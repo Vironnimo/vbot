@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import re
 from typing import Any
@@ -10,6 +9,8 @@ from typing import Any
 from textual.containers import Vertical
 from textual.markup import escape
 from textual.widgets import Collapsible, Markdown, Static
+
+from core.utils.ids import is_safe_id
 
 type JsonObject = dict[str, Any]
 
@@ -47,9 +48,64 @@ def pretty(value: Any) -> str:
 
 
 def item_text(item: JsonObject) -> str:
-    if item.get("type") == "message":
+    kind = item.get("type")
+    if kind == "message":
         return content_text((item.get("message") or {}).get("content"))
+    if kind == "user_message":
+        content = item.get("content")
+        if content is None:
+            content = (item.get("message") or {}).get("content")
+        return content_text(content)
+    if kind == "takeover_separator":
+        message = item.get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except ValueError:
+                content = None
+        if isinstance(content, dict):
+            source, destination = content.get("from"), content.get("to")
+            if isinstance(source, str) and isinstance(destination, str):
+                return terminal_text(f"{source} → {destination}")
+        return "Control passed to another Agent."
+    if kind == "compaction_separator":
+        status = item.get("status") or "completed"
+        if status not in {"running", "failed", "completed"}:
+            status = "completed"
+        descriptions = {
+            "running": "Context compaction is running.",
+            "failed": "Context compaction failed.",
+            "completed": "Context compaction completed.",
+        }
+        details: list[str] = []
+        message = item.get("message") or {}
+        usage = message.get("usage") or {}
+        before = item.get("contextTokensBefore", usage.get("context_tokens_before"))
+        after = item.get("contextTokensAfter", usage.get("context_tokens_after"))
+        if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+            details.append(f"Context: {before:,} → {after:,} tokens")
+        duration_ms = item.get("durationMs", usage.get("compaction_duration_ms"))
+        if isinstance(duration_ms, (int, float)) and duration_ms >= 0:
+            details.append(f"Duration: {duration_ms / 1000:.1f}s")
+        return terminal_text("\n".join([descriptions[status], *details]))
     return content_text(item.get("content", item.get("text", "")))
+
+
+def item_heading(item: JsonObject) -> str | None:
+    kind = item.get("type")
+    if kind == "message":
+        return str((item.get("message") or {}).get("role", "message")).capitalize()
+    if kind == "user_message":
+        return "User Steer · Delivered"
+    if kind == "takeover_separator":
+        return "Agent takeover"
+    if kind == "compaction_separator":
+        status = item.get("status") or "completed"
+        if status not in {"running", "failed", "completed"}:
+            status = "completed"
+        return f"Compaction · {status}"
+    return None
 
 
 def tool_detail(item: JsonObject) -> str:
@@ -96,16 +152,54 @@ def file_links(items: list[JsonObject]) -> list[tuple[str, str]]:
                     media.get("filename") or media.get("label") or media["url"]
                 )
         for label, url in re.findall(r"\[([^\]]*)\]\(([^\s)]+)(?:\s+[^)]*)?\)", item_text(item)):
-            if "/api/files/" in url or "/api/attachments/" in url:
+            if any(
+                prefix in url
+                for prefix in ("/api/files/", "/api/attachments/", "/api/speech/artifacts/")
+            ):
                 result[url] = label or url
-        message = item.get("message", item)
+        message = item.get("message")
+        if not isinstance(message, dict):
+            message = item
         content = message.get("content")
         if isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("attachment_id"):
                     url = f"/api/attachments/{block['attachment_id']}"
                     result[url] = str(block.get("filename") or block["attachment_id"])
+        tool_result = _json_value(item.get("result")) if item.get("type") == "tool_call" else None
+        if isinstance(tool_result, dict):
+            artifacts = tool_result.get("artifacts")
+            if isinstance(artifacts, list):
+                for artifact in artifacts:
+                    _add_artifact_link(result, artifact)
+            data = tool_result.get("data")
+            if isinstance(data, dict):
+                _add_artifact_link(result, data.get("artifact"))
     return [(label, url) for url, label in result.items()]
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _add_artifact_link(result: dict[str, str], artifact: Any) -> None:
+    if not isinstance(artifact, dict):
+        return
+    attachment_id = artifact.get("attachment_id")
+    if artifact.get("kind") == "read_media" and is_safe_id(attachment_id):
+        result[f"/api/attachments/{attachment_id}"] = str(artifact.get("filename") or attachment_id)
+        return
+    url = artifact.get("url")
+    if not isinstance(url, str) or not any(
+        prefix in url for prefix in ("/api/files/", "/api/attachments/", "/api/speech/artifacts/")
+    ):
+        return
+    result[url] = str(artifact.get("filename") or artifact.get("label") or url)
 
 
 class TimelineEntry(Vertical):
@@ -122,18 +216,19 @@ class TimelineEntry(Vertical):
 
     def __init__(self) -> None:
         super().__init__()
-        self.item: JsonObject = {}
+        self.item: JsonObject | None = None
         self.entries: dict[str, TimelineEntry] = {}
+        self.entry_order: tuple[str, ...] = ()
         self.body: Markdown | Static | None = None
         self.heading: Static | None = None
         self.fold: Collapsible | None = None
 
     async def update_item(self, item: JsonObject) -> None:
-        if self.item == item:
+        if self.item is item:
             return
-        first = not self.item
-        previous_text = item_text(self.item)
-        self.item = copy.deepcopy(item)
+        first = self.item is None
+        previous_text = item_text(self.item) if self.item is not None else ""
+        self.item = item
         kind = item.get("type")
         if kind == "assistant_run":
             if self.heading is None:
@@ -151,13 +246,16 @@ class TimelineEntry(Vertical):
                     widget = self.entries[key] = TimelineEntry()
                     await self.mount(widget)
                 await self.entries[key].update_item(child)
-            for index, child in enumerate(children):
-                self.move_child(
-                    self.entries[str(child["id"])],
-                    after=self.heading
-                    if index == 0
-                    else self.entries[str(children[index - 1]["id"])],
-                )
+            order = tuple(str(child["id"]) for child in children)
+            if order != self.entry_order:
+                for index, child in enumerate(children):
+                    self.move_child(
+                        self.entries[str(child["id"])],
+                        after=self.heading
+                        if index == 0
+                        else self.entries[str(children[index - 1]["id"])],
+                    )
+                self.entry_order = order
             return
         text = item_text(item)
         if kind == "tool_call":
@@ -187,26 +285,29 @@ class TimelineEntry(Vertical):
                 else:
                     await self.body.update(text)
         else:
-            if kind in {"compaction_separator", "model_fallback"}:
-                fallback = (
-                    "Context compacted" if kind == "compaction_separator" else "Model fallback"
+            if kind == "model_fallback":
+                text = f"*{text or 'Model fallback'}*"
+            heading = item_heading(item)
+            if heading is not None:
+                if self.heading is None:
+                    self.heading = Static(markup=False, classes="entry-heading")
+                    await self.mount(self.heading)
+                self.heading.update(heading)
+            if kind in {"message", "user_message"}:
+                user_message = kind == "user_message" or (
+                    (item.get("message") or {}).get("role") == "user"
                 )
-                text = f"*{text or fallback}*"
+                self.set_class(user_message, "user-entry")
             if first:
-                if kind == "message":
-                    role = (item.get("message") or {}).get("role", "message")
-                    self.set_class(role == "user", "user-entry")
-                    await self.mount(
-                        Static(str(role).capitalize(), markup=False, classes="entry-heading")
-                    )
                 self.body = Markdown(text, open_links=False)
                 await self.mount(self.body)
             else:
                 assert self.body is not None
                 assert isinstance(self.body, Markdown)
                 if text.startswith(previous_text) and kind not in {
-                    "compaction_separator",
                     "model_fallback",
+                    "compaction_separator",
+                    "takeover_separator",
                 }:
                     await self.body.append(text[len(previous_text) :])
                 else:

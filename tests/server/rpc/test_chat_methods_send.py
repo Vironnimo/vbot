@@ -167,6 +167,10 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
         ("chat.stream", {"session_id": "s1", "new_session": {}}, "exactly one of session_id"),
         ("chat.send", {"new_session": "yes"}, "params.new_session must be an object"),
         ("chat.send", {"new_session": {"title": "Plan"}}, "params.new_session"),
+        *[
+            ("chat.stream", {"new_session": {"session_id": value}}, "params.new_session.session_id")
+            for value in (None, 1, "", "../session", "_session", "a" * 129)
+        ],
         (
             "chat.stream",
             {"new_session": {"agent_overrides": {"speed": 1}}},
@@ -195,7 +199,10 @@ async def test_submission_rejects_malformed_params_before_starting_anything(
 
 
 @pytest.mark.asyncio
-async def test_send_snapshots_mentioned_files_into_the_content(tmp_path: Path) -> None:
+@pytest.mark.parametrize("new_session", [False, True])
+async def test_send_snapshots_mentioned_files_into_the_content(
+    tmp_path: Path, new_session: bool
+) -> None:
     # An @-mentioned file is snapshotted before the loop sees the content: the
     # string message becomes blocks (original text first, then the snapshot),
     # and the file is stamped as read for the Session.
@@ -214,14 +221,17 @@ async def test_send_snapshots_mentioned_files_into_the_content(tmp_path: Path) -
         storage=SimpleNamespace(data_dir=str(tmp_path)),
         file_read_state=file_state,
     )
+    state.chat_loop = SimpleNamespace(
+        start_run=loop.start_run, start_run_in_new_session=loop.start_run
+    )
 
     await call(
         state,
         "chat.send",
         agent_id="builder",
-        session_id="s1",
         content="look at @notes.md",
         file_mentions=["notes.md"],
+        **({"new_session": {"session_id": "s1"}} if new_session else {"session_id": "s1"}),
     )
 
     content = loop.start_calls[0]["content"]
@@ -494,8 +504,9 @@ async def test_send_to_a_missing_session_is_a_domain_error(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+@pytest.mark.parametrize("requested_id", [None, "client-first-send"])
 async def test_new_session_is_created_with_its_first_message_and_overrides(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, requested_id: str | None
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     adapter = StubAdapter(
@@ -512,6 +523,7 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
         method,
         agent_id="coder",
         new_session={
+            **({"session_id": requested_id} if requested_id else {}),
             "agent_overrides": {"model": "openai/gpt-4.1-mini"},
             "working_project_id": "vbot",
         },
@@ -521,6 +533,8 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
 
     result = response["result"]
     session_id = result["session_id"]
+    if requested_id:
+        assert session_id == requested_id
     await state.chat_runs.get(result["run_id"]).wait()
     address = SessionAddress(project_id=None, agent_id="coder", session_id=session_id)
     sessions = state.runtime.chat_sessions
@@ -541,6 +555,21 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
     # (later changes come from the Run itself).
     assert state.runtime.agents.get("coder").current_session_id == session_id
     assert [change["kind"] for change in resource_changes(state)][:2] == ["sessions", "agents"]
+    if requested_id:
+        # A retry after a lost response must never submit the first message twice.
+        retry = await call(
+            state,
+            method,
+            agent_id="coder",
+            new_session={"session_id": requested_id},
+            content="Hi again",
+        )
+        assert retry["ok"] is False
+        assert "already exists" in retry["error"]["message"]
+        assert [
+            message.content for message in sessions.get(address).load() if message.role == "user"
+        ] == ["Hi"]
+        assert len(adapter.requests or adapter.stream_requests) == 1
 
 
 def _unusable_override(state: SimpleNamespace) -> JsonObject:
@@ -589,6 +618,7 @@ async def test_a_refused_message_for_a_new_session_leaves_no_session(
     adapter = StubAdapter()
     state = make_state(tmp_path, adapter)
     params = arrange(state)
+    params["new_session"]["session_id"] = "client-first-send"
 
     response = await call(state, "chat.send", content="Hi", **params)
 

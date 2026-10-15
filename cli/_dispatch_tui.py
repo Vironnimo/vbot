@@ -14,6 +14,8 @@ def dispatch_tui_command(args: argparse.Namespace, instance: ServerInstance) -> 
     if not all(stream is not None and stream.isatty() for stream in (sys.stdin, sys.stdout)):
         print("Error: vbot tui requires an interactive terminal. Use vbot chat for piped input.")
         return 2
+    from core.config_validation import JsonConfigValidationError
+
     try:
         from cli.tui import run_tui
 
@@ -32,3 +34,6 @@ def dispatch_tui_command(args: argparse.Namespace, instance: ServerInstance) -> 
         return 1
     except KeyboardInterrupt:
         return 0
+    except (JsonConfigValidationError, OSError) as error:
+        print(f"Error: {error}")
+        return 1

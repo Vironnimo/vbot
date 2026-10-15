@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from textual.widgets import TextArea
 
-from cli.tui.dialogs import Picker, TextDialog
+from cli.tui.dialogs import PathDialog, Picker, TextDialog
+from cli.tui.mentions import format_mention, open_quoted_mention
 from cli.tui.rendering import file_links, flatten, item_text
 
 if TYPE_CHECKING:
@@ -18,10 +19,16 @@ async def complete(app: ConversationApp, *, commands: bool = False) -> None:
     view = app.conversation
     if view is None:
         return
+    key = view.key
     editor = app.query_one("#composer", TextArea)
     draft = editor.text
     row, column = editor.cursor_location
     prefix = editor.document.lines[row][:column]
+    quoted = open_quoted_mention(prefix)
+    if quoted is not None and not commands:
+        start, query = quoted
+        await server_file(app, query, replace=(row, start, column))
+        return
     token = prefix.rsplit(maxsplit=1)[-1] if prefix.strip() else ""
     if token.startswith("@") and not commands:
         await server_file(app, token[1:], replace=(row, column - len(token), column))
@@ -29,7 +36,7 @@ async def complete(app: ConversationApp, *, commands: bool = False) -> None:
     response = await app.client.rpc(
         "chat.commands", {**view.params(draft=True), "reply_surface": "tui"}
     )
-    if app.conversation is not view or editor.text != draft:
+    if app.conversation is not view or view.key != key or editor.text != draft:
         return
     choices = [
         (f"/{item['name']} · {item['type']} · {item.get('description', '')}", item["name"])
@@ -42,7 +49,7 @@ async def complete(app: ConversationApp, *, commands: bool = False) -> None:
             query=token.lstrip("/") if token.startswith("/") else "",
         )
     )
-    if value and app.conversation is view and editor.text == draft:
+    if value and app.conversation is view and view.key == key and editor.text == draft:
         if token.startswith("/"):
             editor.replace(f"/{value} ", (row, column - len(token)), (row, column))
         else:
@@ -59,16 +66,21 @@ async def files(app: ConversationApp) -> None:
         ("Mention a file on the server", "mention"),
         ("Download a conversation file to this computer", "download"),
     ]
-    if view.attachments or view.mentions:
-        choices.append(("Remove an attachment or file mention from the draft", "remove"))
+    if view.attachments:
+        choices.append(("Remove a local attachment from the draft", "remove"))
     action = await app.push_screen_wait(
         Picker("Files · local uploads and server files are separate", choices)
     )
+    if app.conversation is not view:
+        return
     if action == "upload":
-        path = await app.push_screen_wait(TextDialog("Local file path on this computer"))
-        if path and path.strip():
-            attachment = await app.client.upload(Path(path.strip().strip('"')).expanduser())
+        path = await app.push_screen_wait(
+            PathDialog("Local file on this computer", must_exist=True)
+        )
+        if path and app.conversation is view:
+            attachment = await app.client.upload(Path(path))
             view.attachments.append(attachment)
+            app._view_changed(view)
             app._notice("Local file uploaded and attached to the draft.")
     elif action == "mention":
         await server_file(
@@ -84,9 +96,10 @@ async def files(app: ConversationApp) -> None:
         )
         if link:
             destination = await app.push_screen_wait(
-                TextDialog(
+                PathDialog(
                     "New local destination path · existing files are preserved",
                     str(Path.cwd() / Path(link[0]).name),
+                    must_exist=False,
                 )
             )
             if destination and destination.strip():
@@ -94,17 +107,15 @@ async def files(app: ConversationApp) -> None:
                 app._notice(f"Saved to {destination.strip()}")
     elif action == "remove":
         entries: list[tuple[str, Any]] = [
-            (f"Local upload · {value['filename']}", ("attachment", index))
-            for index, value in enumerate(view.attachments)
+            (f"Local upload · {value['filename']}", value["attachment_id"])
+            for value in view.attachments
         ]
-        entries.extend(
-            (f"Server file · {value}", ("mention", index))
-            for index, value in enumerate(view.mentions)
-        )
         choice = await app.push_screen_wait(Picker("Remove from draft", entries))
-        if choice:
-            values = view.attachments if choice[0] == "attachment" else view.mentions
-            values.pop(choice[1])
+        if choice and app.conversation is view:
+            view.attachments = [
+                value for value in view.attachments if value["attachment_id"] != choice
+            ]
+            app._view_changed(view)
     app._header()
 
 
@@ -112,10 +123,11 @@ async def server_file(app, query: str = "", *, replace: tuple[int, int, int] | N
     view = app.conversation
     if view is None:
         return
+    key = view.key
     editor = app.query_one("#composer", TextArea)
     draft = editor.text
     response = await app.client.rpc("files.list", view.params(draft=True))
-    if app.conversation is not view or editor.text != draft:
+    if app.conversation is not view or view.key != key or editor.text != draft:
         return
     choices: list[tuple[str, Any]] = [(name, name) for name in response.get("files", [])]
     choices.append(("Browse directories (including ignored files)…", ("browse", "")))
@@ -127,7 +139,7 @@ async def server_file(app, query: str = "", *, replace: tuple[int, int, int] | N
         listing = await app.client.rpc(
             "files.list", {**view.params(draft=True), "directory": directory}
         )
-        if app.conversation is not view or editor.text != draft:
+        if app.conversation is not view or view.key != key or editor.text != draft:
             return
         choices = []
         if directory:
@@ -146,16 +158,22 @@ async def server_file(app, query: str = "", *, replace: tuple[int, int, int] | N
         choice = await app.push_screen_wait(
             Picker(f"Server · {listing.get('root', '')}/{directory}", choices)
         )
-    if isinstance(choice, str) and app.conversation is view and editor.text == draft:
+    if (
+        isinstance(choice, str)
+        and app.conversation is view
+        and view.key == key
+        and editor.text == draft
+    ):
         if choice not in view.mentions:
             view.mentions.append(choice)
-        text = f'@"{choice}" ' if " " in choice else f"@{choice} "
+        text = format_mention(choice) + " "
         if replace:
             row, start, end = replace
             editor.replace(text, (row, start), (row, end))
         else:
             editor.insert(text)
         editor.focus()
+        app._view_changed(view)
         app._header()
 
 
@@ -200,7 +218,7 @@ async def copy(app: ConversationApp) -> None:
             app.copy_to_clipboard(text)
             app._notice("Clipboard copy requested from your terminal.")
         elif choice == "save":
-            path = await app.push_screen_wait(TextDialog("New local file path"))
+            path = await app.push_screen_wait(PathDialog("New local file path", must_exist=False))
             if path and path.strip():
                 try:
                     with (
@@ -218,6 +236,7 @@ async def input_history(app: ConversationApp) -> None:
     choices: list[tuple[str, Any]] = [
         ("Unsent draft · " + value["text"].replace("\n", " "), value)
         for value in reversed(app.saved_drafts)
+        if value.get("operation") != "chat.edit"
     ]
     choices.extend((text.replace("\n", " "), text) for text in reversed(app.history))
     selected = await app.push_screen_wait(
@@ -239,6 +258,7 @@ async def input_history(app: ConversationApp) -> None:
                 app.conversation.mentions.extend(
                     path for path in selected["mentions"] if path not in app.conversation.mentions
                 )
+                app._view_changed(app.conversation)
                 app._header()
         else:
             app.query_one("#composer", TextArea).insert(selected)
@@ -256,6 +276,7 @@ async def help(app: ConversationApp) -> None:
             "F7: Extension requests; F8: local uploads, server files and downloads\n"
             "F9: Commands and Skills; Ctrl+Space: completion\n"
             "Ctrl+X: stop current Run; F10: stop all background work\n"
+            "F11: Session actions, Tools and saved drafts; F12: latest output\n"
             "Ctrl+B: previous / Parent conversation\n"
             "Ctrl+O: load older history; Ctrl+F: find in loaded history\n"
             "Ctrl+G: copy or save loaded conversation; Alt+Up: input history\n"
@@ -264,6 +285,7 @@ async def help(app: ConversationApp) -> None:
             "Tab moves focus. Tool and Reasoning rows expand with Enter/Space.\n"
             "Closing this TUI leaves the server's Runs working.\n"
             "@file paths are server paths. Local files are uploaded through F8.\n"
+            "Edit server mentions in the composer. Drafts are saved locally per server.\n"
             "After a lost send response, the draft remains marked uncertain; "
             "no resend is automatic.",
             read_only=True,

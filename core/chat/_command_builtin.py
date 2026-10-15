@@ -498,8 +498,12 @@ async def _execute_agent(
     if goals is not None:
         # The goal was the source Agent's work; the target resumes it only on request.
         await goals.pause_for_takeover(target_address)
+    source_change = _session_change(context.project_id, context.agent_id, context.session_id)
     changes = [
-        _session_change(context.project_id, context.agent_id, context.session_id),
+        CommandResourceChange(
+            kind="sessions",
+            scope={**source_change.scope, "moved_to_agent_id": target_display},
+        ),
         _session_change(target_project_id, target_agent_id, context.session_id),
     ]
     if context.project_id is None or target_project_id is None:

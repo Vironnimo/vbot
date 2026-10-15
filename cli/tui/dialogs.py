@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, override
 
 from textual import on
@@ -12,6 +13,7 @@ from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Checkbox,
+    DirectoryTree,
     Input,
     Label,
     Markdown,
@@ -24,6 +26,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from cli.tui.rendering import terminal_text
+from core.utils.file_status import exists_strict, is_dir_strict, is_file_strict
 
 type JsonObject = dict[str, Any]
 
@@ -149,6 +152,113 @@ class TextDialog(ModalScreen[str | None]):
             self.dismiss(self.query_one(TextArea).text)
 
 
+class PathDialog(ModalScreen[str | None]):
+    """Browse local paths or type one, with distinct open/save validation."""
+
+    BINDINGS = [("escape", "dismiss(None)", "Close"), ("ctrl+s", "choose", "Choose")]
+    DEFAULT_CSS = """
+    PathDialog { align: center middle; }
+    PathDialog > Vertical {
+        width: 94%; max-width: 140; height: 92%; border: round $accent;
+        background: $surface; padding: 1 2;
+    }
+    PathDialog Label { height: auto; margin-bottom: 1; }
+    PathDialog Input { margin-bottom: 1; }
+    PathDialog DirectoryTree { height: 1fr; border: round $panel; }
+    PathDialog #problem { color: $error; height: auto; }
+    PathDialog Horizontal { height: 3; margin-top: 1; }
+    """
+
+    def __init__(self, title: str, path: str = "", *, must_exist: bool) -> None:
+        super().__init__()
+        self.heading = terminal_text(title)
+        self.initial = path
+        self.must_exist = must_exist
+        self.problem = ""
+        try:
+            initial_path = Path(path).expanduser() if path else Path.cwd()
+            if is_dir_strict(initial_path):
+                root = initial_path
+            elif is_dir_strict(initial_path.parent):
+                root = initial_path.parent
+            else:
+                root = Path.cwd()
+        except (OSError, RuntimeError) as exc:
+            # A path that cannot be inspected is different from a missing one.
+            # Keep the chooser usable from the current directory and preserve
+            # that distinction for the operator.
+            root = Path.cwd()
+            target = path or "the initial directory"
+            self.problem = f"Cannot inspect {target}: {getattr(exc, 'strerror', None) or exc}"
+        self.root = root
+
+    @override
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(self.heading, markup=False)
+            yield Input(value=self.initial, placeholder="Local path", id="path")
+            yield DirectoryTree(self.root, id="path-tree")
+            yield Static(
+                "Use arrows to browse; select or type an existing file."
+                if self.must_exist
+                else (
+                    "Use arrows to browse; select or type a new path. "
+                    "Existing files are never replaced."
+                ),
+                markup=False,
+            )
+            yield Static(self.problem, id="problem", markup=False)
+            with Horizontal():
+                yield Button("Use path", id="choose", variant="primary")
+                yield Button("Close", id="close")
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    @on(DirectoryTree.FileSelected)
+    def file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        self.query_one("#path", Input).value = str(event.path)
+
+    @on(DirectoryTree.DirectorySelected)
+    def directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        # The selected directory stays in the path field as a convenient base
+        # when the caller is choosing a destination that does not yet exist.
+        self.query_one("#path", Input).value = str(event.path)
+
+    @on(Button.Pressed)
+    def button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "choose":
+            self.action_choose()
+        else:
+            self.dismiss(None)
+
+    def action_choose(self) -> None:
+        raw = self.query_one("#path", Input).value.strip()
+        try:
+            if not raw:
+                raise ValueError("Enter a local path.")
+            if "\x00" in raw:
+                raise ValueError("The path contains an invalid null character.")
+            path = Path(raw).expanduser()
+            if self.must_exist:
+                if not is_file_strict(path):
+                    raise ValueError("Choose an existing local file.")
+            else:
+                if exists_strict(path, follow_symlinks=False):
+                    raise ValueError("That path already exists; choose a new destination.")
+                if not is_dir_strict(path.parent):
+                    raise ValueError("The destination directory must already exist.")
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.problem = (
+                f"Cannot check this path: {exc.strerror or exc}"
+                if isinstance(exc, OSError)
+                else str(exc)
+            )
+            self.query_one("#problem", Static).update(self.problem)
+            return
+        self.dismiss(str(path))
+
+
 class ExtensionDialog(ModalScreen[JsonObject | None]):
     """Render the Extension-owned form schema, preserving typed values."""
 
@@ -166,12 +276,22 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
     ExtensionDialog TextArea { min-height: 5; max-height: 12; }
     """
 
-    def __init__(self, request: JsonObject) -> None:
+    def __init__(
+        self,
+        request: JsonObject,
+        *,
+        values: JsonObject | None = None,
+        problem: str = "",
+        outcome_unknown: bool = False,
+    ) -> None:
         super().__init__()
         self.request = request
         self.schema = request.get("payload", {}).get("requestedSchema", {})
         self.fields = list(self.schema.get("properties", {}).items())
         self.enums: dict[str, list[Any]] = {}
+        self.form_values = dict(values or {})
+        self.problem = problem
+        self.outcome_unknown = outcome_unknown
 
     @override
     def compose(self) -> ComposeResult:
@@ -198,7 +318,7 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
                         "(leave empty if the browser completed sign-in)",
                         markup=False,
                     )
-                    yield Input(id="redirect")
+                    yield Input(value=str(self.form_values.get("redirect_url", "")), id="redirect")
                 elif payload.get("mode") != "url":
                     required = self.schema.get("required", [])
                     for index, (name, schema) in enumerate(self.fields):
@@ -217,7 +337,7 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
                             enums = [value["const"] for value in constants]
                         if isinstance(enums, list):
                             self.enums[key] = enums
-                            default = schema.get("default")
+                            default = self.form_values.get(name, schema.get("default"))
                             yield Select(
                                 [(str(value), str(i)) for i, value in enumerate(enums)],
                                 value=str(enums.index(default))
@@ -226,13 +346,18 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
                                 id=key,
                             )
                         elif schema.get("type") == "boolean":
-                            yield Checkbox(label, value=schema.get("default") is True, id=key)
+                            yield Checkbox(
+                                label,
+                                value=self.form_values.get(name, schema.get("default") is True)
+                                is True,
+                                id=key,
+                            )
                         elif schema.get("type") == "array" and isinstance(
                             (schema.get("items") or {}).get("enum"), list
                         ):
                             choices = schema["items"]["enum"]
                             self.enums[key] = choices
-                            defaults = schema.get("default", [])
+                            defaults = self.form_values.get(name, schema.get("default", []))
                             yield SelectionList(
                                 *[
                                     (str(value), i, value in defaults)
@@ -243,23 +368,27 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
                         elif (
                             schema.get("type") in {"array", "object"} or schema.get("type") is None
                         ):
+                            initial = self.form_values.get(name, schema.get("default", ""))
                             yield TextArea(
-                                json.dumps(schema["default"], ensure_ascii=False)
-                                if "default" in schema
-                                else "",
+                                json.dumps(initial, ensure_ascii=False) if initial != "" else "",
                                 id=key,
                             )
                         else:
+                            initial = self.form_values.get(name, schema.get("default", ""))
                             yield Input(
-                                value=str(schema.get("default", "")),
+                                value=str(initial),
                                 placeholder="RFC 3339 with UTC offset"
                                 if schema.get("format") == "date-time"
                                 else "",
                                 id=key,
                             )
-            yield Static("", id="problem", markup=False)
+            yield Static(self.problem, id="problem", markup=False)
             with Horizontal():
-                yield Button("Accept", id="accept", variant="primary")
+                yield Button(
+                    "Respond again" if self.outcome_unknown else "Accept",
+                    id="accept",
+                    variant="primary",
+                )
                 yield Button("Decline", id="decline")
                 yield Button("Cancel request", id="cancel", variant="error")
 
@@ -270,9 +399,12 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
             return
         response: JsonObject = {"action": action}
         if self.request.get("kind") == "oauth":
-            response["redirect_url"] = self.query_one("#redirect", Input).value
+            redirect = self.query_one("#redirect", Input).value
+            self.form_values["redirect_url"] = redirect
+            response["redirect_url"] = redirect
         elif action == "accept" and self.request.get("payload", {}).get("mode") != "url":
             content: JsonObject = {}
+            form_values: JsonObject = {}
             try:
                 for index, (name, schema) in enumerate(self.fields):
                     key = f"field-{index}"
@@ -293,13 +425,16 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
                         value = widget.value
                         if value and schema.get("type") in {"number", "integer"}:
                             value = int(value) if schema["type"] == "integer" else float(value)
+                    form_values[name] = value
                     if value == "":
                         if name in self.schema.get("required", []):
                             raise ValueError(f"{schema.get('title', name)} is required.")
                         continue
                     content[name] = value
             except (ValueError, TypeError) as exc:
+                self.form_values.update(form_values)
                 self.query_one("#problem", Static).update(str(exc))
                 return
+            self.form_values = form_values
             response["content"] = content
         self.dismiss(response)

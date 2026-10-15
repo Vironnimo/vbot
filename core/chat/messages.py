@@ -67,7 +67,7 @@ WEBUI_REPLY_SURFACE_REMINDER = (
     "file:<filesystem-path> in your reply; vBot renders it automatically."
 )
 TUI_REPLY_SURFACE_REMINDER = (
-    "Reply surface: terminal TUI. Markdown and code are displayed as text; images, "
+    "Reply surface: terminal TUI. Markdown and code render in the terminal; images, "
     "HTML previews, audio and video are not embedded. To provide a file download, "
     "include file:<filesystem-path> in your reply."
 )

@@ -656,9 +656,11 @@ vbot tui --agent coder --project my-project
 vbot tui --host 127.0.0.1 --port 8420
 ```
 
-Enter inserts a new line; Ctrl+S or Alt+Enter sends. F1 shows keyboard help. F2 opens Sessions, F3 starts a new conversation, F4 selects Model/effort and shows Usage, F5 opens activity, F6 manages the Queue and Steer, F7 answers Extension requests, F8 handles files, and F9 opens Commands and Skills. Ctrl+Space completes `/commands`, Skills and `@` server files. Ctrl+X stops the current Run; F10 stops its related work through Stop all; Ctrl+Q detaches.
+Enter inserts a new line; Ctrl+S or Alt+Enter sends. F1 shows keyboard help. F2 opens Sessions, F3 starts a new conversation, F4 selects Model/effort and shows Usage, F5 opens activity, F6 manages the Queue and Steer, F7 answers Extension requests, F8 handles files, and F9 opens Commands and Skills. Ctrl+Space completes `/commands`, Skills and `@` server files. Ctrl+X stops the current Run; F10 stops its related work through Stop all; Ctrl+Q detaches. F11 offers Session actions, Tool controls and saved drafts; F12 jumps to the latest output when you are reading older messages.
 
 The timeline renders Markdown and code, with expandable Reasoning and Tool details. Ctrl+O loads older history; Ctrl+B returns to the Parent or previous conversation. Ctrl+G copies or exports the loaded conversation. Upload paths and download destinations are on the terminal machine; `@` file references are on the server. Images, audio, video and Extension pages are links rather than embedded browser content. A request with an unknown send outcome stays marked uncertain until you reconnect and inspect the Session; the client never automatically sends it again.
+
+Unsent drafts and pending attachments survive detach and restart on the terminal computer, stored per server in `~/.vbot-tui-state/`. F11 restores a draft without sending it. Two terminals editing the same saved draft retain both versions. File dialogs let you browse or type a local path; downloads never overwrite an existing file. Edit server file mentions directly in the composer. If an Extension rejects a form, its values remain available for correction.
 
 ### Chat from the command line
 

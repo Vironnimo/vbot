@@ -12,8 +12,10 @@ import httpx
 import pytest
 from textual.widgets import Collapsible, TextArea
 
+import cli.tui.app as app_module
 from cli.tui.app import ConversationApp
 from cli.tui.dialogs import Picker, TextDialog
+from cli.tui.drafts import draft_record
 from cli.tui.rendering import TimelineEntry, file_links, tool_detail
 from cli.tui.state import Conversation
 from cli.tui.transport import ClientError, TerminalClient
@@ -77,6 +79,8 @@ class Server(TerminalClient):
             return {"requests": []}
         if method == "chat.work":
             return {"run_active": self.active, "background_work_running": False, "running": []}
+        if method == "files.list":
+            return {"files": ["first.txt", "later.txt"]}
         if method == "chat.stream":
             self.sent.set()
             await self.release_send.wait()
@@ -238,21 +242,21 @@ async def test_pending_submission_preserves_later_input_and_never_replays(unknow
         later_attachment = {"attachment_id": "later", "filename": "later.txt", "kind": "file"}
         app.conversation.attachments.append(first_attachment)
         app.conversation.mentions.append("first.txt")
-        editor.load_text("First input")
+        editor.load_text("First input @first.txt")
         await pilot.press("ctrl+s")
         await server.sent.wait()
-        editor.load_text("Next input")
+        editor.load_text("Next input @later.txt")
         app.conversation.attachments.append(later_attachment)
         app.conversation.mentions.append("later.txt")
         await pilot.pause()
         server.release_send.set()
         await pilot.pause()
-        assert editor.text == "Next input"
+        assert editor.text == "Next input @later.txt"
         assert app.conversation is not None
         assert app.conversation.uncertain is unknown
         if unknown:
             assert app.conversation.uncertain_submission is not None
-            assert app.conversation.uncertain_submission["text"] == "First input"
+            assert app.conversation.uncertain_submission["text"] == "First input @first.txt"
         await server.bus.put({"type": "connection_ready"})
         await pilot.pause()
         assert len([method for method, _ in server.calls if method == "chat.stream"]) == 1
@@ -264,22 +268,23 @@ async def test_pending_submission_preserves_later_input_and_never_replays(unknow
             await pilot.pause()
             assert isinstance(app.screen, Picker)
             await pilot.press("escape")
-            editor.load_text("Next input")
+            editor.load_text("Next input @later.txt")
+            app.conversation.mentions.append("later.txt")
             app.conversation.attachments.extend([first_attachment, later_attachment])
             await pilot.press("ctrl+s")
             await pilot.pause()
             await pilot.press("down", "down", "down", "enter")
             await pilot.pause()
-            assert editor.text == "First input"
+            assert editor.text == "First input @first.txt"
             assert app.conversation.attachments == [first_attachment]
             assert app.conversation.mentions == ["first.txt"]
-            assert app.saved_drafts == [
-                {
-                    "text": "Next input",
-                    "attachments": [first_attachment, later_attachment],
-                    "mentions": ["first.txt", "later.txt"],
-                }
-            ]
+            assert len(app.saved_drafts) == 1
+            saved = app.saved_drafts[0]
+            assert saved["text"] == "Next input @later.txt"
+            assert saved["attachments"] == [first_attachment, later_attachment]
+            assert saved["mentions"] == ["later.txt"]
+            assert (saved["agent"], saved["session"]) == ("main", "session-one")
+            assert saved["draft_id"] != app.conversation.draft_id
             editor.load_text("")
             app.conversation.attachments.clear()
             app.conversation.mentions.clear()
@@ -287,9 +292,9 @@ async def test_pending_submission_preserves_later_input_and_never_replays(unknow
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            assert editor.text == "Next input"
+            assert editor.text == "Next input @later.txt"
             assert app.conversation.attachments == [first_attachment, later_attachment]
-            assert app.conversation.mentions == ["first.txt", "later.txt"]
+            assert app.conversation.mentions == ["later.txt"]
         else:
             assert app.conversation.attachments == [later_attachment]
             assert app.conversation.mentions == ["later.txt"]
@@ -298,6 +303,9 @@ async def test_pending_submission_preserves_later_input_and_never_replays(unknow
 def test_timeline_patch_order_gap_and_pagination_contract() -> None:
     view = Conversation("main", "session-one")
     view.event(snapshot())
+    previous = view.items
+    original_content = previous[0]["items"][0]["content"]
+    unchanged_tool = previous[0]["items"][2]
     update = {
         "type": "timeline_update",
         "run_id": "run-one",
@@ -321,6 +329,8 @@ def test_timeline_patch_order_gap_and_pagination_contract() -> None:
     assert not view.event(update)
     assert [item["id"] for item in view.items] == ["user", "run-item"]
     assert view.items[1]["items"][0]["content"] == "Hello there"
+    assert previous[0]["items"][0]["content"] == original_content
+    assert view.items[1]["items"][1] is unchanged_tool
     assert view.facts["session_usage"]["output_tokens"] == 9
     view.page(
         {
@@ -381,11 +391,13 @@ async def test_render_and_stream_changes_during_an_awaited_mount(
     app = ConversationApp(server, agent_id="main")
     original = TimelineEntry.update_item
     changed = False
+    updated_rows: list[str] = []
     render_blocked = asyncio.Event()
     render_cancelled = asyncio.Event()
 
     async def update(widget: TimelineEntry, item: JsonObject) -> None:
         nonlocal changed
+        updated_rows.append(item["id"])
         if item["id"] == "detach-during-mount":
             render_blocked.set()
             try:
@@ -396,13 +408,14 @@ async def test_render_and_stream_changes_during_an_awaited_mount(
         await original(widget, item)
         if not changed and app.conversation:
             changed = True
-            app.conversation.items.append(
+            app.conversation.items = [
+                *app.conversation.items,
                 {
                     "id": "later",
                     "type": "message",
                     "message": {"role": "user", "content": "Arrived during rendering"},
-                }
-            )
+                },
+            ]
             app.render_dirty = True
 
     monkeypatch.setattr(TimelineEntry, "update_item", update)
@@ -413,9 +426,18 @@ async def test_render_and_stream_changes_during_an_awaited_mount(
         await app._render()
         await app._render()
         assert {"run-item", "later"} == set(app.rows)
+        assert updated_rows.count("run-item") == 1
         assert len(app.query(Collapsible)) == 2
-        app.conversation.items[0]["items"].append(
-            {"id": "detach-during-mount", "type": "reasoning", "content": "Still rendering"}
+        app.conversation.event(
+            {
+                "type": "timeline_update",
+                "run_id": "run-one",
+                "sequence": 2,
+                "base_sequence": 1,
+                "children": [
+                    {"id": "detach-during-mount", "type": "reasoning", "content": "Still rendering"}
+                ],
+            }
         )
         app.render_dirty = True
         app._render_if_dirty()
@@ -544,6 +566,49 @@ async def test_delayed_completion_cannot_edit_another_conversation(token: str, m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["older", "queue"])
+async def test_delayed_conversation_reads_cannot_change_a_new_selection(action: str) -> None:
+    captured = asyncio.Event()
+    release = asyncio.Event()
+
+    class DelayedServer(Server):
+        delay = False
+
+        @override
+        async def rpc(self, method: str, params: JsonObject | None = None) -> JsonObject:
+            response = await super().rpc(method, params)
+            if self.delay and (
+                (action == "older" and method == "chat.timeline" and (params or {}).get("before"))
+                or (action == "queue" and method == "chat.queue_list")
+            ):
+                captured.set()
+                await release.wait()
+                if action == "older":
+                    response["items"] = [
+                        {"id": "old-row", "type": "message", "message": {"content": "Old"}}
+                    ]
+            return response
+
+    server = DelayedServer()
+    app = ConversationApp(server, agent_id="main")
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        previous = app.conversation
+        assert previous is not None
+        previous.next_before = "older"
+        server.delay = True
+        worker = app.action_older() if action == "older" else app.action_queue()
+        await captured.wait()
+        await app._open(Conversation("main", project="another", project_selected=True))
+        release.set()
+        await worker.wait()
+        assert app.conversation is not previous
+        assert not previous.items
+        assert not isinstance(app.screen, Picker)
+        assert "old-row" not in app.rows
+
+
+@pytest.mark.asyncio
 async def test_transport_preserves_send_uncertainty_and_local_files(tmp_path: Path) -> None:
     calls: list[httpx.Request] = []
 
@@ -600,3 +665,270 @@ def test_tool_details_preserve_diffs_and_offer_media_downloads() -> None:
     assert "-old" in detail and "+new" in detail
     assert "not visible" not in detail
     assert file_links([item]) == [("result.png", "/api/files/output")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reconnect", [False, True])
+async def test_catch_up_drains_all_pages_before_completion_is_acknowledged(
+    reconnect: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CatchUpServer(Server):
+        catching_up = False
+
+        @override
+        async def rpc(self, method: str, params: JsonObject | None = None) -> JsonObject:
+            params = params or {}
+            if method == "session.get" and self.catching_up:
+                return {
+                    "session": {
+                        "title": "Current",
+                        "latest_completion_run_id": "latest",
+                        "has_unread_completion": True,
+                    }
+                }
+            if method == "chat.timeline":
+                self.calls.append((method, params))
+                if not self.catching_up:
+                    return {"items": [], "next_after": "zero", "history_generation": "g"}
+                cursor = params.get("after")
+                run = "earlier" if cursor == "zero" else "latest"
+                return {
+                    "items": [
+                        {
+                            "id": run,
+                            "type": "assistant_run",
+                            "run_id": run,
+                            "status": "completed",
+                            "items": [
+                                {"id": f"{run}-text", "type": "assistant_output", "content": run}
+                            ],
+                        }
+                    ],
+                    "incremental": True,
+                    "replace_run_ids": [run],
+                    "next_after": "one" if run == "earlier" else "two",
+                    "has_newer": run == "earlier",
+                    "history_generation": "g",
+                }
+            return await super().rpc(method, params)
+
+        @override
+        async def timeline(self, path: str) -> AsyncIterator[JsonObject]:
+            if False:
+                yield {}
+
+    async def no_delay(_seconds: float) -> None:
+        return
+
+    monkeypatch.setattr(app_module, "_sleep", no_delay)
+    server = CatchUpServer()
+    app = ConversationApp(server, agent_id="main")
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        view = app.conversation
+        assert view is not None
+        server.catching_up = True
+        server.calls.clear()
+        if reconnect:
+            await app._follow(view, "/closed")
+            assert [row["id"] for row in view.items] == ["earlier", "latest"]
+            # The normal refresh also owns Session metadata and read receipts.
+            view.facts["next_after"] = "zero"
+        await app._refresh(view)
+        assert view.facts["has_newer"] is False
+        assert [row["id"] for row in view.items] == ["earlier", "latest"]
+        assert [
+            params["after"] for method, params in server.calls if method == "chat.timeline"
+        ] == (["zero", "one"] * (2 if reconnect else 1))
+        assert not any(method == "session.mark_read" for method, _ in server.calls)
+        modal = TextDialog("Inspecting something else", read_only=True)
+        await app.push_screen(modal)
+        await app._render()
+        await pilot.pause()
+        assert not any(method == "session.mark_read" for method, _ in server.calls)
+        modal.dismiss(None)
+        app.app_focus = True
+        await pilot.pause()
+        app._completion_if_visible()
+        await pilot.pause()
+        assert [
+            (method, params) for method, params in server.calls if method == "session.mark_read"
+        ] == [
+            (
+                "session.mark_read",
+                {"agent_id": "main", "session_id": "session-one", "run_id": "latest"},
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_lost_first_response_recovers_exact_session_without_resending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoints: list[JsonObject] = []
+
+    class AcceptedServer(Server):
+        admitted: str | None = None
+        reveal = False
+
+        @override
+        async def rpc(self, method: str, params: JsonObject | None = None) -> JsonObject:
+            params = params or {}
+            if method == "chat.stream":
+                assert (
+                    checkpoints
+                    and checkpoints[-1]["new_session"]["session_id"]
+                    == params["new_session"]["session_id"]
+                )
+                self.calls.append((method, copy.deepcopy(params)))
+                self.admitted = params["new_session"]["session_id"]
+                raise ClientError("Lost response", state="unknown")
+            if method == "chat.timeline" and params.get("session_id") == self.admitted:
+                if not self.reveal:
+                    raise ClientError("Not found yet", code="session_not_found")
+                return {"items": [], "runs": [{"run_id": "accepted", "complete": True}]}
+            return await super().rpc(method, params)
+
+    server = AcceptedServer()
+    app = ConversationApp(server, agent_id="main", project_id="project-one")
+
+    async def checkpoint() -> None:
+        assert app.conversation is not None and app.conversation.uncertain
+        assert app.conversation.uncertain_submission is not None
+        checkpoints.append(copy.deepcopy(app.conversation.uncertain_submission["request"]))
+
+    monkeypatch.setattr(app, "persist_drafts", checkpoint)
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        editor = app.query_one("#composer", TextArea)
+        editor.load_text("First request")
+        worker = app.action_send()
+        await worker.wait()
+        view = app.conversation
+        assert view is not None and view.uncertain and view.session is None
+        assert view.pending_session_id == server.admitted
+        assert checkpoints[-1]["new_session"]["working_project_id"] == "project-one"
+        editor.load_text("Following request")
+        await pilot.pause()
+        server.reveal = True
+        await app._refresh(view)
+        assert view.session == server.admitted
+        assert not view.uncertain and view.pending_session_id is None
+        assert editor.text == "Following request"
+        assert len([method for method, _ in server.calls if method == "chat.stream"]) == 1
+        assert "new_session" not in view.submission(editor.text)
+
+
+@pytest.mark.asyncio
+async def test_send_checkpoint_failure_keeps_input_without_admitting_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = Server()
+    app = ConversationApp(server, agent_id="main")
+
+    async def failing_checkpoint() -> None:
+        raise OSError("Unavailable local draft storage")
+
+    monkeypatch.setattr(app, "persist_drafts", failing_checkpoint)
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        app.query_one("#composer", TextArea).load_text("Retain this request")
+        await app.action_send().wait()
+        assert not server.sent.is_set()
+        assert app.conversation is not None
+        assert app.conversation.draft == "Retain this request"
+        assert not app.conversation.uncertain
+
+
+@pytest.mark.asyncio
+async def test_sessionless_command_does_not_adopt_its_proposed_session() -> None:
+    class CommandServer(Server):
+        @override
+        async def rpc(self, method: str, params: JsonObject | None = None) -> JsonObject:
+            if method == "chat.stream":
+                return {"command_handled": True, "data": {"command": "status"}}
+            return await super().rpc(method, params)
+
+    app = ConversationApp(CommandServer(), agent_id="main", project_id="project-one")
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        app.query_one("#composer", TextArea).load_text("/status")
+        await app.action_send().wait()
+        assert app.conversation is not None
+        assert app.conversation.session is None
+        assert app.conversation.pending_session_id is None
+        assert app.conversation.draft == "" and not app.conversation.uncertain
+
+
+@pytest.mark.asyncio
+async def test_scoped_rename_move_and_deletion_keep_local_drafts() -> None:
+    app = ConversationApp(Server(), agent_id="main")
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        view = app.conversation
+        assert view is not None
+        app.query_one("#composer", TextArea).load_text("Unsent context")
+        await pilot.pause()
+        displaced = draft_record(view)
+        assert displaced is not None
+        app.recovered_drafts["displaced"] = displaced
+        app.recovered_drafts["other-session"] = {**displaced, "session": "other-session"}
+        saved_edit = {
+            **app._saved_input(view),
+            "operation": "chat.edit",
+            "message_id": "message-one",
+            "uncertain": True,
+            "request": {"agent_id": "main", "session_id": "session-one"},
+        }
+        app.saved_drafts.append(saved_edit)
+        old_key = view.key
+        await app._resource_changed(
+            {"kind": "agents", "scope": {"old_agent_id": "main", "new_agent_id": "renamed"}}
+        )
+        assert view.agent == "renamed" and old_key not in app.views
+        assert displaced["agent"] == saved_edit["agent"] == "renamed"
+        await app._resource_changed(
+            {
+                "kind": "sessions",
+                "scope": {
+                    "agent_id": "renamed",
+                    "session_id": "session-one",
+                    "moved_to_agent_id": "worker@project",
+                },
+            }
+        )
+        assert app.conversation is view and view.agent == "worker@project"
+        assert view.draft == "Unsent context"
+        assert displaced["agent"] == saved_edit["agent"] == "worker@project"
+        assert app.recovered_drafts["other-session"]["agent"] == "renamed"
+        assert saved_edit["request"]["agent_id"] == "main"
+        await app._resource_changed(
+            {
+                "kind": "sessions",
+                "scope": {
+                    "agent_id": "worker",
+                    "project_id": "another-project",
+                    "deleted_session_id": "session-one",
+                },
+            }
+        )
+        assert view.available
+        await app._resource_changed(
+            {
+                "kind": "sessions",
+                "scope": {
+                    "agent_id": "worker",
+                    "project_id": "project",
+                    "deleted_session_id": "session-one",
+                    "next_session_id": None,
+                },
+            }
+        )
+        assert not view.available and app.conversation is not view
+        saved = app.saved_drafts[-1]
+        assert (saved["agent"], saved["session"], saved["text"]) == (
+            "worker@project",
+            "session-one",
+            "Unsent context",
+        )

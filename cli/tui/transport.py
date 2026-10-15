@@ -14,7 +14,7 @@ import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal, Self, cast
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 from websockets.asyncio.client import connect
@@ -178,6 +178,15 @@ class TerminalClient:
     async def download(self, url: str, destination: Path) -> None:
         """Stream to a newly created local file; never replace an existing file."""
         path = self.server_path(url)
+        parsed = urlsplit(path)
+        if parsed.path.startswith("/api/files/"):
+            query = [
+                (key, value)
+                for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+                if key != "download"
+            ]
+            query.append(("download", "true"))
+            path = urlunsplit(("", "", parsed.path, urlencode(query), ""))
         opened = False
         try:
             async with self.http.stream("GET", path) as response:
