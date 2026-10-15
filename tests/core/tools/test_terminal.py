@@ -36,7 +36,7 @@ from core.tools.terminal_backend import UnpassableArgumentError
 from core.tools.terminal_manager import TerminalManager, TerminalOwner, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure
 from core.utils.paths import model_path
-from core.utils.tokens import estimate_json_tokens
+from core.utils.tokens import _estimation_encoding, estimate_json_tokens
 from tests.core.tools.terminal_helpers import call, details, make_context
 from tests.core.tools.terminal_helpers import manager as manager
 from tests.core.tools.terminal_manager_helpers import (
@@ -125,6 +125,8 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
     ]
 
     definitions = registry.provider_definitions(allowed_tools=[TERMINAL_TOOL_NAME])
+    # This is the warmed tokenizer budget, not the temporary startup fallback.
+    _estimation_encoding()
     assert estimate_json_tokens(definitions[0])[0] <= 760
     for profile in ("explicit_non_strict", "omit_strict"):
         rendered = render_tool_definitions(definitions, profile=profile)[0]
