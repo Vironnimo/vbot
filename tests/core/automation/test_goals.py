@@ -26,12 +26,8 @@ _ADDRESS = SessionAddress(project_id=None, agent_id="coder", session_id="session
 Turn = Callable[[Run], Awaitable[None]]
 
 
-async def _works(run: Run) -> None:
-    run.succeeded_tool_call_names.add("bash")
-
-
-async def _talks(_run: Run) -> None:
-    """A turn that only answers, without a successful Tool call."""
+async def _works(_run: Run) -> None:
+    """A turn that only answers: a goal continues without a Tool call."""
 
 
 class _GoalChatLoop:
@@ -133,7 +129,6 @@ class _Harness:
 
 def _marks(goals: GoalService, status: Any) -> Turn:
     async def turn(run: Run) -> None:
-        run.succeeded_tool_call_names.add("bash")
         await goals.update_from_agent(_ADDRESS, status, run_id=run.id)
 
     return turn
@@ -184,7 +179,6 @@ async def test_the_last_automatic_turn_says_so_and_the_limit_pauses_the_goal(
 @pytest.mark.parametrize(
     ("turn", "reason", "note"),
     [
-        (_talks, "no_progress", "an automatic turn ended without a successful tool call"),
         ("fail", "run_failed", "your turn failed"),
         ("cancel", "stop", "the user stopped your turn"),
     ],

@@ -422,7 +422,6 @@ export default Object.freeze({
   'chat.goal.status.paused': 'Goal paused',
   'chat.goal.status.complete': 'Goal complete',
   'chat.goal.pauseReason.limit': 'turn limit reached',
-  'chat.goal.pauseReason.no_progress': 'no progress',
   'chat.goal.pauseReason.run_failed': 'turn failed',
   'chat.goal.pauseReason.stop': 'stopped',
   'chat.goal.pauseReason.restart': 'vBot restarted',

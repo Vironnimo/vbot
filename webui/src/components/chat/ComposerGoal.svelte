@@ -14,7 +14,6 @@
   const STATUSES = new Set(['active', 'blocked', 'paused', 'complete']);
   const PAUSE_REASONS = new Set([
     'limit',
-    'no_progress',
     'run_failed',
     'stop',
     'restart',

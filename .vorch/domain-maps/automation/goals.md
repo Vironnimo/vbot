@@ -23,7 +23,7 @@ does not carry it. Session summaries (`session.get`, `session.list`) expose
 | `complete` | The Agent reported it done. | `/goal resume`, a new `/goal <objective>` |
 
 Pause reasons: `user` (`/goal pause`), `agent` (`update_goal` `paused`), and the
-kernel's `stop`, `run_failed`, `no_progress`, `limit`, `restart`, `takeover`.
+kernel's `stop`, `run_failed`, `limit`, `restart`, `takeover`.
 A kernel pause writes one note (`The goal was paused because <reason>. The user
 can resume it with /goal resume.`); `user` and `agent` write none, since the one
 who paused already knows. Background results never resume a paused or blocked
@@ -38,23 +38,24 @@ observer on every Run. After the Run's terminal commit, a spawned decision runs:
    `stop`. `failed` or `interrupted`: pause `run_failed`.
 2. `blocked`: reactivate only for a reactivating Run (table above).
 3. Not `active`: nothing.
-4. An automatic goal Run with no successful Tool call other than `update_goal`
-   (`Run.succeeded_tool_call_names`): pause `no_progress`. User Runs and
-   background-result Runs are not judged.
-5. `turns >= max_turns`: pause `limit`.
-6. Queued input for the Session: nothing; that Run's end decides again.
-7. Running work whose result wakes the Session (a direct Sub-Agent child with
+4. `turns >= max_turns`: pause `limit`.
+5. Queued input for the Session: nothing; that Run's end decides again.
+6. Running work whose result wakes the Session (a direct Sub-Agent child with
    activity, or `CommandManager.has_pending_delivery`): wait. The result's Run
    decides again; a fallback continues after `GOAL_WAIT_FALLBACK_SECONDS`
    (10 minutes), because a command such as a dev server never ends.
-8. Otherwise count the turn and start an internal `system` Run through
+7. Otherwise count the turn and start an internal `system` Run through
    `ChatLoop.start_run` with the Session's latest reply surface and the input
    `GOAL_CONTINUE_TEXT`, or `GOAL_LAST_TURN_TEXT` for the turn that reaches the
    limit. A Channel surface relays the Run through `set_run_relay`. A start that
    loses the Session to another Run uncounts the turn; a failed start pauses
    `run_failed`.
 
-Goal Run ids are tracked in memory only. A Runtime start pauses every `active`
+There is no progress check: a turn without a Tool call continues the goal, since
+goals such as writing or counting need none (live eval 2026-10-16: a counting
+goal paused after its first automatic turn under the former `no_progress` rule;
+user decision to drop it). Waiting for running work prevents idle turns, and the
+limit bounds the rest. A Runtime start pauses every `active`
 goal with `restart` before any Run starts (`pause_after_restart`), so no goal
 continues unattended after a crash or update.
 
@@ -96,7 +97,8 @@ publishes `resource_changed(sessions)` for the Session through
 ## Deviations from the plan
 
 - No `RunKind.GOAL`: automatic Runs are `system`, Runs from set and resume are
-  internal `user` Runs; the in-memory id set marks goal Runs.
+  internal `user` Runs.
+- No `no_progress` pause (Continuation).
 - The goal-set note is found by its prefix, not by a note id in metadata.
 - The indicator sits above the composer, not in the chat header.
 

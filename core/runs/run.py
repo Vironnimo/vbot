@@ -410,8 +410,6 @@ class Run:
         self.iteration_count = 0
         self.tool_call_count = 0
         self.tool_call_names: set[str] = set()
-        # Tools with at least one call that returned a success envelope.
-        self.succeeded_tool_call_names: set[str] = set()
         self.input_token_total = 0
         self.output_token_total = 0
         # Executor-supplied facts for the terminal log line: the Model route

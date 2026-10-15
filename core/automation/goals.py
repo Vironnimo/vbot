@@ -3,8 +3,8 @@
 A goal lives in Session metadata (``SESSION_GOAL_META_KEY``). While it is
 active, the end of every completed Run of its Session starts the next
 automatic Run, until the Agent marks the goal complete, blocked or paused with
-``update_goal``, or the kernel pauses it (a stop, a failed Run, an automatic
-Run without progress, the turn limit, a Runtime restart or an Agent Takeover).
+``update_goal``, or the kernel pauses it (a stop, a failed Run, the turn limit,
+a Runtime restart or an Agent Takeover).
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ from core.sessions import (
     SESSION_GOAL_NOTE_PREFIX,
     SessionAddress,
 )
-from core.tools import UPDATE_GOAL_TOOL_NAME
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -38,9 +37,7 @@ _LOGGER = get_logger("automation.goals")
 
 GoalStatus = Literal["active", "paused", "blocked", "complete"]
 AgentGoalStatus = Literal["complete", "blocked", "paused"]
-PauseReason = Literal[
-    "user", "stop", "limit", "no_progress", "run_failed", "restart", "takeover", "agent"
-]
+PauseReason = Literal["user", "stop", "limit", "run_failed", "restart", "takeover", "agent"]
 
 DEFAULT_GOAL_TURN_LIMIT = 30
 MAX_GOAL_TURN_LIMIT = 200
@@ -69,7 +66,6 @@ GOAL_PAUSED_TEXT = "The goal was paused because {reason}. The user can resume it
 _PAUSE_NOTE_REASONS: dict[str, str] = {
     "stop": "the user stopped your turn",
     "run_failed": "your turn failed",
-    "no_progress": "an automatic turn ended without a successful tool call",
     "limit": "it reached its limit of {limit} automatic turns",
     "restart": "vBot restarted",
     "takeover": "the session moved to another Agent",
@@ -79,7 +75,6 @@ _PAUSE_STATUS_REASONS: dict[str, str] = {
     "user": "paused with /goal pause",
     "stop": "the turn was stopped",
     "limit": "it reached its limit of automatic turns",
-    "no_progress": "an automatic turn made no progress",
     "run_failed": "a turn failed",
     "restart": "vBot restarted",
     "takeover": "the session moved to another agent",
@@ -135,8 +130,6 @@ class GoalService:
         self._run_relay: Callable[[Run, ReplySurface], Awaitable[None]] | None = None
         self._changed_callbacks: list[Callable[[SessionAddress], None]] = []
         # Automatic Runs: only they count against the limit and must make progress.
-        self._goal_runs: set[str] = set()
-        self._starting: set[SessionAddress] = set()
         self._deferred: dict[SessionAddress, asyncio.Task[None]] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._unobserve: Callable[[], None] | None = None
@@ -280,11 +273,7 @@ class GoalService:
         """Pause an open goal in metadata; returns the goal before, or ``None``. Blocking."""
         previous: dict[str, Any] = {}
         # Blocked waits for the user anyway; only work in progress fails or runs out.
-        pausable = (
-            ("active",)
-            if reason in ("run_failed", "no_progress", "limit")
-            else ("active", "blocked")
-        )
+        pausable = ("active",) if reason in ("run_failed", "limit") else ("active", "blocked")
 
         def mutate(metadata: dict[str, Any]) -> None:
             goal = _goal(metadata.get(SESSION_GOAL_META_KEY))
@@ -445,8 +434,6 @@ class GoalService:
 
     def _run_started(self, run: Run) -> None:
         address = _address(run)
-        if address in self._starting:
-            self._goal_runs.add(run.id)
         # This Run's end decides again; a pending wait is no longer needed.
         self._cancel_deferred(address)
 
@@ -456,8 +443,6 @@ class GoalService:
         run.add_completion_observer(finished)
 
     async def _after_run(self, run: Run, status: RunStatus) -> None:
-        goal_run = run.id in self._goal_runs
-        self._goal_runs.discard(run.id)
         address = _address(run)
         # Status and cancel_reason on the Run are the facts decided here.
         with contextlib.suppress(Exception):
@@ -479,9 +464,6 @@ class GoalService:
                 return
             goal = {**goal, "status": "active", "turns": 0}
         if goal["status"] != "active":
-            return
-        if goal_run and not (run.succeeded_tool_call_names - {UPDATE_GOAL_TOOL_NAME}):
-            await self._pause(address, "no_progress")
             return
         if int(goal.get("turns", 0)) >= int(goal.get("max_turns", DEFAULT_GOAL_TURN_LIMIT)):
             await self._pause(address, "limit")
@@ -536,7 +518,7 @@ class GoalService:
         while run is None:
             try:
                 run = await self._start_run(
-                    address, message, reply_surface, run_kind=RunKind.SYSTEM, goal_run=True
+                    address, message, reply_surface, run_kind=RunKind.SYSTEM
                 )
             except ActiveRunError:
                 active = self._run_manager.active_run(
@@ -621,10 +603,8 @@ class GoalService:
     async def _start_user_run(
         self, address: SessionAddress, reply_surface: ReplySurface, message: str
     ) -> Run:
-        """A Run the user started with /goal; it neither counts nor needs progress."""
-        return await self._start_run(
-            address, message, reply_surface, run_kind=RunKind.USER, goal_run=False
-        )
+        """A Run the user started with /goal; it does not count as an automatic turn."""
+        return await self._start_run(address, message, reply_surface, run_kind=RunKind.USER)
 
     async def _start_run(
         self,
@@ -633,22 +613,16 @@ class GoalService:
         reply_surface: ReplySurface | None,
         *,
         run_kind: RunKind,
-        goal_run: bool,
     ) -> Run:
-        if goal_run:
-            self._starting.add(address)
-        try:
-            return await self._chat_loop.start_run(
-                address.agent_id,
-                message,
-                session_id=address.session_id,
-                internal=True,
-                reply_surface=reply_surface,
-                project_id=address.project_id,
-                run_kind=run_kind,
-            )
-        finally:
-            self._starting.discard(address)
+        return await self._chat_loop.start_run(
+            address.agent_id,
+            message,
+            session_id=address.session_id,
+            internal=True,
+            reply_surface=reply_surface,
+            project_id=address.project_id,
+            run_kind=run_kind,
+        )
 
     async def _latest_reply_surface(self, address: SessionAddress) -> ReplySurface | None:
         try:
