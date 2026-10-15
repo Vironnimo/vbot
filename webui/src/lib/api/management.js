@@ -6,6 +6,28 @@ import {
   requirePlainObject,
 } from './transport.js';
 
+// Settings and pickers ask for the same catalogs in one render turn. Share
+// only a read in flight: subsequent reads still observe the server anew.
+const pendingCatalogReads = new Map();
+
+export function invalidateCatalogReads() {
+  pendingCatalogReads.clear();
+}
+
+function readCatalog(method, params, options) {
+  // A caller's cancellation, transport or server target belongs to that call.
+  if (Object.keys(options).length) return rpc(method, params, options);
+  const key = JSON.stringify([method, Object.entries(params).sort()]);
+  if (!pendingCatalogReads.has(key)) {
+    const read = rpc(method, params).finally(() => {
+      if (pendingCatalogReads.get(key) === read)
+        pendingCatalogReads.delete(key);
+    });
+    pendingCatalogReads.set(key, read);
+  }
+  return pendingCatalogReads.get(key);
+}
+
 export function listAgents(options = {}) {
   return rpc('agent.list', {}, options);
 }
@@ -76,7 +98,7 @@ export function deleteAgent(id, { permanent = false } = {}, options = {}) {
 
 export function listModels(params = {}, options = {}) {
   requirePlainObject(params, 'Model filters must be an object', 'model.list');
-  return rpc('model.list', params, options);
+  return readCatalog('model.list', params, options);
 }
 
 export function refreshModelDatabase(params = {}, options = {}) {
@@ -89,7 +111,7 @@ export function refreshModelDatabase(params = {}, options = {}) {
 }
 
 export function listConnections(options = {}) {
-  return rpc('connection.list', {}, options);
+  return readCatalog('connection.list', {}, options);
 }
 
 export function setConnectionEnabled(params = {}, options = {}) {

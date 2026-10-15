@@ -1,4 +1,5 @@
 import { formatAgentAddress } from './agentAddress.js';
+import { invalidateCatalogReads } from './api.js';
 import { mergeBoundedEntries } from './clientCaches.js';
 import { noteInvalidation } from './clientMetrics.js';
 import {
@@ -202,6 +203,7 @@ export function createAppController({
       return;
     }
     if (event.type === CONNECTION_READY_EVENT_TYPE) {
+      invalidateCatalogReads();
       state.connectionSnapshot = event;
       runEvents.resetActiveRuns(event.active_runs);
       const refreshOwners = [
@@ -308,6 +310,7 @@ export function createAppController({
     }
     const tokenKeys = tokenKeysForKind(kind);
     if (tokenKeys.includes(RESOURCE_TOKEN_MODELS)) {
+      invalidateCatalogReads();
       state.modelsRefreshToken += 1;
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_MEMORIES)) {
