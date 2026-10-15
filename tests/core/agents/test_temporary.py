@@ -29,6 +29,8 @@ from tests.core.chat.chat_loop_support import (
     StubAgent,
     StubCompactionService,
     StubModels,
+    StubProject,
+    StubProjects,
     StubRuntime,
     StubSkill,
     StubSkills,
@@ -104,13 +106,16 @@ def _participant_runtime(tmp_path: Path, content: str, **runtime_options: Any) -
     return runtime
 
 
-def _bind_participant(runtime: StubRuntime, tmp_path: Path, **config: Any) -> Any:
+def _bind_participant(
+    runtime: StubRuntime, tmp_path: Path, *, project_id: str | None = None, **config: Any
+) -> Any:
     registry = runtime.agent_resolver.temporary_agents
     assert registry is not None
     return registry.create(
         owner_name="swarm",
         group_id="group",
         participant_id="participant",
+        project_id=project_id,
         config=_config(tmp_path, model="openai/gpt-5.2", **config),
     )
 
@@ -266,14 +271,26 @@ def test_temporary_agent_config_rejects_an_invalid_snapshot(
 
 
 @pytest.mark.asyncio
-async def test_temporary_session_runs_only_through_protected_chat_path(tmp_path: Path) -> None:
-    runtime = _participant_runtime(tmp_path, "participant result")
-    binding = _bind_participant(runtime, tmp_path, instructions="Work only on the shared goal.")
+@pytest.mark.parametrize("project_id", [None, "selected"])
+async def test_temporary_session_runs_only_through_protected_chat_path(
+    tmp_path: Path, project_id: str | None
+) -> None:
+    runtime = _participant_runtime(
+        tmp_path,
+        "participant result",
+        projects=StubProjects({"selected": StubProject("selected", str(tmp_path), [])}),
+    )
+    binding = _bind_participant(
+        runtime, tmp_path, project_id=project_id, instructions="Work only on the shared goal."
+    )
     loop = build_chat_loop(runtime)
     try:
         with pytest.raises(ChatError, match="managed by an Extension"):
             await loop.start_run(
-                binding.address.agent_id, "bypass", session_id=binding.address.session_id
+                binding.address.agent_id,
+                "bypass",
+                session_id=binding.address.session_id,
+                project_id=project_id,
             )
         run = await loop.start_temporary_run(binding, "shared goal")
         result = await run.wait()
@@ -282,7 +299,12 @@ async def test_temporary_session_runs_only_through_protected_chat_path(tmp_path:
         assert [message.content for message in messages if message.role == "user"] == [
             "shared goal"
         ]
-        assert runtime.skills_for_calls[-1] == (None, None)
+        assert run.working_project_id == project_id
+        assert runtime.skills_for_calls[-1] == (project_id, None)
+        assert [
+            context.project_id
+            for context in runtime.system_prompts.render_working_project_context_calls
+        ] == ([project_id] if project_id is not None else [])
         assert runtime.system_prompts.render_soul_calls == 0
         assert runtime.system_prompts.render_memory_files_calls == 0
     finally:

@@ -647,6 +647,9 @@ class ChatLoop:
         agent = await self._dependencies.agent_resolver.resolve_temporary_agent_async(
             binding.address, generation_id=binding.generation_id, session=binding.address
         )
+        working_project_id = await self._dependencies.agent_resolver.resolve_working_project_async(
+            binding.address.project_id, agent, session_id=binding.address.session_id
+        )
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
         await self._get_session_async(
@@ -664,7 +667,10 @@ class ChatLoop:
             binding.address,
             lambda run: self._execution._execute_run(run, request),
             admission=RunAdmission(
-                contributes_to_agent_activity=False, owner=owner, input_id=input_id
+                working_project_id=working_project_id,
+                contributes_to_agent_activity=False,
+                owner=owner,
+                input_id=input_id,
             ),
         )
 
