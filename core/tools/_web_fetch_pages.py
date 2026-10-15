@@ -327,7 +327,7 @@ def _find_text(
             next_offset = spans[-1][1] if len(trial) == len(spans) else position
             break
         spans = trial
-    searched = f"after character {offset}" if offset else "in the whole page"
+    searched = f"after character {offset}" if offset else f"in {_VIEW_NAMES[scope]}"
     if not spans:
         sections = (
             ", including navigation and footers"
@@ -374,10 +374,10 @@ def _past_the_end(snapshot: dict[str, Any], scope: str, offset: int) -> str:
     other = "main" if scope == "page" else "page"
     length = len(snapshot["page" if scope == "page" else "content"])
     situation = (
-        f"Position {offset} is past the end of {_VIEW_NAMES[scope]} of saved page "
-        f"{snapshot['ref']} ({length} characters)."
+        f"Position {offset} is {'at' if offset == length else 'past'} the end of "
+        f"{_VIEW_NAMES[scope]} of saved page {snapshot['ref']} ({length} characters)."
     )
-    if offset <= len(snapshot["page" if other == "page" else "content"]):
+    if offset < len(snapshot["page" if other == "page" else "content"]):
         ref = _continuation(snapshot["ref"], other, offset)
         return (
             f"{situation} In {_VIEW_NAMES[other]}, {ref} reads on from there: "
@@ -389,11 +389,12 @@ def _past_the_end(snapshot: dict[str, Any], scope: str, offset: int) -> str:
 def read_page(snapshot: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
     """Return a contiguous part or literal search hits with copyable follow-up calls."""
     find = arguments.get("find")
-    _, view, cursor = _decode_ref(arguments.get("ref", snapshot["ref"]))
-    scope = arguments.get("scope", "page" if find else view)
+    ref = arguments.get("ref", snapshot["ref"])
+    identifier, view, cursor = _decode_ref(ref)
+    scope = arguments.get("scope", "page" if find and ref == identifier else view)
     text = snapshot["page" if scope == "page" else "content"]
-    offset = arguments.get("offset", cursor if not find or view == "page" else 0)
-    if offset > len(text):
+    offset = arguments.get("offset", cursor if scope == view else 0)
+    if offset and offset >= len(text):
         return tool_failure(
             "invalid_arguments", _past_the_end(snapshot, scope, offset), retryable=False
         )

@@ -252,13 +252,19 @@ async def test_find_in_plain_text_keeps_its_asterisks_and_pipes(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_search_continuations_recover_all_matches_without_fetching(tmp_path, monkeypatch):
+@pytest.mark.parametrize("scope", ["main", "page"])
+async def test_search_continuations_recover_all_matches_without_fetching(
+    tmp_path, monkeypatch, scope
+):
     body = "\n".join("Filler " * 100 + f"Needle{i:02d}" for i in range(30))
     network = AsyncMock(return_value=make_result(text=body))
     monkeypatch.setattr("core.tools._public_http._http_get", network)
     tool, context = web_fetch_registry(), make_context(tmp_path)
-    response = await tool.dispatch(context, {"url": "https://example.com/", "find": "Needle"})
+    response = await tool.dispatch(
+        context, {"url": "https://example.com/", "find": "Needle", "scope": scope}
+    )
     found = set()
+    cursors = set()
     while True:
         assert response["ok"]
         data = response["data"]
@@ -269,8 +275,35 @@ async def test_search_continuations_recover_all_matches_without_fetching(tmp_pat
         assert data["more"].startswith("More matches. Continue with ")
         follow_up = continuation(data)
         assert set(follow_up) == {"ref", "find"}
+        assert follow_up["ref"] not in cursors
+        cursors.add(follow_up["ref"])
         response = await tool.dispatch(context, follow_up)
     assert found == {f"Needle{i:02d}" for i in range(30)}
+    network.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("find", [None, "Needle"])
+@pytest.mark.parametrize("extra", [0, 1])
+async def test_a_reference_at_or_beyond_the_end_has_no_readable_content(
+    tmp_path, monkeypatch, find, extra
+):
+    body = "Needle\n" * 10
+    network = AsyncMock(return_value=make_result(text=body, headers={"content-type": "text/plain"}))
+    monkeypatch.setattr("core.tools._public_http._http_get", network)
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+    page = await tool.dispatch(context, {"url": "https://example.com/"})
+    ref = page["data"]["ref"]
+    args = {"ref": f"{ref}.m.{len(body) + extra}"}
+    if find:
+        args["find"] = find
+    result = await tool.dispatch(context, args)
+    assert not result["ok"]
+    assert result["error"]["code"] == "invalid_arguments"
+    # Its suggested restart is usable even when both views end at this position.
+    restart = json.loads(re.search(r"(\{.*\})", result["error"]["message"])[1])
+    read = await tool.dispatch(context, restart)
+    assert read["ok"] and read["data"]["content"] == body
     network.assert_awaited_once()
 
 
