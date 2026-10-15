@@ -65,11 +65,16 @@ _DISCONNECTED = (
     "Call this tool again through mcp_example, which reconnects first. If it cannot connect, "
     "tell the user that the MCP server example cannot be reached.\nretryable: true"
 )
+_REMOVED = (
+    "Error (tool_not_ready): The MCP connection example was removed, so nothing was run. "
+    "Tell the user if it is needed.\nretryable: false"
+)
 
 
 @pytest.mark.asyncio
-async def test_disabling_a_connection_that_ignores_cancellation_still_retires_its_tools(
-    host, monkeypatch, caplog
+@pytest.mark.parametrize("operation", ["disable", "remove"])
+async def test_stopping_a_connection_that_ignores_cancellation_still_retires_its_tools(
+    host, monkeypatch, caplog, operation
 ):
     service, registry = await start_service(host)
     service.connections["example"] = validate_connection(
@@ -101,21 +106,39 @@ async def test_disabling_a_connection_that_ignores_cancellation_still_retires_it
     runner._task = asyncio.create_task(stuck())
     await asyncio.sleep(0)  # enter the loop so cancellation is actually ignored
     monkeypatch.setattr("resources.extensions.mcp.client.CONNECTION_CLOSE_TIMEOUT_SECONDS", 0.05)
+    close = runner.close
+
+    async def inspect_before_close():
+        if operation == "remove":
+            # Removal has committed, but the Tools stay registered until close ends.
+            assert "example" not in service.connections
+            assert not set(names) & set(_tool_names(registry, ready_only=True))
+            for name in names:
+                result = await registry.dispatch(
+                    replace(context(host), tool_name=name), {}, allowed_tools=names
+                )
+                assert model_text(result) == _REMOVED
+        await close()
+
+    monkeypatch.setattr(runner, "close", inspect_before_close)
 
     try:
         with caplog.at_level(logging.WARNING, logger="vbot.extensions.mcp"):
-            disabling = asyncio.create_task(service.manage("disable", {"id": "example"}))
-            done, _ = await asyncio.wait({disabling}, timeout=5)
-            assert done, "disabling must not wait forever on a connection ignoring cancellation"
-            await disabling
+            stopping = asyncio.create_task(service.manage(operation, {"id": "example"}))
+            done, _ = await asyncio.wait({stopping}, timeout=5)
+            assert done, "stopping must not wait forever on a connection ignoring cancellation"
+            await stopping
 
         # The Agent no longer sees the connection's Tools; naming one says why.
         assert not set(names) & set(_tool_names(registry, ready_only=True))
-        for name in names:
-            result = await registry.dispatch(
-                replace(context(host), tool_name=name), {}, allowed_tools=names
-            )
-            assert model_text(result) == _DISABLED
+        if operation == "disable":
+            for name in names:
+                result = await registry.dispatch(
+                    replace(context(host), tool_name=name), {}, allowed_tools=names
+                )
+                assert model_text(result) == _DISABLED
+        else:
+            assert not set(names) & set(_tool_names(registry))
         assert runner.state == "disconnected"
         assert "did not stop within" in caplog.text
     finally:
