@@ -197,6 +197,26 @@ class ChannelStateStore:
                 self._install_roles(normalized_id, _NO_ACCESS_ROLES)
         return reset
 
+    def clear_agent_routes(self, channel_id: str) -> None:
+        """Discard Session pointers and buttons when another Agent takes a Channel.
+
+        Platform access, receipts and the polling watermark still belong to the
+        same platform account and stay intact. Existing owed replies carry
+        their own original Agent and Session, independently of these routes.
+        """
+        normalized_id = _normalize_channel_id(channel_id)
+
+        def clear(connection: sqlite3.Connection) -> None:
+            _registered_self_user_id(connection, normalized_id)
+            connection.execute(
+                "DELETE FROM channel_conversations WHERE channel_id = ?", (normalized_id,)
+            )
+            connection.execute(
+                "DELETE FROM channel_run_buttons WHERE channel_id = ?", (normalized_id,)
+            )
+
+        self._database.write(clear)
+
     def unregister(self, channel_id: str) -> None:
         """Delete a Channel and every state row it owns in one transaction."""
         normalized_id = _normalize_channel_id(channel_id)

@@ -151,16 +151,22 @@ async def test_migration_waits_for_an_in_flight_disable_and_keeps_it_disabled(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "replacement",
-    ["restart", "platform-change", "failed-platform-change", "cancelled-platform-change"],
+    [
+        "restart",
+        "agent-change",
+        "platform-change",
+        "failed-platform-change",
+        "cancelled-platform-change",
+    ],
 )
 async def test_adapter_replacement_drains_migration_before_loading_current_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str
 ) -> None:
-    change_platform = replacement != "restart"
+    change_platform = "platform" in replacement
     storage = ChannelStorage(tmp_path)
     config = make_config(enabled=True, allowed_chat_ids=["-500"])
     storage.save(config)
-    service = make_service(tmp_path)
+    service = make_service(tmp_path, known_agent_ids={"assistant", "other"})
     await service._state.grant_group_admin(config.id, "-500", "owner")
     stopping = asyncio.Event()
     release = asyncio.Event()
@@ -194,9 +200,11 @@ async def test_adapter_replacement_drains_migration_before_loading_current_confi
     try:
         await asyncio.wait_for(adapters[0].started.wait(), timeout=5)
         fields = {"platform": "discord"} if change_platform else {"response_mode": "all"}
+        if replacement == "agent-change":
+            fields = {"agent_id": "other"}
         updating = asyncio.create_task(service.update_channel(config.id, **fields))
         await asyncio.wait_for(stopping.wait(), timeout=5)
-        if not change_platform:
+        if replacement == "restart":
             await asyncio.wait_for(updating, timeout=5)
             # A restart while shutdown is pending coalesces with the update's
             # replacement; it does not require constructing a third adapter.
@@ -232,7 +240,10 @@ async def test_adapter_replacement_drains_migration_before_loading_current_confi
             assert saved.allowed_chat_ids == ["-500"]
             assert service._state.role_for(config.id, "-100500", "owner") == "member"
         else:
-            assert saved.response_mode == "all"
+            assert saved.response_mode == (
+                config.response_mode if replacement == "agent-change" else "all"
+            )
+            assert saved.agent_id == ("other" if replacement == "agent-change" else "assistant")
             assert saved.allowed_chat_ids == ["-100500"]
             assert service._state.role_for(config.id, "-100500", "owner") == "admin"
         assert len(adapters) == 2

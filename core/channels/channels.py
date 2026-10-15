@@ -578,7 +578,14 @@ class ChannelService:
         changed: list[str] = []
         for config in await self.list_channels_async():
             if config.agent_id == agent_id:
-                await self.update_channel(config.id, agent_id=new_agent_id)
+                self._require_idle(config.id)
+                with self._config_change(config.id):
+                    current = await self.get_channel(config.id)
+                    if current.agent_id != agent_id:
+                        continue
+                    updated = replace(current, agent_id=new_agent_id)
+                    self._validate_agent_exists(new_agent_id)
+                    await self._change_config(current, updated, agent_renamed=True)
                 changed.append(config.id)
         return tuple(changed)
 
@@ -960,7 +967,9 @@ class ChannelService:
             self._held_config_leases.remove(channel_id)
             self._config_lease(channel_id).release()
 
-    async def _change_config(self, previous: ChannelConfig, updated: ChannelConfig) -> None:
+    async def _change_config(
+        self, previous: ChannelConfig, updated: ChannelConfig, *, agent_renamed: bool = False
+    ) -> None:
         """Persist ``updated``, then bring the adapter in line with it.
 
         The caller holds this Channel's config-change mark. ``channel.json`` is
@@ -975,6 +984,7 @@ class ChannelService:
         """
         channel_id = updated.id
         platform_changed = updated.platform != previous.platform
+        agent_changed = updated.agent_id != previous.agent_id and not agent_renamed
         persisted = False
         was_running = False
 
@@ -992,9 +1002,9 @@ class ChannelService:
             was_running = self._is_running(channel_id) or self._is_stop_in_progress(channel_id)
             if platform_changed and previous.platform == "telegram":
                 self._rollback_chat_migrations[channel_id] = []
-            if was_running or not updated.enabled or platform_changed:
+            if was_running or not updated.enabled or platform_changed or agent_changed:
                 self.stop_channel(channel_id)
-            if platform_changed:
+            if platform_changed or agent_changed:
                 # Drained Telegram handlers may be waiting for this lease.
                 # They leave the replacement platform alone while retaining id
                 # rewrites for rollback. Release before waiting for shutdown.
@@ -1002,12 +1012,32 @@ class ChannelService:
                 stopping = self._adapter_stop_tasks.get(channel_id)
                 if stopping is not None:
                     await asyncio.shield(stopping)
-                if await self._state.database.run_async(
+                if platform_changed and await self._state.database.run_async(
                     self._state.bind_platform, channel_id, updated.platform
                 ):
                     _LOGGER.info("Channel state reset for a new platform (channel=%s)", channel_id)
+                if agent_changed:
+                    await self._state.database.run_async(self._state.clear_agent_routes, channel_id)
+                    # A drained Telegram handler may have migrated its chat id
+                    # after persistence. The replacement needs that allowlist.
+                    updated = await self.get_channel(channel_id)
             if updated.enabled:
-                self.start_channel(channel_id, config_override=updated)
+                try:
+                    self.start_channel(channel_id, config_override=updated)
+                except Exception as error:
+                    if not agent_renamed:
+                        raise
+                    # The Agent and its Sessions already moved. Missing platform
+                    # credentials cannot undo that identity change: retain the
+                    # new config and expose/retry the adapter failure normally.
+                    self._mark_channel_failed(channel_id, str(error) or type(error).__name__)
+                    self._schedule_restart(channel_id)
+                    _LOGGER.error(
+                        "Cannot restart channel adapter after Agent rename (channel=%s): %s",
+                        channel_id,
+                        error,
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
         except BaseException:
             if persisted:
                 await self._restore_config(

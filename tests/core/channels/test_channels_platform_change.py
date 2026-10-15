@@ -60,6 +60,7 @@ class LateWriteAdapter(DelayedStopAdapter):
     async def stop(self) -> None:
         await super().stop()
         await self._state.snapshot_participant_role(_CHANNEL, "-100", "60", "Late")
+        self._state.point_conversation(_CHANNEL, "ch-tg-assistant--100", "group", "ses_late")
 
 
 async def _fill(service: ChannelService) -> None:
@@ -116,11 +117,12 @@ async def _assert_reset(service: ChannelService) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["platform", "agent"])
 async def test_a_platform_change_resets_channel_state_after_the_old_adapter_stopped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
     ChannelStorage(tmp_path).save(make_config(enabled=True))
-    service = make_service(tmp_path)
+    service = make_service(tmp_path, known_agent_ids={"assistant", "other"})
     await _fill(service)
     stop_gate = asyncio.Event()
     events: list[str] = []
@@ -129,7 +131,10 @@ async def test_a_platform_change_resets_channel_state_after_the_old_adapter_stop
     def create_adapter(config: ChannelConfig) -> ChannelAdapter:
         created.append(
             LateWriteAdapter(
-                state=service._state, label=config.platform, stop_gate=stop_gate, events=events
+                state=service._state,
+                label=config.platform if change == "platform" else config.agent_id,
+                stop_gate=stop_gate,
+                events=events,
             )
         )
         return created[-1]
@@ -140,8 +145,12 @@ async def test_a_platform_change_resets_channel_state_after_the_old_adapter_stop
     try:
         await asyncio.wait_for(created[0].started.wait(), timeout=1)
 
-        updating = asyncio.create_task(service.update_channel(_CHANNEL, **_TO_DISCORD))
-        await wait_until(lambda: "stop:telegram:begin" in events)
+        fields = _TO_DISCORD if change == "platform" else {"agent_id": "other"}
+        old_label, new_label = (
+            ("telegram", "discord") if change == "platform" else ("assistant", "other")
+        )
+        updating = asyncio.create_task(service.update_channel(_CHANNEL, **fields))
+        await wait_until(lambda: f"stop:{old_label}:begin" in events)
         # The state waits for the old adapter to finish stopping.
         assert not updating.done()
         assert _recorded_platform(service) == "telegram"
@@ -149,12 +158,20 @@ async def test_a_platform_change_resets_channel_state_after_the_old_adapter_stop
 
         stop_gate.set()
         await asyncio.wait_for(updating, timeout=5)
-        await wait_until(lambda: "start:discord" in events)
+        await wait_until(lambda: f"start:{new_label}" in events)
 
-        assert events.index("stop:telegram:end") < events.index("start:discord")
-        assert _recorded_platform(service) == "discord"
+        assert events.index(f"stop:{old_label}:end") < events.index(f"start:{new_label}")
         # The old adapter's last write landed before the reset, so it is gone too.
-        await _assert_reset(service)
+        if change == "platform":
+            assert _recorded_platform(service) == "discord"
+            await _assert_reset(service)
+        else:
+            assert _state_rows(service) == {
+                **_FILLED,
+                "channel_conversations": 0,
+                "channel_run_buttons": 0,
+                "channel_participants": 2,
+            }
     finally:
         stop_gate.set()
         await service.aclose()
@@ -162,18 +179,60 @@ async def test_a_platform_change_resets_channel_state_after_the_old_adapter_stop
 
 
 @pytest.mark.asyncio
-async def test_a_disabled_channel_changes_platform_without_an_adapter(tmp_path: Path) -> None:
+@pytest.mark.parametrize("change", ["platform", "agent", "rename"])
+async def test_a_disabled_channel_changes_platform_without_an_adapter(
+    tmp_path: Path, change: str
+) -> None:
     ChannelStorage(tmp_path).save(make_config(enabled=False))
-    service = make_service(tmp_path)
+    service = make_service(tmp_path, known_agent_ids={"assistant", "other"})
     try:
         await _fill(service)
 
-        await service.update_channel(_CHANNEL, **_TO_DISCORD)
-
-        assert _recorded_platform(service) == "discord"
-        await _assert_reset(service)
+        if change == "platform":
+            await service.update_channel(_CHANNEL, **_TO_DISCORD)
+            assert _recorded_platform(service) == "discord"
+            await _assert_reset(service)
+        elif change == "agent":
+            await service.update_channel(_CHANNEL, agent_id="other")
+            assert _state_rows(service) == {
+                **_FILLED,
+                "channel_conversations": 0,
+                "channel_run_buttons": 0,
+            }
+        else:
+            service.start()
+            await service.retarget_agent_async("assistant", "other")
+            assert _state_rows(service) == _FILLED
         assert not service.is_running(_CHANNEL)
     finally:
+        await service.aclose()
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_rename_preserves_routes_when_adapter_credentials_are_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    storage.save(make_config(enabled=False))
+    service = make_service(tmp_path, known_agent_ids={"assistant", "other"})
+    service.start()
+    storage.save(make_config(enabled=True))
+    await _fill(service)
+
+    def unavailable(_config: ChannelConfig) -> ChannelAdapter:
+        raise ChannelConfigError("credential unavailable")
+
+    monkeypatch.setattr(service, "_create_adapter", unavailable)
+    try:
+        assert await service.retarget_agent_async("assistant", "other") == (_CHANNEL,)
+        assert storage.get(_CHANNEL).agent_id == "other"
+        assert _state_rows(service) == _FILLED
+        assert service.is_failed(_CHANNEL)
+        assert service.failure_reason(_CHANNEL) == "credential unavailable"
+        assert _CHANNEL in service._adapter_restart_tasks
+    finally:
+        await service.aclose()
         service.close()
 
 
