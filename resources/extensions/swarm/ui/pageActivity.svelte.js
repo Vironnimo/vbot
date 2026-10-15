@@ -404,7 +404,9 @@ export function createSwarmPageActivity(host) {
     { activate = true, preserve = false, catchUp = false } = {},
   ) {
     if (!host.model.selectedSwarm) return;
-    if (activate) host.model.openTab('participants');
+    if (activate) {
+      if (!(await host.model.openTab('participants'))) return;
+    }
     // A hidden Activity catches up when its tab shows again.
     else if (paused) return;
     const background = !activate;

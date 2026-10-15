@@ -73,9 +73,10 @@ describe('Swarm participant Activity', () => {
     await openParticipant(bridge);
     await tick();
     button(t('swarm.tabs.activity')).click();
-    await tick();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.history a[href]')).not.toBeNull(),
+    );
     const link = document.querySelector('.history a[href]');
-    expect(link).not.toBeNull();
     link.click();
     await tick();
     expect(operation).toHaveBeenCalledWith('link.open', {

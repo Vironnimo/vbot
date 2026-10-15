@@ -497,6 +497,13 @@ describe('SwarmPage overview', () => {
       expect(document.querySelector('.swarm-head')).not.toBeNull(),
     );
     expect(bridge.pushRoute).toHaveBeenLastCalledWith('/swarms/swr-a');
+    // The host can refuse the step while an autosave is unresolved. Keep
+    // showing the current tab until the accepted route arrives.
+    bridge.pushRoute.mockResolvedValueOnce({});
+    button(t('swarm.tabs.usage')).click();
+    await tick();
+    expect(bridge.route).toBe('/swarms/swr-a');
+    expect(document.querySelector('.usage-summary')).toBeNull();
     button(t('swarm.tabs.usage')).click();
     await vi.waitFor(() =>
       expect(bridge.pushRoute).toHaveBeenLastCalledWith('/swarms/swr-a/usage'),
@@ -524,7 +531,19 @@ describe('SwarmPage overview', () => {
       ),
     );
     expect(document.querySelector('.usage-summary')).not.toBeNull();
-    expect(bridge.pushRoute).toHaveBeenCalledTimes(2);
+    expect(bridge.pushRoute).toHaveBeenCalledTimes(3);
+    // A direct profile route can name an item beyond the first list page.
+    overrideOperations(operation, {
+      'profiles.get': () => ({ profile: { ...profile, id: 'prf-later' } }),
+    });
+    bridge.goTo('/profiles/prf-later');
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-profile-editor')).not.toBeNull(),
+    );
+    expect(operation).toHaveBeenCalledWith('profiles.get', {
+      profile_id: 'prf-later',
+    });
+    expect(bridge.route).toBe('/profiles/prf-later');
   });
 
   it('keeps the overview usable when the profile catalog fails and retries on request', async () => {

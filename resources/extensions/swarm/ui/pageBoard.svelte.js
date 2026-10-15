@@ -602,8 +602,8 @@ export function createSwarmPageBoard(host) {
     const held = () =>
       shows(swarm, selectedDiscussion) &&
       posts.some((item) => item.sequence === number);
-    // A step to the Board, which loads only what the post needs.
-    host.stepToBoard();
+    // A refused host transition keeps the current tab and its content.
+    if (!(await host.stepToBoard()) || !current()) return;
     if (number === swarm.goal_post_sequence) {
       if (!fresh) await reload(swarm, null);
       await tick();

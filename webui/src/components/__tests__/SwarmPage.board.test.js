@@ -865,6 +865,12 @@ describe('Swarm Board posts', () => {
     await vi.waitFor(() => expect(cite()).not.toBeNull());
     posts.push({ ...posts[0], id: 'pst-3', sequence: 3, text: 'message-3' });
     const lists = callsTo(operation, 'board.list').length;
+    bridge.pushRoute.mockResolvedValueOnce({});
+    cite().click();
+    await tick();
+    expect(bridge.route).toBe('/swarms/swr-a/participants');
+    expect(cite()).not.toBeNull();
+    expect(callsTo(operation, 'board.list')).toHaveLength(lists);
     cite().click();
     await vi.waitFor(() =>
       expect(document.activeElement.dataset.postNumber).toBe('1'),
