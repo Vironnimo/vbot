@@ -541,7 +541,9 @@ async def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
     session_id = _required_string(params, "session_id")
     run_id = _required_string(params, "run_id")
     try:
-        await state.runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
+        await state.runtime.agent_resolver.resolve_agent_async(
+            project_id, agent_id, require_model=False
+        )
         activity = await state.runtime.chat_sessions.mark_terminal_run_read_async(
             _session_address(agent_id, session_id, project_id), run_id
         )
@@ -580,9 +582,11 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
     try:
         # Resolve both endpoints through the one seam so an unknown source or
         # target agent fails before any file work (mirrors session.create/delete).
-        await resolver.resolve_agent_async(source_project_id, source_agent_id)
+        await resolver.resolve_agent_async(source_project_id, source_agent_id, require_model=False)
         if re_homed:
-            await resolver.resolve_agent_async(target_project_id, target_agent_id)
+            await resolver.resolve_agent_async(
+                target_project_id, target_agent_id, require_model=False
+            )
         fork = await state.runtime.chat_sessions.fork(
             _session_address(source_agent_id, session_id, source_project_id),
             target_agent_id=target_agent_id if target_explicit else None,
@@ -725,7 +729,9 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
         from core.settings.normalizers import normalize_compaction_policy
 
         normalized = normalize_compaction_policy(policy) if policy is not None else None
-        agent = await state.runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
+        agent = await state.runtime.agent_resolver.resolve_agent_async(
+            project_id, agent_id, require_model=False
+        )
         chat_sessions = state.runtime.chat_sessions
 
         # The metadata mutation itself rejects a missing Session.
