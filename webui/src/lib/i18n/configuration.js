@@ -746,7 +746,6 @@ export default Object.freeze({
   'settings.liveVoice.callsError': 'The calls could not be loaded.',
   'settings.liveVoice.callsEmpty': 'No call yet.',
   'settings.liveVoice.callRunning': 'In progress',
-  'settings.liveVoice.openSession': 'Open session',
   'settings.liveVoice.openSessionLabel': 'Open the Session of {title}',
   'settings.specializedModels.imageUnderstanding': 'Image understanding',
   'settings.specializedModels.imageUnderstandingDescription':
