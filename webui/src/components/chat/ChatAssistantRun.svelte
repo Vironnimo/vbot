@@ -69,6 +69,8 @@
     onBackgroundToolCall = () => {},
     backgroundToolCallIds = [],
     onCancelSubAgent = () => {},
+    messageEditingDisabledReason = '',
+    onEditMessage = async () => false,
     // Background command status by command id, durable from the Session and
     // live from the server. A view that follows no commands passes neither
     // and keeps their Tool rows plain; otherwise a command missing from both
@@ -685,7 +687,11 @@
           {/if}
         {/if}
       {:else if child.type === 'user_message'}
-        <ChatTimelineEntry item={{ type: 'message', message: child.message }} />
+        <ChatTimelineEntry
+          item={{ type: 'message', message: child.message }}
+          {messageEditingDisabledReason}
+          {onEditMessage}
+        />
       {:else if child.type === 'assistant_output'}
         {@const working = isRunChildWorking(item, child)}
         <MarkdownContent

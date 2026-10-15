@@ -631,6 +631,8 @@
           ? (currentRun.controls?.background_tool_call_ids ?? [])
           : []}
         {onCancelSubAgent}
+        {messageEditingDisabledReason}
+        {onEditMessage}
       />
     {:else}
       <ChatTimelineEntry

@@ -35,7 +35,7 @@ from core.models.assembly import (
     log_model_data_issue,
 )
 from core.storage.layout import DataDirectoryLayout
-from core.utils.atomic import atomic_write_text
+from core.utils.atomic import atomic_write_text, replace_path
 from core.utils.file_status import exists_strict
 
 MODEL_DATABASE_DIRECTORY_NAME = "models"
@@ -451,12 +451,12 @@ def _replace_directory(
     moved_existing = False
     try:
         if target.exists():
-            target.replace(backup)
+            replace_path(target, backup)
             moved_existing = True
-        staging.replace(target)
+        replace_path(staging, target)
     except OSError:
         if moved_existing and backup.exists() and not target.exists():
-            backup.replace(target)
+            replace_path(backup, target)
         raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)

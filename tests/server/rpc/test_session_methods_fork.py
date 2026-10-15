@@ -77,7 +77,9 @@ async def test_fork_of_a_project_session_stays_in_its_project(tmp_path: Path) ->
     state = make_state(tmp_path, StubAdapter())
     resolved: list[tuple[str | None, str]] = []
 
-    async def resolve_agent_async(project_id: str | None, agent_id: str) -> None:
+    async def resolve_agent_async(
+        project_id: str | None, agent_id: str, **_options: object
+    ) -> None:
         resolved.append((project_id, agent_id))
 
     state.runtime.agent_resolver = SimpleNamespace(resolve_agent_async=resolve_agent_async)

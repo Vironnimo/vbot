@@ -81,6 +81,7 @@ from core.tools.fuzzy_match import (
     _split_lines_preserving_endings,
     dominant_line_ending,
 )
+from core.utils.edit_distance import edit_distance
 
 # Where: below this many correct words a copy must be exact up to spacing.
 _TOLERANT_MIN_WORDS = 3
@@ -390,26 +391,7 @@ def _misspelling(wrong: str, right: str) -> bool:
     if _DIGITS.findall(wrong) != _DIGITS.findall(right):
         return False
     bound = 2 if shorter >= _TWO_ERRORS_MIN_CHARACTERS else 1
-    return _edit_distance(wrong.casefold(), right.casefold(), bound) <= bound
-
-
-def _edit_distance(first: str, second: str, bound: int) -> int:
-    """Optimal string alignment distance, or ``bound + 1`` once it exceeds ``bound``."""
-    if abs(len(first) - len(second)) > bound:
-        return bound + 1
-    earlier: list[int] = []
-    previous = list(range(len(second) + 1))
-    for i, left in enumerate(first, 1):
-        current = [i]
-        for j, right in enumerate(second, 1):
-            value = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (left != right))
-            if i > 1 and j > 1 and left == second[j - 2] and first[i - 2] == right:
-                value = min(value, earlier[j - 2] + 1)
-            current.append(value)
-        if min(current) > bound:
-            return bound + 1
-        earlier, previous = previous, current
-    return previous[-1]
+    return edit_distance(wrong.casefold(), right.casefold(), bound) <= bound
 
 
 class _Speller:

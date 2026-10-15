@@ -179,7 +179,7 @@ _EDITOR_VARIABLES = frozenset(
 )
 _ENVIRONMENT_ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 _LEADING_COMMENTS = re.compile(r"^(?:\s+|//[^\n]*|/\*.*?\*/)*", re.DOTALL)
-_TOML_TABLE = re.compile(r"^\s*\[\s*mcp_servers\b", re.MULTILINE)
+_TOML_TABLE = re.compile(r"^\s*(?:\[\s*mcp_servers\b|mcp_servers\s*=)", re.MULTILINE)
 _URL = re.compile(r"^https?://", re.IGNORECASE)
 _PROMPT_PREFIX = re.compile(r"^\s*(?:\$|>|PS [^>\n]*>)\s+")
 _LINE_CONTINUATION = re.compile(r"[ \t]*[\\^`][ \t]*\r?\n[ \t]*")

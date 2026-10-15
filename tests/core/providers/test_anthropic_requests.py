@@ -352,6 +352,34 @@ async def test_native_messages_blocks_pass_through_unchanged() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("choice", "expected"),
+    [
+        (None, None),
+        ("auto", {"type": "auto"}),
+        ("none", {"type": "none"}),
+        ("any", {"type": "any"}),
+        ("required", {"type": "any"}),
+        (
+            {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": True},
+            {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": True},
+        ),
+    ],
+)
+async def test_tool_selection_uses_messages_wire_objects(choice, expected) -> None:
+    payload = await sent_payload(
+        make_adapter(),
+        [{"role": "user", "content": "Weather?"}],
+        tools=SAMPLE_TOOLS,
+        tool_choice=choice,
+    )
+    if expected is None:
+        assert "tool_choice" not in payload
+    else:
+        assert payload["tool_choice"] == expected
+
+
+@pytest.mark.asyncio
 async def test_canonical_tool_loop_maps_to_messages_wire() -> None:
     payload = await sent_payload(
         make_adapter(),

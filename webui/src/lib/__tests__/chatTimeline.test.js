@@ -665,6 +665,73 @@ describe('History and live Run projection', () => {
 });
 
 describe('Run status projection', () => {
+  it.each(['assistant', 'model_fallback'])(
+    'applies a failed summary after its error to the preceding %s group',
+    (role) => {
+      const state = session();
+      const error = {
+        id: 'error',
+        role: 'error',
+        content: 'Test failure',
+        history_run_id: 'run-failed',
+      };
+      loadHistory(state, [
+        { id: 'user', role: 'user', content: 'Start' },
+        {
+          id: 'work',
+          role,
+          content: 'Partial answer',
+          from_model: 'one',
+          to_model: 'two',
+          history_run_id: 'run-failed',
+        },
+        error,
+        {
+          id: 'summary',
+          role: 'run_summary',
+          run_id: 'run-failed',
+          history_run_id: 'run-failed',
+          status: 'failed',
+          timing: { duration_ms: 3000 },
+        },
+        { id: 'next-user', role: 'user', content: 'Try again' },
+        {
+          id: 'next-answer',
+          role: 'assistant',
+          content: 'Done',
+          history_run_id: 'run-next',
+        },
+        {
+          id: 'next-summary',
+          role: 'run_summary',
+          run_id: 'run-next',
+          history_run_id: 'run-next',
+          status: 'completed',
+        },
+      ]);
+      const items = render(state);
+      expect(items.map((item) => item.type)).toEqual([
+        'message',
+        'assistant_run',
+        'message',
+        'message',
+        'assistant_run',
+      ]);
+      expect(items[1]).toMatchObject({
+        status: 'failed',
+        runId: 'run-failed',
+        durationMs: 3000,
+      });
+      expect(items[2].message).toEqual(error);
+      expect(items[4]).toMatchObject({
+        status: 'completed',
+        runId: 'run-next',
+      });
+      // Reusing the unchanged History must preserve both rows and status.
+      expect(render(state)).toEqual(items);
+    },
+  );
+
   it.each(['cancelled', 'interrupted'])(
     'renders a bare %s Run row from an anchorless Run Summary',
     (status) => {

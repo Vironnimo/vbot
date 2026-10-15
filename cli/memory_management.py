@@ -13,7 +13,7 @@ from cli.server_management import CommandResult, ServerInstance
 _AGENT_NOT_FOUND = "agent_not_found"
 
 
-def memory_list(instance: ServerInstance, agent_id: str) -> CommandResult:
+def memory_list(instance: ServerInstance, agent_id: str, scope: str | None = None) -> CommandResult:
     """Return formatted pinned memory entries from `memory.list` RPC."""
 
     payload = _rpc_call(instance, "memory.list", {"agent_id": agent_id})
@@ -21,7 +21,7 @@ def memory_list(instance: ServerInstance, agent_id: str) -> CommandResult:
         return _memory_failure_result(instance, agent_id, payload.to_command_result())
     return CommandResult(
         ok=True,
-        message=_format_memory_response(payload.data, verb="pinned memory for"),
+        message=_format_memory_response(payload.data, verb="pinned memory for", scope=scope),
         instance=instance,
     )
 
@@ -156,7 +156,7 @@ def _memory_mutation(
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
-def _format_memory_response(data: object, *, verb: str) -> str:
+def _format_memory_response(data: object, *, verb: str, scope: str | None = None) -> str:
     if not isinstance(data, dict):
         return "memory unavailable: unexpected RPC result"
     agent_id = _string_or_default(data.get("agent_id"), "?")
@@ -166,7 +166,7 @@ def _format_memory_response(data: object, *, verb: str) -> str:
         lines.append("no entries")
         return "\n".join(lines)
     total = 0
-    for scope_name in ("agent", "user"):
+    for scope_name in (scope,) if scope is not None else ("agent", "user"):
         entries = scopes.get(scope_name)
         if not isinstance(entries, list):
             entries = []

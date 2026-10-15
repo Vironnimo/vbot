@@ -55,7 +55,7 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
             "env_keys": ["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
         },
         "top_foreground_all_multiline": {
-            "command": ("python --version\npython -m pytest tests/core/tools/test_bash.py -q"),
+            "command": ("python --version\npython -m pytest tests/core/tools/test_shell.py -q"),
             "description": "Run Bash tool tests",
             "workdir": "src",
             "timeout": 120,

@@ -14,6 +14,7 @@ from core.chat import ChatSessionError
 from core.runs import RunAdmissionBlockedError
 from core.sessions import ArchiveEntryFilter, SessionAddress
 from core.tools.terminal_manager import TerminalOwner
+from tests.core.sessions.history_fixtures import settle_run
 from tests.server.rpc.project_methods_test_support import _make_state, _write_agent
 from tests.server.rpc.session_methods_test_support import FakeSessions, stub_session_state
 from tests.server.rpc_test_support import JsonObject, resource_changes, rpc_error, rpc_result
@@ -248,11 +249,35 @@ async def test_project_sessions_can_be_managed_without_a_usable_model(tmp_path: 
     runtime.storage = SimpleNamespace(load_compaction_settings=lambda: {})
     repo = tmp_path / "repo"
     _write_agent(repo, "builder.md", model="openai/unavailable")
+    _write_agent(repo, "reviewer.md", model="openai/unavailable")
     runtime.projects.create("vbot", "vBot", repo)
     address = runtime.sessions.create("builder", session_id="s1", project_id="vbot").address
     try:
+        settle_run(runtime.sessions, address, "run-one")
         listing = await rpc_result(state, "session.list", agent_id="builder@vbot")
         assert [row["id"] for row in listing["sessions"]] == ["s1"]
+        read = await rpc_result(
+            state, "session.mark_read", agent_id="builder@vbot", session_id="s1", run_id="run-one"
+        )
+        assert read["marked_read"]
+        policy = await rpc_result(
+            state,
+            "session.set_compaction_policy",
+            agent_id="builder@vbot",
+            session_id="s1",
+            policy=None,
+        )
+        assert policy["session_id"] == "s1"
+        for target in ("builder@vbot", "reviewer@vbot"):
+            fork = await rpc_result(
+                state,
+                "session.fork",
+                agent_id="builder@vbot",
+                session_id="s1",
+                target_agent_id=target,
+            )
+            assert fork["session"]["agent_id"] == target
+            assert fork["session"]["id"] != "s1"
         result = await rpc_result(state, "session.delete", agent_id="builder@vbot", session_id="s1")
         assert result["archive_entry_id"]
         assert not runtime.sessions.exists(address)

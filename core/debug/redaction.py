@@ -59,13 +59,13 @@ def redact_url(url: str) -> str:
     """Return *url* with sensitive query-parameter values redacted.
 
     Query-parameter names are checked against the same rules as header
-    names (see :func:`redact_headers`).  If the URL cannot be parsed it
-    is returned unchanged.
+    names (see :func:`redact_headers`). If the URL cannot be parsed it
+    is redacted in full, since its query cannot be checked safely.
     """
     try:
         parsed = urlparse(url)
     except Exception:
-        return url
+        return _REDACTED
 
     if not parsed.query:
         return url

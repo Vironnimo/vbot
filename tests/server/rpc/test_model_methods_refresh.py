@@ -432,6 +432,8 @@ async def test_runtime_refresh_drops_catalogs_of_providers_that_no_longer_exist(
         pytest.param("missing", True, True, id="missing-with-custom-provider"),
         pytest.param("incompatible", False, True, id="incompatible-without-custom-provider"),
         pytest.param("missing", False, False, id="missing-without-custom-provider"),
+        pytest.param("empty", True, True, id="initialized-empty-with-custom-provider"),
+        pytest.param("empty", False, False, id="initialized-empty-without-custom-provider"),
         pytest.param("compatible", True, False, id="compatible"),
     ],
 )
@@ -454,7 +456,9 @@ async def test_startup_rebuilds_a_lost_runtime_model_db_once(
     if custom_provider:
         state.runtime.providers.add(_custom_provider("custom", "CUSTOM_API_KEY"))
     runtime_models_dir = state.runtime.storage.layout.models
-    if runtime_root != "missing":
+    if runtime_root == "empty":
+        runtime_models_dir.mkdir(parents=True)
+    elif runtime_root != "missing":
         runtime_models_dir.mkdir(parents=True)
         runtime_models_dir.joinpath("custom.json").write_text(
             json.dumps({"provider_id": "custom", "models": {}}), encoding="utf-8"
@@ -483,7 +487,8 @@ async def test_startup_rebuilds_a_lost_runtime_model_db_once(
         assert resource_changes(state) == []
         return
     assert len(messages) == 1
-    assert messages[0].startswith(f"Rebuilt the {runtime_root} runtime Model DB")
+    condition = "missing" if runtime_root == "empty" else runtime_root
+    assert messages[0].startswith(f"Rebuilt the {condition} runtime Model DB")
     assert resource_changes(state) == [{"kind": "models"}]
     manifest_after = read_model_database_manifest(runtime_models_dir)
     assert manifest_after is not None

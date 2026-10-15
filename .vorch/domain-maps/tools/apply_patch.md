@@ -72,7 +72,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   Update plus `Move to: destination` are supported. Paths use ordinary
   `ToolContext.resolve_path` semantics: cwd-relative or absolute, with resolved
   aliases sharing the same mutation history and lock. Add/Update change content
-  and resolve through links to the target file. Delete/Move act on the named
+  and resolve through links to the target file. `~` and `~/...` expand to the
+  user's home; `./~name` stays literal, as does `~name` on Windows. Delete/Move act on the named
   entry: a final symbolic link or Windows junction is deleted or renamed itself
   (`resolve_path(..., follow_final_link=False)`), never its target; a link at a
   move destination, even a dangling one, is an existing destination. Link moves
@@ -148,7 +149,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   caused is followed by the lines around the error (two above and below, numbered
   like `read`, with a caret under the reported column when the parser names one;
   `syntax_check._with_excerpt`); a warning for an error the file already had shows
-  none, since that error is not the Agent's to find now.
+  none, since that error is not the Agent's to find now. A parser's `RecursionError`
+  or `MemoryError` instead says the change was applied but its syntax check could
+  not finish; the completed write remains a successful Tool Result.
   A written line (a created or replaced file's lines, an Update's changed and
   added lines) holding at least 5 literal `\n` sequences followed by
   indentation, the first outside a quoted string (`#` or `//` outside a string

@@ -720,7 +720,7 @@ async def test_session_policy_resolution_failure_does_not_persist_override(
 ) -> None:
     state, resolver, sessions = stub_session_state()
 
-    def unresolved(*_args: object) -> None:
+    def unresolved(*_args: object, **_options: object) -> None:
         raise AgentNotFoundError("missing Agent")
 
     monkeypatch.setattr(resolver, "resolve_agent", unresolved)
@@ -853,7 +853,7 @@ async def test_session_partial_mutation_preserves_concurrent_title(
         monkeypatch.setattr(sessions, "mutate_metadata_with_previous", mutate_after_title)
         config = ChannelConfig(id="channel", platform="telegram", agent_id="assistant")
 
-        async def resolve_agent_async(*_args: object) -> SimpleNamespace:
+        async def resolve_agent_async(*_args: object, **_options: object) -> SimpleNamespace:
             return SimpleNamespace(compaction_policy=None)
 
         state = SimpleNamespace(

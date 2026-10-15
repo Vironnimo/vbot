@@ -37,6 +37,9 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   operations and `/swarm` share the operation surface, so the lines name no actor.
   Startup logs one line when it acknowledged saved delivery batches or found
   conflicting receipts (counts only; WARNING for conflicts).
+  Shutdown cancels wake schedulers together with their shielded workers and
+  pending title requests before awaiting them, then closes the Store; a blocked
+  wake never delays cancellation of its worker (`test_swarm_wakes.py`).
 - `store.py` owns the SQLite profile, Board, Wiki, audience, delivery, lifecycle and audit
   transactions. It receives canonical receipt lookups; it must
   not open the Session database directly. Its database handle comes from

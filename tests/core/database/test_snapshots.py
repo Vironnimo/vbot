@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import queue
 import sqlite3
 from collections.abc import Callable
@@ -96,13 +97,28 @@ def test_a_capture_rechecks_maintenance_after_waiting_for_the_operation_lock(
         capture(data_dir, reason="test")
 
 
+@pytest.mark.parametrize("held_directory", [False, True])
 def test_a_snapshot_captures_every_registered_database_as_one_standalone_member_each(
-    data_dir: Path, tmp_path: Path
+    data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held_directory: bool
 ) -> None:
     tasks = open_database(notes_spec(data_dir, name="tasks"))
     add_note(tasks, "closed while the snapshot runs")
     tasks.close()
     notes = open_database(notes_spec(data_dir))
+    failures: list[Path] = []
+    if held_directory:
+        real_replace = os.replace
+
+        def replace(source, target):
+            if Path(source).is_dir() and not failures:
+                failures.append(source)
+                error = PermissionError("temporarily held directory")
+                error.winerror = 32
+                raise error
+            real_replace(source, target)
+
+        monkeypatch.setattr("core.utils.atomic.os.replace", replace)
+        monkeypatch.setattr("core.utils.atomic._sleep", lambda _: None)
     try:
         add_note(notes, "open during the snapshot")
         snapshot = create_data_snapshot(
@@ -116,6 +132,7 @@ def test_a_snapshot_captures_every_registered_database_as_one_standalone_member_
 
     assert snapshot is not None
     assert b"\r" not in (snapshot / "manifest.json").read_bytes()
+    assert len(failures) == int(held_directory)
     assert sorted(path.name for path in snapshot.iterdir()) == [
         "manifest.json",
         "notes.db",

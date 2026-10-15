@@ -21,6 +21,8 @@ Read when changing imports, source adapters, package validation or replacement. 
 
 ## Package and publication invariants
 
+- Malformed archive metadata, including invalid UTF-8 ZIP names and malformed TAR sparse headers, is a normal installation refusal before publication, never an unexpected server error.
+
 - `_packages.py` bounds downloads to 64 MiB, ordinary file payloads to 128 MiB total and 32 MiB each, archive/directory entries to 10,000, and SKILL.md to 1 MiB. Expanded compressed TAR streams include headers/metadata in the 128 MiB bound before parsing. Network requests have bounded connect/read time, total elapsed checks and redirects; HTTPS downgrade redirects reject. Failures never automatically replay a download or mutation.
 - Reject traversal, absolute paths, names Windows reserves (`core.utils.ids.is_reserved_name` in `package_path`: devices including `COM0`/`LPT0`, alternate streams, trailing dots/spaces), unsafe separators, case/Unicode collisions, symlinks, junctions, hard links, special/sparse files and encrypted archives. Other reparse points, such as OneDrive cloud-file placeholders, are ordinary files (`is_redirect` is `is_link_status`). Archive entries are read into bounded file records, never extracted with an archive library. Omit VCS/generated trees and incoming `.vbot-install.json`; preserve other ordinary file bytes, binary assets and executable status where the OS supports it.
 - `--dry-run` acquires/validates and computes a result but creates no target directories. Identical live package contents return `unchanged`. Different existing packages require `replace=true` (`--replace --yes` in CLI); replacement removes old files including local modifications. Non-package collisions never overwrite.

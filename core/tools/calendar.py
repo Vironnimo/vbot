@@ -96,8 +96,11 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
                 "Omit for 1 hour or 1 day."
             ),
         },
-        "description": {"type": "string"},
-        "location": {"type": "string"},
+        "description": {
+            "type": "string",
+            "description": 'On update, "" clears the description.',
+        },
+        "location": {"type": "string", "description": 'On update, "" clears the location.'},
         "rrule": {
             "type": "string",
             "description": (

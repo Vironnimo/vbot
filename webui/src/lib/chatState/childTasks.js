@@ -85,8 +85,16 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     { agentId, sessionId, runId = '', workId = '' },
     inspection,
   ) {
-    const status = normalizedSubAgentStatus(inspection?.status);
+    let status = normalizedSubAgentStatus(inspection?.status);
     const inspectedRunId = trimmedString(inspection?.run_id) || runId;
+    const knownStatus = chatState.subAgentStatuses[`run:${inspectedRunId}`];
+    const stale =
+      inspectedRunId &&
+      ['completed', 'failed', 'cancelled', 'interrupted'].includes(
+        knownStatus,
+      ) &&
+      ['running', 'queued'].includes(status);
+    if (stale) status = knownStatus;
     const updates = {};
     if (inspectedRunId) {
       updates[`run:${inspectedRunId}`] = status;
@@ -102,7 +110,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
 
     const durationMs = inspection?.timing?.duration_ms;
-    if (Number.isFinite(durationMs) && durationMs >= 0) {
+    if (!stale && Number.isFinite(durationMs) && durationMs >= 0) {
       if (inspectedRunId) {
         updates[`runDuration:${inspectedRunId}`] = durationMs;
       } else if (address) {
@@ -110,7 +118,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
       }
     }
     const toolName = trimmedString(inspection?.tool_name);
-    if (toolName) {
+    if (!stale && toolName) {
       if (inspectedRunId) {
         updates[`runTool:${inspectedRunId}`] = toolName;
       } else if (address) {

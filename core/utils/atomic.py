@@ -163,7 +163,7 @@ def _atomic_write(
             descriptor = os.open(temp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
             os.close(descriptor)
         write(temp_path)
-        _replace_with_retry(temp_path, target_path)
+        replace_path(temp_path, target_path)
         _fsync_replace_directories(temp_path, target_path)
     except BaseException:
         # A streamed writer can fail outside the OS layer; never leave its temp.
@@ -177,8 +177,12 @@ def _atomic_write(
             os.chmod(target_path, mode)
 
 
-def _replace_with_retry(temp_path: Path, target_path: Path) -> None:
-    """``os.replace`` that outlasts a short-lived Windows sharing violation."""
+def replace_path(temp_path: Path, target_path: Path) -> None:
+    """Replace a file or directory, retrying short-lived Windows sharing violations.
+
+    Like ``os.replace`` this only renames; the caller owns staging, rollback,
+    cleanup and flushing the affected directories where durability is required.
+    """
 
     for delay in _REPLACE_RETRY_DELAYS:
         try:

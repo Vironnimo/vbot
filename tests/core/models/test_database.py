@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -145,8 +146,9 @@ def test_each_catalog_is_selected_from_the_root_that_fetched_it_last(
     assert files.overrides_dir == system_models_dir
 
 
+@pytest.mark.parametrize("held_directory", [False, True])
 def test_runtime_refresh_publishes_only_the_catalogs_this_installation_fetched(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held_directory: bool
 ) -> None:
     resources_dir = tmp_path / "resources"
     system_models_dir = resources_dir / "models"
@@ -183,7 +185,22 @@ def test_runtime_refresh_publishes_only_the_catalogs_this_installation_fetched(
         system_models_dir / "superseded.json"
     )
     _write_catalogs(staged_models_dir, ["lmstudio.json"])
+    held: set[Path] = set()
+    if held_directory:
+        real_replace = os.replace
+
+        def replace(source, target):
+            if Path(source).is_dir() and source not in held:
+                held.add(source)
+                error = PermissionError("temporarily held directory")
+                error.winerror = 32
+                raise error
+            real_replace(source, target)
+
+        monkeypatch.setattr("core.utils.atomic.os.replace", replace)
+        monkeypatch.setattr("core.utils.atomic._sleep", lambda _: None)
     manifest = refresh.commit(providers=["lmstudio"], canonical=True)
+    assert len(held) == (2 if held_directory else 0)
 
     assert sorted(path.name for path in runtime_models_dir.iterdir()) == [
         "lmstudio.json",

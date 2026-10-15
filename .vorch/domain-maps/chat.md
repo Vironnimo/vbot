@@ -41,6 +41,8 @@ New public Message ids use `msg_` plus 16 lowercase base32 characters (80 random
 
 ## Invariants and conventions
 
+- Tool Result facts persist `cancelled_by_user` as `cancelled`, alongside the legacy cancellation codes, so a user's stopped call never becomes a failed call in History.
+
 - Chat remains Provider-agnostic. It may inspect declared adapter capabilities/policies but never Provider-specific wire payloads or raw SSE events.
 - One active Run per `(project_id, agent_id, session_id)` and busy-Session FIFO semantics are Runs-domain invariants. Chat starts or enqueues through `ChatRunManager`; it does not maintain a second Queue.
 - Each admitted executor captures immutable request inputs, including the static Tool restriction and the optional live Tool-denial resolver, then Chat resolves one Run-local execution context containing the Agent (with its Session's Agent overrides), Session, working Project inputs, primary Model target, Skill scope/catalog, Tool policy, and the Run's Stream draft. Request building derives Session Tool grants only from the exact protected temporary binding and current Extension capability; Compaction grants none; callers cannot inject a Run-local grant. The static restriction and live denial remain dispatch-only and do not change System Prompt text or Provider Tool definitions.

@@ -888,6 +888,35 @@ async def test_input_answers_must_have_their_requested_string_format(
         await task
 
 
+@pytest.mark.parametrize(("kind", "mime_type"), [("image", "image/png"), ("audio", "audio/wav")])
+def test_sampling_media_uses_canonical_content_blocks(kind, mime_type):
+    assert sampling_messages(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": {
+                        "type": kind,
+                        "data": "YWJj",
+                        "mimeType": mime_type,
+                    },
+                }
+            ]
+        }
+    ) == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "media",
+                    "base64": "YWJj",
+                    "media_type": mime_type,
+                }
+            ],
+        }
+    ]
+
+
 def test_sampling_rejects_unknown_content_instead_of_losing_it():
     with pytest.raises(ValueError):
         sampling_messages({"messages": [{"role": "user", "content": {"type": "future-data"}}]})

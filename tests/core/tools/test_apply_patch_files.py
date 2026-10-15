@@ -441,6 +441,30 @@ def test_update_with_case_only_move_to_edits_and_renames(tmp_path):
 WRITE_WARNING = "Warning: Syntax check failed after this write: "
 
 
+@pytest.mark.parametrize("operation", ["write", "edit"])
+@pytest.mark.parametrize("failure", [RecursionError, MemoryError])
+def test_parser_resource_failure_keeps_the_successful_file_change(
+    tmp_path, monkeypatch, operation, failure
+):
+    from core.tools import syntax_check
+
+    def fail(_content):
+        raise failure()
+
+    monkeypatch.setitem(syntax_check._CHECKERS_BY_SUFFIX, ".py", fail)
+    if operation == "edit":
+        (tmp_path / "file.py").write_bytes(b"x = 1\n")
+        patch = update("@@\n-x = 1\n+x = 2", "file.py")
+    else:
+        patch = "*** Add File: file.py\n+x = 2"
+    result = apply(tmp_path, patch)
+    assert result["ok"], result
+    assert (tmp_path / "file.py").read_bytes() == b"x = 2\n"
+    assert "change was applied" in text(result)
+    assert "syntax check could not finish" in text(result)
+    assert failure.__name__ in text(result)
+
+
 @pytest.mark.parametrize(
     ("original", "name", "content", "warning"),
     [

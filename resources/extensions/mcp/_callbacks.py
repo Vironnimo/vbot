@@ -260,7 +260,7 @@ def sampling_messages(request: dict[str, Any]) -> list[dict[str, Any]]:
                 content.append({"type": "text", "text": block["text"]})
             elif kind in {"image", "audio"}:
                 content.append(
-                    {"type": kind, "base64": block["data"], "media_type": block["mimeType"]}
+                    {"type": "media", "base64": block["data"], "media_type": block["mimeType"]}
                 )
             elif kind == "tool_use":
                 calls.append(

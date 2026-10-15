@@ -319,6 +319,24 @@ def test_rejects_archive_links(tmp_path, tar):
     assert not (tmp_path / "skills").exists()
 
 
+@pytest.mark.parametrize("kind", ["zip-name", "tar-sparse-header"])
+def test_rejects_malformed_archive_metadata_without_partial_writes(tmp_path, kind):
+    if kind == "zip-name":
+        source = archive(tmp_path, {"SKILL.md": DOCUMENT, "assets/é.txt": b"x"})
+        source.write_bytes(source.read_bytes().replace("é".encode(), b"\xff\xff"))
+    else:
+        source = tmp_path / "malformed.tar"
+        with tarfile.open(source, "w", format=tarfile.PAX_FORMAT) as output:
+            info = tarfile.TarInfo("research/SKILL.md")
+            info.pax_headers = {"GNU.sparse.map": "not-a-number"}
+            info.size = len(DOCUMENT)
+            output.addfile(info, io.BytesIO(DOCUMENT))
+    target = tmp_path / "skills"
+    with pytest.raises(SkillAuthoringError, match="Cannot read Skill archive"):
+        SkillAuthoringService().install(target, str(source))
+    assert not target.exists()
+
+
 @pytest.mark.parametrize(
     "limit", ["MAX_PACKAGE_ENTRIES", "MAX_PACKAGE_BYTES", "MAX_FILE_BYTES", "MAX_DOWNLOAD_BYTES"]
 )

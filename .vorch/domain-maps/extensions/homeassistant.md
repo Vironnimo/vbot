@@ -10,6 +10,8 @@ The four tools are **always registered** regardless of configuration. A shared r
 
 The bundled `home-assistant` Skill under `resources/skills/home-assistant/` is the separate deep-configuration surface. It requires the same `HASS_TOKEN`, which activation grants to Bash, and teaches the bundled WebSocket script for Lovelace dashboard export, validation, race-safe backup/apply, creation with rollback, and allowlisted read-only registry inspection. It assumes the Extension connection already exists and never teaches or mutates setup. Keep ordinary entity/state/service work in the four Extension Tools; do not widen the script to bypass their validation or blocked-domain policy.
 
+Connection diagnostics and Tool guidance name the live WebUI path: Settings -> Integrations -> Extensions.
+
 ## Interfaces
 
 Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`.

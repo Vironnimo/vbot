@@ -361,20 +361,29 @@ class TestFindFreeTime:
 
 
 class TestUpdate:
-    def test_update_changes_only_the_fields_sent(self, tool: CalendarTool) -> None:
+    @pytest.mark.parametrize("clear_field", [None, "description", "location"])
+    @pytest.mark.parametrize("explicit_action", [True, False])
+    def test_update_changes_only_the_fields_sent(
+        self, tool: CalendarTool, clear_field: str | None, explicit_action: bool
+    ) -> None:
         event = tool.service.create_event(
             title="Dentist", start="2030-01-10T15:00", location="Dr. Weiss", description="Card."
         )
 
-        text = tool.succeeded({"action": "update", "id": event.id, "title": "Dentist checkup"})
+        arguments = {"id": event.id, "title": "Dentist checkup"}
+        if explicit_action:
+            arguments["action"] = "update"
+        if clear_field:
+            arguments[clear_field] = ""
+        text = tool.succeeded(arguments)
 
         updated = tool.only_event()
         assert updated.title == "Dentist checkup"
         assert (updated.start, updated.end, updated.location, updated.description) == (
             event.start,
             event.end,
-            event.location,
-            event.description,
+            None if clear_field == "location" else event.location,
+            None if clear_field == "description" else event.description,
         )
         assert "title: Dentist checkup" in text
 

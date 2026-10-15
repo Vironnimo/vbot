@@ -346,6 +346,7 @@ def _run(
         index = argv.index("-NoExit")
         argv[index : index + 1] = ["-NoProfile", "-NonInteractive"]
         environment["APPDATA"] = str(private)
+        environment["LOCALAPPDATA"] = str(private)
     elif Path(argv[0]).name == "zsh":
         # zsh reads its .zshrc only as an interactive shell, as in the PTY.
         argv.append("-i")
@@ -358,6 +359,8 @@ def _run(
         env=environment,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
         # POSIX: an interactive shell takes over the controlling terminal's
         # foreground; its own session leaves the test runner untouched.

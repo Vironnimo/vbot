@@ -192,8 +192,11 @@ def read_archive(data: bytes) -> dict[str, PackageFile]:
                             collector.add(name, member.size, member.mode, tar_stream)
                     else:
                         raise PackageError(f"Archive contains a link or special file: {name}")
+    except PackageError:
+        raise
     except (
         zipfile.BadZipFile,
+        ValueError,
         tarfile.TarError,
         RuntimeError,
         EOFError,

@@ -85,12 +85,15 @@ def test_redact_url_redacts_every_sensitive_query_value_and_keeps_the_rest():
     [
         "http://example.com/api?user=john&page=2&limit=10",
         "http://example.com/api",
-        # An unparseable URL is returned as it is.
-        "http://[::1/api",
     ],
 )
 def test_redact_url_returns_a_url_without_sensitive_values_unchanged(url: str):
     assert redact_url(url) == url
+
+
+@pytest.mark.parametrize("url", ["http://[::1/api", "http://[::1/api?token=secret"])
+def test_redact_url_hides_unparseable_urls(url: str):
+    assert redact_url(url) == _REDACTED
 
 
 # ---------------------------------------------------------------------------

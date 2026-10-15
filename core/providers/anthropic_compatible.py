@@ -422,6 +422,9 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 payload.setdefault(key, value)
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
+        tool_choice = payload.get("tool_choice")
+        if isinstance(tool_choice, str) and tool_choice in {"auto", "none", "any", "required"}:
+            payload["tool_choice"] = {"type": "any" if tool_choice == "required" else tool_choice}
         # Pin the resolved output allowance so the model's own ceiling wins
         # over the provider-default fallback (Anthropic requires a positive
         # ``max_tokens`` and rejects one above the model's output ceiling).
