@@ -47,7 +47,7 @@ from core.sessions import SUBAGENT_SESSION_META_KEY, SessionAddress
 from core.tools.availability import MEMORY_TOOL_NAME, SKILL_MANAGE_TOOL_NAME, resolve_tool_access
 from core.tools.model_names import model_tool_name
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, finish_despite_cancel
 
 if TYPE_CHECKING:
     from core.chat import ReplySurface
@@ -531,7 +531,20 @@ class ReflectionService:
                 contributes_to_agent_activity=False,
                 source_session_id=session_id,
             )
-            final_message = await review_run.wait()
+            try:
+                final_message = await review_run.wait()
+            except asyncio.CancelledError:
+                # The waiter does not own Run.wait's execution task. Keep the
+                # Skill reservation until the admitted Run has actually stopped,
+                # even if shutdown or another cancellation interrupts this drain.
+                await finish_despite_cancel(
+                    self._runtime.chat_run_manager.cancel(
+                        review_run.id,
+                        reason="shutdown" if self._closed else "user",
+                        initiator="reflection",
+                    )
+                )
+                raise
             if counters is not None:
                 reviewed_memory, reviewed_skill = _scope_dimensions(scope)
                 await _REFLECTION_WORKERS.run(

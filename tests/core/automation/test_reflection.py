@@ -24,7 +24,7 @@ from core.automation.reflection import (
 )
 from core.chat import ChatMessage
 from core.prompts.briefs import ReflectionScope, learn_brief, reflection_brief
-from core.runs import RunKind
+from core.runs import ChatRunManager, Run, RunKind
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import StorageManager
 from core.tools.availability import ToolAccess
@@ -978,6 +978,97 @@ async def test_cancelled_manual_review_releases_its_wait_without_forking() -> No
     pass_finished.set()
     await service.run_review("main", "s1")
     assert len(loop.started) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["admission", "running", "repeated_cancel", "shutdown"])
+async def test_cancelled_review_drains_its_run_before_releasing_skill_ownership(
+    phase: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, sessions, loop = _make_service(memory_turn_interval=1, skill_model_step_interval=1)
+    manager = ChatRunManager()
+    cast(Any, service._runtime).chat_run_manager = manager
+    admitting = asyncio.Event()
+    admitted = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    started: list[Run] = []
+
+    async def execute(run: Run) -> Any:
+        admitted.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await cleanup_finished.wait()
+
+    async def start_run(agent_id: str, content: str, **kwargs: Any) -> Run:
+        admitting.set()
+        if phase == "admission":
+            await asyncio.Event().wait()
+        run = await manager.start(
+            SessionAddress(kwargs.get("project_id"), agent_id, kwargs["session_id"]), execute
+        )
+        started.append(run)
+        return run
+
+    monkeypatch.setattr(loop, "start_run", start_run)
+    closing: asyncio.Task[None] | None = None
+    review: asyncio.Task[Any]
+    if phase == "shutdown":
+        service.notify_run_end(
+            cast(Any, _FakeRun(iteration_count=1)),
+            _identity_agent(),
+            internal=False,
+            outcome="success",
+        )
+        review = next(iter(service._background_tasks))
+    else:
+        review = asyncio.create_task(service.run_review("main", "s1", review_scope="skill"))
+    try:
+        await admitting.wait()
+        if phase == "admission":
+            review.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await review
+            assert not started
+            assert not manager.active_runs()
+            assert not service.reviewing("main")
+            return
+        await admitted.wait()
+        if phase == "shutdown":
+            closing = asyncio.create_task(service.aclose())
+        else:
+            review.cancel()
+        await cleanup_started.wait()
+        assert service.reviewing("main")
+        assert not review.done()
+        if phase == "repeated_cancel":
+            review.cancel()
+            await asyncio.sleep(0)
+            assert not review.done()
+        if phase != "shutdown":
+            successor = asyncio.create_task(service.run_review("main", "s2", review_scope="skill"))
+            await asyncio.sleep(0)
+            assert len(sessions.forks) == 1
+            successor.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await successor
+        cleanup_finished.set()
+        if closing is not None:
+            await closing
+        with pytest.raises(asyncio.CancelledError):
+            await review
+        assert not manager.active_runs()
+        assert not service.reviewing("main")
+        assert started[0].cancel_reason == ("shutdown" if phase == "shutdown" else "user")
+    finally:
+        cleanup_finished.set()
+        review.cancel()
+        await asyncio.gather(review, return_exceptions=True)
+        if closing is not None:
+            await closing
+        await manager.aclose()
 
 
 @pytest.mark.asyncio
