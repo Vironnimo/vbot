@@ -404,6 +404,8 @@ def _set_override_record(state: Any, params: JsonObject) -> JsonObject:
                 RPC_ERROR_INVALID_REQUEST,
                 f"agent '{agent_id}' is not on project '{project_id}' team",
             )
+        if field in {"model", "thinking_effort"}:
+            _agent_resolver(state).preserve_agent_sessions(project_id, agent_id)
         project = _projects(state).set_override(project_id, agent_id, field, value)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -437,6 +439,8 @@ def _clear_override_record(state: Any, params: JsonObject) -> JsonObject:
     try:
         current_project = _projects(state).get(project_id)
         had_override = field in current_project.overrides.get(agent_id, {})
+        if field in {"model", "thinking_effort"}:
+            _agent_resolver(state).preserve_agent_sessions(project_id, agent_id)
         project = _projects(state).clear_override(project_id, agent_id, field)
     except Exception as exc:
         raise _map_expected_error(exc) from exc

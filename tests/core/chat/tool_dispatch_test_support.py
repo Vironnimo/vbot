@@ -36,6 +36,8 @@ async def _dispatch_resolved_tool_calls(
 class StubDispatchAgent:
     id: str
     workspace: Path
+    model: str = "fixture/running"
+    thinking_effort: str = "high"
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
     tools: dict[str, object] | None = None

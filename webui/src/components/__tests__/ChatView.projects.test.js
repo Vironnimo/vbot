@@ -193,7 +193,11 @@ describe('ChatView Projects', () => {
           'first-session',
       );
       expect(rpcCalls('chat.stream')).toEqual([
-        { agent_id: 'first@vbot', new_session: {}, content: 'Hello first' },
+        {
+          agent_id: 'first@vbot',
+          new_session: { agent_overrides: { thinking_effort_default: true } },
+          content: 'Hello first',
+        },
       ]);
       expect(onSessionNavigation).toHaveBeenLastCalledWith(
         { ...draftPlace, sessionId: 'first-session' },

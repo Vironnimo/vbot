@@ -1,8 +1,7 @@
-"""A thinking effort change keeps the System Prompt and reaches the next request.
+"""A thinking effort change keeps the System Prompt and reaches the next Run.
 
 The System Prompt shows the effort its prompt epoch pinned. A change between
-Runs applies from the next Run's first request, a change during a Run from its
-next request, except turning Reasoning on or off, which waits for the next Run.
+Runs applies from the next Run's first request; an active Run keeps its effort.
 A route that switches the effort mid-conversation gets the change at its place
 in the history and keeps the epoch's effort as the request effort.
 """
@@ -113,12 +112,12 @@ async def test_a_change_between_runs_reaches_the_next_run_and_keeps_the_system_p
 @pytest.mark.parametrize(
     ("changed", "in_run", "next_run"),
     [
-        pytest.param("high", "high", "high", id="level-applies-at-the-next-request"),
+        pytest.param("high", "low", "high", id="level-waits-for-the-next-run"),
         pytest.param("none", "low", "none", id="reasoning-off-waits-for-the-next-run"),
     ],
 )
 @pytest.mark.asyncio
-async def test_a_change_during_a_run_reaches_its_next_request_unless_it_toggles_reasoning(
+async def test_a_change_during_a_run_waits_for_the_next_run(
     tmp_path: Path, changed: str, in_run: str, next_run: str
 ) -> None:
     adapter = _UpdatingAdapter([_WORK, _answer("done"), _answer("next")])

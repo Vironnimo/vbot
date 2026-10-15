@@ -121,6 +121,13 @@ async def _execute_model(
     await _require_dependency(agent_resolver, "AgentResolver").update_session_overrides_async(
         SessionAddress(context.project_id, context.agent_id, context.session_id), {"model": None}
     )
+    resolver = _require_dependency(agent_resolver, "AgentResolver")
+    agent = await resolver.resolve_agent_async(
+        context.project_id, context.agent_id, require_model=False
+    )
+    await resolver.capture_session_settings_async(
+        SessionAddress(context.project_id, context.agent_id, context.session_id), agent
+    )
     return outcome
 
 
@@ -225,6 +232,7 @@ def _apply_model_setting(
     resolver = _require_dependency(agent_resolver, "AgentResolver")
     if not is_reset:
         resolver.require_model_configured(model)
+    resolver.preserve_agent_sessions(project_id, agent_id)
     if project_id is None:
         agents = _require_dependency(agents, "AgentStore")
         previous_model = _stored_agent_model(agents, agent_id)

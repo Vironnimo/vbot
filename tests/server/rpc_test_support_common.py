@@ -437,6 +437,22 @@ class StubAgentResolver:
     async def session_overrides_async(self, address: SessionAddress) -> AgentOverrides:
         return await self._overrides.session_overrides_async(address)
 
+    def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
+        self._overrides.preserve_agent_sessions(project_id, agent_id)
+
+    def capture_session_settings(self, address: SessionAddress, agent: Any) -> AgentOverrides:
+        return self._overrides.capture_session_settings(address, agent)
+
+    async def capture_session_settings_async(
+        self, address: SessionAddress, agent: Any
+    ) -> AgentOverrides:
+        return await self._overrides.capture_session_settings_async(address, agent)
+
+    def remember_session_settings(
+        self, address: SessionAddress, changes: Mapping[str, Any]
+    ) -> AgentOverrides:
+        return self._overrides.remember_session_settings(address, changes)
+
     def update_session_overrides(
         self, address: SessionAddress, changes: Mapping[str, Any]
     ) -> AgentOverrides:

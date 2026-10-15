@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.agents import is_builtin_agent
 from core.projects import (
+    AgentOverrides,
     AgentResolutionError,
     InvalidAgentAddressError,
     ModelConfigurationError,
@@ -684,7 +685,7 @@ class SubAgentCoordinator:
         target_project_id: str | None,
         *,
         description: str,
-        overrides: dict[str, str],
+        overrides: dict[str, Any],
         temporary_parent: TemporarySessionBinding | None,
         notes: list[str],
     ) -> JsonObject:
@@ -1241,7 +1242,7 @@ def _open_subagent_session(
     title: str,
     subagent_id: str,
     context: ToolContext,
-    overrides: dict[str, str],
+    overrides: dict[str, Any],
 ) -> ChatSession:
     """Create the Sub-Agent Session, title it, link it to its Parent and store *overrides*.
 
@@ -1253,6 +1254,7 @@ def _open_subagent_session(
     session = sessions.create(
         agent_id,
         project_id=project_id,
+        metadata=AgentOverrides.from_stored(overrides).session_metadata(),
         working_project_id=(
             AGENT_DEFAULT_PROJECT
             if project_id is not None
@@ -1270,8 +1272,6 @@ def _open_subagent_session(
         tool_call_id=context.tool_call_id,
         tool_call_index=context.tool_call_index,
     )
-    if overrides:
-        runtime.agent_resolver.update_session_overrides(address, overrides)
     return session
 
 
@@ -1331,7 +1331,7 @@ def _positive_int(value: Any, default: int) -> int:
     return default
 
 
-def _parse_session_overrides(arguments: JsonObject) -> dict[str, str]:
+def _parse_session_overrides(arguments: JsonObject) -> dict[str, Any]:
     """Parse the Sub-Agent Session's Agent overrides the call sets.
 
     An omitted field keeps the Session's current value: the Agent's own for a
@@ -1345,7 +1345,7 @@ def _parse_session_overrides(arguments: JsonObject) -> dict[str, str]:
         thinking_effort = cast(
             str, validate_thinking_effort(raw, label="thinking_effort", allow_none=False)
         )
-    overrides: dict[str, str] = {}
+    overrides: dict[str, Any] = {}
     if model is not None:
         overrides["model"] = model
     if thinking_effort is not None:
@@ -1371,10 +1371,34 @@ async def _validate_target_agent(
     requested *model* that cannot run reports ``invalid_arguments``.
     """
     try:
+        own_agent = (
+            caller is not None
+            and caller.agent_id == target_agent_id
+            and caller.project_id == project_id
+        )
         if temporary_parent_binding is not None:
-            await runtime.agent_resolver.resolve_temporary_agent_async(
+            target = await runtime.agent_resolver.resolve_temporary_agent_async(
                 temporary_parent_binding.address,
                 generation_id=temporary_parent_binding.generation_id,
+                session=temporary_parent_binding.address,
+            )
+        elif own_agent:
+            assert caller is not None
+            if caller.agent_model:
+                inherited = AgentOverrides(
+                    model=caller.agent_model,
+                    thinking_effort=caller.agent_thinking_effort or None,
+                    thinking_effort_default=not caller.agent_thinking_effort,
+                )
+            else:
+                inherited = await runtime.agent_resolver.session_overrides_async(_caller(caller))
+            source = {**inherited.as_dict(), **(overrides or {})}
+            if overrides and "thinking_effort" in overrides:
+                source.pop("thinking_effort_default", None)
+            target = await runtime.agent_resolver.resolve_agent_async(
+                project_id,
+                target_agent_id,
+                new_session_overrides=AgentOverrides.from_stored(source),
             )
         else:
             if (
@@ -1383,34 +1407,47 @@ async def _validate_target_agent(
                 and caller is not None
                 and overrides is not None
             ):
-                parent_address = SessionAddress(
-                    caller.project_id, caller.agent_id, caller.session_id
-                )
-                binding = await runtime.chat_sessions.run_async(
-                    runtime.chat_sessions.temporary_binding, parent_address
-                )
-                if binding is not None:
-                    parent = await runtime.agent_resolver.resolve_temporary_agent_async(
-                        parent_address, generation_id=binding.generation_id, session=parent_address
+                caller_model = caller.agent_model
+                if not caller_model:
+                    parent_address = _caller(caller)
+                    binding = await runtime.chat_sessions.run_async(
+                        runtime.chat_sessions.temporary_binding, parent_address
                     )
-                else:
-                    parent = await runtime.agent_resolver.resolve_agent_async(
-                        caller.project_id, caller.agent_id, session_id=caller.session_id
-                    )
+                    if binding is not None:
+                        parent = await runtime.agent_resolver.resolve_temporary_agent_async(
+                            parent_address,
+                            generation_id=binding.generation_id,
+                            session=parent_address,
+                        )
+                    else:
+                        parent = await runtime.agent_resolver.resolve_agent_async(
+                            caller.project_id, caller.agent_id, session_id=caller.session_id
+                        )
+                    caller_model = parent.model
                 target = await runtime.agent_resolver.resolve_delegated_agent_async(
-                    project_id, target_agent_id, caller_model=parent.model
+                    project_id, target_agent_id, caller_model=caller_model
                 )
                 if getattr(target, "model_inherit", False):
-                    overrides["model"] = parent.model
+                    overrides["model"] = caller_model
             else:
                 target = await runtime.agent_resolver.resolve_agent_async(
-                    project_id, target_agent_id
+                    project_id,
+                    target_agent_id,
+                    new_session_overrides=AgentOverrides.from_stored(overrides),
                 )
-            if is_builtin_agent(target):
-                # A built-in Agent is no delegation target: it looks like no Agent at all.
-                raise ResolutionAgentNotFoundError(f"Agent not found: {target_agent_id}")
+        if is_builtin_agent(target):
+            raise ResolutionAgentNotFoundError(f"Agent not found: {target_agent_id}")
         if model is not None:
             await runtime.agent_resolver.require_model_configured_async(model)
+        if overrides is not None:
+            if own_agent and caller is not None and caller.agent_model:
+                overrides.setdefault("model", caller.agent_model)
+                if "thinking_effort" not in overrides:
+                    if caller.agent_thinking_effort:
+                        overrides["thinking_effort"] = caller.agent_thinking_effort
+                    else:
+                        overrides["thinking_effort_default"] = True
+            overrides.update(AgentOverrides.from_stored(overrides).capture(target).as_dict())
     except ResolutionProjectNotFoundError as error:
         return tool_failure("project_not_found", str(error))
     except ResolutionAgentNotFoundError as error:

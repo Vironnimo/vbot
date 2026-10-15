@@ -342,10 +342,9 @@
     // `/model` changed the Agent's Model: read its defaults again.
     refreshAgentDefaults: (agentAddress) => {
       if (parseAgentAddress(agentAddress).projectId) {
-        void target.refreshProjectTeam();
-        return;
+        return target.refreshProjectTeam();
       }
-      void chatController.loadAgents({ silent: true });
+      return chatController.loadAgents({ silent: true });
     },
   });
 
@@ -539,15 +538,26 @@
     const draft = target.activeDraft();
     if (draft) {
       const submissionDraft = sessionSettings.draftWithSettings(draft);
-      return async (content, options = {}) =>
-        await actions.sendDraft(agent, submissionDraft, content, options);
+      return async (content, options = {}) => {
+        if (sessionSettings.hasPending && !(await sessionSettings.flush()))
+          return false;
+        return await actions.sendDraft(
+          agent,
+          submissionDraft,
+          content,
+          options,
+        );
+      };
     }
     const sessionState = target.activeSessionState;
     if (!sessionState) {
       return null;
     }
-    return async (content, options = {}) =>
-      await actions.sendStream(agent, sessionState, content, options);
+    return async (content, options = {}) => {
+      if (sessionSettings.hasPending && !(await sessionSettings.flush()))
+        return false;
+      return await actions.sendStream(agent, sessionState, content, options);
+    };
   });
   let composerListFiles = $derived.by(() => {
     const agentId =

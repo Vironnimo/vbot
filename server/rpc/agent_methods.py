@@ -157,6 +157,8 @@ def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, li
                 f"unknown Project: {root_project_id}",
             )
         _ensure_agent_model_connections(state, changes)
+        if {"model", "thinking_effort"}.intersection(changes):
+            state.runtime.agent_resolver.preserve_agent_sessions(None, agent_id)
         previous_agent = state.runtime.agents.get(agent_id)
         if (
             changes.get("custom_system_prompt_enabled") is True

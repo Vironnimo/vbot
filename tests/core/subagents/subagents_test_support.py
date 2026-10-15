@@ -119,7 +119,7 @@ class FakeAgents:
             return SimpleNamespace(id=agent_id, builtin=agent_id.replace("-", "_"))
         if agent_id not in self._agent_ids:
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
-        return SimpleNamespace(id=agent_id, model="fixture/model")
+        return SimpleNamespace(id=agent_id, model="fixture/model", thinking_effort=None)
 
     def list(self) -> list[SimpleNamespace]:
         return [SimpleNamespace(id=agent_id, name=agent_id) for agent_id in sorted(self._agent_ids)]
@@ -153,7 +153,12 @@ class FakeAgentResolver:
         return await self.resolve_agent_async(project_id, agent_id)
 
     async def resolve_agent_async(
-        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
+        self,
+        project_id: str | None,
+        agent_id: str,
+        *,
+        session_id: str | None = None,
+        new_session_overrides: AgentOverrides | None = None,
     ) -> SimpleNamespace:
         if agent_id in self.failures:
             raise self.failures[agent_id]
@@ -162,7 +167,9 @@ class FakeAgentResolver:
         except AgentNotFoundError as error:
             raise ResolutionAgentNotFoundError(str(error)) from error
         if session_id is None:
-            return agent
+            return SimpleNamespace(
+                **{**vars(agent), **(new_session_overrides or AgentOverrides()).agent_changes()}
+            )
         overrides = await self.session_overrides_async(address(agent_id, session_id, project_id))
         return SimpleNamespace(**{**vars(agent), **overrides.agent_changes()})
 
@@ -297,6 +304,8 @@ class SubAgentHarness:
         working_project_id: str | None = None,
         cancellation_hook: Callable[[], bool] | None = None,
         delegation_bindings: dict[str, str | int] | None = None,
+        agent_model: str | None = None,
+        agent_thinking_effort: str | None = None,
     ) -> ToolContext:
         session = session or self.parent
         # Chat grants message_parent to Sub-Agent Sessions; the Tool itself checks the link.
@@ -314,6 +323,8 @@ class SubAgentHarness:
             data_root=Path("data"),
             execution_owner=execution_owner,
             working_project_id=working_project_id,
+            agent_model=agent_model,
+            agent_thinking_effort=agent_thinking_effort,
             session_tool_grants=grants,
             emit_hook=self._record_event,
             cancellation_hook=cancellation_hook,

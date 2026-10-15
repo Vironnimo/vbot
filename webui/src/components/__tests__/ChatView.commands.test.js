@@ -312,10 +312,26 @@ describe('ChatView slash commands', () => {
         await waitForCondition(() => alphaSessionId() === 'created-alpha');
         expect(rpcCalls('chat.stream')).toEqual([
           { agent_id: 'alpha', session_id: 'session-1', content: '/new' },
-          { agent_id: 'alpha', new_session: {}, content: '/status' },
           {
             agent_id: 'alpha',
-            new_session: {},
+            new_session: {
+              working_project_id: null,
+              agent_overrides: {
+                model: 'openrouter/anthropic/claude-sonnet-4',
+                thinking_effort_default: true,
+              },
+            },
+            content: '/status',
+          },
+          {
+            agent_id: 'alpha',
+            new_session: {
+              working_project_id: null,
+              agent_overrides: {
+                model: 'openrouter/anthropic/claude-sonnet-4',
+                thinking_effort_default: true,
+              },
+            },
             content: 'First draft message',
           },
         ]);

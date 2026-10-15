@@ -823,6 +823,8 @@ class ToolRound:
             vbot_root=context.vbot_root,
             data_root=context.data_root,
             iteration_number=iteration_number,
+            agent_model=agent.model,
+            agent_thinking_effort=agent.thinking_effort,
             execution_owner=run.execution_owner,
             cwd=_resolve_tool_cwd(context.project_cwd, workspace),
             # The owning run's project rides onto every ToolContext so the

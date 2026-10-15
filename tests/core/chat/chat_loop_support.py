@@ -317,6 +317,11 @@ class StubAgentResolver:
     async def session_overrides_async(self, address: SessionAddress) -> AgentOverrides:
         return self.session_overrides(address)
 
+    def capture_session_settings(self, address: SessionAddress, agent: Any) -> AgentOverrides:
+        captured = self.session_overrides(address).capture(agent)
+        self._session_overrides[address] = captured.as_dict()
+        return captured
+
     def update_session_overrides(
         self, address: SessionAddress, changes: dict[str, Any]
     ) -> AgentOverrides:

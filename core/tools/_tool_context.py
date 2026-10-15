@@ -104,6 +104,10 @@ class ToolContext:
     # Completed Agentic Loop Iteration whose Assistant response requested this
     # Tool Call. Direct callers that do not execute inside Chat leave it at 0.
     iteration_number: int = 0
+    # The executing Run's choices, so self-delegation does not reread a newer
+    # Session or Agent configuration while this Run is still working.
+    agent_model: str | None = None
+    agent_thinking_effort: str | None = None
     execution_owner: RunExecutionOwner | None = field(default=None, repr=False)
     # Working directory for relative-path resolution by file/shell tools. ``None``
     # falls back to ``workspace`` (the identity-agent home) so every existing
@@ -551,6 +555,8 @@ class ToolExecutionConfig:
     data_root: Path
     # Completed Agentic Loop Iteration that produced this execution group.
     iteration_number: int = 0
+    agent_model: str | None = None
+    agent_thinking_effort: str | None = None
     execution_owner: RunExecutionOwner | None = field(default=None, repr=False)
     # Working directory for relative-path resolution; ``None`` falls back to
     # ``workspace`` so existing execution groups keep today's behavior. See

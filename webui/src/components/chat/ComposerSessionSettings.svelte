@@ -6,9 +6,9 @@
   //
   // - Project: a picker in a draft of an Identity Agent; afterwards, and for
   //   a Project team Agent, a read-only name.
-  // - Model: "Agent default" (naming the Agent's Model) or a catalog Model;
+  // - Model: the Session's concrete choice, initially copied from the Agent;
   //   the row names the Model by its catalog name, the tooltip by its id.
-  // - Thinking effort: the Agent's effort or a level the effective Model
+  // - Thinking effort: Provider default or a level the effective Model
   //   offers; hidden for a Model without reasoning.
   import {
     THINKING_EFFORT_OPTIONS,
@@ -28,6 +28,7 @@
   import { tooltip } from '$lib/tooltip.js';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
+  import SaveStatus from '../ui/SaveStatus.svelte';
 
   const noop = () => {};
 
@@ -128,17 +129,6 @@
 
   // A Connection pinned by the Agent's Model shows in the tooltip, not the
   // label.
-  let defaultModelName = $derived(
-    parseModelSelectionValue(view.defaultModel).model,
-  );
-  let modelDefaultOption = $derived({
-    value: '',
-    label: defaultModelName || t('chat.sessionSettings.agentDefault'),
-    secondaryLabel: defaultModelName
-      ? t('chat.sessionSettings.agentDefault')
-      : '',
-    labelLead: modelIdParts(defaultModelName).lead,
-  });
   let allModelOptions = $derived.by(() => {
     if (!view.catalog) {
       // Until the catalog answers, offer what is known without calling a
@@ -146,14 +136,13 @@
       const { model } = parseModelSelectionValue(view.model);
       return view.model
         ? [
-            modelDefaultOption,
             {
               value: view.model,
               label: model,
               labelLead: modelIdParts(model).lead,
             },
           ]
-        : [modelDefaultOption];
+        : [];
     }
     // Canonical `provider/model` values: the Session leaves Connection
     // routing to the Runtime. `model.list` lists only usable Models.
@@ -163,7 +152,7 @@
       modelOnly: true,
       selectedModelValue: view.model,
     });
-    return [modelDefaultOption, ...catalogOptions];
+    return catalogOptions;
   });
   let modelOptions = $derived(
     filterModelSelectOptions(allModelOptions, {
@@ -197,9 +186,7 @@
   );
   let modelTooltip = $derived.by(() => {
     const value = view.model || view.defaultModel;
-    const text = view.model
-      ? t('chat.sessionSettings.modelOverrideHint')
-      : t('chat.sessionSettings.modelDefaultHint');
+    const text = t('chat.sessionSettings.modelHint');
     if (!value) {
       return { title: t('chat.sessionSettings.model'), text, placement: 'top' };
     }
@@ -235,12 +222,7 @@
     const options = [
       {
         value: '',
-        label: view.defaultThinkingEffort
-          ? effortLabel(view.defaultThinkingEffort)
-          : t('chat.sessionSettings.providerDefault'),
-        secondaryLabel: view.defaultThinkingEffort
-          ? t('chat.sessionSettings.agentDefault')
-          : '',
+        label: t('chat.sessionSettings.providerDefault'),
       },
       ...levels.map((level) => ({ value: level, label: effortLabel(level) })),
     ];
@@ -255,9 +237,7 @@
   });
   let effortTooltip = $derived({
     title: t('chat.sessionSettings.thinkingEffort'),
-    text: view.thinkingEffort
-      ? t('chat.sessionSettings.effortOverrideHint')
-      : t('chat.sessionSettings.effortDefaultHint'),
+    text: t('chat.sessionSettings.effortHint'),
     placement: 'top',
   });
 
@@ -315,6 +295,11 @@
     {/if}
   </div>
   <div class="session-settings__end">
+    <SaveStatus
+      saving={view.saving}
+      pending={view.pending}
+      onClick={view.save}
+    />
     <span
       class="session-settings__field session-settings__field--model"
       class:session-settings__field--override={Boolean(view.model)}

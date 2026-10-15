@@ -32,8 +32,9 @@ from core.utils.logging import get_logger
 from core.utils.timestamps import canonical_timestamp
 from server.events import (
     RESOURCE_KIND_AGENTS,
+    RESOURCE_KIND_PROJECTS,
 )
-from server.rpc.agent_refs import _agent_reference_lock
+from server.rpc.agent_refs import _agent_reference_lock, _guard_agent_lifecycle
 from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -96,11 +97,8 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
             project_id=project_id,
             actor="rpc",
             working_project_id=working_project_id if project_id is None else None,
+            metadata=AgentOverrides(**(overrides or {})).capture(agent).session_metadata(),
         )
-        if overrides:
-            resolver.update_session_overrides(
-                _session_address(agent_id, created.id, project_id), overrides
-            )
         if make_current and project_id is None:
             state.runtime.agents.update(agent_id, current_session_id=created.id)
         return created
@@ -134,15 +132,17 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
         "session_id": session.id,
         "working_project_id": working_project_id,
     }
-    if overrides:
-        response["agent_overrides"] = AgentOverrides(**overrides).as_dict()
+    response["agent_overrides"] = AgentOverrides(**(overrides or {})).capture(agent).as_dict()
     return response
 
 
+@_guard_agent_lifecycle
 async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonObject:
     """Set or clear some of one Session's Agent overrides; other fields keep their value."""
     _reject_unsupported(
-        params, {"agent_id", "session_id", "agent_overrides"}, "session.set_agent_overrides"
+        params,
+        {"agent_id", "session_id", "agent_overrides", "remember"},
+        "session.set_agent_overrides",
     )
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
@@ -153,10 +153,16 @@ async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonOb
             "params.agent_overrides must name at least one of: " + ", ".join(AGENT_OVERRIDE_FIELDS),
         )
     address = _session_address(agent_id, session_id, project_id)
+    remember = _optional_bool(params, "remember", default=False)
     try:
-        overrides = await state.runtime.agent_resolver.update_session_overrides_async(
-            address, changes
-        )
+        if remember:
+            overrides = await state.runtime.chat_sessions.run_async(
+                state.runtime.agent_resolver.remember_session_settings, address, changes
+            )
+        else:
+            overrides = await state.runtime.agent_resolver.update_session_overrides_async(
+                address, changes
+            )
         effective = await state.runtime.chat_sessions.run_async(
             state.runtime.agent_resolver.effective_config,
             project_id,
@@ -166,6 +172,10 @@ async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonOb
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_session_changed(state, project_id, agent_id, session_id)
+    if remember:
+        publish_resource_changed(
+            state, RESOURCE_KIND_PROJECTS if project_id else RESOURCE_KIND_AGENTS
+        )
     _LOGGER.info(
         "Session agent overrides updated (agent=%s session=%s fields=%s)",
         format_agent_address(agent_id, project_id),

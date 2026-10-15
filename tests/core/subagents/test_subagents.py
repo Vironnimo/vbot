@@ -408,6 +408,44 @@ async def test_model_and_thinking_effort_belong_to_the_subagent_session(
         assert harness.manager.release_waiting_work(reservation)
 
 
+@pytest.mark.parametrize(
+    ("arguments", "effort", "expected_model", "expected_effort"),
+    [
+        ({}, "high", "acme/running", "high"),
+        ({}, "", "acme/running", None),
+        ({"model": "acme/explicit", "thinking_effort": "low"}, "high", "acme/explicit", "low"),
+        ({"agent_id": "worker"}, "high", "fixture/model", None),
+    ],
+    ids=["self", "provider-default", "explicit", "other-agent"],
+)
+async def test_new_subagent_captures_the_running_parent_or_its_other_agent(
+    harness: SubAgentHarness,
+    arguments: dict[str, Any],
+    effort: str,
+    expected_model: str,
+    expected_effort: str | None,
+) -> None:
+    # The user's next-Run choice may already differ from the running Parent.
+    harness.resolver.update_session_overrides(
+        harness.parent, {"model": "acme/next-run", "thinking_effort": "low"}
+    )
+    result = await harness.call(
+        {"description": "Review API changes", "content": "review", **arguments},
+        agent_model="acme/running",
+        agent_thinking_effort=effort,
+    )
+    assert result["ok"], result
+    child = harness.subagent_session(result["data"]["id"])
+    stored = await harness.resolver.session_overrides_async(child)
+    assert (stored.model, stored.thinking_effort) == (expected_model, expected_effort)
+    assert stored.thinking_effort_default is (expected_effort is None)
+    harness.resolver.update_session_overrides(harness.parent, {"model": "acme/later"})
+    await harness.settle()
+    sent = await harness.call({"action": "send", "id": result["data"]["id"], "content": "more"})
+    assert sent["ok"], sent
+    assert await harness.resolver.session_overrides_async(child) == stored
+
+
 async def test_every_answer_reaches_the_parent_with_what_is_still_running(
     harness: SubAgentHarness,
 ) -> None:
@@ -838,7 +876,9 @@ async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
             cancellation_hook=lambda: outer_run.cancel_requested,
         )
         assert spawned["error"]["code"] == sent["error"]["code"] == "run_cancelled"
-        assert (await harness.resolver.session_overrides_async(inner_session)).model is None
+        assert (
+            await harness.resolver.session_overrides_async(inner_session)
+        ).model == "fixture/model"
         assert [turn.content for turn in harness.loop.turns] == ["outer", "inner"]
     finally:
         release_cleanup.set()
