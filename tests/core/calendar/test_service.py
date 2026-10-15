@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from itertools import islice
 from pathlib import Path
@@ -816,3 +817,55 @@ def test_short_event_ids_skip_collisions_after_reload(tmp_path, monkeypatch):
     assert first.id == "evt_000000000001"
     assert second.id == "evt_000000000002"
     assert reloaded.get_event(first.id).title == "first"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "update", "delete"])
+async def test_async_changes_publish_after_storage_settles_even_if_cancelled(
+    service: CalendarService, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    event = service.create_event(title="Before", start="2030-01-02T12:00")
+    before = service.projection()
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
+    loop_thread = threading.get_ident()
+    callback_threads: list[int] = []
+    service.add_changed_callback(lambda: callback_threads.append(threading.get_ident()))
+    write = service._write_events
+
+    def held_write(events: list[Any], legacy: bool) -> None:
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(2)
+        write(events, legacy)
+
+    monkeypatch.setattr(service, "_write_events", held_write)
+    work: Coroutine[Any, Any, Any]
+    if operation == "create":
+        work = service.create_event_async(title="After", start="2030-01-03T12:00")
+    elif operation == "update":
+        work = service.update_event(event.id, title="After")
+    else:
+        work = service.delete_event(event.id)
+    task = asyncio.create_task(work)
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        assert service.list_events() == before.list_events()
+        assert callback_threads == []
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert callback_threads == [loop_thread]
+    assert before.get_event(event.id).title == "Before"
+    persisted = CalendarService(service._data_root, tz="Europe/Berlin")
+    assert persisted.list_events() == service.list_events()
+    assert [item.title for item in service.list_events()] == {
+        "create": ["Before", "After"],
+        "update": ["After"],
+        "delete": [],
+    }[operation]

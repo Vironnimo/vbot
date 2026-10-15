@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.calendar import CalendarService, parse_occurrence_id
+from core.automation._cron_projection import CronProjection
+from core.calendar import CalendarProjection, CalendarService, parse_occurrence_id
+from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_CALENDAR
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -14,6 +16,7 @@ from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
+_CALENDAR_READS = BoundedWorkerPool(name="calendar-rpc", max_workers=2)
 
 _WINDOW_FIELDS = frozenset({"from", "to"})
 # Texts a call may clear with null or "".
@@ -29,27 +32,47 @@ def _calendar_service(state: Any) -> CalendarService:
     return service
 
 
-def _calendar_window(state: Any, params: JsonObject) -> JsonObject:
+async def _calendar_window(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, _WINDOW_FIELDS, "calendar.window")
     service = _calendar_service(state)
     window_start_value = _required_string(params, "from")
     window_end_value = _required_string(params, "to")
     try:
-        window_start, window_end = service.parse_window(window_start_value, window_end_value)
-        occurrences = service.occurrences_in_window(window_start, window_end)
-        events = service.list_events()
-        cron_occurrences = state.runtime.cron_service.project_occurrences(window_start, window_end)
+        await service.load(allow_degraded=True)
+        cron = state.runtime.cron_service
+        await cron.load_projection()
+        calendar_snapshot = service.projection()
+        cron_snapshot = cron.projection()
+        return await _CALENDAR_READS.run(
+            _window_response,
+            calendar_snapshot,
+            cron_snapshot,
+            window_start_value,
+            window_end_value,
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+
+
+def _window_response(
+    calendar: CalendarProjection, cron: CronProjection, start: str, end: str
+) -> JsonObject:
+    window_start, window_end = calendar.parse_window(start, end)
     return {
-        "occurrences": [_occurrence_payload(occurrence) for occurrence in occurrences],
-        "events": [_event_payload(event) for event in events],
-        "cron": [_cron_occurrence_payload(occurrence) for occurrence in cron_occurrences],
-        "system_timezone": service.system_timezone_name(),
+        "occurrences": [
+            _occurrence_payload(item)
+            for item in calendar.occurrences_in_window(window_start, window_end)
+        ],
+        "events": [_event_payload(event) for event in calendar.list_events()],
+        "cron": [
+            _cron_occurrence_payload(item)
+            for item in cron.project_occurrences(window_start, window_end)
+        ],
+        "system_timezone": calendar.system_timezone_name(),
     }
 
 
-def _calendar_create(state: Any, params: JsonObject) -> JsonObject:
+async def _calendar_create(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, _CREATE_FIELDS, "calendar.create")
     service = _calendar_service(state)
     fields = _event_fields(params)
@@ -58,7 +81,7 @@ def _calendar_create(state: Any, params: JsonObject) -> JsonObject:
     fields.pop("title")
     fields.pop("start")
     try:
-        event = service.create_event(title=title, start=start, actor="rpc", **fields)
+        event = await service.create_event_async(title=title, start=start, actor="rpc", **fields)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
