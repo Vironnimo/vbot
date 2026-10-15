@@ -86,10 +86,14 @@ async def test_find_searches_full_page_and_match_reference_reads_more(tmp_path, 
     tool, context = web_fetch_registry(), make_context(tmp_path)
     first = await tool.dispatch(context, {"url": "https://example.com/"})
     assert first["data"]["content"] == "Short article"
+    assert "Only the main content" in first["data"]["note"]
     monkeypatch.setattr(
         "core.tools._public_http._http_get",
         AsyncMock(side_effect=AssertionError("ref must not fetch")),
     )
+    whole = await tool.dispatch(context, {"ref": first["data"]["ref"], "scope": "page"})
+    assert "Policy details" in whole["data"]["content"]
+    assert "Only the main content" not in whole["data"].get("note", "")
     found = await tool.dispatch(context, {"ref": first["data"]["ref"], "find": "zebra42"})
     passage, _, _ = found["data"]["content"].partition("\nRead on with ")
     assert "ZEBRA42 license" in passage

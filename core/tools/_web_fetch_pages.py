@@ -231,14 +231,14 @@ def _call(arguments: Any) -> str:
     return json.dumps(arguments, ensure_ascii=False)
 
 
-def _note(snapshot: dict[str, Any], *, first_read: bool) -> str:
+def _note(snapshot: dict[str, Any], *, first_read: bool, scope: str) -> str:
     """Fold the snapshot's limitations into one sentence group for this view."""
     notes = []
     for warning in snapshot.get("warnings", []):
         if not isinstance(warning, str):
             continue
         if warning.startswith("Main content shown"):
-            if first_read:
+            if first_read and scope == "main":
                 notes.append(
                     "Only the main content is shown; find also searches navigation, "
                     "sidebars and footers."
@@ -409,7 +409,7 @@ def read_page(snapshot: dict[str, Any], arguments: dict[str, Any]) -> dict[str, 
         data.update(_find_text(snapshot, text, scope, offset, find, max_chars))
     else:
         data.update(_read_text(snapshot, text, scope, offset, max_chars))
-    note = _note(snapshot, first_read=offset == 0 and not find)
+    note = _note(snapshot, first_read=offset == 0 and not find, scope=scope)
     if note:
         data["note"] = note
     return tool_success(data)
