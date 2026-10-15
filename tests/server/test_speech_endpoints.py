@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.requests import ClientDisconnect  # type: ignore[import-not-found]
 
-import server.app as server_app
+import server._speech_routes as speech_routes
 from core.model_tasks import (
     SpeechArtifactNotFoundError,
     SpeechConfigurationError,
@@ -27,7 +27,9 @@ from core.model_tasks import (
 from core.model_tasks.speech_input import SpeechInputError
 from core.model_tasks.speech_playback import PLAYBACK_MEDIA_TYPE, SpeechPlaybackStore
 from core.model_tasks.speech_types import SpeechAudioChunk, SpeechBusyError
-from server.app import JSON_REQUEST_BODY_MAX_BYTES, _stream_speech, _stream_synthesis, create_app
+from server._request_bodies import JSON_REQUEST_BODY_MAX_BYTES
+from server._speech_routes import _stream_speech, _stream_synthesis
+from server.app import create_app
 from tests.server.app_test_support import ServerStubRuntime
 
 _AUDIO_FILE = {"file": ("clip.webm", b"audio", "audio/webm")}
@@ -131,7 +133,7 @@ async def test_transcription_stream_reports_the_live_phase_and_reaps_disconnect(
     # TestClient reads whole responses, so the heartbeat and disconnect reaping
     # are observed on the endpoint's progress stream directly. The shortened
     # heartbeat is the one real wait here.
-    monkeypatch.setattr(server_app, "SPEECH_PROGRESS_HEARTBEAT_SECONDS", 0.01)
+    monkeypatch.setattr(speech_routes, "SPEECH_PROGRESS_HEARTBEAT_SECONDS", 0.01)
     cancelled = asyncio.Event()
 
     async def transcribe(progress: Any) -> Any:
@@ -200,14 +202,14 @@ async def test_speech_responses_close_generators_when_connection_ends_during_sen
     started, suspended, ended = asyncio.Event(), asyncio.Event(), asyncio.Event()
     incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     retained_responses: list[Any] = []
-    original_call = server_app._SpeechStreamingResponse.__call__
+    original_call = speech_routes._SpeechStreamingResponse.__call__
 
     async def retain_response(response: Any, *args: Any, **kwargs: Any) -> None:
         # Retain the generator too: cleanup must happen before GC can finalize it.
         retained_responses.append(response)
         await original_call(response, *args, **kwargs)
 
-    monkeypatch.setattr(server_app._SpeechStreamingResponse, "__call__", retain_response)
+    monkeypatch.setattr(speech_routes._SpeechStreamingResponse, "__call__", retain_response)
 
     async def pending(*_args: Any, **_kwargs: Any) -> Any:
         started.set()

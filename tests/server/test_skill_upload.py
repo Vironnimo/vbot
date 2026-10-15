@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-import server.app as app_module
+import server._upload_routes as upload_routes
 from core.runtime import Runtime
 from core.skills.authoring import SkillAuthoringService
 from core.utils.config import Config
@@ -107,7 +107,7 @@ def test_rejected_skill_uploads_leave_no_skill(
             files={"file": ("demo.skill", package())},
             headers={"Origin": "https://foreign.example"},
         )
-        monkeypatch.setattr(app_module, "SKILL_ARCHIVE_MAX_BYTES", 32)
+        monkeypatch.setattr(upload_routes, "SKILL_ARCHIVE_MAX_BYTES", 32)
         oversized = client.post(
             "/api/skills/install?scope=global", files={"file": ("demo.skill", package())}
         )

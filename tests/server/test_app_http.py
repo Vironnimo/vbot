@@ -10,7 +10,8 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 import server.app as server_app
-from server.app import JSON_REQUEST_BODY_MAX_BYTES, WEBUI_DOCUMENT_CACHE_HEADERS, create_app
+from server._request_bodies import JSON_REQUEST_BODY_MAX_BYTES
+from server.app import WEBUI_DOCUMENT_CACHE_HEADERS, create_app
 from server.rpc.dispatcher import dispatch_rpc
 from tests.server.app_test_support import ServerStubRuntime
 
