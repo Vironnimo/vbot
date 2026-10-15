@@ -4,6 +4,7 @@ response classification."""
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -143,6 +144,7 @@ async def test_from_runtime_binds_the_resolved_connection_credential_and_base_ur
     base_url: str,
     connection_base_url: str | None,
     expected_base_url: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     route = respx.post(f"{expected_base_url}/things").mock(
         return_value=httpx.Response(200, json=_OK)
@@ -153,10 +155,16 @@ async def test_from_runtime_binds_the_resolved_connection_credential_and_base_ur
         connection_id="example:api-key",
         local_connection_id="api-key",
     )
-    client = ProviderTaskClient.from_runtime(
-        _StubRuntime(_make_provider(connection_base_url, adapter=adapter, base_url=base_url)),
-        target,
-    )
+    runtime = _StubRuntime(_make_provider(connection_base_url, adapter=adapter, base_url=base_url))
+    loop_thread = threading.get_ident()
+    token_getter = runtime.get_connection_token_getter
+
+    def prepare(connection: ConnectionRef) -> Any:
+        assert threading.get_ident() != loop_thread
+        return token_getter(connection)
+
+    monkeypatch.setattr(runtime, "get_connection_token_getter", prepare)
+    client = await ProviderTaskClient.from_runtime_async(runtime, target)
 
     result = await client.post_and_parse("/things", timeout=5.0, parse=_json, json={"model": "m"})
 

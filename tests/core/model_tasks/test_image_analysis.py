@@ -537,8 +537,14 @@ async def test_analyze_offloads_file_loading_and_base64_encoding(
     event_loop_thread = threading.get_ident()
     load_threads: list[int] = []
     content_threads: list[int] = []
+    setup_threads: list[int] = []
     original_load = image_module._load_image_inputs
     original_content = image_module._analysis_content
+    original_adapter = runtime.get_adapter
+
+    def tracked_adapter(*args: Any, **kwargs: Any) -> Any:
+        setup_threads.append(threading.get_ident())
+        return original_adapter(*args, **kwargs)
 
     def tracked_load(*args: Any, **kwargs: Any) -> Any:
         load_threads.append(threading.get_ident())
@@ -550,11 +556,13 @@ async def test_analyze_offloads_file_loading_and_base64_encoding(
 
     monkeypatch.setattr(image_module, "_load_image_inputs", tracked_load)
     monkeypatch.setattr(image_module, "_analysis_content", tracked_content)
+    monkeypatch.setattr(runtime, "get_adapter", tracked_adapter)
 
     await service.analyze("Describe it", image_paths=[source])
 
     assert load_threads and all(thread_id != event_loop_thread for thread_id in load_threads)
     assert content_threads and all(thread_id != event_loop_thread for thread_id in content_threads)
+    assert setup_threads and all(thread_id != event_loop_thread for thread_id in setup_threads)
 
 
 @pytest.mark.asyncio

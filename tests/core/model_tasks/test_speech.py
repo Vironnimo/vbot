@@ -191,8 +191,10 @@ async def test_transcription_admission_limits_active_requests_and_discards_cance
     )
     tasks = [asyncio.create_task(service.transcribe(audio)) for audio in (b"first", b"second")]
     try:
-        assert await asyncio.wait_for(entered.get(), 1) == b"first"
-        assert await asyncio.wait_for(entered.get(), 1) == b"second"
+        assert {
+            await asyncio.wait_for(entered.get(), 1),
+            await asyncio.wait_for(entered.get(), 1),
+        } == {b"first", b"second"}
         waiter = asyncio.create_task(service.transcribe(b"cancelled"))
         queued = asyncio.create_task(service.transcribe(b"queued"))
         tasks.extend((waiter, queued))

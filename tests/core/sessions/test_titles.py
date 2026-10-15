@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, cast, override
@@ -258,7 +259,9 @@ async def test_closed_session_database_skips_the_title_with_a_warning(
 
 
 @pytest.mark.asyncio
-async def test_configured_title_model_replaces_local_title_with_bounded_request(manager) -> None:
+async def test_configured_title_model_replaces_local_title_with_bounded_request(
+    manager, monkeypatch: pytest.MonkeyPatch
+) -> None:
     adapter = StubAdapter('Title: "Review report".')
     runtime = StubRuntime(
         manager,
@@ -292,6 +295,14 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     ]
     _append_first_user(runtime, content)
     service = SessionTitleService(cast(Any, runtime))
+    loop_thread = threading.get_ident()
+    original_adapter = runtime.get_adapter
+
+    def prepare_adapter(connection: ConnectionRef) -> StubAdapter:
+        assert threading.get_ident() != loop_thread
+        return original_adapter(connection)
+
+    monkeypatch.setattr(runtime, "get_adapter", prepare_adapter)
 
     await _title_first_message(service)
 

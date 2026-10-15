@@ -43,8 +43,8 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("sessions.titles")
 
 SESSION_TITLE_WORKER_LIMIT = 2
-# Parses and validates Model title responses (CPU). Session reads and title
-# writes run on the Session database's pool.
+# Prepares Provider credentials/adapters and validates Model title responses.
+# Session reads and title writes run on the Session database's pool.
 _SESSION_TITLE_WORKERS = BoundedWorkerPool(
     name="session-title",
     max_workers=SESSION_TITLE_WORKER_LIMIT,
@@ -350,7 +350,9 @@ class SessionTitleService:
         await sessions.set_temporary_group_title_async(
             owner_name=owner_name, group_id=group_id, title=local_title
         )
-        settings = self._runtime.storage.load_session_title_settings()
+        settings = await _SESSION_TITLE_WORKERS.run(
+            self._runtime.storage.load_session_title_settings
+        )
         title_input = _title_input(source_text, [])
         candidate = _group_title_candidate(participants, self._runtime.models.pricing_for)
         if not settings["enabled"] or not title_input or candidate is None:
@@ -412,9 +414,17 @@ class SessionTitleService:
         group_id: str | None = None,
     ) -> str:
         adapter: Any | None = None
-        try:
+
+        def prepare() -> tuple[str, str, str]:
+            nonlocal adapter
             provider_id, model_id, connection_id = _resolve_model_target(self._runtime, model)
+            # Keep ownership if cancellation arrives while the worker builds it.
             adapter = self._runtime.get_adapter(ConnectionRef(provider_id, connection_id))
+            return provider_id, model_id, connection_id
+
+        try:
+            provider_id, model_id, connection_id = await _SESSION_TITLE_WORKERS.run(prepare)
+            assert adapter is not None
             usage_context = {
                 "model": f"{provider_id}/{model_id}",
                 "kind": "group_title" if group_id is not None else "session_title",

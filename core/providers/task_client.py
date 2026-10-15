@@ -38,9 +38,11 @@ from core.providers.errors import (
 )
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
+from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
 HeaderBuilder = Callable[[], Awaitable[dict[str, str]]]
+_TASK_CLIENT_WORKERS = BoundedWorkerPool(name="task-client-setup", max_workers=4)
 
 # Option name of the JSON escape hatch every provider task target carries:
 # a free-form object adding provider-specific request fields not authored by
@@ -255,6 +257,28 @@ class ProviderTaskClient:
             token_getter=token_getter,
             usage_observer=usage_observer,
             debug_recorder=_task_debug_recorder(runtime, debug_context),
+        )
+
+    @classmethod
+    async def from_runtime_async(
+        cls,
+        runtime: TaskClientRuntime,
+        target_ref: TaskTargetRef,
+        *,
+        usage_observer: TaskRequestObserver | None = None,
+        debug_context: DebugContext | None = None,
+    ) -> Self:
+        """Resolve credentials and debug configuration without blocking the Event Loop.
+
+        Construction owns no transport; HTTP clients are opened only by requests.
+        A cancelled preparation therefore has no transport resource to retire.
+        """
+        return await _TASK_CLIENT_WORKERS.run(
+            cls.from_runtime,
+            runtime,
+            target_ref,
+            usage_observer=usage_observer,
+            debug_context=debug_context,
         )
 
     def http_client(self, timeout: float) -> httpx.AsyncClient:

@@ -4,6 +4,8 @@ Provider-neutral image generation/edit execution, isolated image understanding, 
 
 ## Overview
 
+Image binding/credential resolution and Adapter/client construction run on bounded workers: shared Task Model binding/client preparation plus the image-specific `image-setup` pool for availability and analysis Adapters. A cancelled Adapter setup settles and closes the constructed Adapter before returning cancellation.
+
 `core/model_tasks/` (`image*.py`) owns text-to-image, source-image editing, and text analysis of local images after Settings has selected concrete task-model targets. Generation resolves `image_generation` and routes provider media APIs through `ProviderImageClient`; understanding resolves `image_understanding` and uses the selected Provider's ordinary Chat Adapter for one isolated multimodal request. Both paths load bounded local image files and reject local targets. This module does not own model discovery, settings validation, UI controls, or Tool schemas; those live in `core/models/`, `core/settings/`, `webui/`, and `core/tools/image.py`.
 
 ## Interfaces

@@ -25,8 +25,10 @@ from core.model_tasks.model_tasks import (
 )
 from core.usage import UsageRecorder
 from core.utils.errors import TaskError
+from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
+_TASK_BINDING_WORKERS = BoundedWorkerPool(name="task-binding", max_workers=4)
 
 
 @dataclass(frozen=True)
@@ -240,6 +242,12 @@ class TaskBindingResolver:
             return binding, options, self.parse_target(binding.target)
         except TaskModelError as exc:
             raise self._configuration_error(str(exc)) from exc
+
+    async def resolve_async(
+        self, task_type: str
+    ) -> tuple[TaskModelBinding, JsonObject, TaskModelTargetRef]:
+        """Resolve current Settings and credential gates off the Event Loop."""
+        return await _TASK_BINDING_WORKERS.run(self.resolve, task_type)
 
     def binding_for(self, task_type: str) -> TaskModelBinding:
         try:

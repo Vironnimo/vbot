@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any, override
 
 import pytest
@@ -31,17 +32,25 @@ class _StubModelTasks:
         return {"merged": True, **dict(binding.options)}
 
 
-def test_resolve_returns_binding_options_and_parsed_target() -> None:
+@pytest.mark.asyncio
+async def test_resolve_returns_binding_options_and_parsed_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     binding = TaskModelBinding(
         task_type="speech_to_text",
         target="openai/whisper-1::api-key",
         options={"language": "de"},
     )
-    resolver = TaskBindingResolver(
-        _StubModelTasks(binding), configuration_error=_StubConfigurationError
-    )
+    service = _StubModelTasks(binding)
+    loop_thread = threading.get_ident()
 
-    resolved_binding, options, target_ref = resolver.resolve("speech_to_text")
+    def validate_execution_target(_binding: object) -> None:
+        assert threading.get_ident() != loop_thread
+
+    monkeypatch.setattr(service, "validate_execution_target", validate_execution_target)
+    resolver = TaskBindingResolver(service, configuration_error=_StubConfigurationError)
+
+    resolved_binding, options, target_ref = await resolver.resolve_async("speech_to_text")
 
     assert resolved_binding is binding
     assert options == {"merged": True, "language": "de"}
