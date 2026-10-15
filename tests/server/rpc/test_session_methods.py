@@ -468,6 +468,11 @@ async def test_session_get_reads_one_summary_by_exact_address(tmp_path: Path) ->
     source = sessions.create("coder", session_id="source")
     source.append(ChatMessage.user("hello"))
     sessions.set_title(source.address, "Release planning")
+    goal = {"objective": "Ship", "status": "active", "turns": 2, "max_turns": 30}
+    sessions.mutate_metadata(
+        source.address,
+        lambda metadata: metadata.update(goal={**goal, "status_run_id": "run-zero"}),
+    )
     fork = await sessions.fork(source.address)
     settle_run(sessions, fork.address, "run-one", completed_at="2026-09-20T10:00:00Z")
 
@@ -479,6 +484,9 @@ async def test_session_get_reads_one_summary_by_exact_address(tmp_path: Path) ->
     assert parent["session"]["title"] == "Release planning"
     assert "agent_id" not in parent["session"]
     assert "compaction_policy_effective" not in parent["session"]
+    # The goal shows without its bookkeeping; a fork does not inherit it.
+    assert parent["session"]["goal"] == goal
+    assert "goal" not in child["session"]
     assert child["session"][FORK_SOURCE_META_KEY]["session_id"] == "source"
     assert child["session"]["unread_run_id"] == "run-one"
 

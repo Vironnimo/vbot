@@ -13,6 +13,7 @@ from core.chat.errors import ChatSessionError
 from core.sessions import _store_values
 from core.sessions._metadata import _completion_activity_from_state
 from core.sessions._types import (
+    SESSION_GOAL_META_KEY,
     JsonObject,
     SessionHistoryRevision,
     SessionListCursor,
@@ -282,11 +283,28 @@ def _summary(state: sqlite3.Row, metadata_keys: Sequence[str] = ()) -> JsonObjec
             str(state["agent_overrides_json"]), "Session agent overrides"
         )
     summary.update(_completion_activity_from_state(state))
+    goal = _goal_from_state(state)
+    if goal is not None:
+        summary[SESSION_GOAL_META_KEY] = goal
     for key in metadata_keys:
         payload = state[f"metadata_{key}_json"]
         if payload is not None:
             summary[key] = json.loads(str(payload))
     return summary
+
+
+# The goal fields a Session summary shows; the rest is the goal's bookkeeping.
+_SUMMARY_GOAL_FIELDS = ("objective", "status", "pause_reason", "turns", "max_turns")
+
+
+def _goal_from_state(state: sqlite3.Row) -> JsonObject | None:
+    payload = state["goal_json"]
+    if payload is None:
+        return None
+    goal = json.loads(str(payload))
+    if not isinstance(goal, dict):
+        return None
+    return {key: goal[key] for key in _SUMMARY_GOAL_FIELDS if goal.get(key) is not None}
 
 
 def list_summaries(

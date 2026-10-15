@@ -20,8 +20,8 @@ import {
 //   across navigation like the draft text. Its first message sends them as
 //   the new Session's `working_project_id` and `agent_overrides`; the next
 //   draft starts from the remembered values.
-// - An existing Session reads its Project and overrides from its `session.get`
-//   row and writes a Model or effort change through
+// - An existing Session reads its Project, overrides and goal from its
+//   `session.get` row and writes a Model or effort change through
 //   `session.set_agent_overrides` with `remember`. Opening a Session only reads
 //   its choices. Autosave serializes edits, retains failed saves, and flushes
 //   before a message starts a Run.
@@ -120,8 +120,8 @@ export function createSessionSettings(context) {
   // draft key -> { workingProjectId?, model, thinking_effort }. An absent
   // `workingProjectId` is the Agent's default Project; `null` the Workspace.
   let drafts = $state({});
-  // Session key -> { workingProjectId, projectKnown, overrides } as last read
-  // or written.
+  // Session key -> { workingProjectId, projectKnown, overrides, goal } as last
+  // read or written.
   let rows = $state({});
   // The Model catalog (`{ models, connections }`), null until it answers.
   let catalog = $state.raw(null);
@@ -229,6 +229,7 @@ export function createSessionSettings(context) {
       },
       model: override('model'),
       thinkingEffort: override('thinking_effort'),
+      goal: row?.goal ?? null,
     };
   });
 
@@ -373,6 +374,7 @@ export function createSessionSettings(context) {
           overrides: isRecord(session.agent_overrides)
             ? session.agent_overrides
             : {},
+          goal: isRecord(session.goal) ? session.goal : null,
         },
       };
     } catch {
@@ -410,6 +412,7 @@ export function createSessionSettings(context) {
           workingProjectId: row?.workingProjectId ?? null,
           projectKnown: row?.projectKnown === true,
           overrides: saved,
+          goal: row?.goal ?? null,
         },
       };
       await context.refreshAgentDefaults(shown.agentAddress);
