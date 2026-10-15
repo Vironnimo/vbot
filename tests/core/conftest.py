@@ -85,7 +85,10 @@ def deny_access(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path], None]:
         return real_open(file, mode, *args, **kwargs)
 
     def guarded_os_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
-        if inside(path) and not flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT):
+        # POSIX directory walkers open the directory before scanning its fd.
+        if (location(path) in denied or inside(path)) and not flags & (
+            os.O_WRONLY | os.O_RDWR | os.O_CREAT
+        ):
             raise refuse(path)
         return real_os_open(path, flags, *args, **kwargs)
 
