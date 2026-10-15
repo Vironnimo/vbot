@@ -21,6 +21,7 @@ from .engine_test_support import (
     drain,
     ending_engine_on_stop,
     make_channel_engine,
+    make_sessions,
     make_trigger_service,
 )
 
@@ -242,7 +243,7 @@ def make_adapter(
 
     Without ``trigger_run``, every triggered Run completes with the reply "ok".
     """
-    chat_sessions = ChatSessionManager(tmp_path)
+    chat_sessions = make_sessions(tmp_path)
     trigger = trigger_run or AsyncMock(
         side_effect=lambda _agent, _content, session_id, **_kwargs: make_completed_run(session_id)
     )
