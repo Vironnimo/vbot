@@ -142,6 +142,12 @@ def test_edits_outside_the_service_are_recorded_when_next_noticed(
             id="several-revisions-newest-first",
         ),
         pytest.param([("add", "A"), ("remove", "A")], [1], [], id="already-undone-needs-nothing"),
+        pytest.param(
+            [("add", "A"), ("replace", "A", "A2"), ("add", "A")],
+            [2],
+            ["A", "A"],
+            id="replacement-restores-entry-even-if-text-exists-elsewhere",
+        ),
     ],
 )
 def test_revert_takes_back_the_named_revisions(
@@ -159,9 +165,14 @@ def test_revert_takes_back_the_named_revisions(
         else:
             service.remove_matching(workspace, "agent", step[1], writer=_TOOL)
 
-    service.revert(workspace, revert, writer=_RPC)
+    before = service.entries_at(workspace, "coder", None)["agent"]
+    reverted = service.revert(workspace, revert, writer=_RPC)
 
     assert service.entries_at(workspace, "coder", None)["agent"] == expected
+    assert [entry.content for entry in service.list_entries(workspace, "agent")] == expected
+    if reverted.revisions:
+        service.revert(workspace, [r.id for r in reverted.revisions], writer=_RPC)
+        assert service.entries_at(workspace, "coder", None)["agent"] == before
 
 
 def test_revert_is_recorded_and_can_itself_be_reverted(

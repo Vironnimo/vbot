@@ -189,6 +189,7 @@ def replace_fuzzy(
     typographic: bool = False,
     first: bool = False,
     rewrapped: bool = False,
+    whitespace: bool = True,
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     """Find ``old_string`` in ``content`` via the strategy chain and replace it.
 
@@ -200,14 +201,24 @@ def replace_fuzzy(
     winning strategy's first match. ``rewrapped`` adds a last strategy for one
     target: ``old_string`` whose line breaks fall in other places than the file's,
     for an edit that changes more than whitespace.
+    ``whitespace=False`` keeps spacing and indentation significant, including
+    in the typographic step, for callers checking an edit's post-state.
     """
     replacement_text = _normalize_replacement_newlines(new_string)
     old_lf = _normalize_newlines(old_string)
     file_ending = dominant_line_ending(content)
 
     for name, matcher, reindent in _STRATEGIES:
+        if not whitespace and name in {"line_trimmed", "whitespace_normalized"}:
+            continue
         matches = (
-            _match_normalized(content, old_string, typographic=True, whole_lines=whole_lines)
+            _match_normalized(
+                content,
+                old_string,
+                typographic=True,
+                whole_lines=whole_lines,
+                trim_lines=whitespace,
+            )
             if typographic and name == "normalized"
             else matcher(content, old_string)
         )
@@ -254,6 +265,7 @@ def replace_fuzzy(
     # misstates: what the edit means is unclear.
     if (
         not rewrapped
+        or not whitespace
         or first
         or whole_lines
         or at_eof
@@ -1280,7 +1292,12 @@ def _match_exact(content: str, pattern: str) -> list[tuple[int, int]]:
 
 
 def _match_normalized(
-    content: str, pattern: str, *, typographic: bool = False, whole_lines: bool = False
+    content: str,
+    pattern: str,
+    *,
+    typographic: bool = False,
+    whole_lines: bool = False,
+    trim_lines: bool = True,
 ) -> list[tuple[int, int]]:
     normalized_pattern = _normalize_with_spans(pattern, typographic=typographic)[0]
     if not normalized_pattern:
@@ -1313,7 +1330,7 @@ def _match_normalized(
             ):
                 matches.append((left, right))
         start = position + 1
-    if not matches and typographic:
+    if not matches and typographic and trim_lines:
         matches = [
             (spans[start][0], spans[end - 1][1])
             for start, end in _match_line_trimmed(normalized_content, normalized_pattern)

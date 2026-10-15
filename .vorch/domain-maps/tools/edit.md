@@ -183,7 +183,8 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   results counted it as applied and never named it (Swarm runs 2026-10-11/12).
   An edit whose change the file already holds is such a no-op too
   (`_edit_engine._new_text_in_place`): its `old_string` is not in the file,
-  its `new_string` stands exactly once (precise matching) and is not part of
+  its `new_string` stands exactly once (line-ending and typographic normalization
+  only; spacing and indentation must match) and is not part of
   `old_string`, the two start or end with the same line holding a word, and no
   copy of `old_string` with errors stands outside that place. It is named
   `X[, edit K of N]: new_string already stands at lines A-B and old_string is

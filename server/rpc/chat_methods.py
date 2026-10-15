@@ -1196,13 +1196,16 @@ def _command_output_chat(state: Any, params: JsonObject) -> JsonObject:
 async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "run_id", "tool_call_id"}, "chat.cancel_tool_call")
 
+    owner = _required_agent_address(params, "agent_id") if "agent_id" in params else None
     run_id = _required_string(params, "run_id")
     tool_call_id = _required_string(params, "tool_call_id")
     try:
         run = state.chat_runs.get(run_id)
-        cancelled = run.cancel_tool_call(tool_call_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    if owner is not None and (run.agent_id, run.project_id) != owner:
+        raise RpcError(RPC_ERROR_RUN_NOT_FOUND, "Run not found.")
+    cancelled = run.cancel_tool_call(tool_call_id)
     if not cancelled:
         raise RpcError(
             RPC_ERROR_RUN_NOT_FOUND,

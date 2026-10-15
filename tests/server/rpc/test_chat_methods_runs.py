@@ -41,9 +41,9 @@ async def _hold_until_cancelled(_run: Run) -> str:
     return "done"
 
 
-async def _held_run() -> tuple[SimpleNamespace, Run]:
+async def _held_run(address: SessionAddress = ADDRESS) -> tuple[SimpleNamespace, Run]:
     manager = ChatRunManager()
-    run = await manager.start(ADDRESS, _hold_until_cancelled)
+    run = await manager.start(address, _hold_until_cancelled)
     await asyncio.sleep(0)
     return SimpleNamespace(chat_runs=manager, file_delivery=FileDelivery()), run
 
@@ -141,12 +141,23 @@ async def test_cancel_records_the_optional_reason_on_the_run(
 
 
 @pytest.mark.asyncio
-async def test_cancel_tool_call_cancels_only_that_tool_call() -> None:
-    state, run = await _held_run()
+@pytest.mark.parametrize("project_id", [None, "project"])
+async def test_cancel_tool_call_cancels_only_that_tool_call(project_id: str | None) -> None:
+    state, run = await _held_run(SessionAddress(project_id, "coder", "session-one"))
     aborted: list[str] = []
     run.register_tool_cancel("tool-1", lambda: aborted.append("tool-1"))
     try:
-        response = await call(state, "chat.cancel_tool_call", run_id=run.id, tool_call_id="tool-1")
+        owner = "coder@project" if project_id else "coder"
+        for wrong in ("other", "coder@elsewhere", "coder" if project_id else "coder@project"):
+            refused = await call(
+                state, "chat.cancel_tool_call", agent_id=wrong, run_id=run.id, tool_call_id="tool-1"
+            )
+            assert refused["error"]["code"] == RPC_ERROR_RUN_NOT_FOUND
+            assert not run.tool_call_cancelled("tool-1")
+            assert aborted == []
+        response = await call(
+            state, "chat.cancel_tool_call", agent_id=owner, run_id=run.id, tool_call_id="tool-1"
+        )
 
         assert response == {"ok": True, "result": {"ok": True}}
         assert aborted == ["tool-1"]

@@ -344,7 +344,7 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
     details = _not_found(content, old, source="old_string")
     present = None
     if new.strip() and new != old:
-        present = replace_fuzzy(content, new, new, replace_all=False, first=True, typographic=True)
+        present = _poststate(content, new, first=True)
         # Text the old text already holds proves nothing about an earlier edit.
         if isinstance(present, FuzzyReplacement) and new.strip() not in old:
             details["already_present"] = present.first_changed_line
@@ -544,7 +544,7 @@ def _new_text_in_place(content: str, old: str, new: str) -> AlreadyApplied | Non
     """
     if not new.strip() or new.strip() in old or not _share_an_edge_line(old, new):
         return None
-    present = replace_fuzzy(content, new, new, replace_all=False, typographic=True)
+    present = _poststate(content, new)
     if not isinstance(present, FuzzyReplacement):
         return None
     start, end = present.before_spans[0]
@@ -956,7 +956,7 @@ def _already_applied(window: str, hunk: _Hunk, section: _Section) -> bool:
     context = "".join(text.strip() for prefix, text in hunk.lines if prefix == " ")
     if len(context) < 4 and not _inline_context_identifies(window, old, new):
         return False
-    poststate = _match(window, new, new, eof=hunk.eof or hunk.no_newline)
+    poststate = _poststate(window, new, whole_lines=True, eof=hunk.eof or hunk.no_newline)
     return isinstance(poststate, FuzzyReplacement) and (
         not hunk.no_newline or poststate.before_spans[0][1] == len(window)
     )
@@ -970,7 +970,7 @@ def _may_copy(window: str, hunk: _Hunk) -> bool:
     was made, and a similar passage must not stand in for it.
     """
     new = _hunk_text(hunk, " +")
-    return not hunk.precise_only and (not new or _match(window, new, new) is None)
+    return not hunk.precise_only and (not new or _poststate(window, new, whole_lines=True) is None)
 
 
 def _unmarked_additions(
@@ -1270,6 +1270,33 @@ def _splice(
 
 
 # --- Matching helpers ------------------------------------------------------------------
+
+
+def _poststate(
+    content: str, new: str, *, whole_lines: bool = False, eof: bool = False, first: bool = False
+) -> _Found:
+    """Recognize written text without treating requested whitespace as a copy error."""
+    found = replace_fuzzy(
+        content,
+        new,
+        new,
+        replace_all=False,
+        whole_lines=whole_lines,
+        at_eof=eof,
+        first=first,
+        typographic=True,
+        whitespace=False,
+    )
+    # A substring starting inside indentation does not prove the requested
+    # indentation: dedenting a first line must not count as already applied.
+    if isinstance(found, FuzzyReplacement):
+        start = found.before_spans[0][0]
+        lead = content[
+            max(content.rfind("\n", 0, start), content.rfind("\r", 0, start)) + 1 : start
+        ]
+        if lead and not lead.strip():
+            return None
+    return found
 
 
 def _match(

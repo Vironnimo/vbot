@@ -458,6 +458,7 @@ def _write_manifest(path: Path, manifest: SnapshotManifest) -> None:
     path.write_text(
         json.dumps(_manifest_payload(manifest), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     fsync_file(path)
 

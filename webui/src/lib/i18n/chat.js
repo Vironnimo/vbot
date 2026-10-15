@@ -110,6 +110,8 @@ export default Object.freeze({
   'chat.cancelToolCallAria': 'Cancel running tool call',
   'chat.cancelSubAgentAria': 'Cancel running sub-agent',
   'chat.historyLoadError': 'Chat history could not be loaded.',
+  'chat.activityLoadError':
+    'Completion status could not be refreshed. Retrying automatically.',
   'chat.sendError': 'Message could not be sent.',
   'chat.editError': 'Message could not be edited.',
   'chat.editMessage': 'Edit message',

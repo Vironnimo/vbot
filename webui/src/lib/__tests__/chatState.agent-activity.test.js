@@ -452,6 +452,49 @@ describe('completion activity', () => {
 });
 
 describe('scoped completion activity', () => {
+  it('retries failed displayed activity without reconnecting and stops after disposal', async () => {
+    vi.useFakeTimers();
+    const { chatState, controller, listSessionActivity } = activitySetup();
+    const state = ensureSessionState(chatState, 'alpha', 'session-one');
+    state.hasUnreadCompletion = true;
+    state.unreadRunId = 'run-one';
+    state.latestCompletionRunId = 'run-one';
+    listSessionActivity.mockRejectedValueOnce(new Error('unavailable'));
+    try {
+      controller.syncAgentActivity(['alpha'], 'same-connection');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state.hasUnreadCompletion).toBe(true);
+      expect(chatState.agentActivityError).toBe('unavailable');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(listSessionActivity).toHaveBeenCalledTimes(2);
+      expect(state.hasUnreadCompletion).toBe(false);
+      expect(chatState.agentActivityError).toBe('');
+      controller.syncAgentActivity(['alpha'], 'same-connection');
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(listSessionActivity).toHaveBeenCalledTimes(2);
+
+      listSessionActivity.mockRejectedValue(new Error('unavailable'));
+      await controller.refreshAgentActivity(['alpha']);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(listSessionActivity).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(listSessionActivity).toHaveBeenCalledTimes(4);
+      controller.syncAgentActivity([], 'same-connection');
+      expect(chatState.agentActivityError).toBe('');
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(listSessionActivity).toHaveBeenCalledTimes(4);
+      controller.syncAgentActivity(['alpha'], 'same-connection');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listSessionActivity).toHaveBeenCalledTimes(5);
+      controller.destroy();
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(listSessionActivity).toHaveBeenCalledTimes(5);
+    } finally {
+      controller.destroy();
+      vi.useRealTimers();
+    }
+  });
+
   const unreadRow = (id, runId, at = '2026-07-20T10:00:00+00:00') => ({
     id,
     latest_completion_run_id: runId,

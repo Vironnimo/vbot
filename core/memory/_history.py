@@ -463,7 +463,7 @@ def revert_revisions(
                         MemoryRevertConflict(target.id, change, change.text, later.ids)
                     )
                 continue
-            if change.op == "added" or change.previous in entries:
+            if change.op == "added":
                 entries.pop(index)
             else:
                 entries[index] = change.previous or change.text

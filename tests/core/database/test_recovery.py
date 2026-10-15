@@ -161,6 +161,7 @@ def test_a_damaged_database_is_restored_on_open_with_an_incident(
     assert status["state"] == "recovered_with_incident"
     incident = read_incident(data_dir, "notes")
     assert incident is not None
+    assert b"\r" not in incident_path(data_dir, "notes").read_bytes()
     assert incident["verification"] == "ok"
     assert incident["database"] == "notes"
     assert incident["acknowledged"] is False
