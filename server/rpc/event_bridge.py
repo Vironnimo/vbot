@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import OrderedDict
+from collections.abc import Mapping, Sequence
 from contextlib import aclosing
 from typing import Any
 
@@ -38,6 +39,7 @@ from core.runs import (
     Run,
     RunEvent,
 )
+from core.sessions import SessionAddress
 from core.subagents import (
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_STATUS_CHANGED_EVENT,
@@ -206,6 +208,44 @@ def publish_resource_changed(
     if scope:
         payload["scope"] = scope
     state.event_bus.publish(RESOURCE_CHANGED_EVENT, payload)
+
+
+async def publish_archived_sessions(
+    state: Any,
+    addresses: Sequence[SessionAddress],
+    *,
+    landings: Mapping[tuple[str | None, str], str | None] | None = None,
+) -> None:
+    """Release archived Sessions in every window using each owner's own landing."""
+    if not addresses:
+        return
+
+    def resolve_landings() -> dict[tuple[str | None, str], str | None]:
+        resolved = dict(landings or {})
+        for address in addresses:
+            scope = (address.project_id, address.agent_id)
+            if scope not in resolved:
+                resolved[scope] = (
+                    state.runtime.chat_sessions.newest_session_id(
+                        address.agent_id, address.project_id
+                    )
+                    if address.project_id is not None
+                    else state.runtime.agents.get(address.agent_id).current_session_id or None
+                )
+        return resolved
+
+    resolved = await state.runtime.chat_sessions.run_async(resolve_landings)
+    for address in addresses:
+        publish_resource_changed(
+            state,
+            RESOURCE_KIND_SESSIONS,
+            scope={
+                "agent_id": address.agent_id,
+                "project_id": address.project_id,
+                "deleted_session_id": address.session_id,
+                "next_session_id": resolved[(address.project_id, address.agent_id)],
+            },
+        )
 
 
 def session_resource_scope(

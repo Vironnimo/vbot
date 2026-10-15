@@ -55,7 +55,7 @@ from server.rpc.errors import (
     RPC_ERROR_LAST_AGENT,
     RpcError,
 )
-from server.rpc.event_bridge import publish_resource_changed
+from server.rpc.event_bridge import publish_archived_sessions, publish_resource_changed
 from server.rpc.payloads import _agent_response
 from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
@@ -359,6 +359,7 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
         "session_count": outcome.session_count,
         "external_workspace": outcome.external_workspace,
     }
+    await publish_archived_sessions(state, outcome.review_addresses)
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     return result
 

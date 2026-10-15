@@ -15,8 +15,9 @@ from typing import Any
 import pytest
 
 from core.agents import AgentStore
+from core.chat import ChatMessage
 from core.database import DatabaseUnavailableError, SnapshotBarrier
-from core.runs import Run
+from core.runs import Run, RunKind
 from core.sessions import ArchiveEntryFilter, SessionAddress
 from tests.server.rpc_test_support import (
     InstrumentedAgentDeleteLock,
@@ -288,18 +289,29 @@ async def test_agent_delete_refuses_a_referenced_agent(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("moved_review", [False, True])
 async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, moved_review: bool
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
     agents = AgentStore(tmp_path, sessions=state.runtime.chat_sessions)
     state.runtime.agents = agents
     monkeypatch.setattr(state.runtime.agent_resolver, "_agents", agents)
-    agents.create("coder")
+    archived_agent = agents.create("coder")
     state.runtime.chat_sessions.create("coder", session_id="work")
     grant_holder = agents.create(
         "manager", "Manager", tools={"subagent": {"allowed_agents": ["coder", "coder@vbot"]}}
     )
+
+    review = None
+    if moved_review:
+        sessions = state.runtime.chat_sessions
+        sessions.create("manager", session_id="landing")
+        source = sessions.create("manager", session_id="source")
+        source.append(ChatMessage.user("reviewed history"))
+        review = await sessions.fork(source.address, run_kind=RunKind.MEMORY_REFLECTION)
+        await sessions.move(source.address, SessionAddress(None, "coder", source.id))
+        agents.update("manager", current_session_id=review.id)
 
     try:
         result = await rpc_result(state, "agent.delete", id="coder")
@@ -312,12 +324,37 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
     # The delete created one archive entry that remembers the grant for a restore.
     entry = state.runtime.chat_sessions.archive_ledger.entry(result["archive_entry_id"])
     assert entry is not None and (entry.kind, entry.subject_id) == ("agent", "coder")
-    assert (result["session_count"], result["purged"], result["purge_pending"]) == (1, False, False)
+    assert (result["session_count"], result["purged"], result["purge_pending"]) == (
+        3 if moved_review else 1,
+        False,
+        False,
+    )
     assert entry.facts["grants"] == [
-        {"agent_id": "manager", "agent_created_at": grant_holder.created_at, "index": 0}
+        {
+            "agent_id": "manager",
+            "agent_created_at": grant_holder.created_at,
+            "target_created_at": archived_agent.created_at,
+            "index": 0,
+        }
     ]
     # The archived Sessions leave Recall.
     assert state.runtime.recall.removed_agents == ["coder"]
+
+    if review is not None:
+        assert manager["current_session_id"] == "landing"
+        deletions = [
+            event["payload"]["scope"]
+            for event in state.event_bus.events
+            if event["payload"].get("kind") == "sessions"
+        ]
+        assert deletions == [
+            {
+                "agent_id": "manager",
+                "project_id": None,
+                "deleted_session_id": review.id,
+                "next_session_id": "landing",
+            }
+        ]
 
 
 @pytest.mark.asyncio

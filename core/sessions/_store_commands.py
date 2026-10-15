@@ -21,10 +21,14 @@ def put(
     command_id: str,
     origin_run_id: str,
     checkpoint: dict[str, Any],
+    *,
+    generation_id: str,
 ) -> None:
     previous = connection.execute(
-        "SELECT checkpoint_json FROM session_background_commands WHERE command_id = ?",
-        (command_id,),
+        "SELECT c.checkpoint_json FROM session_background_commands AS c "
+        "JOIN sessions AS s ON s.session_key = c.session_key "
+        "WHERE c.command_id = ? AND s.generation_id = ? AND s.state = 'live'",
+        (command_id, generation_id),
     ).fetchone()
     if previous is not None:
         connection.execute(
@@ -37,22 +41,20 @@ def put(
             ),
         )
         return
-    # Do not resurrect a removed Session or rebind an existing command to a
-    # replacement that reuses its address. A Session move keeps session_key.
+    # Capture generation before process launch: even the first queued write
+    # follows a move and can never bind to a replacement at the old address.
     connection.execute(
         "INSERT INTO session_background_commands "
         "(command_id, session_key, origin_run_id, checkpoint_json, updated_at) "
         "SELECT ?, s.session_key, ?, ?, ? FROM sessions AS s "
-        "WHERE s.project_id = ? AND s.agent_id = ? AND s.session_id = ? AND s.state = 'live' "
+        "WHERE s.generation_id = ? AND s.state = 'live' "
         "ON CONFLICT(command_id) DO NOTHING",
         (
             command_id,
             origin_run_id,
             json.dumps(checkpoint, ensure_ascii=False),
             utc_now_timestamp(),
-            address.project_id or "",
-            address.agent_id,
-            address.session_id,
+            generation_id,
         ),
     )
 
@@ -65,11 +67,12 @@ def read(connection: sqlite3.Connection) -> list[dict[str, Any]]:
                 row["project_id"] or None, str(row["agent_id"]), str(row["session_id"])
             ),
             "origin_run_id": str(row["origin_run_id"]),
+            "generation_id": str(row["generation_id"]),
             "checkpoint": json.loads(row["checkpoint_json"]),
         }
         for row in connection.execute(
             "SELECT c.command_id, c.origin_run_id, c.checkpoint_json, "
-            "s.project_id, s.agent_id, s.session_id "
+            "s.project_id, s.agent_id, s.session_id, s.generation_id "
             "FROM session_background_commands AS c "
             "JOIN sessions AS s ON s.session_key = c.session_key WHERE s.state = 'live'"
         )

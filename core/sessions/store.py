@@ -54,6 +54,7 @@ if TYPE_CHECKING:
         SessionReadBatch,
         SessionReadCursor,
         SessionRunRecord,
+        SessionWorkingProject,
         ToolResultFacts,
     )
 
@@ -252,10 +253,14 @@ class SessionStore:
             lambda connection: _store_archive.archive_session(connection, address, None)
         )
 
-    def review_forks(self, address: SessionAddress) -> tuple[SessionAddress, ...]:
+    def review_forks(
+        self, address: SessionAddress, *, recursive: bool = True
+    ) -> tuple[SessionAddress, ...]:
         """The live review forks that follow one live Session; see ``_store_mutations``."""
         return self._read(
-            lambda connection: _store_mutations.review_fork_addresses(connection, address)
+            lambda connection: _store_mutations.review_fork_addresses(
+                connection, address, recursive=recursive
+            )
         )
 
     def move(self, source: SessionAddress, target: SessionAddress) -> None:
@@ -325,6 +330,10 @@ class SessionStore:
                 _store_values._live_metadata_row(connection, address)
             )
         )
+
+    def working_project(self, address: SessionAddress) -> SessionWorkingProject:
+        """Read the Working Project and whether its original incarnation was archived."""
+        return self._read(lambda connection: _store_queries.working_project(connection, address))
 
     def metadata_value(self, address: SessionAddress, key: str) -> Any:
         """Return one metadata value, or ``None`` when the Session has none."""

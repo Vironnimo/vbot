@@ -17,6 +17,7 @@ from core.sessions import (
     _store_archive_backfill,
     _store_attachments,
     _store_fts,
+    _store_values,
     _store_working_projects,
 )
 from core.sessions._store_health import SessionHealth
@@ -79,6 +80,11 @@ def session_database_spec(
                 breaks_older=True,
                 apply=_store_attachments.backfill,
             ),
+            Migration(
+                "sessions.0006_review_lineage",
+                breaks_older=True,
+                apply=_adopt_review_forks,
+            ),
         ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,
@@ -118,4 +124,16 @@ def _adopt_parent_generations(connection: sqlite3.Connection) -> None:
         "AND parent.project_id = COALESCE(child.subagent_parent_project_id, '') "
         "AND parent.agent_id = child.subagent_parent_agent_id "
         "AND parent.session_id = child.subagent_parent_session_id"
+    )
+
+
+def _adopt_review_forks(connection: sqlite3.Connection) -> None:
+    """Capture established same-scope reviews without guessing moved legacy owners."""
+    connection.execute(
+        "INSERT OR IGNORE INTO session_review_forks (session_key, source_key) "
+        "SELECT s.session_key, p.session_key FROM sessions s "
+        "JOIN sessions p ON p.session_key = s.fork_parent_key "
+        "AND p.project_id = s.project_id AND p.agent_id = s.agent_id "
+        "WHERE EXISTS (SELECT 1 FROM session_run_kinds k WHERE k.session_key = s.session_key "
+        f"AND k.run_kind IN {_store_values._REFLECTION_RUN_KINDS_SQL})"
     )

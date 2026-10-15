@@ -173,6 +173,15 @@ CREATE TABLE session_run_kinds (
   PRIMARY KEY (session_key, run_kind)
 ) STRICT, WITHOUT ROWID;
 
+-- Review ownership is captured once while source and fork share an Agent scope.
+-- It follows their generations even if the source later moves elsewhere.
+CREATE TABLE session_review_forks (
+  session_key INTEGER PRIMARY KEY REFERENCES sessions (session_key) ON DELETE CASCADE,
+  source_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX session_review_forks_by_source ON session_review_forks (source_key);
+
 -- A fork's inherited history, one row per seq segment: the entries of
 -- ancestor_key with from_seq <= seq < upto_seq that were current when the
 -- ancestor's history reached as_of_seq. Segments of one Session are disjoint

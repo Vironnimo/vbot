@@ -9,8 +9,9 @@ from typing import Any
 
 import pytest
 
+from core.chat import ChatMessage
 from core.projects.resolver import AgentResolutionError
-from core.runs import Run, RunAdmission
+from core.runs import Run, RunAdmission, RunKind
 from core.sessions import ArchiveEntryFilter, SessionAddress
 from server.rpc.errors import RPC_ERROR_PROJECT_BUSY
 from tests.server.rpc.project_methods_test_support import _make_repo, _make_state
@@ -29,19 +30,60 @@ async def _vbot_state(
 
 
 @pytest.mark.asyncio
-async def test_rm_archives_project(tmp_path: Path) -> None:
+@pytest.mark.parametrize("review_scope", [None, "identity", "project"])
+async def test_rm_archives_project(tmp_path: Path, review_scope: str | None) -> None:
     state, repo = await _vbot_state(tmp_path, "builder.md")
+
+    review = None
+    original_project = "original" if review_scope == "project" else None
+    if review_scope is not None:
+        sessions = state.runtime.chat_sessions
+        if original_project:
+            original_repo = _make_repo(tmp_path, original_project, "original.md")
+            await rpc_result(state, "project.add", cwd=str(original_repo))
+        else:
+            state.runtime.agents.create("original")
+        sessions.create("original", session_id="landing", project_id=original_project)
+        source = sessions.create("original", session_id="source", project_id=original_project)
+        source.append(ChatMessage.user("reviewed history"))
+        review = await sessions.fork(
+            source.address, target_project_id=original_project, run_kind=RunKind.MEMORY_REFLECTION
+        )
+        await sessions.move(source.address, SessionAddress("vbot", "builder", source.id))
+        if original_project is None:
+            state.runtime.agents.update("original", current_session_id=review.id)
 
     result = await rpc_result(state, "project.rm", project_id="vbot")
 
     entry = state.runtime.sessions.archive_ledger.entry(result["archive_entry_id"])
     assert entry is not None and (entry.kind, entry.subject_id) == ("project", "vbot")
-    assert (result["session_count"], result["purged"], result["purge_pending"]) == (0, False, False)
+    assert (result["session_count"], result["purged"], result["purge_pending"]) == (
+        2 if review_scope else 0,
+        False,
+        False,
+    )
     assert "archive_path" not in result
     assert not state.runtime.projects.exists("vbot")
     assert state.runtime.terminal_manager.closed_projects == ["vbot"]
     # The repo (cwd) is never touched by removal.
     assert repo.joinpath(*OPENCODE_AGENTS_SUBPATH, "builder.md").exists()
+
+    if review is not None:
+        if original_project is None:
+            assert state.runtime.agents.get("original").current_session_id == "landing"
+        deletions = [
+            event["payload"]["scope"]
+            for event in state.event_bus.events
+            if event["payload"].get("kind") == "sessions"
+        ]
+        assert deletions == [
+            {
+                "agent_id": "original",
+                "project_id": original_project,
+                "deleted_session_id": review.id,
+                "next_session_id": "landing",
+            }
+        ]
 
 
 @pytest.mark.asyncio

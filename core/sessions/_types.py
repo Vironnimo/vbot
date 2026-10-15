@@ -372,6 +372,18 @@ def recall_visibilities(*, include_subagents: bool) -> tuple[SessionRecallVisibi
 
 
 @dataclass(frozen=True)
+class SessionWorkingProject:
+    """A Session's Project and whether its original Project is still archived.
+
+    An archived binding stays unavailable after its archive is purged, even when
+    another Project reuses the public id. Only restoring that original clears it.
+    """
+
+    project_id: str | None
+    archived: bool = False
+
+
+@dataclass(frozen=True)
 class SessionDescriptorSource:
     """What a Recall result needs to describe one live Session."""
 

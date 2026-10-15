@@ -32,7 +32,6 @@ from core.utils.logging import get_logger
 from core.utils.timestamps import canonical_timestamp
 from server.events import (
     RESOURCE_KIND_AGENTS,
-    RESOURCE_KIND_SESSIONS,
 )
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.archive_methods import not_purged, purge_permanently
@@ -44,7 +43,11 @@ from server.rpc.errors import (
     RPC_ERROR_SESSION_IN_USE,
     RpcError,
 )
-from server.rpc.event_bridge import publish_resource_changed, publish_session_changed
+from server.rpc.event_bridge import (
+    publish_archived_sessions,
+    publish_resource_changed,
+    publish_session_changed,
+)
 from server.rpc.payloads import _global_compaction_policy_loader
 from server.rpc.validation import (
     _optional_agent_overrides,
@@ -224,21 +227,14 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
             )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+
     # Same emit point as session.create/rename: other windows on this agent
     # refresh their list (and the current marking), scoped to the agent. The
     # scope names each archived Session and its landing so windows still
     # displaying or holding it release it and follow, like the deleting window.
-    for archived_address in outcome.addresses:
-        publish_resource_changed(
-            state,
-            RESOURCE_KIND_SESSIONS,
-            scope={
-                "agent_id": archived_address.agent_id,
-                "project_id": archived_address.project_id,
-                "deleted_session_id": archived_address.session_id,
-                "next_session_id": next_session_id,
-            },
-        )
+    await publish_archived_sessions(
+        state, outcome.addresses, landings={(project_id, agent_id): next_session_id}
+    )
     # Re-aiming the identity current pointer is an agent-config change, so refresh
     # agent state in other windows (the current marking + return-to-current path).
     if outcome.was_current:

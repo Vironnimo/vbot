@@ -43,6 +43,7 @@ from core.sessions._types import (
     SessionRunCompletion,
     SessionSearchOrder,
     SessionSearchResult,
+    SessionWorkingProject,
     TemporarySessionBinding,
     ToolResultFacts,
     WorkingProjectChoice,
@@ -357,6 +358,13 @@ class ChatSessionManager:
         """Atomically mutate metadata and return exact before/after snapshots."""
         return self._store.mutate_metadata(address, mutation)
 
+    def working_project(self, address: SessionAddress) -> SessionWorkingProject:
+        """Read the Working Project binding, including an archived original incarnation."""
+        return self._store.working_project(address)
+
+    async def working_project_async(self, address: SessionAddress) -> SessionWorkingProject:
+        return await self._store.run_async(self.working_project, address)
+
     def metadata_value(self, address: SessionAddress, key: str) -> Any:
         """Read one metadata value (``None`` when absent) from the Session row alone."""
         return self._store.metadata_value(address, key)
@@ -542,9 +550,13 @@ class ChatSessionManager:
         command_id: str,
         origin_run_id: str,
         checkpoint: JsonObject,
+        *,
+        generation_id: str,
     ) -> None:
         """Persist an opaque command checkpoint bound to its original Session."""
-        self._store.execution.background_command_put(address, command_id, origin_run_id, checkpoint)
+        self._store.execution.background_command_put(
+            address, command_id, origin_run_id, checkpoint, generation_id=generation_id
+        )
 
     def background_command_read(self) -> builtins.list[JsonObject]:
         """Read command checkpoints with their current live Session addresses."""
@@ -1085,16 +1097,18 @@ class ChatSessionManager:
         """
         return self._store.discard_unused(address, generation_id)
 
-    def review_forks(self, address: SessionAddress) -> tuple[SessionAddress, ...]:
+    def review_forks(
+        self, address: SessionAddress, *, recursive: bool = True
+    ) -> tuple[SessionAddress, ...]:
         """The live review forks that follow one live Session, oldest first.
 
-        A review fork is a fork in the Session's own scope that carries a
-        reflection Run kind; review forks of those follow too. Archive and delete
-        take them along, so a caller that guards the Session's Runs must guard
-        theirs as well.
+        Review ownership is captured in the original scope and survives source
+        moves. Nested review forks follow too unless ``recursive=False`` asks
+        only for direct reviews. Archive and delete take the whole tree along,
+        so a caller guarding the Session's Runs must guard theirs as well.
         """
         _validate_session_id(address.session_id)
-        return self._store.review_forks(address)
+        return self._store.review_forks(address, recursive=recursive)
 
     async def archive(self, address: SessionAddress) -> ArchiveEntryRef:
         """Archive one live Session as its own ``session`` archive entry.

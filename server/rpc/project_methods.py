@@ -70,7 +70,7 @@ from server.rpc.errors import (
     RPC_ERROR_PROJECT_IN_USE,
     RpcError,
 )
-from server.rpc.event_bridge import publish_resource_changed
+from server.rpc.event_bridge import publish_archived_sessions, publish_resource_changed
 from server.rpc.validation import (
     _optional_bool,
     _optional_string,
@@ -568,6 +568,7 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
                 ) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    await publish_archived_sessions(state, outcome.review_addresses)
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
     purge = (

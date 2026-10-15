@@ -21,7 +21,7 @@ from tests.server.rpc_test_support import JsonObject, resource_changes, rpc_erro
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("with_review", [False, True])
+@pytest.mark.parametrize("review_scope", [None, "same", "original-owner"])
 @pytest.mark.parametrize(
     ("current_session_id", "refreshed_kinds"),
     [
@@ -34,16 +34,25 @@ from tests.server.rpc_test_support import JsonObject, resource_changes, rpc_erro
 async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current(
     current_session_id: str,
     refreshed_kinds: list[str],
-    with_review: bool,
+    review_scope: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state, resolver, sessions = stub_session_state()
     state._agent_current["current_session_id"] = current_session_id
+    with_review = review_scope is not None
+    review_agent = "original" if review_scope == "original-owner" else "builder"
+    if review_scope == "original-owner":
+        prior_get = state.runtime.agents.get
+        state.runtime.agents.get = lambda agent_id: (
+            SimpleNamespace(current_session_id="original-current")
+            if agent_id == "original"
+            else prior_get(agent_id)
+        )
     if with_review:
         monkeypatch.setattr(
             sessions,
             "review_forks",
-            lambda _address: (SessionAddress(None, "builder", "review"),),
+            lambda _address: (SessionAddress(None, review_agent, "review"),),
         )
 
     result = await rpc_result(state, "session.delete", agent_id="builder", session_id="s1")
@@ -62,7 +71,7 @@ async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current
     assert sessions.archived == [("builder", "s1", None)]
     assert state.runtime.terminal_manager.closed_scopes == [
         TerminalOwner(None, "builder", "s1"),
-        *([TerminalOwner(None, "builder", "review")] if with_review else []),
+        *([TerminalOwner(None, review_agent, "review")] if with_review else []),
     ]
     # Identity pointer re-aimed through the shared seam; the landing is its result.
     assert state._resets == [("builder", "s1")]
@@ -83,7 +92,11 @@ async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current
     if with_review:
         assert events[1]["scope"] == {
             **events[0]["scope"],
+            "agent_id": review_agent,
             "deleted_session_id": "review",
+            "next_session_id": "original-current"
+            if review_scope == "original-owner"
+            else "landing",
         }
 
 

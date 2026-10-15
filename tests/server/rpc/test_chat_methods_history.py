@@ -923,31 +923,54 @@ async def test_reflection_runs_restore_running_and_durable_reviews(
             source_session_id=source.id,
         ),
     )
+    nested = await history.sessions.fork(fork.address, run_kind=RunKind.MEMORY_REFLECTION)
+    nested_run = await history.state.chat_runs.start(
+        nested.address,
+        execute,
+        admission=RunAdmission(
+            run_kind=RunKind.MEMORY_REFLECTION,
+            contributes_to_agent_activity=False,
+            source_session_id=fork.id,
+        ),
+    )
+    moved = SessionAddress("project", "other", source.id)
+    await history.sessions.move(source.address, moved)
+    history.session("source")  # Same public id, another generation, owns no old review.
     try:
-        live = await call(history.state, "chat.reflections", agent_id="coder", session_id="source")
+        live = await call(
+            history.state, "chat.reflections", agent_id="other@project", session_id="source"
+        )
         assert live["result"]["reflection_runs"] == [
             {
                 "run_id": run.id,
                 "session_id": fork.id,
+                "agent_id": "coder",
+                "project_id": None,
                 "run_kind": "skill_reflection",
                 "status": "running",
                 "started_at": run.created_at,
             }
         ]
+        direct = await call(history.state, "chat.reflections", agent_id="coder", session_id=fork.id)
+        assert [row["run_id"] for row in direct["result"]["reflection_runs"]] == [nested_run.id]
     finally:
         release.set()
-        await run.wait()
+        await asyncio.gather(run.wait(), nested_run.wait())
 
     for method in ("chat.history", "chat.reflections"):
-        durable = await call(history.state, method, agent_id="coder", session_id="source")
+        durable = await call(history.state, method, agent_id="other@project", session_id="source")
         [row] = durable["result"]["reflection_runs"]
         assert (row["run_id"], row["status"]) == (run.id, "completed")
+        assert (row["agent_id"], row["project_id"]) == ("coder", None)
         assert row["outcome"] == {"memory": 1, "skills": 0, "undone": False}
     history.session("unrelated")
     unrelated = await call(
         history.state, "chat.reflections", agent_id="coder", session_id="unrelated"
     )
     assert unrelated["result"]["reflection_runs"] == []
+
+    reused = await call(history.state, "chat.reflections", agent_id="coder", session_id="source")
+    assert reused["result"]["reflection_runs"] == []
 
 
 @pytest.mark.asyncio

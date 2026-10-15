@@ -107,10 +107,15 @@ async def test_reflection_runs_restore_only_own_review_summaries(
     def forbid_history(*args, **kwargs):
         raise AssertionError("Reflection recovery must not reconstruct chat content")
 
+    moved = SessionAddress("moved-project", "new-agent", source.id)
+    await manager.move(source.address, moved)
+    source = manager.get(moved)
     monkeypatch.setattr(session_store_module, "select_batch", forbid_history)
     assert source.reflection_runs() == [
         {
             "session_id": fork.id,
+            "agent_id": "coder",
+            "project_id": project_id,
             "run_id": "review",
             "status": status,
             "started_at": canonical_timestamp(review.created_at),
@@ -400,11 +405,20 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
     assert manager.metadata_value(bound.address, "skill_agent_id") == "coder"
     # The Sessions of a Live call are listed in the scope of its built-in Agents.
     manager.create("live-voice", "call", run_kind=RunKind.LIVE)
-    manager.create("live-backend", "answers", run_kind=RunKind.LIVE)
+    manager.create(
+        "live-backend",
+        "answers",
+        run_kind=RunKind.LIVE,
+        metadata={"live_voice_session_id": "call"},
+    )
     live_sessions = manager.list_summaries_page(
         [(None, "live-voice"), (None, "live-backend")], limit=100, filters=hidden
     ).sessions
     assert {summary["id"] for summary in live_sessions} == {"call", "answers"}
+    voice = next(summary for summary in live_sessions if summary["id"] == "call")
+    backend = next(summary for summary in live_sessions if summary["id"] == "answers")
+    assert voice["live_backend_session_id"] == "answers"
+    assert "live_backend_session_id" not in backend
 
 
 RECALL_VISIBILITY_CASES = {

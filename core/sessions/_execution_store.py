@@ -317,10 +317,17 @@ class SessionExecutionStore:
         command_id: str,
         origin_run_id: str,
         checkpoint: JsonObject,
+        *,
+        generation_id: str,
     ) -> None:
         self._store._execute_write(
             lambda connection: _store_commands.put(
-                connection, address, command_id, origin_run_id, checkpoint
+                connection,
+                address,
+                command_id,
+                origin_run_id,
+                checkpoint,
+                generation_id=generation_id,
             )
         )
 

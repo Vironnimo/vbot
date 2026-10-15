@@ -555,13 +555,14 @@ def run_records(
 def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> list[JsonObject]:
     """Read the first finished own Run of each live review fork of this Session.
 
-    Only forks in the Session's own scope count: a reflection reviews its
-    source for the same Agent.
+    Review ownership was captured in the original Agent scope. Return the
+    review's own address so callers retain that attribution after source moves.
     """
     source = _store_values._require_live(connection, address)
     rows = connection.execute(
         f"""
-        SELECT s.session_id, r.run_id, r.status, r.started_at,
+        SELECT s.session_id, s.agent_id, NULLIF(s.project_id, '') AS project_id,
+          r.run_id, r.status, r.started_at,
           (SELECT k.run_kind FROM session_run_kinds AS k
            WHERE k.session_key = s.session_key
              AND k.run_kind IN {_store_values._REFLECTION_RUN_KINDS_SQL}

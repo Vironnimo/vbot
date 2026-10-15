@@ -17,6 +17,7 @@ from core.sessions._types import (
     SessionHistoryRevision,
     SessionListCursor,
     SessionListPage,
+    SessionWorkingProject,
 )
 from core.sessions.errors import SessionNotFoundError
 
@@ -35,6 +36,25 @@ def exists(connection: sqlite3.Connection, address: SessionAddress) -> bool:
             _store_values._scope(address),
         ).fetchone()
         is not None
+    )
+
+
+def working_project(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> SessionWorkingProject:
+    """Read the Working Project and its archive binding in one live snapshot."""
+    row = connection.execute(
+        "SELECT s.project_id, s.working_project_id, "
+        "EXISTS(SELECT 1 FROM session_working_project_archives a "
+        "WHERE a.session_key = s.session_key) AS archived FROM sessions s "
+        "WHERE s.project_id = ? AND s.agent_id = ? AND s.session_id = ? AND s.state = 'live'",
+        _store_values._scope(address),
+    ).fetchone()
+    if row is None:
+        raise SessionNotFoundError(f"session does not exist: {address.session_id}")
+    return SessionWorkingProject(
+        project_id=_store_values._working_project_from_state(row),
+        archived=bool(row["archived"]),
     )
 
 
@@ -222,7 +242,14 @@ def _summary(state: sqlite3.Row, metadata_keys: Sequence[str] = ()) -> JsonObjec
         "created_at": str(state["created_at"]),
         "last_active_at": str(state["last_activity_at"]),
     }
-    for key in ("title", "auto_title", "source_channel_id", "platform", "platform_conv_id"):
+    for key in (
+        "title",
+        "auto_title",
+        "source_channel_id",
+        "platform",
+        "platform_conv_id",
+        "live_backend_session_id",
+    ):
         if state[key] is not None:
             summary[key] = str(state[key])
     if state["is_subagent"]:
