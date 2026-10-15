@@ -8,7 +8,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote
 from xml.parsers import expat
 from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile
@@ -42,6 +42,9 @@ from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
+
+if TYPE_CHECKING:
+    from core.sessions import ChatSessionManager
 
 # Storing sniffs the content and fsyncs a blob of up to the size limit: never on
 # the Event Loop.
@@ -197,7 +200,18 @@ class AttachmentStore:
             raise AttachmentError("max_size_bytes must be greater than 0")
 
         self._attachments_dir = DataDirectoryLayout(data_dir).attachments
+        self._data_dir = Path(data_dir)
         self._max_size_bytes = max_size_bytes
+
+    def collect_session_orphans(self, sessions: ChatSessionManager) -> int:
+        """Collect previously admitted blobs while Runtime producers are quiescent.
+
+        Before startup admission or after a successful asynchronous shutdown drain.
+        Never-admitted uploads have no lifetime here and are left untouched.
+        """
+        from core.attachments._collection import collect_session_orphans
+
+        return collect_session_orphans(self, sessions)
 
     @property
     def max_size_bytes(self) -> int:
@@ -295,6 +309,10 @@ class AttachmentStore:
     def get(self, attachment_id: str) -> AttachmentRecord:
         """Load one attachment record by id from sidecar metadata."""
 
+        return self._get_record(attachment_id, require_blob=True)
+
+    def _get_record(self, attachment_id: str, *, require_blob: bool) -> AttachmentRecord:
+
         normalized_id = _normalize_attachment_id(attachment_id)
         sidecar_path = self._sidecar_path(normalized_id)
         try:
@@ -317,7 +335,7 @@ class AttachmentStore:
             )
 
         blob_path = self._blob_path(normalized_id, metadata["media_type"])
-        if not blob_path.is_file():
+        if require_blob and not blob_path.is_file():
             raise AttachmentNotFoundError(f"Attachment blob not found: {normalized_id}")
 
         return AttachmentRecord(
