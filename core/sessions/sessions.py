@@ -289,6 +289,12 @@ class ChatSessionManager:
         """Return the live Sub-Agent Session with this public Sub-Agent id, if any."""
         return self._store.subagent_session(subagent_id)
 
+    def live_addresses_with_metadata_field(
+        self, key: str, field: str, value: str
+    ) -> builtins.list[SessionAddress]:
+        """Return the live Sessions whose metadata object *key* holds *field* = *value*."""
+        return self._store.live_addresses_with_metadata_field(key, field, value)
+
     def get(self, address: SessionAddress) -> ChatSession:
         """Resolve a live Session and capture its generation for later Run admission."""
         _validate_session_id(address.session_id)

@@ -1,4 +1,4 @@
-"""Scratch folder announcements and their Compaction projection."""
+"""Scratch folder announcements and the notes Compaction keeps verbatim."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from core.chat._message_history import effective_compaction_messages
 from core.chat.messages import ChatMessage
 from core.runs import RunKind
+from core.sessions import SESSION_GOAL_NOTE_PREFIX
 
 if TYPE_CHECKING:
     from core.tools.scratch_areas import ScratchFolder
@@ -50,28 +51,37 @@ def scratch_note(folder: ScratchFolder) -> ChatMessage:
     )
 
 
-def preserve_scratch_note(
-    checkpoint: ChatMessage, session_messages: list[ChatMessage], note_id: object
+def preserve_notes(
+    checkpoint: ChatMessage, session_messages: list[ChatMessage], note_ids: Collection[object]
 ) -> ChatMessage:
-    """Keep the latest announcement verbatim, including across mid-Run Compaction."""
-    announcement = next(
-        (
-            message
-            for message in reversed(effective_compaction_messages(session_messages))
-            if message.role == "note" and message.id == note_id
-        ),
-        None,
-    )
-    if announcement is None or checkpoint.projection is None:
+    """Keep the named notes verbatim, including across mid-Run Compaction.
+
+    The Scratch folder announcement and an open goal's note survive this way.
+    """
+    if checkpoint.projection is None:
         return checkpoint
-    if any(entry.get("id") == announcement.id for entry in checkpoint.projection):
+    projected = {entry.get("id") for entry in checkpoint.projection}
+    kept = [
+        message.to_dict()
+        for message in effective_compaction_messages(session_messages)
+        if message.role == "note" and message.id in note_ids and message.id not in projected
+    ]
+    if not kept:
         return checkpoint
     # Keep the mandatory summary first and the retained Tool cycles intact.
     return replace(
         checkpoint,
-        projection=[
-            checkpoint.projection[0],
-            announcement.to_dict(),
-            *checkpoint.projection[1:],
-        ],
+        projection=[checkpoint.projection[0], *kept, *checkpoint.projection[1:]],
     )
+
+
+def latest_goal_note_id(session_messages: list[ChatMessage]) -> str | None:
+    """The id of the newest note that set the Session goal, if it is still visible."""
+    for message in reversed(effective_compaction_messages(session_messages)):
+        if (
+            message.role == "note"
+            and isinstance(message.content, str)
+            and message.content.startswith(SESSION_GOAL_NOTE_PREFIX)
+        ):
+            return message.id
+    return None

@@ -33,6 +33,7 @@ from core.utils.workers import BoundedWorkerPool
 if TYPE_CHECKING:
     from core.agents import AgentStore
     from core.automation import AutomationReferences
+    from core.automation.goals import GoalService
     from core.models.models import ModelRegistry
     from core.projects import AgentResolver, ProjectStore, RuntimeAgent
     from core.providers.providers import ProviderRegistry
@@ -42,6 +43,7 @@ else:
     AgentResolver = Any
     AgentStore = Any
     AutomationReferences = Any
+    GoalService = Any
     ChatSessionManager = Any
     CommandManager = Any
     ModelRegistry = Any
@@ -105,6 +107,8 @@ class CommandSpec:
     argument_execution_mode: CommandExecutionMode | None = None
     unavailable_surfaces: frozenset[CommandSurfaceKind] = frozenset()
     new_session_mode: CommandNewSessionMode = "needs_session"
+    # False refuses the command in group conversations of every surface.
+    group_conversations: bool = True
 
 
 @dataclass(frozen=True)
@@ -123,6 +127,8 @@ class CommandUnavailability:
 
     command: str
     surface: CommandSurfaceKind
+    # ``group``: refused because the conversation is a group, not because of the surface.
+    conversation: Literal["group"] | None = None
 
     def __post_init__(self) -> None:
         if not self.command.startswith("/"):
@@ -370,6 +376,15 @@ class CommandDispatcher:
             catalog_result="notice",
             execution_mode="serialized",
         ),
+        "goal": CommandSpec(
+            "goal",
+            "Set a goal the agent works toward across turns; /goal pause, resume or clear.",
+            argument="optional",
+            catalog_result="state_change",
+            execution_mode="immediate",
+            new_session_mode="create_session",
+            group_conversations=False,
+        ),
         "handoff": CommandSpec(
             "handoff",
             "Write a handoff and start a new session (optionally for another agent).",
@@ -463,6 +478,7 @@ class CommandDispatcher:
         automation_references: AutomationReferences | None = None,
         snapshot_barrier: SnapshotBarrier | None = None,
         stop_all: Callable[[SessionAddress], Awaitable[int]] | None = None,
+        goals: GoalService | None = None,
     ) -> None:
         from core.chat import _command_builtin, _command_status
 
@@ -471,6 +487,7 @@ class CommandDispatcher:
         self._sessions = sessions
         self._stop_all = stop_all
         self._trigger_service = trigger_service
+        self._goals = goals
         self._execution_commands: dict[str, CommandExecutionHandler] = {
             "agent": partial(
                 _command_builtin._execute_agent,
@@ -486,6 +503,7 @@ class CommandDispatcher:
                 terminal_manager=terminal_manager,
                 command_manager=command_manager,
                 trigger_service=trigger_service,
+                goals=goals,
             ),
             "compact": partial(_command_builtin._execute_compact, trigger_service=trigger_service),
             "handoff": partial(
@@ -497,6 +515,7 @@ class CommandDispatcher:
                 storage=storage,
                 trigger_service=trigger_service,
             ),
+            "goal": self._execute_goal,
             "help": self._execute_help,
             "learn": partial(
                 _command_builtin._execute_learn,
@@ -731,6 +750,10 @@ class CommandDispatcher:
         spec = self._prepared_spec(prepared)
         if spec is None:
             return None
+        if not spec.group_conversations and reply_surface.conversation_kind == "group":
+            return CommandUnavailability(
+                command=f"/{prepared.name}", surface=reply_surface.kind, conversation="group"
+            )
         if reply_surface.kind not in spec.unavailable_surfaces:
             return None
         return CommandUnavailability(command=f"/{prepared.name}", surface=reply_surface.kind)
@@ -1073,6 +1096,12 @@ class CommandDispatcher:
             feedback=CommandFeedback(kind="detail", text="\n".join(lines)),
         )
 
+    async def _execute_goal(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        goals: GoalService = _require_dependency(self._goals, "GoalService")
+        return await goals.execute_command(context, argument)
+
     async def _execute_stop(
         self, context: CommandExecutionContext, argument: str | None
     ) -> CommandOutcome:
@@ -1082,21 +1111,24 @@ class CommandDispatcher:
             if surface.kind == "channel"
             else f"{surface.kind}_command"
         )
+        address = SessionAddress(
+            project_id=context.project_id,
+            agent_id=context.agent_id,
+            session_id=context.session_id,
+        )
         if argument is not None:
             if argument.strip().casefold() != "all" or self._stop_all is None:
                 return _notice("stop", "Use /stop or /stop all.")
-            stopped = await self._stop_all(
-                SessionAddress(
-                    project_id=context.project_id,
-                    agent_id=context.agent_id,
-                    session_id=context.session_id,
-                )
-            )
+            stopped = await self._stop_all(address)
+            goal_paused = await self._pause_goal_for_stop(address)
             if not stopped:
+                if goal_paused:
+                    return _notice("stop", "Goal paused. Resume it with /goal resume.")
                 return _notice("stop", "Nothing is running in this session.")
-            return _notice(
-                "stop", "Stopped the run, its background commands, terminals and sub-agents."
-            )
+            text = "Stopped the run, its background commands, terminals and sub-agents."
+            if goal_paused:
+                text += " The goal is paused; resume it with /goal resume."
+            return _notice("stop", text)
         try:
             self._chat_runs.cancel_by_session(
                 context.agent_id,
@@ -1106,8 +1138,21 @@ class CommandDispatcher:
                 initiator=initiator,
             )
         except RunNotFoundError:
+            # Between automatic turns no Run is active, but Stop still ends them.
+            if await self._pause_goal_for_stop(address):
+                return _notice("stop", "Goal paused. Resume it with /goal resume.")
             return _notice("stop", "No active run to cancel.")
+        if await self._pause_goal_for_stop(address):
+            return _notice(
+                "stop", "Run cancelled. The goal is paused; resume it with /goal resume."
+            )
         return _notice("stop", "Run cancelled.")
+
+    async def _pause_goal_for_stop(self, address: SessionAddress) -> bool:
+        """Stop always ends a goal's automatic turns; True when it paused one."""
+        if self._goals is None:
+            return False
+        return await self._goals.pause_for_stop(address)
 
 
 def _has_exception_name(error: BaseException, expected_name: str) -> bool:

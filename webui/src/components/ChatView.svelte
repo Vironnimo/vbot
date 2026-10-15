@@ -22,6 +22,7 @@
   import ChatTimeline from './ChatTimeline.svelte';
   import QueuedMessages from './QueuedMessages.svelte';
   import ChatComposer from './ChatComposer.svelte';
+  import ComposerGoal from './chat/ComposerGoal.svelte';
   import ComposerSessionSettings from './chat/ComposerSessionSettings.svelte';
   import ComputerUseControl from './ComputerUseControl.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
@@ -1159,6 +1160,12 @@
                 </p>
               </Banner>
             {:else if composerAvailable}
+              {#if sessionSettings.view?.goal}
+                <ComposerGoal
+                  goal={sessionSettings.view.goal}
+                  onCommand={actions.handleGoalCommand}
+                />
+              {/if}
               <ChatComposer
                 disabled={composerDisabled}
                 isRunning={isRunActive(target.activeSessionState)}

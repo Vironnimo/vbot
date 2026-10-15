@@ -16,6 +16,7 @@ from core.automation import (
     AutomationReferences,
     BootstrapService,
     CronService,
+    GoalService,
     LearningChanges,
     LibrarianService,
     ReflectionService,
@@ -158,6 +159,7 @@ class RuntimeServiceGraph:
         self._archive: ArchiveService | None = None
         self._config_backups: ConfigBackupSchedule | None = None
         self._trigger_service: TriggerService | None = None
+        self._goal_service: GoalService | None = None
         self._reflection_service: ReflectionService | None = None
         self._learning_changes: LearningChanges | None = None
         self._librarian_service: LibrarianService | None = None
@@ -373,6 +375,10 @@ class RuntimeServiceGraph:
 
     trigger_service: _StartedService[TriggerService] = _StartedService(
         lambda runtime: runtime._trigger_service, "Trigger service not available"
+    )
+
+    goals: _StartedService[GoalService] = _StartedService(
+        lambda runtime: runtime._goal_service, "Goal service not available"
     )
 
     reflection: _StartedService[ReflectionService] = _StartedService(

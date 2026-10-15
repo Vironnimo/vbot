@@ -34,8 +34,8 @@ _LOGGER = get_logger("automation")
 
 AUTOMATIC_COMPLETION_GUIDANCE = (
     "Automatic completion delivery — this is not a new user request. Do not restart or "
-    "repeat work merely because this report arrived. Re-evaluate the original user goal "
-    "and current system state before taking further action."
+    "repeat work merely because this report arrived. Re-evaluate the user's original "
+    "request and current system state before taking further action."
 )
 # Opens a follow-up Run for results a request already carried that the Model never answered.
 UNREAD_COMPLETION_TEXT = "Your previous turn ended before you read the results reported above."

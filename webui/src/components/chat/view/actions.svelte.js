@@ -274,6 +274,15 @@ export function createChatViewActions(context) {
     }
   };
 
+  // The goal bar's buttons send `/goal pause|resume|clear` like typed commands.
+  const handleGoalCommand = async (argument) => {
+    const agent = context.target.activeAgent;
+    const sessionState = context.target.activeSessionState;
+    if (agent && sessionState) {
+      await sendStream(agent, sessionState, `/goal ${argument}`);
+    }
+  };
+
   // Sessions whose manual `/compact` submission is still being admitted.
   let compactionSubmissions = $state([]);
 
@@ -521,6 +530,9 @@ export function createChatViewActions(context) {
     },
     get handleCompactContext() {
       return handleCompactContext;
+    },
+    get handleGoalCommand() {
+      return handleGoalCommand;
     },
     get isCompactionSubmitting() {
       return isCompactionSubmitting;

@@ -303,6 +303,7 @@ async def test_built_in_commands_are_always_present_with_their_input_and_output(
     assert [(item["name"], item["argument"], item["output"]) for item in commands] == [
         ("agent", "optional", "action"),
         ("compact", "optional", "toast"),
+        ("goal", "optional", "action"),
         ("handoff", "optional", "action"),
         ("help", "none", "transient"),
         ("learn", "optional", "action"),

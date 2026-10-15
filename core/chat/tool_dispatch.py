@@ -473,6 +473,7 @@ class _EmittingToolRegistry(ToolRegistry):
 
             if result.get("ok") is True:
                 context._commit_owned_effects()
+                self._run.succeeded_tool_call_names.add(context.tool_name)
 
             # Media goes with failures too: a Tool attaches it for the Model to see,
             # such as a screenshot of what a failed input step left on screen.

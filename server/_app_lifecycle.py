@@ -156,11 +156,24 @@ def _unregister_run_event_bridge(state: Any) -> None:
 
 
 def _register_session_title_bridge(state: Any) -> Any:
-    return state.runtime.chat_sessions.add_title_changed_callback(
-        lambda address: publish_session_changed(
-            state, address.project_id, address.agent_id, address.session_id
-        )
-    )
+    """Publish Session changes the Runtime makes on its own: titles and goals."""
+
+    def publish(address: Any) -> None:
+        publish_session_changed(state, address.project_id, address.agent_id, address.session_id)
+
+    unsubscribers = [state.runtime.chat_sessions.add_title_changed_callback(publish)]
+    try:
+        goals = state.runtime.goals
+    except AttributeError, RuntimeError:
+        goals = None  # A Runtime without goals, such as a test double.
+    if goals is not None:
+        unsubscribers.append(goals.add_changed_callback(publish))
+
+    def unsubscribe() -> None:
+        for remove in unsubscribers:
+            remove()
+
+    return unsubscribe
 
 
 def _unregister_session_title_bridge(state: Any) -> None:

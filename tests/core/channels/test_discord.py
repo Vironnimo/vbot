@@ -291,12 +291,27 @@ async def test_addressed_group_reply_downloads_quoted_attachment_on_demand(
 
 
 @pytest.mark.asyncio
-async def test_agent_command_reports_exact_discord_unavailability(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("unavailable", "reply"),
+    [
+        (
+            CommandUnavailability(command="/agent", surface="channel"),
+            "The /agent command is not available through Discord.",
+        ),
+        (
+            CommandUnavailability(command="/goal", surface="channel", conversation="group"),
+            "The /goal command is not available in group chats.",
+        ),
+    ],
+)
+async def test_unavailable_command_reports_why_on_discord(
+    tmp_path: Path, unavailable: CommandUnavailability, reply: str
+) -> None:
     channel = FakeChannel(100, guild=SimpleNamespace(id=1))
     dispatcher = make_command_dispatcher(
         result=command_outcome("agent", "switched"),
         execution_mode="immediate",
-        unavailable=CommandUnavailability(command="/agent", surface="channel"),
+        unavailable=unavailable,
     )
     h = make_adapter(
         tmp_path,
@@ -308,9 +323,7 @@ async def test_agent_command_reports_exact_discord_unavailability(tmp_path: Path
 
     await h.receive(make_message(channel, message_id=201, author_id=50, content="/agent planner"))
 
-    assert [payload["content"] for payload in channel.sent] == [
-        "The /agent command is not available through Discord."
-    ]
+    assert [payload["content"] for payload in channel.sent] == [reply]
     h.trigger.assert_not_awaited()
     dispatcher.execute.assert_not_awaited()
     await h.adapter.stop()

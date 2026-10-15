@@ -330,6 +330,41 @@ describe('ChatView Session settings', () => {
       expect(rpcCalls('chat.timeline')).toHaveLength(historyReads);
     });
 
+    it('shows the Session goal and sends its buttons as /goal commands', async () => {
+      rpcMock.mockImplementation(
+        settingsRpcMock({
+          streamResponse: handledCommand('Goal paused.', { output: 'toast' }),
+        }),
+      );
+      let goal = {
+        objective: 'Ship the release',
+        status: 'active',
+        turns: 3,
+        max_turns: 30,
+      };
+      getSessionMock.mockImplementation(async () => ({
+        session: { id: 'session-1', agent_overrides: {}, goal },
+      }));
+      const props = reactiveProps({ projects: PROJECTS });
+      await chat.mountChat(props);
+      const bar = () => document.querySelector('.composer-goal');
+      await waitForCondition(() => bar() !== null);
+      expect(bar().textContent).toContain('Ship the release');
+      expect(bar().textContent).toContain('3/30 turns');
+
+      findButtonByText('Pause').click();
+      await waitForCondition(() => rpcCalls('chat.stream').length > 0);
+      expect(rpcCalls('chat.stream').at(-1).content).toBe('/goal pause');
+
+      // The server publishes the goal change; the bar rereads the Session.
+      goal = { ...goal, status: 'paused', pause_reason: 'user' };
+      props.sessionInvalidations = [
+        { id: 1, scope: { agent_id: 'alpha', session_id: 'session-1' } },
+      ];
+      await waitForCondition(() => bar()?.textContent.includes('Goal paused'));
+      expect(findButtonByText('Resume')).toBeTruthy();
+    });
+
     it('keeps an older Session when another view changes the remembered start values', async () => {
       const agents = [createAgent({ model: SONNET, thinking_effort: 'high' })];
       rpcMock.mockImplementation(settingsRpcMock({ agents }));

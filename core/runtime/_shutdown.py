@@ -140,6 +140,9 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("commands", None, commands.shutdown)
     if (triggers := runtime._trigger_service) is not None:
         yield _Step("triggers", None, triggers.aclose)
+    if (goals := runtime._goal_service) is not None:
+        # Before Runs drain, so the Runs shutdown cancels start no automatic turn.
+        yield _Step("goals", None, goals.aclose)
     if (reflection := runtime._reflection_service) is not None:
         yield _Step("reflection", None, reflection.aclose)
     if (librarian := runtime._librarian_service) is not None:

@@ -1131,6 +1131,15 @@ def _quote_external_json(value: JsonObject) -> str:
     reminder or quote that carries user, Model, Provider, or channel text uses
     this one encoding.
     """
+    return quote_external_value(value)
+
+
+def quote_external_value(value: object) -> str:
+    """JSON-quote one external value, such as user text in a kernel reminder.
+
+    The encoding of ``_quote_external_json``: angle brackets are escaped, so the
+    text can neither close nor impersonate a System Reminder.
+    """
     serialized = json.dumps(value, ensure_ascii=False)
     return serialized.replace("<", "\\u003c").replace(">", "\\u003e")
 

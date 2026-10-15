@@ -350,6 +350,7 @@ async def _execute_agent(
     terminal_manager: TerminalManager | None,
     command_manager: CommandManager | None,
     trigger_service: Any | None,
+    goals: Any | None = None,
 ) -> CommandOutcome:
     if argument is None:
         return CommandOutcome(
@@ -494,6 +495,9 @@ async def _execute_agent(
             "agent", "This session can be moved once its source and destination are idle."
         )
 
+    if goals is not None:
+        # The goal was the source Agent's work; the target resumes it only on request.
+        await goals.pause_for_takeover(target_address)
     changes = [
         _session_change(context.project_id, context.agent_id, context.session_id),
         _session_change(target_project_id, target_agent_id, context.session_id),

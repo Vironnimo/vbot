@@ -74,6 +74,7 @@ def test_built_in_commands_declare_their_argument_result_kind_and_new_session_mo
     } == {
         "agent": ("optional", "state_change", "needs_session"),
         "compact": ("optional", "notice", "needs_session"),
+        "goal": ("optional", "state_change", "create_session"),
         "handoff": ("optional", "state_change", "needs_session"),
         "help": ("none", "detail", "session_less"),
         "learn": ("optional", "state_change", "create_session"),
@@ -250,6 +251,27 @@ def test_agent_without_argument_lists_personal_and_team_directory() -> None:
     # Team agents are shown project-qualified, teaching the address the move expects.
     assert "builder@vbot" in reply
     assert "planner@vbot" in reply
+
+
+@pytest.mark.parametrize("message", ["/goal", "/goal Ship the release", "/goal resume"])
+def test_goal_is_unavailable_only_in_group_conversations(message: str) -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    prepared = _prepared(dispatcher, message)
+
+    def surface(kind: Any) -> ReplySurface:
+        return ReplySurface.channel(
+            platform="telegram",
+            platform_display_name="Telegram",
+            channel_id="tg-assistant",
+            conversation_kind=kind,
+        )
+
+    unavailable = dispatcher.unavailability(prepared, surface("group"))
+
+    assert unavailable is not None
+    assert (unavailable.command, unavailable.conversation) == ("/goal", "group")
+    assert dispatcher.unavailability(prepared, surface("direct")) is None
+    assert dispatcher.unavailability(prepared, ReplySurface.webui()) is None
 
 
 @pytest.mark.parametrize("message", ["/agent", "/agent planner"])

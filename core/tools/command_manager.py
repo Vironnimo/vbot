@@ -660,6 +660,16 @@ class CommandManager:
             for record in self._records.values()
         )
 
+    def has_pending_delivery(self, owner: CommandOwner) -> bool:
+        """Whether a background command of *owner* still runs and delivers its result at its end."""
+        return any(
+            record.background
+            and record.owner == owner
+            and not record.ended
+            and record.delivery_pending
+            for record in self._records.values()
+        )
+
     def has_unfinished_background(self, *, besides: CommandOwner | None = None) -> bool:
         """Whether a background command of a Session other than *besides* is still unfinished.
 
