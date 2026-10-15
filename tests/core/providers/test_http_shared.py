@@ -121,8 +121,12 @@ def test_valid_json_decodes_from_stream_data_and_response_bodies() -> None:
             json.JSONDecodeError,
         ),
         (lambda: decode_response_json(_json_response(b"[1, 2]"), "Stub provider"), type(None)),
+        (
+            lambda: decode_response_json(_json_response(b'{"text":"\xff"}'), "Stub provider"),
+            UnicodeDecodeError,
+        ),
     ],
-    ids=["malformed-stream-data", "malformed-response", "non-object-response"],
+    ids=["malformed-stream-data", "malformed-response", "non-object-response", "invalid-encoding"],
 )
 def test_unusable_provider_json_is_a_fatal_error_naming_the_provider(
     decode: Callable[[], Any], cause: type
@@ -408,10 +412,13 @@ async def test_iter_stream_lines_joins_crlf_and_utf8_split_across_chunks() -> No
 
 
 @pytest.mark.asyncio
-async def test_iter_sse_events_keeps_unicode_line_separators_inside_json_data() -> None:
+@pytest.mark.parametrize("boundary", [(b"\n\r\n",), (b"\n", b"\n"), (b"", b"\n", b"\n")])
+async def test_iter_sse_events_keeps_unicode_line_separators_inside_json_data(
+    boundary: tuple[bytes, ...],
+) -> None:
     payload = json.dumps({"delta": f"one{_UNICODE_SEPARATORS}two"}, ensure_ascii=False)
     response = _chunked_response(
-        f"data: {payload}\r".encode(), b"\n\r\n", b": keepalive\n", b"data: [DONE]\n\n"
+        f"data: {payload}\r".encode(), *boundary, b": keepalive\n", b"data: [DONE]\n\n"
     )
 
     events = [event async for event in iter_sse_events(response)]
