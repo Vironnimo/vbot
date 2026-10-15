@@ -427,7 +427,9 @@ Important behavior:
   nothing except the worktree marker (see "Merge succeeded but cleanup failed").
   Remaining files require restored Git metadata or an explicit `--force`; a
   failed filesystem check refuses deletion. Its branch is read from
-  `git worktree list`, never from the enclosing repository; a managed branch is
+  `git worktree list`, never from the enclosing repository. If Git already
+  pruned its registration, a managed marker identifies the branch by the
+  worktree name; an already-removed branch needs no further cleanup. The branch is
   still deleted with `git branch -d` without `--force`, so unmerged commits keep
   their branch
 
@@ -526,7 +528,7 @@ A keeper process exits when its release signal appears, when its window expires 
 
 The output prints `status: merged` with the commit and then an explicit cleanup error. The landed commit is safe; finish the removal manually with `python scripts/worktree.py delete <name>` (add `--force` only to discard worktree-local leftovers).
 
-A merge started from inside the worktree no longer fails here: its cleanup hands the held, emptied directory to a background removal (see "Delete reported `terminated:` or `leftover:` lines"). Worktrees branched before that change run their own older copy of this script when the merge is invoked as `python scripts/worktree.py` from inside them, and still fail; so does a removal whose directory still holds the checkout's `.git`. In these cases the merge restores the `.vbot-worktree` marker for a retry (typically while `git worktree list` still shows the entry as `prunable`). Move the shell out in a separate command (a `cd` inside the merge command does not release it), then run `delete <name>` without `--force`. It removes the leftover directory, the data dir, Git's registration, and the merged managed branch. If Git no longer registers the leftover, its branch cannot be verified and is kept; delete it with `git branch -d <name>`.
+A merge started from inside the worktree no longer fails here: its cleanup hands the held, emptied directory to a background removal (see "Delete reported `terminated:` or `leftover:` lines"). Worktrees branched before that change run their own older copy of this script when the merge is invoked as `python scripts/worktree.py` from inside them, and still fail; so does a removal whose directory still holds the checkout's `.git`. In these cases the merge restores the `.vbot-worktree` marker for a retry (typically while `git worktree list` still shows the entry as `prunable`). Move the shell out in a separate command (a `cd` inside the merge command does not release it), then run `delete <name>` without `--force`. It removes the leftover directory, the data dir, Git's registration, and the merged managed branch. If Git already pruned the registration, the managed marker still identifies the branch; `git branch -d` keeps any unmerged commits reachable.
 
 ## Recommended team workflow
 

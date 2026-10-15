@@ -751,8 +751,9 @@ def _branch_exists(repo: Path, name: str) -> bool:
 
 @pytest.mark.parametrize("force", [False, True])
 @pytest.mark.parametrize("working_files", [False, True])
+@pytest.mark.parametrize("registration", ["present", "pruned", "branch-removed"])
 def test_cmd_delete_finishes_marker_only_leftover(
-    real_repo, monkeypatch, capsys, force, working_files
+    real_repo, monkeypatch, capsys, force, working_files, registration
 ):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
@@ -761,6 +762,10 @@ def test_cmd_delete_finishes_marker_only_leftover(
     _commit_file(worktree_path, "task.txt", "done\n", "task work")
     _git(real_repo, "merge", "--no-ff", name, "-m", f"merge: {name}")
     _strip_to_marker_only(module, worktree_path)
+    if registration != "present":
+        _git(real_repo, "worktree", "prune")
+    if registration == "branch-removed":
+        _git(real_repo, "branch", "-d", name)
     data_dir = _seed_leftover_data_dir(real_repo, name, 8433)
     _record_owned_data(module, worktree_path, data_dir)
     stop_calls = _intercept_service_stop(module, monkeypatch)
@@ -774,7 +779,8 @@ def test_cmd_delete_finishes_marker_only_leftover(
     if working_files and not force:
         assert result == 1
         assert sentinel.read_text(encoding="utf-8") == "keep my work"
-        assert data_dir.is_dir() and _branch_exists(real_repo, name)
+        assert data_dir.is_dir()
+        assert _branch_exists(real_repo, name) == (registration != "branch-removed")
         assert stop_calls == []
         return
     assert result == 0
@@ -804,8 +810,9 @@ def test_cmd_delete_finishes_marker_only_leftover(
 
 
 @pytest.mark.parametrize("force", [False, True])
+@pytest.mark.parametrize("pruned", [False, True])
 def test_cmd_delete_leftover_deletes_unmerged_branch_only_with_force(
-    real_repo, monkeypatch, capsys, force
+    real_repo, monkeypatch, capsys, force, pruned
 ):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
@@ -813,6 +820,8 @@ def test_cmd_delete_leftover_deletes_unmerged_branch_only_with_force(
     worktree_path = _create_task_worktree(module, real_repo, name)
     _commit_file(worktree_path, "task.txt", "unmerged\n", "unmerged work")
     _strip_to_marker_only(module, worktree_path)
+    if pruned:
+        _git(real_repo, "worktree", "prune")
     _intercept_service_stop(module, monkeypatch)
 
     result = module.cmd_delete(argparse.Namespace(name=name, force=force))
