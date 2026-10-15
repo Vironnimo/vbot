@@ -9,8 +9,16 @@ import {
   startRun,
   visibleTimelineItemsForRender,
 } from '../../lib/chatState.js';
+import { applyTimelineEvent } from '../../lib/chatTimeline.js';
 import { t } from '../../lib/i18n.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
+import {
+  assistantRun,
+  messageItem,
+  outputItem,
+  reasoningItem,
+  toolItem,
+} from './timelineItems.support.js';
 import * as speechPlayback from '../../lib/speechPlayback.js';
 
 vi.mock(
@@ -302,8 +310,7 @@ it.each(['run', 'event'])(
 );
 
 it('restores a paused player for a speech result read back from Session history', async () => {
-  // Session history carries the Tool result envelope as the Tool message's
-  // JSON text, and a finished Run is rebuilt from it once its live events retire.
+  // The server projects the persisted Tool result into a completed Run.
   const url = '/api/speech/artifacts/aud_history';
   const envelope = {
     ok: true,
@@ -344,6 +351,23 @@ it('restores a paused player for a speech result read back from Session history'
       history_run_id: 'run-speech',
       history_sequence: index + 1,
     })),
+    {
+      items: [
+        assistantRun(
+          'run-speech',
+          [
+            toolItem({
+              id: 'call-speech',
+              name: 'generate_speech',
+              arguments: { text: 'test-owned speech' },
+              result: envelope,
+            }),
+            outputItem('Spoken.'),
+          ],
+          { status: 'completed', source: 'history' },
+        ),
+      ],
+    },
   );
   const item = visibleTimelineItemsForRender(sessionState).find(
     (entry) => entry.type === 'assistant_run',
@@ -433,37 +457,28 @@ it.each([false, true])(
       chatWorkingMode: 'compact',
     });
     const { sessionState } = props;
-    let sequence = 0;
-    const appendEvent = (type, payload) =>
-      appendRunEvent(sessionState, {
-        type,
-        run_id: 'run-speech',
-        sequence: ++sequence,
-        payload,
-      });
+    const completedTool = toolItem({ ...toolCall, result: envelope });
+    const timelineItems = (speech, outputs = [], options = {}) => [
+      messageItem(messages[0], { runId: 'run-speech' }),
+      assistantRun(
+        'run-speech',
+        [reasoningItem(messages[1].reasoning), speech, ...outputs],
+        options,
+      ),
+    ];
     startRun(sessionState, { run_id: 'run-speech', status: 'running' });
-    appendEvent('user_message_persisted', { message: messages[0] });
-    appendEvent('reasoning', { message: messages[1] });
-    // A streamed Tool preview is dropped when the Run ends.
-    appendEvent('tool_call_delta', {
-      tool_call_id: toolCall.id,
-      name_delta: toolCall.name,
+    applyTimelineEvent(sessionState, 'timeline_snapshot', {
+      run_id: 'run-speech',
+      sequence: 1,
+      items: timelineItems(
+        early
+          ? toolItem({
+              ...toolCall,
+              speechPlayback: '/api/speech/playback/early',
+            })
+          : completedTool,
+      ),
     });
-    appendEvent('tool_call_started', {
-      assistant_message_id: 'assistant-one',
-      tool_call: toolCall,
-    });
-    if (early)
-      appendEvent('speech_playback', {
-        tool_call_id: toolCall.id,
-        url: '/api/speech/playback/early',
-      });
-    else
-      appendEvent('tool_call_result', {
-        assistant_message_id: 'assistant-one',
-        tool_call: toolCall,
-        result: envelope,
-      });
     render(props, ChatTimelineHost);
     const working = document.querySelector('.working-block');
     expect(working.open).toBe(false);
@@ -493,22 +508,33 @@ it.each([false, true])(
           history_run_id: 'run-speech',
           history_sequence: index + 1,
         })),
+        {
+          items: timelineItems(completedTool),
+          activeRunId: 'run-speech',
+          timelineSequence: 2,
+        },
       );
       await flush();
       expect(document.querySelector('audio')).toBe(audio);
       expect(audio.getAttribute('src')).toBe(url);
       expect(stream.stop).not.toHaveBeenCalled();
-      appendEvent('tool_call_result', {
-        assistant_message_id: 'assistant-one',
-        tool_call: toolCall,
-        result: envelope,
-      });
     }
 
-    appendEvent('assistant_output', { message: messages[3] });
-    appendEvent('run_completed', { status: 'completed' });
+    applyTimelineEvent(sessionState, 'timeline_snapshot', {
+      run_id: 'run-speech',
+      sequence: 3,
+      items: timelineItems(completedTool, [outputItem('Spoken.')], {
+        status: 'completed',
+      }),
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-speech',
+      sequence: 4,
+      payload: { status: 'completed' },
+    });
     await flush();
-    expect(sessionState.streamingRunEvents).toEqual([]);
+    expect(sessionState.currentRun.status).toBe('completed');
     expect(document.querySelector('audio')).toBe(audio);
 
     loadHistory(
@@ -518,7 +544,13 @@ it.each([false, true])(
         history_run_id: 'run-speech',
         history_sequence: index + 1,
       })),
-      { runs: [{ run_id: 'run-speech', complete: true }] },
+      {
+        items: timelineItems(completedTool, [outputItem('Spoken.')], {
+          status: 'completed',
+          source: 'history',
+        }),
+        runs: [{ run_id: 'run-speech', complete: true }],
+      },
     );
     await flush();
 

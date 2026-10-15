@@ -877,6 +877,7 @@ describe('ExtensionPage Run stream recovery', () => {
       'group',
       'run',
       5,
+      { timeline: false },
     );
     expect(streams[1].options.afterSequence).toBe(5);
     expect(resyncs()).toBe(1);

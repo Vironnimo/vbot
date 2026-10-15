@@ -5,6 +5,12 @@ import { flushSync, unmount } from 'svelte';
 
 import { init, t } from '../lib/i18n.js';
 import { rpcBackedApiMock } from '../components/__tests__/apiMock.support.js';
+import {
+  assistantRun,
+  messageItem,
+  outputItem,
+  toolItem,
+} from '../components/__tests__/timelineItems.support.js';
 
 export const rpcMock = vi.fn();
 export const listSessionActivityMock = vi.fn(() =>
@@ -150,7 +156,7 @@ export async function waitForCondition(assertion) {
 
 /**
  * RPC fake for a mounted App. It answers the Chat startup reads for `agents`
- * (`history(params)` adds fields to each `chat.history` reply) and any method
+ * (`history(params)` adds fields to each `chat.timeline` reply) and any method
  * in `methods`; every other method fails like an unknown RPC.
  */
 export function createAppRpcMock({
@@ -176,11 +182,13 @@ export function createAppRpcMock({
           stale_shared: [],
           policy_diagnostics: [],
         };
-      case 'chat.history':
+      case 'chat.timeline':
         return {
           agent_id: params.agent_id ?? '',
           session_id: params.session_id ?? '',
           messages: [],
+          items: [],
+          timeline_version: 1,
           ...history(params),
         };
       default:
@@ -189,8 +197,25 @@ export function createAppRpcMock({
   };
 }
 
+export function assistantHistory(id, content) {
+  const message = { id, role: 'assistant', content };
+  return {
+    messages: [message],
+    items: [
+      assistantRun(id, [outputItem(content, { id, messages: [message] })], {
+        status: 'completed',
+        source: 'history',
+      }),
+    ],
+  };
+}
+
 function subAgentCall(callId, sessionId, runId, status, content) {
-  return [
+  const result = {
+    ok: true,
+    data: { agent_id: 'alpha', session_id: sessionId, run_id: runId, status },
+  };
+  const messages = [
     {
       id: 'parent-assistant-tool',
       role: 'assistant',
@@ -208,47 +233,57 @@ function subAgentCall(callId, sessionId, runId, status, content) {
       role: 'tool',
       tool_call_id: callId,
       name: 'subagent',
-      content: JSON.stringify({
-        ok: true,
-        data: {
-          agent_id: 'alpha',
-          session_id: sessionId,
-          run_id: runId,
-          status,
-        },
-      }),
+      content: JSON.stringify(result),
     },
   ];
+  return {
+    messages,
+    items: [
+      assistantRun(
+        'parent-run',
+        [
+          toolItem({
+            id: callId,
+            name: 'subagent',
+            arguments: messages[0].tool_calls[0].arguments,
+            result,
+          }),
+        ],
+        { status: 'completed', source: 'history' },
+      ),
+    ],
+  };
 }
 
 // `session-parent` holds a completed background sub-agent call ('Inspect
 // again') whose child Session `sub-session-repeat` answered 'Sub-agent
 // response'.
 export function createSubAgentNavigationRpcMock(agents) {
-  const messagesBySession = {
-    'session-parent': [
-      { id: 'parent-user', role: 'user', content: 'Start sub-agent' },
-      ...subAgentCall(
-        'call-subagent-repeat',
-        'sub-session-repeat',
-        'sub-run-repeat',
-        'completed',
-        'Inspect again',
-      ),
-    ],
-    'sub-session-repeat': [
-      {
-        id: 'sub-agent-assistant',
-        role: 'assistant',
-        content: 'Sub-agent response',
-      },
-    ],
+  const parentUser = {
+    id: 'parent-user',
+    role: 'user',
+    content: 'Start sub-agent',
+  };
+  const parentCall = subAgentCall(
+    'call-subagent-repeat',
+    'sub-session-repeat',
+    'sub-run-repeat',
+    'completed',
+    'Inspect again',
+  );
+  const historiesBySession = {
+    'session-parent': {
+      messages: [parentUser, ...parentCall.messages],
+      items: [messageItem(parentUser), ...parentCall.items],
+    },
+    'sub-session-repeat': assistantHistory(
+      'sub-agent-assistant',
+      'Sub-agent response',
+    ),
   };
   return createAppRpcMock({
     agents,
-    history: (params) => ({
-      messages: messagesBySession[params.session_id] ?? [],
-    }),
+    history: (params) => historiesBySession[params.session_id] ?? {},
   });
 }
 
@@ -259,15 +294,13 @@ export function createRunningSubAgentRpcMock(agents) {
     agents,
     history: (params) =>
       params.session_id === 'session-parent'
-        ? {
-            messages: subAgentCall(
-              'call-subagent-running',
-              'sub-session-running',
-              'sub-run-running',
-              'running',
-              'Inspect in the background',
-            ),
-          }
+        ? subAgentCall(
+            'call-subagent-running',
+            'sub-session-running',
+            'sub-run-running',
+            'running',
+            'Inspect in the background',
+          )
         : {
             active_run: {
               run_id:

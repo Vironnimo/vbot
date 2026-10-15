@@ -6,6 +6,7 @@ import { flushSync, mount } from 'svelte';
 import { englishCatalog, t } from '../lib/i18n.js';
 import {
   App,
+  assistantHistory,
   NAVIGATION_ITEMS,
   buttonWithText,
   cleanupAppHarness,
@@ -571,28 +572,30 @@ describe('App Run events', () => {
   const streamedRuns = () =>
     subscribeRunEventsMock.mock.calls.map(([url]) => url);
 
-  it('keeps the assistant output of rapid Run events and streams the rest', async () => {
-    await mountChat(createAppRpcMock({ agents: ALPHA }));
+  it('keeps a rapidly completed Run output across its timeline and History handoff', async () => {
+    const finalHistory = assistantHistory(
+      'run-follow-up',
+      'assistant-output-sentinel',
+    );
+    let settled = false;
+    await mountChat(
+      createAppRpcMock({
+        agents: ALPHA,
+        history: () => (settled ? finalHistory : {}),
+      }),
+    );
     await waitForCondition(() => {
       expect(selectedAgentName()).toBe('Alpha');
     });
 
+    // App-wide lifecycle events can finish before the Timeline snapshot arrives.
+    // The completed Run is already persisted when its terminal event is sent.
+    settled = true;
     await Promise.all([
       handlers.onEvent(
         runServerEvent('run_started', 'run-follow-up', 1, {
           run_event_type: 'run_started',
           status: 'running',
-        }),
-      ),
-      handlers.onEvent(
-        runServerEvent('run_output', 'run-follow-up', 2, {
-          run_event_type: 'assistant_output',
-          output: {
-            message: {
-              role: 'assistant',
-              content: 'assistant-output-sentinel',
-            },
-          },
         }),
       ),
       handlers.onEvent(
@@ -603,14 +606,41 @@ describe('App Run events', () => {
       ),
     ]);
     flushSync();
+    await waitForCondition(() =>
+      expect(subscribeRunEventsMock).toHaveBeenCalledWith(
+        '/api/runs/run-follow-up/timeline',
+        expect.any(Object),
+        {
+          eventTypes: ['timeline_snapshot', 'timeline_update'],
+          closeOnTerminal: false,
+        },
+      ),
+    );
+    const [, stream] = subscribeRunEventsMock.mock.calls.find(
+      ([url]) => url === '/api/runs/run-follow-up/timeline',
+    );
+    stream.onEvent({
+      type: 'timeline_snapshot',
+      data: {
+        run_id: 'run-follow-up',
+        sequence: 3,
+        items: finalHistory.items,
+        state: { status: 'completed' },
+        terminal: true,
+      },
+    });
+    flushSync();
 
     await waitForCondition(() => {
       expect(document.body.textContent).toContain('assistant-output-sentinel');
     });
     expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-      '/api/runs/run-follow-up/events',
+      '/api/runs/run-follow-up/timeline',
       expect.any(Object),
-      { afterSequence: 1 },
+      {
+        eventTypes: ['timeline_snapshot', 'timeline_update'],
+        closeOnTerminal: false,
+      },
     );
   });
 
@@ -652,8 +682,8 @@ describe('App Run events', () => {
     flushSync();
 
     expect(streamedRuns().slice(streamedBefore)).toEqual([
-      '/api/runs/run-snapshot-1/events',
-      '/api/runs/run-plain/events',
+      '/api/runs/run-snapshot-1/timeline',
+      '/api/runs/run-plain/timeline',
     ]);
   });
 

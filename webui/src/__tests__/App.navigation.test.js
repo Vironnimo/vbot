@@ -11,6 +11,7 @@ import { AUTOSAVE_STILL_SAVING_MS } from '../lib/autosave.js';
 import { t } from '../lib/i18n.js';
 import {
   App,
+  assistantHistory,
   buttonWithText,
   cleanupAppHarness,
   createAppRpcMock,
@@ -70,7 +71,7 @@ function agentsAppRpc(options) {
   const agentsRpc = createAgentsRpcMock(options);
   const chatRpc = createAppRpcMock();
   return (method, params) =>
-    ['chat.commands', 'chat.history', 'chat.queue_list'].includes(method)
+    ['chat.commands', 'chat.timeline', 'chat.queue_list'].includes(method)
       ? chatRpc(method, params)
       : agentsRpc(method, params);
 }
@@ -319,7 +320,7 @@ describe('App navigation', () => {
 
     await waitForCondition(() => {
       expect(selectedAgentName()).toBe('Beta');
-      expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
         agent_id: 'beta',
         session_id: 'session-beta',
         limit: 100,
@@ -362,12 +363,10 @@ describe('App navigation', () => {
     const olderSessionRpc = () =>
       createAppRpcMock({
         agents: [ALPHA],
-        history: (params) => ({
-          messages:
-            params.session_id === 'session-old'
-              ? [{ id: 'old-reply', role: 'assistant', content: 'Older reply' }]
-              : [],
-        }),
+        history: (params) =>
+          params.session_id === 'session-old'
+            ? assistantHistory('old-reply', 'Older reply')
+            : {},
       });
 
     it.each([
@@ -397,15 +396,11 @@ describe('App navigation', () => {
               ALPHA,
               { id: 'beta', name: 'Beta', current_session_id: 'session-beta' },
             ],
-            history: (params) => ({
-              messages: [
-                {
-                  id: `reply-${params.session_id}`,
-                  role: 'assistant',
-                  content: `Reply in ${params.session_id}`,
-                },
-              ],
-            }),
+            history: (params) =>
+              assistantHistory(
+                `reply-${params.session_id}`,
+                `Reply in ${params.session_id}`,
+              ),
             methods: {
               'project.list': () => projectCatalog,
               'project.show': () => ({ project: { project_id: 'work' }, scan }),
@@ -419,7 +414,7 @@ describe('App navigation', () => {
         if (projectAgent) {
           await waitForCondition(() =>
             expect(rpcMock).toHaveBeenCalledWith(
-              'chat.history',
+              'chat.timeline',
               expect.objectContaining({ agent_id: 'alpha' }),
             ),
           );
@@ -475,15 +470,7 @@ describe('App navigation', () => {
         rpcMock.mockImplementation(
           createAppRpcMock({
             agents: [ALPHA],
-            history: () => ({
-              messages: [
-                {
-                  id: 'linked-reply',
-                  role: 'assistant',
-                  content: 'Linked reply',
-                },
-              ],
-            }),
+            history: () => assistantHistory('linked-reply', 'Linked reply'),
             methods: {
               'project.list': () => {
                 if (address.endsWith('@unavailable'))
@@ -591,7 +578,7 @@ describe('App navigation', () => {
           expect(localStorage.getItem('vbot.selectedProjectId')).toBeNull();
         }
         expect(rpcMock).not.toHaveBeenCalledWith(
-          'chat.history',
+          'chat.timeline',
           expect.objectContaining({ agent_id: 'builder@work' }),
         );
         if (choice === 'view') {
@@ -601,7 +588,7 @@ describe('App navigation', () => {
               '#chat/builder@work/linked-session',
             );
             expect(rpcMock).toHaveBeenCalledWith(
-              'chat.history',
+              'chat.timeline',
               expect.objectContaining({
                 agent_id: 'builder@work',
                 session_id: 'linked-session',
@@ -645,7 +632,7 @@ describe('App navigation', () => {
         ],
       });
       rpcMock.mockImplementation((method, params) =>
-        method === 'chat.history' && params?.session_id === 'missing'
+        method === 'chat.timeline' && params?.session_id === 'missing'
           ? Promise.reject(new Error('Session not found'))
           : appRpc(method, params),
       );
@@ -663,7 +650,7 @@ describe('App navigation', () => {
 
       await selectPersonalAgent('Beta');
       await waitForCondition(() => {
-        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+        expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
           agent_id: 'beta',
           session_id: 'session-beta',
           limit: 100,
@@ -677,7 +664,7 @@ describe('App navigation', () => {
       window.history.replaceState(null, '', '/?accessor=desktop');
       mountApp();
       await waitForCondition(() => {
-        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+        expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
           agent_id: 'alpha',
           session_id: 'session-alpha',
           limit: 100,
@@ -733,7 +720,7 @@ describe('App navigation', () => {
 
     await waitForCondition(() => {
       expect(document.querySelector('.msg-input')).toBeTruthy();
-      expect(rpcMock).toHaveBeenCalledWith('chat.history', expect.anything());
+      expect(rpcMock).toHaveBeenCalledWith('chat.timeline', expect.anything());
       expect(listSessionActivityMock).toHaveBeenCalled();
     });
 
@@ -767,7 +754,7 @@ describe('App navigation', () => {
       .slice(readsBeforeSwitch)
       .map(([method]) => method);
     expect(readsAfterSwitch).not.toContain('agent.list');
-    expect(readsAfterSwitch).not.toContain('chat.history');
+    expect(readsAfterSwitch).not.toContain('chat.timeline');
     expect(listSessionActivityMock).toHaveBeenCalledTimes(
       activityReadsBeforeSwitch,
     );
@@ -787,7 +774,7 @@ describe('App navigation', () => {
 
     await waitForCondition(() => {
       expect(logsShown()).toBe(true);
-      expect(rpcMock).toHaveBeenCalledWith('chat.history', expect.anything());
+      expect(rpcMock).toHaveBeenCalledWith('chat.timeline', expect.anything());
     });
 
     sidebarNavButton('chat').click();
@@ -1154,7 +1141,7 @@ describe('App navigation', () => {
       expect(
         rpcMock.mock.calls.filter(
           ([method, params]) =>
-            method === 'chat.history' &&
+            method === 'chat.timeline' &&
             params?.session_id === 'sub-session-repeat' &&
             params?.limit === 100,
         ),
@@ -1172,12 +1159,10 @@ describe('App navigation', () => {
         agents: [
           { id: 'alpha', name: 'Alpha', current_session_id: 'session-one' },
         ],
-        history: (params) => ({
-          messages:
-            params.session_id === 'session-one'
-              ? [{ id: 'reply', role: 'assistant', content: 'First reply' }]
-              : [],
-        }),
+        history: (params) =>
+          params.session_id === 'session-one'
+            ? assistantHistory('reply', 'First reply')
+            : {},
       }),
     );
     mountApp();
