@@ -368,8 +368,16 @@ async def test_start_polls_as_the_resolved_bot_and_stop_drains_before_shutdown(
             95.0,
             [logging.DEBUG, logging.DEBUG, logging.WARNING, logging.DEBUG, logging.INFO],
         ),
+        # Flood-control failures also bypass PTB's error callback.
+        ("rate-limit", [0.0, 1.0], 2.5, [logging.DEBUG, logging.DEBUG]),
+        (
+            "rate-limit",
+            [0.0, 30.0, 60.0, 90.0],
+            95.0,
+            [logging.DEBUG, logging.DEBUG, logging.WARNING, logging.DEBUG, logging.INFO],
+        ),
     ],
-    ids=["blip", "outage", "outage-seen-as-timeouts"],
+    ids=["blip", "outage", "outage-seen-as-timeouts", "rate-limit-blip", "rate-limit-outage"],
 )
 async def test_polling_warns_only_about_an_outage_and_logs_its_end(
     tmp_path: Path,
@@ -394,6 +402,8 @@ async def test_polling_warns_only_about_an_outage_and_logs_its_end(
     async def answer(*_args: Any, **_kwargs: Any) -> tuple[int, bytes]:
         nonlocal now
         if not telegram_reachable:
+            if failure == "rate-limit":
+                return 429, b'{"ok": false, "parameters": {"retry_after": 30}}'
             raise telegram.error.TimedOut() from httpx.ReadTimeout("")
         # Telegram holds a long poll open until updates arrive or it times out.
         now += 10.0
@@ -410,8 +420,8 @@ async def test_polling_warns_only_about_an_outage_and_logs_its_end(
     assert report_failure is not None
 
     async def poll() -> None:
-        with contextlib.suppress(telegram.error.TimedOut):
-            await request.do_request("https://api.telegram.org/bot/getUpdates", "POST")
+        with contextlib.suppress(telegram.error.TimedOut, telegram.error.RetryAfter):
+            await request.post("https://api.telegram.org/bot/getUpdates")
 
     def connection_reset() -> telegram.error.NetworkError:
         # PTB's error for a reset connection: the OS error sits at the end of its chain.
@@ -423,7 +433,7 @@ async def test_polling_warns_only_about_an_outage_and_logs_its_end(
     await poll()
     for moment in failed_at:
         now = moment
-        if failure == "timeout":
+        if failure in {"timeout", "rate-limit"}:
             telegram_reachable = False
             await poll()
         else:
@@ -444,7 +454,11 @@ async def test_polling_warns_only_about_an_outage_and_logs_its_end(
     assert all(record.exc_info is None for record in records)
     for record in records:
         if record.levelno == logging.WARNING:
-            cause = "ReadTimeout" if failure == "timeout" else "ConnectionResetError"
+            cause = {
+                "timeout": "ReadTimeout",
+                "rate-limit": "RetryAfter",
+                "error-callback": "ConnectionResetError",
+            }[failure]
             assert f"cause={cause}" in record.getMessage()
         if record.levelno == logging.INFO:
             assert f"failures={len(failed_at)}" in record.getMessage()
