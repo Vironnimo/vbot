@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -26,7 +26,7 @@ from core.projects.resolver import effective_project_allowed_skills
 from core.prompts import SystemPromptManager
 from core.prompts.prompts import ProjectPromptContext
 from core.providers.providers import ProviderRegistry
-from core.runs import ChatRunManager, RunAdmissionBlockedError
+from core.runs import ChatRunManager, RunAdmissionBlockedError, RunExecutionOwner
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     LoggerProtocol,
@@ -211,6 +211,11 @@ class ExtensionHostFactory:
             temporary_agents=groups,
             state_dir=state_dir,
             open_database=self.databases.opener(identity),
+            capture_tool_call=lambda context: self._capture_tool_call(identity, context),
+            restore_tool_call=lambda receipt: self._restore_tool_call(identity, receipt),
+            deliver_tool_outcome=lambda receipt, text: self._deliver_tool_outcome(
+                identity, receipt, text
+            ),
             catalog=lambda: self._extension_catalog(identity),
             inspect_prompt=lambda config, project_id: self._inspect_extension_prompt(
                 identity, config, project_id
@@ -449,6 +454,72 @@ class ExtensionHostFactory:
         publisher = self._get_change_publisher()
         if publisher is not None:
             publisher(identity.name, resource, tuple(ids), revision)
+
+    def _require_registration(self, identity: Any) -> None:
+        if self._extensions is None or not self._extensions.is_registration_current(identity):
+            raise ValueError("Extension registration is no longer current")
+
+    async def _capture_tool_call(self, identity: Any, context: ToolContext) -> str | None:
+        self._require_registration(identity)
+        if self.tools.get(context.tool_name).extension != identity.name:
+            raise ValueError("Extension does not own this Tool")
+        receipt = await self.chat_sessions.capture_tool_receipt_async(
+            SessionAddress(context.project_id, context.agent_id, context.session_id),
+            owner_name=identity.name,
+            run_id=context.run_id,
+            tool_call_id=context.tool_call_id,
+            tool_name=context.tool_name,
+            execution_owner=asdict(context.execution_owner) if context.execution_owner else None,
+        )
+        self._require_registration(identity)
+        return receipt
+
+    async def _restore_tool_call(self, identity: Any, receipt: str) -> ToolContext | None:
+        self._require_registration(identity)
+        record = await self.chat_sessions.resolve_tool_receipt_async(
+            receipt, owner_name=identity.name
+        )
+        if record is None:
+            return None
+        context = ToolContext(
+            agent_id=record["agent_id"],
+            session_id=record["session_id"],
+            project_id=record["project_id"],
+            run_id=record["run_id"],
+            tool_call_id=record["tool_call_id"],
+            tool_name=record["tool_name"],
+            tool_call_index=0,
+            workspace=self._host.data_dir,
+            data_root=self._host.data_dir,
+            vbot_root=Path(__file__).resolve().parents[2],
+            execution_owner=RunExecutionOwner(**record["execution_owner"])
+            if record["execution_owner"]
+            else None,
+        )
+        assert self._host.resolve_tool_agent_async is not None
+        agent = await self._host.resolve_tool_agent_async(context)
+        working_project = await self.agent_resolver.resolve_working_project_async(
+            context.project_id, agent, session_id=context.session_id
+        )
+        project = (
+            await _RUNTIME_WORKERS.run(self.projects.get, working_project)
+            if working_project
+            else None
+        )
+        self._require_registration(identity)
+        return replace(
+            context,
+            workspace=Path(agent.workspace),
+            cwd=Path(project.cwd) if project else Path(agent.workspace),
+            working_project_id=working_project,
+            skill_project_id=working_project,
+        )
+
+    async def _deliver_tool_outcome(self, identity: Any, receipt: str, content: str) -> bool:
+        self._require_registration(identity)
+        return await self.chat_sessions.deliver_tool_outcome_async(
+            receipt, content, owner_name=identity.name
+        )
 
     async def _extension_catalog(self, identity: Any) -> dict[str, Any]:
         if self._extensions is None or not self._extensions.is_registration_current(identity):

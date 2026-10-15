@@ -367,6 +367,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     )
     from core.calendar import validate_calendar_events_file
     from core.channels import validate_channel_file
+    from core.extensions.config_validation import validate_extension_documents
     from core.model_tasks.artifacts import validate_task_artifact_metadata_file
     from core.projects import validate_project_file
     from core.providers.token_store import validate_oauth_token_file
@@ -376,10 +377,6 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         validate_terminal_groups_file,
         validate_terminal_launch_history_file,
     )
-
-    # The bundled MCP Extension owns ``extension-data/mcp/connections.json``; core has no
-    # Extension hook for doctor checks yet, so this one import points outward.
-    from resources.extensions.mcp.config import validate_connections_file
 
     # One owner validator per kind of ``DURABLE_DOCUMENTS``, which owns the locations.
     validators: dict[str, Callable[[Path], JsonValidationReport]] = {
@@ -399,20 +396,47 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         "terminal_launch_history": validate_terminal_launch_history_file,
         "terminal_groups": validate_terminal_groups_file,
         "oauth_token": validate_oauth_token_file,
-        "mcp_connections": validate_connections_file,
         "attachment_metadata": validate_attachment_metadata_file,
         "speech_artifact_metadata": validate_task_artifact_metadata_file,
     }
-    if set(validators) != set(DURABLE_DOCUMENTS):
+    core_documents = {
+        kind: pattern
+        for kind, pattern in DURABLE_DOCUMENTS.items()
+        if not pattern.startswith("extension-data/")
+    }
+    if set(validators) != set(core_documents):
         raise RuntimeError("every durable JSON document kind needs exactly one validator")
     root = Path(data_dir).expanduser()
     reports = [validate_settings_file(root / DURABLE_DOCUMENTS["settings"])]
-    for kind, pattern in DURABLE_DOCUMENTS.items():
+    for kind, pattern in core_documents.items():
         if kind == "settings":
             continue
         validate = validators[kind]
         # A literal pattern matches only an existing file.
         reports.extend(validate(path) for path in sorted(root.glob(pattern)) if path.is_file())
+    try:
+        settings, _diagnostics = load_runtime_settings_json(root / "settings.json")
+    except SettingsValidationError:
+        settings = {}
+    directories = [Path(path).expanduser() for path in settings.get("extension_directories", [])]
+    reports.extend(validate_extension_documents(root, directories))
+    reported = {report.file_path for report in reports}
+    for pattern in DURABLE_DOCUMENTS.values():
+        if pattern.startswith("extension-data/"):
+            for path in sorted(root.glob(pattern)):
+                if path not in reported:
+                    reports.append(
+                        JsonValidationReport(
+                            path,
+                            True,
+                            (
+                                _error_diagnostic(
+                                    "$",
+                                    "The Extension declares no validator for this document",
+                                ),
+                            ),
+                        )
+                    )
     return tuple(reports)
 
 

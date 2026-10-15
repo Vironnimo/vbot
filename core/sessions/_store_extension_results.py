@@ -28,28 +28,34 @@ def capture_tool_receipt(
     state = _store_values._find_live(connection, address)
     if state is None:
         return None
-    row = connection.execute(
+    rows = connection.execute(
         "SELECT c.call_key FROM tool_calls c JOIN entries e ON e.entry_key=c.entry_key "
         "JOIN runs r ON r.run_key=e.run_key WHERE e.session_key=? AND r.run_id=? "
         "AND r.inherited=0 AND r.status='running' AND c.call_id=? AND c.name=? "
         "AND e.superseded_at_seq IS NULL",
         (state["session_key"], run_id, tool_call_id, tool_name),
-    ).fetchone()
-    if row is None:
+    ).fetchall()
+    if len(rows) != 1:
         return None
+    row = rows[0]
     existing = connection.execute(
         "SELECT receipt_id FROM extension_tool_receipts WHERE owner_name=? AND call_key=?",
         (owner_name, row["call_key"]),
     ).fetchone()
     if existing is not None:
         return str(existing["receipt_id"])
-    receipt = new_id("etr")
-    connection.execute(
-        "INSERT INTO extension_tool_receipts(receipt_id, owner_name, call_key, "
-        "execution_owner_json) VALUES(?,?,?,?)",
-        (receipt, owner_name, row["call_key"], json.dumps(execution_owner)),
-    )
-    return receipt
+
+    def claim(receipt: str) -> bool:
+        return (
+            connection.execute(
+                "INSERT OR IGNORE INTO extension_tool_receipts(receipt_id, owner_name, call_key, "
+                "execution_owner_json) VALUES(?,?,?,?)",
+                (receipt, owner_name, row["call_key"], json.dumps(execution_owner)),
+            ).rowcount
+            == 1
+        )
+
+    return new_id("etr", claim=claim)
 
 
 def resolve_tool_receipt(

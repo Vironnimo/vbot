@@ -532,3 +532,79 @@ async def test_result_payloads_load_for_their_owner_through_the_calling_session(
     assert stale.load_result_payload is not None
     with pytest.raises(ValueError, match="no longer current"):
         await stale.load_result_payload(call("source"), "res_one")
+
+
+@pytest.mark.asyncio
+async def test_deferred_tool_outcomes_follow_only_the_original_session_generation(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    runtime.tools.register(
+        "mcp_recovery",
+        "test-owned-tool",
+        {"type": "object"},
+        lambda context, args: {},
+        extension="mcp",
+    )
+    host = _owner_host(runtime, "mcp")
+    other = _owner_host(runtime, "swarm")
+    session = runtime.chat_sessions.create("main", "recovery-origin")
+    running = session.start_run("recovery-run")
+    running.append(
+        ChatMessage.assistant(
+            content="",
+            model="fixture/model",
+            tool_calls=[ToolCall(id="recovery-call", name="mcp_recovery", arguments={})],
+        )
+    )
+    context = ToolContext(
+        agent_id="main",
+        session_id=session.id,
+        run_id="recovery-run",
+        tool_call_id="recovery-call",
+        tool_name="mcp_recovery",
+        tool_call_index=0,
+        workspace=tmp_path,
+        data_root=tmp_path,
+        vbot_root=tmp_path,
+    )
+    assert (
+        host.capture_tool_call is not None
+        and host.restore_tool_call is not None
+        and host.deliver_tool_outcome is not None
+    )
+    receipt = await host.capture_tool_call(context)
+    assert receipt is not None
+    assert await host.capture_tool_call(context) == receipt
+    assert await host.capture_tool_call(replace(context, run_id="wrong-run")) is None
+    assert other.restore_tool_call is not None
+    assert await other.restore_tool_call(receipt) is None
+    complete_run(
+        running,
+        ChatMessage.run_summary(
+            run_id="recovery-run",
+            status="interrupted",
+            timing={
+                "started_at": "2026-10-15T10:00:00Z",
+                "completed_at": "2026-10-15T10:01:00Z",
+                "duration_ms": 60000,
+            },
+            iteration_count=1,
+        ),
+    )
+    fork = await runtime.chat_sessions.fork(session.address)
+    moved = await runtime.chat_sessions.move(
+        session.address, SessionAddress(None, "main", "recovery-moved")
+    )
+    restored = await host.restore_tool_call(receipt)
+    assert restored is not None and restored.session_id == moved.id
+    assert await host.deliver_tool_outcome(receipt, "recovered-outcome-sentinel")
+    assert await host.deliver_tool_outcome(receipt, "recovered-outcome-sentinel")
+    assert [message.content for message in moved.load() if message.role == "note"] == [
+        "recovered-outcome-sentinel"
+    ]
+    assert not [message for message in fork.load() if message.role == "note"]
+    runtime.chat_sessions.delete(moved.address)
+    replacement = runtime.chat_sessions.create("main", moved.id)
+    assert await host.restore_tool_call(receipt) is None
+    assert not await host.deliver_tool_outcome(receipt, "wrong-generation-sentinel")
+    assert replacement.load() == []

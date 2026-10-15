@@ -768,3 +768,25 @@ def test_runtime_settings_leave_out_unknown_fields_and_the_version(tmp_path: Pat
 
     assert settings == {"web_fetch": {"provider": "direct"}, "model_tasks": {}}
     assert ignored == ()
+
+
+def test_extension_documents_validate_without_running_the_extension(tmp_path: Path) -> None:
+    extension = tmp_path / "extensions" / "example"
+    extension.mkdir(parents=True)
+    (extension / "__init__.py").write_text("raise AssertionError('registration ran')")
+    (extension / "extension.json").write_text(
+        json.dumps({"config_documents": {"state.json": "validate:check"}})
+    )
+    (extension / "validate.py").write_text(
+        "from core.config_validation import validate_json_file, JsonDiagnostic\n"
+        "def check(path):\n"
+        "    return validate_json_file(path, lambda value: "
+        "[JsonDiagnostic('error', '$.sentinel', 'invalid')], missing_ok=False)\n"
+    )
+    document = tmp_path / "extension-data" / "example" / "state.json"
+    document.parent.mkdir(parents=True)
+    document.write_text('{"format_version":1}')
+    reports = validate_data_dir_config(tmp_path)
+    [report] = [item for item in reports if item.file_path == document]
+    assert not report.ok
+    assert report.diagnostics[0].path == "$.sentinel"
