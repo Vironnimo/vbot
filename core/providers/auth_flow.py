@@ -413,7 +413,7 @@ class DeviceFlowEngine:
                     raise DeviceFlowTerminalError(data["error"])
 
                 token = await self._build_token(client, oauth_config, data)
-                self._token_store.save(
+                await self._token_store.save_async(
                     provider_id, local_connection_id, token, account_id=account_id
                 )
                 return

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -191,7 +192,7 @@ REFRESH_FLOWS = {
 @pytest.mark.asyncio
 @pytest.mark.parametrize("flow", list(REFRESH_FLOWS))
 async def test_expired_token_refreshes_through_the_flow_and_publishes_to_its_account(
-    store: TokenStore, caplog: pytest.LogCaptureFixture, flow: str
+    store: TokenStore, caplog: pytest.LogCaptureFixture, flow: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     case = REFRESH_FLOWS[flow]
     reply = case.reply()
@@ -200,9 +201,27 @@ async def test_expired_token_refreshes_through_the_flow_and_publishes_to_its_acc
     )
     route = respx.post(case.config.token_url).mock(return_value=httpx.Response(200, json=reply))
     getter = OAuthTokenGetter(store, "provider", "subscription", case.config, account_id="work")
+    loop_thread = threading.get_ident()
+    operations: list[str] = []
+    load, publish = store.load, store.replace_if_current
 
-    with caplog.at_level(logging.DEBUG, logger="vbot.providers.token_getter"):
-        assert await getter() == reply["access_token"]
+    def load_off_loop(*args: Any, **kwargs: Any) -> OAuthToken | None:
+        assert threading.get_ident() != loop_thread
+        operations.append("load")
+        return load(*args, **kwargs)
+
+    def publish_off_loop(*args: Any, **kwargs: Any) -> bool:
+        assert threading.get_ident() != loop_thread
+        operations.append("publish")
+        return publish(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "load", load_off_loop)
+        patch.setattr(store, "replace_if_current", publish_off_loop)
+        with caplog.at_level(logging.DEBUG, logger="vbot.providers.token_getter"):
+            assert await getter() == reply["access_token"]
+
+    assert operations == ["load", "publish", "load"]
 
     request = route.calls.last.request
     assert route.call_count == 1
@@ -374,6 +393,34 @@ async def test_owned_refresh_client_is_closed_after_its_request(
 # ---------------------------------------------------------------------------
 # Delayed refresh results against concurrent Account changes
 # ---------------------------------------------------------------------------
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_cancelled_refresh_still_persists_the_rotated_credentials(
+    store: TokenStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = nous_oauth_config()
+    store.save("nous", "subscription", expired_token())
+    respx.post(config.token_url).mock(return_value=httpx.Response(200, json=_ROTATED))
+    entered, release = asyncio.Event(), asyncio.Event()
+    publish = store.replace_if_current_async
+
+    async def delayed_publish(*args: Any, **kwargs: Any) -> bool:
+        entered.set()
+        await release.wait()
+        return await publish(*args, **kwargs)
+
+    monkeypatch.setattr(store, "replace_if_current_async", delayed_publish)
+    task = asyncio.create_task(OAuthTokenGetter(store, "nous", "subscription", config)())
+    await entered.wait()
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    token = store.load("nous", "subscription")
+    assert token is not None
+    assert token.refresh_token == "rotated-refresh"
 
 
 @respx.mock

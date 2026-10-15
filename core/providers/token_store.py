@@ -32,6 +32,7 @@ from core.json_documents import (
 from core.providers.accounts import ACCOUNT_ID_PATTERN, DEFAULT_ACCOUNT_ID, sorted_account_ids
 from core.utils.errors import ConfigError
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 TOKEN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ACCOUNT_FILE_SEPARATOR = "--"
@@ -41,6 +42,7 @@ OAUTH_TOKEN_SHAPE = json_document({"access_token", "refresh_token", "expires_at"
 _RESET_HINT = "Disconnecting the Provider account removes the file; then connect it again."
 
 _LOGGER = get_logger("providers.token_store")
+_TOKEN_WORKERS = BoundedWorkerPool(name="provider-tokens", max_workers=4)
 
 
 class OAuthTokenFileError(ConfigError):
@@ -120,11 +122,12 @@ class TokenStore:
             self._validate_token_id("local_connection_id", local_connection_id),
             self._validate_account_id(account_id),
         )
-        lock = self._refresh_locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._refresh_locks[key] = lock
-        return lock
+        with self._mutation_lock:
+            lock = self._refresh_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._refresh_locks[key] = lock
+            return lock
 
     def save(
         self,
@@ -151,6 +154,19 @@ class TokenStore:
                 )
             except JsonDocumentWriteError as error:
                 raise OAuthTokenFileError(f"{error} {_RESET_HINT}") from error
+
+    async def save_async(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        token: OAuthToken,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> None:
+        """Persist a login off the Event Loop, settling writes before cancellation."""
+        await _TOKEN_WORKERS.run(
+            self.save, provider_id, local_connection_id, token, account_id=account_id
+        )
 
     def load(
         self,
@@ -191,6 +207,18 @@ class TokenStore:
 
         return self._token_path(provider_id, local_connection_id, account_id).exists()
 
+    async def load_async(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> OAuthToken | None:
+        """Read current credentials without filesystem work on the Event Loop."""
+        return await _TOKEN_WORKERS.run(
+            self.load, provider_id, local_connection_id, account_id=account_id
+        )
+
     def delete(
         self,
         provider_id: str,
@@ -230,6 +258,25 @@ class TokenStore:
             else:
                 self.save(provider_id, local_connection_id, replacement, account_id=account_id)
             return True
+
+    async def replace_if_current_async(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        expected: OAuthToken,
+        replacement: OAuthToken | None,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> bool:
+        """Settle an atomic credential comparison/publication off the Event Loop."""
+        return await _TOKEN_WORKERS.run(
+            self.replace_if_current,
+            provider_id,
+            local_connection_id,
+            expected,
+            replacement,
+            account_id=account_id,
+        )
 
     def has_valid_token(
         self,
