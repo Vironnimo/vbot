@@ -10,6 +10,7 @@ import weakref
 from typing import Any
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from core.providers.errors import ProviderOutcomeUnknownError
 from core.runs import (
@@ -223,8 +224,36 @@ class _KeywordOSError(OSError):
         self.detail = detail
 
 
+class _ValidationFixture(BaseModel):
+    count: int
+
+
+def _validation_error() -> ValidationError:
+    try:
+        _ValidationFixture.model_validate({"count": "bad"})
+    except ValidationError as error:
+        return error
+    raise AssertionError("fixture unexpectedly validated")
+
+
+class _UncopyableValidationError(ValidationError):
+    def __copy__(self) -> _UncopyableValidationError:
+        raise TypeError("fixture copy refused")
+
+
 @pytest.mark.parametrize(
-    "kind", ["provider", "os", "keyword-os", "unicode", "name", "group", "interrupted"]
+    "kind",
+    [
+        "provider",
+        "os",
+        "keyword-os",
+        "unicode",
+        "name",
+        "group",
+        "interrupted",
+        "pydantic",
+        "pydantic-cause",
+    ],
 )
 async def test_retained_errors_preserve_semantics_without_execution_or_waiter_frames(
     kind: str, monkeypatch: pytest.MonkeyPatch
@@ -247,13 +276,17 @@ async def test_retained_errors_preserve_semantics_without_execution_or_waiter_fr
             return NameError("missing", name="fixture_id")
         if kind == "group":
             return ExceptionGroup("fixture", [ValueError("nested")])
+        if kind == "pydantic":
+            return _validation_error()
+        if kind == "pydantic-cause":
+            return RuntimeError("validation failed")
         return RunInterruptedError("network", result={"content": "partial"})
 
     async def execute(_run: Run) -> None:
         resource = _Resource()
         handles.append(weakref.ref(resource))
         try:
-            raise ValueError("cause")
+            raise _validation_error() if kind == "pydantic-cause" else ValueError("cause")
         except ValueError as cause:
             error = failure()
             error.add_note("fixture note")
@@ -274,16 +307,58 @@ async def test_retained_errors_preserve_semantics_without_execution_or_waiter_fr
             if hasattr(expected, field):
                 assert getattr(caught.value, field) == getattr(expected, field)
         assert caught.value is not run.error
+        if isinstance(expected, ValidationError):
+            assert isinstance(caught.value, ValidationError)
+            assert caught.value.errors() == expected.errors()
         assert run.error is not None and run.error.__traceback__ is None
         cause = run.error.__cause__
         assert cause is not None and cause.__traceback__ is None
         assert cause.__cause__ is run.error
         assert run.error.__context__ is cause
+        if kind == "pydantic-cause":
+            assert isinstance(cause, ValidationError)
+            assert cause.errors() == _validation_error().errors()
         if isinstance(run.error, BaseExceptionGroup):
             assert run.error.exceptions[0].__traceback__ is None
         del caught
     gc.collect()
     assert handles[0]() is None
+    await manager.aclose()
+
+
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "cause"])
+async def test_uncloneable_error_cannot_prevent_terminal_settlement(
+    nested: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("core.runs.run._LOGGER.error", lambda *args, **kwargs: None)
+
+    async def execute(_run: Run) -> None:
+        error = _UncopyableValidationError.from_exception_data(
+            "fixture", [{"type": "int_parsing", "loc": ("count",), "input": "bad"}]
+        )
+        if nested:
+            raise RuntimeError("validation failed") from error
+        raise error
+
+    manager = ChatRunManager()
+    run = await manager.start(SESSION, execute)
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            await asyncio.wait_for(run.wait(), timeout=1)
+    assert run.status == RunStatus.FAILED
+    assert run.error is not None and run.error.__traceback__ is None
+    fallback = run.error.__cause__ if nested else run.error
+    assert isinstance(fallback, RuntimeError)
+    assert fallback.__traceback__ is None
+    assert "_UncopyableValidationError" in str(fallback)
+    assert "count" in str(fallback)
+    assert run.events[-1].type == "run_failed"
+
+    async def succeed(_run: Run) -> str:
+        return "done"
+
+    next_run = await manager.start(SESSION, succeed)
+    assert await next_run.wait() == "done"
     await manager.aclose()
 
 

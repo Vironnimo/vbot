@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from types import MemberDescriptorType
 
 
@@ -11,12 +12,38 @@ def detached_error(error: BaseException) -> BaseException:
     Raising a snapshot would attach the waiter's frames to it, so each waiter
     receives another detached copy. Original errors remain intact for logging.
     """
+    try:
+        return _detached_error(error)
+    except BaseException:
+        # Snapshotting is terminal bookkeeping: even an exception with broken
+        # copy/accessor hooks must not keep a Run running or strand its waiters.
+        return _unclonable_error(error)
+
+
+def _unclonable_error(error: BaseException) -> RuntimeError:
+    try:
+        message = str(error)
+    except BaseException:
+        message = "exception details unavailable"
+    return RuntimeError(f"{type(error).__name__}: {message}")
+
+
+def _detached_error(error: BaseException) -> BaseException:
     copies: dict[int, BaseException] = {}
     pending: list[tuple[BaseException, BaseException]] = []
 
     def clone(source: BaseException) -> BaseException:
         if id(source) in copies:
             return copies[id(source)]
+        try:
+            result = allocate(source)
+        except BaseException:
+            result = _unclonable_error(source)
+        copies[id(source)] = result
+        pending.append((source, result))
+        return result
+
+    def allocate(source: BaseException) -> BaseException:
         result: BaseException
         if isinstance(source, BaseExceptionGroup):
             result = BaseExceptionGroup.__new__(
@@ -31,10 +58,17 @@ def detached_error(error: BaseException) -> BaseException:
                 if base.__module__ == "builtins" and issubclass(base, BaseException)
             )
             arguments = native.__reduce__(source)[1]
-            result = native.__new__(type(source), *arguments)
-            native.__init__(result, *arguments)
+            try:
+                result = native.__new__(type(source), *arguments)
+                native.__init__(result, *arguments)
+            except TypeError:
+                # Native extension exceptions (for example Pydantic validation
+                # errors) own their allocation and expose reconstruction via
+                # the copy/reduction protocol instead of the built-in base.
+                result = copy.copy(source)
+                if result is source or type(result) is not type(source):
+                    raise TypeError("Exception copy did not preserve independent state") from None
             result.args = source.args
-        copies[id(source)] = result
         result.__dict__.update(source.__dict__)
         for base in type(source).__mro__:
             for name, attribute in vars(base).items():
@@ -50,7 +84,6 @@ def detached_error(error: BaseException) -> BaseException:
         if hasattr(source, "__notes__"):
             result.__notes__ = list(source.__notes__)
         result.__traceback__ = None
-        pending.append((source, result))
         return result
 
     snapshot = clone(error)
