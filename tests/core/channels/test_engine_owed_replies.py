@@ -121,7 +121,7 @@ def _record_history(
     if ending is not None:
         status, _, reason = ending.partition(":")
         now = utc_now_timestamp()
-        session._store.finish_run(
+        session._store.execution.finish_run(
             _ADDRESS,
             SessionRunCompletion(
                 run_id=run_id,

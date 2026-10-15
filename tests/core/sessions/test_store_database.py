@@ -213,13 +213,13 @@ def test_a_populated_database_keeps_every_row_when_tables_are_added(tmp_path: Pa
         store.replace_metadata(
             address, {"title": "Retained title", "custom": {"unicode": "Gruesse"}}
         )
-        store.admit_run(
+        store.execution.admit_run(
             address,
             SessionRunAdmission(
                 run_id="retained-run", run_kind="user", started_at="2026-05-01T11:59:00Z"
             ),
         )
-        store.finish_run(
+        store.execution.finish_run(
             address,
             SessionRunCompletion(
                 run_id="retained-run",

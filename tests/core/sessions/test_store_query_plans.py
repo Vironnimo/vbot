@@ -453,7 +453,7 @@ def test_owned_run_point_lookups_probe_indexes_not_group_history(manager) -> Non
     )
     owner = RunExecutionOwner("owner", "group", "peer", binding.generation_id, "epoch")
     for number in range(3):
-        manager._store.admit_run(
+        manager._store.execution.admit_run(
             binding.address,
             SessionRunAdmission(
                 run_id=f"run{number}",

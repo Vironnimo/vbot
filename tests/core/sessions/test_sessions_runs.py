@@ -391,7 +391,7 @@ def test_snapshot_lists_page_runs_in_start_order(manager):
 async def test_run_records_read_the_sessions_own_runs_with_completion_facts(manager):
     source = manager.create("coder")
     source.start_run("done").append(ChatMessage.user("question"))
-    source._store.finish_run(
+    source._store.execution.finish_run(
         source.address,
         SessionRunCompletion(
             run_id="done",

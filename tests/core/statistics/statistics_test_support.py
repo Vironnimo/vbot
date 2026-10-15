@@ -164,7 +164,7 @@ def _admit(
     at: datetime = BASE,
 ) -> None:
     """Admit a Run of ``kind`` started at ``at``; ``seed_history`` then writes and ends it."""
-    manager._store.admit_run(
+    manager._store.execution.admit_run(
         address,
         SessionRunAdmission(
             run_id=run_id, run_kind=kind, started_at=format_canonical_timestamp(at)

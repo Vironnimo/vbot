@@ -11,27 +11,28 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.database import Database, DatabaseError, open_database
+from core.database.snapshots import read_retained_snapshot_members
 from core.sessions import (
     _store_archive,
+    _store_attachments,
+    _store_external_notes,
     _store_fts,
     _store_history,
     _store_mutations,
     _store_operations,
-    _store_owned,
     _store_prompts,
     _store_queries,
-    _store_runs,
     _store_search,
     _store_timeline,
     _store_usage,
     _store_values,
 )
 from core.sessions._archive_types import ArchiveEntryRef
+from core.sessions._execution_store import TRANSCRIPT_WRITE_PATIENCE_S, SessionExecutionStore
 from core.sessions._store_health import SessionHealth
 from core.sessions._store_schema import session_database_spec
 from core.sessions._types import (
     JsonObject,
-    OwnedRunRecord,
     SessionChatHistorySnapshot,
     SessionDescriptorSource,
     SessionHistoryRevision,
@@ -43,8 +44,6 @@ from core.sessions.errors import FtsHealth, SessionNotFoundError
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
     from core.sessions._types import (
-        DeliveryReceipt,
-        OwnedSessionSummary,
         PromptEpoch,
         SeenSkillsUpdate,
         SessionAddress,
@@ -54,20 +53,12 @@ if TYPE_CHECKING:
         SessionListPage,
         SessionReadBatch,
         SessionReadCursor,
-        SessionRunAdmission,
-        SessionRunCompletion,
         SessionRunRecord,
-        TemporarySessionBinding,
         ToolResultFacts,
     )
 
 
 WRITE_PATIENCE_S = 20.0
-# Transcript appends are the user's conversation: wait longer before failing.
-TRANSCRIPT_WRITE_PATIENCE_S = 60.0
-# Marking the latest completion read is advisory: give up quickly under
-# contention.
-ACTIVITY_WRITE_PATIENCE_S = 0.5
 
 _FTS_ERROR_MARKERS = ("fts",)
 
@@ -99,6 +90,7 @@ class SessionStore:
     """
 
     def __init__(self, path: Path) -> None:
+        self.execution = SessionExecutionStore(self)
         self.path = Path(path)
         self._health = SessionHealth()
         self._database = open_database(session_database_spec(self.path, health=self._health))
@@ -159,6 +151,26 @@ class SessionStore:
         """Exercise the opened read/write path without changing canonical rows."""
         self._database.verify_read_write()
 
+    def referenced_attachment_ids(self) -> frozenset[str]:
+        return self._read(_store_attachments.referenced)
+
+    def unreferenced_attachment_ids(self) -> tuple[str, ...]:
+        """Collectable known blobs at a quiescent startup/shutdown boundary only."""
+        candidates = self._read(_store_attachments.unreferenced)
+        if not candidates:
+            return ()
+        protected: set[str] = set()
+        for references in read_retained_snapshot_members(
+            self.path.parent, "sessions", _store_attachments.snapshot_references
+        ):
+            protected.update(references)
+        return tuple(
+            attachment_id for attachment_id in candidates if attachment_id not in protected
+        )
+
+    def forget_collected_attachment_ids(self, ids: Sequence[str]) -> None:
+        self._execute_write(lambda connection: _store_attachments.forget(connection, ids))
+
     def usage_history(self, after_entry_key: int, *, limit: int) -> tuple[JsonObject, ...]:
         return self._read_decoded(
             lambda connection: _store_usage.usage_history(connection, after_entry_key, limit=limit)
@@ -207,6 +219,11 @@ class SessionStore:
 
     def exists(self, address: SessionAddress) -> bool:
         return self._read(lambda connection: _store_queries.exists(connection, address))
+
+    def generation_address(self, generation_id: str) -> SessionAddress | None:
+        return self._read(
+            lambda connection: _store_external_notes.generation_address(connection, generation_id)
+        )
 
     def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
         return self._read(
@@ -426,69 +443,6 @@ class SessionStore:
 
     # -- Runs ---------------------------------------------------------------------
 
-    def admit_run(self, address: SessionAddress, admission: SessionRunAdmission) -> None:
-        """Admit one Run with its Run kind and execution owner in one transaction."""
-        self._execute_write(
-            lambda connection: _store_runs.admit_run(connection, address, admission)
-        )
-
-    def finish_run(self, address: SessionAddress, completion: SessionRunCompletion) -> JsonObject:
-        return self._execute_write(
-            lambda connection: _store_runs.finish_run(connection, address, completion),
-            patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
-        )
-
-    def record_run_changes(
-        self, address: SessionAddress, run_id: str, change_stats: JsonObject
-    ) -> None:
-        """Store a running Run's change statistics so far; its completion replaces them."""
-        self._execute_write(
-            lambda connection: _store_runs.record_run_changes(
-                connection, address, run_id, change_stats
-            )
-        )
-
-    def append_stream_draft(
-        self,
-        address: SessionAddress,
-        run_id: str,
-        *,
-        model: str,
-        reasoning_delta: str,
-        content_delta: str,
-        tool_calls: Sequence[JsonObject] = (),
-    ) -> None:
-        """Append streamed output of a running Run's current Model step to its draft."""
-        self._execute_write(
-            lambda connection: _store_runs.append_stream_draft(
-                connection,
-                address,
-                run_id,
-                model=model,
-                reasoning_delta=reasoning_delta,
-                content_delta=content_delta,
-                tool_calls=tool_calls,
-            )
-        )
-
-    def discard_stream_draft(self, address: SessionAddress, run_id: str) -> None:
-        """Delete a running Run's stream draft, whose Model step starts over."""
-        self._execute_write(
-            lambda connection: _store_runs.discard_stream_draft(connection, address, run_id)
-        )
-
-    def recover_interrupted_runs(self) -> None:
-        self._execute_write(_store_runs.recover_interrupted_runs)
-
-    def mark_terminal_run_read(
-        self, address: SessionAddress, run_id: str
-    ) -> tuple[JsonObject, bool]:
-        """Mark the latest completion read; return the activity and whether it changed."""
-        return self._execute_write(
-            lambda connection: _store_runs.mark_terminal_run_read(connection, address, run_id),
-            patience_s=ACTIVITY_WRITE_PATIENCE_S,
-        )
-
     # -- History writes -------------------------------------------------------------
 
     def append_messages(
@@ -608,192 +562,6 @@ class SessionStore:
         return _store_history.read_batch(delta)
 
     # -- Extension-owned Sessions -----------------------------------------------------
-
-    def create_bound_temporary_session(
-        self,
-        address: SessionAddress,
-        *,
-        owner_name: str,
-        group_id: str,
-        participant_id: str,
-        config: JsonObject,
-    ) -> str:
-        return self._execute_write(
-            lambda connection: _store_owned.create_bound_temporary_session(
-                connection,
-                address,
-                owner_name=owner_name,
-                group_id=group_id,
-                participant_id=participant_id,
-                config=config,
-            )
-        )
-
-    def temporary_binding(self, address: SessionAddress) -> TemporarySessionBinding | None:
-        return self._read_decoded(
-            lambda connection: _store_owned.temporary_binding(connection, address)
-        )
-
-    def temporary_binding_by_participant(
-        self, *, owner_name: str, group_id: str, participant_id: str
-    ) -> TemporarySessionBinding | None:
-        return self._read_decoded(
-            lambda connection: _store_owned.temporary_binding_by_participant(
-                connection, owner_name=owner_name, group_id=group_id, participant_id=participant_id
-            )
-        )
-
-    def delete_temporary_group(self, *, owner_name: str, group_id: str) -> int:
-        return self._execute_write(
-            lambda connection: _store_owned.delete_temporary_group(
-                connection, owner_name=owner_name, group_id=group_id
-            )
-        )
-
-    def archive_temporary_group(
-        self, *, owner_name: str, group_id: str, reason: str
-    ) -> tuple[int, ArchiveEntryRef | None]:
-        return self._execute_write(
-            lambda connection: _store_owned.archive_temporary_group(
-                connection, owner_name=owner_name, group_id=group_id, reason=reason
-            )
-        )
-
-    def temporary_groups(self, *, owner_name: str, after: str = "", limit: int = 100) -> list[str]:
-        return self._read(
-            lambda connection: _store_owned.temporary_groups(
-                connection, owner_name=owner_name, after=after, limit=limit
-            )
-        )
-
-    def temporary_owners(self) -> list[str]:
-        return self._read(_store_owned.temporary_owners)
-
-    def temporary_bindings(
-        self,
-        *,
-        owner_name: str,
-        group_id: str,
-        after: str = "",
-        limit: int = 100,
-    ) -> list[TemporarySessionBinding]:
-        return self._read_decoded(
-            lambda connection: _store_owned.temporary_bindings(
-                connection, owner_name=owner_name, group_id=group_id, after=after, limit=limit
-            )
-        )
-
-    def set_temporary_group_title(self, *, owner_name: str, group_id: str, title: str) -> None:
-        self._execute_write(
-            lambda connection: _store_owned.set_temporary_group_title(
-                connection, owner_name=owner_name, group_id=group_id, title=title
-            )
-        )
-
-    def temporary_group_titles(
-        self, *, owner_name: str, group_ids: Sequence[str]
-    ) -> dict[str, str]:
-        return self._read(
-            lambda connection: _store_owned.temporary_group_titles(
-                connection, owner_name=owner_name, group_ids=group_ids
-            )
-        )
-
-    def owned_session_summaries(
-        self,
-        *,
-        owner_name: str | None = None,
-        group_id: str | None = None,
-        metadata_keys: Sequence[str] = (),
-    ) -> list[OwnedSessionSummary]:
-        return self._read_decoded(
-            lambda connection: _store_owned.owned_session_summaries(
-                connection, owner_name=owner_name, group_id=group_id, metadata_keys=metadata_keys
-            )
-        )
-
-    def append_messages_with_receipts(
-        self,
-        address: SessionAddress,
-        *,
-        generation_id: str,
-        owner_name: str,
-        messages: Sequence[ChatMessage],
-        receipts: Sequence[tuple[int, str, str, str, str]],
-        deduplicate_carrier: bool = False,
-        run_id: str | None = None,
-        assistant_message_id: str | None = None,
-        tool_results: Mapping[str, ToolResultFacts] | None = None,
-        since: SessionReadCursor | None = None,
-    ) -> SessionReadBatch | None:
-        """Receipt-carrying variant of :meth:`append_messages` with the same options."""
-
-        def _fn(connection: sqlite3.Connection) -> _store_history.HistoryDelta | None:
-            _store_owned.append_messages_with_receipts(
-                connection,
-                address,
-                generation_id=generation_id,
-                owner_name=owner_name,
-                messages=messages,
-                receipts=receipts,
-                deduplicate_carrier=deduplicate_carrier,
-                run_id=run_id,
-                assistant_message_id=assistant_message_id,
-                tool_results=tool_results,
-            )
-            return self._select_since(connection, address, since)
-
-        delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
-        return None if delta is None else _store_history.read_batch(delta)
-
-    def delivery_receipt(
-        self, address: SessionAddress, *, generation_id: str, owner_name: str, receipt_id: str
-    ) -> DeliveryReceipt | None:
-        return self._read(
-            lambda connection: _store_owned.delivery_receipt(
-                connection,
-                address,
-                generation_id=generation_id,
-                owner_name=owner_name,
-                receipt_id=receipt_id,
-            )
-        )
-
-    def owned_runs(
-        self,
-        *,
-        owner_name: str,
-        group_id: str,
-        participant_id: str | None = None,
-        after: int = 0,
-        limit: int = 100,
-    ) -> list[OwnedRunRecord]:
-        return self._read(
-            lambda connection: _store_owned.owned_runs(
-                connection,
-                owner_name=owner_name,
-                group_id=group_id,
-                participant_id=participant_id,
-                after=after,
-                limit=limit,
-            )
-        )
-
-    def owned_runs_by_id(
-        self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
-    ) -> dict[str, OwnedRunRecord]:
-        return self._read(
-            lambda connection: _store_owned.owned_runs_by_id(
-                connection, owner_name=owner_name, group_id=group_id, run_ids=run_ids
-            )
-        )
-
-    def owned_run_by_input(self, address: SessionAddress, input_id: str) -> OwnedRunRecord | None:
-        return self._read(
-            lambda connection: _store_owned.owned_run_by_input(connection, address, input_id)
-        )
-
-    # -- History reads ---------------------------------------------------------------
 
     def messages(self, address: SessionAddress) -> list[ChatMessage]:
         """The Session's own audit: every entry it wrote, superseded ones included."""

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
-from core.sessions import _store_fts, _store_lineage, _store_values
+from core.sessions import _store_attachments, _store_fts, _store_lineage, _store_values
 from core.sessions._types import JsonObject, ToolResultFacts, ToolResultPayload
 from core.sessions.errors import SessionStoreCorruptError
 from core.utils.ids import is_safe_id
@@ -166,7 +166,7 @@ def _text_row(message: ChatMessage) -> tuple[str | None, str | None, str | None]
     if isinstance(message.content, str):
         return message.content, None, None
     from core.chat.content_blocks import content_block_to_dict
-    from core.recall.canonical import content_to_text
+    from core.sessions.search_content import content_to_text
 
     blocks = [content_block_to_dict(block) for block in message.content]
     return None, _store_values._optional_json(blocks, "content"), content_to_text(message.content)
@@ -236,6 +236,7 @@ def insert_entry(
             )
         case "compaction_checkpoint":
             _insert_checkpoint(connection, entry_key, message)
+    _store_attachments.record(connection, entry_key, message.to_dict())
     return entry_key
 
 
@@ -438,6 +439,8 @@ def link_tool_result(
                 for payload in facts.payloads
             ],
         )
+        for payload in facts.payloads:
+            _store_attachments.record(connection, entry_key, json.loads(payload.payload_json))
 
 
 @dataclass
@@ -870,6 +873,7 @@ def _copy_side_rows(
 
 
 _ENTRY_SIDE_TABLES = (
+    "session_attachment_refs",
     "entry_text",
     "assistant_entries",
     "assistant_reasoning",

@@ -191,7 +191,7 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
                 return original(run_key)
 
             monkeypatch.setattr(tracker, name, recording)
-        store = runtime.chat_sessions._store
+        store = runtime.chat_sessions._store.execution
         stored: list[Any] = []
         record_run_changes = store.record_run_changes
 

@@ -8,6 +8,7 @@ snapshots it; this module only declares what it contains.
 from __future__ import annotations
 
 from core.sessions._store_lineage import own_current, segment_admits
+from core.sessions.search_content import SESSION_RECALL_DEFAULT_ROLES
 
 DATABASE_NAME = "sessions"
 APPLICATION_ID = 0x56425353  # "VBSS"
@@ -28,7 +29,7 @@ FTS_DEGRADED_REASON_KEY = "fts_degraded_reason"
 FTS_STORAGE_VERSION_KEY = "fts_storage_version"
 FTS_STORAGE_VERSION = 1
 # Entry roles whose text the trigram index covers: conversation text only.
-FTS_TRIGRAM_ROLES = ("user", "assistant", "compaction_checkpoint")
+FTS_TRIGRAM_ROLES = SESSION_RECALL_DEFAULT_ROLES
 
 # Generation 1 follows the evolution rules of the persistence contract: no enum
 # CHECKs on extensible vocabularies (roles, kinds, statuses, causes), narrow hot
@@ -603,6 +604,44 @@ CREATE INDEX archive_entries_due
 CREATE INDEX archive_entries_unsettled
   ON archive_entries (state, entry_key)
   WHERE state <> 'archived' OR cleanup_pending = 1;
+
+-- Canonical blob reachability, including superseded and archived history.
+CREATE TABLE session_attachment_refs (
+  entry_key INTEGER NOT NULL REFERENCES entries (entry_key) ON DELETE CASCADE,
+  attachment_id TEXT NOT NULL,
+  PRIMARY KEY (entry_key, attachment_id)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX session_attachment_refs_by_id ON session_attachment_refs (attachment_id);
+CREATE TABLE session_attachment_ids (
+  attachment_id TEXT PRIMARY KEY
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE session_background_commands (
+  command_id TEXT PRIMARY KEY,
+  session_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,
+  origin_run_id TEXT NOT NULL,
+  checkpoint_json TEXT NOT NULL CHECK (json_valid(checkpoint_json)),
+  updated_at TEXT NOT NULL
+) STRICT;
+-- Session deletion and checkpoint ownership lookup.
+CREATE INDEX session_background_commands_by_session
+  ON session_background_commands (session_key);
+
+CREATE TABLE extension_tool_receipts (
+  receipt_id TEXT PRIMARY KEY,
+  owner_name TEXT NOT NULL,
+  call_key INTEGER NOT NULL REFERENCES tool_calls (call_key) ON DELETE CASCADE,
+  execution_owner_json TEXT NOT NULL CHECK (json_valid(execution_owner_json)),
+  UNIQUE (owner_name, call_key)
+) STRICT;
+
+-- Idempotency receipts for accessor context batches delivered from durable inboxes.
+CREATE TABLE session_external_note_receipts (
+  session_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,
+  delivery_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  PRIMARY KEY (session_key, delivery_id)
+) STRICT, WITHOUT ROWID;
 
 -- Which archived Session generation belongs to which entry (exactly one each).
 CREATE TABLE archive_entry_sessions (

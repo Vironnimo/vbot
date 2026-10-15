@@ -13,7 +13,12 @@ from core.database import (
     Migration,
     SnapshotFacts,
 )
-from core.sessions import _store_archive_backfill, _store_fts, _store_working_projects
+from core.sessions import (
+    _store_archive_backfill,
+    _store_attachments,
+    _store_fts,
+    _store_working_projects,
+)
 from core.sessions._store_health import SessionHealth
 from core.sessions.schema import APPLICATION_ID, DATABASE_NAME, FORMAT_GENERATION, SCHEMA_SQL
 
@@ -67,6 +72,12 @@ def session_database_spec(
                 "sessions.0004_restore_provenance",
                 breaks_older=True,
                 apply=_adopt_parent_generations,
+            ),
+            # Blob collection relies on every writer keeping canonical references.
+            Migration(
+                "sessions.0005_attachment_references",
+                breaks_older=True,
+                apply=_store_attachments.backfill,
             ),
         ),
         after_open=_store_fts._ensure_fts_schema,

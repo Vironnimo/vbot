@@ -394,7 +394,7 @@ class ChatSessionManager:
         self._store.record_seen_skills(address, update)
 
     def recover_interrupted_runs(self) -> None:
-        self._store.recover_interrupted_runs()
+        self._store.execution.recover_interrupted_runs()
 
     async def start_run(self, run: Run) -> None:
         """Admit *run* with its Run kind and execution owner in one transaction.
@@ -415,7 +415,7 @@ class ChatSessionManager:
             expected_generation_id=run.expected_session_generation_id,
             working_project_id=None if run.project_id is not None else run.working_project_id,
         )
-        await self._store.run_async(self._store.admit_run, address, admission)
+        await self._store.run_async(self._store.execution.admit_run, address, admission)
 
     async def finish_run(
         self, run: Run, status: str, payload: JsonObject, *, completion_reason: str | None
@@ -433,10 +433,10 @@ class ChatSessionManager:
             completion_reason=completion_reason,
             contributes_to_activity=run.contributes_to_agent_activity,
         )
-        return await self._store.run_async(self._store.finish_run, address, completion)
+        return await self._store.run_async(self._store.execution.finish_run, address, completion)
 
     def mark_terminal_run_read(self, address: SessionAddress, run_id: str) -> JsonObject:
-        activity, marked = self._store.mark_terminal_run_read(address, run_id)
+        activity, marked = self._store.execution.mark_terminal_run_read(address, run_id)
         result = dict(activity)
         result["marked_read"] = marked
         if marked:
@@ -522,6 +522,103 @@ class ChatSessionManager:
             project_id=project_id,
             agent_id=agent_id,
             exclude_owner_managed=exclude_owner_managed,
+        )
+
+    def referenced_attachment_ids(self) -> frozenset[str]:
+        """Blob references retained by every live, archived and superseded history entry."""
+        return self._store.referenced_attachment_ids()
+
+    def unreferenced_attachment_ids(self) -> tuple[str, ...]:
+        """Collectable blobs, excluding snapshots; quiescent lifecycle boundaries only."""
+        return self._store.unreferenced_attachment_ids()
+
+    def forget_collected_attachment_ids(self, ids: Sequence[str]) -> None:
+        """Acknowledge only blobs collection successfully removed."""
+        self._store.forget_collected_attachment_ids(ids)
+
+    def background_command_put(
+        self,
+        address: SessionAddress,
+        command_id: str,
+        origin_run_id: str,
+        checkpoint: JsonObject,
+    ) -> None:
+        """Persist an opaque command checkpoint bound to its original Session."""
+        self._store.execution.background_command_put(address, command_id, origin_run_id, checkpoint)
+
+    def background_command_read(self) -> builtins.list[JsonObject]:
+        """Read command checkpoints with their current live Session addresses."""
+        return self._store.execution.background_command_read()
+
+    def background_command_delete(self, command_id: str) -> None:
+        self._store.execution.background_command_delete(command_id)
+
+    def background_command_delivered(self, command_id: str, body: str) -> bool:
+        return self._store.execution.background_command_delivered(command_id, body)
+
+    async def capture_tool_receipt_async(
+        self,
+        address: SessionAddress,
+        *,
+        owner_name: str,
+        run_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        execution_owner: JsonObject | None,
+    ) -> str | None:
+        """Bind deferred Extension work to its original admitted invocation."""
+        return await self.run_async(
+            self._store.execution.capture_tool_receipt,
+            address,
+            owner_name=owner_name,
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            execution_owner=execution_owner,
+        )
+
+    async def resolve_tool_receipt_async(
+        self,
+        receipt_id: str,
+        *,
+        owner_name: str,
+    ) -> JsonObject | None:
+        return await self.run_async(
+            self._store.execution.resolve_tool_receipt,
+            receipt_id,
+            owner_name=owner_name,
+        )
+
+    async def deliver_tool_outcome_async(
+        self,
+        receipt_id: str,
+        content: str,
+        *,
+        owner_name: str,
+    ) -> bool:
+        """Persist a late Extension outcome once, without rerunning the invocation."""
+        return await self.run_async(
+            self._store.execution.deliver_tool_outcome,
+            receipt_id,
+            content,
+            owner_name=owner_name,
+        )
+
+    def generation_address(self, generation_id: str) -> SessionAddress | None:
+        """Find the live address of the same generation after a move or Agent rename."""
+        return self._store.generation_address(generation_id)
+
+    def append_notes_once(
+        self,
+        address: SessionAddress,
+        delivery_id: str,
+        notes: Sequence[str],
+        *,
+        generation_id: str,
+    ) -> None:
+        """Persist a complete external Note delivery once for its original generation."""
+        self._store.execution.append_notes_once(
+            address, delivery_id, notes, generation_id=generation_id
         )
 
     def list_live_scopes(self) -> builtins.list[tuple[str | None, str]]:
@@ -610,7 +707,7 @@ class ChatSessionManager:
         participant_id: str,
         config: JsonObject,
     ) -> TemporarySessionBinding:
-        generation_id = self._store.create_bound_temporary_session(
+        generation_id = self._store.execution.create_bound_temporary_session(
             address,
             owner_name=owner_name,
             group_id=group_id,
@@ -625,19 +722,21 @@ class ChatSessionManager:
         return binding
 
     def temporary_binding(self, address: SessionAddress) -> TemporarySessionBinding | None:
-        return self._store.temporary_binding(address)
+        return self._store.execution.temporary_binding(address)
 
     def temporary_binding_by_participant(
         self, *, owner_name: str, group_id: str, participant_id: str
     ) -> TemporarySessionBinding | None:
-        return self._store.temporary_binding_by_participant(
+        return self._store.execution.temporary_binding_by_participant(
             owner_name=owner_name, group_id=group_id, participant_id=participant_id
         )
 
     async def delete_temporary_group(self, *, owner_name: str, group_id: str) -> int:
         """Delete bound participant Sessions after their owner has drained execution."""
         deleted = await self._store.run_async(
-            lambda: self._store.delete_temporary_group(owner_name=owner_name, group_id=group_id)
+            lambda: self._store.execution.delete_temporary_group(
+                owner_name=owner_name, group_id=group_id
+            )
         )
         if deleted:
             _LOGGER.info(
@@ -659,7 +758,7 @@ class ChatSessionManager:
         and a later group delete still removes them.
         """
         archived, entry = await self._store.run_async(
-            lambda: self._store.archive_temporary_group(
+            lambda: self._store.execution.archive_temporary_group(
                 owner_name=owner_name, group_id=group_id, reason=reason
             )
         )
@@ -679,12 +778,14 @@ class ChatSessionManager:
     ) -> builtins.list[str]:
         """Page the ids of one owner's groups that still have live bound Sessions."""
         return await self._store.run_async(
-            lambda: self._store.temporary_groups(owner_name=owner_name, after=after, limit=limit)
+            lambda: self._store.execution.temporary_groups(
+                owner_name=owner_name, after=after, limit=limit
+            )
         )
 
     async def temporary_owners_async(self) -> builtins.list[str]:
         """Return the names of every owner that still has live bound Sessions."""
-        return await self._store.run_async(self._store.temporary_owners)
+        return await self._store.run_async(self._store.execution.temporary_owners)
 
     async def temporary_bindings_async(
         self,
@@ -695,14 +796,16 @@ class ChatSessionManager:
         limit: int = 100,
     ) -> builtins.list[TemporarySessionBinding]:
         return await self._store.run_async(
-            lambda: self._store.temporary_bindings(
+            lambda: self._store.execution.temporary_bindings(
                 owner_name=owner_name, group_id=group_id, after=after, limit=limit
             )
         )
 
     def set_temporary_group_title(self, *, owner_name: str, group_id: str, title: str) -> None:
         """Replace the display title of one owner's temporary execution group."""
-        self._store.set_temporary_group_title(owner_name=owner_name, group_id=group_id, title=title)
+        self._store.execution.set_temporary_group_title(
+            owner_name=owner_name, group_id=group_id, title=title
+        )
 
     async def set_temporary_group_title_async(
         self, *, owner_name: str, group_id: str, title: str
@@ -717,7 +820,9 @@ class ChatSessionManager:
         self, *, owner_name: str, group_ids: Sequence[str]
     ) -> dict[str, str]:
         """Return stored display titles for this owner's groups, keyed by group id."""
-        return self._store.temporary_group_titles(owner_name=owner_name, group_ids=group_ids)
+        return self._store.execution.temporary_group_titles(
+            owner_name=owner_name, group_ids=group_ids
+        )
 
     async def temporary_group_titles_async(
         self, *, owner_name: str, group_ids: Sequence[str]
@@ -740,7 +845,7 @@ class ChatSessionManager:
         configured Model from the protected binding, never its complete
         configuration. ``group_id`` narrows one owner's group.
         """
-        return self._store.owned_session_summaries(
+        return self._store.execution.owned_session_summaries(
             owner_name=owner_name, group_id=group_id, metadata_keys=metadata_keys
         )
 
@@ -801,7 +906,7 @@ class ChatSessionManager:
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
         """Append owned deliveries; see ``SessionStore.append_messages`` for the options."""
-        return self._store.append_messages_with_receipts(
+        return self._store.execution.append_messages_with_receipts(
             address,
             generation_id=generation_id,
             owner_name=owner_name,
@@ -822,7 +927,7 @@ class ChatSessionManager:
         receipt_id: str,
     ) -> DeliveryReceipt | None:
         return await self._store.run_async(
-            lambda: self._store.delivery_receipt(
+            lambda: self._store.execution.delivery_receipt(
                 address,
                 generation_id=generation_id,
                 owner_name=owner_name,
@@ -839,7 +944,7 @@ class ChatSessionManager:
         after: int = 0,
         limit: int = 100,
     ) -> builtins.list[OwnedRunRecord]:
-        return self._store.owned_runs(
+        return self._store.execution.owned_runs(
             owner_name=owner_name,
             group_id=group_id,
             participant_id=participant_id,
@@ -852,7 +957,7 @@ class ChatSessionManager:
     ) -> dict[str, OwnedRunRecord]:
         """Read exact Run ids' execution records in one owner group (absent ids omitted)."""
         return await self._store.run_async(
-            lambda: self._store.owned_runs_by_id(
+            lambda: self._store.execution.owned_runs_by_id(
                 owner_name=owner_name, group_id=group_id, run_ids=run_ids
             )
         )
@@ -861,7 +966,9 @@ class ChatSessionManager:
         self, address: SessionAddress, input_id: str
     ) -> OwnedRunRecord | None:
         """Read the execution record admitted for one input of a live Session."""
-        return await self._store.run_async(self._store.owned_run_by_input, address, input_id)
+        return await self._store.run_async(
+            self._store.execution.owned_run_by_input, address, input_id
+        )
 
     async def tool_result_persisted_async(self, address: SessionAddress, tool_call_id: str) -> bool:
         """Report in one indexed probe whether a live Session holds a Tool call's result."""
