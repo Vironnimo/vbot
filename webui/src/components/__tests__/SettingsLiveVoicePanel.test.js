@@ -149,11 +149,15 @@ describe('SettingsLiveVoicePanel', () => {
     ]);
   });
 
-  it('lists the recent calls and opens the voice Session of one', async () => {
+  it('opens the voice recording and the linked backend Session of a recent call', async () => {
     serve({
       sessions: [
         { id: 'call-2', title: 'Live call · 2026-10-07 09:30' },
-        { id: 'call-1', auto_title: 'Live call · 2026-10-06 18:00' },
+        {
+          id: 'call-1',
+          auto_title: 'Live call · 2026-10-06 18:00',
+          live_backend_session_id: 'backend-1',
+        },
       ],
     });
     const onOpenSession = vi.fn();
@@ -171,6 +175,11 @@ describe('SettingsLiveVoicePanel', () => {
     );
     row.querySelector('button').click();
     expect(onOpenSession).toHaveBeenCalledWith('live-voice', 'call-1');
+    row.querySelectorAll('button')[1].click();
+    expect(onOpenSession).toHaveBeenCalledWith('live-backend', 'backend-1');
+    expect(
+      document.body.querySelectorAll('[data-live-call="call-2"] button'),
+    ).toHaveLength(1);
   });
 });
 

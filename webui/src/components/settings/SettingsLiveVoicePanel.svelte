@@ -26,7 +26,7 @@
   // its options, among them who answers its requests), the Tools of the
   // built-in voice Agent, the Model and Tools of the built-in vBot backend
   // Agent (both saved with `agent.update`), and the recent calls, each
-  // opening the voice Session that recorded it.
+  // opening its voice recording and, when used, its backend Session.
 
   const noop = () => {};
   const CALL_LIMIT = 10;
@@ -247,8 +247,19 @@
               title: callTitle(call),
             })}
             onClick={() => onOpenSession(LIVE_VOICE_AGENT_ID, call.id)}
-            >{t('settings.liveVoice.openSession')}</Button
+            >{t('live.activity.voiceSession')}</Button
           >
+          {#if call.live_backend_session_id}
+            <Button
+              variant="secondary"
+              ariaLabel={`${t('live.activity.backendSession')}: ${callTitle(call)}`}
+              onClick={() =>
+                onOpenSession(
+                  LIVE_BACKEND_AGENT_ID,
+                  call.live_backend_session_id,
+                )}>{t('live.activity.backendSession')}</Button
+            >
+          {/if}
         </div>
       </div>
     {/each}
