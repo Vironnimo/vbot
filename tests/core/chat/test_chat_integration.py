@@ -10,15 +10,13 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 from core.agents import LIBRARIAN_AGENT_ID, SKILL_AGENT_ID_KEY
-from core.prompts import SkillPromptRegistry
 from core.runs import MODEL_STEP_USAGE_EVENT, RUN_CHANGE_STATS_EVENT
 from core.skills.authoring import SkillAuthoringService
-from core.skills.skills import SkillRegistry
 from core.tools import tool_success
 from core.tools.memory import MEMORY_TOOL_DESCRIPTION, MEMORY_TOOL_PARAMETERS
 from tests.core.chat.chat_integration_test_support import FakeAdapter, JsonObject, StartRuntime
@@ -293,8 +291,7 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
     with start_runtime() as runtime:
         _write_skill(runtime.storage.data_dir, "agent-cli", "Delegate coding tasks")
         _write_skill(runtime.storage.data_dir, "news", "Fetch news")
-        runtime._skills = SkillRegistry.load(runtime.storage.data_dir / "skills")
-        runtime.system_prompts._skill_registry = cast(SkillPromptRegistry, runtime.skills)
+        runtime.reload_skills()
         runtime.tools.register(
             "read_file", "Read a workspace file.", {"type": "object"}, _ok_tool_handler
         )
@@ -320,7 +317,7 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
         assert "No entries yet." in prompt
         assert "- read_file: Read a workspace file." in prompt
         assert "- shell:" not in prompt
-        assert "- agent-cli: Delegate coding tasks" in prompt
+        assert "- agent-cli:" not in prompt
         assert "news" not in prompt
         # skill and skill_manage are ordinary Tools that this Agent's selection filters out.
         assert tool_definitions == [
@@ -335,6 +332,18 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
                 "parameters": {"type": "object"},
             },
         ]
+
+        # Skill guidance and its catalog appear only with the callable skill Tool.
+        agent = runtime.agents.update(
+            "coder", tool_access={"mode": "selected", "allowed": ["read_file", "skill"]}
+        )
+        prompt = runtime.system_prompts.build_system_prompt(agent)
+        assert "- agent-cli: Delegate coding tasks" in prompt
+        assert "- news:" not in prompt
+        assert "skill" in {
+            definition["name"]
+            for definition in runtime.system_prompts.provider_tool_definitions(agent)
+        }
 
 
 def _write_skill(data_dir: Path, name: str, description: str) -> None:
