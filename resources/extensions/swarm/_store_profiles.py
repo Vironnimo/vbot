@@ -598,9 +598,9 @@ def _apply_delivery_settings(
                     participant["wake_announced_seq"]
                 ):
                     continue
-                connection.execute(
-                    "UPDATE participants SET wake_pending=1 WHERE id=?", (participant["id"],)
-                )
+                # The settings operation schedules the normal wake scan. Only
+                # that scan reserves a wake, with its epoch, batch watermark
+                # and pacing decision; a partial reservation blocks the scan.
                 wake_intents.append(
                     {
                         "participant_id": str(participant["id"]),

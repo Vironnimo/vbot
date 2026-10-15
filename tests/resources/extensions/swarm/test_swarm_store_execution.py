@@ -137,8 +137,10 @@ async def test_recovery_interrupts_open_swarms_without_admitting_work(tmp_path) 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resumed", [False, True])
 async def test_settings_enable_returns_wake_intent_and_events_are_bounded(
     store: SwarmStore,
+    resumed: bool,
 ) -> None:
     started = await _swarm(store)
     swarm = await store.get_swarm(started["swarm_id"])
@@ -148,6 +150,13 @@ async def test_settings_enable_returns_wake_intent_and_events_are_bounded(
     await store.apply_delivery_settings(
         started["swarm_id"], disabled, expected_revision=1, request_id="disable", actor="user"
     )
+    if resumed:
+        await store.begin_stop(started["swarm_id"], request_id="stop", actor="user")
+        await store.finish_stop(
+            started["swarm_id"], request_id="stopped", actor="user", drain_report={"drained": True}
+        )
+        await store.begin_resume(started["swarm_id"], request_id="resume", actor="user")
+    epoch = (await store.get_swarm(started["swarm_id"]))["epoch"]
     await store.post(started["swarm_id"], sender, text="pending", request_id="pending")
     enabled = {**disabled, "main": {"mode": "all", "wake_idle": True}}
     applied = await store.apply_delivery_settings(
@@ -166,6 +175,26 @@ async def test_settings_enable_returns_wake_intent_and_events_are_bounded(
     assert events.entries[0]["new"] == enabled
     assert events.entries[0]["settings_revision"] == 3
     assert events.has_more is True
+
+    # Management schedules this scan after settings; it owns the complete
+    # reservation, including the epoch and the delivered batch's watermark.
+    prepared = await store.prepare_wake(started["swarm_id"], recipient, expected_epoch=epoch)
+    assert prepared["wake"]
+    claimed = await store.claim_wake(started["swarm_id"], recipient, expected_epoch=epoch)
+    assert claimed["pending"]
+    await store.mark_wake_admitted(
+        started["swarm_id"],
+        recipient,
+        expected_epoch=epoch,
+        run_id="run-settings",
+        boundary=claimed["boundary"],
+    )
+    assert not (await store.list_wake_intents(started["swarm_id"])).entries
+    await store.set_participant_state(started["swarm_id"], recipient, "idle")
+    await store.post(started["swarm_id"], sender, text="later", request_id="later")
+    later = await store.prepare_wake(started["swarm_id"], recipient, expected_epoch=epoch)
+    assert later["wake"]
+    assert (await store.claim_wake(started["swarm_id"], recipient, expected_epoch=epoch))["pending"]
 
     second_profile = await store.save_profile(_profile(slug="other"), expected_revision=None)
     await store.create_swarm(

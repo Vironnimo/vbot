@@ -753,6 +753,12 @@ beyond that batch trigger another wake after the Run instead of waiting for an
 unrelated post. Evidence: `test_swarm_wake_policy.py`,
 `test_runs_without_tools_pace_wakes_until_addressed_or_quiet_ends`.
 
+Enabling a communication route returns eligible wake candidates and schedules
+the normal wake scan; it does not reserve a wake itself. The scan applies pacing
+and stamps the current epoch and batch watermark together with `wake_pending`,
+so a wake enabled after Stop and Resume can be claimed and later posts can wake
+the participant again (`test_swarm_store_execution.py`).
+
 Run callbacks recompute the open Swarm's aggregate state: any running peer keeps
 it running, unsuccessful inactive peers require attention, and all-idle peers
 yield idle. Repeated start/wake acknowledgments cannot overwrite the same Run's
