@@ -12,6 +12,7 @@ from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.database import write_bootstrap_marker
 from core.sessions.sessions import ChatSessionManager
+from core.tools.model_names import model_tool_name
 from scripts.tool_lab import definitions, replay
 from scripts.tool_lab.__main__ import main
 from scripts.tool_lab.sessions import Filters
@@ -275,3 +276,14 @@ def test_definitions_summary_counts_on_demand_tools_apart_from_the_tool_list() -
         "~web_search",
         "*status",
     ]
+
+
+def test_definitions_show_the_model_facing_shell_name(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["definitions", "--show", "bash"]) == 0
+
+    output = capsys.readouterr().out
+    assert f"== Tool {model_tool_name('bash')} " in output
+    definition = json.loads(output.split("-- as sent\n", 1)[1])
+    assert definition["name"] == model_tool_name("bash")
