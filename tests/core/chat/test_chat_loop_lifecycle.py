@@ -482,7 +482,21 @@ async def test_run_failures_remain_visible_in_history_once(
     with pytest.raises(type(failure)) as raised:
         await run.wait()
 
-    assert raised.value is failure
+    assert type(raised.value) is type(failure)
+    assert (raised.value.args, str(raised.value)) == (failure.args, str(failure))
+    if isinstance(failure, ProviderError):
+        assert isinstance(raised.value, ProviderError)
+        assert raised.value.retryable is failure.retryable
+    if failure.__cause__ is None:
+        assert raised.value.__cause__ is None
+    else:
+        assert type(raised.value.__cause__) is type(failure.__cause__)
+        assert str(raised.value.__cause__) == str(failure.__cause__)
+    with pytest.raises(type(failure)) as repeated:
+        await run.wait()
+    assert repeated.value is not raised.value
+    assert repeated.value.args == failure.args
+    assert run.error is not None and run.error.__traceback__ is None
     errors = [message for message in history(runtime) if message.role == "error"]
     assert len(errors) == 1
     assert errors[0].error_kind == error_kind
