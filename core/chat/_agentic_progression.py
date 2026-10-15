@@ -296,6 +296,66 @@ class AgenticProgression:
             async with AsyncExitStack() as tool_rounds:
                 return await self._advance_until_final(context, target, tool_rounds)
 
+    async def _prepare_model_request(
+        self,
+        context: _RunExecutionContext,
+        target: _ModelTarget,
+        state: RequestState,
+    ) -> tuple[list[JsonObject], RequestContextEstimate]:
+        """Apply request hooks and count the selected wire's image-limited request."""
+        run = context.run
+        session = context.session
+        messages = state.messages
+        tools = state.tools
+        extension_registry = self._dependencies.get_extension_registry()
+        # The request shares the live message dicts read-only: context hooks
+        # receive their own copies, image limiting copies on write, and
+        # Provider adapters never mutate the messages they are sent. Image
+        # limiting always returns a new list, so later in-place updates of
+        # the live list leave this request view unchanged.
+        messages_for_request = messages
+        if extension_registry is not None:
+            session.begin_defer_notes()
+            extension_ctx = HookContext(
+                session_id=run.session_id,
+                agent_id=run.agent_id,
+                run_id=run.id,
+                add_note=session.add_note,
+            )
+            try:
+                messages_for_request = await extension_registry.dispatch_context(
+                    extension_ctx,
+                    messages=messages,
+                )
+            finally:
+                async with self._dependencies.sessions.write_lock(session.address):
+                    await context.session_snapshot.flush_deferred_notes(session)
+            # Hook notes were persisted before this Model step. Send them
+            # here too, so replay cannot move them ahead of its reply later.
+            hook_notes = session.drain_pending_notes()
+            for request_view in (
+                [messages] if messages_for_request is messages else [messages, messages_for_request]
+            ):
+                extend_request_with_notes(
+                    request_view,
+                    hook_notes,
+                    context.session_snapshot.active_messages,
+                    replay_policy=target.replay_policy,
+                    agent_model=target.model_reference,
+                )
+
+        messages_for_request, request_estimate = await _CHAT_TRANSFORM_WORKERS.run(
+            _prepare_request_context,
+            messages_for_request,
+            budget=context.image_budget,
+            image_limit=target.max_request_images,
+            accounting=context.context_usage,
+            target=target,
+            tools=tools,
+            scope=context.prompt_cache_affinity_id,
+        )
+        return messages_for_request, request_estimate
+
     async def _advance_until_final(
         self,
         context: _RunExecutionContext,
@@ -486,55 +546,35 @@ class AgenticProgression:
                 replay_policy=target.replay_policy,
                 agent_model=target.model_reference,
             )
-            extension_registry = self._dependencies.get_extension_registry()
-            # The request shares the live message dicts read-only: context hooks
-            # receive their own copies, image limiting copies on write, and
-            # Provider adapters never mutate the messages they are sent. Image
-            # limiting always returns a new list, so later in-place updates of
-            # the live list leave this request view unchanged.
-            messages_for_request = messages
-            if extension_registry is not None:
-                session.begin_defer_notes()
-                extension_ctx = HookContext(
-                    session_id=run.session_id,
-                    agent_id=run.agent_id,
-                    run_id=run.id,
-                    add_note=session.add_note,
-                )
-                try:
-                    messages_for_request = await extension_registry.dispatch_context(
-                        extension_ctx,
-                        messages=messages,
-                    )
-                finally:
-                    async with self._dependencies.sessions.write_lock(session_address):
-                        await context.session_snapshot.flush_deferred_notes(session)
-                # Hook notes were persisted before this Model step. Send them
-                # here too, so replay cannot move them ahead of its reply later.
-                hook_notes = session.drain_pending_notes()
-                for request_view in (
-                    [messages]
-                    if messages_for_request is messages
-                    else [messages, messages_for_request]
-                ):
-                    extend_request_with_notes(
-                        request_view,
-                        hook_notes,
-                        context.session_snapshot.active_messages,
-                        replay_policy=target.replay_policy,
-                        agent_model=target.model_reference,
-                    )
-
-            messages_for_request, request_estimate = await _CHAT_TRANSFORM_WORKERS.run(
-                _prepare_request_context,
-                messages_for_request,
-                budget=context.image_budget,
-                image_limit=target.max_request_images,
-                accounting=context.context_usage,
-                target=target,
-                tools=tools,
-                scope=context.prompt_cache_affinity_id,
+            messages_for_request, request_estimate = await self._prepare_model_request(
+                context, target, state
             )
+            if self._compaction_service is not None:
+                # This request is needed: steering has been delivered (or its
+                # withdrawal ended the Run), complete Tool Results and pending
+                # notes are present, and hooks/media have shaped the exact input.
+                run.raise_if_cancelled()
+                compacted_state = await self._compaction_runs.maybe_auto_compact_state(
+                    context,
+                    target,
+                    usage=None,
+                    continuation_request_messages=messages_for_request,
+                    request_estimate=request_estimate,
+                    allow_continuation=True,
+                )
+                context.request_state = compacted_state
+                if compacted_state is not state:
+                    state = compacted_state
+                    messages = state.messages
+                    tools = state.tools
+                    evaluated_tool_key = None
+                    # A checkpoint or stale-result rebuild changed the request.
+                    # Render its hooks/media afresh, without a second Compaction
+                    # attempt or a second delivery of this step's input.
+                    build_started = time.perf_counter()
+                    messages_for_request, request_estimate = await self._prepare_model_request(
+                        context, target, state
+                    )
 
             # The next ordinal is derived from the canonical completed count.
             # Failed requests therefore do not consume an Iteration number.
@@ -1195,7 +1235,7 @@ class AgenticProgression:
             # another Tool cycle. Canonical artifacts remain available to reopen.
             (
                 limited_messages,
-                continuation_request_messages,
+                _,
                 tool_context_estimate,
             ) = await _CHAT_TRANSFORM_WORKERS.run(
                 _prepare_tool_context,
@@ -1233,21 +1273,7 @@ class AgenticProgression:
             if finalization_request_reason is not None:
                 context.tool_progress.finalization_reason = finalization_request_reason
 
-            if self._compaction_service is not None:
-                compacted_state = await self._compaction_runs.maybe_auto_compact_state(
-                    context,
-                    target,
-                    usage=assistant_message.usage,
-                    continuation_request_messages=continuation_request_messages,
-                    request_estimate=tool_context_estimate,
-                    allow_continuation=True,
-                )
-                context.request_state = compacted_state
-                state = compacted_state
-                messages = compacted_state.messages
-                tools = compacted_state.tools
-
-        if self._compaction_service is not None:
+        if self._compaction_service is not None and run.compaction_state == "pending":
             try:
                 await self._compaction_runs.maybe_auto_compact_state(
                     context,
@@ -1265,7 +1291,7 @@ class AgenticProgression:
             except asyncio.CancelledError:
                 if not run.cancel_requested:
                     raise
-                # Stop ends only this optional post-answer Compaction. The final
+                # Stop ends only this user-requested post-answer Compaction. The final
                 # answer is already durable and remains the Run result; the Run
                 # manager sees ``cancel_requested`` and marks the Run cancelled.
         return assistant_message

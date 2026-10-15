@@ -87,7 +87,6 @@ if TYPE_CHECKING:
         _RunRequest,
     )
     from core.compaction import CompactionService
-    from core.compaction.run_coordination import CompactionRunCoordinator
 
 _LOGGER = get_logger("chat")
 
@@ -100,7 +99,6 @@ class RunExecution:
         dependencies: ChatLoopDependencies,
         requests: RequestBuilder,
         progression: AgenticProgression,
-        compaction_runs: CompactionRunCoordinator,
         compaction_service: CompactionService | None,
         reflection_service: ReflectionNotifier | None,
         session_title_service: SessionTitleNotifier | None,
@@ -109,7 +107,6 @@ class RunExecution:
         self._scratch_failures = LoggedConditions()
         self._requests = requests
         self._progression = progression
-        self._compaction_runs = compaction_runs
         self._compaction_service = compaction_service
         self._reflection_service = reflection_service
         self._session_title_service = session_title_service
@@ -441,18 +438,6 @@ class RunExecution:
                 await _persist_run_error(run, session, exc)
                 raise
 
-            if self._compaction_service is not None:
-                built_state = context.request_state
-                context.request_state = await self._compaction_runs.maybe_auto_compact_state(
-                    context,
-                    target,
-                    usage=None,
-                    allow_continuation=True,
-                )
-                if context.request_state is not built_state:
-                    # A Compaction ran and is measured on its own; the first
-                    # step's request build then starts in the progression.
-                    request_build_started = None
             context.request_build_started = request_build_started
 
             try:
@@ -749,13 +734,6 @@ class RunExecution:
                 # Provider-specific reasoning, which must never cross the Provider
                 # boundary.
                 _strip_assistant_reasoning_fields(context.request_state.messages)
-                if self._compaction_service is not None:
-                    context.request_state = await self._compaction_runs.maybe_auto_compact_state(
-                        context,
-                        candidate_target,
-                        usage=None,
-                        allow_continuation=True,
-                    )
                 try:
                     completed = await self._progression._send_until_final(context, candidate_target)
                     return completed, last_failure

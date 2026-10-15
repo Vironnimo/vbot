@@ -163,11 +163,11 @@ async def test_failed_auto_compaction_retries_at_the_next_boundary(tmp_path: Pat
     finally:
         await runtime.chat_runs.aclose()
 
-    # Pre-request check, post-Tool-batch check and final-response check each
-    # retried; a failed attempt never suppresses a later eligible boundary.
+    # Both needed Model requests get one attempt; a failed Compaction neither
+    # loops at the same boundary nor suppresses the next request's attempt.
     assert result.content == "Done"
     assert compactions_at_tool_boundary == [1]
-    assert len(service.compact_calls) == 3
+    assert len(service.compact_calls) == 2
     assert "compaction_checkpoint" not in persisted_roles(session.load())
 
 
@@ -285,48 +285,6 @@ def _live_context_notes(messages: list[ChatMessage]) -> list[str]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("concurrent", "carried"), _CONCURRENT_ENTRIES)
-async def test_final_answer_compaction_meets_a_concurrent_entry(
-    tmp_path: Path, concurrent: ChatMessage, carried: bool
-) -> None:
-    runtime = compaction_runtime(
-        tmp_path,
-        agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[]),
-        adapter=StubAdapter(
-            [
-                {
-                    "content": "Finished",
-                    "tool_calls": None,
-                    "usage": {"input_tokens": 90, "output_tokens": 5},
-                }
-            ]
-        ),
-    )
-    runtime.chat_sessions.create("coder", session_id="session-one")
-    service = CompactOnceService(block=True)
-    address = session_address("coder", "session-one")
-
-    run = await build_chat_loop(runtime, compaction_service=cast(Any, service)).start_run(
-        "coder", "Finish", session_id="session-one"
-    )
-    await append_while_compacting(runtime, service, address, concurrent)
-    result = await asyncio.wait_for(run.wait(), WAIT_SECONDS)
-
-    messages = runtime.chat_sessions.get(address).load()
-    events = await runtime.timelines.events(run)
-    assert result.content == "Finished"
-    if carried:
-        assert persisted_roles(messages) == ["user", "assistant", "note", "compaction_checkpoint"]
-        assert _outcomes(events) == [COMPACTION_STARTED_EVENT, COMPACTION_COMPLETED_EVENT]
-        assert _live_context_notes(messages)[-1] == "Background completed"
-    else:
-        assert persisted_roles(messages) == ["user", "assistant", "user"]
-        assert _outcomes(events) == [COMPACTION_STARTED_EVENT, COMPACTION_ABORTED_EVENT]
-        aborted = next(event for event in events if event.type == COMPACTION_ABORTED_EVENT)
-        assert aborted.payload == {"reason": "stale_context"}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("concurrent", "carried"), _CONCURRENT_ENTRIES)
 async def test_mid_tool_compaction_meets_a_concurrent_entry_and_rebuilds_the_request(
     tmp_path: Path, concurrent: ChatMessage, carried: bool
 ) -> None:
@@ -440,8 +398,10 @@ async def test_automatic_compaction_absorbs_notes_landing_during_projection_up_t
 
 
 @pytest.mark.asyncio
-async def test_stop_during_post_answer_compaction_keeps_the_answer_resolved(
+@pytest.mark.parametrize("cancel", [False, True], ids=["completed", "cancelled"])
+async def test_requested_post_answer_compaction_keeps_the_answer_resolved(
     tmp_path: Path,
+    cancel: bool,
 ) -> None:
     service = CompactOnceService(block=True)
     runtime = compaction_runtime(
@@ -452,19 +412,34 @@ async def test_stop_during_post_answer_compaction_keeps_the_answer_resolved(
         ),
     )
     runtime.chat_sessions.create("coder", session_id="one")
+    send = runtime.adapter.send
+
+    async def request_compaction(*args: Any, **kwargs: Any) -> Any:
+        active = runtime.chat_run_manager.active_run(
+            agent_id="coder", session_id="one", project_id=None
+        )
+        assert active is not None and active.request_compaction()
+        return await send(*args, **kwargs)
+
+    runtime.adapter.send = request_compaction
     run = await build_chat_loop(runtime, compaction_service=cast(Any, service)).start_run(
         "coder", "Finish", session_id="one"
     )
     await asyncio.wait_for(service.started.wait(), WAIT_SECONDS)
 
-    await runtime.chat_run_manager.cancel(run.id, reason="user")
-
-    with pytest.raises(RunCancelledError):
-        await run.wait()
-    assert run.status == RunStatus.CANCELLED
+    if cancel:
+        await runtime.chat_run_manager.cancel(run.id, reason="user")
+        with pytest.raises(RunCancelledError):
+            await run.wait()
+        assert run.status == RunStatus.CANCELLED
+    else:
+        service.release.set()
+        assert (await run.wait()).content == "Complete answer"
+        assert run.status == RunStatus.COMPLETED
     session = runtime.chat_sessions.get(session_address("coder", "one"))
     assistant = next(message for message in session.load() if message.role == "assistant")
     assert (assistant.content, assistant.interrupted) == ("Complete answer", False)
+    assert any(message.role == "compaction_checkpoint" for message in session.load()) is not cancel
     # The Run stopped after its final answer, so the next request tells nothing about it.
     request = _embed_notes_into_request(session.load())
     assert "previous turn" not in json.dumps(request)

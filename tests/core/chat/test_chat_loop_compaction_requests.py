@@ -11,8 +11,8 @@ import pytest
 from core.chat import ChatMessage
 from core.chat._request_history import _restore_in_run_tool_result_content
 from core.compaction import TOOL_RESULT_COMPACTED_FIELD, CompactionService
+from core.extensions import ExtensionRegistry
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.runs import Run
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_compaction_test_support import (
     CompactOnceService,
@@ -20,12 +20,12 @@ from tests.core.chat.chat_loop_compaction_test_support import (
     RecordingCompactionAdapter,
     compaction_runtime,
     real_compaction_runtime,
-    run_context,
     word_count_tools,
 )
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
+    StubCompactionService,
     StubModels,
     build_chat_loop,
     build_request_messages,
@@ -37,6 +37,45 @@ class _ContextAdapter(RecordingCompactionAdapter):
     @override
     def request_context_kwargs(self, **context: Any) -> JsonObject:
         return {"_test_context": {**context, "adapter": id(self)}}
+
+
+@pytest.mark.asyncio
+async def test_compaction_counts_hook_context_and_renders_the_changed_request(
+    tmp_path: Path,
+) -> None:
+    runtime = compaction_runtime(
+        tmp_path, adapter=StubAdapter([{"content": "Done"}]), context_window=1_000_000
+    )
+    runtime.extensions = ExtensionRegistry()
+    hook_inputs: list[str] = []
+
+    def hook(context: Any, *, messages: list[JsonObject]) -> list[JsonObject]:
+        hook_inputs.append(json.dumps(messages))
+        context.add_note(f"HOOK_NOTE_{len(hook_inputs)}")
+        return [*messages, {"role": "user", "content": f"HOOK_INPUT_{len(hook_inputs)}"}]
+
+    runtime.extensions.install_handler("probe", "context", hook)
+    session = runtime.chat_sessions.create("coder", session_id="one")
+    service = StubCompactionService(
+        should_auto=True,
+        checkpoint=ChatMessage.compaction_checkpoint(
+            summary="COMPACTED_CONTEXT", projection=[], compacted_token_count=8_000
+        ),
+    )
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+
+    await loop.send("coder", "Go", session_id=session.id)
+
+    [compaction] = service.compact_calls
+    assert "HOOK_INPUT_1" in json.dumps(compaction["request_messages"])
+    assert "HOOK_NOTE_1" in json.dumps(compaction["request_messages"])
+    assert len(service.should_auto_calls) == 1
+    assert len(hook_inputs) == 2
+    assert "COMPACTED_CONTEXT" in hook_inputs[1]
+    [request] = runtime.adapter.requests
+    assert "HOOK_INPUT_2" in json.dumps(request["messages"])
+    assert "HOOK_INPUT_1" not in json.dumps(request["messages"])
+    assert "HOOK_NOTE_2" in json.dumps(request["messages"])
 
 
 @pytest.mark.asyncio
@@ -219,7 +258,9 @@ async def test_rebuilt_request_restores_each_turns_media_when_tool_call_ids_repe
 
 
 @pytest.mark.asyncio
-async def test_final_answer_checkpoint_keeps_the_tool_list_of_the_next_run(tmp_path: Path) -> None:
+async def test_next_run_compaction_counts_its_request_and_keeps_the_tool_list(
+    tmp_path: Path,
+) -> None:
     adapter = StubAdapter(
         [
             {
@@ -238,19 +279,20 @@ async def test_final_answer_checkpoint_keeps_the_tool_list_of_the_next_run(tmp_p
     await loop.send("coder", "First", session_id="session-one")
 
     session = runtime.chat_sessions.get(session_address("coder", "session-one"))
+    assert not any(message.role == "compaction_checkpoint" for message in session.load())
+    await loop.send("coder", "Second", session_id="session-one")
     checkpoint = next(
         message for message in session.load() if message.role == "compaction_checkpoint"
     )
-    probe = Run(run_id="probe", agent_id="coder", session_id="session-one")
-    next_request = (await run_context(loop, probe, session)).request_state
+    next_request = adapter.requests[1]
     # The stored after-count covers the next request on the Run's route, including
     # the Tail's replayed reasoning and its Tool definitions.
-    tokens_after, _ = estimate_request_input_tokens(next_request.messages, next_request.tools)
-    messages_only_tokens, _ = estimate_request_input_tokens(next_request.messages)
+    tokens_after, _ = estimate_request_input_tokens(
+        next_request["messages"], next_request["kwargs"]["tools"]
+    )
+    messages_only_tokens, _ = estimate_request_input_tokens(next_request["messages"])
     assert checkpoint.usage is not None
     assert checkpoint.usage["context_tokens_after"] == tokens_after > messages_only_tokens
-
-    await loop.send("coder", "Second", session_id="session-one")
 
     # Compaction leaves the Tool list, and with it the Provider prompt cache prefix, unchanged.
     tool_names = [
