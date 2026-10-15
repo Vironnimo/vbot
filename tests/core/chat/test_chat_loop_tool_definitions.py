@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -499,7 +500,12 @@ def _analyze_image_runtime(
     ],
 )
 async def test_analyze_image_is_offered_only_when_the_route_cannot_view_images_itself(
-    tmp_path: Path, image_input: bool, wire_images: bool, task_available: bool, visible: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    image_input: bool,
+    wire_images: bool,
+    task_available: bool,
+    visible: bool,
 ) -> None:
     runtime = _analyze_image_runtime(
         tmp_path,
@@ -508,6 +514,14 @@ async def test_analyze_image_is_offered_only_when_the_route_cannot_view_images_i
         wire_images=wire_images,
         task_available=task_available,
     )
+    get_adapter = runtime.get_adapter
+    loop_thread = threading.get_ident()
+
+    def prepare_adapter(connection: Any) -> Any:
+        assert threading.get_ident() != loop_thread
+        return get_adapter(connection)
+
+    monkeypatch.setattr(runtime, "get_adapter", prepare_adapter)
     loop = build_chat_loop(runtime)
 
     preview = await loop.preview_tool_definitions(runtime.agents.get("coder"))

@@ -24,11 +24,6 @@ from core.chat.messages import (
     MessageSender,
     ReplySurface,
 )
-from core.chat.model_resolution import (
-    _ensure_provider_exists,
-    _resolve_agent_connection,
-    _split_agent_model,
-)
 from core.chat.recovery import RecoveryBudget
 from core.chat.usage import RequestContextUsage
 from core.chat.wire_shaping import RequestImageBudget
@@ -736,12 +731,7 @@ async def create_run_execution_context(
     temporary_source = temporary_binding or request.temporary_parent_binding
     project_cwd: Path | None
     agent = await resolve_run_agent(dependencies, run, request)
-    provider_id, connection_id = _resolve_agent_connection(dependencies, agent)
-    _ensure_provider_exists(dependencies.providers, provider_id)
-    _model_provider_id, model_id = _split_agent_model(agent.model)
-    target = requests._create_model_target(
-        provider_id, connection_id, model_id, public_model=agent.model
-    )
+    target = await requests.targets.for_agent(agent)
     try:
         run.add_cancel_callback(lambda: _close_adapter(target.adapter))
         commands = dependencies.get_command_manager()

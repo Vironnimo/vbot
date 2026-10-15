@@ -2,6 +2,13 @@
 
 Policy-driven Context transformation and checkpoint creation for chat Sessions.
 
+Manual Compaction resolves Project paths, Settings, Model routes and Adapters on the
+Chat preparation worker. Automatic Compaction uses the same worker boundary for
+its Context window and summary Adapter. The coordinator retains every acquired
+Adapter before a worker returns, so cancellation waits for preparation and closes
+new Adapters even when the awaited result is discarded; the active Run's Adapter
+remains owned by that Run.
+
 ## Overview
 
 `core/compaction/` owns the provider-neutral Engine: evaluates Triggers, asks one Strategy for a Plan, performs zero or one Model call, validates the resulting Projection, returns one self-contained `compaction_checkpoint` - never rewriting or deleting prior canonical Session records. The Model call always consumes the adapter's canonical stream through Chat's shared accumulator, without passing normalized content back through a raw Provider response parser: some providers (observed on OpenRouter's stealth tier) reject large non-streaming completions outright while streaming the same payload fine. Summary+Tail keeps the already-built request byte-for-byte through the chosen Tail boundary when the Summary target is the active target, removes the native Tail from the Compaction request, and appends one canonical System Reminder containing only the Compaction instruction. `run_coordination.py` owns Compaction Policy decisions, checkpoint persistence, and manual/automatic Run lifecycle. Chat owns request materialization and recovery through `core/chat/compaction_host.py::ChatCompactionHost`, the implementation of `CompactionRunHost`; the coordinator never imports private Chat symbols or reconstructs Chat request state. Pinned prompt-epoch assembly lives in `core/prompts/pinned_context.py` behind that host; Policy configuration belongs to Settings/Agent/Project/Session layers.

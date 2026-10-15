@@ -588,7 +588,7 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
         delivered = base64.b64decode(native[0]["base64"])
         if byte_limit is not None:
             assert len(delivered) <= byte_limit
-            assert any("byte limit" in part.get("text", "") for part in parts)
+            assert any("destination limits" in part.get("text", "") for part in parts)
         elif wire_type == "image/png":
             assert delivered == pixels
         with Image.open(io.BytesIO(delivered)) as image:

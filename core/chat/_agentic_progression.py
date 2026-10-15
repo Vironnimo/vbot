@@ -289,7 +289,9 @@ class AgenticProgression:
             tool_messages, media_outputs = await tool_round.settle_cancelled()
             if not tool_messages:
                 return
-            tool_messages, _ = await self._requests.store_tool_media(tool_messages, media_outputs)
+            tool_messages, _ = await self._requests.media.store_tool_media(
+                tool_messages, media_outputs
+            )
             await self._persist_tool_results(
                 context, tool_dispatch_context, assistant_message_id, tool_messages
             )
@@ -355,7 +357,7 @@ class AgenticProgression:
                 # Keep speech-to-text cancellable and outside the Session lock.
                 # Pass its result directly: failed attempts have no cached text
                 # and must not retry inside the protected persistence boundary.
-                content = await self._requests.transcribe_user_audio(executor.request.content)
+                content = await self._requests.media.transcribe_user_audio(executor.request.content)
                 async with self._dependencies.sessions.write_lock(session_address):
                     await _finish_visible_boundary(
                         persist_steering_input(context, item, self._dependencies, content),
@@ -1042,7 +1044,9 @@ class AgenticProgression:
                     # From here until their Results are persisted and
                     # acknowledged, a Run cancel must not drop work already done.
                     tool_messages, media_outputs = await _finish_visible_boundary(
-                        self._requests.store_tool_media(tool_messages, media_outputs), run, True
+                        self._requests.media.store_tool_media(tool_messages, media_outputs),
+                        run,
+                        True,
                     )
                     tool_request_messages: list[JsonObject] = []
                     for tool_message in tool_messages:
@@ -1094,7 +1098,7 @@ class AgenticProgression:
                         raise assistant_step.failure
                     if terminal_error is not None:
                         raise terminal_error
-                    await self._requests._attach_tool_result_content(
+                    await self._requests.media.attach_tool_result_content(
                         tool_request_messages,
                         media_outputs,
                         target.input_modalities,

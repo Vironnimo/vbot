@@ -80,7 +80,7 @@ async def test_compact_session_refuses_while_run_is_active(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_compact_session_commits_the_checkpoint_and_closes_the_adapter(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     adapter = ClosingStubAdapter([])
     runtime = compaction_runtime(tmp_path, adapter=adapter)
@@ -88,6 +88,14 @@ async def test_compact_session_commits_the_checkpoint_and_closes_the_adapter(
     service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
     caplog.set_level(logging.INFO, logger="vbot.compaction.coordination")
 
+    loop_thread = threading.get_ident()
+    get_adapter = runtime.get_adapter
+
+    def worker_adapter(*args: Any, **kwargs: Any) -> Any:
+        assert threading.get_ident() != loop_thread
+        return get_adapter(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "get_adapter", worker_adapter)
     reply = await build_chat_loop(runtime, compaction_service=cast(Any, service)).compact_session(
         "coder", "session-one", "keep the API design"
     )
