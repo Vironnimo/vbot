@@ -95,7 +95,7 @@ def _assert_agent_is(store: AgentStore, created: Agent, agent_id: str, other_id:
     assert sessions.metadata_value(_CURATING, SKILL_AGENT_ID_KEY) == agent_id
     assert [listed.id for listed in store.list()] == [agent_id, "manager"]
     assert sorted(path.name for path in (store.data_dir / "agents").iterdir()) == sorted(
-        [agent_id, "manager", "order.json"]
+        [agent_id, "manager", "order.json", "retirements.json"]
     )
 
 
@@ -198,6 +198,7 @@ def test_rename_supports_case_only_id_change(store: AgentStore) -> None:
     assert sorted(path.name for path in (store.data_dir / "agents").iterdir()) == [
         "Coder",
         "order.json",
+        "retirements.json",
     ]
 
 

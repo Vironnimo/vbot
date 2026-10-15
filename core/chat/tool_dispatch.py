@@ -847,6 +847,7 @@ class ToolRound:
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
             skill_env_keys=_active_skill_env_keys(session, context.skill_registry),
             tool_settings=agent_tool_settings(getattr(agent, "tools", {})),
+            delegation_bindings=dict(getattr(agent, "delegation_bindings", {})),
             emit_hook=lambda event_type, payload: _emit_tool_context_event(
                 run,
                 event_type,

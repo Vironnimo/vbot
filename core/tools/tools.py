@@ -1130,6 +1130,7 @@ class ToolExecutor:
                 allowed_skills=config.allowed_skills,
                 skill_env_keys=config.skill_env_keys,
                 tool_settings=config.tool_settings,
+                delegation_bindings=config.delegation_bindings,
                 session_tool_grants=config.session_tool_grants,
                 input_contract=config.input_contracts.get(tool_call.name),
                 # On-demand Tools have contracts before the Model was shown them.

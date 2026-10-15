@@ -92,6 +92,10 @@ class StubAgentStore:
     def list(self) -> list[PromptAgent]:
         return list(self._agents.values())
 
+    def delegation_target_allowed(self, target_id: str, binding: str | int) -> bool:
+        agent = self._agents.get(target_id)
+        return agent is not None and getattr(agent, "created_at", None) == binding
+
 
 class StubTools:
     """Tool registry stub recording the allow-lists and profiles it was asked for."""

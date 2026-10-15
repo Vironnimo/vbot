@@ -100,16 +100,20 @@ def test_missing_workspace_template_does_not_block_agent_creation(
     assert str(missing_templates / "SOUL.md") in caplog.text
 
 
-def test_create_rolls_back_the_session_when_workspace_setup_fails(
-    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("stage", ["workspace", "delegation"])
+def test_create_rolls_back_when_setup_fails(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch, stage: str
 ) -> None:
-    def fail(_workspace: Path) -> None:
+    def fail(*_args: Any, **_kwargs: Any) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(store, "_seed_workspace", fail)
+    if stage == "workspace":
+        monkeypatch.setattr(store, "_seed_workspace", fail)
+    else:
+        monkeypatch.setattr("core.agents._delegation.write_json_document", fail)
 
     with pytest.raises(OSError, match="disk full"):
-        store.create("coder")
+        store.create("coder", tools={"subagent": {"allowed_agents": ["future"]}})
 
     assert store._session_manager().list("coder") == []
     assert not (store.data_dir / "agents" / "coder").exists()

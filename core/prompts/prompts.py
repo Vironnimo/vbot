@@ -194,7 +194,7 @@ class SystemPromptManager:
         agent_store: PromptAgentStore | None = None,
     ) -> None:
         self._storage = storage
-        self._tool_policy = PromptToolPolicy(tool_registry)
+        self._tool_policy = PromptToolPolicy(tool_registry, agent_store)
         self._skill_registry = skill_registry
         self._channel_registry = channel_registry
         self._memory_provider = memory_provider or MemoryService()

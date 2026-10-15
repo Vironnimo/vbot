@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
@@ -602,7 +603,9 @@ class SubAgentCoordinator:
         if arguments.get("background") is False:
             notes.append(SUBAGENT_BACKGROUND_IGNORED_NOTE)
         agent_address = optional_text(arguments, "agent_id")
-        if agent_address is not None and is_generic_target(runtime, context, agent_address):
+        if agent_address is not None and await sessions.run_async(
+            is_generic_target, runtime, context, agent_address
+        ):
             notes.append(SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE.format(name=quoted(agent_address)))
             agent_address = None
         target_agent_id, target_project_id = _resolve_target_address(
@@ -611,10 +614,11 @@ class SubAgentCoordinator:
         target_address = agent_address or format_agent_address(target_agent_id, target_project_id)
         overrides = _parse_session_overrides(arguments)
         if not _target_is_allowed(context, target_agent_id, target_project_id):
+            choices = await sessions.run_async(target_choices, runtime, context)
             return tool_failure(
                 "agent_not_allowed",
                 SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE.format(
-                    target=target_address, choices=target_choices(runtime, context)
+                    target=target_address, choices=choices
                 ),
             )
         temporary_parent = await self._temporary_parent(context, target_agent_id, target_project_id)
@@ -631,9 +635,10 @@ class SubAgentCoordinator:
             error = failure["error"]
             if error["code"] in {"agent_not_found", "project_not_found"}:
                 reason = str(error["message"]).rstrip(".")
+                choices = await sessions.run_async(target_choices, runtime, context)
                 return tool_failure(
                     error["code"],
-                    f"Nothing was started. {reason}. {target_choices(runtime, context)}",
+                    f"Nothing was started. {reason}. {choices}",
                 )
             return failure
 
@@ -691,31 +696,48 @@ class SubAgentCoordinator:
         runtime = self._runtime
         sessions = runtime.chat_sessions
         new_subagent_id = new_id("sub")
-        session = await sessions.run_async(
-            _open_subagent_session,
-            runtime,
-            target_agent_id,
-            target_project_id,
-            _session_title(description),
-            new_subagent_id,
-            context,
-            overrides,
-        )
-        address = session.address
-        executor = runtime.chat_loop.run_executor(
-            content, parent_agent_input=True, temporary_parent_binding=temporary_parent
-        )
-        try:
-            run = await runtime.chat_run_manager.start(
-                address,
-                executor,
-                admission=_admission(
-                    context, new_subagent_id, _child_working_project(context, target_project_id)
-                ),
+        async with AsyncExitStack() as lifecycle:
+            binding = _target_binding(context, target_agent_id, target_project_id)
+            if binding is not None:
+                # Agent create/rename/archive/restore hold this same lock. Keep
+                # the identity check and Run admission together; afterwards an
+                # active Run itself prevents replacing its Agent.
+                await lifecycle.enter_async_context(runtime.automation_references.lock)
+                if not await sessions.run_async(
+                    runtime.agents.delegation_target_allowed, target_agent_id, binding
+                ):
+                    choices = await sessions.run_async(target_choices, runtime, context)
+                    return tool_failure(
+                        "agent_not_allowed",
+                        SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE.format(
+                            target=target_agent_id, choices=choices
+                        ),
+                    )
+            session = await sessions.run_async(
+                _open_subagent_session,
+                runtime,
+                target_agent_id,
+                target_project_id,
+                _session_title(description),
+                new_subagent_id,
+                context,
+                overrides,
             )
-        except Exception:
-            await _remove_unstarted_session(runtime, address)
-            raise
+            address = session.address
+            executor = runtime.chat_loop.run_executor(
+                content, parent_agent_input=True, temporary_parent_binding=temporary_parent
+            )
+            try:
+                run = await runtime.chat_run_manager.start(
+                    address,
+                    executor,
+                    admission=_admission(
+                        context, new_subagent_id, _child_working_project(context, target_project_id)
+                    ),
+                )
+            except Exception:
+                await _remove_unstarted_session(runtime, address)
+                raise
         activity = await self._activities.ensure(address)
         activity_file = self._activities.path(address)
         _LOGGER.info(
@@ -1438,6 +1460,20 @@ def _resolve_target_address(address: str, caller_project_id: str | None) -> tupl
     """Resolve the Tool's address; a bare address inherits the caller's Project scope."""
     agent_id, addressed_project_id = parse_agent_address(address)
     return agent_id, addressed_project_id or caller_project_id
+
+
+def _target_binding(
+    context: ToolContext, target_agent_id: str, target_project_id: str | None
+) -> str | int | None:
+    """Return an explicit Identity grant's captured incarnation, if it has one."""
+    if (
+        context.project_id is not None
+        or target_project_id is not None
+        or target_agent_id == context.agent_id
+        or "*" in subagent_allowed_agents(context.tool_settings)
+    ):
+        return None
+    return context.delegation_bindings.get(target_agent_id)
 
 
 def _target_is_allowed(

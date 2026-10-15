@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any
 
-from core.prompts._types import JsonObject, PromptAgent, ToolPromptRegistry
+from core.prompts._types import JsonObject, PromptAgent, PromptAgentStore, ToolPromptRegistry
 from core.prompts.blocks import ToolAvailability
 from core.tools.availability import (
     agent_tool_settings,
@@ -28,8 +28,27 @@ OnDemandEntries = Callable[[], tuple[tuple[str, str], ...]]
 class PromptToolPolicy:
     """Resolve the same Agent policy for every prompt-time view of its Tools."""
 
-    def __init__(self, registry: ToolPromptRegistry) -> None:
+    def __init__(
+        self, registry: ToolPromptRegistry, agent_store: PromptAgentStore | None = None
+    ) -> None:
         self._registry = registry
+        self._agents = agent_store
+
+    def _subagent_targets(self, agent: PromptAgent) -> list[str]:
+        allowed = subagent_allowed_agents(agent_tool_settings(getattr(agent, "tools", {})))
+        bindings = getattr(agent, "delegation_bindings", {})
+        if not bindings or "*" in allowed or getattr(agent, "project_id", None) is not None:
+            return allowed
+        return [
+            target
+            for target in allowed
+            if target == agent.id
+            or target not in bindings
+            or (
+                self._agents is not None
+                and self._agents.delegation_target_allowed(target, bindings[target])
+            )
+        ]
 
     def tool_availability(
         self,
@@ -119,9 +138,7 @@ class PromptToolPolicy:
             apply_agent_target_tool_visibility(
                 definitions,
                 agent_id=agent.id,
-                allowed_agents=subagent_allowed_agents(
-                    agent_tool_settings(getattr(agent, "tools", {}))
-                ),
+                allowed_agents=self._subagent_targets(agent),
             ),
             session_tool_grants,
             lambda: self._registry.provider_definitions(
@@ -157,9 +174,7 @@ class PromptToolPolicy:
             apply_agent_target_tool_visibility(
                 definitions,
                 agent_id=agent.id,
-                allowed_agents=subagent_allowed_agents(
-                    agent_tool_settings(getattr(agent, "tools", {}))
-                ),
+                allowed_agents=self._subagent_targets(agent),
             ),
             session_tool_grants,
             lambda: self._registry.prompt_definitions(

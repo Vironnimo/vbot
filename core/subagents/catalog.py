@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -43,7 +44,13 @@ def build_subagent_prompt_targets(
     """
     from core.tools.availability import agent_tool_settings
 
-    return subagent_targets(runtime, agent.id, project_id, agent_tool_settings(agent.tools))
+    return subagent_targets(
+        runtime,
+        agent.id,
+        project_id,
+        agent_tool_settings(agent.tools),
+        delegation_bindings=getattr(agent, "delegation_bindings", {}),
+    )
 
 
 def subagent_targets(
@@ -51,6 +58,8 @@ def subagent_targets(
     caller_agent_id: str,
     project_id: str | None,
     tool_settings: Any,
+    *,
+    delegation_bindings: Mapping[str, str | int] | None = None,
 ) -> list[SubAgentPromptTarget]:
     """Return the additional targets a caller with these Tool settings may select.
 
@@ -62,7 +71,7 @@ def subagent_targets(
     allowed = subagent_allowed_agents(tool_settings)
     if project_id is not None:
         return _project_targets(runtime, caller_agent_id, project_id, allowed)
-    return _identity_targets(runtime, caller_agent_id, allowed)
+    return _identity_targets(runtime, caller_agent_id, allowed, delegation_bindings or {})
 
 
 def _project_targets(
@@ -93,6 +102,7 @@ def _identity_targets(
     runtime: RuntimeServices,
     caller_agent_id: str,
     allowed: list[str],
+    delegation_bindings: Mapping[str, str | int],
 ) -> list[SubAgentPromptTarget]:
     if "*" in allowed:
         return _all_identity_scope_targets(runtime, caller_agent_id)
@@ -109,6 +119,11 @@ def _identity_targets(
 
         if target_project_id is None:
             if target_agent_id == caller_agent_id:
+                continue
+            binding = delegation_bindings.get(target_agent_id)
+            if binding is not None and not runtime.agents.delegation_target_allowed(
+                target_agent_id, binding
+            ):
                 continue
             identity = identities.get(target_agent_id)
             if identity is not None:

@@ -120,6 +120,9 @@ class Agent:
     created_at: str
     updated_at: str
     tools: dict[str, Any] = field(default_factory=dict)
+    # Private identity proof for explicit bare delegation targets. A timestamp
+    # binds an existing incarnation; an integer waits at its retirement cursor.
+    delegation_bindings: dict[str, str | int] = field(default_factory=dict)
     # Skill names removed from what ``allowed_skills`` grants. Never hides the Agent's
     # own private Skills or the active Project's Skills.
     excluded_skills: list[str] = field(default_factory=list)

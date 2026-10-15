@@ -358,6 +358,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         validate_agent_file,
         validate_agent_order_file,
         validate_agent_rename_file,
+        validate_agent_retirements_file,
     )
     from core.attachments import validate_attachment_metadata_file
     from core.automation import (
@@ -384,6 +385,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         "agent": validate_agent_file,
         "agent_order": validate_agent_order_file,
         "agent_rename": validate_agent_rename_file,
+        "agent_retirements": validate_agent_retirements_file,
         "agent_prompt_layout": validate_prompt_layout_file,
         "librarian_state": validate_librarian_state_file,
         "prompt_layout": validate_prompt_layout_file,

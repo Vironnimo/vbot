@@ -172,6 +172,8 @@ class ToolContext:
     # Bash combines these transient grants with the Agent's permanent Tool settings.
     skill_env_keys: Sequence[str] = field(default_factory=tuple)
     tool_settings: Mapping[str, Any] | None = None
+    # Identity proof captured from the calling Agent, never Model arguments.
+    delegation_bindings: Mapping[str, str | int] = field(default_factory=dict)
     # Delegated capabilities must inherit the same Run restrictions as direct calls.
     tool_restriction: Sequence[str] | None = None
     tool_denial_resolver: Callable[[str], str | None] | None = field(
@@ -582,6 +584,7 @@ class ToolExecutionConfig:
     allowed_skills: Sequence[str] | None = None
     skill_env_keys: Sequence[str] = field(default_factory=tuple)
     tool_settings: Mapping[str, Any] | None = None
+    delegation_bindings: Mapping[str, str | int] = field(default_factory=dict)
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
     # Model-facing contracts of the Tools in this cycle's Model request, by registry
     # name; empty when the group runs without a Model request. On-demand Tools

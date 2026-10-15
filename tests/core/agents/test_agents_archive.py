@@ -157,8 +157,18 @@ def test_delegation_grants_are_recorded_before_removal_and_return_at_their_posit
 
     assert recorded == [
         [
-            {"agent_id": "beta", "agent_created_at": beta.created_at, "index": 1},
-            {"agent_id": "delta", "agent_created_at": delta.created_at, "index": 0},
+            {
+                "agent_id": "beta",
+                "agent_created_at": beta.created_at,
+                "index": 1,
+                "target_created_at": store.get("coder").created_at,
+            },
+            {
+                "agent_id": "delta",
+                "agent_created_at": delta.created_at,
+                "index": 0,
+                "target_created_at": store.get("coder").created_at,
+            },
         ]
     ]
     assert store.get("beta").tools["subagent"]["allowed_agents"] == ["a", "b"]

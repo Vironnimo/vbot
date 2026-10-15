@@ -13,7 +13,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal, override
 
 import pytest
 import pytest_asyncio
@@ -166,6 +166,90 @@ async def test_targets_outside_the_callers_choices_are_refused_with_them(
     assert "agent_id" in result["error"]["message"]
     assert harness.loop.turns == []
     assert harness.sessions.list("worker") == []
+
+
+async def test_a_bound_target_replaced_during_validation_cannot_start(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live_identity = "original"
+    harness.runtime.automation_references = SimpleNamespace(lock=asyncio.Lock())
+    harness.runtime.agents.delegation_target_allowed = lambda _target, binding: (
+        binding == live_identity
+    )
+    resolve = harness.resolver.resolve_agent_async
+
+    async def resolve_then_replace(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        nonlocal live_identity
+        result = await resolve(*args, **kwargs)
+        async with harness.runtime.automation_references.lock:
+            live_identity = "replacement"
+        return result
+
+    monkeypatch.setattr(harness.resolver, "resolve_agent_async", resolve_then_replace)
+
+    result = await harness.call(
+        {"description": "Do review", "content": "review", "agent_id": "worker"},
+        allowed_agents=["worker"],
+        delegation_bindings={"worker": "original"},
+    )
+
+    assert result["error"]["code"] == "agent_not_allowed"
+    assert harness.loop.turns == []
+    assert harness.sessions.list("worker") == []
+
+
+async def test_a_bound_target_is_protected_until_its_run_is_admitted(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mutation_waiting = asyncio.Event()
+
+    class LifecycleLock(asyncio.Lock):
+        @override
+        async def acquire(self) -> Literal[True]:
+            if self.locked():
+                mutation_waiting.set()
+            return await super().acquire()
+
+    lifecycle_lock = LifecycleLock()
+    harness.runtime.automation_references = SimpleNamespace(lock=lifecycle_lock)
+    harness.runtime.agents.delegation_target_allowed = lambda _target, binding: (
+        binding == "original"
+    )
+    before_admission, continue_admission = asyncio.Event(), asyncio.Event()
+    start = harness.manager.start
+
+    async def delayed_start(*args: Any, **kwargs: Any) -> Run:
+        before_admission.set()
+        await continue_admission.wait()
+        return await start(*args, **kwargs)
+
+    monkeypatch.setattr(harness.manager, "start", delayed_start)
+    harness.loop.hold("review")
+    call = asyncio.create_task(
+        harness.call(
+            {"description": "Do review", "content": "review", "agent_id": "worker"},
+            allowed_agents=["worker"],
+            delegation_bindings={"worker": "original"},
+        )
+    )
+    await before_admission.wait()
+
+    async def replace_target() -> None:
+        async with (
+            lifecycle_lock,
+            harness.manager.agent_admission_guard("worker", project_id=None),
+        ):
+            pytest.fail("The bound Agent was replaceable between validation and Run admission")
+
+    replacement = asyncio.create_task(replace_target())
+    try:
+        await mutation_waiting.wait()
+        assert not replacement.done()
+    finally:
+        continue_admission.set()
+    assert (await call)["ok"]
+    with pytest.raises(RunAdmissionBlockedError):
+        await replacement
 
 
 async def test_subagent_in_another_scope_is_addressed_by_its_qualified_agent_id(
