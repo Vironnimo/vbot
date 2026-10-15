@@ -90,6 +90,28 @@ def test_historical_summary_segments_and_fork_keep_read_identity(manager):
     assert read(fork).generation_id != page.generation_id
 
 
+def test_fork_run_completion_excludes_an_edited_away_summary_before_and_after_detachment(manager):
+    source = manager.create("coder").start_run("one")
+    follow_up = ChatMessage.user("a steered follow-up")
+    source.append_many(
+        [
+            ChatMessage.user("question"),
+            ChatMessage.assistant(content="partial", model="test"),
+            follow_up,
+        ]
+    )
+    complete_run(source, summary("one"))
+    manager.get(source.address).apply_edit(follow_up.id, [ChatMessage.user("replacement")])
+    fork = asyncio.run(manager.fork(source.address))
+    before = read(fork).runs
+    assert before[0]["terminal_sequence"] is None
+    assert before[0]["complete"] is False
+
+    manager.delete(source.address)
+
+    assert read(fork).runs == before
+
+
 def test_completed_run_does_not_claim_unrelated_later_records(manager):
     session = manager.create("coder")
     session = session.start_run("one")

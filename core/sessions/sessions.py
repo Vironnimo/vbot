@@ -9,6 +9,7 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from weakref import WeakValueDictionary
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunKind
@@ -85,7 +86,9 @@ class ChatSessionManager:
         self._archive_ledger = SessionArchiveLedger(self._store)
         self._title_changed_callbacks: list[Callable[[SessionAddress], None]] = []
         self._completion_read_callbacks: list[Callable[[SessionAddress, str], None]] = []
-        self._write_locks: dict[SessionAddress, _SessionWriteLock] = {}
+        self._write_locks: WeakValueDictionary[SessionAddress, _SessionWriteLock] = (
+            WeakValueDictionary()
+        )
         self._write_locks_guard = threading.Lock()
         self._agent_default_project: Callable[[str], str | None] | None = None
 
@@ -187,9 +190,11 @@ class ChatSessionManager:
     def write_lock(self, address: SessionAddress) -> _SessionWriteLock:
         _validate_session_id(address.session_id)
         with self._write_locks_guard:
-            if address not in self._write_locks:
-                self._write_locks[address] = _SessionWriteLock()
-            return self._write_locks[address]
+            lock = self._write_locks.get(address)
+            if lock is None:
+                lock = _SessionWriteLock()
+                self._write_locks[address] = lock
+            return lock
 
     def create(
         self,
@@ -465,11 +470,12 @@ class ChatSessionManager:
         *,
         initialized: bool = True,
         expected_generation_id: str | None = None,
+        expected_first_user_sequence: int | None = None,
     ) -> str | None:
         """Store the automatic title; with *expected_generation_id*, only on that generation.
 
-        Raises ``SessionNotFoundError`` when the Session is missing or, with
-        *expected_generation_id*, another generation now holds its address.
+        Raises ``SessionNotFoundError`` when the Session is missing, another
+        generation holds its address, or its guarded first User entry changed.
         """
         normalized = _normalize_session_title(title)
 
@@ -482,7 +488,10 @@ class ChatSessionManager:
                 metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
 
         previous_metadata, _updated = self._store.mutate_metadata(
-            address, update, expected_generation_id=expected_generation_id
+            address,
+            update,
+            expected_generation_id=expected_generation_id,
+            expected_first_user_sequence=expected_first_user_sequence,
         )
         previous = previous_metadata.get(SESSION_AUTO_TITLE_KEY)
         if previous != normalized:

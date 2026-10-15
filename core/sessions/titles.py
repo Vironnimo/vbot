@@ -114,6 +114,7 @@ class _TitleGenerationRequest:
     title_input: str
     # The Session generation the title belongs to; a later one at the same address keeps its own.
     generation_id: str | None
+    first_user_sequence: int
 
 
 class _InvalidGeneratedTitleError(ValueError):
@@ -138,7 +139,6 @@ class SessionTitleService:
         session_id: str,
         project_id: str | None,
         agent: Any,
-        content: str | list[ContentBlock],
         run_id: str,
     ) -> None:
         """Handle the first visible user message without delaying its Run."""
@@ -150,7 +150,6 @@ class SessionTitleService:
                 session_id=session_id,
                 project_id=project_id,
                 agent=agent,
-                content=content,
                 run_id=run_id,
             ),
             name=f"session-title:{run_id}",
@@ -165,7 +164,6 @@ class SessionTitleService:
         session_id: str,
         project_id: str | None,
         agent: Any,
-        content: str | list[ContentBlock],
         run_id: str,
     ) -> None:
         try:
@@ -175,7 +173,6 @@ class SessionTitleService:
                 session_id=session_id,
                 project_id=project_id,
                 agent=agent,
-                content=content,
             )
             if request is not None:
                 await self._generate_title(
@@ -200,7 +197,6 @@ class SessionTitleService:
         session_id: str,
         project_id: str | None,
         agent: Any,
-        content: str | list[ContentBlock],
     ) -> _TitleGenerationRequest | None:
         sessions = self._runtime.chat_sessions
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
@@ -214,14 +210,20 @@ class SessionTitleService:
         )
 
         session = sessions.get(address)
-        user_message_count = session.active_user_message_count(limit=2)
-        if user_message_count != 1:
+        source = session.single_active_user_message()
+        if source is None:
             sessions.mark_auto_title_initialized(address)
             return None
 
-        text, attachment_lines = _title_source_parts(content)
+        first_user_sequence, first_user = source
+        text, attachment_lines = _title_source_parts(first_user.content or "")
         local_title = _local_title(text, attachment_lines)
-        sessions.set_auto_title(address, local_title)
+        sessions.set_auto_title(
+            address,
+            local_title,
+            expected_generation_id=session.generation_id,
+            expected_first_user_sequence=first_user_sequence,
+        )
 
         if has_manual_title:
             return None
@@ -236,7 +238,10 @@ class SessionTitleService:
         configured_model = settings["model"]
         model = configured_model or str(agent.model)
         return _TitleGenerationRequest(
-            model=model, title_input=title_input, generation_id=session.generation_id
+            model=model,
+            title_input=title_input,
+            generation_id=session.generation_id,
+            first_user_sequence=first_user_sequence,
         )
 
     def _on_background_task_done(self, task: asyncio.Task[None]) -> None:
@@ -283,6 +288,7 @@ class SessionTitleService:
                 SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
                 title,
                 expected_generation_id=request.generation_id,
+                expected_first_user_sequence=request.first_user_sequence,
             )
             _LOGGER.debug(
                 "Generated automatic Session title (agent=%s session=%s model=%s)",
@@ -291,7 +297,7 @@ class SessionTitleService:
                 model,
             )
         except SessionNotFoundError:
-            # Archived or deleted meanwhile; a new Session at its address keeps its own title.
+            # The Session or its first User entry changed while the Model ran.
             _LOGGER.debug(
                 "Generated Session title dropped; the Session ended (agent=%s session=%s)",
                 agent_id,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from core.chat._message_history import (
     _append_input_origin_note,
@@ -29,7 +29,6 @@ from core.chat._scratch_context import (
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat._step_outcomes import OUTPUT_INTEGRITY_RECOVERY_NOTE
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
-from core.chat.content_blocks import ContentBlock
 from core.chat.errors import (
     ChatError,
     ImageBudgetExceededError,
@@ -381,7 +380,6 @@ class RunExecution:
                         session_id=run.session_id,
                         project_id=project_id,
                         agent=agent,
-                        content=cast(str | list[ContentBlock], user_content),
                         run_id=run.id,
                     )
                 if isinstance(request.content, str):

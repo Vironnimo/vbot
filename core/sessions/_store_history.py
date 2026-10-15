@@ -214,9 +214,23 @@ def active_user_message_count(
     _state, ranges = current_view(connection, address)
     return len(
         _store_lineage.ordered_rows(
-            connection, ranges, columns="e.entry_key", where="e.role = 'user'", limit=limit
+            connection, ranges, columns="e.seq", where="e.role = 'user'", limit=limit
         )
     )
+
+
+def single_active_user_message(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> Callable[[], tuple[int, ChatMessage] | None]:
+    """Read the sole current User entry's position and content in one snapshot."""
+    _state, ranges = current_view(connection, address)
+    rows = _store_lineage.ordered_rows(
+        connection, ranges, columns=_store_codec.ENTRY_COLUMNS, where="e.role = 'user'", limit=2
+    )
+    if len(rows) != 1:
+        return lambda: None
+    batch = _store_codec.select_batch(connection, rows)
+    return lambda: (int(rows[0]["seq"]), batch.message(rows[0]))
 
 
 def tool_result_persisted(

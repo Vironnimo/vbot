@@ -168,6 +168,7 @@ def mutate_metadata(
     mutation: Callable[[JsonObject], None],
     *,
     expected_generation_id: str | None = None,
+    expected_first_user_sequence: int | None = None,
 ) -> tuple[JsonObject, JsonObject]:
     """Apply one metadata read-modify-write under the writer transaction.
 
@@ -176,6 +177,16 @@ def mutate_metadata(
     state = _store_values._live_metadata_row(connection, address)
     if expected_generation_id is not None and str(state["generation_id"]) != expected_generation_id:
         raise SessionNotFoundError(f"session generation changed: {address.session_id}")
+    if expected_first_user_sequence is not None:
+        first_user = _store_lineage.ordered_rows(
+            connection,
+            _store_lineage.view_ranges(connection, int(state["session_key"])),
+            columns="e.seq",
+            where="e.role = 'user'",
+            limit=1,
+        )
+        if not first_user or int(first_user[0][0]) != expected_first_user_sequence:
+            raise SessionNotFoundError(f"session title source changed: {address.session_id}")
     previous, updated, storage = metadata_change(state, mutation)
     if storage is not None:
         _store_values._write_metadata_storage(connection, int(state["session_key"]), storage)
