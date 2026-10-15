@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -193,6 +194,102 @@ def replace_path(temp_path: Path, target_path: Path) -> None:
                 raise
         _sleep(delay)
     os.replace(temp_path, target_path)
+
+
+def preserve_windows_file_metadata(source: Path, replacement: Path) -> None:
+    """Copy an existing file's DACL and display/indexing flags before replacement.
+
+    Called after writing a same-directory staged file, before publishing it.
+    A missing source means a new file; other failures abort the write. The
+    source is never changed. File identity, hard links, timestamps and archive
+    state are deliberately not copied: this publishes new content at one path.
+    """
+    if sys.platform != "win32":
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        source_status = source.stat()
+    except FileNotFoundError:
+        return
+    attributes = stat.FILE_ATTRIBUTE_HIDDEN | stat.FILE_ATTRIBUTE_SYSTEM
+    attributes |= stat.FILE_ATTRIBUTE_NOT_CONTENT_INDEXED
+    flags = (replacement.stat().st_file_attributes & ~attributes) | (
+        source_status.st_file_attributes & attributes
+    )
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.SetFileAttributesW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD)
+    kernel.SetFileAttributesW.restype = wintypes.BOOL
+    if not kernel.SetFileAttributesW(str(replacement), flags):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    security = ctypes.WinDLL("advapi32", use_last_error=True)
+    security.GetFileSecurityW.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    security.GetFileSecurityW.restype = wintypes.BOOL
+    security.SetFileSecurityW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    security.SetFileSecurityW.restype = wintypes.BOOL
+    security.GetSecurityDescriptorControl.argtypes = (
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.WORD),
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    security.GetSecurityDescriptorControl.restype = wintypes.BOOL
+    size = wintypes.DWORD()
+    dacl_information = 4
+    security.GetFileSecurityW(str(source), dacl_information, None, 0, ctypes.byref(size))
+    if not size.value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    descriptor = ctypes.create_string_buffer(size.value)
+    if not security.GetFileSecurityW(
+        str(source), dacl_information, descriptor, size.value, ctypes.byref(size)
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    control, revision = wintypes.WORD(), wintypes.DWORD()
+    if not security.GetSecurityDescriptorControl(
+        descriptor, ctypes.byref(control), ctypes.byref(revision)
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    # Preserve the descriptor's inheritance model. The raw setter drops the
+    # modern auto-inherited bit; the named setter upgrades legacy descriptors.
+    protection = 0x80000000 if control.value & 0x1000 else 0x20000000
+    if control.value & 0x400:
+        security.GetSecurityDescriptorDacl.argtypes = (
+            ctypes.c_void_p,
+            ctypes.POINTER(wintypes.BOOL),
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.POINTER(wintypes.BOOL),
+        )
+        security.GetSecurityDescriptorDacl.restype = wintypes.BOOL
+        security.SetNamedSecurityInfoW.argtypes = (
+            wintypes.LPWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        )
+        security.SetNamedSecurityInfoW.restype = wintypes.DWORD
+        present, defaulted, dacl = wintypes.BOOL(), wintypes.BOOL(), ctypes.c_void_p()
+        if not security.GetSecurityDescriptorDacl(
+            descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        error = security.SetNamedSecurityInfoW(
+            str(replacement), 1, dacl_information | protection, None, None, dacl, None
+        )
+        if error:
+            raise ctypes.WinError(error)
+    elif not security.SetFileSecurityW(str(replacement), dacl_information | protection, descriptor):
+        raise ctypes.WinError(ctypes.get_last_error())
 
 
 def _is_transient_sharing_error(error: OSError, target_path: Path) -> bool:
