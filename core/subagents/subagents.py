@@ -130,7 +130,7 @@ from core.tools.tools import (
 )
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
-from core.utils.workers import finish_despite_cancel
+from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
@@ -1019,30 +1019,39 @@ class SubAgentCoordinator:
                     run.request_cancel(reason=reason, initiator=initiator)
                     runs.append(run)
                     stopped += 1
-        # Cleanup can wait on other work; never hold the admission lock here.
-        for address in addresses:
+
+        async def cleanup() -> int:
+            # Cleanup can wait on other work; never hold the admission lock here.
+            # One failed resource must not leave the rest of the captured tree running.
+            closed = 0
+            failures: list[Exception] = []
             if terminals is not None:
-                owner = TerminalOwner(
-                    project_id=address.project_id,
-                    agent_id=address.agent_id,
-                    session_id=address.session_id,
-                )
-                running = [
-                    info
-                    for info in terminals.list_terminals()
-                    if info.finished_at is None and owner in (info.lifecycle_owner, info.attachment)
+                owners = [
+                    TerminalOwner(address.project_id, address.agent_id, address.session_id)
+                    for address in addresses
                 ]
-                if running:
-                    stopped += len(running)
-                    await terminals.close_scope(owner)
-            if commands is not None:
-                # Commands still inside their call end with the cancelled Run;
-                # only background ones count as work of their own.
-                stopped += sum(1 for report in commands.commands([address]) if not report.finished)
-                await commands.close_scope(address)
-        if runs:
-            await asyncio.gather(*(_run_end(run) for run in runs))
-        return stopped
+                try:
+                    closed += await terminals.close_scopes(owners)
+                except Exception as error:
+                    failures.append(error)
+            for address in addresses:
+                if commands is not None:
+                    # Commands still inside their call end with the cancelled Run;
+                    # only background ones count as work of their own.
+                    closed += sum(
+                        1 for report in commands.commands([address]) if not report.finished
+                    )
+                    try:
+                        await commands.close_scope(address)
+                    except Exception as error:
+                        failures.append(error)
+            if runs:
+                await asyncio.gather(*(_run_end(run) for run in runs))
+            if failures:
+                raise failures[0]
+            return closed
+
+        return stopped + await settle_before_cancelling(cleanup())
 
     async def _temporary_parent(
         self, context: ToolContext, target_agent_id: str, target_project_id: str | None

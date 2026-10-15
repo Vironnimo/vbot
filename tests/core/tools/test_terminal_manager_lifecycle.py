@@ -366,6 +366,109 @@ async def test_shutdown_waits_for_pending_start_and_closes_its_child(tmp_path: P
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "cancel_close", "paused_at"),
+    [
+        ("session", False, "process"),
+        ("session", True, "process"),
+        ("agent", False, "process"),
+        ("project", False, "process"),
+        ("session", False, "preparation"),
+    ],
+)
+async def test_scope_close_drains_pending_launches_without_closing_other_scopes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scope: str,
+    cancel_close: bool,
+    paused_at: str,
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    adapter = FakeTerminalAdapter()
+    factory = AdapterFactory()
+    manager = _manager(factory)
+    start_process = manager._start_process  # noqa: SLF001
+    open_screen = manager._open_screen  # noqa: SLF001
+    process_started = False
+
+    async def blocked_screen(columns, rows):
+        screen = await open_screen(columns, rows)
+        if paused_at == "preparation" and not entered.is_set():
+            entered.set()
+            await release.wait()
+        return screen
+
+    async def blocked_start(argv, *args):
+        nonlocal process_started
+        if argv == ["pending"]:
+            process_started = True
+            entered.set()
+            await release.wait()
+            return adapter
+        return await start_process(argv, *args)
+
+    monkeypatch.setattr(manager, "_start_process", blocked_start)
+    monkeypatch.setattr(manager, "_open_screen", blocked_screen)
+    launch = asyncio.create_task(spawn(manager, tmp_path, command="pending"))
+    close = None
+    try:
+        await entered.wait()
+        match scope:
+            case "session":
+                closing = manager.close_scope(owner())
+                unrelated = owner("session-b")
+            case "agent":
+                closing = manager.close_agent_scope("agent-a", "project-a")
+                unrelated = TerminalOwner("project-a", "other-agent", "session-a")
+            case _:
+                closing = manager.close_project_scope("project-a")
+                unrelated = TerminalOwner("other-project", "agent-a", "session-a")
+        close = asyncio.create_task(closing)
+        await asyncio.sleep(0)
+        assert not close.done()
+        with pytest.raises(TerminalClosedError):
+            await spawn(manager, tmp_path)
+        other = await manager.spawn(
+            unrelated, ["other"], cwd=tmp_path, env=None, origin_run_id="other-run"
+        )
+        if cancel_close:
+            close.cancel()
+            await asyncio.sleep(0)
+            assert not close.done()
+            with pytest.raises(TerminalClosedError):
+                await spawn(manager, tmp_path)
+        release.set()
+        with pytest.raises(TerminalClosedError):
+            await launch
+        if cancel_close:
+            with pytest.raises(asyncio.CancelledError):
+                await close
+        else:
+            result = await close
+            if scope == "session":
+                assert result == 1
+        if paused_at == "process":
+            assert not adapter.alive
+            assert adapter.closed
+        else:
+            assert not process_started
+        assert [info.terminal_id for info in manager.list_terminals()] == [other.terminal_id]
+        assert manager.busy_addresses() == {
+            SessionAddress(unrelated.project_id, unrelated.agent_id, unrelated.session_id)
+        }
+        assert factory.adapters[0].alive
+        # Stop all is a boundary for current work, not a permanent Session ban.
+        await spawn(manager, tmp_path)
+        assert len(manager.list_terminals()) == 2
+    finally:
+        release.set()
+        await asyncio.gather(
+            launch, *([close] if close is not None else []), return_exceptions=True
+        )
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_parallel_terminal_ids_skip_collisions(
     terminal_manager: tuple[TerminalManager, AdapterFactory],
     tmp_path: Path,
