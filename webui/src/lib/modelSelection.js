@@ -11,6 +11,12 @@ const SUITABILITY_REASON_NO_TOOLS = 'noTools';
 const SUITABILITY_REASON_BELOW_MIN_CONTEXT = 'belowMinContext';
 const SUITABILITY_REASON_CONTEXT_UNKNOWN = 'contextUnknown';
 
+export function isChatModel(model) {
+  const tasks = model?.capabilities?.task_types;
+  // Sparse catalogs retain the backend's conservative text-in/text-out default.
+  return !Array.isArray(tasks) || tasks.length === 0 || tasks.includes('chat');
+}
+
 export function createModelCatalogLoader({ listModels, listConnections }) {
   let requestId = 0;
 
@@ -193,6 +199,7 @@ export function buildModelSelectOptions({
   selectedModelValue = '',
   emptyLabel = '',
 } = {}) {
+  models = models.filter(isChatModel);
   const connectionsByProvider = usableConnectionsByProvider(connections);
   const selectedModel = parseModelSelectionValue(selectedModelValue);
   const selectedConnectionId = connectionIdFromModel(

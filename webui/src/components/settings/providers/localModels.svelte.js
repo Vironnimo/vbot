@@ -1,5 +1,6 @@
 import { listModels, updateSettings } from '$lib/api.js';
 import { t } from '$lib/i18n.js';
+import { isChatModel } from '$lib/modelSelection.js';
 
 export function createLocalProviderModels(context) {
   const LOCAL_CONTEXT_DEFAULT_CAP = 32768;
@@ -23,7 +24,7 @@ export function createLocalProviderModels(context) {
     try {
       const result = await listModels();
       localModels = (result?.models ?? []).filter(
-        (model) => model?.local === true,
+        (model) => model?.local === true && isChatModel(model),
       );
     } catch {
       localModels = [];
