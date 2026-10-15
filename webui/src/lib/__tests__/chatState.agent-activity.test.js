@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { applyTimelineEvent } from '../chatTimeline.js';
+import { assistantRun } from '../../components/__tests__/timelineItems.support.js';
 import {
   agentActivityStatus,
   agentUnreadResults,
@@ -994,6 +996,11 @@ describe('Agent activity projection', () => {
         sequence: 2,
         contributes_to_agent_activity: false,
         payload: { status: terminalStatus },
+      });
+      applyTimelineEvent(sessionState, 'timeline_snapshot', {
+        run_id: 'run-system',
+        sequence: 2,
+        items: [assistantRun('run-system', [], { status: terminalStatus })],
       });
 
       expect(sessionState.status).toBe(terminalStatus);

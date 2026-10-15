@@ -642,6 +642,7 @@ class SessionStore:
         complete_run_segment: bool,
         background_tool_names: Sequence[str],
         background_note_marker: str | None,
+        complete_runs: bool = False,
         after: tuple[str, int] | None = None,
         skip_unchanged: bool = False,
     ) -> SessionChatHistorySnapshot:
@@ -655,6 +656,7 @@ class SessionStore:
                 expected_generation_id=expected_generation_id,
                 excluded_roles=excluded_roles,
                 complete_run_segment=complete_run_segment,
+                complete_runs=complete_runs,
                 background_tool_names=background_tool_names,
                 background_note_marker=background_note_marker,
                 after=after,

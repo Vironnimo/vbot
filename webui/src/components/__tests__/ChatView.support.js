@@ -14,6 +14,7 @@ import {
   TOOLTIP_SHOW_DELAY_MS,
 } from '../../lib/tooltip.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
+import { messageItem } from './timelineItems.support.js';
 
 export const rpcMock = vi.fn();
 export const subscribeRunEventsMock = vi.fn(() => ({
@@ -207,6 +208,7 @@ export function createChatRpcMock({
   contextUsage,
   contextWindow = 262144,
   sessionMessages,
+  sessionItems,
   activeRuns,
   streamResponse,
   streamHandler,
@@ -234,7 +236,7 @@ export function createChatRpcMock({
       return { agents: resolvedAgents };
     }
 
-    if (method === 'chat.history') {
+    if (method === 'chat.timeline') {
       const messages = resolvedSessionMessages[params.session_id];
       if (messages) {
         const beforeIndex = params.before
@@ -250,6 +252,20 @@ export function createChatRpcMock({
         const response = {
           session_id: params.session_id,
           messages: pageMessages,
+          // Plain, independent message rows have no reconstruction semantics.
+          // Tests with Runs, Tools or separators supply their authoritative
+          // server items explicitly through sessionItems.
+          items:
+            sessionItems?.[params.session_id] ??
+            pageMessages
+              .filter(
+                (entry) =>
+                  ['user', 'assistant', 'error'].includes(entry.role) &&
+                  !entry.tool_calls,
+              )
+              .map((entry) => messageItem(entry)),
+          next_before: pageMessages[0]?.id ?? '',
+          timeline_version: 1,
           has_more: sourceMessages.length > pageMessages.length,
         };
         if (sessionUsage) {
@@ -325,6 +341,7 @@ export function createChatRpcMock({
         run_id: params.run_id,
         status: 'running',
         sse_url: `/api/runs/${params.run_id}/events`,
+        timeline_url: `/api/runs/${params.run_id}/timeline`,
         controls: { compaction: 'unavailable', background_tool_call_ids: [] },
         events: [],
       };
@@ -392,6 +409,7 @@ export function runningRun(runId, events = []) {
   return {
     run_id: runId,
     sse_url: `/api/runs/${runId}/events`,
+    timeline_url: `/api/runs/${runId}/timeline`,
     status: 'running',
     events,
   };
@@ -543,7 +561,7 @@ export function rpcCalls(method) {
 }
 
 export function historyReads(sessionId, agentId) {
-  return rpcCalls('chat.history').filter(
+  return rpcCalls('chat.timeline').filter(
     (params) =>
       params.session_id === sessionId &&
       (agentId === undefined || params.agent_id === agentId),
@@ -565,11 +583,21 @@ export function runEventSource(runId, index = 0) {
   const handlers = subscribeRunEventsMock.mock.calls[index][1];
   let sequence = 0;
   return {
+    runId,
     handlers,
     emit(type, payload = {}, eventSequence = sequence + 1) {
+      const baseSequence = sequence;
       sequence = eventSequence;
       handlers.onEvent({
-        data: { type, run_id: runId, sequence, payload },
+        type,
+        data: {
+          run_id: runId,
+          sequence,
+          ...(type === 'timeline_update'
+            ? { base_sequence: baseSequence }
+            : {}),
+          ...payload,
+        },
       });
     },
   };

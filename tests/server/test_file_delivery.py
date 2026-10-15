@@ -695,7 +695,8 @@ def test_extension_page_capability_is_epoch_bound_and_scopes_assets(tmp_path: Pa
     assert "https:" not in policy
 
 
-def test_extension_run_capability_is_short_lived_and_identity_bound(monkeypatch) -> None:
+@pytest.mark.parametrize("timeline", [False, True])
+def test_extension_run_capability_is_short_lived_and_identity_bound(monkeypatch, timeline) -> None:
     delivery = FileDelivery(secret=b"x" * 32)
     monkeypatch.setattr("server.file_delivery.time.time", lambda: 1000)
 
@@ -706,10 +707,12 @@ def test_extension_run_capability_is_short_lived_and_identity_bound(monkeypatch)
         group_id="group-a",
         run_id="run-a",
         after_sequence=4,
+        timeline=timeline,
     )
     token = capability["url"].split("/")[3]
 
-    assert capability["url"].endswith("/events")
+    assert capability["url"].endswith("/timeline" if timeline else "/events")
+    assert capability.get("timeline_version") == (1 if timeline else None)
     assert delivery.extension_run_claims(token) == {
         "extension": "swarm",
         "page": "overview",

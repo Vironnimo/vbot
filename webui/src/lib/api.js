@@ -169,6 +169,7 @@ export {
   listChatCommands,
   loadChatRunResult,
   loadChatHistory,
+  loadChatTimeline,
   loadReflectionRuns,
   loadLearningChanges,
   undoLearningChanges,

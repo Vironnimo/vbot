@@ -103,7 +103,12 @@ async def test_slash_command_is_executed_instead_of_starting_a_run(method: str) 
     state.command_dispatcher = _NoticeDispatcher()
 
     response = await call(
-        state, method, agent_id="agent-1", session_id="session-1", content="/stop"
+        state,
+        method,
+        agent_id="agent-1",
+        session_id="session-1",
+        content="/stop",
+        reply_surface="tui",
     )
 
     assert response == {
@@ -115,7 +120,7 @@ async def test_slash_command_is_executed_instead_of_starting_a_run(method: str) 
             "session_id": "session-1",
         },
     }
-    assert state.command_dispatcher.calls == [("agent-1", "session-1", "/stop", WEBUI)]
+    assert state.command_dispatcher.calls == [("agent-1", "session-1", "/stop", ReplySurface.tui())]
     assert loop.start_calls == []
 
 
@@ -287,6 +292,7 @@ async def test_command_for_a_new_session_names_a_session_only_when_it_created_on
     sessions = state.runtime.chat_sessions
 
     def workflow(context: ExtensionCommandContext, argument: str | None) -> CommandOutcome:
+        assert context.reply_surface == ReplySurface.tui()
         address = SessionAddress(context.project_id, context.agent_id, context.session_id)
         sessions.get(address).append(ChatMessage.user("Workflow brief"))
         return CommandOutcome(
@@ -297,7 +303,9 @@ async def test_command_for_a_new_session_names_a_session_only_when_it_created_on
         "fixture", name="workflow", description="Start the workflow.", handler=workflow
     )
 
-    response = await call(state, "chat.stream", agent_id="coder", new_session={}, content=content)
+    response = await call(
+        state, "chat.stream", agent_id="coder", new_session={}, content=content, reply_surface="tui"
+    )
 
     result = response["result"]
     assert result["command_handled"] is True

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from core.chat._message_history import _append_input_origin_note
+from core.chat._message_history import _append_input_origin_note, _append_reply_surface_note
 from core.chat._request_history import _assign_session_image_references
 from core.chat._run_state import (
     RequestBuildInputs,
@@ -24,6 +24,7 @@ from core.chat.messages import (
     SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER,
     ChatMessage,
     InputOrigin,
+    ReplySurface,
 )
 from core.runs import USER_MESSAGE_EVENT, QueuedRunItem, Run
 
@@ -56,6 +57,7 @@ class QueuedChatInput:
         self,
         content: str | list[ContentBlock],
         input_origin: InputOrigin | None,
+        reply_surface: ReplySurface | None = None,
     ) -> QueuedChatInput:
         return replace(
             self,
@@ -63,6 +65,7 @@ class QueuedChatInput:
                 self.request,
                 content=content,
                 input_origin=input_origin,
+                reply_surface=reply_surface or self.request.reply_surface,
             ),
         )
 
@@ -87,6 +90,9 @@ async def persist_steering_input(
         context, reply_target, dependencies.sessions
     )
     session.begin_defer_notes()
+    _append_reply_surface_note(
+        session, request.reply_surface, messages=context.session_snapshot.active_messages
+    )
     _append_input_origin_note(session, request.input_origin)
     if reply_to_user:
         session.add_note(SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER)
@@ -103,6 +109,8 @@ async def persist_steering_input(
     await session.append_many_async(
         [*session.take_deferred_notes(), message], subagent_reply_target=reply_target
     )
+    if request.reply_surface is not None:
+        context.request = replace(context.request, reply_surface=request.reply_surface)
     if reply_to_user:
         report_subagent_user_input(dependencies, session.address, message.id)
     context.run.emit(

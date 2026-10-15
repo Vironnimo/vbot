@@ -1,3 +1,4 @@
+import { assistantRun, outputItem } from './timelineItems.support.js';
 // @vitest-environment jsdom
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
@@ -847,6 +848,12 @@ describe('Swarm Board posts', () => {
     overrideOperations(operation, { 'board.read': boardStore(posts) });
     bridge.readHistory.mockResolvedValue({
       status: 'completed',
+      items: [
+        assistantRun('cite', [outputItem('Builds on #1.')], {
+          source: 'history',
+          status: 'completed',
+        }),
+      ],
       messages: [
         {
           id: 'msg-cite',

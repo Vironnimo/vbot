@@ -1,5 +1,6 @@
 """Runs domain public API."""
 
+from core.runs._timeline import RunTimeline
 from core.runs.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
@@ -57,6 +58,7 @@ from core.runs.runs import (
 )
 
 __all__ = [
+    "RunTimeline",
     "ASSISTANT_OUTPUT_DELTA_EVENT",
     "ASSISTANT_OUTPUT_EVENT",
     "ActiveRunError",

@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat import CommandDispatcher, ReplySurface
+from core.chat import CommandDispatcher, CommandOutcome, ReplySurface
 from core.chat.commands import (
     AgentArgument,
     HandoffArgument,
@@ -16,7 +16,7 @@ from core.chat.commands import (
     parse_handoff_argument,
 )
 from core.chat.status_report import STATUS_PLACEHOLDER
-from core.projects import AgentResolver, ModelConfigurationError, ProjectStore
+from core.projects import AgentOverrides, AgentResolver, ModelConfigurationError, ProjectStore
 from core.runs import ChatRunManager, Run, RunCancelledError
 from core.sessions import SessionAddress
 from tests.core.chat.commands_test_support import (
@@ -212,7 +212,15 @@ def test_stop_without_an_active_run_still_replies_with_a_notice() -> None:
 
 
 def test_help_lists_the_current_commands_as_detail() -> None:
-    result = _execute_sync(CommandDispatcher(ChatRunManager()), "/help")
+    dispatcher = CommandDispatcher(ChatRunManager())
+    dispatcher.register_extension_command(
+        "fixture",
+        name="restricted",
+        description="Restricted command.",
+        handler=lambda _context, _argument: CommandOutcome(command="restricted"),
+        unavailable_surfaces={"webui", "tui"},
+    )
+    result = _execute_sync(dispatcher, "/help")
 
     assert result.feedback is not None and result.feedback.kind == "detail"
     reply = result.feedback.text
@@ -220,6 +228,7 @@ def test_help_lists_the_current_commands_as_detail() -> None:
     assert "/continue" not in reply
     assert "/retry" not in reply
     assert "$skill-name" in reply
+    assert "/restricted" not in reply
 
 
 def test_agent_without_argument_lists_personal_and_team_directory() -> None:
@@ -411,9 +420,49 @@ class _ConfiguredModels:
     """Model-validation stub (only the configured set is usable) with in-memory Session
     Agent overrides."""
 
-    def __init__(self, configured: set[str]) -> None:
+    def __init__(
+        self, configured: set[str], *, agents: _RecordingAgents, projects: _RecordingProjects
+    ) -> None:
         self._configured = configured
+        self._agents = agents
+        self._projects = projects
         self.session_overrides: dict[SessionAddress, dict[str, Any]] = {}
+
+    def _agent(self, project_id: str | None, agent_id: str) -> Any:
+        model = "openai/gpt-5.2"
+        if project_id is None:
+            for target, changes in self._agents.updates:
+                if target == agent_id:
+                    model = changes.get("model") or "openai/gpt-5.2"
+        else:
+            for project, target, field, value in self._projects.set_calls:
+                if (project, target, field) == (project_id, agent_id, "model"):
+                    model = value
+            if (project_id, agent_id, "model") in self._projects.clear_calls:
+                model = "openai/gpt-5.2"
+        return _make_agent(model=model)
+
+    def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
+        for address, values in self.session_overrides.items():
+            if (address.project_id, address.agent_id) == (project_id, agent_id):
+                values.update(
+                    AgentOverrides.from_stored(values)
+                    .capture(self._agent(project_id, agent_id))
+                    .as_dict()
+                )
+
+    async def resolve_agent_async(
+        self, project_id: str | None, agent_id: str, *, require_model: bool
+    ) -> Any:
+        return self._agent(project_id, agent_id)
+
+    async def capture_session_settings_async(
+        self, address: SessionAddress, agent: Any
+    ) -> AgentOverrides:
+        stored = self.session_overrides.setdefault(address, {})
+        captured = AgentOverrides.from_stored(stored).capture(agent)
+        stored.update(captured.as_dict())
+        return captured
 
     def require_model_configured(self, model: str) -> None:
         if model not in self._configured:
@@ -500,7 +549,7 @@ async def test_model_value_writes_the_identity_model_or_project_override(
     facts: dict[str, Any] | None,
 ) -> None:
     agents, projects = _RecordingAgents(), _RecordingProjects()
-    resolver = _ConfiguredModels({"openai/gpt-5"})
+    resolver = _ConfiguredModels({"openai/gpt-5"}, agents=agents, projects=projects)
     session = SessionAddress(project_id=project_id, agent_id="coder", session_id="session-one")
     resolver.session_overrides[session] = dict(_SESSION_OVERRIDES)
     dispatcher = _model_dispatcher(agents, projects, resolver)
@@ -511,7 +560,10 @@ async def test_model_value_writes_the_identity_model_or_project_override(
     assert projects.set_calls == override_sets
     assert projects.clear_calls == override_clears
     # The Session runs the Agent's Model next; its other overrides stay.
-    assert resolver.session_overrides[session] == {"thinking_effort": "high"}
+    assert resolver.session_overrides[session] == {
+        "model": "openai/gpt-5.2" if message.lower().endswith("reset") else "openai/gpt-5",
+        "thinking_effort": "high",
+    }
     if facts is not None:
         assert result.facts == facts
     assert result.feedback is not None
@@ -523,7 +575,7 @@ async def test_model_value_writes_nothing_when_the_resolver_refuses_the_model() 
     # The resolver's Model checker owns usability, including forbidden pinned
     # Connections (tests/core/projects/test_resolver_connections.py).
     agents, projects = _RecordingAgents(), _RecordingProjects()
-    resolver = _ConfiguredModels({"openai/gpt-5"})
+    resolver = _ConfiguredModels({"openai/gpt-5"}, agents=agents, projects=projects)
     session = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
     resolver.session_overrides[session] = dict(_SESSION_OVERRIDES)
     dispatcher = _model_dispatcher(agents, projects, resolver)

@@ -148,6 +148,31 @@ def test_incremental_reads_are_bounded_and_advance_across_hidden_records(manager
     assert unchanged.after_cursor == second.after_cursor
 
 
+def test_semantic_pages_replace_complete_runs_at_both_edges(manager):
+    session = manager.create("coder").start_run("first")
+    session.append(ChatMessage.user("first"))
+    initial = read(session, complete_runs=True)
+    session.append_many(
+        [
+            ChatMessage.assistant(content="one", model="test"),
+            ChatMessage.assistant(content="two", model="test"),
+        ]
+    )
+    complete_run(session, summary("first"))
+    session = session.start_run("second")
+    session.append(ChatMessage.user("second"))
+    complete_run(session, summary("second"))
+    appended = read(session, after=initial.after_cursor, limit=1, complete_runs=True)
+    assert appended.incremental and appended.has_newer
+    assert [message.content for message in appended.page.messages[:3]] == ["first", "one", "two"]
+    assert appended.page.messages[-1].role == "run_summary"
+    assert appended.page.record_run_ids == ("first",) * 4
+    latest = read(session, limit=1, complete_runs=True)
+    assert latest.page.record_run_ids == ("second",) * 2
+    older = read(session, before=latest.page.before_cursor, limit=1, complete_runs=True)
+    assert older.page.record_run_ids == ("first",) * 4
+
+
 def test_edit_invalidates_append_cursor_and_excludes_old_lineage(manager):
     session = manager.create("coder")
     user = ChatMessage.user("old")

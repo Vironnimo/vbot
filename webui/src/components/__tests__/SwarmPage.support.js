@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, vi } from 'vitest';
+import { assistantRun, outputItem } from './timelineItems.support.js';
 const { flushSync, mount, tick, unmount } = await import('svelte');
 
 vi.mock(
@@ -292,6 +293,12 @@ function createBridge(initialProfile = profile, detail = swarm) {
       readHistory: vi.fn(() =>
         Promise.resolve({
           status: 'completed',
+          items: [
+            assistantRun('link', [outputItem('See https://example.test')], {
+              source: 'history',
+              status: 'completed',
+            }),
+          ],
           messages: [
             {
               id: 'msg-link',

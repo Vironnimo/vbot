@@ -12,7 +12,8 @@ import pytest
 from core.chat import ChatMessage
 from core.database import write_bootstrap_marker
 from core.runs import ChatRunManager, Run
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress
+from core.subagents.links import link_session
 from core.tools import ToolContext, tool_success
 from core.tools.process_tree import RunningProcess
 from server.file_delivery import FileDelivery
@@ -23,6 +24,7 @@ from server.rpc.errors import (
 )
 from tests.core.runs.runs_test_support import RunTimelines
 from tests.core.sessions.history_fixtures import complete_run
+from tests.core.subagents.subagents_test_support import SubAgentHarness
 from tests.core.tools.command_manager_helpers import (
     OWNER,
     Harness,
@@ -209,9 +211,12 @@ async def test_stop_all_stops_the_session_tree_and_reports_how_much_it_stopped()
 async def test_work_projects_the_complete_exact_session_scope_without_history() -> None:
     inspected: list[SessionAddress] = []
 
-    async def work_snapshot(address: SessionAddress) -> dict[str, bool]:
+    async def work_snapshot(
+        address: SessionAddress, *, include_entries: bool = False
+    ) -> JsonObject:
         inspected.append(address)
-        return {"run_active": False, "background_work_running": True}
+        assert include_entries is True
+        return {"run_active": False, "background_work_running": True, "running": []}
 
     state = SimpleNamespace(
         runtime=SimpleNamespace(subagents=SimpleNamespace(work_snapshot=work_snapshot))
@@ -219,11 +224,86 @@ async def test_work_projects_the_complete_exact_session_scope_without_history() 
     response = await call(state, "chat.work", agent_id="builder@vbot", session_id="s1")
     assert response == {
         "ok": True,
-        "result": {"run_active": False, "background_work_running": True},
+        "result": {"run_active": False, "background_work_running": True, "running": []},
     }
     assert inspected == [SessionAddress("vbot", "builder", "s1")]
     refused = await call(state, "chat.work", agent_id="builder@vbot", session_id="s1", after="old")
     assert refused["error"]["code"] == RPC_ERROR_INVALID_REQUEST
+
+
+@pytest.mark.asyncio
+async def test_work_lists_descendant_and_command_addresses_without_timeline_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = SubAgentHarness(tmp_path)
+    harness.parent = harness.sessions.create("parent", project_id="vbot", session_id="root").address
+    child = harness.sessions.create("worker", project_id="vbot", session_id="child").address
+    deep = harness.sessions.create("worker", project_id="vbot", session_id="deep").address
+    for address, parent, subagent_id in (
+        (child, harness.parent, "sub-child"),
+        (deep, child, "sub-deep"),
+    ):
+        link_session(
+            harness.sessions,
+            address,
+            subagent_id=subagent_id,
+            parent=parent,
+            run_id="original",
+            tool_call_id=None,
+            tool_call_index=None,
+        )
+
+    def no_history(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("Activity must not load conversation pages")
+
+    monkeypatch.setattr(ChatSession, "read_chat_history_snapshot", no_history)
+    (tmp_path / "commands").mkdir()
+    try:
+        async with command_harness(tmp_path / "commands") as commands:
+            harness.use_commands(commands.manager)
+            active = await harness.manager.start(deep, _hold_until_cancelled)
+            await active.wait_admitted()
+            command_id, _ = await commands.launch(owner=child, description="Build")
+            commands.manager.to_background(command_id, deliver=True)
+            unrelated_id, _ = await commands.launch(
+                owner=SessionAddress("other", "worker", "child")
+            )
+            commands.manager.to_background(unrelated_id, deliver=True)
+            state = SimpleNamespace(runtime=SimpleNamespace(subagents=harness.coordinator))
+            response = await call(state, "chat.work", agent_id="parent@vbot", session_id="root")
+            assert response["ok"] is True
+            result = response["result"]
+            assert result["run_active"] is False
+            assert result["background_work_running"] is True
+            entries = {entry["id"]: entry for entry in result["running"]}
+            assert set(entries) == {"sub-deep", command_id}
+            assert entries["sub-deep"] == {
+                "kind": "subagent",
+                "id": "sub-deep",
+                "label": "",
+                "status": "running",
+                "agent_id": "worker",
+                "session_id": "deep",
+                "project_id": "vbot",
+                "subagent_id": "sub-deep",
+                "parent_id": "sub-child",
+                "run_id": active.id,
+                "reply_target": "parent",
+                "tool_name": None,
+            }
+            assert entries[command_id] == {
+                "kind": "command",
+                "id": command_id,
+                "label": "Build",
+                "status": "running",
+                "still_running": False,
+                "agent_id": "worker",
+                "session_id": "child",
+                "project_id": "vbot",
+                "subagent_id": "sub-child",
+            }
+    finally:
+        await harness.close()
 
 
 def _commands_state(commands: Harness) -> SimpleNamespace:

@@ -1,5 +1,7 @@
 # Chat from the shell
 
+For a human-operated terminal conversation, use `vbot tui`. It requires interactive stdin and stdout; do not launch it from an automated shell Tool. Use `vbot chat` below to send a message and read its answer from a script or Agent.
+
 `vbot chat` sends one message to an Agent Session, waits until the Run it starts ends, and prints the answer.
 
 ```bash

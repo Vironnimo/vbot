@@ -26,6 +26,7 @@ from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.payloads import _invalid_skill_response, _skill_response, _tool_response
 from server.rpc.runtime_access import _state_command_dispatcher
 from server.rpc.validation import (
+    _chat_reply_surface,
     _draft_working_project,
     _optional_string,
     _reject_unsupported,
@@ -120,7 +121,10 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
     # (left out: the Agent's default Project; null: its Workspace). Validated as a
     # request shape before the domain work so a malformed address is a clean
     # client error.
-    _reject_unsupported(params, {"agent_id", "session_id", "working_project_id"}, "chat.commands")
+    _reject_unsupported(
+        params, {"agent_id", "session_id", "working_project_id", "reply_surface"}, "chat.commands"
+    )
+    reply_surface = _chat_reply_surface(params)
     address = _required_agent_address(params, "agent_id") if "agent_id" in params else None
     session_id = _optional_string(params, "session_id")
     if address is None and ("session_id" in params or "working_project_id" in params):
@@ -143,6 +147,7 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
                 "output": _COMMAND_CATALOG_OUTPUT[spec.catalog_result],
             }
             for spec in _state_command_dispatcher(state).catalog()
+            if reply_surface.kind not in spec.unavailable_surfaces
         ]
         skills = await _command_skill_suggestions(state, address, session_id, working_project_id)
     except Exception as exc:

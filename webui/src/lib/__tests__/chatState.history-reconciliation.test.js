@@ -5,937 +5,170 @@ import {
   ensureSessionState,
   loadHistory,
   startRun,
-  visibleTimelineItemsForRender,
 } from '../chatState.js';
-import { countTimelineTextOccurrences } from './chatState.support.js';
+import { prependHistory } from '../chatState/history.js';
+import { applyTimelineEvent } from '../chatTimeline.js';
+import {
+  assistantRun,
+  messageItem,
+  outputItem,
+} from '../../components/__tests__/timelineItems.support.js';
 
-describe('History reconciliation', () => {
-  it.each(['assistant_output_delta', 'reasoning_delta', 'tool_call_started'])(
-    'keeps new %s visible after loading an automatic Run prefix',
-    (type) => {
-      const session = ensureSessionState(
-        createChatState(),
-        'alpha',
-        'session-one',
-      );
-      const prefix = {
-        id: 'prefix',
-        role: 'assistant',
-        content: 'Earlier saved output',
-      };
-      const saved = {
-        history_run_id: 'run-one',
-        id: 'saved',
-        role: 'assistant',
-        content: 'Saved output',
-      };
-      startRun(session, { run_id: 'run-one' });
-      appendRunEvent(session, {
-        run_id: 'run-one',
-        sequence: 1,
-        type: 'assistant_output',
-        payload: { message: saved },
-      });
-      loadHistory(session, [prefix, saved]);
-      const payload =
-        type === 'tool_call_started'
-          ? {
-              tool_call: {
-                id: 'new-tool',
-                name: 'read',
-                arguments: { path: 'example.txt' },
-              },
-            }
-          : {
-              content_delta: 'Fresh output',
-              reasoning_delta: 'Fresh reasoning',
-            };
-
-      appendRunEvent(session, {
-        run_id: 'run-one',
-        sequence: 2,
-        type,
-        payload,
-      });
-      const timeline = visibleTimelineItemsForRender(session);
-
-      expect(countTimelineTextOccurrences(timeline, prefix.content)).toBe(1);
-      expect(countTimelineTextOccurrences(timeline, saved.content)).toBe(1);
-      const children = timeline.flatMap((item) => item.items ?? []);
-      if (type === 'tool_call_started') {
-        expect(children.some((item) => item.toolCallId === 'new-tool')).toBe(
-          true,
-        );
-      } else {
-        expect(
-          children.some(
-            (item) =>
-              item.content ===
-              (type === 'reasoning_delta' ? 'Fresh reasoning' : 'Fresh output'),
-          ),
-        ).toBe(true);
-      }
-    },
-  );
-
-  it('keeps an unanchored replay head after its already persisted User message', () => {
-    const session = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    const user = {
-      id: 'user',
-      history_run_id: 'run-one',
-      role: 'user',
-      content: 'Question',
-      timestamp: '2026-09-05T10:00:01Z',
-    };
-    loadHistory(session, [user]);
-    startRun(session, {
-      run_id: 'run-one',
-      events: [
-        {
-          run_id: 'run-one',
-          sequence: 1,
-          type: 'run_started',
-          timestamp: '2026-09-05T10:00:00Z',
-        },
-      ],
-    });
-
-    expect(
-      visibleTimelineItemsForRender(session).map((item) => item.id),
-    ).toEqual(['user', 'assistant-run-run-one']);
+const state = () => ensureSessionState(createChatState(), 'agent', 'session');
+const projection = (session, runId, sequence, items) =>
+  applyTimelineEvent(session, 'timeline_snapshot', {
+    run_id: runId,
+    sequence,
+    items,
   });
 
-  it('retains canonical Tool results while overlaying a partial automatic-Run replay', () => {
-    const session = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    const assistant = {
-      history_run_id: 'run-one',
-      id: 'saved',
-      role: 'assistant',
-      content: 'Inspecting',
-      tool_calls: [
-        { id: 'call-one', name: 'bash', arguments: { command: 'example' } },
-      ],
-    };
-    const result = {
-      id: 'result',
-      role: 'tool',
-      name: 'bash',
-      tool_call_id: 'call-one',
-      content: '{"ok":true,"data":{"content":"Canonical result"}}',
-    };
-    loadHistory(
-      session,
-      [assistant, result].map((message) => ({
-        ...message,
-        history_run_id: 'run-one',
-      })),
-    );
-    startRun(session, { run_id: 'run-one' });
-    appendRunEvent(session, {
-      run_id: 'run-one',
-      sequence: 1,
-      type: 'assistant_output',
-      payload: { message: assistant },
-    });
-    appendRunEvent(session, {
-      run_id: 'run-one',
-      sequence: 2,
-      type: 'tool_call_started',
-      payload: { tool_call: assistant.tool_calls[0] },
-    });
-    appendRunEvent(session, {
-      run_id: 'run-one',
-      sequence: 3,
-      type: 'tool_call_output',
-      payload: {
-        tool_call_id: 'call-one',
-        command_id: 'cmd_one',
-        output: 'Live output',
-      },
-    });
-    appendRunEvent(session, {
-      run_id: 'run-one',
-      sequence: 4,
-      type: 'reasoning_delta',
-      payload: { reasoning_delta: 'Next step' },
-    });
-
-    const [run] = visibleTimelineItemsForRender(session);
-
-    expect(run.tools).toHaveLength(1);
-    expect(run.tools[0]).toMatchObject({
-      result: result.content,
-      output: 'Live output',
-      status: 'success',
-    });
-    expect(run.reasoning[0].content).toBe('Next step');
-  });
-
-  it('keeps successive automatic-Run answers distinct through terminal History reconciliation', () => {
-    const session = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    const first = {
-      history_run_id: 'run-one',
-      id: 'first',
-      role: 'assistant',
-      content: 'First step',
-    };
-    const second = {
-      history_run_id: 'run-one',
-      id: 'second',
-      role: 'assistant',
-      content: 'Second step',
-    };
-    loadHistory(session, [first]);
-    startRun(session, { run_id: 'run-one' });
-    appendRunEvent(session, {
-      run_id: 'run-one',
-      sequence: 1,
-      type: 'assistant_output',
-      payload: { message: first },
-    });
-    appendRunEvent(session, {
-      run_id: 'run-one',
-      sequence: 2,
-      type: 'assistant_output_delta',
-      payload: { content_delta: 'Second' },
-    });
-    appendRunEvent(session, {
-      run_id: 'run-one',
-      sequence: 3,
-      type: 'assistant_output',
-      payload: { message: second },
-    });
-    appendRunEvent(session, {
-      run_id: 'run-one',
-      sequence: 4,
-      type: 'run_completed',
-      payload: { status: 'completed' },
-    });
-    for (const message of [first, second])
-      expect(
-        countTimelineTextOccurrences(
-          visibleTimelineItemsForRender(session),
-          message.content,
-        ),
-      ).toBe(1);
-
-    loadHistory(
-      session,
-      [
-        first,
-        second,
-        {
-          history_run_id: 'run-one',
-          id: 'summary',
-          role: 'run_summary',
-          run_id: 'run-one',
-          status: 'completed',
-        },
-      ],
-      { runs: [{ run_id: 'run-one', status: 'completed', complete: true }] },
-    );
-
-    for (const message of [first, second])
-      expect(
-        countTimelineTextOccurrences(
-          visibleTimelineItemsForRender(session),
-          message.content,
-        ),
-      ).toBe(1);
-  });
-
-  it('merges an automatic Run across a persisted Compaction checkpoint without duplication', () => {
-    const session = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    const first = {
-      history_run_id: 'run-one',
-      id: 'first',
-      role: 'assistant',
-      content: 'Before compaction',
-    };
-    const checkpoint = {
-      history_run_id: 'run-one',
-      id: 'checkpoint',
-      role: 'compaction_checkpoint',
-      content: 'Checkpoint',
-    };
-    const second = {
-      history_run_id: 'run-one',
-      id: 'second',
-      role: 'assistant',
-      content: 'After compaction',
-    };
-    loadHistory(session, [first, checkpoint, second]);
-    startRun(session, { run_id: 'run-one' });
-    for (const [index, message] of [first, checkpoint, second].entries()) {
-      appendRunEvent(session, {
-        run_id: 'run-one',
-        sequence: index + 1,
-        type:
-          message === checkpoint ? 'compaction_completed' : 'assistant_output',
-        payload: { message },
-      });
-    }
-    appendRunEvent(session, {
-      run_id: 'run-one',
-      sequence: 4,
-      type: 'assistant_output_delta',
-      payload: { content_delta: 'Fresh continuation' },
-    });
-
-    const timeline = visibleTimelineItemsForRender(session);
-
-    expect(timeline).toHaveLength(1);
-    expect(
-      timeline[0].items.map((item) => item.content ?? item.message?.content),
-    ).toEqual([
-      'Before compaction',
-      'Checkpoint',
-      'After compaction',
-      'Fresh continuation',
+describe('History and server Timeline synchronization', () => {
+  it('keeps the newer active projection while merging an older History page', () => {
+    const session = state();
+    startRun(session, { run_id: 'active' });
+    projection(session, 'active', 20, [
+      assistantRun('active', [outputItem('Latest')]),
     ]);
+    const live = session.timelineItems[0];
+    loadHistory(session, [{ id: 'older', role: 'user', content: 'Earlier' }], {
+      items: [
+        messageItem({ id: 'older', role: 'user', content: 'Earlier' }),
+        assistantRun('active', [outputItem('Stale')]),
+      ],
+      activeRunId: 'active',
+      timelineSequence: 10,
+    });
+    expect(session.timelineItems[1]).toBe(live);
+    expect(session.timelineItems[0].id).toBe('older');
+    expect(session.timelineSequences.active).toBe(20);
   });
 
-  it('keeps retained older Runs before the newest loaded page', () => {
-    const session = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
+  it('replaces a completed Run atomically on an incremental History read and retires its events', () => {
+    const session = state();
+    const old = assistantRun('older', [outputItem('Earlier')], {
+      source: 'history',
+      status: 'completed',
+    });
+    loadHistory(session, [], { items: [old], generation: 'generation' });
+    const loadedOld = session.timelineItems[0];
+    startRun(session, { run_id: 'completed' });
+    appendRunEvent(session, {
+      run_id: 'completed',
+      sequence: 1,
+      type: 'run_completed',
+    });
+    projection(session, 'completed', 1, [
+      assistantRun('completed', [outputItem('Provisional')]),
+      messageItem({ id: 'provisional-error' }, { runId: 'completed' }),
+    ]);
+    const canonical = assistantRun('completed', [outputItem('Canonical')], {
+      source: 'history',
+      status: 'completed',
+    });
+    loadHistory(session, [], {
+      generation: 'generation',
+      incremental: true,
+      runs: [{ run_id: 'completed', status: 'completed', complete: true }],
+      items: [canonical],
+      replaceRunIds: ['completed'],
+    });
+    expect(session.timelineItems).toEqual([old, canonical]);
+    expect(session.timelineItems[0]).toBe(loadedOld);
+    expect(session.runEvents).toEqual([]);
+  });
+
+  it('replaces the lineage when History generation changes despite newer local sequences', () => {
+    const session = state();
+    loadHistory(
+      session,
+      [{ id: 'old', role: 'user', content: 'Edited away' }],
+      { items: [messageItem({ id: 'old' })], generation: 'before' },
     );
-    for (const [index, runId] of ['older', 'newer'].entries()) {
-      const timestamp = `2026-09-05T10:0${index}:00Z`;
-      startRun(session, { run_id: runId });
-      appendRunEvent(session, {
-        run_id: runId,
-        sequence: 1,
-        timestamp,
-        type: 'user_message_persisted',
-        payload: {
-          message: {
-            id: `${runId}-user`,
+    startRun(session, { run_id: 'old-run' });
+    projection(session, 'old-run', 100, [
+      assistantRun('old-run', [outputItem('Old answer')]),
+    ]);
+    appendRunEvent(session, {
+      run_id: 'old-run',
+      sequence: 100,
+      type: 'run_completed',
+    });
+    loadHistory(
+      session,
+      [{ id: 'replacement', role: 'user', content: 'New question' }],
+      {
+        generation: 'after',
+        incremental: true,
+        reset: true,
+        items: [
+          messageItem({
+            id: 'replacement',
             role: 'user',
-            content: `${runId} question`,
-            timestamp,
-          },
-        },
-      });
-      appendRunEvent(session, {
-        run_id: runId,
-        sequence: 2,
-        timestamp,
-        type: 'assistant_output',
-        payload: {
-          message: {
-            id: `${runId}-answer`,
-            role: 'assistant',
-            content: `${runId} answer`,
-            timestamp,
-          },
-        },
-      });
-      if (runId === 'older') {
-        appendRunEvent(session, {
-          run_id: runId,
-          sequence: 3,
-          timestamp,
-          type: 'run_completed',
-          payload: { status: 'completed' },
-        });
-      }
-    }
-
-    loadHistory(
-      session,
-      [
-        {
-          id: 'newer-user',
-          role: 'user',
-          content: 'newer question',
-          timestamp: '2026-09-05T10:01:00Z',
-        },
-      ],
-      { hasMore: true, nextBefore: 'newer-cursor' },
-    );
-
-    expect(
-      visibleTimelineItemsForRender(session).map(
-        (item) =>
-          item.message?.content ??
-          item.event?.payload?.message?.content ??
-          item.outputs?.map((output) => output.content).join(''),
-      ),
-    ).toEqual([
-      'older question',
-      'older answer',
-      'newer question',
-      'newer answer',
-    ]);
-  });
-
-  it('keeps one assistant run while SSE replay and terminal events overlap persisted active-run history', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    startRun(sessionState, {
-      run_id: 'run-one',
-      sse_url: '/api/runs/run-one/events',
-      status: 'running',
-    });
-
-    loadHistory(sessionState, [
-      {
-        history_run_id: 'run-one',
-        id: 'user-one',
-        role: 'user',
-        content: 'Inspect the file',
-      },
-      {
-        history_run_id: 'run-one',
-        id: 'assistant-one',
-        role: 'assistant',
-        content: 'The file says A.',
-      },
-    ]);
-
-    appendRunEvent(sessionState, {
-      type: 'user_message_persisted',
-      run_id: 'run-one',
-      sequence: 1,
-      payload: {
-        message: {
-          id: 'user-one',
-          role: 'user',
-          content: 'Inspect the file',
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'reasoning_delta',
-      run_id: 'run-one',
-      sequence: 2,
-      payload: { reasoning_delta: 'Checking' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output',
-      run_id: 'run-one',
-      sequence: 3,
-      payload: {
-        message: {
-          id: 'assistant-one',
-          role: 'assistant',
-          content: 'The file says A.',
-        },
-      },
-    });
-
-    const timelineItems = visibleTimelineItemsForRender(sessionState);
-
-    expect(timelineItems).toHaveLength(2);
-    expect(timelineItems[0]).toEqual(
-      expect.objectContaining({ id: 'user-one', type: 'message' }),
-    );
-    expect(timelineItems[1]).toEqual(
-      expect.objectContaining({
-        id: 'assistant-run-run-one',
-        type: 'assistant_run',
-        outputs: [expect.objectContaining({ content: 'The file says A.' })],
-      }),
-    );
-    expect(timelineItems[1].reasoning).toEqual([
-      expect.objectContaining({ content: 'Checking', streaming: true }),
-    ]);
-
-    appendRunEvent(sessionState, {
-      type: 'run_completed',
-      run_id: 'run-one',
-      sequence: 4,
-      payload: { status: 'completed' },
-    });
-
-    expect(sessionState.status).toBe('completed');
-    expect(visibleTimelineItemsForRender(sessionState)).toEqual([
-      expect.objectContaining({ id: 'user-one', type: 'message' }),
-      expect.objectContaining({
-        id: 'assistant-run-run-one',
-        status: 'completed',
-        outputs: [expect.objectContaining({ content: 'The file says A.' })],
-      }),
-    ]);
-  });
-
-  it('keeps output streamed after a mid-run history snapshot when the run finishes', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    startRun(sessionState, {
-      run_id: 'run-one',
-      sse_url: '/api/runs/run-one/events',
-      status: 'running',
-    });
-
-    loadHistory(
-      sessionState,
-      [
-        { id: 'user-one', role: 'user', content: 'Finish the investigation' },
-        {
-          id: 'assistant-at-entry',
-          role: 'assistant',
-          content: null,
-          tool_calls: [
-            {
-              id: 'call-at-entry',
-              name: 'read',
-              arguments: { path: 'before.txt' },
-            },
-          ],
-        },
-        {
-          id: 'tool-at-entry',
-          role: 'tool',
-          tool_call_id: 'call-at-entry',
-          name: 'read',
-          content: 'before',
-        },
-      ].map((message) => ({ ...message, history_run_id: 'run-one' })),
-    );
-
-    appendRunEvent(sessionState, {
-      type: 'user_message_persisted',
-      run_id: 'run-one',
-      sequence: 1,
-      payload: {
-        message: {
-          id: 'user-one',
-          role: 'user',
-          content: 'Finish the investigation',
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_started',
-      run_id: 'run-one',
-      sequence: 2,
-      payload: {
-        tool_call: {
-          id: 'call-at-entry',
-          index: 0,
-          name: 'read',
-          arguments: { path: 'before.txt' },
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_result',
-      run_id: 'run-one',
-      sequence: 3,
-      payload: {
-        tool_call: { id: 'call-at-entry', name: 'read' },
-        result: 'before',
-        message: {
-          id: 'tool-at-entry',
-          role: 'tool',
-          tool_call_id: 'call-at-entry',
-          name: 'read',
-          content: 'before',
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_started',
-      run_id: 'run-one',
-      sequence: 4,
-      payload: {
-        tool_call: {
-          id: 'call-after-entry',
-          index: 0,
-          name: 'read',
-          arguments: { path: 'after.txt' },
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_result',
-      run_id: 'run-one',
-      sequence: 5,
-      payload: {
-        tool_call: { id: 'call-after-entry', name: 'read' },
-        result: 'after',
-        message: {
-          id: 'tool-after-entry',
-          role: 'tool',
-          tool_call_id: 'call-after-entry',
-          name: 'read',
-          content: 'after',
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output',
-      run_id: 'run-one',
-      sequence: 6,
-      payload: {
-        message: {
-          id: 'assistant-final',
-          role: 'assistant',
-          content: 'This is the final answer.',
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'run_completed',
-      run_id: 'run-one',
-      sequence: 7,
-      payload: { status: 'completed' },
-    });
-
-    const timelineItems = visibleTimelineItemsForRender(sessionState);
-
-    expect(timelineItems).toHaveLength(2);
-    expect(timelineItems[1]).toEqual(
-      expect.objectContaining({
-        id: 'assistant-run-run-one',
-        type: 'assistant_run',
-        status: 'completed',
-      }),
-    );
-    expect(timelineItems[1].tools.map((tool) => tool.toolCallId)).toEqual([
-      'call-at-entry',
-      'call-after-entry',
-    ]);
-    expect(timelineItems[1].outputs.map((output) => output.content)).toEqual([
-      'This is the final answer.',
-    ]);
-  });
-
-  it('retains provisional Tool activity until a canonical terminal record arrives', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    startRun(sessionState, {
-      run_id: 'run-one',
-      sse_url: '/api/runs/run-one/events',
-      status: 'running',
-    });
-
-    loadHistory(
-      sessionState,
-      [
-        { id: 'user-one', role: 'user', content: 'Inspect the file' },
-        {
-          id: 'assistant-one',
-          role: 'assistant',
-          content: 'The file says A.',
-        },
-      ].map((message) => ({ ...message, history_run_id: 'run-one' })),
-    );
-
-    appendRunEvent(sessionState, {
-      type: 'user_message_persisted',
-      run_id: 'run-one',
-      sequence: 1,
-      payload: {
-        message: {
-          id: 'user-one',
-          role: 'user',
-          content: 'Inspect the file',
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_started',
-      run_id: 'run-one',
-      sequence: 2,
-      payload: {
-        tool_call: {
-          id: 'call-one',
-          index: 0,
-          name: 'read',
-          arguments: { path: 'a.txt' },
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'run_completed',
-      run_id: 'run-one',
-      sequence: 3,
-      payload: { status: 'completed' },
-    });
-
-    expect(visibleTimelineItemsForRender(sessionState)).toEqual([
-      expect.objectContaining({ id: 'user-one', type: 'message' }),
-      expect.objectContaining({
-        id: 'assistant-run-run-one',
-        type: 'assistant_run',
-        status: 'completed',
-        outputs: [expect.objectContaining({ content: 'The file says A.' })],
-        tools: [expect.objectContaining({ toolCallId: 'call-one' })],
-      }),
-    ]);
-  });
-
-  it('overlays a live cancellation onto history that has not loaded its Run Summary yet', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'orchestrator@project-one',
-      'session-one',
-    );
-    startRun(sessionState, {
-      run_id: 'run-parent',
-      sse_url: '/api/runs/run-parent/events',
-      status: 'running',
-    });
-
-    loadHistory(
-      sessionState,
-      [
-        { id: 'user-one', role: 'user', content: 'Start the planner' },
-        {
-          id: 'assistant-subagent',
-          role: 'assistant',
-          content: 'I will start the planner.',
-          tool_calls: [
-            {
-              id: 'call-subagent',
-              name: 'subagent',
-              arguments: {
-                agent_id: 'planner',
-                background: false,
-                content: 'Create the plan',
-              },
-            },
-          ],
-        },
-      ].map((message) => ({ ...message, history_run_id: 'run-parent' })),
-    );
-
-    appendRunEvent(sessionState, {
-      type: 'user_message_persisted',
-      run_id: 'run-parent',
-      sequence: 1,
-      payload: {
-        message: {
-          id: 'user-one',
-          role: 'user',
-          content: 'Start the planner',
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_started',
-      run_id: 'run-parent',
-      sequence: 2,
-      payload: {
-        tool_call: {
-          id: 'call-subagent',
-          index: 0,
-          name: 'subagent',
-          arguments: {
-            agent_id: 'planner',
-            background: false,
-            content: 'Create the plan',
-          },
-        },
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'run_cancelled',
-      run_id: 'run-parent',
-      sequence: 3,
-      timestamp: '2026-07-27T12:11:57Z',
-      payload: {
-        status: 'cancelled',
-        timing: { duration_ms: 1509909 },
-      },
-    });
-
-    const timelineItems = visibleTimelineItemsForRender(sessionState);
-    const assistantRun = timelineItems.find(
-      (item) => item.type === 'assistant_run',
-    );
-
-    expect(timelineItems).toHaveLength(2);
-    expect(assistantRun).toEqual(
-      expect.objectContaining({
-        id: 'assistant-run-run-parent',
-        runId: 'run-parent',
-        status: 'cancelled',
-        durationMs: 1509909,
-      }),
-    );
-    expect(assistantRun.tools).toEqual([
-      expect.objectContaining({
-        toolCallId: 'call-subagent',
-        status: 'cancelled',
-      }),
-    ]);
-  });
-
-  it('rehydrates interrupted reasoning-only output from persisted history', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-
-    loadHistory(
-      sessionState,
-      [
-        {
-          history_run_id: 'run-cancelled',
-          id: 'user-one',
-          role: 'user',
-          content: 'Inspect the evidence',
-        },
-        {
-          history_run_id: 'run-cancelled',
-          id: 'assistant-reasoning',
-          role: 'assistant',
-          content: null,
-          reasoning: 'Inspect the evidence.',
-          interrupted: true,
-        },
-        {
-          history_run_id: 'run-cancelled',
-          id: 'summary-one',
-          role: 'run_summary',
-          run_id: 'run-cancelled',
-          status: 'cancelled',
-        },
-      ],
-      {
-        runs: [
-          { run_id: 'run-cancelled', status: 'cancelled', complete: true },
-        ],
-      },
-    );
-
-    const assistantRun = visibleTimelineItemsForRender(sessionState).find(
-      (item) => item.type === 'assistant_run',
-    );
-
-    expect(assistantRun).toEqual(
-      expect.objectContaining({
-        source: 'history',
-        status: 'cancelled',
-        outputs: [],
-        reasoning: [
-          expect.objectContaining({
-            content: 'Inspect the evidence.',
-            streaming: false,
+            content: 'New question',
           }),
         ],
-      }),
+      },
     );
+    expect(session.messages.map((message) => message.id)).toEqual([
+      'replacement',
+    ]);
+    expect(session.timelineItems.map((item) => item.id)).toEqual([
+      'replacement',
+    ]);
+    expect(session.timelineSequences).toEqual({});
+    expect(session.runEvents).toEqual([]);
+    expect(session.currentRun).toBeNull();
+    expect(session.status).toBe('idle');
   });
 
-  it('uses persisted suffix history only when terminal live events overlap the same turn', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    startRun(sessionState, {
-      run_id: 'run-one',
-      sse_url: '/api/runs/run-one/events',
-      status: 'running',
-    });
-
-    loadHistory(
-      sessionState,
-      [
-        { id: 'user-one', role: 'user', content: 'Inspect the file' },
-        {
-          id: 'assistant-tools',
-          role: 'assistant',
-          reasoning: 'Need to read it.',
-          tool_calls: [
-            {
-              id: 'call-one',
-              name: 'read',
-              arguments: { path: 'a.txt' },
-            },
-          ],
-        },
-        {
-          id: 'tool-one',
-          role: 'tool',
-          tool_call_id: 'call-one',
-          name: 'read',
-          content: '{"ok": true, "content": "A"}',
-        },
-        {
-          id: 'assistant-final',
-          role: 'assistant',
-          content: 'The file says A.',
-        },
-      ].map((message) => ({ ...message, history_run_id: 'run-one' })),
-    );
-
-    appendRunEvent(sessionState, {
-      type: 'user_message_persisted',
-      run_id: 'run-one',
-      sequence: 1,
-      payload: {
-        message: {
-          id: 'user-one',
-          role: 'user',
-          content: 'Inspect the file',
-        },
+  it('prepends an older page without changing the active Run or its streamed children', () => {
+    const session = state();
+    startRun(session, { run_id: 'active' });
+    projection(session, 'active', 10, [
+      assistantRun('active', [outputItem('Current')]),
+    ]);
+    const live = session.timelineItems[0];
+    const current = session.currentRun;
+    prependHistory(
+      session,
+      [{ id: 'older', role: 'user', content: 'Earlier' }],
+      {
+        items: [messageItem({ id: 'older', role: 'user', content: 'Earlier' })],
+        hasMore: true,
+        nextBefore: 'cursor',
       },
-    });
-    appendRunEvent(sessionState, {
-      type: 'run_completed',
-      run_id: 'run-one',
-      sequence: 2,
-      payload: { status: 'completed' },
-    });
-
-    const timelineItems = visibleTimelineItemsForRender(sessionState);
-
-    expect(timelineItems).toHaveLength(2);
-    expect(timelineItems[1]).toEqual(
-      expect.objectContaining({
-        id: 'assistant-run-run-one',
-        type: 'assistant_run',
-        status: 'completed',
-      }),
     );
-    expect(timelineItems[1].items.map((item) => item.type)).toEqual([
-      'reasoning',
-      'tool_call',
-      'assistant_output',
+    expect(session.timelineItems.map((item) => item.id)).toEqual([
+      'older',
+      live.id,
     ]);
-    expect(timelineItems[1].tools).toEqual([
-      expect.objectContaining({
-        toolCallId: 'call-one',
-        name: 'read',
-        result: '{"ok": true, "content": "A"}',
-        status: 'success',
-      }),
+    expect(session.timelineItems[1]).toBe(live);
+    expect(session.currentRun).toBe(current);
+    expect(session.historyBefore).toBe('cursor');
+  });
+
+  it('does not mistake a matching message id for completed durable Run coverage', () => {
+    const session = state();
+    startRun(session, { run_id: 'one' });
+    appendRunEvent(session, {
+      run_id: 'one',
+      sequence: 1,
+      type: 'run_completed',
+    });
+    projection(session, 'one', 1, [
+      assistantRun('one', [outputItem('Done')], { status: 'completed' }),
     ]);
-    expect(timelineItems[1].outputs).toEqual([
-      expect.objectContaining({ content: 'The file says A.' }),
-    ]);
+    const events = session.runEvents;
+    loadHistory(
+      session,
+      [{ id: 'output-one', role: 'assistant', content: 'Done' }],
+      {
+        items: [],
+        incremental: true,
+        runs: [{ run_id: 'one', complete: false }],
+      },
+    );
+    expect(session.runEvents).toEqual(events);
+    expect(session.timelineItems[0].outputs[0].content).toBe('Done');
   });
 });

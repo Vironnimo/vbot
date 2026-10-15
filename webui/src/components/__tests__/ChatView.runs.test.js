@@ -33,6 +33,7 @@ import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { createRunEventFeed } from '../../lib/runEventFeed.svelte.js';
 import { t } from '../../lib/i18n.js';
+import { assistantRun, outputItem, toolItem } from './timelineItems.support.js';
 
 const alphaProps = () => ({
   sharedAgents: [createAgent()],
@@ -56,29 +57,41 @@ async function startRun(runId, content) {
   await waitForText('Hello');
   sendComposerMessage(content);
   await waitForCondition(() => subscribeRunEventsMock.mock.calls.length === 1);
-  return runEventSource(runId);
+  const source = runEventSource(runId);
+  source.emit('timeline_snapshot', {
+    items: [assistantRun(runId, [])],
+    state: { status: 'running' },
+  });
+  return source;
 }
 
-// Emits a `subagent` run into the running parent Run: the tool call, its
-// child Session start and the run result, all carrying `spawn`.
+// The server announces the child before its spawning Tool returns.
 function emitSubAgentSpawn(source, callId, spawn, { afterStart } = {}) {
-  const toolCall = { id: callId, index: 0, name: 'subagent' };
-  source.emit('tool_call_started', {
-    tool_call: {
-      ...toolCall,
-      arguments: {
-        action: 'run',
-        agent_id: 'alpha',
-        content: 'Inspect the project',
-      },
+  const row = toolItem({
+    id: callId,
+    name: 'subagent',
+    arguments: {
+      action: 'run',
+      agent_id: 'alpha',
+      content: 'Inspect the project',
     },
+    subAgentSession: spawn,
   });
-  source.emit('subagent_session_started', { tool_call: toolCall, data: spawn });
+  source.emit('timeline_update', {
+    run: { id: `assistant-run-${source.runId}` },
+    children: [row],
+  });
   flushSync();
   afterStart?.();
-  source.emit('tool_call_result', {
-    tool_call: toolCall,
-    result: JSON.stringify({ ok: true, data: spawn }),
+  source.emit('timeline_update', {
+    run: { id: `assistant-run-${source.runId}` },
+    children: [
+      toolItem({
+        ...row,
+        result: { ok: true, data: spawn },
+        status: 'success',
+      }),
+    ],
   });
   flushSync();
 }
@@ -91,7 +104,7 @@ function serveSubAgentHistory(subSessionHistory) {
     streamResponse: runningRun('run-parent'),
   });
   rpcMock.mockImplementation(async (method, params) => {
-    if (method !== 'chat.history' || params?.session_id !== 'sub-session-1') {
+    if (method !== 'chat.timeline' || params?.session_id !== 'sub-session-1') {
       return fallback(method, params);
     }
     if (subSessionHistory instanceof Error) throw subSessionHistory;
@@ -107,7 +120,7 @@ const subSessionHistory = (overrides = {}) => ({
 });
 
 const statusChecks = () =>
-  rpcCalls('chat.history').filter(
+  rpcCalls('chat.timeline').filter(
     (params) => params.session_id === 'sub-session-1' && params.limit === 20,
   ).length;
 
@@ -144,13 +157,11 @@ describe('ChatView Runs', () => {
   // A new parent-Run event re-renders the Timeline, which reconciles every
   // sub-agent row again.
   function rerenderTimeline(source, callId) {
-    source.emit('tool_call_started', {
-      tool_call: {
-        id: callId,
-        index: 0,
-        name: 'read',
-        arguments: { path: 'notes.md' },
-      },
+    source.emit('timeline_update', {
+      run: { id: `assistant-run-${source.runId}` },
+      children: [
+        toolItem({ id: callId, name: 'read', arguments: { path: 'notes.md' } }),
+      ],
     });
     flushSync();
   }
@@ -180,26 +191,25 @@ describe('ChatView Runs', () => {
       ).toBe(false);
     });
 
-    it('batches run SSE deltas before updating the rendered timeline', async () => {
+    it('renders server-batched text and applies its incremental append in the same row', async () => {
       rpcMock.mockImplementation(
         createChatRpcMock({ streamResponse: runningRun('run-batched') }),
       );
       await chat.mountChat({}, { ready: null });
       const source = await startRun('run-batched', 'Start batched stream');
-
-      vi.useFakeTimers();
-      try {
-        source.emit('assistant_output_delta', { content_delta: 'Streamed ' });
-        source.emit('assistant_output_delta', { content_delta: 'answer' });
-        flushSync();
-        expect(document.body.textContent).not.toContain('Streamed');
-
-        await vi.advanceTimersByTimeAsync(50);
-        flushSync();
-        expect(document.body.textContent).toContain('Streamed answer');
-      } finally {
-        vi.useRealTimers();
-      }
+      source.emit('timeline_update', {
+        run: { id: 'assistant-run-run-batched' },
+        children: [outputItem('Streamed ', { id: 'answer', streaming: true })],
+      });
+      flushSync();
+      expect(document.body.textContent).toContain('Streamed');
+      source.emit('timeline_update', {
+        run: { id: 'assistant-run-run-batched' },
+        child_updates: [{ id: 'answer', append: { content: 'answer' } }],
+      });
+      flushSync();
+      expect(document.body.textContent).toContain('Streamed answer');
+      expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
     });
 
     it('forwards a live bash row background action to the Run control RPC', async () => {
@@ -209,17 +219,22 @@ describe('ChatView Runs', () => {
       await chat.mountChat({}, { ready: null });
       const source = await startRun('run-bash', 'Run a long command');
 
-      source.emit('tool_call_started', {
-        tool_call: {
-          id: 'call-bash',
-          index: 0,
-          name: 'bash',
-          arguments: { command: 'sleep 60' },
+      source.emit('timeline_update', {
+        run: { id: 'assistant-run-run-bash' },
+        children: [
+          toolItem({
+            id: 'call-bash',
+            name: 'bash',
+            arguments: { command: 'sleep 60' },
+          }),
+        ],
+        state: {
+          controls: {
+            compaction: 'unavailable',
+            background_tool_call_ids: ['call-bash'],
+          },
+          controls_sequence: 2,
         },
-      });
-      source.emit('run_controls_changed', {
-        compaction: 'unavailable',
-        background_tool_call_ids: ['call-bash'],
       });
       flushSync();
 
@@ -238,8 +253,12 @@ describe('ChatView Runs', () => {
     });
 
     it('coalesces repeated run stream errors into one reconnect', async () => {
+      const activeRuns = {};
       rpcMock.mockImplementation(
-        createChatRpcMock({ streamResponse: runningRun('run-reconnect') }),
+        createChatRpcMock({
+          activeRuns,
+          streamResponse: runningRun('run-reconnect'),
+        }),
       );
       await chat.mountChat({}, { ready: null });
       const { handlers } = await startRun(
@@ -247,6 +266,7 @@ describe('ChatView Runs', () => {
         'Start reconnecting stream',
       );
 
+      activeRuns['session-1'] = runningRun('run-reconnect');
       vi.useFakeTimers();
       // Pin reconnect jitter to its midpoint so attempt 0 fires at exactly the
       // base 500ms delay this test advances by.
@@ -268,44 +288,12 @@ describe('ChatView Runs', () => {
   });
 
   describe('attaching to active Runs', () => {
-    it.each([
-      [
-        'resumes after a complete retained prefix',
-        [
-          { type: 'run_started', sequence: 1, payload: { status: 'running' } },
-          {
-            type: 'assistant_output_delta',
-            sequence: 2,
-            payload: { content_delta: 'Retained ' },
-          },
-        ],
-        2,
-      ],
-      [
-        'replays from the start when the replay prefix was evicted',
-        [
-          {
-            type: 'assistant_output_delta',
-            sequence: 5_000,
-            payload: { content_delta: 'Retained ' },
-          },
-        ],
-        0,
-      ],
-    ])(
-      'keeps an opened Session live and %s',
-      async (_case, retainedEvents, afterSequence) => {
-        const events = retainedEvents.map((event) => ({
-          ...event,
-          run_id: 'active-sub-run',
-          agent_id: 'alpha',
-          session_id: 'sub-session-1',
-        }));
+    it.each([2, 5000])(
+      'opens a Session from a complete timeline snapshot at sequence %i regardless of raw replay retention',
+      async (sequence) => {
         rpcMock.mockImplementation(
           createChatRpcMock({
-            activeRuns: {
-              'sub-session-1': runningRun('active-sub-run', events),
-            },
+            activeRuns: { 'sub-session-1': runningRun('active-sub-run') },
           }),
         );
         await chat.mountChat(
@@ -323,48 +311,51 @@ describe('ChatView Runs', () => {
           () => subscribeRunEventsMock.mock.calls.length === 1,
         );
         expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-          '/api/runs/active-sub-run/events',
+          '/api/runs/active-sub-run/timeline',
           expect.any(Object),
-          { afterSequence },
+          {
+            eventTypes: ['timeline_snapshot', 'timeline_update'],
+            closeOnTerminal: false,
+          },
         );
-
-        runEventSource('active-sub-run').emit(
-          'assistant_output_delta',
-          { content_delta: 'live' },
-          retainedEvents.at(-1).sequence + 1,
+        const source = runEventSource('active-sub-run');
+        source.emit(
+          'timeline_snapshot',
+          {
+            items: [
+              assistantRun('active-sub-run', [
+                outputItem('Retained ', { id: 'answer', streaming: true }),
+              ]),
+            ],
+            state: { status: 'running' },
+          },
+          sequence,
         );
+        source.emit('timeline_update', {
+          run: { id: 'assistant-run-active-sub-run' },
+          child_updates: [{ id: 'answer', append: { content: 'live' } }],
+        });
         await waitForText('Retained live');
       },
     );
 
-    it('merges retained active-run events when reloading the same displayed Session', async () => {
-      const retained = (sequence, type, payload) => ({
-        type,
-        run_id: 'active-parent-run',
-        agent_id: 'alpha',
-        session_id: 'session-1',
-        sequence,
-        payload,
-      });
-      const activeRuns = {
-        'session-1': runningRun('active-parent-run', [
-          retained(1, 'run_started', { status: 'running' }),
-        ]),
-      };
-      rpcMock.mockImplementation(createChatRpcMock({ activeRuns }));
+    it('loads an authoritative timeline when reloading the same displayed Session without opening another stream', async () => {
+      const activeRuns = { 'session-1': runningRun('active-parent-run') };
+      const sessionItems = {};
+      rpcMock.mockImplementation(
+        createChatRpcMock({ activeRuns, sessionItems }),
+      );
       listedSessions('session-1');
       await chat.mountChat(alphaProps());
       await waitForCondition(
         () => subscribeRunEventsMock.mock.calls.length === 1,
       );
-
-      activeRuns['session-1'] = runningRun('active-parent-run', [
-        ...activeRuns['session-1'].events,
-        retained(2, 'assistant_output_delta', { content_delta: 'Recovered ' }),
-        retained(3, 'assistant_output_delta', { content_delta: 'draft' }),
-      ]);
+      sessionItems['session-1'] = [
+        assistantRun('active-parent-run', [
+          outputItem('Recovered draft', { streaming: true }),
+        ]),
+      ];
       await reopenCurrentSessionFromDrawer();
-
       await waitForText('Recovered draft');
       expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
     });
@@ -387,9 +378,12 @@ describe('ChatView Runs', () => {
         () => subscribeRunEventsMock.mock.calls.length === 1,
       );
       expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-        '/api/runs/pushed-run/events',
+        '/api/runs/pushed-run/timeline',
         expect.any(Object),
-        { afterSequence: 1 },
+        {
+          eventTypes: ['timeline_snapshot', 'timeline_update'],
+          closeOnTerminal: false,
+        },
       );
     });
 
@@ -483,7 +477,7 @@ describe('ChatView Runs', () => {
       ];
       const baseRpc = createChatRpcMock({ commandItems: [] });
       rpcMock.mockImplementation(async (method, params) =>
-        method === 'chat.history'
+        method === 'chat.timeline'
           ? responses[historyReads('session-1') - 1]()
           : baseRpc(method, params),
       );
@@ -758,6 +752,35 @@ describe('ChatView Runs', () => {
       '%s Stop all without a Run by whether work of a Sub-Agent of the Session runs (Run dot %s)',
       async (offers, dot, childHistory, subAgentCommands) => {
         const fallback = createChatRpcMock({
+          sessionItems: {
+            'session-1': [
+              assistantRun(
+                'delegation',
+                [
+                  toolItem({
+                    id: 'call-worker',
+                    name: 'subagent',
+                    arguments: {
+                      action: 'run',
+                      agent_id: 'alpha',
+                      content: 'Do the work',
+                    },
+                    result: {
+                      ok: true,
+                      data: {
+                        agent_id: 'alpha',
+                        session_id: 'sub-session-1',
+                        run_id: 'child-run',
+                        status: 'running',
+                      },
+                    },
+                  }),
+                  outputItem('Hello'),
+                ],
+                { source: 'history', status: 'completed' },
+              ),
+            ],
+          },
           sessionMessages: {
             'session-1': [
               message('user-1', 'Delegate the work', 'user'),
@@ -802,7 +825,7 @@ describe('ChatView Runs', () => {
               run_active: false,
               background_work_running: offers === 'offers',
             };
-          if (method !== 'chat.history') return fallback(method, params);
+          if (method !== 'chat.timeline') return fallback(method, params);
           if (params?.session_id === 'sub-session-1') return childHistory;
           return {
             ...(await fallback(method, params)),

@@ -2,12 +2,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  appendEvents,
   flushSync,
-  reportedMultiStepMessages,
   setupChatTimelineSuite,
   timelineSession,
-  userPersisted,
 } from './ChatTimeline.support.js';
 import {
   installFakeLayout,
@@ -17,6 +14,14 @@ import {
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { createChatState } from '../../lib/chatState.js';
 import { t } from '../../lib/i18n.js';
+import {
+  assistantRun,
+  messageItem,
+  outputItem,
+  toolItem,
+  reportedMultiStepItems,
+} from './timelineItems.support.js';
+import { applyTimelineEvent } from '../../lib/chatTimeline.js';
 
 const VIEWPORT_HEIGHT = 500;
 
@@ -37,24 +42,24 @@ function rowHeight(element) {
 // `turns` History turns: a user message and an answering Run each.
 function historyTurns(turns, prefix = '') {
   return Array.from({ length: turns }, (_, index) => [
-    {
+    messageItem({
       id: `${prefix}user-${index}`,
       role: 'user',
       content: `Question ${index}`,
       timestamp: '2026-05-10T09:00:00',
-    },
-    {
-      id: `${prefix}answer-${index}`,
-      role: 'assistant',
-      content: `Answer ${index}`,
+    }),
+    assistantRun(`${prefix}run-${index}`, [outputItem(`Answer ${index}`)], {
+      id: `history-run-${prefix}answer-${index}`,
+      source: 'history',
+      status: 'completed',
       timestamp: '2026-05-10T09:00:30',
-    },
+    }),
   ]).flat();
 }
 
 function sessionWithHistory(sessionId, messages, chatState) {
   const sessionState = timelineSession(sessionId, chatState);
-  sessionState.messages = messages;
+  sessionState.timelineItems = messages;
   return sessionState;
 }
 
@@ -128,21 +133,30 @@ describe('ChatTimeline virtualization', () => {
     ).toBe(true);
     expect(layout.scrollTop()).toBe(layout.maxScrollTop());
 
-    appendEvents(sessionState, 'run-live', [
-      userPersisted('user-live', 'Stream please'),
-    ]);
+    applyTimelineEvent(sessionState, 'timeline_snapshot', {
+      run_id: 'run-live',
+      sequence: 1,
+      items: [
+        messageItem(
+          { id: 'user-live', role: 'user', content: 'Stream please' },
+          { runId: 'run-live' },
+        ),
+        assistantRun('run-live', [outputItem('', { streaming: true })]),
+      ],
+    });
     for (let delta = 0; delta < 5; delta += 1) {
-      appendEvents(
-        sessionState,
-        'run-live',
-        [
+      applyTimelineEvent(sessionState, 'timeline_update', {
+        run_id: 'run-live',
+        sequence: 2 + delta,
+        base_sequence: 1 + delta,
+        run: { id: 'assistant-run-run-live' },
+        child_updates: [
           {
-            type: 'assistant_output_delta',
-            payload: { content_delta: 'streamed text '.repeat(20) },
+            id: 'output-one',
+            append: { content: 'streamed text '.repeat(20) },
           },
         ],
-        2 + delta,
-      );
+      });
       flushSync();
       await layout.settle(2);
       expect(layout.scrollTop()).toBe(layout.maxScrollTop());
@@ -233,9 +247,9 @@ describe('ChatTimeline virtualization', () => {
   it('keeps the reading position when older History loads above it', async () => {
     let props = null;
     const onLoadOlder = vi.fn(async () => {
-      props.sessionState.messages = [
+      props.sessionState.timelineItems = [
         ...historyTurns(30, 'older-'),
-        ...props.sessionState.messages,
+        ...props.sessionState.timelineItems,
       ];
       return true;
     });
@@ -264,7 +278,7 @@ describe('ChatTimeline virtualization', () => {
   it('keeps an expanded Tool row expanded after it leaves the window and returns', async () => {
     await mountWithLayout({
       sessionState: sessionWithHistory('session-disclosure', [
-        ...reportedMultiStepMessages(),
+        ...reportedMultiStepItems(),
         ...historyTurns(20),
       ]),
     });
@@ -290,43 +304,45 @@ describe('ChatTimeline virtualization', () => {
   describe('rows with ongoing interaction', () => {
     const speechUrl = '/api/speech/artifacts/aud_virtual';
     const speechMessages = [
-      { id: 'speech-user', role: 'user', content: 'Read it aloud' },
-      {
-        id: 'speech-call',
-        role: 'assistant',
-        tool_calls: [
-          {
+      messageItem({
+        id: 'speech-user',
+        role: 'user',
+        content: 'Read it aloud',
+      }),
+      assistantRun(
+        'speech',
+        [
+          toolItem({
             id: 'call-speech',
             name: 'generate_speech',
             arguments: { text: 'test-owned speech' },
-          },
+            result: {
+              ok: true,
+              error: null,
+              data: {
+                artifact: { id: 'aud_virtual', kind: 'speech', url: speechUrl },
+              },
+              artifacts: [],
+            },
+          }),
+          outputItem('Spoken.'),
         ],
-      },
-      {
-        id: 'speech-result',
-        role: 'tool',
-        tool_call_id: 'call-speech',
-        name: 'generate_speech',
-        content: JSON.stringify({
-          ok: true,
-          error: null,
-          data: {
-            artifact: { id: 'aud_virtual', kind: 'speech', url: speechUrl },
-          },
-          artifacts: [],
-        }),
-      },
-      { id: 'speech-answer', role: 'assistant', content: 'Spoken.' },
+        {
+          id: 'history-run-speech-call',
+          source: 'history',
+          status: 'completed',
+        },
+      ),
     ];
 
     function editableHistory() {
       return [
-        {
+        messageItem({
           id: 'edit-user',
           role: 'user',
           content: 'Original question',
           editable: true,
-        },
+        }),
         ...speechMessages,
         ...historyTurns(20),
       ];

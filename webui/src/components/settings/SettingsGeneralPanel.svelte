@@ -173,6 +173,9 @@
     if (accessor === 'tray') {
       return t('settings.general.clients.accessor.tray');
     }
+    if (accessor === 'tui') {
+      return t('settings.general.clients.accessor.tui');
+    }
     return t('settings.general.clients.accessor.unknown');
   }
 

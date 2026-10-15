@@ -409,6 +409,7 @@ class ChatLoop:
         queued_item: QueuedRunItem,
         input_origin: InputOrigin | None = None,
         project_id: str | None = None,
+        reply_surface: ReplySurface | None = None,
     ) -> tuple[str, RunExecutor, str]:
         """Build replacement data for a queued run without mutating queue state."""
         agent = await self._dependencies.agent_resolver.resolve_agent_async(
@@ -424,7 +425,7 @@ class ChatLoop:
             raise ChatError("queued item is not an editable chat request")
         return (
             session.id,
-            executor.with_edited_content(content, input_origin),
+            executor.with_edited_content(content, input_origin, reply_surface),
             _display_content_preview(content),
         )
 

@@ -53,6 +53,7 @@ export function openExtensionPageRun(
       group_id: groupId,
       run_id: runId,
       after_sequence: afterSequence,
+      ...(options.timeline === true ? { timeline: true } : {}),
     },
     options,
   );

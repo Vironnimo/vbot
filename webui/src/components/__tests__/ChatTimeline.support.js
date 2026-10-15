@@ -7,11 +7,7 @@ import {
   unmount,
 } from 'svelte';
 
-import {
-  appendRunEvent,
-  createChatState,
-  ensureSessionState,
-} from '../../lib/chatState.js';
+import { createChatState, ensureSessionState } from '../../lib/chatState.js';
 import { init, t } from '../../lib/i18n.js';
 
 vi.mock('svelte', async () => {
@@ -129,45 +125,6 @@ export function timelineSession(sessionId = 'session-test', chatState) {
   return ensureSessionState(chatState ?? createChatState(), 'alpha', sessionId);
 }
 
-// Appends `events` to one Run with consecutive sequence numbers.
-export function appendEvents(sessionState, runId, events, firstSequence = 1) {
-  events.forEach((event, index) => {
-    appendRunEvent(sessionState, {
-      run_id: runId,
-      sequence: firstSequence + index,
-      ...event,
-    });
-  });
-}
-
-export function toolStarted(id, name, args = {}, payload = {}) {
-  return {
-    type: 'tool_call_started',
-    payload: { tool_call: { id, index: 0, name, arguments: args }, ...payload },
-  };
-}
-
-export function toolResult(id, name, result, payload = {}) {
-  return {
-    type: 'tool_call_result',
-    payload: { tool_call: { id, index: 0, name }, result, ...payload },
-  };
-}
-
-export function assistantOutput(content, message = {}) {
-  return {
-    type: 'assistant_output',
-    payload: { message: { role: 'assistant', content, ...message } },
-  };
-}
-
-export function userPersisted(id, content) {
-  return {
-    type: 'user_message_persisted',
-    payload: { message: { id, role: 'user', content } },
-  };
-}
-
 // The Tool detail row labelled with the i18n `key` (`chat.toolArgs`,
 // `chat.toolResultLabel`, ...).
 export function detailRow(key) {
@@ -261,109 +218,4 @@ export async function waitForCondition(check, attempts = 20) {
     }
   }
   throw new Error('Timed out waiting for condition.');
-}
-
-// A reported multi-step Run: two Tool calls with Thinking and commentary
-// between them, as History rows.
-export function reportedMultiStepMessages() {
-  return [
-    {
-      id: 'user-reported',
-      role: 'user',
-      content: 'Investigate the duplicated chat UI.',
-    },
-    {
-      id: 'assistant-glob',
-      role: 'assistant',
-      reasoning: 'Find candidate files.',
-      tool_calls: [
-        {
-          id: 'call-glob',
-          name: 'glob',
-          arguments: { pattern: 'webui/src/**/*.js' },
-        },
-      ],
-    },
-    {
-      id: 'tool-glob',
-      role: 'tool',
-      tool_call_id: 'call-glob',
-      name: 'glob',
-      content: '{"ok":true,"data":{"content":"webui/src/lib/chatState.js"}}',
-    },
-    {
-      id: 'assistant-read',
-      role: 'assistant',
-      content: 'I found the timeline helper; now I will read it.',
-      reasoning: 'Read the selected file.',
-      tool_calls: [
-        {
-          id: 'call-read',
-          name: 'read',
-          arguments: { path: 'webui/src/lib/chatState.js' },
-        },
-      ],
-    },
-    {
-      id: 'tool-read',
-      role: 'tool',
-      tool_call_id: 'call-read',
-      name: 'read',
-      content: '{"ok":true,"data":{"content":"timeline code"}}',
-    },
-    {
-      id: 'assistant-final',
-      role: 'assistant',
-      content: 'The timeline is in chatState.js.',
-      reasoning: 'Summarize the result.',
-    },
-  ];
-}
-
-// The same reported Run as live events.
-export function appendReportedLiveRunEvents(
-  sessionState,
-  runId,
-  firstSequence = 1,
-) {
-  const [, , , readMessage, , finalMessage] = reportedMultiStepMessages();
-  appendEvents(
-    sessionState,
-    runId,
-    [
-      {
-        type: 'reasoning_delta',
-        payload: { reasoning_delta: 'Find candidate files.' },
-      },
-      toolStarted('call-glob', 'glob', { pattern: 'webui/src/**/*.js' }),
-      toolResult('call-glob', 'glob', {
-        ok: true,
-        data: { content: 'webui/src/lib/chatState.js' },
-      }),
-      {
-        type: 'reasoning_delta',
-        payload: { reasoning_delta: 'Read the selected file.' },
-      },
-      {
-        type: 'assistant_output_delta',
-        payload: { content_delta: readMessage.content },
-      },
-      toolStarted('call-read', 'read', { path: 'webui/src/lib/chatState.js' }),
-      toolResult('call-read', 'read', {
-        ok: true,
-        data: { content: 'timeline code' },
-      }),
-      { type: 'assistant_output', payload: { message: readMessage } },
-      {
-        type: 'reasoning_delta',
-        payload: { reasoning_delta: 'Summarize the result.' },
-      },
-      {
-        type: 'assistant_output_delta',
-        payload: { content_delta: finalMessage.content },
-      },
-      { type: 'assistant_output', payload: { message: finalMessage } },
-    ],
-    firstSequence,
-  );
 }

@@ -41,7 +41,7 @@ MessageRole = Literal[
     "history_edit",
 ]
 InputOrigin = Literal["speech_transcription", "live_voice"]
-ReplySurfaceKind = Literal["webui", "channel"]
+ReplySurfaceKind = Literal["webui", "tui", "channel"]
 ConversationKind = Literal["direct", "group"]
 GroupRole = Literal["admin", "member"]
 JsonObject = dict[str, Any]
@@ -65,6 +65,11 @@ REPLY_SURFACE_NOTE_PREFIX = "[reply-surface] "
 WEBUI_REPLY_SURFACE_REMINDER = (
     "Reply surface: WebUI/Desktop. To show an image or provide a file download, include "
     "file:<filesystem-path> in your reply; vBot renders it automatically."
+)
+TUI_REPLY_SURFACE_REMINDER = (
+    "Reply surface: terminal TUI. Markdown and code are displayed as text; images, "
+    "HTML previews, audio and video are not embedded. To provide a file download, "
+    "include file:<filesystem-path> in your reply."
 )
 INPUT_ORIGIN_SPEECH_TRANSCRIPTION: InputOrigin = "speech_transcription"
 INPUT_ORIGIN_LIVE_VOICE: InputOrigin = "live_voice"
@@ -287,7 +292,7 @@ class ReplySurface:
     thread_id: str | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
-        if self.kind == "webui":
+        if self.kind in {"webui", "tui"}:
             if any(
                 value is not None
                 for value in (
@@ -299,7 +304,7 @@ class ReplySurface:
                     self.thread_id,
                 )
             ):
-                raise ChatError("WebUI reply surfaces cannot include Channel fields")
+                raise ChatError(f"{self.kind} reply surfaces cannot include Channel fields")
             return
         if self.kind != "channel":
             raise ChatError(f"unsupported reply surface kind: {self.kind}")
@@ -316,6 +321,11 @@ class ReplySurface:
     def webui(cls) -> ReplySurface:
         """Return the shared WebUI/Desktop reply surface."""
         return cls(kind="webui")
+
+    @classmethod
+    def tui(cls) -> ReplySurface:
+        """Return the terminal conversation reply surface."""
+        return cls(kind="tui")
 
     @classmethod
     def channel(
@@ -342,7 +352,7 @@ class ReplySurface:
     @property
     def identity(self) -> tuple[str, ...]:
         """Return the stable identity used to detect reply-surface switches."""
-        if self.kind == "webui":
+        if self.kind in {"webui", "tui"}:
             return (self.kind,)
         return (
             self.kind,
@@ -371,6 +381,8 @@ class ReplySurface:
         """Render the exact model-facing reminder for this destination."""
         if self.kind == "webui":
             return WEBUI_REPLY_SURFACE_REMINDER
+        if self.kind == "tui":
+            return TUI_REPLY_SURFACE_REMINDER
         conversation_kind = cast(ConversationKind, self.conversation_kind)
         conversation = "group chat" if conversation_kind == "group" else "direct message"
         return (

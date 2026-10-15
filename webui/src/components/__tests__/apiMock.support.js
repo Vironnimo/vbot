@@ -90,6 +90,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       call('skill.share', { agent_id: agentId, name, shared, receivers }),
     listChatCommands: (params = {}) => call('chat.commands', params),
     loadChatHistory: (params) => call('chat.history', params),
+    loadChatTimeline: (params) => call('chat.timeline', params),
     loadReflectionRuns: (params) => call('chat.reflections', params),
     deleteSession: (agentId, sessionId, { permanent = false } = {}) =>
       call('session.delete', {

@@ -2,56 +2,55 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  appendEvents,
   flushSync,
   mockScrollGeometry,
   setupChatTimelineSuite,
   tick,
   timelineSession,
-  userPersisted,
   waitForCondition,
 } from './ChatTimeline.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { createChatState } from '../../lib/chatState.js';
+import {
+  assistantRun,
+  messageItem,
+  outputItem,
+} from './timelineItems.support.js';
+import { applyTimelineEvent } from '../../lib/chatTimeline.js';
 import { t } from '../../lib/i18n.js';
 
 // A parent Session and a Sub-Agent Session from the same chat state.
 function scrollMemorySessions() {
   const chatState = createChatState();
   const parentSession = timelineSession('session-parent', chatState);
-  parentSession.messages = [
-    {
+  parentSession.timelineItems = [
+    messageItem({
       id: 'parent-user-one',
       role: 'user',
       content: 'Parent question',
       timestamp: '2026-05-10T09:00:00',
-    },
-    {
-      id: 'parent-assistant-one',
-      role: 'assistant',
-      content: 'Parent answer',
-      timestamp: '2026-05-10T09:01:00',
-    },
+    }),
+    assistantRun('parent-assistant-one', [outputItem('Parent answer')], {
+      status: 'completed',
+    }),
   ];
   const childSession = timelineSession('session-child', chatState);
-  childSession.messages = [
-    {
+  childSession.timelineItems = [
+    messageItem({
       id: 'child-user-one',
       role: 'user',
       content: 'Child task',
       timestamp: '2026-05-10T09:02:00',
-    },
+    }),
   ];
   return { parentSession, childSession };
 }
 
 function lateMessage(id) {
-  return {
-    id,
-    role: 'assistant',
-    content: 'Late answer',
+  return assistantRun(id, [outputItem('Late answer')], {
+    status: 'completed',
     timestamp: '2026-05-10T09:05:00',
-  };
+  });
 }
 
 function scrollAsUser(
@@ -259,9 +258,13 @@ describe('ChatTimeline scrolling', () => {
       'a submitted turn',
       () => {
         const sessionState = timelineSession();
-        appendEvents(sessionState, 'run-submitted', [
-          userPersisted('user-submitted', 'Fresh turn'),
-        ]);
+        sessionState.timelineItems = [
+          messageItem({
+            id: 'user-submitted',
+            role: 'user',
+            content: 'Fresh turn',
+          }),
+        ];
         return sessionState;
       },
       { submittedTurnScrollKey: 1 },
@@ -286,13 +289,13 @@ describe('ChatTimeline scrolling', () => {
       return true;
     });
     const sessionState = timelineSession();
-    sessionState.messages = [
-      {
+    sessionState.timelineItems = [
+      messageItem({
         id: 'message-older-boundary',
         role: 'user',
         content: 'Oldest loaded message',
         timestamp: '2026-05-10T09:00:00',
-      },
+      }),
     ];
     timeline.render(sessionState, { hasOlderHistory: true, onLoadOlder });
 
@@ -339,8 +342,8 @@ describe('ChatTimeline scrolling', () => {
     // moves the view near the bottom without user input; the next content
     // change re-asserts the restored position instead of following.
     view.geometry.setScrollTop(1980);
-    view.props.sessionState.messages = [
-      ...view.props.sessionState.messages,
+    view.props.sessionState.timelineItems = [
+      ...view.props.sessionState.timelineItems,
       lateMessage('parent-late'),
     ];
     flushSync();
@@ -360,16 +363,16 @@ describe('ChatTimeline scrolling', () => {
     'keeps the visible text line when %s',
     async (_name, change, expectedTop) => {
       const sessions = scrollMemorySessions();
-      appendEvents(sessions.parentSession, 'run-reading', [
-        userPersisted('reading-user', 'Give a long answer.'),
-        {
-          type: 'assistant_output_delta',
-          payload: { content_delta: READING_MARKDOWN },
-        },
-      ]);
-      // Only the long Run supplies layout; the older History is irrelevant to
-      // this position within the Run and does not need synthetic geometry.
-      sessions.parentSession.messages = [];
+      sessions.parentSession.timelineItems = [
+        messageItem({
+          id: 'reading-user',
+          role: 'user',
+          content: 'Give a long answer.',
+        }),
+        assistantRun('run-reading', [
+          outputItem(READING_MARKDOWN, { streaming: true }),
+        ]),
+      ];
       const view = await mountSessions({}, sessions);
       const layout = mockReadingLayout(view);
       try {
@@ -392,25 +395,20 @@ describe('ChatTimeline scrolling', () => {
           if (change === 'wrapping') layout.narrowParagraph();
           else layout.growImage();
           if (change === 'markdown') {
-            appendEvents(
-              view.props.sessionState,
-              'run-reading',
-              [
-                {
-                  type: 'assistant_output',
-                  payload: {
-                    message: {
-                      role: 'assistant',
-                      content: READING_MARKDOWN.replace(
-                        'This paragraph',
-                        '**This paragraph**',
-                      ),
-                    },
-                  },
-                },
+            applyTimelineEvent(view.props.sessionState, 'timeline_snapshot', {
+              run_id: 'run-reading',
+              sequence: 3,
+              items: [
+                assistantRun('run-reading', [
+                  outputItem(
+                    READING_MARKDOWN.replace(
+                      'This paragraph',
+                      '**This paragraph**',
+                    ),
+                  ),
+                ]),
               ],
-              3,
-            );
+            });
             flushSync();
             expect(layout.paragraph()).toBe(originalParagraph);
             expect(layout.paragraph().querySelector('strong')).not.toBeNull();
@@ -442,8 +440,8 @@ describe('ChatTimeline scrolling', () => {
     // Real user scroll input releases the pin; from near the bottom the view
     // follows new content again.
     scrollAsUser(view.container, view.geometry, 1980);
-    view.props.sessionState.messages = [
-      ...view.props.sessionState.messages,
+    view.props.sessionState.timelineItems = [
+      ...view.props.sessionState.timelineItems,
       lateMessage('parent-late'),
     ];
     flushSync();
@@ -456,13 +454,13 @@ describe('ChatTimeline scrolling', () => {
     const view = await mountSessions();
     await returnToParentAt700(view);
 
-    view.props.sessionState.messages = [
-      {
+    view.props.sessionState.timelineItems = [
+      messageItem({
         id: 'parent-user-replaced',
         role: 'user',
         content: 'Replaced question',
         timestamp: '2026-05-10T10:00:00',
-      },
+      }),
     ];
     flushSync();
     await switchTo(view, view.childSession, 2000);
@@ -688,13 +686,13 @@ describe('ChatTimeline scrolling', () => {
     expect(geometry.currentScrollTop()).toBe(0);
 
     session.historyLoaded = true;
-    session.messages = [
-      {
+    session.timelineItems = [
+      messageItem({
         id: 'initial-user',
         role: 'user',
         content: 'First message',
         timestamp: '2026-05-10T09:00:00',
-      },
+      }),
     ];
     geometry.setScrollHeight(2000);
     flushSync();
@@ -714,8 +712,8 @@ describe('ChatTimeline scrolling', () => {
     view.container.dispatchEvent(new Event('scroll'));
     await waitForCondition(() => view.geometry.currentScrollTop() === 2000);
 
-    view.childSession.messages = [
-      ...view.childSession.messages,
+    view.childSession.timelineItems = [
+      ...view.childSession.timelineItems,
       lateMessage('child-late'),
     ];
     view.geometry.setScrollHeight(2400);

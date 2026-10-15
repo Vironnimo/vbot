@@ -156,25 +156,11 @@ describe('Sub-Agent rows without a run id', () => {
       transport: 'websocket',
     },
     {
-      name: 'Project child, current result, SSE',
-      result: { agent_id: 'builder@vbot', project_id: 'vbot' },
-      event: { agent_id: 'builder', project_id: 'vbot' },
-      childAddress: 'builder@vbot',
-      transport: 'sse',
-    },
-    {
       name: 'Identity child, WebSocket',
       result: { agent_id: 'helper' },
       event: { agent_id: 'helper' },
       childAddress: 'helper',
       transport: 'websocket',
-    },
-    {
-      name: 'Identity child, SSE',
-      result: { agent_id: 'helper' },
-      event: { agent_id: 'helper' },
-      childAddress: 'helper',
-      transport: 'sse',
     },
   ])(
     'follows the child Run events for a $name',

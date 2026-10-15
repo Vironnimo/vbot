@@ -17,7 +17,7 @@ The runtime and shared state live on the server. WebUI, Desktop, CLI, and Channe
 core/          <- Kernel (async). No HTTP, no UI.
 server/        <- FastAPI + WS + SSE. Imports core/. RPC dispatch lives in server/rpc/.
 webui/         <- Svelte frontend. Own package.json. Talks HTTP/WS/SSE only.
-cli/           <- CLI accessor. Server lifecycle locally; all other domains via shared RPC client.
+cli/           <- CLI accessor, including the full-screen `vbot tui`. Server lifecycle locally; conversation and management through server contracts.
 desktop/       <- pywebview shell. Imports nothing from the project - HTTP only.
 ```
 

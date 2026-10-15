@@ -120,6 +120,11 @@ def test_reply_surface_note_is_appended_after_a_switch_or_compaction() -> None:
     assert should_append_reply_surface_note([webui_note, checkpoint], webui) is True
     restated = [webui_note, checkpoint, ChatMessage.note(webui.to_note_content())]
     assert should_append_reply_surface_note(restated, webui) is False
+    tui = ReplySurface.tui()
+    assert should_append_reply_surface_note(restated, tui) is True
+    restated.append(ChatMessage.note(tui.to_note_content()))
+    assert should_append_reply_surface_note(restated, tui) is False
+    assert should_append_reply_surface_note(restated, webui) is True
 
 
 def test_old_untagged_channel_note_is_not_reply_surface_state() -> None:

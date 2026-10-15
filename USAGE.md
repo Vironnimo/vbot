@@ -643,6 +643,23 @@ Built-in Commands are owned by Chat and work in the WebUI; Channels support the 
 
 `/agent` changes Session ownership; `/handoff` creates a new target Session and leaves the source intact. Through a Channel, `/handoff` relays the target's first response once but does not change the Channel's configured Agent or future routing.
 
+### Full-screen terminal conversations
+
+Run `vbot tui` in a terminal to choose an Agent and resume or start a Session. It connects to the same server as the WebUI, including through SSH or a local SSH tunnel. Closing the TUI leaves server Runs running.
+
+```bash
+vbot tui
+vbot tui --agent coder
+vbot tui --agent coder@my-project
+vbot tui --agent coder --session SESSION_ID
+vbot tui --agent coder --project my-project
+vbot tui --host 127.0.0.1 --port 8420
+```
+
+Enter inserts a new line; Ctrl+S or Alt+Enter sends. F1 shows keyboard help. F2 opens Sessions, F3 starts a new conversation, F4 selects Model/effort and shows Usage, F5 opens activity, F6 manages the Queue and Steer, F7 answers Extension requests, F8 handles files, and F9 opens Commands and Skills. Ctrl+Space completes `/commands`, Skills and `@` server files. Ctrl+X stops the current Run; F10 stops its related work through Stop all; Ctrl+Q detaches.
+
+The timeline renders Markdown and code, with expandable Reasoning and Tool details. Ctrl+O loads older history; Ctrl+B returns to the Parent or previous conversation. Ctrl+G copies or exports the loaded conversation. Upload paths and download destinations are on the terminal machine; `@` file references are on the server. Images, audio, video and Extension pages are links rather than embedded browser content. A request with an unknown send outcome stays marked uncertain until you reconnect and inspect the Session; the client never automatically sends it again.
+
 ### Chat from the command line
 
 `vbot chat` sends one message to an Agent Session, waits for the Run, and prints the answer, which makes it usable from scripts and other tools:
@@ -1137,6 +1154,7 @@ Installed commands use `vbot`. From a development checkout, `python cli/main.py`
 | Projects | `project add`, `project list`, `project show`, `project set`, `project override set`, `project override clear`, `project detect`, `project remove` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session policy set`, `session delete`, `session channel link` |
 | Archive | `archive list`, `archive show`, `archive restore`, `archive purge` |
+| Terminal | `tui [--agent ...] [--session ... \| --project ...] [--host ... --port ...]` |
 | Chat | `chat [<prompt>] [--agent ...] [-c \| --session ...] [--model ...] [--thinking-effort ...] [--temperature ...] [--json]` |
 | Data store | `data-store status`, `data-store snapshot list|create|verify|restore`, `data-store config-backup list|show|restore`, `data-store incident acknowledge`, `data-store unregister` |
 | Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel whatsapp setup/status/pair`, `channel remove` |

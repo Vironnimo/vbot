@@ -2,8 +2,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  appendEvents,
-  assistantOutput,
   flushAsync,
   flushSync,
   follows,
@@ -12,7 +10,13 @@ import {
   stubClipboard,
   timelineSession,
 } from './ChatTimeline.support.js';
-import { loadHistory } from '../../lib/chatState.js';
+import {
+  assistantRun,
+  messageItem,
+  outputItem,
+  reasoningItem,
+} from './timelineItems.support.js';
+import { applyTimelineEvent } from '../../lib/chatTimeline.js';
 import { t } from '../../lib/i18n.js';
 import {
   HOVER_CARD_SHOW_DELAY_MS,
@@ -21,7 +25,13 @@ import {
 
 function sessionWithMessages(messages) {
   const sessionState = timelineSession();
-  sessionState.messages = messages;
+  sessionState.timelineItems = messages.map((message) => messageItem(message));
+  return sessionState;
+}
+
+function sessionWithItems(items) {
+  const sessionState = timelineSession();
+  sessionState.timelineItems = items;
   return sessionState;
 }
 
@@ -47,7 +57,9 @@ function imageBlock(attachmentId, filename, extra = {}) {
 
 function sessionWithOutput(content) {
   const sessionState = timelineSession();
-  appendEvents(sessionState, 'run-output', [assistantOutput(content)]);
+  sessionState.timelineItems = [
+    assistantRun('run-output', [outputItem(content)]),
+  ];
   return sessionState;
 }
 
@@ -314,15 +326,14 @@ describe('ChatTimeline messages', () => {
         'streaming output with an open fence',
         () => {
           const sessionState = timelineSession();
-          appendEvents(sessionState, 'run-streaming', [
-            {
-              type: 'assistant_output_delta',
-              payload: {
-                content_delta:
-                  '**streaming** text\n\n## Title\n\n```js\nconst value = 1;',
-              },
-            },
-          ]);
+          sessionState.timelineItems = [
+            assistantRun('run-streaming', [
+              outputItem(
+                '**streaming** text\n\n## Title\n\n```js\nconst value = 1;',
+                { streaming: true },
+              ),
+            ]),
+          ];
           return sessionState;
         },
         {
@@ -469,15 +480,17 @@ describe('ChatTimeline messages', () => {
 
     it('renders reasoning as Markdown and strips HTML comment separators', () => {
       timeline.render(
-        sessionWithMessages([
-          {
-            id: 'assistant-history-reasoning-markdown',
-            role: 'assistant',
-            content: 'Done.',
-            reasoning:
-              '**Analyzing the input**\n\n<!-- -->\n\n**Deciding next step**',
-            timestamp: '2026-05-10T12:00:00Z',
-          },
+        sessionWithItems([
+          assistantRun(
+            'reasoning-markdown',
+            [
+              reasoningItem(
+                '**Analyzing the input**\n\n<!-- -->\n\n**Deciding next step**',
+              ),
+              outputItem('Done.'),
+            ],
+            { source: 'history', status: 'completed' },
+          ),
         ]),
       );
 
@@ -499,21 +512,18 @@ describe('ChatTimeline messages', () => {
         '**Inspecting evidence**\n\nRead the available sources.',
         '**Comparing options**\n\nWeigh the two approaches.',
       ];
-      const deltas = sections.flatMap((section, summary_index) =>
-        [section.slice(0, 10), section.slice(10)].map((summary_text, part) => ({
-          type: 'reasoning_delta',
-          payload: {
-            reasoning_delta:
-              (summary_index > 0 && part === 0 ? '\n\n' : '') + summary_text,
-            summary_index,
-            summary_text,
-          },
-        })),
-      );
-      appendEvents(sessionState, 'summary-run', [
-        { type: 'run_started', payload: {} },
-        ...deltas,
-      ]);
+      applyTimelineEvent(sessionState, 'timeline_snapshot', {
+        run_id: 'summary-run',
+        sequence: 5,
+        items: [
+          assistantRun('summary-run', [
+            reasoningItem(sections.join('\n\n'), {
+              reasoningSummary: sections,
+              streaming: true,
+            }),
+          ]),
+        ],
+      });
       timeline.render(sessionState);
       openDisclosures('.reasoning-block');
       expect(
@@ -527,23 +537,18 @@ describe('ChatTimeline messages', () => {
       ).toBe(t('chat.reasoning.sections', { count: 2 }));
       expect(document.querySelector('.reasoning-duration')).toBeNull();
 
-      const message = {
-        id: 'summary-message',
-        role: 'assistant',
-        reasoning: sections.join('\n\n'),
-        reasoning_summary: sections,
-        content: 'I will check the relevant Tool next.',
-        phase: 'commentary',
-      };
-      appendEvents(
-        sessionState,
-        'summary-run',
-        [
-          { type: 'reasoning', payload: { message } },
-          { type: 'assistant_output', payload: { message } },
+      applyTimelineEvent(sessionState, 'timeline_snapshot', {
+        run_id: 'summary-run',
+        sequence: 7,
+        items: [
+          assistantRun('summary-run', [
+            reasoningItem(sections.join('\n\n'), {
+              reasoningSummary: sections,
+            }),
+            outputItem('I will check the relevant Tool next.'),
+          ]),
         ],
-        deltas.length + 2,
-      );
+      });
       // Remount as a reconnect would, using the stable Run projection.
       await timeline.unmount();
       timeline.render(sessionState);
@@ -565,15 +570,17 @@ describe('ChatTimeline messages', () => {
           'A section without a heading.',
         ];
         timeline.render(
-          sessionWithMessages([
-            {
-              id: 'summary-history-message',
-              role: 'assistant',
-              content,
-              reasoning: sections.join('\n\n'),
-              reasoning_summary: sections,
-              timestamp: '2026-09-22T12:00:00Z',
-            },
+          sessionWithItems([
+            assistantRun(
+              'summary-history',
+              [
+                reasoningItem(sections.join('\n\n'), {
+                  reasoningSummary: sections,
+                }),
+                ...(content ? [outputItem(content)] : []),
+              ],
+              { source: 'history', status: 'completed' },
+            ),
           ]),
         );
 
@@ -595,16 +602,18 @@ describe('ChatTimeline messages', () => {
 
     it('keeps additional raw reasoning visible for compatible Provider mixtures', () => {
       timeline.render(
-        sessionWithMessages([
-          {
-            id: 'mixed',
-            role: 'assistant',
-            content: 'Answer',
-            reasoning:
-              '**Summary**\n\nReadable summary. Additional raw reasoning.',
-            reasoning_summary: ['**Summary**\n\nReadable summary.'],
-            timestamp: '2026-09-22T12:00:00Z',
-          },
+        sessionWithItems([
+          assistantRun(
+            'mixed',
+            [
+              reasoningItem(
+                '**Summary**\n\nReadable summary. Additional raw reasoning.',
+                { reasoningSummary: ['**Summary**\n\nReadable summary.'] },
+              ),
+              outputItem('Answer'),
+            ],
+            { source: 'history', status: 'completed' },
+          ),
         ]),
       );
 
@@ -624,17 +633,15 @@ describe('ChatTimeline messages', () => {
       const summaryText =
         '\n# Exact compaction summary\n\n<tag> stays text & *stars* stay literal\n';
       const sessionState = timelineSession();
-      appendEvents(sessionState, 'run-compaction', [
-        assistantOutput('Before checkpoint', { id: 'assistant-before' }),
-        {
-          type: 'compaction_started',
-          payload: { context_tokens_before: 250_000 },
-        },
-        {
-          type: 'compaction_completed',
-          payload: {
-            context_tokens_before: 250_000,
-            context_tokens_after: 30_000,
+      sessionState.timelineItems = [
+        assistantRun('run-compaction', [
+          outputItem('Before checkpoint', { id: 'before' }),
+          {
+            id: 'checkpoint-live',
+            type: 'compaction_separator',
+            status: 'completed',
+            contextTokensBefore: 250_000,
+            contextTokensAfter: 30_000,
             message: {
               id: 'checkpoint-live',
               role: 'compaction_checkpoint',
@@ -642,9 +649,9 @@ describe('ChatTimeline messages', () => {
               timestamp: '2026-07-29T17:55:25Z',
             },
           },
-        },
-        assistantOutput('After checkpoint', { id: 'assistant-after' }),
-      ]);
+          outputItem('After checkpoint', { id: 'after' }),
+        ]),
+      ];
       timeline.render(sessionState);
 
       const divider = document.querySelector('.run-compaction-sep');
@@ -676,15 +683,16 @@ describe('ChatTimeline messages', () => {
       'renders Compaction progress or failure (failed=%s)',
       (failed) => {
         const sessionState = timelineSession();
-        appendEvents(sessionState, 'run-compaction', [
-          {
-            type: 'compaction_started',
-            payload: { context_tokens_before: 250_000 },
-          },
-          ...(failed
-            ? [{ type: 'compaction_aborted', payload: { reason: 'failed' } }]
-            : []),
-        ]);
+        sessionState.timelineItems = [
+          assistantRun('run-compaction', [
+            {
+              id: 'checkpoint-progress',
+              type: 'compaction_separator',
+              status: failed ? 'failed' : 'running',
+              contextTokensBefore: 250_000,
+            },
+          ]),
+        ];
         timeline.render(sessionState);
 
         const divider = document.querySelector('.compaction-sep');
@@ -703,19 +711,21 @@ describe('ChatTimeline messages', () => {
       const summaryText =
         'Remember this exactly:\n\n- first fact\n- <literal tag>\n\nTrailing line.';
       const sessionState = timelineSession();
-      loadHistory(sessionState, [
+      sessionState.timelineItems = [
         {
           id: 'checkpoint-history',
-          role: 'compaction_checkpoint',
-          content: summaryText,
-          timestamp: '2026-07-29T17:55:25Z',
-          usage: {
-            compacted_token_count: 220_000,
-            context_tokens_before: 250_000,
-            context_tokens_after: 30_000,
+          type: 'compaction_separator',
+          status: 'completed',
+          contextTokensBefore: 250_000,
+          contextTokensAfter: 30_000,
+          message: {
+            id: 'checkpoint-history',
+            role: 'compaction_checkpoint',
+            content: summaryText,
+            timestamp: '2026-07-29T17:55:25Z',
           },
         },
-      ]);
+      ];
       timeline.render(sessionState);
 
       const divider = document.querySelector('.compaction-sep');
@@ -846,24 +856,28 @@ describe('ChatTimeline messages', () => {
       'edits only server-approved User messages, including steered: %s',
       async (steered) => {
         const onEditMessage = vi.fn().mockResolvedValue(true);
+        const editable = userMessage('Original request', {
+          id: 'user-edit',
+          editable: true,
+        });
         timeline.render(
-          sessionWithMessages([
-            userMessage('Channel-originated request', { id: 'user-channel' }),
+          sessionWithItems([
+            messageItem(
+              userMessage('Channel-originated request', { id: 'user-channel' }),
+            ),
             ...(steered
               ? [
-                  {
-                    id: 'assistant-before-edit',
-                    role: 'assistant',
-                    content: 'Working',
-                    history_run_id: 'run-edit',
-                  },
+                  assistantRun('run-edit', [
+                    outputItem('Working'),
+                    {
+                      id: 'steered-edit',
+                      type: 'user_message',
+                      content: editable.content,
+                      message: editable,
+                    },
+                  ]),
                 ]
-              : []),
-            userMessage('Original request', {
-              id: 'user-edit',
-              editable: true,
-              history_run_id: 'run-edit',
-            }),
+              : [messageItem(editable)]),
           ]),
           { onEditMessage },
         );
@@ -891,24 +905,26 @@ describe('ChatTimeline messages', () => {
       'explains why editable User messages cannot be edited, including steered: %s',
       async (steered) => {
         vi.useFakeTimers();
+        const editable = userMessage('Original request', {
+          id: 'user-edit',
+          editable: true,
+        });
         timeline.render(
-          sessionWithMessages([
+          sessionWithItems([
             ...(steered
               ? [
-                  userMessage('First request'),
-                  {
-                    id: 'assistant-before-edit',
-                    role: 'assistant',
-                    content: 'Working',
-                    history_run_id: 'run-edit',
-                  },
+                  messageItem(userMessage('First request')),
+                  assistantRun('run-edit', [
+                    outputItem('Working'),
+                    {
+                      id: 'steered-edit',
+                      type: 'user_message',
+                      content: editable.content,
+                      message: editable,
+                    },
+                  ]),
                 ]
-              : []),
-            userMessage('Original request', {
-              id: 'user-edit',
-              editable: true,
-              history_run_id: 'run-edit',
-            }),
+              : [messageItem(editable)]),
           ]),
           { messageEditingDisabledReason: t('chat.editUnavailableRunning') },
         );

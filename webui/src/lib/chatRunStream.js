@@ -2,988 +2,290 @@ import { createRunActivityProjection } from './chatRunStream/activity.js';
 import { runEventFromServerEvent } from './chatRunStream/serverEvents.js';
 import { formatAgentAddress } from './agentAddress.js';
 import { reconnectBackoffDelay } from './backoff.js';
+import { applyTimelineEvent } from './chatTimeline.js';
 import { t } from './i18n.js';
 import {
   TERMINAL_RUN_EVENTS,
   appendRunEvent,
   applyRunControls,
   ensureSessionState,
-  highestContiguousRunEventSequence,
-  isReleasedRun,
   isRunActive,
+  isReleasedRun,
   releaseFinishedRunEvents,
-  removeQueuedMessage,
   resetStaleRun,
   startRun,
 } from './chatState.js';
+import { nextContextUsage } from './chatState/sessionState.js';
 
-const SSE_RECONNECT_DELAY_MS = 500;
-const MAX_SSE_RECONNECT_ATTEMPTS = 3;
-const SSE_HEARTBEAT_TIMEOUT_MS = 25_000;
-const SSE_RECOVERY_RETRY_DELAY_MS = 5_000;
-const RUN_EVENT_GAP_TIMEOUT_MS = 2_000;
-const TERMINAL_RECONCILIATION_DELAY_MS = 1_000;
-const MAX_PENDING_ORDERED_RUN_EVENTS = 1024;
-const RUN_EVENT_FLUSH_DELAY_MS = 33;
-const DELAYED_RUN_EVENT_TYPES = new Set([
-  'assistant_output_delta',
-  'reasoning_delta',
-  'tool_call_delta',
-  'tool_call_output',
-]);
+const HEARTBEAT_TIMEOUT_MS = 25_000;
 
-function defaultStreamDiagnostic(diagnostic) {
-  console.warn('vBot Run stream recovery', diagnostic);
-}
-
+// One projection transport per displayed Session. The server resolves History,
+// replay, partial output and terminal Tool state; this owner only applies keyed
+// updates and recovers the connection with an authoritative snapshot.
 export function createChatRunStream({
   chatState,
   subscribeRunEvents,
-  // Reads a Session's Queue again after its Run ended; the owner decides
-  // whether anything shows that Queue.
   refreshSessionQueue,
   reconcileRunSession = async () => false,
   isDisplayedSession,
   updateSubAgentRunStatuses,
   onReflectionFinished = () => {},
-  reportStreamDiagnostic = defaultStreamDiagnostic,
+  reportStreamDiagnostic = () => {},
 }) {
   const activity = createRunActivityProjection({
     chatState,
     updateSubAgentRunStatuses,
     onReflectionFinished,
   });
-  const activeSubscriptions = {};
-  const pendingReconnects = {};
-  const pendingHeartbeatWatchdogs = {};
-  const pendingRecoveryRetries = {};
-  const pendingReconciliations = {};
-  const pendingGapWatchdogs = {};
-  const pendingTerminalReconciliations = {};
-  const pendingRunEventQueues = {};
-  const pendingRunEventFlushes = {};
-  const orderedRunEventBuffers = {};
+  const connections = new Map();
+  const reconciliations = new Map();
   let destroyed = false;
 
-  function reportDiagnostic(diagnostic) {
-    try {
-      reportStreamDiagnostic(diagnostic);
-    } catch {
-      // Diagnostics are best-effort and must never interfere with recovery.
-    }
+  function closeSubscriptionFor(key) {
+    const connection = connections.get(key);
+    if (!connection) return;
+    connections.delete(key);
+    clearTimeout(connection.watchdog);
+    clearTimeout(connection.retry);
+    connection.stream?.close();
   }
 
-  function subscribeToRun(sessionState, sseUrl, options = {}) {
-    if (!sseUrl || destroyed) {
-      return;
-    }
-    if (sessionState.currentRun) {
-      sessionState.currentRun.sseUrl = sseUrl;
-    }
-    closeRunSubscription(sessionState.key);
-    clearPendingReconnect(sessionState.key);
-    clearPendingRecoveryRetry(
-      runBufferKey(sessionState.key, sessionState.currentRun?.runId),
-    );
-    const afterSequence =
-      options.afterSequence ?? highestContiguousRunEventSequence(sessionState);
-    prepareOrderedRunEventBuffer(sessionState, afterSequence);
-    let retryAttempt = options.retryAttempt ?? 0;
-    let awaitingReplayHead = true;
-    let subscription;
-    const markStreamAlive = ({ resetRetryBudget = false } = {}) => {
-      if (
-        subscription &&
-        activeSubscriptions[sessionState.key] !== subscription
-      ) {
-        return;
-      }
-      // Only a heartbeat or Run event proves the complete data path is
-      // flowing. `open` alone can still be followed by a blackholed stream, so
-      // it starts the watchdog without resetting consecutive failures.
-      if (resetRetryBudget) {
-        retryAttempt = 0;
-      }
-      sessionState.streamError = '';
-      if (resetRetryBudget) {
-        clearPendingRecoveryRetry(
-          runBufferKey(sessionState.key, sessionState.currentRun?.runId),
+  function reconcile(session, runId) {
+    const key = `${session.key}:${runId}`;
+    if (reconciliations.has(key)) return reconciliations.get(key);
+    const pending = Promise.resolve(reconcileRunSession(session, runId))
+      .catch(() => false)
+      .finally(() => reconciliations.delete(key));
+    reconciliations.set(key, pending);
+    return pending;
+  }
+
+  function subscribeToRun(session, url) {
+    if (destroyed || !session?.currentRun?.runId) return;
+    const runId = session.currentRun.runId;
+    const timelineUrl = url?.endsWith('/timeline')
+      ? url
+      : timelineUrlForRun(runId);
+    const existing = connections.get(session.key);
+    if (existing?.runId === runId && existing.url === timelineUrl) return;
+    closeSubscriptionFor(session.key);
+    session.currentRun.timelineUrl = timelineUrl;
+    const connection = {
+      runId,
+      url: timelineUrl,
+      stream: null,
+      watchdog: null,
+      retry: null,
+      attempt: 0,
+      generation: 0,
+    };
+    connections.set(session.key, connection);
+    const current = (generation) =>
+      !destroyed &&
+      connections.get(session.key) === connection &&
+      connection.generation === generation;
+    const arm = (generation) => {
+      clearTimeout(connection.watchdog);
+      connection.watchdog = setTimeout(
+        () => recover(generation),
+        HEARTBEAT_TIMEOUT_MS,
+      );
+    };
+    const recover = (generation) => {
+      if (!current(generation)) return;
+      connection.generation += 1;
+      connection.stream?.close();
+      clearTimeout(connection.watchdog);
+      session.streamError = t('errors.streamClosed');
+      reportStreamDiagnostic({ reason: 'timeline_reconnect', runId });
+      void reconcile(session, runId);
+      connection.retry = setTimeout(
+        attach,
+        reconnectBackoffDelay(connection.attempt++, {
+          initialDelayMs: 500,
+          maxDelayMs: 5000,
+        }),
+      );
+    };
+    const attach = () => {
+      if (connections.get(session.key) !== connection || destroyed) return;
+      const generation = ++connection.generation;
+      let gotSnapshot = false;
+      arm(generation);
+      try {
+        connection.stream = subscribeRunEvents(
+          timelineUrl,
+          {
+            onOpen: () => {
+              if (current(generation)) arm(generation);
+            },
+            onHeartbeat: () => {
+              if (!current(generation)) return;
+              connection.attempt = 0;
+              arm(generation);
+            },
+            onError: () => recover(generation),
+            onEvent: ({ type, data }) => {
+              if (!current(generation) || data?.run_id !== runId) return;
+              connection.attempt = 0;
+              arm(generation);
+              const eventType = type ?? data.type;
+              if (!gotSnapshot && eventType !== 'timeline_snapshot') {
+                recover(generation);
+                return;
+              }
+              gotSnapshot ||= eventType === 'timeline_snapshot';
+              if (!applyTimelineEvent(session, eventType, data)) {
+                if (data.sequence > (session.timelineSequences?.[runId] ?? -1))
+                  recover(generation);
+                return;
+              }
+              session.streamError = '';
+              applyState(session, data);
+              if (data.terminal) {
+                closeSubscriptionFor(session.key);
+                void refreshSessionQueue(session);
+                void reconcile(session, runId);
+              }
+            },
+          },
+          {
+            eventTypes: ['timeline_snapshot', 'timeline_update'],
+            closeOnTerminal: false,
+          },
         );
+      } catch {
+        recover(generation);
       }
-      armHeartbeatWatchdog(sessionState, sseUrl, () => retryAttempt);
     };
-    const markStreamHealthy = () => markStreamAlive({ resetRetryBudget: true });
-    subscription = subscribeRunEvents(
-      sseUrl,
-      {
-        onOpen: markStreamAlive,
-        onHeartbeat: markStreamHealthy,
-        onEvent: ({ data }) => {
-          // A replaced stream may still deliver a queued predecessor event.
-          // Keep it only while that Run retains unfinished transport state.
-          if (
-            destroyed ||
-            (activeSubscriptions[sessionState.key] !== subscription &&
-              !orderedRunEventBuffers[
-                runBufferKey(sessionState.key, data?.run_id)
-              ])
-          )
-            return;
-          markStreamHealthy();
-          queueRunEvent(sessionState, data, {
-            acceptAsReplayHead: awaitingReplayHead,
-          });
-          awaitingReplayHead = false;
-        },
-        onError: (error) => {
-          if (activeSubscriptions[sessionState.key] !== subscription) {
-            return;
-          }
-          recoverRunStream(sessionState, sseUrl, retryAttempt, error);
-        },
-      },
-      {
-        afterSequence,
-      },
-    );
-    activeSubscriptions[sessionState.key] = subscription;
-    armHeartbeatWatchdog(sessionState, sseUrl, () => retryAttempt);
+    attach();
   }
 
-  function attachRunStream(sessionState, run, options = {}) {
-    if (!sessionState || !run?.run_id) {
-      return false;
-    }
-
-    const sseUrl =
-      typeof run.sse_url === 'string' && run.sse_url
-        ? run.sse_url
-        : sseUrlForRun(run.run_id);
-    const currentRun = sessionState.currentRun;
-    const alreadySubscribed =
-      Boolean(activeSubscriptions[sessionState.key]) &&
-      currentRun?.runId === run.run_id &&
-      currentRun?.sseUrl === sseUrl;
-
-    if (currentRun?.runId !== run.run_id) {
-      startRun(sessionState, { ...run, sse_url: sseUrl });
-    } else {
-      if (currentRun.status === 'running') {
-        currentRun.status = run.status ?? currentRun.status;
-      }
-      currentRun.sseUrl = sseUrl;
-      currentRun.startedAt = run.started_at ?? currentRun.startedAt ?? null;
-      if (Number.isInteger(run.iteration_count) && run.iteration_count >= 0) {
-        currentRun.iterationCount = run.iteration_count;
-      }
-      if (run.contributes_to_agent_activity === false) {
-        currentRun.contributesToAgentActivity = false;
-      }
-    }
-    mergeRetainedRunEvents(sessionState, run.events);
-
-    applyRunControls(sessionState, run);
-
-    if (!alreadySubscribed) {
-      subscribeToRun(sessionState, sseUrl, {
-        afterSequence:
-          options.afterSequence ??
-          highestContiguousRunEventSequence(sessionState),
+  function applyState(session, data) {
+    const state = data.state ?? {};
+    const current = session.currentRun;
+    if (current?.runId !== data.run_id) return;
+    current.status = state.status ?? current.status;
+    current.startedAt = state.started_at ?? current.startedAt;
+    current.iterationCount = state.iteration_count ?? current.iterationCount;
+    session.status = current.status;
+    applyRunControls(session, { run_id: data.run_id, ...state });
+    if (Object.hasOwn(state, 'context_usage'))
+      session.contextUsage = nextContextUsage(
+        session.contextUsage,
+        state.context_usage,
+      );
+    if (state.session_usage) session.sessionUsage = state.session_usage;
+    if (state.usage) session.usage = state.usage;
+    if (data.terminal)
+      appendRunEvent(session, {
+        type: `run_${state.status ?? current.status}`,
+        run_id: data.run_id,
+        sequence: data.sequence,
+        timestamp:
+          state.completed_at ??
+          data.run?.endTimestamp ??
+          data.items?.find((item) => item.type === 'assistant_run')
+            ?.endTimestamp,
+        ...(current.contributesToAgentActivity === false
+          ? { contributes_to_agent_activity: false }
+          : {}),
+        payload: state,
       });
-    }
+  }
 
+  function attachRunStream(session, run) {
+    if (!session || !run?.run_id) return false;
+    if (session.currentRun?.runId !== run.run_id) startRun(session, run);
+    else {
+      if (session.currentRun.status === 'running')
+        session.currentRun.status = run.status ?? 'running';
+      session.currentRun.startedAt ??= run.started_at ?? null;
+      applyRunControls(session, run);
+    }
+    subscribeToRun(session, run.timeline_url);
     return true;
   }
 
-  function mergeRetainedRunEvents(sessionState, events) {
-    if (!Array.isArray(events) || events.length === 0) {
-      return;
+  function mergeRunResponse(session, run) {
+    if (!session || session.currentRun?.runId !== run?.run_id) return false;
+    for (const event of run.events ?? []) {
+      appendRunEvent(session, event);
+      trackActivity(event);
     }
-    for (const eventData of events) {
-      const event = appendRunEvent(sessionState, eventData);
-      handleAppendedRunEvent(sessionState, event);
-    }
-  }
-
-  function mergeRunResponse(sessionState, run) {
-    if (
-      !sessionState ||
-      !run?.run_id ||
-      sessionState.currentRun?.runId !== run.run_id
-    ) {
-      return false;
-    }
-    mergeRetainedRunEvents(sessionState, run.events);
-    applyRunControls(sessionState, run);
+    applyRunControls(session, run);
     return true;
   }
 
-  function queueRunEvent(sessionState, eventData, options = {}) {
-    const sessionKey = sessionState.key;
-    pendingRunEventQueues[sessionKey] ??= [];
-    pendingRunEventQueues[sessionKey].push({ eventData, options });
-    if (!DELAYED_RUN_EVENT_TYPES.has(eventData?.type)) {
-      const terminalEvent = flushPendingRunEvents(sessionKey);
-      if (
-        TERMINAL_RUN_EVENTS.has(eventData?.type) &&
-        terminalEvent?.run_id !== eventData?.run_id
-      ) {
-        scheduleTerminalReconciliation(sessionState, eventData);
-      }
-      return;
-    }
-    scheduleRunEventFlush(sessionKey);
-  }
-
-  function runBufferKey(sessionKey, runId) {
-    return JSON.stringify([sessionKey, runId]);
-  }
-
-  function prepareOrderedRunEventBuffer(
-    sessionState,
-    afterSequence = 0,
-    runId = sessionState.currentRun?.runId ?? '',
-  ) {
-    if (!runId) {
-      return null;
-    }
-    const key = runBufferKey(sessionState.key, runId);
-    const nextSequence =
-      Math.max(
-        0,
-        Math.trunc(afterSequence),
-        highestContiguousRunEventSequence(sessionState, runId),
-      ) + 1;
-    const existing = orderedRunEventBuffers[key];
-    if (existing) {
-      existing.nextSequence = Math.max(existing.nextSequence, nextSequence);
-      return existing;
-    }
-    const buffer = {
-      sessionKey: sessionState.key,
-      runId,
-      nextSequence,
-      // A plain Map is intentional: this transport-owned buffer is not UI
-      // state. Only events promoted through appendRunEvent become reactive.
-      pending: new Map(),
-    };
-    orderedRunEventBuffers[key] = buffer;
-    return buffer;
-  }
-
-  function appendOrderedRunEvent(sessionState, eventData, options = {}) {
-    const runId = typeof eventData?.run_id === 'string' ? eventData.run_id : '';
-    const sequence = Number(eventData?.sequence);
-    if (!runId || !Number.isInteger(sequence) || sequence < 1) {
-      const appended = appendRunEvent(sessionState, eventData);
-      return appended ? [appended] : [];
-    }
-
-    let buffer = orderedRunEventBuffers[runBufferKey(sessionState.key, runId)];
-    if (!buffer) {
-      buffer = prepareOrderedRunEventBuffer(sessionState, 0, runId);
-    }
-    if (!buffer || sequence < buffer.nextSequence) {
-      return [];
-    }
-    // The first Run event on a new SSE connection is the server's oldest
-    // retained event after our requested cursor. If it starts beyond the
-    // expected sequence, the missing prefix has already fallen out of the
-    // bounded replay window and can never arrive on this connection. Rebase
-    // only at that transport-proven boundary; later gaps still wait for their
-    // missing event so mirrored WebSocket terminal output cannot overtake SSE.
-    if (options.acceptAsReplayHead && sequence > buffer.nextSequence) {
-      reportDiagnostic({
-        reason: 'replay_rebased',
-        runId,
-        expectedSequence: buffer.nextSequence,
-        receivedSequence: sequence,
-      });
-      buffer.nextSequence = sequence;
-      for (const pendingSequence of buffer.pending.keys()) {
-        if (pendingSequence < sequence) {
-          buffer.pending.delete(pendingSequence);
-        }
-      }
-    }
-    if (sequence - buffer.nextSequence >= MAX_PENDING_ORDERED_RUN_EVENTS) {
-      armGapWatchdog(sessionState, buffer, sequence);
-      return [];
-    }
-    if (!buffer.pending.has(sequence)) {
-      buffer.pending.set(sequence, eventData);
-    }
-
-    const appendedEvents = [];
-    while (buffer.pending.has(buffer.nextSequence)) {
-      const nextEventData = buffer.pending.get(buffer.nextSequence);
-      buffer.pending.delete(buffer.nextSequence);
-      buffer.nextSequence += 1;
-      const appended = appendRunEvent(sessionState, nextEventData);
-      if (appended) {
-        appendedEvents.push(appended);
-      }
-    }
-    syncGapWatchdog(sessionState, buffer);
-    return appendedEvents;
-  }
-
-  function syncGapWatchdog(sessionState, buffer) {
-    if (buffer.pending.size === 0) {
-      clearGapWatchdog(runBufferKey(sessionState.key, buffer.runId));
-      return;
-    }
-    const firstPendingSequence = Math.min(...buffer.pending.keys());
-    if (firstPendingSequence <= buffer.nextSequence) {
-      clearGapWatchdog(runBufferKey(sessionState.key, buffer.runId));
-      return;
-    }
-    armGapWatchdog(sessionState, buffer, firstPendingSequence);
-  }
-
-  function armGapWatchdog(sessionState, buffer, receivedSequence) {
-    const sessionKey = sessionState.key;
-    const key = runBufferKey(sessionKey, buffer.runId);
-    const existing = pendingGapWatchdogs[key];
-    if (
-      existing?.runId === buffer.runId &&
-      existing.expectedSequence === buffer.nextSequence
-    ) {
-      existing.receivedSequence = Math.max(
-        existing.receivedSequence,
-        receivedSequence,
-      );
-      return;
-    }
-    clearGapWatchdog(key);
-    const gap = {
-      sessionKey,
-      runId: buffer.runId,
-      expectedSequence: buffer.nextSequence,
-      receivedSequence,
-      timeoutId: null,
-    };
-    gap.timeoutId = setTimeout(() => {
-      if (pendingGapWatchdogs[key] !== gap) {
-        return;
-      }
-      delete pendingGapWatchdogs[key];
-      const currentRun = sessionState.currentRun;
-      const currentBuffer = orderedRunEventBuffers[key];
-      if (
-        currentBuffer?.runId !== gap.runId ||
-        currentBuffer.nextSequence !== gap.expectedSequence
-      ) {
-        return;
-      }
-      reportDiagnostic({
-        reason: 'sequence_gap_timeout',
-        runId: gap.runId,
-        expectedSequence: gap.expectedSequence,
-        receivedSequence: gap.receivedSequence,
-      });
-      if (currentRun?.runId !== gap.runId) {
-        void reconcileRunHistory(sessionState, gap.runId);
-        return;
-      }
-      if (currentRun.status !== 'running') return;
-      recoverRunStream(
-        sessionState,
-        currentRun.sseUrl,
-        0,
-        new Error(
-          `Run event sequence gap at ${gap.expectedSequence} before ${gap.receivedSequence}.`,
-        ),
-      );
-    }, RUN_EVENT_GAP_TIMEOUT_MS);
-    pendingGapWatchdogs[key] = gap;
-  }
-
-  function scheduleTerminalReconciliation(sessionState, event) {
-    const sessionKey = sessionState.key;
-    const runId = event?.run_id;
-    const key = runBufferKey(sessionKey, runId);
-    if (!runId || pendingTerminalReconciliations[key]) {
-      return;
-    }
-    const pending = {
-      sessionKey,
-      runId,
-      terminalSequence: event.sequence,
-      timeoutId: null,
-    };
-    pending.timeoutId = setTimeout(() => {
-      if (pendingTerminalReconciliations[key] !== pending) {
-        return;
-      }
-      delete pendingTerminalReconciliations[key];
-      if (
-        !orderedRunEventBuffers[key] ||
-        sessionState.historyRuns?.[runId]?.complete
-      ) {
-        return;
-      }
-      const buffer = orderedRunEventBuffers[key];
-      reportDiagnostic({
-        reason: 'terminal_event_blocked',
-        runId,
-        expectedSequence: buffer?.nextSequence ?? null,
-        receivedSequence: pending.terminalSequence ?? null,
-      });
-      if (sessionState.currentRun?.runId === runId) {
-        sessionState.streamError = t('errors.streamClosed');
-        closeRunSubscription(sessionKey);
-      }
-      void reconcileRunHistory(sessionState, runId);
-    }, TERMINAL_RECONCILIATION_DELAY_MS);
-    pendingTerminalReconciliations[key] = pending;
-  }
-
-  function scheduleRunEventFlush(sessionKey) {
-    if (pendingRunEventFlushes[sessionKey] !== undefined) {
-      return;
-    }
-    pendingRunEventFlushes[sessionKey] = setTimeout(() => {
-      delete pendingRunEventFlushes[sessionKey];
-      flushPendingRunEvents(sessionKey);
-    }, RUN_EVENT_FLUSH_DELAY_MS);
-  }
-
-  function flushPendingRunEvents(sessionKey) {
-    const pendingEvents = pendingRunEventQueues[sessionKey];
-    if (!Array.isArray(pendingEvents) || pendingEvents.length === 0) {
-      delete pendingRunEventQueues[sessionKey];
-      clearPendingRunEventFlush(sessionKey);
-      return null;
-    }
-
-    delete pendingRunEventQueues[sessionKey];
-    clearPendingRunEventFlush(sessionKey);
-
-    const sessionState = chatState.sessions[sessionKey];
-    if (!sessionState) {
-      return null;
-    }
-
-    let terminalEvent = null;
-    for (const pendingEvent of pendingEvents) {
-      for (const event of appendOrderedRunEvent(
-        sessionState,
-        pendingEvent.eventData,
-        pendingEvent.options,
-      )) {
-        handleAppendedRunEvent(sessionState, event);
-        if (TERMINAL_RUN_EVENTS.has(event.type)) {
-          terminalEvent = event;
-        }
-      }
-    }
-    return terminalEvent;
-  }
-
-  function handleAppendedRunEvent(sessionState, event) {
-    if (!event) {
-      return;
-    }
+  function trackActivity(event) {
+    activity.trackReflectionTask(event);
     if (
       event.contributes_to_agent_activity !== false ||
       event.type === 'subagent_status_changed'
-    ) {
+    )
       activity.trackSubAgentRunStatus(event);
-    }
-    if (
-      event.type === 'run_started' &&
-      typeof event.payload?.queue_item_id === 'string' &&
-      event.payload.queue_item_id.length > 0
-    ) {
-      // The started run is now executing, so its queued-item handle is no
-      // longer "pending" — drop it locally. The terminal-event
-      // `refreshSessionQueue` call below still re-fetches the server list, so
-      // a shown projection stays consistent if the local removal races.
-      removeQueuedMessage(sessionState, event.payload.queue_item_id);
-    }
-    const terminal = TERMINAL_RUN_EVENTS.has(event.type);
-    if (!terminal && !isReleasedRun(sessionState, event.run_id)) {
-      return;
-    }
-    const holdsTimeline =
-      sessionState.historyLoaded ||
-      isDisplayedSession(sessionState.agentId, sessionState.sessionId);
-    if (terminal) {
-      const key = runBufferKey(sessionState.key, event.run_id);
-      delete orderedRunEventBuffers[key];
-      clearGapWatchdog(key);
-      clearTerminalReconciliation(key);
-      clearPendingRecoveryRetry(key);
-      if (holdsTimeline) void reconcileRunHistory(sessionState, event.run_id);
-    }
-    if (terminal && sessionState.currentRun?.runId === event.run_id) {
-      clearPendingReconnect(sessionState.key);
-      closeRunSubscription(sessionState.key);
-      sessionState.streamError = '';
-      void refreshSessionQueue(sessionState);
-    }
-    // Without a displayed timeline or loaded History, a finished Run's events
-    // have no reader: opening the Session loads canonical History. Release
-    // them (and any late event of a released Run) so a long-lived tab does
-    // not keep every stable event of every background Run.
-    if (!holdsTimeline) {
-      releaseFinishedRunEvents(sessionState, event.run_id);
-    }
   }
 
-  function recoverRunStream(sessionState, sseUrl, retryAttempt, error) {
-    const sessionKey = sessionState.key;
-    flushPendingRunEvents(sessionKey);
-    const currentRun = sessionState.currentRun;
-    if (!currentRun || currentRun.status !== 'running') {
-      return;
-    }
-
-    reportDiagnostic({
-      reason:
-        retryAttempt < MAX_SSE_RECONNECT_ATTEMPTS
-          ? 'stream_reconnect'
-          : 'stream_recovery_exhausted',
-      runId: currentRun.runId,
-      afterSequence: highestContiguousRunEventSequence(sessionState),
-      retryAttempt,
-      errorType:
-        typeof error?.name === 'string' && error.name ? error.name : 'Error',
-    });
-
-    if (retryAttempt < MAX_SSE_RECONNECT_ATTEMPTS) {
-      sessionState.streamError = t('errors.streamReconnecting');
-      if (pendingReconnects[sessionKey] !== undefined) {
-        return;
-      }
-      closeRunSubscription(sessionKey);
-      pendingReconnects[sessionKey] = setTimeout(
-        () => {
-          delete pendingReconnects[sessionKey];
-          if (sessionState.currentRun?.runId !== currentRun.runId) {
-            return;
-          }
-          subscribeToRun(sessionState, currentRun.sseUrl || sseUrl, {
-            afterSequence: highestContiguousRunEventSequence(sessionState),
-            retryAttempt: retryAttempt + 1,
-          });
-        },
-        reconnectBackoffDelay(retryAttempt, {
-          initialDelayMs: SSE_RECONNECT_DELAY_MS,
-        }),
-      );
-      return;
-    }
-
-    sessionState.streamError = `${t(
-      'errors.streamClosed',
-    )} ${error?.message ?? ''}`;
-    closeRunSubscription(sessionState.key);
-    void reconcileRunHistory(sessionState, currentRun.runId);
-  }
-
-  function armHeartbeatWatchdog(sessionState, sseUrl, retryAttempt) {
-    const sessionKey = sessionState.key;
-    clearHeartbeatWatchdog(sessionKey);
-    const runId = sessionState.currentRun?.runId;
-    if (!runId || sessionState.currentRun?.status !== 'running') {
-      return;
-    }
-    pendingHeartbeatWatchdogs[sessionKey] = setTimeout(() => {
-      delete pendingHeartbeatWatchdogs[sessionKey];
-      if (sessionState.currentRun?.runId !== runId) {
-        return;
-      }
-      recoverRunStream(
-        sessionState,
-        sseUrl,
-        retryAttempt(),
-        new Error('No stream heartbeat received.'),
-      );
-    }, SSE_HEARTBEAT_TIMEOUT_MS);
-  }
-
-  function reconcileRunHistory(sessionState, expectedRunId) {
-    const sessionKey = sessionState.key;
-    const reconciliationKey = runBufferKey(sessionKey, expectedRunId);
-    if (pendingReconciliations[reconciliationKey]) {
-      return pendingReconciliations[reconciliationKey];
-    }
-
-    const reconciliation = Promise.resolve()
-      .then(() => reconcileRunSession(sessionState, expectedRunId))
-      .catch(() => false)
-      .then((reconciled) => {
-        if (
-          destroyed ||
-          pendingReconciliations[reconciliationKey] !== reconciliation
-        ) {
-          return;
-        }
-        // A newer History read can restore this stream while the older
-        // recovery is pending. Its discarded response must neither strand a
-        // closed stream nor schedule a duplicate recovery of a restored one.
-        const streamRestored =
-          sessionState.currentRun?.runId === expectedRunId &&
-          Boolean(activeSubscriptions[sessionKey]);
-        if (reconciled || streamRestored) {
-          clearPendingRecoveryRetry(reconciliationKey);
-          if (sessionState.historyRuns?.[expectedRunId]?.complete) {
-            delete orderedRunEventBuffers[reconciliationKey];
-            clearGapWatchdog(reconciliationKey);
-            clearTerminalReconciliation(reconciliationKey);
-          }
-          if (
-            sessionState.currentRun?.runId === expectedRunId &&
-            activeSubscriptions[sessionKey]
-          ) {
-            sessionState.streamError = '';
-          }
-          return;
-        }
-        scheduleRecoveryRetry(sessionState, expectedRunId);
-      })
-      .finally(() => {
-        if (pendingReconciliations[reconciliationKey] === reconciliation) {
-          delete pendingReconciliations[reconciliationKey];
-        }
-      });
-    pendingReconciliations[reconciliationKey] = reconciliation;
-    return reconciliation;
-  }
-
-  function scheduleRecoveryRetry(sessionState, expectedRunId) {
-    const sessionKey = sessionState.key;
-    const key = runBufferKey(sessionKey, expectedRunId);
-    if (pendingRecoveryRetries[key] !== undefined) {
-      return;
-    }
-    pendingRecoveryRetries[key] = {
-      sessionKey,
-      timeoutId: setTimeout(() => {
-        delete pendingRecoveryRetries[key];
-        void reconcileRunHistory(sessionState, expectedRunId);
-      }, SSE_RECOVERY_RETRY_DELAY_MS),
-    };
-  }
-
-  // Apply one Run server event from the App's feed. The owner hands each event
-  // over once, in feed order.
   function handleServerEvent(serverEvent) {
     const event = runEventFromServerEvent(serverEvent);
-    if (!event?.agent_id || !event?.session_id) {
-      return;
-    }
-    activity.trackReflectionTask(event);
-
-    const sessionState = ensureSessionState(
+    if (!event?.agent_id || !event?.session_id) return;
+    trackActivity(event);
+    const session = ensureSessionState(
       chatState,
       event.agent_id,
       event.session_id,
     );
+    if (
+      session.historyRuns?.[event.run_id]?.complete === true ||
+      isReleasedRun(session, event.run_id)
+    )
+      return;
+    appendRunEvent(session, event);
     const displayed = isDisplayedSession(event.agent_id, event.session_id);
-    flushPendingRunEvents(sessionState.key);
-    // A displayed Run has both its complete SSE stream and the stable events
-    // mirrored over WebSocket. Feed both transports through one contiguous
-    // reducer so a mirrored terminal event cannot overtake missing output.
-    // Non-displayed Runs intentionally have no SSE subscription, while their
-    // WebSocket feed omits high-volume deltas and therefore has sequence gaps;
-    // reduce those stable events directly in WebSocket order. Opening such a
-    // Session later reloads its durable History rather than relying on this
-    // transient projection.
-    const orderedBuffer =
-      orderedRunEventBuffers[runBufferKey(sessionState.key, event.run_id)];
-    // A mirrored event of a displayed Run that History already holds whole
-    // adds nothing. It can arrive that late when a hidden Chat applies its
-    // deferred events; a fresh ordered buffer would then wait for sequences
-    // the reconciled projection no longer holds.
-    if (
-      displayed &&
-      !orderedBuffer &&
-      sessionState.historyRuns?.[event.run_id]?.complete === true
-    ) {
-      return;
-    }
-    if (
-      event.type !== 'run_started' &&
-      (sessionState.currentRun?.runId === event.run_id || orderedBuffer) &&
-      displayed
-    ) {
-      let terminalAppended = false;
-      for (const appendedEvent of appendOrderedRunEvent(sessionState, event)) {
-        handleAppendedRunEvent(sessionState, appendedEvent);
-        terminalAppended ||= TERMINAL_RUN_EVENTS.has(appendedEvent.type);
-      }
-      if (TERMINAL_RUN_EVENTS.has(event.type) && !terminalAppended) {
-        scheduleTerminalReconciliation(sessionState, event);
-      }
-      return;
-    }
-    const appended = appendRunEvent(sessionState, event);
-    handleAppendedRunEvent(sessionState, appended);
     if (
       event.type === 'run_started' &&
       displayed &&
-      sessionState.currentRun?.runId === event.run_id
+      session.currentRun?.runId === event.run_id
     ) {
-      attachRunStream(
-        sessionState,
-        {
-          run_id: event.run_id,
-          status: 'running',
-          sse_url: sseUrlForRun(event.run_id),
-          ...(event.contributes_to_agent_activity === false
-            ? { contributes_to_agent_activity: false }
-            : {}),
-          events: [],
-        },
-        { afterSequence: highestContiguousRunEventSequence(sessionState) },
-      );
+      attachRunStream(session, { run_id: event.run_id, status: 'running' });
     }
-  }
-
-  function closeRunSubscription(sessionKey) {
-    activeSubscriptions[sessionKey]?.close();
-    delete activeSubscriptions[sessionKey];
-    clearHeartbeatWatchdog(sessionKey);
-    clearGapWatchdog(
-      runBufferKey(
-        sessionKey,
-        chatState.sessions[sessionKey]?.currentRun?.runId,
-      ),
-    );
-  }
-
-  function closeSubscriptionFor(sessionKey) {
-    closeRunSubscription(sessionKey);
-    clearPendingReconnect(sessionKey);
-    for (const key of sessionRunKeys(orderedRunEventBuffers, sessionKey))
-      delete orderedRunEventBuffers[key];
-    for (const key of sessionRunKeys(pendingReconciliations, sessionKey))
-      delete pendingReconciliations[key];
-    for (const key of sessionRunKeys(pendingRecoveryRetries, sessionKey))
-      clearPendingRecoveryRetry(key);
-    for (const key of sessionRunKeys(pendingGapWatchdogs, sessionKey))
-      clearGapWatchdog(key);
-    for (const key of sessionRunKeys(
-      pendingTerminalReconciliations,
-      sessionKey,
-    ))
-      clearTerminalReconciliation(key);
-  }
-
-  function sessionRunKeys(collection, sessionKey) {
-    return Object.keys(collection).filter(
-      (key) => JSON.parse(key)[0] === sessionKey,
-    );
-  }
-
-  function closeSubscriptionsExcept(sessionKey) {
-    const subscriptionKeys = new Set([
-      ...Object.keys(activeSubscriptions),
-      ...Object.keys(pendingReconnects),
-      ...Object.keys(pendingHeartbeatWatchdogs),
-      ...Object.values(pendingRecoveryRetries).map((value) => value.sessionKey),
-      ...Object.values(pendingGapWatchdogs).map((value) => value.sessionKey),
-      ...Object.values(pendingTerminalReconciliations).map(
-        (value) => value.sessionKey,
-      ),
-      ...Object.values(orderedRunEventBuffers).map((value) => value.sessionKey),
-    ]);
-    for (const key of subscriptionKeys) {
-      if (key === sessionKey) {
-        continue;
-      }
-      closeSubscriptionFor(key);
-    }
-  }
-
-  function sseUrlForRun(runId) {
-    return `/api/runs/${encodeURIComponent(String(runId))}/events`;
-  }
-
-  function clearPendingReconnect(sessionKey) {
-    const timeoutId = pendingReconnects[sessionKey];
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-      delete pendingReconnects[sessionKey];
-    }
-  }
-
-  function clearPendingReconnects() {
-    for (const key of Object.keys(pendingReconnects)) {
-      clearPendingReconnect(key);
-    }
-  }
-
-  function clearHeartbeatWatchdog(sessionKey) {
-    const timeoutId = pendingHeartbeatWatchdogs[sessionKey];
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-      delete pendingHeartbeatWatchdogs[sessionKey];
-    }
-  }
-
-  function clearHeartbeatWatchdogs() {
-    for (const key of Object.keys(pendingHeartbeatWatchdogs)) {
-      clearHeartbeatWatchdog(key);
-    }
-  }
-
-  function clearPendingRecoveryRetry(sessionKey) {
-    const pending = pendingRecoveryRetries[sessionKey];
-    if (pending !== undefined) {
-      clearTimeout(pending.timeoutId);
-      delete pendingRecoveryRetries[sessionKey];
-    }
-  }
-
-  function clearPendingRecoveryRetries() {
-    for (const key of Object.keys(pendingRecoveryRetries)) {
-      clearPendingRecoveryRetry(key);
-    }
-  }
-
-  function clearGapWatchdog(sessionKey) {
-    const pending = pendingGapWatchdogs[sessionKey];
-    if (pending) {
-      clearTimeout(pending.timeoutId);
-      delete pendingGapWatchdogs[sessionKey];
-    }
-  }
-
-  function clearGapWatchdogs() {
-    for (const key of Object.keys(pendingGapWatchdogs)) {
-      clearGapWatchdog(key);
-    }
-  }
-
-  function clearTerminalReconciliation(sessionKey) {
-    const pending = pendingTerminalReconciliations[sessionKey];
-    if (pending) {
-      clearTimeout(pending.timeoutId);
-      delete pendingTerminalReconciliations[sessionKey];
-    }
-  }
-
-  function clearTerminalReconciliations() {
-    for (const key of Object.keys(pendingTerminalReconciliations)) {
-      clearTerminalReconciliation(key);
-    }
-  }
-
-  function clearPendingRunEventFlush(sessionKey) {
-    const timeoutId = pendingRunEventFlushes[sessionKey];
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-      delete pendingRunEventFlushes[sessionKey];
-    }
-  }
-
-  function clearPendingRunEventFlushes() {
-    for (const key of Object.keys(pendingRunEventFlushes)) {
-      clearPendingRunEventFlush(key);
-    }
-    for (const key of Object.keys(pendingRunEventQueues)) {
-      delete pendingRunEventQueues[key];
-    }
-  }
-
-  function closeSubscriptions() {
-    destroyed = true;
-    for (const subscription of Object.values(activeSubscriptions)) {
-      subscription.close();
-    }
-    for (const key of Object.keys(activeSubscriptions)) {
-      delete activeSubscriptions[key];
-    }
-    clearPendingReconnects();
-    clearHeartbeatWatchdogs();
-    clearPendingRecoveryRetries();
-    clearGapWatchdogs();
-    clearTerminalReconciliations();
-    clearPendingRunEventFlushes();
-    for (const key of Object.keys(orderedRunEventBuffers)) {
-      delete orderedRunEventBuffers[key];
-    }
+    if (!TERMINAL_RUN_EVENTS.has(event.type)) return;
+    void refreshSessionQueue(session);
+    // A WebSocket terminal may overtake the final projection batch. Never
+    // close that transport until its own terminal snapshot/update arrives.
+    if (displayed || session.historyLoaded) {
+      void reconcile(session, event.run_id).then((settled) => {
+        if (
+          settled &&
+          session.historyRuns?.[event.run_id]?.complete &&
+          connections.get(session.key)?.runId === event.run_id
+        )
+          closeSubscriptionFor(session.key);
+      });
+    } else releaseFinishedRunEvents(session, event.run_id);
   }
 
   function applyConnectionSnapshot(snapshot) {
-    if (!Array.isArray(snapshot?.active_runs)) {
-      return;
-    }
-    const activeRuns = snapshot.active_runs;
-    const activeRunIds = new Set(
-      activeRuns
-        .map((activeRun) => activeRun?.run_id)
-        .filter((runId) => typeof runId === 'string' && runId.length > 0),
-    );
-
-    for (const sessionState of Object.values(chatState.sessions)) {
-      const currentRunId = sessionState.currentRun?.runId;
-      if (
-        isRunActive(sessionState) &&
-        currentRunId &&
-        !activeRunIds.has(currentRunId)
-      ) {
-        closeSubscriptionFor(sessionState.key);
-        if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
-          sessionState.streamError = t('errors.streamClosed');
-          void reconcileRunHistory(sessionState, currentRunId);
-        } else {
-          resetStaleRun(sessionState);
-        }
-      }
-    }
-
-    activity.applySnapshot(activeRuns);
-
-    for (const activeRun of activeRuns) {
-      if (!activeRun?.run_id || !activeRun.agent_id || !activeRun.session_id) {
+    if (!Array.isArray(snapshot?.active_runs)) return;
+    const activeIds = new Set(snapshot.active_runs.map((run) => run.run_id));
+    for (const session of Object.values(chatState.sessions)) {
+      if (!isRunActive(session) || activeIds.has(session.currentRun?.runId))
         continue;
-      }
-      const agentAddress = formatAgentAddress(
-        activeRun.agent_id,
-        activeRun.project_id,
-      );
-      const sessionState = ensureSessionState(
-        chatState,
-        agentAddress,
-        activeRun.session_id,
-      );
-      if (sessionState.currentRun?.runId !== activeRun.run_id) {
-        startRun(sessionState, {
-          run_id: activeRun.run_id,
-          status: 'running',
-          started_at: activeRun.started_at,
-          sse_url: activeRun.sse_url,
-          iteration_count: activeRun.iteration_count,
-          controls: activeRun.controls,
-          controls_sequence: activeRun.controls_sequence,
-          ...(activeRun.contributes_to_agent_activity === false
-            ? { contributes_to_agent_activity: false }
-            : {}),
-          events: [],
-        });
-      }
-      if (!isDisplayedSession(agentAddress, activeRun.session_id)) {
-        applyRunControls(sessionState, activeRun);
-        continue;
-      }
-      attachRunStream(sessionState, {
-        run_id: activeRun.run_id,
-        status: 'running',
-        started_at: activeRun.started_at,
-        sse_url: activeRun.sse_url,
-        iteration_count: activeRun.iteration_count,
-        controls: activeRun.controls,
-        controls_sequence: activeRun.controls_sequence,
-        ...(activeRun.contributes_to_agent_activity === false
-          ? { contributes_to_agent_activity: false }
-          : {}),
-        events: [],
-      });
+      closeSubscriptionFor(session.key);
+      if (isDisplayedSession(session.agentId, session.sessionId)) {
+        session.streamError = t('errors.streamClosed');
+        void reconcile(session, session.currentRun.runId);
+      } else resetStaleRun(session);
+    }
+    activity.applySnapshot(snapshot.active_runs);
+    for (const run of snapshot.active_runs) {
+      if (!run?.run_id || !run.agent_id || !run.session_id) continue;
+      const address = formatAgentAddress(run.agent_id, run.project_id);
+      const session = ensureSessionState(chatState, address, run.session_id);
+      if (session.currentRun?.runId !== run.run_id) startRun(session, run);
+      applyRunControls(session, run);
+      if (isDisplayedSession(address, run.session_id))
+        attachRunStream(session, run);
     }
   }
 
@@ -991,10 +293,20 @@ export function createChatRunStream({
     applyConnectionSnapshot,
     attachRunStream,
     closeSubscriptionFor,
-    closeSubscriptions,
-    closeSubscriptionsExcept,
+    closeSubscriptionsExcept(key) {
+      for (const other of connections.keys())
+        if (other !== key) closeSubscriptionFor(other);
+    },
+    closeSubscriptions() {
+      destroyed = true;
+      for (const key of connections.keys()) closeSubscriptionFor(key);
+    },
     handleServerEvent,
     mergeRunResponse,
     subscribeToRun,
   };
+}
+
+function timelineUrlForRun(runId) {
+  return `/api/runs/${encodeURIComponent(String(runId))}/timeline`;
 }

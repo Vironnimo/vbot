@@ -6,6 +6,7 @@ from typing import Any
 
 from core.chat import latest_session_context_usage
 from core.extensions import ExtensionRecord, ExtensionRegistrationIdentity, SettingsFieldDeclaration
+from core.runs import Run
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS, RESOURCE_KIND_SKILLS
@@ -15,7 +16,11 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.payloads import history_message, projected_file_urls
+from server.rpc.payloads import (
+    history_message,
+    projected_file_urls,
+    remove_opaque_provider_metadata,
+)
 from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
@@ -349,12 +354,15 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
     """Open a parent-owned SSE capability for one live, owner-scoped Run."""
     _reject_unsupported(
         params,
-        {"name", "page", "group_id", "run_id", "after_sequence"},
+        {"name", "page", "group_id", "run_id", "after_sequence", "timeline"},
         "extensions.page_run",
     )
     name = _required_string(params, "name")
     group_id = _required_string(params, "group_id")
     run_id = _required_string(params, "run_id")
+    timeline = params.get("timeline", False)
+    if not isinstance(timeline, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.page_run timeline must be a boolean")
     after_sequence = params.get("after_sequence", 0)
     if (
         not isinstance(after_sequence, int)
@@ -394,6 +402,7 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
                 group_id=group_id,
                 run_id=run_id,
                 after_sequence=after_sequence,
+                timeline=timeline,
             ),
         }
     except ValueError as error:
@@ -438,6 +447,8 @@ async def _extension_page_cancel_tool(state: Any, params: JsonObject) -> JsonObj
 
 async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
     """Project one owner-bound temporary Session history for a registered page."""
+    from server.timeline import capture_run_timeline
+
     _reject_unsupported(
         params,
         {"name", "page", "group_id", "participant_id", "query"},
@@ -460,9 +471,38 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
         temporary_agents = host.temporary_agents
         if temporary_agents is None:
             raise ValueError("Extension page is unavailable; refresh the page")
-        snapshot = await temporary_agents.inspect(group_id, participant_id, query)
+
+        def active_candidates() -> dict[str, Run]:
+            if query.get("before"):
+                return {}
+            return {
+                run.id: run
+                for run in state.chat_runs.active_runs()
+                if (owner := run.execution_owner) is not None
+                and (owner.extension, owner.group_id, owner.participant_id)
+                == (name, group_id, participant_id)
+            }
+
+        while True:
+            candidates = active_candidates()
+            snapshot = await temporary_agents.inspect(group_id, participant_id, query)
+            if active_candidates() == candidates:
+                break
+        # Only a Run in this canonical participant's History may replace its
+        # visible segment; descendants can share an execution owner.
+        active_run = next(
+            (
+                run
+                for record in snapshot.runs
+                if (run := candidates.get(record["run_id"])) is not None
+                and run.execution_owner is not None
+                and run.execution_owner.generation_id == snapshot.generation_id
+            ),
+            None,
+        )
+        active_snapshot = capture_run_timeline(active_run) if active_run is not None else None
         projection = await _HISTORY_WORKERS.run(
-            _temporary_history_projection, snapshot, state.file_delivery
+            _temporary_history_projection, snapshot, state.file_delivery, active_snapshot
         )
         _validate_page_context(state.runtime, registry, name, page)
         return projection
@@ -472,8 +512,12 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(error) from error
 
 
-def _temporary_history_projection(snapshot: Any, delivery: Any) -> JsonObject:
+def _temporary_history_projection(
+    snapshot: Any, delivery: Any, active_snapshot: JsonObject | None = None
+) -> JsonObject:
     """Use the ordinary client projection while withholding internal Session records."""
+    from server.timeline import project_timeline_history
+
     messages = [
         {
             **record,
@@ -493,11 +537,19 @@ def _temporary_history_projection(snapshot: Any, delivery: Any) -> JsonObject:
         "has_newer": snapshot.has_newer,
         "session_usage": snapshot.session_usage,
         "context_usage": latest_session_context_usage(list(snapshot.context_messages)),
-        "file_urls": projected_file_urls(messages, delivery),
     }
     if snapshot.page.before_cursor is not None:
         response["next_before"] = snapshot.page.before_cursor
-    return response
+    active = (
+        remove_opaque_provider_metadata(active_snapshot, file_delivery=delivery)
+        if active_snapshot is not None
+        else None
+    )
+    projection = project_timeline_history(response, active)
+    projection["file_urls"] = projected_file_urls(
+        {"messages": messages, "items": projection["items"]}, delivery
+    )
+    return projection
 
 
 def _validate_page_context(runtime: Any, registry: Any, name: str, page: Any) -> None:

@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from core.chat import ChatLoop, CommandDispatcher
 from core.chat.content_blocks import ContentBlock
+from core.chat.messages import ReplySurface
 from core.runs import ChatRunManager, QueuedRunItem, RunExecutor
 
 
@@ -22,6 +23,7 @@ async def _build_queue_update(
     *,
     input_origin: str | None = None,
     project_id: str | None = None,
+    reply_surface: ReplySurface | None = None,
 ) -> tuple[str, RunExecutor, str]:
     return await _chat_loop(state).build_queue_update(
         agent_id,
@@ -30,6 +32,7 @@ async def _build_queue_update(
         queued_item,
         input_origin=cast(Any, input_origin),
         project_id=project_id,
+        reply_surface=reply_surface,
     )
 
 

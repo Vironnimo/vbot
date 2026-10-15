@@ -7,6 +7,7 @@ disabled-set delta to a live reload or live disable.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from pathlib import Path
@@ -32,7 +33,7 @@ from core.extensions.extensions import (
 )
 from core.extensions.interactions import InteractionHandlerDeclaration
 from core.extensions.settings_schema import parse_settings_fields
-from core.runs import Run
+from core.runs import ChatRunManager, Run, RunExecutionOwner
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
 from tests.server.rpc_test_support import (
@@ -463,6 +464,17 @@ async def test_set_secret_saves_or_clears_the_credential_without_logging_it(
             "after_sequence",
         ),
         (
+            "extensions.page_run",
+            {
+                "name": "alpha",
+                "page": _PAGE,
+                "group_id": "group",
+                "run_id": "run",
+                "timeline": "true",
+            },
+            "timeline",
+        ),
+        (
             "extensions.set_secret",
             {"name": "nope", "key": "token", "value": "x"},
             "unknown extension",
@@ -535,6 +547,7 @@ def _page_state(temporary_agents: Any, registry: _PageRegistry | None = None) ->
     state.runtime.extensions = registry or _PageRegistry(
         SimpleNamespace(temporary_agents=temporary_agents)
     )
+    state.chat_runs = ChatRunManager()
     return state
 
 
@@ -690,6 +703,15 @@ async def test_extension_page_history_projects_only_bound_visible_history(
 
     # Only an older page to read adds the ``next_before`` cursor.
     older = {"next_before": before_cursor} if before_cursor is not None else {}
+    items = result.pop("items")
+    assert result.pop("timeline_version") == 1
+    assert "timeline_sequence" not in result
+    projected = json.dumps(items)
+    assert "/api/files/capability.signature" in projected
+    assert "reasoning_meta" not in projected
+    assert "output_files" not in projected
+    assert "/private/report.txt" not in projected
+    assert "private switch" not in projected
     assert result == {
         "messages": [
             {
@@ -710,6 +732,7 @@ async def test_extension_page_history_projects_only_bound_visible_history(
             },
         ],
         "runs": [],
+        "replace_run_ids": ["run"],
         "history_generation": "generation",
         "next_after": "after",
         **older,
@@ -745,6 +768,72 @@ async def test_extension_page_history_rejects_stale_page_and_foreign_participant
 
     assert foreign == {"code": "invalid_request", "message": "participant is not owned"}
     assert stale == {"code": "invalid_request", "message": _UNAVAILABLE}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("older_page", [False, True])
+async def test_extension_page_history_projects_only_its_canonical_live_run(
+    older_page: bool,
+) -> None:
+    owner = RunExecutionOwner("alpha", "group-a", "participant-a", "generation", "work-epoch")
+    active = Run(
+        run_id="run-a", agent_id="participant-a", session_id="session-a", execution_owner=owner
+    )
+    descendant = Run(
+        run_id="descendant", agent_id="child", session_id="child-session", execution_owner=owner
+    )
+    active.emit("assistant_output_delta", {"content_delta": "test-owned live content"})
+    descendant.emit("assistant_output_delta", {"content_delta": "test-owned descendant content"})
+    snapshot = SimpleNamespace(
+        runs=({"run_id": active.id, "status": "running"},),
+        generation_id="generation",
+        after_cursor="after",
+        incremental=False,
+        has_newer=False,
+        page=SimpleNamespace(
+            record_sequences=(0,),
+            record_run_ids=(active.id,),
+            messages=(
+                ChatMessage(
+                    id="saved",
+                    timestamp="2026-09-08T09:00:00+00:00",
+                    role="assistant",
+                    content="test-owned saved content",
+                    model="test/model",
+                ),
+            ),
+            has_more=False,
+            before_cursor=None,
+        ),
+        session_usage={},
+        context_messages=(),
+    )
+
+    class Groups:
+        async def inspect(self, *_args: Any) -> Any:
+            return snapshot
+
+    state = _page_state(Groups())
+    state.chat_runs = SimpleNamespace(active_runs=lambda: [descendant, active])
+    state.file_delivery = _HistoryDelivery()
+    result = await rpc_result(
+        state,
+        "extensions.page_history",
+        name="alpha",
+        page=_PAGE,
+        group_id="group-a",
+        participant_id="participant-a",
+        query={"before": "older"} if older_page else {},
+    )
+
+    items = json.dumps(result["items"])
+    assert "test-owned descendant content" not in items
+    assert ("test-owned live content" in items) is not older_page
+    if not older_page:
+        assert result["timeline_sequence"] == active.last_sequence
+        assert result["items"][0]["status"] == "running"
+    else:
+        assert "timeline_sequence" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -792,7 +881,10 @@ async def test_extension_page_cancel_tool_is_owner_scoped_and_call_local(scenari
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", ["live", "retired"])
-async def test_extension_page_run_reports_verified_replay_watermark(scenario: str) -> None:
+@pytest.mark.parametrize("timeline", [False, True])
+async def test_extension_page_run_reports_verified_replay_watermark(
+    scenario: str, timeline: bool
+) -> None:
     run = SimpleNamespace(last_sequence=7)
 
     class Groups:
@@ -819,6 +911,7 @@ async def test_extension_page_run_reports_verified_replay_watermark(scenario: st
     class Delivery:
         def open_extension_run(self, **kwargs: Any) -> Any:
             assert kwargs["after_sequence"] == 3
+            assert kwargs["timeline"] is timeline
             return {"url": "/api/extension-runs/test"}
 
     groups = Groups()
@@ -834,6 +927,7 @@ async def test_extension_page_run_reports_verified_replay_watermark(scenario: st
         group_id="group-a",
         run_id="run-a",
         after_sequence=3,
+        timeline=timeline,
     )
 
     assert groups.reads == 1

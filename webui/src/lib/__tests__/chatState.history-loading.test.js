@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  assistantRun,
+  messageItem,
+  outputItem,
+} from '../../components/__tests__/timelineItems.support.js';
+import {
   appendRunEvent,
   setAgents,
   selectAgent,
@@ -8,6 +13,7 @@ import {
   visibleTimelineItemsForRender,
 } from '../chatState.js';
 import {
+  applyOutputSnapshot,
   countTimelineTextOccurrences,
   deferred,
   reflectionRun,
@@ -391,6 +397,14 @@ describe('History reads', () => {
       .mockReturnValueOnce(older.promise)
       .mockResolvedValueOnce({
         messages: [{ id: 'new-user', role: 'user', content: 'New question' }],
+        items: [
+          messageItem({
+            id: 'new-user',
+            role: 'user',
+            content: 'New question',
+          }),
+        ],
+        timeline_sequence: 0,
         active_run: { run_id: 'new-run', status: 'running' },
       });
     const { chatState, controller, runStream } = setupController({
@@ -401,12 +415,7 @@ describe('History reads', () => {
     startRun(session, { run_id: 'old-run' });
     const loading = controller.loadHistoryForSession('alpha', 'session-one');
     startRun(session, { run_id: 'new-run' });
-    appendRunEvent(session, {
-      run_id: 'new-run',
-      sequence: 1,
-      type: 'assistant_output_delta',
-      payload: { content_delta: 'Fresh answer' },
-    });
+    applyOutputSnapshot(session, 'new-run', 1, 'Fresh answer');
     older.resolve({
       messages: [],
       active_run: { run_id: 'old-run', status: 'running' },
@@ -737,6 +746,17 @@ describe('Run recovery', () => {
       .mockResolvedValueOnce({
         runs: [{ run_id: 'run-final', status: 'completed', complete: true }],
         active_run: null,
+        items: [
+          messageItem({
+            id: 'user-final',
+            role: 'user',
+            content: 'Finish the work',
+          }),
+          assistantRun('run-final', [outputItem('Final answer')], {
+            status: 'completed',
+            source: 'history',
+          }),
+        ],
         has_more: false,
         messages: [
           { id: 'user-final', role: 'user', content: 'Finish the work' },
@@ -778,12 +798,7 @@ describe('Run recovery', () => {
         },
       },
     });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-final',
-      sequence: 2,
-      payload: { content_delta: 'Final answer' },
-    });
+    applyOutputSnapshot(sessionState, 'run-final', 2, 'Final answer');
     appendRunEvent(sessionState, {
       type: 'assistant_output',
       run_id: 'run-final',
@@ -804,6 +819,14 @@ describe('Run recovery', () => {
     });
 
     resolveStaleHistory({
+      items: [
+        messageItem({
+          id: 'user-final',
+          role: 'user',
+          content: 'Finish the work',
+        }),
+      ],
+      timeline_sequence: 1,
       active_run: {
         run_id: 'run-final',
         status: 'running',
@@ -910,12 +933,7 @@ describe('Run recovery', () => {
       'run-recovering',
     );
     await vi.waitFor(() => expect(loadChatHistory).toHaveBeenCalledOnce());
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-recovering',
-      sequence: 1,
-      payload: { content_delta: 'Recovered answer' },
-    });
+    applyOutputSnapshot(sessionState, 'run-recovering', 1, 'Recovered answer');
     appendRunEvent(sessionState, {
       type: 'assistant_output',
       run_id: 'run-recovering',
@@ -973,15 +991,16 @@ describe('Run recovery', () => {
       status: 'running',
       sse_url: '/new',
     });
-    appendRunEvent(session, {
-      type: 'assistant_output_delta',
-      run_id: 'successor',
-      sequence: 1,
-      payload: { content_delta: 'New answer' },
-    });
+    applyOutputSnapshot(session, 'successor', 1, 'New answer');
     resolveHistory({
       active_run: { run_id: 'predecessor', status: 'running' },
       runs: [{ run_id: 'predecessor', status: 'completed', complete: true }],
+      items: [
+        assistantRun('predecessor', [outputItem('Old final answer')], {
+          status: 'completed',
+          source: 'history',
+        }),
+      ],
       messages: [
         {
           id: 'old-answer',
@@ -1047,6 +1066,33 @@ describe('Run recovery', () => {
       active_run: null,
       has_more: false,
       messages: durableMessages,
+      runs: ['run-one', 'run-two', 'run-stalled'].map((run_id) => ({
+        run_id,
+        status: 'completed',
+        complete: true,
+      })),
+      items: [
+        {
+          id: 'compaction-one',
+          type: 'compaction_separator',
+          status: 'completed',
+        },
+        messageItem(durableMessages[1]),
+        assistantRun('run-one', [outputItem('First answer')], {
+          status: 'completed',
+          source: 'history',
+        }),
+        messageItem(durableMessages[4]),
+        assistantRun('run-two', [outputItem('Second answer')], {
+          status: 'completed',
+          source: 'history',
+        }),
+        messageItem(durableMessages[7]),
+        assistantRun('run-stalled', [outputItem('Latest answer')], {
+          status: 'completed',
+          source: 'history',
+        }),
+      ],
     });
     const { chatState, controller } = setupController({
       isDisplayedSession: () => true,

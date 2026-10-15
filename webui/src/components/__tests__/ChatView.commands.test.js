@@ -1,3 +1,4 @@
+import { assistantRun } from './timelineItems.support.js';
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 
@@ -249,7 +250,7 @@ describe('ChatView slash commands', () => {
           session_id: 'session-1',
           content,
         });
-        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+        expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
           agent_id: agentId,
           session_id: data.session_id,
           limit: 100,
@@ -553,9 +554,11 @@ describe('ChatView slash commands', () => {
     const usage = { input_tokens: 3886, output_tokens: 92 };
 
     it('starts a manual Compaction Run that renders the live checkpoint lifecycle', async () => {
+      const sessionItems = {};
       rpcMock.mockImplementation(
         createChatRpcMock({
           usage,
+          sessionItems,
           streamHandler: streamResponses({
             '/compact': runningRun('run-manual-compaction', [
               {
@@ -585,6 +588,31 @@ describe('ChatView slash commands', () => {
       expect(action.disabled).toBe(false);
       action.click();
       await waitForCondition(
+        () => subscribeRunEventsMock.mock.calls.length === 1,
+      );
+      const events = runEventSource('run-manual-compaction');
+      events.emit(
+        'timeline_snapshot',
+        {
+          items: [
+            assistantRun('run-manual-compaction', [
+              {
+                id: 'checkpoint',
+                type: 'compaction_separator',
+                status: 'running',
+                events: [],
+              },
+            ]),
+          ],
+          state: {
+            status: 'running',
+            controls: { compaction: 'running', background_tool_call_ids: [] },
+            controls_sequence: 2,
+          },
+        },
+        2,
+      );
+      await waitForCondition(
         () => action.textContent.trim() === t('chat.compactionRunning'),
       );
       expect(action.disabled).toBe(true);
@@ -602,31 +630,51 @@ describe('ChatView slash commands', () => {
       );
       expect(historyReads('session-1')).toBe(historyReadsBefore);
       expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-        '/api/runs/run-manual-compaction/events',
+        '/api/runs/run-manual-compaction/timeline',
         expect.any(Object),
-        { afterSequence: 0 },
-      );
-      const events = runEventSource('run-manual-compaction');
-      events.emit(
-        'compaction_completed',
         {
-          message: {
-            id: 'checkpoint-manual',
-            role: 'compaction_checkpoint',
-            content: 'Exact manual compaction context',
-            usage: {
-              context_tokens_before: 69_030,
-              context_tokens_after: 26_835,
-            },
+          eventTypes: ['timeline_snapshot', 'timeline_update'],
+          closeOnTerminal: false,
+        },
+      );
+      const checkpoint = {
+        id: 'checkpoint',
+        type: 'compaction_separator',
+        status: 'completed',
+        contextTokensBefore: 69_030,
+        contextTokensAfter: 26_835,
+        message: {
+          id: 'checkpoint-manual',
+          role: 'compaction_checkpoint',
+          content: 'Exact manual compaction context',
+        },
+        events: [],
+      };
+      sessionItems['session-1'] = [
+        assistantRun('run-manual-compaction', [checkpoint], {
+          status: 'completed',
+        }),
+      ];
+      events.emit(
+        'timeline_update',
+        {
+          terminal: true,
+          run: {
+            id: 'assistant-run-run-manual-compaction',
+            status: 'completed',
           },
-          checkpoint: 1,
-          checkpoint_id: 'checkpoint-manual',
-          context_tokens_before: 69_030,
-          context_tokens_after: 26_835,
+          children: [checkpoint],
+          state: {
+            status: 'completed',
+            controls: {
+              compaction: 'unavailable',
+              background_tool_call_ids: [],
+            },
+            controls_sequence: 3,
+          },
         },
         3,
       );
-      events.emit('run_completed', { status: 'completed' });
 
       await waitForCondition(() =>
         document
@@ -655,10 +703,17 @@ describe('ChatView slash commands', () => {
         () => subscribeRunEventsMock.mock.calls.length === 1,
       );
       const events = runEventSource('run-card-control');
+      events.emit('timeline_snapshot', {
+        items: [assistantRun('run-card-control', [])],
+        state: { status: 'running' },
+      });
+      let controlSequence = 1;
       const controls = (compaction) =>
-        events.emit('run_controls_changed', {
-          compaction,
-          background_tool_call_ids: [],
+        events.emit('timeline_update', {
+          state: {
+            controls: { compaction, background_tool_call_ids: [] },
+            controls_sequence: ++controlSequence,
+          },
         });
 
       controls('unavailable');

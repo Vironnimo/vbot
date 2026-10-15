@@ -17,6 +17,12 @@ import {
   historyText,
 } from './SwarmPage.support.js';
 import { t } from '../../lib/i18n.js';
+import {
+  assistantRun,
+  messageItem,
+  outputItem,
+  toolItem,
+} from './timelineItems.support.js';
 
 const RESUME_PARTICIPANT = t('swarm.resumeParticipant');
 const LOAD_OLDER = t('swarm.loadOlderMessages');
@@ -31,7 +37,7 @@ describe('Swarm participant Activity', () => {
   it('opens participant Activity from the Board and detaches its Run silently when leaving', async () => {
     const { bridge } = createBridge(profile, swarmWithRun('run-live-test'));
     bridge.subscribeRun.mockResolvedValue({
-      replay_through_sequence: 0,
+      timeline_version: 1,
       subscription_id: 'subscription-live-test',
     });
     bridge.unsubscribeRun.mockRejectedValue(
@@ -50,12 +56,21 @@ describe('Swarm participant Activity', () => {
     expect(panel.getAttribute('aria-labelledby')).toBe(
       'swarm-run-tab-participants',
     );
-    expect(bridge.subscribeRun).toHaveBeenCalledWith('swr-a', 'run-live-test');
+    expect(bridge.subscribeRun).toHaveBeenCalledWith(
+      'swr-a',
+      'run-live-test',
+      0,
+      { timeline: true },
+    );
     bridge.emitRun('subscription-live-test', {
-      type: 'model_step_usage',
+      type: 'timeline_snapshot',
       run_id: 'run-live-test',
       sequence: 1,
-      payload: { context_usage: { tokens: 2468, estimated: true } },
+      items: [assistantRun('run-live-test', [])],
+      state: {
+        status: 'running',
+        context_usage: { tokens: 2468, estimated: true },
+      },
     });
     await vi.waitFor(() => expect(contextFigures()).toBe('2.5K / 128K · 2%'));
     button(t('swarm.newRun')).click();
@@ -89,24 +104,31 @@ describe('Swarm participant Activity', () => {
     bridge.cancelToolCall.mockRejectedValue(
       new Error('test-owned cancellation failure'),
     );
-    bridge.readHistory.mockResolvedValue({ messages: [], status: 'running' });
+    bridge.readHistory.mockResolvedValue({
+      messages: [],
+      items: [],
+      status: 'running',
+    });
     bridge.subscribeRun.mockResolvedValue({
-      replay_through_sequence: 0,
+      timeline_version: 1,
       subscription_id: 'stream-bash',
     });
     await openParticipant(bridge);
     await vi.waitFor(() => expect(bridge.subscribeRun).toHaveBeenCalled());
     bridge.emitRun('stream-bash', {
-      type: 'tool_call_started',
+      type: 'timeline_snapshot',
       run_id: 'run-bash',
       sequence: 1,
-      payload: {
-        tool_call: {
-          id: 'call-bash',
-          name: 'bash',
-          arguments: { command: 'test-command' },
-        },
-      },
+      items: [
+        assistantRun('run-bash', [
+          toolItem({
+            id: 'call-bash',
+            name: 'bash',
+            arguments: { command: 'test-command' },
+          }),
+        ]),
+      ],
+      state: { status: 'running' },
     });
     const cancel = t('chat.cancelToolCallAria');
     await vi.waitFor(() => expect(button(cancel)).toBeDefined());
@@ -149,6 +171,14 @@ describe('Swarm participant Activity', () => {
       document.querySelector('.activity-view [role="status"]').textContent,
     ).toBe(t('common.loading'));
     finish({
+      items: [
+        messageItem({
+          id: 'msg-loaded',
+          role: 'user',
+          content: 'loaded-sentinel',
+          timestamp: '2026-09-08T09:00:00+00:00',
+        }),
+      ],
       messages: [
         {
           id: 'msg-loaded',
@@ -181,6 +211,15 @@ describe('Swarm participant Activity', () => {
       });
     const histories = {
       'prt-a': {
+        items: [
+          assistantRun('run-net', [outputItem('partial')], {
+            source: 'history',
+            status: 'interrupted',
+            runSummaryMessage: summary('run-net', 'interrupted', {
+              completion_reason: 'network',
+            }),
+          }),
+        ],
         runs: [{ run_id: 'run-net', status: 'interrupted', complete: true }],
         messages: [
           entry('run-net', 'out-net', 'assistant', { content: 'partial' }),
@@ -188,6 +227,12 @@ describe('Swarm participant Activity', () => {
         ],
       },
       'prt-b': {
+        items: [
+          assistantRun('run-ok', [outputItem('done')], {
+            source: 'history',
+            status: 'completed',
+          }),
+        ],
         runs: [{ run_id: 'run-ok', status: 'completed', complete: true }],
         messages: [
           entry('run-ok', 'out-ok', 'assistant', { content: 'done' }),
@@ -195,6 +240,18 @@ describe('Swarm participant Activity', () => {
         ],
       },
       'prt-c': {
+        items: [
+          assistantRun('run-err', [outputItem('trying')], {
+            source: 'history',
+            status: 'failed',
+          }),
+          messageItem(
+            entry('run-err', 'error-err', 'error', {
+              content: 'test-owned Provider failure',
+              error_kind: 'provider_error',
+            }),
+          ),
+        ],
         runs: [{ run_id: 'run-err', status: 'failed', complete: true }],
         messages: [
           entry('run-err', 'out-err', 'assistant', { content: 'trying' }),
@@ -269,6 +326,7 @@ describe('Swarm participant Activity', () => {
     bridge.readHistory.mockImplementation((_swarm, participant) =>
       Promise.resolve({
         messages: [],
+        items: [],
         context_usage: {
           tokens: tokens.get(participant),
           estimated: participant !== 'prt-a',
@@ -336,49 +394,57 @@ describe('Swarm participant Activity', () => {
     const { bridge } = createBridge(profile, swarmWithRun('run-retry'));
     bridge.readHistory.mockResolvedValue({
       messages: [],
+      items: [],
       status: 'completed',
     });
     bridge.subscribeRun.mockResolvedValue({
-      replay_through_sequence: 0,
+      timeline_version: 1,
       subscription_id: 'retry-sub',
     });
     await openParticipant(bridge);
     await vi.waitFor(() => expect(bridge.subscribeRun).toHaveBeenCalled());
     bridge.emitRun('retry-sub', {
-      type: 'run_started',
-      run_id: 'run-retry',
-      sequence: 1,
-      payload: { status: 'running' },
-    });
-    bridge.emitRun('retry-sub', {
-      type: 'provider_request_status',
+      type: 'timeline_snapshot',
       run_id: 'run-retry',
       sequence: 2,
-      payload: {
-        state: 'retrying',
-        error_kind: 'timeout',
-        attempt: 2,
-        max_attempts: 4,
-      },
+      items: [
+        assistantRun('run-retry', [], {
+          providerRequestStatus: {
+            state: 'retrying',
+            error_kind: 'timeout',
+            attempt: 2,
+            max_attempts: 4,
+          },
+        }),
+      ],
+      state: { status: 'running' },
     });
     const notice = () => document.querySelector('.run-footer__notice');
     await vi.waitFor(() => expect(notice()).not.toBeNull());
     expect(notice().textContent).toContain('2');
     expect(notice().textContent).toContain('4');
     bridge.emitRun('retry-sub', {
-      type: 'assistant_output_delta',
+      type: 'timeline_update',
       run_id: 'run-retry',
       sequence: 3,
-      payload: { content_delta: 'progress sentinel' },
+      base_sequence: 2,
+      run: { id: 'assistant-run-run-retry', providerRequestStatus: null },
+      children: [outputItem('progress sentinel', { streaming: true })],
     });
     await vi.waitFor(() => expect(notice()).toBeNull());
   });
 
   it('reconciles canonical final output even when completion arrives before the subscription reply', async () => {
     const { bridge } = createBridge(profile, swarmWithRun('run-final-test'));
-    bridge.readHistory.mockResolvedValueOnce({ messages: [] });
+    bridge.readHistory.mockResolvedValueOnce({ messages: [], items: [] });
     bridge.readHistory.mockResolvedValue({
       runs: [{ run_id: 'run-final-test', status: 'completed', complete: true }],
+      items: [
+        assistantRun('run-final-test', [outputItem('final-output-sentinel')], {
+          source: 'history',
+          status: 'completed',
+        }),
+      ],
       messages: [
         {
           history_run_id: 'run-final-test',
@@ -398,12 +464,15 @@ describe('Swarm participant Activity', () => {
     });
     bridge.subscribeRun.mockImplementation(() => {
       bridge.emitRun('subscription-final-test', {
-        type: 'run_completed',
+        type: 'timeline_snapshot',
         run_id: 'run-final-test',
         sequence: 1,
+        items: [assistantRun('run-final-test', [], { status: 'completed' })],
+        state: { status: 'completed' },
+        terminal: true,
       });
       return Promise.resolve({
-        replay_through_sequence: 0,
+        timeline_version: 1,
         subscription_id: 'subscription-final-test',
       });
     });
@@ -423,9 +492,12 @@ describe('Swarm participant Activity', () => {
       'its Run ends',
       (bridge) =>
         bridge.emitRun('stream-ends', {
-          type: 'run_completed',
+          type: 'timeline_snapshot',
           run_id: 'run-ends',
           sequence: 1,
+          items: [assistantRun('run-ends', [], { status: 'completed' })],
+          state: { status: 'completed' },
+          terminal: true,
         }),
     ],
     [
@@ -446,10 +518,16 @@ describe('Swarm participant Activity', () => {
         },
       });
       bridge.readHistory
-        .mockResolvedValueOnce({ messages: [], status: 'running' })
+        .mockResolvedValueOnce({ messages: [], items: [], status: 'running' })
         .mockRejectedValueOnce(new Error('test-owned history failure'))
         .mockResolvedValue({
           runs: [{ run_id: 'run-ends', status: 'completed', complete: true }],
+          items: [
+            assistantRun('run-ends', [outputItem('final-output-sentinel')], {
+              source: 'history',
+              status: 'completed',
+            }),
+          ],
           messages: [
             {
               history_run_id: 'run-ends',
@@ -461,7 +539,7 @@ describe('Swarm participant Activity', () => {
           ],
         });
       bridge.subscribeRun.mockResolvedValue({
-        replay_through_sequence: 0,
+        timeline_version: 1,
         subscription_id: 'stream-ends',
       });
       await openParticipant(bridge);
@@ -491,7 +569,7 @@ describe('Swarm participant History pages', () => {
   it('retains older Session pages during invalidation and reconciles them on completion', async () => {
     const { bridge } = createBridge(profile, swarmWithRun('run-paged'));
     bridge.subscribeRun.mockResolvedValue({
-      replay_through_sequence: 0,
+      timeline_version: 1,
       subscription_id: 'stream-paged',
     });
     const entry = (n) => ({
@@ -511,6 +589,7 @@ describe('Swarm participant History pages', () => {
         if (query.after === 'after-six')
           return {
             messages: [entry(6)],
+            items: [messageItem(entry(6))],
             incremental: true,
             has_newer: false,
             next_after: 'after-seven',
@@ -520,6 +599,10 @@ describe('Swarm participant History pages', () => {
         const page = pages[query.before ?? 'newest'];
         return {
           messages: [entry(page.first), entry(page.first + 1)],
+          items: [
+            messageItem(entry(page.first)),
+            messageItem(entry(page.first + 1)),
+          ],
           history_generation: 'generation',
           next_after: 'after-six',
           runs: [],
@@ -551,9 +634,12 @@ describe('Swarm participant History pages', () => {
     await settle(150);
     expect(bridge.readHistory).toHaveBeenCalledTimes(3);
     bridge.emitRun('stream-paged', {
-      type: 'run_completed',
+      type: 'timeline_snapshot',
       run_id: 'run-paged',
       sequence: 1,
+      items: [assistantRun('run-paged', [], { status: 'completed' })],
+      state: { status: 'completed' },
+      terminal: true,
     });
     await vi.waitFor(() => expect(bridge.readHistory).toHaveBeenCalledTimes(4));
     expect(bridge.readHistory).toHaveBeenLastCalledWith('swr-a', 'prt-a', {
@@ -579,6 +665,13 @@ describe('Swarm participant History pages', () => {
           })
         : {
             messages: [{ id: participant, role: 'user', content: participant }],
+            items: [
+              messageItem({
+                id: participant,
+                role: 'user',
+                content: participant,
+              }),
+            ],
             has_more: participant === 'prt-a',
             next_before: 'older',
           },
@@ -590,6 +683,13 @@ describe('Swarm participant History pages', () => {
     button('Beta').click();
     await vi.waitFor(() => expect(historyText()).toContain('prt-b'));
     finishOlder({
+      items: [
+        messageItem({
+          id: 'older-alpha',
+          role: 'user',
+          content: 'stale-alpha-sentinel',
+        }),
+      ],
       messages: [
         { id: 'older-alpha', role: 'user', content: 'stale-alpha-sentinel' },
       ],

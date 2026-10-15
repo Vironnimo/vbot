@@ -18,6 +18,7 @@ import pytest
 import pytest_asyncio
 
 from core.chat.content_blocks import TextBlock
+from core.chat.messages import ReplySurface
 from core.runs import ChatRunManager, QueuedRunItem, Run
 from core.sessions import SessionAddress
 from tests.server.rpc.chat_methods_test_support import (
@@ -150,7 +151,7 @@ async def test_queue_mutations_treat_unknown_and_internal_items_as_missing(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("agent_address", "project_id", "content", "expected_content", "editable"),
+    ("agent_address", "project_id", "content", "expected_content", "editable", "surface"),
     [
         pytest.param(
             "builder",
@@ -158,9 +159,12 @@ async def test_queue_mutations_treat_unknown_and_internal_items_as_missing(
             [{"type": "text", "text": "Edited text"}],
             [TextBlock(type="text", text="Edited text")],
             False,
+            None,
             id="identity-blocks",
         ),
-        pytest.param("builder@vbot", "vbot", "Edited text", "Edited text", True, id="project"),
+        pytest.param(
+            "builder@vbot", "vbot", "Edited text", "Edited text", True, "tui", id="project-tui"
+        ),
     ],
 )
 async def test_queue_update_rebuilds_the_item_under_its_address_and_resolved_session(
@@ -169,6 +173,7 @@ async def test_queue_update_rebuilds_the_item_under_its_address_and_resolved_ses
     content: Any,
     expected_content: Any,
     editable: bool,
+    surface: str | None,
 ) -> None:
     # The queue key carries the project anchor, so the rebuild runs against the
     # addressed project; the signal names the Session the rebuild resolved.
@@ -184,6 +189,7 @@ async def test_queue_update_rebuilds_the_item_under_its_address_and_resolved_ses
         session_id="s1",
         item_id="queue-1",
         content=content,
+        **({"reply_surface": surface} if surface else {}),
     )
 
     assert response == {"ok": True, "result": {"ok": True}}
@@ -195,6 +201,7 @@ async def test_queue_update_rebuilds_the_item_under_its_address_and_resolved_ses
             "queued_item": item,
             "input_origin": None,
             "project_id": project_id,
+            "reply_surface": ReplySurface.tui() if surface else None,
         }
     ]
     assert runs.list_calls == [("builder", "s1", project_id)]

@@ -193,7 +193,6 @@ export default Object.freeze({
     'The live stream closed before the run finished. Waiting for server status.',
   'errors.minimumAgents': 'At least one agent must remain.',
   'errors.appError': 'Error',
-  'errors.streamReconnecting': 'The live stream closed. Reconnecting...',
   'cancel.cancelling': 'Cancelling run…',
   'status.connected': 'Connected',
   'status.notReachable': 'Not reachable',

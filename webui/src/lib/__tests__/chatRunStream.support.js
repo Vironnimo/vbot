@@ -62,7 +62,7 @@ export function makeStreamHarness({
     // Delivers raw Run events through the newest SSE subscription.
     sse: (...events) => {
       for (const data of events)
-        subscriptions.at(-1).handlers.onEvent({ data });
+        subscriptions.at(-1).handlers.onEvent({ type: data.type, data });
     },
     // Hands WebSocket Run server events over in feed order.
     ws: (...serverEvents) => {
@@ -103,5 +103,62 @@ export function activeRun(runId, fields = {}) {
     status: 'running',
     sse_url: `/api/runs/${runId}/events`,
     ...fields,
+  };
+}
+
+// Explicit server projections: tests exercise transport/application, never
+// reconstruct the server's semantic grouping from raw Model events.
+export function timelineSnapshot(
+  runId,
+  sequence = 10,
+  { content = 'Hello', status = 'running', state = {} } = {},
+) {
+  return {
+    type: 'timeline_snapshot',
+    run_id: runId,
+    sequence,
+    items: [
+      {
+        id: `assistant-run-${runId}`,
+        type: 'assistant_run',
+        runId,
+        run_id: runId,
+        source: 'live',
+        status,
+        items: [
+          {
+            id: `${runId}-output`,
+            type: 'assistant_output',
+            content,
+            streaming: status === 'running',
+          },
+        ],
+      },
+    ],
+    state: { status, ...state },
+    terminal: status !== 'running',
+  };
+}
+
+export function timelinePatch(
+  runId,
+  baseSequence,
+  { content = '!', status = 'running', state = {} } = {},
+) {
+  return {
+    type: 'timeline_update',
+    run_id: runId,
+    sequence: baseSequence + 1,
+    base_sequence: baseSequence,
+    run: { id: `assistant-run-${runId}`, status },
+    child_updates: [
+      {
+        id: `${runId}-output`,
+        append: { content },
+        set: { streaming: status === 'running' },
+      },
+    ],
+    state: { status, ...state },
+    terminal: status !== 'running',
   };
 }

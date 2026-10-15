@@ -432,7 +432,9 @@ class SubAgentCoordinator:
         # Without stopped_by the Session the user works in is always stopped.
         return stopped or 0
 
-    async def work_snapshot(self, address: SessionAddress) -> dict[str, bool]:
+    async def work_snapshot(
+        self, address: SessionAddress, *, include_entries: bool = False
+    ) -> JsonObject:
         """Project Stop all's live scope, independently of loaded History.
 
         The root's own Queue is retained by Stop all and does not make background
@@ -473,7 +475,93 @@ class SubAgentCoordinator:
                     )
                     for info in terminals.list_terminals()
                 )
-            return {"run_active": run_active, "background_work_running": background}
+            snapshot: JsonObject = {
+                "run_active": run_active,
+                "background_work_running": background,
+            }
+            if not include_entries:
+                return snapshot
+
+            # The same strict tree read also supplies an Accessor's activity
+            # list. Keep exact addresses with each entry so opening a child
+            # never depends on a historical Tool row being loaded.
+            ids = {link.session: link.id for link in links}
+
+            def owner_fields(owner: SessionAddress) -> JsonObject:
+                return {
+                    "agent_id": owner.agent_id,
+                    "session_id": owner.session_id,
+                    "project_id": owner.project_id,
+                    "subagent_id": ids.get(owner),
+                }
+
+            running: list[JsonObject] = []
+            for link in links:
+                child = link.session
+                active = runtime.chat_run_manager.active_run(
+                    agent_id=child.agent_id,
+                    session_id=child.session_id,
+                    project_id=child.project_id,
+                )
+                if active is None and not is_working(runtime, child):
+                    continue
+                running.append(
+                    {
+                        "kind": "subagent",
+                        "id": link.id,
+                        "label": link.title,
+                        "status": "running" if active is not None else "queued",
+                        **owner_fields(child),
+                        "parent_id": ids.get(link.parent),
+                        "run_id": active.id if active is not None else None,
+                        "reply_target": link.reply_target,
+                        "tool_name": _latest_tool_name(active) if active is not None else None,
+                    }
+                )
+            if commands is not None:
+                running.extend(
+                    {
+                        "kind": "command",
+                        "id": report.command_id,
+                        "label": report.label,
+                        "status": report.status,
+                        "still_running": bool(report.still_running),
+                        **owner_fields(report.owner),
+                    }
+                    for report in commands.commands(tree)
+                    if not report.finished
+                )
+            if terminals is not None:
+                for info in terminals.list_terminals():
+                    if info.finished_at is not None:
+                        continue
+                    owner = next(
+                        (
+                            scoped
+                            for candidate in (info.attachment, info.lifecycle_owner)
+                            if candidate is not None
+                            and (
+                                scoped := SessionAddress(
+                                    candidate.project_id, candidate.agent_id, candidate.session_id
+                                )
+                            )
+                            in tree
+                        ),
+                        None,
+                    )
+                    if owner is None:
+                        continue
+                    running.append(
+                        {
+                            "kind": "terminal",
+                            "id": info.terminal_id,
+                            "label": info.name or " ".join((info.command, *info.arguments)).strip(),
+                            "status": "running",
+                            **owner_fields(owner),
+                        }
+                    )
+            snapshot["running"] = running
+            return snapshot
 
     async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
         """Return *caller*'s Sub-Agents at every depth, breadth first, as they are now.

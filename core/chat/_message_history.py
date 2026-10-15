@@ -122,6 +122,8 @@ def reply_surface_from_note(message: _records.ChatMessage) -> _records.ReplySurf
         return None
     if payload.get("kind") == "webui":
         return _records.ReplySurface.webui()
+    if payload.get("kind") == "tui":
+        return _records.ReplySurface.tui()
     if payload.get("kind") != "channel":
         return None
     platform = payload.get("platform")

@@ -11,6 +11,7 @@ from server.clients import (
     ACCESSOR_BROWSER,
     ACCESSOR_DESKTOP,
     ACCESSOR_TRAY,
+    ACCESSOR_TUI,
     ACCESSOR_UNKNOWN,
     CLIENT_STATUS_CONNECTED,
     UNKNOWN_LABEL,
@@ -35,7 +36,13 @@ _EDGE_WINDOWS = (
 def test_register_lists_each_connection_with_the_row_contract_oldest_first() -> None:
     at = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
     clock = iter(
-        (at + timedelta(hours=1), at, at + timedelta(minutes=30), at + timedelta(minutes=45))
+        (
+            at + timedelta(hours=1),
+            at,
+            at + timedelta(minutes=30),
+            at + timedelta(minutes=45),
+            at + timedelta(hours=2),
+        )
     )
     registry = ClientRegistry(now_provider=lambda: next(clock))
 
@@ -44,8 +51,12 @@ def test_register_lists_each_connection_with_the_row_contract_oldest_first() -> 
     # A reconnect overlap from the same client id is a second, distinct entry.
     overlap = registry.register(connection_id="tab-a", accessor="browser", user_agent="")
     tray = registry.register(connection_id="tray-a", accessor="tray", user_agent="")
+    tui = registry.register(
+        connection_id="tui-a", accessor="tui", user_agent="vBot-TUI/0.4.19 (Linux)"
+    )
 
-    assert registry.list() == [unknown, overlap, tray, desktop]
+    assert registry.list() == [unknown, overlap, tray, desktop, tui]
+    assert tui.accessor == ACCESSOR_TUI
     assert unknown.id != overlap.id
     assert (unknown.accessor, overlap.accessor, tray.accessor) == (
         ACCESSOR_UNKNOWN,
@@ -121,6 +132,7 @@ def test_presence_logs_one_connect_and_disconnect_per_logical_window(
         (_SAFARI_MAC, "Safari", "macOS"),
         (_EDGE_WINDOWS, "Edge", "Windows"),
         ("vBot-Tray/0.5.0 (Windows)", "vBot", "Windows"),
+        ("vBot-TUI/0.5.0 (Linux)", "vBot", "Linux"),
         ("", UNKNOWN_LABEL, UNKNOWN_LABEL),
         ("curl/8.4.0", UNKNOWN_LABEL, UNKNOWN_LABEL),
     ],

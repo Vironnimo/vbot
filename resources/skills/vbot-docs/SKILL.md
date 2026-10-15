@@ -5,7 +5,7 @@ description: Configure and inspect vBot and its Agents. Use when a task changes 
 
 # vBot
 
-Use `vbot` through the shell Tool to inspect and configure the application. The server runs Agents and owns the state used by the CLI, WebUI, Desktop, and Channels. A saved configuration change affects that server instance.
+Use `vbot` through the shell Tool to inspect and configure the application. The server runs Agents and owns the state used by the CLI, TUI, WebUI, Desktop, and Channels. A saved configuration change affects that server instance.
 
 Choose the area and action first: `vbot <area> <action> [target] [options]`. Related actions can be grouped, for example `vbot project override set`, `vbot channel token set`, and `vbot skill file write`. There is no fixed word count. Resource ids are positional; flags supply options and values. Use the commands shown by help instead of inventing action flags such as `--restart`.
 
@@ -27,7 +27,7 @@ For a focused question about a past conversation, use `session_search` and answe
 | Create an Agent for a purpose, rename an Agent, Agent settings, Project membership, permissions, Sessions | `references/agents-projects.md` |
 | Write or revise an Agent's SOUL.md: its role, how it works, its voice, its boundaries | `references/soul.md` |
 | Archived Agents, Projects and Sessions: list, restore, delete permanently | `references/agents-projects.md` |
-| Send a message to an Agent and read its answer, continue one of its Sessions, set a Session's Model, thinking effort or temperature | `references/chat.md` |
+| Send a message to an Agent and read its answer, continue one of its Sessions, set a Session's Model, thinking effort or temperature, or help the user open the terminal TUI | `references/chat.md` |
 | Extended Session search, listing past conversations, full transcripts or exact Tool Results | `references/session-search.md` |
 | Provider keys/OAuth/limits, Models, voices, specialized Task Models, and image, video or music generation settings such as quality, image count or video length | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings | `references/configuration.md` |
