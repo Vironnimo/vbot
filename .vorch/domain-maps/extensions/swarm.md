@@ -243,6 +243,11 @@ be applied, each with its own explanation (the changes since `expected_revision`
 shown once), and asks to send all edits again with those corrected or left out. One
 Agent sent four table-row edits as `edits` and got only the unknown-parameter error;
 its first three would have applied (Swarm run 2026-10-12).
+Oversized content or passage text is refused before the Store: the error names the
+field (and edit number for a batch), its length and the 200000-character limit.
+`Nothing changed. <field> has <count> characters. Use at most <maximum> characters.`
+replaces the generic unknown-field refusal, which gave no correction for a valid
+`edits` field containing an oversized item.
 Store writes require payload-bound request ids. `swarm_wiki` callers do not supply
 them: like the Board, the handler derives the key from Session, Run, iteration and
 Tool Call identity, and drops an Agent-sent `request_id`; management keeps its own.

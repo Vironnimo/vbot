@@ -729,6 +729,15 @@ async def test_wiki_update_edits_apply_together_or_not_at_all(board):
     )
     assert refused["error"]["code"] == "invalid_arguments"
     assert (await stored(board, page_id))["revision"] == 3
+    # One-item edits are folded into the root fields; both forms explain a size refusal.
+    for field in ("old_text", "new_text"):
+        large = {"old_text": "| B02 | Cy |", "new_text": "| B02 | Dee |", field: "x" * 200_001}
+        for edits in ([large], [first, large]):
+            refused = await invoke(board, {"action": "update", "page_id": page_id, "edits": edits})
+            assert refused["error"]["code"] == "invalid_arguments"
+            message = refused["error"]["message"]
+            assert field in message and "200001" in message and "200000" in message
+            assert (await stored(board, page_id))["revision"] == 3
 
 
 @pytest.mark.asyncio

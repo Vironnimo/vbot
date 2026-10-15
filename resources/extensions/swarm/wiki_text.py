@@ -236,6 +236,7 @@ WIKI_NEEDS = {
         "as old_text and new_text, or send content without edits to replace the whole page."
     ),
     "edits_many": "edits holds {count} edits; send at most {maximum} in one call.",
+    "text_long": "{field} has {count} characters. Use at most {maximum} characters.",
 }
 WIKI_FIELD_ELSEWHERE = "{field} is used by {users}, not by {action}. Repeat the call without it."
 WIKI_FIELD_UNKNOWN = "swarm_wiki has no field {field}. Repeat the call without it."
