@@ -34,7 +34,29 @@ export function createChatActivity({
   const refreshedAddresses = new Set();
   let lastInvalidationId = null;
   let disposed = false;
+  const retryAddresses = new Set();
+  let retryTimer = null;
+  let retryDelay = 1000;
   const refresher = createCoalescedRefresh((keys) => readActivity(keys));
+
+  function clearRetry() {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    retryAddresses.clear();
+    retryDelay = 1000;
+  }
+
+  function scheduleRetry() {
+    if (retryTimer !== null || retryAddresses.size === 0 || disposed) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      const needed = [...retryAddresses].filter((address) =>
+        addresses.includes(address),
+      );
+      if (needed.length) void refresher.run(needed);
+    }, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 30000);
+  }
 
   // Refresh completion activity for these addresses now (or right after the
   // read in flight). Resolves true when this read applied a response.
@@ -44,7 +66,7 @@ export function createChatActivity({
 
   async function readActivity(agentAddresses) {
     const requested = uniqueAddresses(agentAddresses);
-    chatState.agentActivityError = '';
+    const refreshKey = fullRefreshKey;
     if (requested.length === 0 || disposed) {
       return true;
     }
@@ -85,10 +107,27 @@ export function createChatActivity({
           seenCompletions,
         );
       }
+      if (refreshKey === fullRefreshKey) {
+        for (const address of requested) {
+          retryAddresses.delete(address);
+          if (addresses.includes(address)) refreshedAddresses.add(address);
+        }
+        if (retryAddresses.size === 0) {
+          clearRetry();
+          chatState.agentActivityError = '';
+        }
+      }
       return true;
     } catch (error) {
-      if (!disposed) {
-        chatState.agentActivityError = errorMessage(error);
+      if (!disposed && refreshKey === fullRefreshKey) {
+        for (const address of requested) {
+          refreshedAddresses.delete(address);
+          if (addresses.includes(address)) retryAddresses.add(address);
+        }
+        if (retryAddresses.size > 0 || fullRefreshKey === null) {
+          chatState.agentActivityError = errorMessage(error);
+        }
+        scheduleRetry();
       }
       return false;
     } finally {
@@ -107,9 +146,18 @@ export function createChatActivity({
         refreshedAddresses.delete(address);
       }
     }
+    const hadRetries = retryAddresses.size > 0;
+    for (const address of [...retryAddresses]) {
+      if (!displayed.has(address)) retryAddresses.delete(address);
+    }
+    if (hadRetries && retryAddresses.size === 0) {
+      clearRetry();
+      chatState.agentActivityError = '';
+    }
     if (refreshKey !== fullRefreshKey) {
       fullRefreshKey = refreshKey;
       refreshedAddresses.clear();
+      clearRetry();
     }
     const needed = addresses.filter(
       (address) => !refreshedAddresses.has(address),
@@ -243,6 +291,7 @@ export function createChatActivity({
     syncAgentActivity,
     dispose() {
       disposed = true;
+      clearRetry();
       refresher.destroy();
       chatState.loadingAgentActivity = false;
     },

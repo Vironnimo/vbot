@@ -921,6 +921,13 @@
     {/if}
   {/if}
 
+  {#if chatState.agentActivityError}
+    <Banner variant="warn" class="chat-view__state-banner">
+      {t('chat.activityLoadError')}
+      {chatState.agentActivityError}
+    </Banner>
+  {/if}
+
   {#if chatState.loadingAgents}
     <Banner variant="neutral" class="chat-view__state-banner">
       {t('loading.agents')}
