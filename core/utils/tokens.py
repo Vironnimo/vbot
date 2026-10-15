@@ -128,6 +128,10 @@ def estimate_tokens(text: str) -> tuple[int, bool]:
         if encoding is not None
         else math.ceil(len(text) / FALLBACK_CHARS_PER_TOKEN)
     )
+    # A cold encoding may still be downloading. Do not retain the temporary
+    # character estimate after that encoding becomes available.
+    if encoding is None:
+        return count, True
     with _CACHE_LOCK:
         _COUNT_CACHE[key] = count
         _COUNT_CACHE.move_to_end(key)
@@ -155,22 +159,38 @@ def prewarm_estimation_encoding() -> None:
 
     Loading parses o200k_base: 200-270 ms and about 66 MB. Warming at startup
     keeps the first Run's request count, and any count on the Event Loop, from
-    paying it. A count that arrives while the thread still loads waits for that
-    load instead of loading again.
+    paying it. Counts use the character estimate while it loads: tiktoken may
+    download missing data without a network timeout, which must never block a
+    caller or the Event Loop.
     """
     if _estimation_encoding.cache_info().currsize:
         return
-    Thread(target=_load_estimation_encoding, name="vbot-tokenizer-prewarm", daemon=True).start()
+    if not _ENCODING_LOCK.acquire(blocking=False):
+        return
+
+    def load() -> None:
+        try:
+            _estimation_encoding()
+        finally:
+            _ENCODING_LOCK.release()
+
+    try:
+        Thread(target=load, name="vbot-tokenizer-prewarm", daemon=True).start()
+    except BaseException:
+        _ENCODING_LOCK.release()
+        raise
 
 
 def _load_estimation_encoding() -> tiktoken.Encoding | None:
     """One instance per process, shared across Agents and Sessions.
 
-    The first call loads it (normally ``prewarm_estimation_encoding``); a caller
-    that arrives meanwhile waits for that load, so a failure is logged once.
+    Never wait for a cold load. It can include an unbounded download performed
+    by tiktoken; only the daemon may wait for that, while callers estimate.
     """
-    with _ENCODING_LOCK:
+    if _estimation_encoding.cache_info().currsize:
         return _estimation_encoding()
+    prewarm_estimation_encoding()
+    return None
 
 
 @lru_cache(maxsize=1)

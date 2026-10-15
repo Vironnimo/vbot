@@ -44,6 +44,7 @@ def _stub_tiktoken_encoding(monkeypatch: pytest.MonkeyPatch):
     encoding = _DeterministicEncoding()
     monkeypatch.setattr(token_utils.tiktoken, "get_encoding", lambda _name: encoding)
     _forget_estimation_encoding()
+    token_utils._estimation_encoding()
     token_utils._COUNT_CACHE.clear()
     token_utils._IMAGE_CACHE.clear()
     yield
@@ -77,6 +78,7 @@ def test_estimation_encoding_is_fixed_and_cached(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(token_utils.tiktoken, "get_encoding", load_encoding)
     _forget_estimation_encoding()
+    token_utils._estimation_encoding()
 
     first, _ = estimate_tokens("first")
     second, _ = estimate_tokens("second")
@@ -86,10 +88,10 @@ def test_estimation_encoding_is_fixed_and_cached(monkeypatch: pytest.MonkeyPatch
     assert calls == [TOKEN_ESTIMATE_ENCODING]
 
 
-def test_startup_prewarm_loads_the_encoding_once_while_counts_wait(
+def test_startup_prewarm_loads_once_without_blocking_counts(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Counts that arrive during the startup load wait for it instead of loading again."""
+    """An unfinished encoding download never blocks counting or poisons its cache."""
     loads: list[str] = []
     loading = threading.Event()
     release = threading.Event()
@@ -108,19 +110,16 @@ def test_startup_prewarm_loads_the_encoding_once_while_counts_wait(
     _forget_estimation_encoding()
     prewarm_estimation_encoding()
     assert loading.wait(timeout=5)
-    counts: list[int] = []
-    threads = [
-        threading.Thread(target=lambda text=text: counts.append(estimate_tokens(text)[0]))
-        for text in ("one", "two", "three")
-    ]
-    for thread in threads:
-        thread.start()
-    release.set()
-    for thread in threads:
-        thread.join(timeout=5)
+    try:
+        assert [estimate_tokens(text)[0] for text in ("one", "two", "three")] == [1, 1, 2]
+        prewarm_estimation_encoding()
+    finally:
+        release.set()
+        with token_utils._ENCODING_LOCK:
+            pass
 
     assert loads == ["vbot-tokenizer-prewarm"]
-    assert counts == [100, 100, 100]
+    assert [estimate_tokens(text)[0] for text in ("one", "two", "three")] == [100, 100, 100]
     prewarm_estimation_encoding()
     assert loads == ["vbot-tokenizer-prewarm"]
 
@@ -135,6 +134,7 @@ def test_estimate_tokens_uses_character_fallback_when_encoding_is_unavailable(
 
     monkeypatch.setattr(token_utils.tiktoken, "get_encoding", fail_to_load)
     _forget_estimation_encoding()
+    token_utils._estimation_encoding()
 
     count, is_estimate = estimate_tokens("x" * 5)
     estimate_tokens("y" * 5)
@@ -459,6 +459,8 @@ def test_growing_wire_reuses_unchanged_message_counts(monkeypatch):
             return [0] * len(text)
 
     monkeypatch.setattr(token_utils.tiktoken, "get_encoding", lambda _: Encoding())
+    _forget_estimation_encoding()
+    token_utils._estimation_encoding()
     first = {"role": "user", "content": "unchanged"}
     estimate_structured_tokens([first], model_id="gpt-4o")
     estimate_structured_tokens([first, {"role": "assistant", "content": "new"}], model_id="gpt-4o")
