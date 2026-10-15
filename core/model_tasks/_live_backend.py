@@ -20,7 +20,7 @@ from core.agents import LIVE_BACKEND_AGENT_ID
 from core.chat.messages import INPUT_ORIGIN_LIVE_VOICE, ContentBlock, TextBlock
 from core.model_tasks._live_brief import EFFECTS_LABEL
 from core.runs import TOOL_CALL_RESULT_EVENT, Run, RunKind
-from core.tools.live import LIVE_READ_ONLY_TOOLS, LiveToolHost, LiveToolHosts
+from core.tools.live import LIVE_READ_ONLY_TOOLS, TOOL_END_CALL, LiveToolHost, LiveToolHosts
 from core.tools.web_fetch import WEB_FETCH_TOOL_NAME
 from core.tools.web_search import WEB_SEARCH_TOOL_NAME
 from core.utils.logging import get_logger
@@ -130,15 +130,29 @@ class LiveBackend:
             finally:
                 self._run = None
 
-    async def aclose(self) -> None:
-        """Stop a running request and release the Session's Live Tools."""
+    async def aclose(self, *, finish_request: bool = False) -> None:
+        """Release Live Tools, allowing a successful hangup's admitted batch to finish."""
         self._closed = True
         run = self._run
-        if run is not None:
-            run.request_cancel()
-            await _settled(run)
-        if self._session_id is not None:
-            self._hosts.unbind(self._session_id, self._host)
+        try:
+            if run is not None and finish_request:
+                try:
+                    async with asyncio.timeout(_CLOSE_SECONDS):
+                        await asyncio.shield(run.wait())
+                except Exception:
+                    pass
+                else:
+                    run = None
+            if run is not None:
+                run.request_cancel()
+                await _settled(run)
+        except asyncio.CancelledError:
+            if run is not None:
+                run.request_cancel()
+            raise
+        finally:
+            if self._session_id is not None:
+                self._hosts.unbind(self._session_id, self._host)
 
     async def _session(self) -> str:
         if self._session_id is None:
@@ -159,7 +173,8 @@ class LiveBackend:
 
     async def _outcome(self, run: Run) -> str:
         effects: list[str] = []
-        collector = asyncio.create_task(_collect_effects(run, effects))
+        hangup: list[str] = []
+        collector = asyncio.create_task(_collect_effects(run, effects, hangup))
         try:
             try:
                 async with asyncio.timeout(self._timeout):
@@ -189,6 +204,8 @@ class LiveBackend:
                 pass
         finally:
             collector.cancel()
+        if answer == _NO_ANSWER and hangup:
+            answer = hangup[-1]
         return f"{answer}\n{effects_line(effects)}"
 
 
@@ -220,7 +237,7 @@ def effects_line(effects: Sequence[str]) -> str:
     return f"{EFFECTS_LABEL} " + " | ".join(shown)
 
 
-async def _collect_effects(run: Run, effects: list[str]) -> None:
+async def _collect_effects(run: Run, effects: list[str], hangup: list[str]) -> None:
     async for event in run.subscribe():
         if event.type != TOOL_CALL_RESULT_EVENT:
             continue
@@ -228,6 +245,9 @@ async def _collect_effects(run: Run, effects: list[str]) -> None:
         name = str(call.get("name") or "") if isinstance(call, dict) else ""
         if name and name not in _LOOKUP_TOOLS:
             effects.append(_effect(name, event.payload.get("result")))
+            result = event.payload.get("result")
+            if name == TOOL_END_CALL and isinstance(result, dict) and result.get("ok") is True:
+                hangup.append(effects[-1])
 
 
 def _effect(name: str, result: Any) -> str:

@@ -863,9 +863,7 @@ class ToolRound:
             tool_delivery_receipt_registrar=(
                 context.register_delivery_receipt if context.allow_owned_effects else None
             ),
-            tool_turn_end_registrar=(
-                context.request_turn_end if context.allow_owned_effects else None
-            ),
+            tool_turn_end_registrar=context.request_turn_end,
             tool_result_payload_registrar=context.stage_result_payload,
             input_contracts=context.tool_contracts,
             loadable_tools=context.loadable_tools,

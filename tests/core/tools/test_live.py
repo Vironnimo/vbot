@@ -8,9 +8,10 @@ from typing import Any
 
 import pytest
 
-from core.tools import ToolRegistry
+from core.tools import ToolCall, ToolExecutor, ToolRegistry, tool_success
 from core.tools._tool_context import ToolContext
 from core.tools.live import LIVE_TOOL_NAMES, LiveToolHosts, register_live_tools
+from tests.core.tools.tools_test_support import make_execution_config
 
 
 class FakeCall:
@@ -19,11 +20,11 @@ class FakeCall:
 
     async def run_live_tool(self, name: str, arguments: Any) -> dict[str, Any]:
         self.calls.append((name, arguments))
-        return {"ok": True, "data": {"content": f"ran {name}"}}
+        return tool_success({"content": f"ran {name}"})
 
     async def vbot_request(self, request: str | None) -> dict[str, Any]:
         self.calls.append(("vbot_request", request))
-        return {"ok": True, "data": {"content": "answered"}}
+        return tool_success({"content": "answered"})
 
 
 def _registry() -> tuple[ToolRegistry, LiveToolHosts]:
@@ -70,8 +71,8 @@ async def test_calls_reach_the_call_their_session_is_bound_to() -> None:
     unworded = await _run(registry, "vbot_request", "voice-1", {"request": " "})
 
     assert (ran, asked) == (
-        {"ok": True, "data": {"content": "ran overview"}},
-        {"ok": True, "data": {"content": "answered"}},
+        tool_success({"content": "ran overview"}),
+        tool_success({"content": "answered"}),
     )
     assert unworded["ok"] is True
     # Arguments reach the call as the Model wrote them; a blank request is no request.
@@ -94,3 +95,27 @@ async def test_a_session_without_a_running_call_gets_a_failure_instead_of_a_resu
         assert result["ok"] is False
         assert result["error"]["code"] == "no_live_call"
     assert call.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["end_call", "overview"])
+async def test_only_a_successful_hangup_requests_turn_completion(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry, hosts = _registry()
+    hosts.bind("voice-1", FakeCall())
+    endings: list[str] = []
+    monkeypatch.setattr(
+        ToolContext, "request_turn_end", lambda context: endings.append(context.tool_call_id)
+    )
+    config = make_execution_config(
+        agent_id="live-voice",
+        session_id="voice-1",
+        allowed_tools=list(LIVE_TOOL_NAMES),
+        tool_turn_end_registrar=endings.append,
+    )
+    [result] = await ToolExecutor(registry).execute_many(
+        [ToolCall(id="call-1", name=name, arguments={})], config
+    )
+    assert result["ok"] is True
+    assert endings == (["call-1"] if name == "end_call" else [])

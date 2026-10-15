@@ -41,6 +41,7 @@ New public Message ids use `msg_` plus 16 lowercase base32 characters (80 random
 
 ## Invariants and conventions
 
+- A successful Tool may request graceful turn completion through `ToolContext.request_turn_end`. Ordinary Chat Runs stop after every sibling Tool result has persisted, without another Model request; failed results cannot request completion. Extension-owned Runs keep their owner reconciliation decision.
 - Tool Result facts persist `cancelled_by_user` as `cancelled`, alongside the legacy cancellation codes, so a user's stopped call never becomes a failed call in History.
 
 - Chat remains Provider-agnostic. It may inspect declared adapter capabilities/policies but never Provider-specific wire payloads or raw SSE events.

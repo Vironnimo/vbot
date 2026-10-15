@@ -185,7 +185,9 @@ class FakeBackend:
             await self.release.wait()
             return f"answer {len(self.requests)}"
 
-    async def aclose(self) -> None:
+    async def aclose(self, *, finish_request: bool = False) -> None:
+        if finish_request:
+            self.release.set()
         self.closed = True
 
 
@@ -1296,3 +1298,37 @@ async def test_a_start_with_the_other_media_kind_is_a_media_mismatch(
     with pytest.raises(LiveStartRejected) as caught:
         await service.start_call(media=media, offer_sdp=OFFER, host=FakeHost())
     assert caught.value.code == "media_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_hangup_closes_media_before_draining_the_successful_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
+    backend.release.clear()
+    call, voice = _call(wire, host, backend)
+    saved: list[dict[str, Any]] = []
+    execute = voice.run_tool
+    close_backend = backend.aclose
+
+    async def finish_backend(*, finish_request: bool = False) -> None:
+        assert wire.closed
+        assert host.of_type("closed")
+        assert finish_request
+        await close_backend(finish_request=finish_request)
+
+    async def store(call_id: str, name: str, arguments: Any) -> dict[str, Any]:
+        result = await execute(call_id, name, arguments)
+        saved.append(result)
+        return result
+
+    monkeypatch.setattr(voice, "run_tool", store)
+    monkeypatch.setattr(backend, "aclose", finish_backend)
+    wire.push(WireStarted(None), WireDelegation("goodbye", "End the call"))
+    await backend.started.wait()
+    assert (await call.run_live_tool("end_call", {}))["ok"]
+    await call.close()
+    assert wire.closed
+    assert saved and saved[0]["ok"] is True
+    assert voice.finished == [None]
+    assert backend.closed

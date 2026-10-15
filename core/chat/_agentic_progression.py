@@ -661,17 +661,17 @@ class AgenticProgression:
 
             while True:
                 run.raise_if_cancelled()
+                context_window = await self._requests.targets.resolve_context_window_async(
+                    agent, target
+                )
                 request_context_usage = context.context_usage.project_prepared(
                     request_estimate,
-                    context_window=self._requests.resolve_context_window(agent, target),
+                    context_window=context_window,
                 )
-                self._requests._raise_if_measured_context_exhausted(
+                self._requests.targets.raise_if_measured_context_exhausted(
                     context.session_snapshot.active_messages,
-                    messages_for_request,
-                    tools,
-                    agent,
                     run,
-                    target,
+                    context_window,
                     context_usage=request_context_usage,
                 )
                 try:
@@ -826,7 +826,9 @@ class AgenticProgression:
                     target=target,
                     tools=request_tools,
                     scope=context.prompt_cache_affinity_id,
-                    context_window=self._requests.resolve_context_window(agent, target),
+                    context_window=await self._requests.targets.resolve_context_window_async(
+                        agent, target
+                    ),
                 )
 
             (
@@ -1160,6 +1162,9 @@ class AgenticProgression:
                             await context.session_snapshot.refresh(session)
                         if decision.end:
                             return assistant_message
+                    elif tool_dispatch_context.turn_end_requested:
+                        run.raise_if_cancelled()
+                        return assistant_message
                     # Honored only after every sibling tool result is persisted, so
                     # this cooperative stop never itself dangles the assistant turn.
                     # The forceful task.cancel() in Run.request_cancel persists
@@ -1213,7 +1218,9 @@ class AgenticProgression:
             messages[:] = limited_messages
             tool_context_usage = context.context_usage.project_prepared(
                 tool_context_estimate,
-                context_window=self._requests.resolve_context_window(context.agent, target),
+                context_window=await self._requests.targets.resolve_context_window_async(
+                    context.agent, target
+                ),
             )
             run.terminal_payload_extras["context_usage"] = tool_context_usage
 

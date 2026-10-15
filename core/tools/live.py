@@ -179,7 +179,14 @@ def _live_tool_handler(hosts: LiveToolHosts) -> Callable[..., Any]:
         host = hosts.get(context.session_id or "")
         if host is None:
             return tool_failure("no_live_call", _NO_CALL)
-        return await host.run_live_tool(context.tool_name, arguments)
+        result = await host.run_live_tool(context.tool_name, arguments)
+        if (
+            context.tool_name == TOOL_END_CALL
+            and result.get("ok") is True
+            and context.request_turn_end_hook is not None
+        ):
+            context.request_turn_end()
+        return result
 
     return handle
 
