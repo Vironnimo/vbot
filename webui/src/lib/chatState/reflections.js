@@ -1,4 +1,4 @@
-import { parseAgentAddress } from '../agentAddress.js';
+import { parseAgentAddress, qualifyAgentAddress } from '../agentAddress.js';
 import { isReflectionRunKind } from '../chatTimelinePresentation.js';
 import {
   TERMINAL_RUN_STATUSES,
@@ -61,6 +61,9 @@ export function createChatReflections({
           const outcome = reviewOutcome(row.outcome);
           restored[row.run_id] = {
             sessionId: row.session_id,
+            ...(row.agent_id
+              ? { agentId: qualifyAgentAddress(row.agent_id, row.project_id) }
+              : {}),
             runKind: row.run_kind,
             status: row.status,
             startedAt: row.started_at ?? '',
@@ -105,10 +108,15 @@ export function createChatReflections({
     }
   }
 
-  // Only Identity Agents learn; a Project address has no review changes.
-  function learningAgentId(sessionState) {
+  // A source Session can move while its old review stays with its original
+  // owner. Only an Identity review has changes; legacy live entries fall
+  // back to the source's owner until the durable row supplies one.
+  function learningAgentId(sessionState, runId) {
     if (!isRecord(sessionState)) return '';
-    const { agentId, projectId } = parseAgentAddress(sessionState.agentId);
+    const owner = sessionState.reflectionTasks?.[runId]?.agentId;
+    const { agentId, projectId } = parseAgentAddress(
+      owner || sessionState.agentId,
+    );
     return projectId ? '' : agentId;
   }
 
@@ -153,7 +161,7 @@ export function createChatReflections({
   }
 
   async function readChanges(sessionState, runId, reset = {}) {
-    const agentId = learningAgentId(sessionState);
+    const agentId = learningAgentId(sessionState, runId);
     if (!agentId || !runId) return false;
     const isLatest = nextDetailVersion(sessionState, runId);
     updateDetails(sessionState, runId, {
@@ -180,7 +188,7 @@ export function createChatReflections({
   // Take back every change of one review. The server refuses the whole undo
   // when a later change touched one of them; the refusal names that change.
   async function undo(sessionState, runId) {
-    const agentId = learningAgentId(sessionState);
+    const agentId = learningAgentId(sessionState, runId);
     if (
       !agentId ||
       !runId ||

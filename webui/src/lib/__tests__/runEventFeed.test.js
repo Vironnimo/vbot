@@ -49,6 +49,7 @@ describe('Run event feed', () => {
     expect(feed.read(2).missed).toBe(false);
     expect(feed.read(4).events[0]).toBe(events[4]);
     expect([feed.end, feed.runStarts]).toEqual([5, 2]);
+    expect(feed.lifecycle).toBe(3);
   });
 
   it('knows which terminal events it still holds', () => {

@@ -237,3 +237,20 @@ async def test_closing_stops_the_running_request_and_refuses_later_ones() -> Non
     later = await backend.answer(_prepared(BackendRequest(request="Again")))
     assert later == "The request was stopped before it finished. Nothing was retried."
     assert len(chat.runs) == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_hangup_finishes_without_another_model_answer() -> None:
+    backend, chat, *_ = _backend()
+    chat.hold = True
+    chat.answer = ""
+    chat.events = [_result("end_call", _ok("Hangup completed"))]
+    running = asyncio.create_task(backend.answer(_prepared(BackendRequest(request="Goodbye"))))
+    while not chat.runs:
+        await asyncio.sleep(0)
+    close = asyncio.create_task(backend.aclose(finish_request=True))
+    chat.runs[0].finish()
+    await close
+    answer = await running
+    assert not chat.runs[0].cancel_requested
+    assert answer == f"Hangup completed\n{EFFECTS} Hangup completed"

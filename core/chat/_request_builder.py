@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.agents import skill_subject_id
-from core.attachments.images import ImageConverter
 from core.chat._effort_epoch import (
     EffortPin,
     EffortState,
@@ -26,10 +25,10 @@ from core.chat._prompt_block_epoch import (
 )
 from core.chat._request_history import (
     _prepare_request_messages,
-    _request_content_resolution_inputs,
-    _restore_in_run_tool_result_content,
 )
-from core.chat._run_state import RequestBuildInputs, _ModelTarget, _RequestState
+from core.chat._request_media import RequestMedia
+from core.chat._request_targets import RequestTargets
+from core.chat._run_state import RequestBuildInputs, _RequestState
 from core.chat._scratch_context import preserve_scratch_note
 from core.chat._tool_epoch import (
     LiveToolCatalog,
@@ -41,7 +40,6 @@ from core.chat._tool_epoch import (
 )
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.block_resolver import ContentBlockResolver
-from core.chat.content_blocks import ContentBlock, MediaBlock, content_block_to_dict
 from core.chat.errors import ChatError
 from core.chat.events import _close_adapter
 from core.chat.messages import (
@@ -49,23 +47,13 @@ from core.chat.messages import (
     JsonObject,
 )
 from core.chat.model_resolution import (
-    _first_usable_connection_id,
-    _model_connection_allowlist,
     _model_family,
-    _model_family_for_target,
     _model_input_modalities,
-    _model_input_modalities_for_target,
-    _resolve_agent_connection,
-    _split_agent_model,
-    parse_model_with_connection,
 )
-from core.chat.streaming import stream_stall_timeout
-from core.chat.usage import latest_session_context_usage
 from core.chat.wire_shaping import (
     PINNED_IMAGE_RETIREMENT_SLOT,
     RequestImageBudget,
     _restore_in_run_assistant_reasoning,
-    limit_request_images,
 )
 from core.extensions import invoke_extension_handler
 from core.projects import ProjectError
@@ -76,10 +64,6 @@ from core.prompts.pinned_context import (
     PINNED_TOOL_DEFINITIONS_SLOT,
     stamp_prompt_files_read,
 )
-from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
-from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.providers.providers import resolve_effective_context_window
-from core.runs import Run
 from core.sessions import (
     SKILL_AVAILABLE_NOTE_PREFIX,
     ChatSession,
@@ -101,7 +85,6 @@ from core.tools import (
 )
 from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tool_entries, on_demand_tools
 from core.tools.terminal import project_terminal_tool_definitions
-from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -121,37 +104,6 @@ def _finalize_compaction_checkpoint(
     return preserve_scratch_note(
         finalize_checkpoint_guidance(checkpoint, ordinal=ordinal), session_messages, scratch_note_id
     )
-
-
-def _resolved_model_reference(
-    dependencies: ChatLoopDependencies,
-    provider_id: str,
-    connection_id: str,
-    model_id: str,
-) -> str:
-    """Return the exact Provider/Model/Connection/Account scope for one request."""
-
-    local_connection_id, explicit_account_id = split_connection_id(provider_id, connection_id)
-    resolved_account_id = dependencies.provider_credentials.resolve_account_id(
-        provider_id,
-        local_connection_id,
-        explicit_account_id,
-    )
-    connection_suffix = local_connection_id
-    if resolved_account_id != DEFAULT_ACCOUNT_ID:
-        connection_suffix = f"{connection_suffix}:{resolved_account_id}"
-    bare_reference = f"{provider_id}/{model_id}"
-    return f"{bare_reference}::{connection_suffix}"
-
-
-def _resolve_image_size_limit(adapter: Any, model_id: str) -> int | None:
-    value = adapter.image_size_limit(model_id)
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
-
-
-def _resolve_request_image_limit(adapter: Any, model_id: str) -> int | None:
-    value = adapter.request_image_limit(model_id)
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
 def _live_session_tool_grants(
@@ -211,8 +163,11 @@ class RequestBuilder:
     ) -> None:
         self._dependencies = dependencies
         self._wire_requests = wire_requests
-        self._attachment_resolver = attachment_resolver
-        self._tool_image_converter = ImageConverter()
+        self.media = RequestMedia(attachment_resolver, dependencies.sessions)
+        self.targets = RequestTargets(
+            dependencies,
+            max_image_bytes=attachment_resolver.max_image_bytes if attachment_resolver else None,
+        )
 
     async def _apply_project_skill_context(
         self,
@@ -243,49 +198,6 @@ class RequestBuilder:
             return
         context.skill_project_id = project_id
         context.skill_registry = registry
-
-    def _create_model_target(
-        self,
-        provider_id: str,
-        connection_id: str,
-        model_id: str,
-        *,
-        public_model: str,
-    ) -> _ModelTarget:
-        connection = ConnectionRef(provider_id, connection_id)
-        adapter = self._dependencies.get_adapter(connection)
-        return _ModelTarget(
-            provider_id=provider_id,
-            connection_id=connection_id,
-            model_id=model_id,
-            model_reference=_resolved_model_reference(
-                self._dependencies,
-                provider_id,
-                connection_id,
-                model_id,
-            ),
-            public_model=public_model,
-            adapter=adapter,
-            replay_policy=adapter.reasoning_replay_policy(model_id),
-            input_modalities=_model_input_modalities_for_target(
-                self._dependencies,
-                provider_id,
-                model_id,
-            ),
-            wire_media_types=adapter.wire_media_support(model_id),
-            chunk_timeout_seconds=stream_stall_timeout(adapter),
-            max_image_bytes=self._image_size_limit(adapter, model_id),
-            max_request_images=_resolve_request_image_limit(adapter, model_id),
-            unlisted_tool_calls=not adapter.list_announced_tools(model_id),
-            model_family=_model_family_for_target(self._dependencies, provider_id, model_id),
-        )
-
-    def _image_size_limit(self, adapter: Any, model_id: str) -> int | None:
-        limit = _resolve_image_size_limit(adapter, model_id)
-        if self._attachment_resolver is not None:
-            configured = self._attachment_resolver.max_image_bytes
-            return min(configured, limit) if limit is not None else configured
-        return limit
 
     def resolve_project_cwd(self, project_id: str | None) -> Path | None:
         """Resolve a working Project cwd, failing closed when unavailable."""
@@ -716,63 +628,9 @@ class RequestBuilder:
 
         session.drain_pending_notes()
 
-        if self._attachment_resolver is None:
-            return _RequestState(
-                request_messages,
-                tools,
-                allowed_tool_names,
-                session_tool_grants,
-                tool_contracts,
-                tool_epoch,
-                prompt_blocks,
-                tool_loads,
-                effort,
-            )
-
-        current_user_message, read_media_outputs = await _CHAT_TRANSFORM_WORKERS.run(
-            _request_content_resolution_inputs,
-            effective_messages,
-        )
-        # Use the most recently appended user turn as the current-turn marker.
-        # If that turn is plain text, all user content blocks resolve as historical.
-        if current_user_message is not None:
-            request_messages = await self._attachment_resolver.resolve_messages(
-                request_messages,
-                input_modalities=effective_input_modalities,
-                wire_media_types=inputs.wire_media_types,
-                max_image_bytes=inputs.max_image_bytes,
-            )
-
-        await self._attach_tool_result_content(
-            [message for message in request_messages if message.get("role") == "tool"],
-            read_media_outputs,
-            effective_input_modalities,
-            inputs.wire_media_types,
-            max_image_bytes=inputs.max_image_bytes,
-        )
-        image_budget = inputs.image_budget or RequestImageBudget()
-        if not image_budget.restored:
-            retirement_pin = await _CHAT_TRANSFORM_WORKERS.run(
-                self._dependencies.sessions.prompt_pin,
-                session.address,
-                PINNED_IMAGE_RETIREMENT_SLOT,
-            )
-            await _CHAT_TRANSFORM_WORKERS.run(
-                partial(
-                    image_budget.restore,
-                    retirement_pin,
-                    request_messages,
-                    current_user_message_id=(
-                        current_user_message.id if current_user_message is not None else None
-                    ),
-                )
-            )
         return _RequestState(
-            await _CHAT_TRANSFORM_WORKERS.run(
-                limit_request_images,
-                request_messages,
-                budget=image_budget,
-                image_limit=inputs.max_request_images,
+            await self.media.resolve_history(
+                request_messages, effective_messages, session, inputs, effective_input_modalities
             ),
             tools,
             allowed_tool_names,
@@ -803,15 +661,8 @@ class RequestBuilder:
         state = await self.build_request_state(agent, session, inputs=inputs)
         messages = state.messages
         if live_messages is not None:
-            messages = await _restore_in_run_tool_result_content(
-                _restore_in_run_assistant_reasoning(messages, live_messages),
-                live_messages,
-                input_modalities=inputs.input_modalities,
-                wire_media_types=inputs.wire_media_types,
-                image_budget=inputs.image_budget,
-                image_limit=inputs.max_request_images,
-                image_converter=self._tool_image_converter,
-                max_image_bytes=inputs.max_image_bytes,
+            messages = await self.media.restore_tool_results(
+                _restore_in_run_assistant_reasoning(messages, live_messages), live_messages, inputs
             )
         return replace(state, messages=messages)
 
@@ -1136,11 +987,7 @@ class RequestBuilder:
                 wire_media_types=frozenset(),
                 edit_dialect=dialect,
             )
-        provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
-        _, model_id = _split_agent_model(agent.model)
-        target = self._create_model_target(
-            provider_id, connection_id, model_id, public_model=agent.model
-        )
+        target = await self.targets.for_agent(agent)
         try:
             return await self._route_tool_definitions(
                 tools,
@@ -1151,275 +998,3 @@ class RequestBuilder:
             )
         finally:
             await _close_adapter(target.adapter)
-
-    async def transcribe_user_audio(
-        self, content: str | list[ContentBlock]
-    ) -> str | list[ContentBlock]:
-        """Give incoming audio its speech-to-text before the user message persists."""
-        if self._attachment_resolver is None:
-            return content
-        return await self._attachment_resolver.transcribe_audio(content)
-
-    async def store_tool_media(
-        self, tool_messages: list[ChatMessage], media_outputs: list[JsonObject]
-    ) -> tuple[list[ChatMessage], list[JsonObject]]:
-        """Store a Tool batch's loaded images and reference them from their Results.
-
-        Stored images reach every later request of the Session from their Tool
-        message, so a new Run sends the same bytes again and keeps the prompt cache.
-        """
-        if self._attachment_resolver is None or not any("base64" in m for m in media_outputs):
-            return tool_messages, media_outputs
-        loaded = ["base64" in media for media in media_outputs]
-        media_outputs = await self._attachment_resolver.store_tool_images(media_outputs)
-        stored: dict[str, list[JsonObject]] = {}
-        for was_loaded, media in zip(loaded, media_outputs, strict=True):
-            message_id = media.get("tool_message_id")
-            if was_loaded and "base64" not in media and isinstance(message_id, str):
-                stored.setdefault(message_id, []).append(
-                    {key: media[key] for key in ("attachment_id", "filename", "media_type")}
-                )
-        return [
-            replace(message, tool_media=[*(message.tool_media or []), *stored[message.id]])
-            if message.id in stored
-            else message
-            for message in tool_messages
-        ], media_outputs
-
-    async def _attach_tool_result_content(
-        self,
-        tool_messages: list[JsonObject],
-        media_outputs: list[JsonObject],
-        input_modalities: frozenset[str],
-        wire_media_types: frozenset[str],
-        *,
-        max_image_bytes: int | None = None,
-    ) -> None:
-        """Attach resolved media blocks to their correlated Tool Results.
-
-        The persisted Tool message keeps only its compact result envelope. Base64
-        blocks live exclusively in the in-flight request, so reading an image does
-        not fabricate or persist a user turn. Correlation uses the Tool message
-        identity because Providers may reuse Tool-call ids across turns.
-        """
-
-        if not media_outputs:
-            return
-
-        by_tool_message_id: dict[str, list[JsonObject]] = {}
-        for media_output in media_outputs:
-            tool_message_id = media_output.get("tool_message_id")
-            if isinstance(tool_message_id, str):
-                by_tool_message_id.setdefault(tool_message_id, []).append(media_output)
-
-        for tool_message in tool_messages:
-            tool_message_id = tool_message.get("id")
-            matching = (
-                by_tool_message_id.get(tool_message_id, [])
-                if isinstance(tool_message_id, str)
-                else []
-            )
-            if not matching:
-                continue
-            local_content = [
-                block
-                for media_output in matching
-                if "base64" in media_output
-                for block in await ContentBlockResolver.resolve_tool_image(
-                    media_output,
-                    input_modalities,
-                    wire_media_types,
-                    self._tool_image_converter,
-                    max_image_bytes=max_image_bytes,
-                )
-            ]
-            if local_content:
-                tool_message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = local_content
-            matching = [media for media in matching if "attachment_id" in media]
-            if not matching or self._attachment_resolver is None:
-                continue
-            content_blocks = [
-                content_block_to_dict(
-                    MediaBlock(
-                        type="media",
-                        attachment_id=media_output["attachment_id"],
-                        filename=media_output["filename"],
-                        media_type=media_output["media_type"],
-                    )
-                )
-                for media_output in matching
-            ]
-            transient_message_id = f"tool-result:{tool_message_id}"
-            resolved = await self._attachment_resolver.resolve_messages(
-                [
-                    {
-                        "id": transient_message_id,
-                        "role": "user",
-                        "content": content_blocks,
-                    }
-                ],
-                input_modalities=input_modalities,
-                wire_media_types=wire_media_types,
-                max_image_bytes=max_image_bytes,
-            )
-            resolved_content = resolved[0].get("content")
-            if isinstance(resolved_content, list):
-                tool_message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = local_content + resolved_content
-
-    def resolve_context_window(self, agent: Any, target: _ModelTarget) -> int | None:
-        """Resolve the usable context window for the current Model target.
-
-        Returns ``None`` only when the Model catalog has no entry for the target.
-        Otherwise the value always resolves through the shared effective chain
-        (user-set/capped window for flagged-local models, else model window →
-        provider-config default → global floor, see
-        :func:`resolve_effective_context_window`), so a model whose window is
-        ``None`` still gets a usable budget and auto-compaction keeps working
-        instead of silently disabling itself.
-        """
-        del agent  # The target carries the resolved Model and Connection.
-        provider_id = target.provider_id
-        resolved_model_id = target.model_id
-        connection_id = target.connection_id
-
-        try:
-            model_entry = self._dependencies.models.get(provider_id, resolved_model_id)
-        except KeyError, AttributeError:
-            return None
-
-        model_context_window = model_entry.context_window
-        try:
-            if connection_id is None:
-                raise ConfigError("Model target has no resolved Provider Connection")
-            local_connection_id, _account_id = split_connection_id(provider_id, connection_id)
-            context_window_for = getattr(model_entry, "context_window_for", None)
-            if callable(context_window_for):
-                model_context_window = context_window_for(local_connection_id)
-        except AttributeError, ChatError, ConfigError, KeyError:
-            # Status/build callers can be partially wired. Preserve the existing
-            # Model-wide fallback when the active Connection cannot be resolved.
-            pass
-
-        local_context_windows = self._dependencies.get_local_context_windows()
-
-        return resolve_effective_context_window(
-            model_context_window,
-            self._lookup_provider_config(provider_id),
-            model_metadata=model_entry.metadata,
-            model_key=f"{provider_id}/{resolved_model_id}",
-            # Live read through the runtime's single source of truth (no reload
-            # hook, StorageError-tolerant), so a settings change applies to the
-            # next request without re-implementing the storage read here.
-            local_context_windows=local_context_windows,
-        )
-
-    def _lookup_provider_config(self, provider_id: str) -> Any:
-        """Return the ProviderConfig for the read-side window default, or None.
-
-        Tolerant of a missing/partial runtime (the registry may be absent for a
-        custom provider): the resolver treats ``None`` as "no provider default"
-        and falls back to the global floor.
-        """
-        try:
-            return self._dependencies.providers.get(provider_id)
-        except KeyError, AttributeError:
-            return None
-
-    def _raise_if_measured_context_exhausted(
-        self,
-        session_messages: list[ChatMessage],
-        request_messages: list[JsonObject],
-        tools: list[JsonObject],
-        agent: Any,
-        run: Run,
-        target: _ModelTarget,
-        *,
-        context_usage: JsonObject | None = None,
-    ) -> None:
-        """Fail fast when the projected request already fills the Model window.
-
-        The same measured anchor plus request delta drives the indicator and
-        Compaction. Output-limit safety reserves belong to the Adapter and do
-        not inflate the displayed Context or override a measured anchor.
-        """
-
-        context_window = self.resolve_context_window(agent, target)
-        if context_window is None:
-            return
-        projection = context_usage or latest_session_context_usage(session_messages)
-        if projection is None or "provider_input_tokens" not in projection:
-            return
-        projected_tokens = int(projection["tokens"])
-        if projected_tokens < context_window:
-            return
-        _LOGGER.error(
-            "Run %s pre-send context guard tripped (agent=%s session=%s "
-            "projected_input_tokens=%d context_window=%d)",
-            run.id,
-            run.agent_id,
-            run.session_id,
-            projected_tokens,
-            context_window,
-        )
-        raise ProviderError(
-            "Context usage leaves no output capacity in the Model "
-            f"context window (projected_input_tokens={projected_tokens}, "
-            f"context_window={context_window})",
-            retryable=False,
-        )
-
-    def resolve_summary_adapter(
-        self,
-        agent: Any,
-        adapter: Any,
-        model_id: str,
-        settings: Any,
-        *,
-        active_provider_id: str,
-        active_connection_id: str,
-    ) -> tuple[Any, str, str]:
-        """Resolve compaction summary adapter/model/provider, defaulting to active.
-
-        A configured summary Model that names the active Model, without another
-        Connection, is the active target: it reuses the active adapter so the
-        summary request keeps the Run's Provider prompt cache.
-        """
-        del agent
-
-        summary_model = settings.summary_model
-        if not isinstance(summary_model, str) or not summary_model:
-            return adapter, model_id, active_provider_id
-
-        try:
-            provider_id, summary_model_id, connection_suffix = parse_model_with_connection(
-                summary_model
-            )
-            if (
-                provider_id == active_provider_id
-                and summary_model_id == model_id
-                and (
-                    not connection_suffix
-                    or f"{provider_id}:{connection_suffix}" == active_connection_id
-                )
-            ):
-                return adapter, model_id, active_provider_id
-            if connection_suffix:
-                connection_id = f"{provider_id}:{connection_suffix}"
-            else:
-                connection_id = _first_usable_connection_id(
-                    self._dependencies,
-                    provider_id,
-                    _model_connection_allowlist(self._dependencies, provider_id, summary_model_id),
-                )
-            summary_adapter = self._dependencies.get_adapter(
-                ConnectionRef(provider_id, connection_id)
-            )
-        except ChatError, ConfigError, VBotError, KeyError:
-            _LOGGER.warning(
-                "Invalid compaction summary model %r; using active run model instead.",
-                summary_model,
-                exc_info=True,
-            )
-            return adapter, model_id, active_provider_id
-
-        return summary_adapter, summary_model_id, provider_id

@@ -229,8 +229,12 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
         ledger.abort_restore(entry.entry_key)
         return "rolled_back"
     plan = entry.facts.get("restore_plan")
-    config_problem: str | None = None
-    if agent:
+    findings = _Findings()
+    _check_member_scopes(services, entry, findings)
+    config_problem = (
+        "; ".join(blocker.message for blocker in findings.blockers) if findings.blockers else None
+    )
+    if agent and config_problem is None:
         # A crash after the tree move may precede the config rewrite. Replay it
         # through the Agent owner before making the Sessions live, keeping their
         # current pointer and the planned Workspace/default Project intact.
@@ -247,7 +251,7 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
             )
         except AgentError as error:
             config_problem = str(error)
-    else:
+    elif not agent and config_problem is None:
         try:
             services.projects.complete_restore_files(target, source_id=entry.subject_id)
         except ProjectError as error:
@@ -343,6 +347,7 @@ def _plan(services: ArchiveServices, entry: ArchiveEntry, target_id: str | None)
                 "restored children.",
                 session_count=unproven_children,
             )
+    _check_member_scopes(services, entry, findings)
     if entry.kind == ARCHIVE_KIND_AGENT:
         return _plan_agent(services, entry, target, findings)
     if entry.kind == ARCHIVE_KIND_PROJECT:
@@ -631,7 +636,6 @@ def _plan_project(
 def _check_session(
     services: ArchiveServices, entry: ArchiveEntry, target: str, findings: _Findings
 ) -> None:
-    ledger = services.sessions.archive_ledger
     renamed = target != entry.subject_id
     if renamed and not accepts_target_id(services, entry):
         findings.block(
@@ -642,31 +646,49 @@ def _check_session(
         findings.block("invalid_target_id", f"{target} is not a valid Session id")
     else:
         _check_addresses(services, entry, findings, **({"session_id": target} if renamed else {}))
-    if entry.project_id:
-        if not services.projects.exists(entry.project_id):
+
+
+def _check_member_scopes(
+    services: ArchiveServices, entry: ArchiveEntry, findings: _Findings
+) -> None:
+    """Every surviving review owner must exist before restoring the whole entry."""
+    ledger = services.sessions.archive_ledger
+    scopes = {
+        (member.address.project_id or "", member.address.agent_id)
+        for member in ledger.members(entry.entry_key, limit=None)
+    }
+    if entry.kind == ARCHIVE_KIND_AGENT:
+        scopes.discard(("", entry.agent_id))
+    elif entry.kind == ARCHIVE_KIND_PROJECT:
+        scopes = {scope for scope in scopes if scope[0] != entry.project_id}
+    else:
+        scopes.add((entry.project_id, entry.agent_id))
+    for project_id, agent_id in sorted(scopes):
+        if project_id:
+            if not services.projects.exists(project_id):
+                findings.block(
+                    "scope_missing",
+                    f"Project {project_id} does not exist; restore it first",
+                    project_id=project_id,
+                    entry_id=ledger.newest_entry_id(ARCHIVE_KIND_PROJECT, project_id),
+                )
+                continue
+            try:
+                services.agent_resolver.resolve_agent(project_id, agent_id)
+            except Exception:
+                findings.block(
+                    "scope_missing",
+                    f"Agent {agent_id} is not in the Team of Project {project_id}",
+                    project_id=project_id,
+                    agent_id=agent_id,
+                )
+        elif not services.agents.exists(agent_id):
             findings.block(
                 "scope_missing",
-                f"Project {entry.project_id} does not exist; restore it first",
-                project_id=entry.project_id,
-                entry_id=ledger.newest_entry_id(ARCHIVE_KIND_PROJECT, entry.project_id),
+                f"Agent {agent_id} does not exist; restore it first",
+                agent_id=agent_id,
+                entry_id=ledger.newest_entry_id(ARCHIVE_KIND_AGENT, agent_id),
             )
-            return
-        try:
-            services.agent_resolver.resolve_agent(entry.project_id, entry.agent_id)
-        except Exception:
-            findings.block(
-                "scope_missing",
-                f"Agent {entry.agent_id} is not in the Team of Project {entry.project_id}",
-                project_id=entry.project_id,
-                agent_id=entry.agent_id,
-            )
-    elif not services.agents.exists(entry.agent_id):
-        findings.block(
-            "scope_missing",
-            f"Agent {entry.agent_id} does not exist; restore it first",
-            agent_id=entry.agent_id,
-            entry_id=ledger.newest_entry_id(ARCHIVE_KIND_AGENT, entry.agent_id),
-        )
 
 
 def _raise_blockers(plan: _Plan) -> None:

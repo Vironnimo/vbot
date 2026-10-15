@@ -12,6 +12,7 @@ from core.automation.cron import CronServiceError
 from core.calendar import (
     MAX_WINDOW_DAYS,
     CalendarEventNotFoundError,
+    CalendarProjection,
     CalendarServiceError,
     CalendarStorageError,
     CalendarValidationError,
@@ -51,6 +52,7 @@ from core.tools.tools import (
     tool_success,
 )
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     import asyncio
@@ -147,6 +149,7 @@ _NEXT_OCCURRENCES = 3
 _REFERENCE_ACTIONS = frozenset({"update", "delete"})
 
 _LOGGER = get_logger("tools.calendar")
+_CALENDAR_READS = BoundedWorkerPool(name="calendar-tool", max_workers=2)
 
 
 @cache
@@ -179,9 +182,9 @@ def register_calendar_tool(
     revive a Cron job bound to the event between a removal's reference check and
     the removal. ``cron_service`` names the jobs bound to each event in results.
     """
-    tool = _CalendarTool(calendar_service, cron_service)
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        tool = _CalendarTool(calendar_service, cron_service)
         if arguments.get("action") in _REFERENCE_ACTIONS:
             async with reference_lock:
                 return await tool.run(context, arguments)
@@ -205,61 +208,12 @@ def register_calendar_tool(
     )
 
 
-class _CalendarTool:
-    """The calendar Tool's actions over the calendar and the cron jobs bound to its events."""
+class _CalendarRead:
+    """Render a detached Calendar projection and its event-job descriptions."""
 
-    def __init__(self, calendar: CalendarService, cron: CronService | None) -> None:
+    def __init__(self, calendar: CalendarProjection, jobs: dict[str, str]) -> None:
         self._calendar = calendar
-        self._cron = cron
-
-    async def run(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
-        action = arguments["action"]
-        try:
-            if REMINDER_FIELD in arguments or ATTENDEES_FIELD in arguments:
-                raise CalendarCallRefusedError(
-                    self._unsupported_refusal(arguments, context.offers("cron"))
-                )
-            if action in _REFERENCE_ACTIONS and "id" not in arguments:
-                raise CalendarCallRefusedError(_missing_id(action, arguments))
-            if action == "list":
-                return self._list(arguments)
-            if action == "find_free_time":
-                return self._find_free_time(arguments)
-            if action == "create":
-                return self._create(arguments)
-            if action == "update":
-                return await self._update(arguments)
-            return await self._delete(arguments)
-        except CalendarCallRefusedError as error:
-            return tool_failure("invalid_arguments", str(error))
-        except CalendarEventNotFoundError:
-            event_ids = {event.id for event in self._calendar.list_events()}
-            return tool_failure("event_not_found", _not_found(arguments.get("id"), event_ids))
-        except CalendarValidationError as error:
-            return tool_failure("invalid_arguments", _validation_message(arguments, error))
-        except CalendarStorageError as error:
-            # The service rolls a failed save back, and the file is replaced atomically.
-            _LOGGER.warning("Calendar storage error for action=%s: %s", action, error)
-            if action in WINDOW_ACTIONS:
-                text = (
-                    "vBot cannot read its calendar file on the server. Retrying will not help; "
-                    "tell the user that vBot cannot read its calendar data."
-                )
-            else:
-                text = (
-                    "Nothing was changed: vBot cannot read or write its calendar file on the "
-                    "server. Retrying will not help; tell the user that vBot cannot save its "
-                    "calendar data."
-                )
-            return tool_failure("calendar_storage_error", text)
-        except CalendarServiceError as error:
-            _LOGGER.warning("Calendar service error for action=%s: %s", action, error)
-            text = f"The calendar could not complete the call: {str(error).rstrip('. ')}."
-            if action not in WINDOW_ACTIONS:
-                text += ' {"action":"list"} shows whether it changed anything.'
-            return tool_failure("calendar_service_error", text)
-
-    # -- reading ------------------------------------------------------------------------
+        self._jobs = jobs
 
     def _list(self, arguments: JsonObject) -> JsonObject:
         zone = self._zone()
@@ -350,9 +304,134 @@ class _CalendarTool:
             )
         return start, end
 
+    def _event_result(self, event: CalendarEvent) -> JsonObject:
+        data = self._event_fields(event)
+        if event.recurring:
+            data["next"] = self._next_text(event)
+        return data
+
+    def _next_text(self, event: CalendarEvent) -> str:
+        """The next starts of a repeating event, or that none is ahead."""
+        upcoming = islice(
+            self._calendar.iter_occurrences(event, datetime.now(UTC)), _NEXT_OCCURRENCES
+        )
+        return ", ".join(_time_text(item.start) for item in upcoming) or "none ahead"
+
+    def _event_fields(self, event: CalendarEvent) -> JsonObject:
+        """One event in the Agent-facing shape: local times, the last day of an all-day event."""
+        data: JsonObject = {
+            "id": event.id,
+            "title": event.title,
+            "start": _time_text(event.start),
+            "end": _end_text(event.end, all_day=event.all_day),
+        }
+        if event.rrule:
+            data["rrule"] = event.rrule
+        if event.location:
+            data["location"] = event.location
+        if event.description:
+            data["description"] = event.description
+        jobs = self._jobs_text(event.id)
+        if jobs:
+            data["cron_jobs"] = jobs
+        return data
+
+    def _event_block(self, event: CalendarEvent, occurrences: list[EventOccurrence]) -> str:
+        lines = [
+            f"{key}: " + "\n  ".join(str(value).splitlines())
+            for key, value in self._event_fields(event).items()
+        ]
+        if event.recurring:
+            lines.extend(_occurrence_lines(event, occurrences))
+        return "\n".join(lines)
+
+    def _jobs_text(self, event_id: str) -> str | None:
+        return self._jobs.get(event_id)
+
+    def _zone(self) -> ZoneInfo:
+        return ZoneInfo(self._calendar.system_timezone_name())
+
+
+class _CalendarTool(_CalendarRead):
+    """The calendar Tool's actions over the calendar and the cron jobs bound to its events."""
+
+    def __init__(self, calendar: CalendarService, cron: CronService | None) -> None:
+        self._calendar: CalendarService = calendar
+        self._cron = cron
+        self._jobs: dict[str, str] = {}
+
+    async def run(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
+        action = arguments["action"]
+        try:
+            await self._calendar.load(allow_degraded=action in WINDOW_ACTIONS)
+            if self._cron is not None:
+                await self._cron.load_projection()
+                jobs: dict[str, list[str]] = {}
+                for job in self._cron.list_jobs():
+                    if job.event_id is None:
+                        continue
+                    text = (
+                        f"{job.id} at {self._cron.format_schedule(job)}, target "
+                        f"{format_agent_address(job.agent_id, job.project_id)}"
+                    )
+                    jobs.setdefault(job.event_id, []).append(
+                        text if job.status == "active" else f"{text}, {job.status}"
+                    )
+                self._jobs = {key: "; ".join(values) for key, values in jobs.items()}
+            if REMINDER_FIELD in arguments or ATTENDEES_FIELD in arguments:
+                raise CalendarCallRefusedError(
+                    self._unsupported_refusal(arguments, context.offers("cron"))
+                )
+            if action in _REFERENCE_ACTIONS and "id" not in arguments:
+                raise CalendarCallRefusedError(_missing_id(action, arguments))
+            if action == "list":
+                return await _CALENDAR_READS.run(
+                    _CalendarRead(self._calendar.projection(), self._jobs)._list, arguments
+                )
+            if action == "find_free_time":
+                return await _CALENDAR_READS.run(
+                    _CalendarRead(self._calendar.projection(), self._jobs)._find_free_time,
+                    arguments,
+                )
+            if action == "create":
+                return await self._create(arguments)
+            if action == "update":
+                return await self._update(arguments)
+            return await self._delete(arguments)
+        except CalendarCallRefusedError as error:
+            return tool_failure("invalid_arguments", str(error))
+        except CalendarEventNotFoundError:
+            event_ids = {event.id for event in self._calendar.list_events()}
+            return tool_failure("event_not_found", _not_found(arguments.get("id"), event_ids))
+        except CalendarValidationError as error:
+            return tool_failure("invalid_arguments", _validation_message(arguments, error))
+        except CalendarStorageError as error:
+            # The service rolls a failed save back, and the file is replaced atomically.
+            _LOGGER.warning("Calendar storage error for action=%s: %s", action, error)
+            if action in WINDOW_ACTIONS:
+                text = (
+                    "vBot cannot read its calendar file on the server. Retrying will not help; "
+                    "tell the user that vBot cannot read its calendar data."
+                )
+            else:
+                text = (
+                    "Nothing was changed: vBot cannot read or write its calendar file on the "
+                    "server. Retrying will not help; tell the user that vBot cannot save its "
+                    "calendar data."
+                )
+            return tool_failure("calendar_storage_error", text)
+        except CalendarServiceError as error:
+            _LOGGER.warning("Calendar service error for action=%s: %s", action, error)
+            text = f"The calendar could not complete the call: {str(error).rstrip('. ')}."
+            if action not in WINDOW_ACTIONS:
+                text += ' {"action":"list"} shows whether it changed anything.'
+            return tool_failure("calendar_service_error", text)
+
+    # -- reading ------------------------------------------------------------------------
+
     # -- changing -------------------------------------------------------------------------
 
-    def _create(self, arguments: JsonObject) -> JsonObject:
+    async def _create(self, arguments: JsonObject) -> JsonObject:
         missing = [name for name in ("title", "start") if name not in arguments]
         if missing:
             raise CalendarCallRefusedError(
@@ -363,7 +442,7 @@ class _CalendarTool:
                 )
             )
         _check_event_times(arguments)
-        event = self._calendar.create_event(
+        event = await self._calendar.create_event_async(
             title=arguments["title"],
             start=arguments["start"],
             end=arguments.get("end"),
@@ -510,63 +589,6 @@ class _CalendarTool:
         return text if len(text) <= LONG_TEXT else None
 
     # -- rendering ------------------------------------------------------------------------
-
-    def _event_result(self, event: CalendarEvent) -> JsonObject:
-        data = self._event_fields(event)
-        if event.recurring:
-            data["next"] = self._next_text(event)
-        return data
-
-    def _next_text(self, event: CalendarEvent) -> str:
-        """The next starts of a repeating event, or that none is ahead."""
-        upcoming = islice(
-            self._calendar.iter_occurrences(event, datetime.now(UTC)), _NEXT_OCCURRENCES
-        )
-        return ", ".join(_time_text(item.start) for item in upcoming) or "none ahead"
-
-    def _event_fields(self, event: CalendarEvent) -> JsonObject:
-        """One event in the Agent-facing shape: local times, the last day of an all-day event."""
-        data: JsonObject = {
-            "id": event.id,
-            "title": event.title,
-            "start": _time_text(event.start),
-            "end": _end_text(event.end, all_day=event.all_day),
-        }
-        if event.rrule:
-            data["rrule"] = event.rrule
-        if event.location:
-            data["location"] = event.location
-        if event.description:
-            data["description"] = event.description
-        jobs = self._jobs_text(event.id)
-        if jobs:
-            data["cron_jobs"] = jobs
-        return data
-
-    def _event_block(self, event: CalendarEvent, occurrences: list[EventOccurrence]) -> str:
-        lines = [
-            f"{key}: " + "\n  ".join(str(value).splitlines())
-            for key, value in self._event_fields(event).items()
-        ]
-        if event.recurring:
-            lines.extend(_occurrence_lines(event, occurrences))
-        return "\n".join(lines)
-
-    def _jobs_text(self, event_id: str) -> str | None:
-        """The cron jobs bound to an event: id, schedule and target, with any other status."""
-        if self._cron is None:
-            return None
-        texts = []
-        for job in self._cron.list_jobs(event_id=event_id):
-            text = (
-                f"{job.id} at {self._cron.format_schedule(job)}, target "
-                f"{format_agent_address(job.agent_id, job.project_id)}"
-            )
-            texts.append(text if job.status == "active" else f"{text}, {job.status}")
-        return "; ".join(texts) or None
-
-    def _zone(self) -> ZoneInfo:
-        return ZoneInfo(self._calendar.system_timezone_name())
 
 
 def _occurrence_lines(event: CalendarEvent, occurrences: list[EventOccurrence]) -> list[str]:

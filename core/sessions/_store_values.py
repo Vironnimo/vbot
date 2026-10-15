@@ -87,6 +87,13 @@ _SESSION_LIST_COLUMNS = f"""
     s.compaction_policy_json,
     s.agent_overrides_json,
     s.working_project_id,
+    CASE WHEN s.agent_id = 'live-voice' AND s.project_id = '' THEN (
+      SELECT backend.session_id FROM sessions AS backend
+      WHERE backend.state = 'live' AND backend.project_id = s.project_id
+        AND backend.agent_id = 'live-backend'
+        AND json_extract(backend.metadata_json, '$.live_voice_session_id') = s.session_id
+      ORDER BY backend.last_activity_at DESC, backend.session_id LIMIT 1
+    ) END AS live_backend_session_id,
     {_COMPLETION_ACTIVITY_COLUMNS},
     {_DERIVED_METADATA_COLUMNS}
 """
@@ -505,16 +512,14 @@ def _json_object(value: JsonObject, name: str) -> str:
 def _review_fork_of(fork: str, source: str) -> str:
     """SQL: the Session aliased ``fork`` is a review fork of the one aliased ``source``.
 
-    A review fork is a direct fork in its source's scope that carries a reflection
-    Run kind; ``ReflectionService.run_review`` records the kind in the fork's
-    creating write. The live ones follow their source's lifecycle
-    (``_store_mutations.review_forks``).
+    The relation captures a same-scope review when it is classified. Source
+    moves never reassign the review's Agent or break the source association.
     """
     return (
-        f"{fork}.fork_parent_key = {source}.session_key "
-        f"AND {fork}.project_id = {source}.project_id AND {fork}.agent_id = {source}.agent_id "
-        f"AND EXISTS (SELECT 1 FROM session_run_kinds AS k WHERE k.session_key = {fork}.session_key "
-        f"AND k.run_kind IN {_REFLECTION_RUN_KINDS_SQL})"
+        f"{fork}.fork_parent_key = {source}.session_key AND "
+        "EXISTS (SELECT 1 FROM session_review_forks AS review "
+        f"WHERE review.session_key = {fork}.session_key "
+        f"AND review.source_key = {source}.session_key)"
     )
 
 

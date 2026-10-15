@@ -264,7 +264,9 @@ class RunExecution:
                 user_content = request.content
                 if not internal and not request.input_already_persisted and user_content:
                     try:
-                        user_content = await self._requests.transcribe_user_audio(user_content)
+                        user_content = await self._requests.media.transcribe_user_audio(
+                            user_content
+                        )
                     except asyncio.CancelledError:
                         if not run.cancel_requested:
                             raise
@@ -677,7 +679,9 @@ class RunExecution:
         down the whole escape route.
         """
         agent = context.agent
-        chain = list(_resolve_fallback_chain(self._dependencies, agent))
+        chain = list(
+            await _CHAT_TRANSFORM_WORKERS.run(_resolve_fallback_chain, self._dependencies, agent)
+        )
         if not chain or not should_advance_model_fallback_chain(first_failure):
             return None, first_failure
 
@@ -688,7 +692,7 @@ class RunExecution:
                 break
             _, candidate_model_id = _split_agent_model(binding)
             try:
-                candidate_target = self._requests._create_model_target(
+                candidate_target = await self._requests.targets.create(
                     provider_id,
                     connection_id,
                     candidate_model_id,

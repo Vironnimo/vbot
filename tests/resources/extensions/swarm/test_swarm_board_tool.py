@@ -124,7 +124,13 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
     created, _ = await call(board, {"action": "create", "title": "Topic", "text": "opening"})
     # The open page shows the new discussion, its opening and the announcement post.
     sid = board.swarm["id"]
-    assert changes == [("discussions", sid), ("posts", sid)]
+    discussions = await board.store.list_discussions(sid, board.bindings[0].participant_id)
+    topic = next(row["id"] for row in discussions.entries if row["sequence"] == 2)
+    assert changes == [
+        ("discussions", sid),
+        ("discussion_posts", f"{sid}/{topic}"),
+        ("discussion_posts", f"{sid}/{board.swarm['main_discussion_id']}"),
+    ]
     changes.clear()
     discussion = created["data"]["discussion_id"]
     opening = created["data"]["opening_post_id"]
@@ -181,7 +187,11 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
     again, _ = await call(board, {"action": "leave", "discussion_id": discussion}, peer=1)
     assert again["data"]["status"] == "You were not a member; nothing changed."
     # Joining and leaving change the members; reads change nothing the page shows.
-    assert changes == [("discussions", sid)] * 2 + [("posts", sid)] + [("discussions", sid)] * 2
+    assert changes == [
+        ("discussions", sid),
+        ("discussion_posts", f"{sid}/{topic}"),
+        ("discussions", sid),
+    ]
 
 
 @pytest.mark.asyncio

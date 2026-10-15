@@ -77,9 +77,11 @@ def statistics(tmp_path: Path, manager: ChatSessionManager) -> Iterator[Statisti
 
 
 @pytest.fixture
-def ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[UsageRecorder]:
+def ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manager: ChatSessionManager
+) -> Iterator[UsageRecorder]:
     """A durable Usage ledger whose calls start at BASE unless a call says otherwise."""
-    recorder = UsageRecorder(tmp_path / "model-usage.db")
+    recorder = UsageRecorder(tmp_path / "model-usage.db", session_source=manager)
     monkeypatch.setattr(
         "core.usage.usage.utc_now_timestamp", lambda: format_canonical_timestamp(BASE)
     )

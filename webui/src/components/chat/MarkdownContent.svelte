@@ -1,6 +1,4 @@
 <script>
-  import { mount, unmount } from 'svelte';
-
   import { t } from '$lib/i18n.js';
   import {
     renderMarkdownDocument,
@@ -8,9 +6,7 @@
     renderReasoningMarkdownDocument,
     renderReasoningMarkdownStreamingDocument,
   } from '$lib/markdown.js';
-
-  import CopyButton from '../ui/CopyButton.svelte';
-  import { tooltip } from '$lib/tooltip.js';
+  import { renderMarkdownDom } from './markdownDom.js';
 
   let {
     source = '',
@@ -21,11 +17,8 @@
     contentId = undefined,
   } = $props();
 
-  let container = $state();
   let renderedDocument = $derived.by(() => {
-    const options = {
-      plainLanguageLabel: t('chat.codeLanguagePlain'),
-    };
+    const options = { plainLanguageLabel: t('chat.codeLanguagePlain') };
     if (reasoning) {
       return streaming
         ? renderReasoningMarkdownStreamingDocument(source, options)
@@ -35,128 +28,22 @@
       ? renderMarkdownStreamingDocument(source, options)
       : renderMarkdownDocument(source, options);
   });
-
-  $effect(() => {
-    const target = container;
-    const codeBlocks = renderedDocument.codeBlocks;
-    if (!target) {
-      return undefined;
-    }
-
-    const mountedCopyButtons = [];
-    const fileActions = [];
-    for (const slot of target.querySelectorAll('[data-markdown-code-index]')) {
-      const codeBlockIndex = Number(slot.dataset.markdownCodeIndex);
-      const codeBlock = codeBlocks[codeBlockIndex];
-      if (!codeBlock?.copyable || !codeBlock.text) {
-        continue;
-      }
-
-      mountedCopyButtons.push(
-        mount(CopyButton, {
-          target: slot,
-          props: {
-            text: codeBlock.text,
-            label: t('chat.copyCode'),
-            copiedLabel: t('chat.codeCopied'),
-            class: 'msg-code__copy',
-          },
-        }),
-      );
-    }
-
-    if (!reasoning && className.split(/\s+/).includes('msg-markdown')) {
-      for (const link of target.querySelectorAll('a')) {
-        const href = link.getAttribute('href') || '';
-        const filename = link.textContent.trim();
-        let url;
-        try {
-          url = new URL(href, window.location.href);
-        } catch {
-          continue;
-        }
-        if (
-          url.origin !== window.location.origin ||
-          !/^\/api\/files\/[A-Za-z0-9_.-]+$/.test(url.pathname)
-        )
-          continue;
-        // The Markdown title carries the original path. It moves into
-        // `data-file-path` (kept across effect re-runs) so the shared tooltip
-        // replaces the native title bubble for good.
-        const path = link.getAttribute('title') || link.dataset.filePath || '';
-        link.dataset.deliveredFile = href;
-        link.dataset.fileName = filename;
-        link.dataset.filePath = path;
-        link.setAttribute('aria-haspopup', 'menu');
-        link.removeAttribute('title');
-        const previewable = /\.html?$/i.test(filename);
-        // The path, then what the link does: the file actions menu opens
-        // only on a right-click or the context-menu key.
-        const pathHint = tooltip(link, {
-          text: path,
-          mono: true,
-          selectable: true,
-          rows: [
-            {
-              value: previewable
-                ? t('chat.fileLink.previewHint')
-                : t('chat.fileLink.actionsHint'),
-              tone: 'muted',
-            },
-          ],
-        });
-        fileActions.push(() => {
-          pathHint.destroy();
-          delete link.dataset.deliveredFile;
-          delete link.dataset.fileName;
-          link.removeAttribute('aria-haspopup');
-          link.removeAttribute('aria-expanded');
-        });
-        if (!previewable) continue;
-        link.dataset.previewFile = href;
-        const external = document.createElement('a');
-        const externalLabel = t('preview.openExternal', { filename });
-        external.href = href;
-        external.target = '_blank';
-        external.rel = 'noopener noreferrer';
-        external.dataset.fileExternal = '';
-        external.dataset.previewFile = href;
-        external.dataset.deliveredFile = href;
-        external.dataset.fileName = filename;
-        external.dataset.filePath = path;
-        external.setAttribute('aria-label', externalLabel);
-        external.textContent = '↗';
-        link.after(external);
-        const hint = tooltip(external, externalLabel);
-        fileActions.push(() => {
-          hint.destroy();
-          external.remove();
-          delete link.dataset.previewFile;
-          delete link.dataset.fileName;
-          link.removeAttribute('aria-haspopup');
-          link.removeAttribute('aria-expanded');
-        });
-      }
-    }
-
-    return () => {
-      for (const copyButton of mountedCopyButtons) {
-        void unmount(copyButton);
-      }
-      for (const cleanup of fileActions) cleanup();
-    };
-  });
 </script>
 
 <div
-  bind:this={container}
   class={className}
   data-timeline-content-id={contentId}
->
-  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-  {@html renderedDocument.html}
-  {#if caret}<span class="streaming-caret" aria-hidden="true"></span>{/if}
-</div>
+  use:renderMarkdownDom={{
+    document: renderedDocument,
+    fileLinks: !reasoning && className.split(/\s+/).includes('msg-markdown'),
+    copyLabel: t('chat.copyCode'),
+    copiedLabel: t('chat.codeCopied'),
+    previewHint: t('chat.fileLink.previewHint'),
+    actionsHint: t('chat.fileLink.actionsHint'),
+    externalLabel: (filename) => t('preview.openExternal', { filename }),
+    caret,
+  }}
+></div>
 
 <style>
   :global(.msg-markdown a[data-file-external]) {

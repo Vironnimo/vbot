@@ -141,7 +141,7 @@ async def open_openai_live_wire(
     its media disconnects.
     """
 
-    client = _OpenAILiveClient.from_runtime(runtime, target_ref)
+    client = await _OpenAILiveClient.from_runtime_async(runtime, target_ref)
     call_id, answer_sdp, control_url, headers = await client.create_call(
         offer_sdp=offer_sdp,
         instructions=instructions,

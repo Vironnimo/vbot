@@ -182,7 +182,7 @@ class SpeechService:
         self, audio: bytes, filename: str, media_type: str, progress: SpeechProgress | None
     ) -> SpeechTranscriptionResult:
         try:
-            _binding, options, target_ref = self._resolver.resolve(TASK_SPEECH_TO_TEXT)
+            _binding, options, target_ref = await self._resolver.resolve_async(TASK_SPEECH_TO_TEXT)
         except SpeechConfigurationError as exc:
             _LOGGER.warning("Speech transcription unavailable: %s", exc)
             raise
@@ -207,7 +207,7 @@ class SpeechService:
                 raise SpeechUnsupportedTargetError(str(exc)) from exc
 
         try:
-            provider_client = ProviderSpeechClient.from_runtime(
+            provider_client = await ProviderSpeechClient.from_runtime_async(
                 self._runtime, target_ref, usage_observer=usage
             )
             if progress is not None:
@@ -350,7 +350,7 @@ class SpeechService:
         if not normalized_text:
             raise SpeechConfigurationError("Text to synthesize must not be empty")
 
-        _binding, options, target_ref = self._resolver.resolve(TASK_TEXT_TO_SPEECH)
+        _binding, options, target_ref = await self._resolver.resolve_async(TASK_TEXT_TO_SPEECH)
 
         usage = TaskUsage(
             self._usage_recorder, TASK_TEXT_TO_SPEECH, target_ref, context=usage_context
@@ -372,7 +372,7 @@ class SpeechService:
 
         if progress is not None:
             progress.update("synthesizing")
-        provider_client = ProviderSpeechClient.from_runtime(
+        provider_client = await ProviderSpeechClient.from_runtime_async(
             self._runtime, target_ref, usage_observer=usage
         )
         try:

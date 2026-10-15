@@ -4,6 +4,7 @@ import {
   controlRun as requestControlRun,
   editChatMessage as requestEditChatMessage,
   getSession as requestGetSession,
+  getSessionWork as requestGetSessionWork,
   getSessionChangeStats as requestGetSessionChangeStats,
   inspectSubAgentWork as requestInspectSubAgentWork,
   listAgents as requestListAgents,
@@ -31,6 +32,7 @@ import { t } from '../i18n.js';
 import { createChatActivity } from './activity.js';
 import { createChatChildTasks } from './childTasks.js';
 import { createChatReflections } from './reflections.js';
+import { createChatWork } from './work.js';
 import { formatAgentAddress, parseAgentAddress } from '../agentAddress.js';
 import {
   setAgents,
@@ -116,6 +118,7 @@ function defaultChatOperations() {
     listSessionActivity: (...args) => requestListSessionActivity(...args),
     listSessions: (...args) => requestListSessions(...args),
     getSession: (...args) => requestGetSession(...args),
+    getSessionWork: (...args) => requestGetSessionWork(...args),
     getSessionChangeStats: (...args) => requestGetSessionChangeStats(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
     loadCommandOutput: (...args) => requestLoadCommandOutput(...args),
@@ -169,6 +172,7 @@ export function createChatController({
   const earlyRunStarts = new Set();
 
   let displayedHistoryLoad = null;
+  const work = createChatWork({ operations });
   const childTasks = createChatChildTasks({
     chatState,
     operations,
@@ -352,8 +356,18 @@ export function createChatController({
     const version = (historyLoadVersions.get(sessionState.key) ?? 0) + 1;
     historyLoadVersions.set(sessionState.key, version);
     const snapshotVersion = sessionState.historySnapshotVersion;
+    const compactionPolicy = sessionState.compactionPolicy;
     return {
       snapshotVersion,
+      loadOptions(history) {
+        const options = historyLoadOptions(history);
+        // A settings read or local save accepted while History was in flight
+        // supersedes its policy snapshot without discarding its new messages.
+        if (sessionState.compactionPolicy !== compactionPolicy) {
+          delete options.compactionPolicy;
+        }
+        return options;
+      },
       isLatest: () => historyLoadVersions.get(sessionState.key) === version,
       isDisplayed: () =>
         isDisplayedSession(sessionState.agentId, sessionState.sessionId),
@@ -437,7 +451,7 @@ export function createChatController({
       loadHistory(
         sessionState,
         history?.messages ?? [],
-        historyLoadOptions(history),
+        request.loadOptions(history),
       );
       reflectionRequest?.apply(history?.reflection_runs);
       sessionState.markReadFailedRunId = '';
@@ -473,7 +487,7 @@ export function createChatController({
   }
 
   // A Session Compaction Policy saved from this window takes effect at once;
-  // other changes arrive with the next History read.
+  // other windows reconcile it with their invalidated Session settings row.
   function applySessionCompactionPolicy(agentId, sessionId, policy) {
     const sessionState = chatState.sessions[sessionKey(agentId, sessionId)];
     if (sessionState && isRecord(policy)) {
@@ -509,7 +523,7 @@ export function createChatController({
       const currentRunId = sessionState.currentRun?.runId;
 
       loadHistory(sessionState, history?.messages ?? [], {
-        ...historyLoadOptions(history),
+        ...request.loadOptions(history),
         ...(successor ? { activeRunId: currentRunId, reset: false } : {}),
       });
       reflectionRequest?.apply(history?.reflection_runs);
@@ -820,6 +834,7 @@ export function createChatController({
       return { kind: 'failed' };
     } finally {
       sessionState.stoppingAll = false;
+      work.refresh(sessionState);
     }
   }
 
@@ -1149,6 +1164,7 @@ export function createChatController({
     queueSyncVersions.clear();
     childTasks.dispose();
     activity.dispose();
+    work.destroy();
     displayedHistoryLoad = null;
     chatState.loadingHistory = false;
   }
@@ -1202,6 +1218,7 @@ export function createChatController({
     stopCommand,
     stopSubAgentWork,
     syncAgentActivity,
+    syncSessionWork: work.sync,
     syncSessionQueue,
     undoReflection: reflections.undo,
     updateQueued,

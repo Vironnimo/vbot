@@ -35,6 +35,7 @@ class _Step:
     name: str
     stop: Callable[[], object] | None
     aclose: Callable[[], object] | None
+    requires_clean_drain: bool = False
 
 
 def run_shutdown(runtime: Runtime) -> None:
@@ -76,7 +77,7 @@ async def run_shutdown_async(runtime: Runtime) -> None:
     failures: list[tuple[str, Exception]] = []
     try:
         for step in _steps(runtime):
-            if step.aclose is None:
+            if step.aclose is None or (step.requires_clean_drain and failures):
                 continue
             try:
                 result = step.aclose()
@@ -198,6 +199,15 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
     if (usage := runtime._usage_recorder) is not None:
         yield _Step("model_usage", usage.close, usage.aclose)
     if (sessions := runtime._chat_sessions) is not None:
+        if (attachments := runtime._attachment_store) is not None:
+            # Only async shutdown has drained admission, Runs and producers.
+            # A failed earlier drain may still own in-flight attachment reads.
+            yield _Step(
+                "attachment_collection",
+                None,
+                partial(sessions.run_async, attachments.collect_session_orphans, sessions),
+                requires_clean_drain=True,
+            )
         yield _Step("sessions", sessions.close, sessions.close)
 
 

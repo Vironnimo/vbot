@@ -284,6 +284,40 @@ def _archive_members(connection: sqlite3.Connection, entry_key: int, now: str) -
     )
 
 
+def _scope_members(
+    connection: sqlite3.Connection, scope: ArchiveScope, *, idle: bool = False
+) -> list[sqlite3.Row]:
+    """Live scope members and their review followers, in one canonical read."""
+    where, params = _scope_predicate(scope)
+    running = (
+        " AND NOT EXISTS (SELECT 1 FROM runs AS r "
+        "WHERE r.session_key = f.session_key AND r.status = 'running')"
+        if idle
+        else ""
+    )
+    return list(
+        connection.execute(
+            "WITH RECURSIVE members (session_key) AS ("
+            f"SELECT s.session_key FROM sessions AS s WHERE {where} UNION "
+            "SELECT f.session_key FROM members AS m "
+            "JOIN sessions AS p ON p.session_key = m.session_key "
+            f"JOIN sessions AS f ON {_store_values._review_fork_of('f', 'p')} "
+            f"WHERE f.state = 'live'{running}) "
+            "SELECT s.session_key, s.project_id, s.agent_id, s.session_id "
+            "FROM members AS m JOIN sessions AS s ON s.session_key = m.session_key "
+            "ORDER BY s.session_key",
+            params,
+        )
+    )
+
+
+def scope_addresses(
+    connection: sqlite3.Connection, scope: ArchiveScope
+) -> tuple[SessionAddress, ...]:
+    """Sessions whose work must be guarded before archiving an Agent or Project."""
+    return tuple(_store_values._address(row) for row in _scope_members(connection, scope))
+
+
 def commit_scope(
     connection: sqlite3.Connection,
     entry_key: int,
@@ -300,13 +334,16 @@ def commit_scope(
     associations, including archived Sessions but not an older incarnation's users.
     """
     row = _require_state(connection, entry_key, ARCHIVE_STATE_ARCHIVING)
-    where, params = _scope_predicate(scope)
-    _store_values._reject_owner_managed_scope_mutation(connection, where, params)
+    keys = [int(member["session_key"]) for member in _scope_members(connection, scope, idle=True)]
+    encoded_keys = _store_values._key_list(keys)
+    _store_values._reject_owner_managed_scope_mutation(
+        connection, "s.session_key IN (SELECT value FROM json_each(?))", (encoded_keys,)
+    )
     now = utc_now_timestamp()
     count = connection.execute(
         "INSERT INTO archive_entry_sessions (session_key, entry_key) "
-        f"SELECT s.session_key, ? FROM sessions AS s WHERE {where}",
-        (entry_key, *params),
+        "SELECT value, ? FROM json_each(?)",
+        (entry_key, encoded_keys),
     ).rowcount
     if scope.project_id is not None:
         connection.execute(
@@ -532,13 +569,23 @@ def _restore_targets(
         raise ChatSessionError(
             "only an entry of one Session can be restored under a new Session id"
         )
+    entry = entry_by_key(connection, entry_key)
+    assert entry is not None
     targets: list[tuple[int, SessionAddress]] = []
     for member in members:
+        # A review kept its learning owner when its source moved. Restoring
+        # that source under another name must not move the review's owner.
+        original_owner = not member["review_fork"] or (
+            str(member["project_id"]) == (entry.project_id or "")
+            and (entry.kind == ARCHIVE_KIND_PROJECT or str(member["agent_id"]) == entry.agent_id)
+        )
         target = SessionAddress(
             project_id=(str(member["project_id"]) or None)
-            if project_id is None
+            if project_id is None or not original_owner
             else project_id or None,
-            agent_id=str(member["agent_id"]) if agent_id is None else agent_id,
+            agent_id=str(member["agent_id"])
+            if agent_id is None or not original_owner
+            else agent_id,
             session_id=str(member["session_id"])
             if session_id is None or member["review_fork"]
             else session_id,

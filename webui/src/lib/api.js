@@ -187,6 +187,7 @@ export {
   listQueue,
   cancelRun,
   stopAll,
+  getSessionWork,
   stopCommand,
   loadCommandOutput,
   controlRun,

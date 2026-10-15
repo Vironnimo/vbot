@@ -1016,8 +1016,8 @@ export function createChatViewNavigation(context) {
     });
   };
 
-  // A reflection review lives in a same-Agent fork; opening it is ordinary
-  // same-agent session navigation, not sub-agent navigation, so no child
+  // A reflection review keeps its original owner when its source moves;
+  // opening it is ordinary Session navigation, so no child
   // banner appears and the fork's live Run streams like any other session.
   const handleOpenReflection = (row) => {
     const sessionId = String(row?.sessionId ?? '').trim();
@@ -1026,7 +1026,7 @@ export function createChatViewNavigation(context) {
     }
     void handleSessionSelected(
       sessionId,
-      context.target.activeSessionState?.agentId ?? '',
+      row.agentId || context.target.activeSessionState?.agentId || '',
       false,
     );
   };

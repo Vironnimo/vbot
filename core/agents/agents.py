@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from core.agents import _archive
+from core.agents import _archive, _delegation
 from core.agents import _workspace as workspace_ops
 from core.agents._config import (
     AGENT_FORMAT,
@@ -409,7 +409,7 @@ class AgentStore:
                 else None
             )
             validated_tool_loading = _validate_tool_loading(tool_loading)
-            now = utc_now_timestamp()
+            now = _delegation.new_creation_timestamp(self)
             workspace_value = workspace
             if workspace_value is None or (
                 isinstance(workspace_value, str) and not workspace_value.strip()
@@ -445,6 +445,7 @@ class AgentStore:
             agent = _with_builtin_capabilities(agent)
 
             try:
+                agent = _delegation.bind_changes(self, agent, None)
                 self._seed_workspace(Path(agent.workspace))
                 self._write_agent(agent)
             except Exception:
@@ -809,6 +810,7 @@ class AgentStore:
                 "id",
                 "created_at",
                 "updated_at",
+                "delegation_bindings",
             }
             unknown_fields = sorted(set(changes) - allowed_fields)
             if unknown_fields:
@@ -880,6 +882,7 @@ class AgentStore:
             updated_agent = _with_builtin_capabilities(
                 replace(agent, **changes, updated_at=utc_now_timestamp())
             )
+            updated_agent = _delegation.bind_changes(self, updated_agent, agent)
             relocation = _WorkspaceRelocation()
             try:
                 if "workspace" in changes:
@@ -980,6 +983,7 @@ class AgentStore:
             # Before the record, outside every rename direction: an interruption
             # leaves only fewer leftovers, and no revert brings them back.
             leftover_policy_agent_ids = self._remove_from_allow_lists(new_agent_id)
+            _delegation.revoke_future_grants(self, new_agent_id)
             # Repairs a dangling current-Session pointer before the Sessions move.
             self._load_verified_agent(agent_path)
             session_ids = tuple(
@@ -1097,6 +1101,7 @@ class AgentStore:
         target state, so repeating the whole sequence after an interruption at any
         point finishes it.
         """
+        _delegation.retire(self, rename.source_id)
         sessions = self._session_manager()
         sessions.retarget_identity_agent_sessions(rename.source_id, rename.target_id)
         link_count = len(
@@ -1168,7 +1173,8 @@ class AgentStore:
             tools["subagent"]["allowed_agents"] = _replace_list_item_once(
                 allowed_agents, old_agent_id, new_agent_id
             )
-            self._write_agent(replace(agent, tools=tools, updated_at=utc_now_timestamp()))
+            updated = _delegation.retarget(agent, old_agent_id, new_agent_id, self)
+            self._write_agent(replace(updated, tools=tools, updated_at=utc_now_timestamp()))
             changed.append(agent.id)
         return tuple(changed)
 
@@ -1471,6 +1477,13 @@ class AgentStore:
     def _write_agent(self, agent: Agent) -> None:
         """Write one config; it never waits under the lock (see ``_repairing_read``)."""
         agent_path = self._agent_path(agent.id)
+        allowed = agent.tools.get("subagent", {}).get("allowed_agents", [])
+        agent = replace(
+            agent,
+            delegation_bindings={
+                key: value for key, value in agent.delegation_bindings.items() if key in allowed
+            },
+        )
         with self._write_lock, document_change(agent_path, wait=False):
             persisted = _agent_document(
                 agent,
@@ -1480,6 +1493,18 @@ class AgentStore:
                 write_json_document(agent_path, persisted, AGENT_FORMAT)
             except JsonDocumentWriteError as error:
                 raise AgentError(str(error)) from error
+
+    def delegation_target_allowed(self, target_id: str, binding: str | int) -> bool:
+        """Whether a captured explicit grant still addresses this Identity Agent.
+
+        No binding means a legacy grant and is handled by the caller. This check
+        fails closed for unavailable or invalid identity history.
+        """
+        with self._write_lock:
+            try:
+                return _delegation.target_allowed(self, target_id, binding)
+            except AgentError, OSError:
+                return False
 
     def _load_agent_order(self) -> _AgentOrderDocument | None:
         order_path = self._agent_order_path()

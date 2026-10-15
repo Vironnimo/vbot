@@ -6,7 +6,7 @@ The reflection service owns two halves of one capability:
    background trigger: fork the session (same agent, so the fork stays
    prompt-cache-warm and keeps the pinned skill catalog), run the scope's brief
    as an internal run inside the fork with only that scope's Tools dispatchable
-   and a small Tool-iteration limit, and return the fork id plus the run's
+   and the normal Run Tool-iteration limit, and return the fork id plus the run's
    closing summary. The source session is never touched.
 2. The cadence policy behind the background trigger: per-session counters in
    the session metadata sidecar (user turns since the last memory review,
@@ -33,9 +33,11 @@ Loop.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from weakref import WeakValueDictionary
 
 from core.agents import is_builtin_agent
 from core.chat.content_blocks import ContentBlock, TextBlock
@@ -45,7 +47,7 @@ from core.sessions import SUBAGENT_SESSION_META_KEY, SessionAddress
 from core.tools.availability import MEMORY_TOOL_NAME, SKILL_MANAGE_TOOL_NAME, resolve_tool_access
 from core.tools.model_names import model_tool_name
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, finish_despite_cancel
 
 if TYPE_CHECKING:
     from core.chat import ReplySurface
@@ -124,6 +126,10 @@ class ReflectionUnavailableError(RuntimeError):
     """Raised before forking when the Agent can review no requested dimension."""
 
 
+async def _no_librarian_pass(_agent_id: str) -> None:
+    """Default for standalone Reflection without a Librarian."""
+
+
 class ReflectionService:
     """Fork-based session reviews that save durable memory/skill updates."""
 
@@ -132,6 +138,7 @@ class ReflectionService:
         runtime: RuntimeServices,
         *,
         librarian_running: Callable[[str], bool] = lambda _agent_id: False,
+        librarian_wait: Callable[[str], Awaitable[None]] = _no_librarian_pass,
     ) -> None:
         """Review Sessions of ``runtime``'s Agents.
 
@@ -140,14 +147,44 @@ class ReflectionService:
         """
         self._runtime = runtime
         self._librarian_running = librarian_running
+        self._librarian_wait = librarian_wait
+        self._skill_reviews: dict[str, int] = {}
+        self._skill_review_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._agents_in_review: set[str] = set()
         self._accounting_lock = asyncio.Lock()
         self._closed = False
 
     def reviewing(self, agent_id: str) -> bool:
-        """Whether a background review of the Agent is starting or running."""
-        return agent_id in self._agents_in_review
+        """Whether a review reserves this Agent's learning state."""
+        return agent_id in self._agents_in_review or agent_id in self._skill_reviews
+
+    @asynccontextmanager
+    async def _coordinate_review(
+        self, agent_id: str, scope: ReflectionScope
+    ) -> AsyncIterator[None]:
+        if self._closed:
+            raise ReflectionUnavailableError("Reflection is shutting down")
+        if scope == "memory":
+            yield
+            return
+        # Register before yielding: Librarian admission rechecks reviewing()
+        # immediately before claiming the Agent. An existing pass can finish,
+        # but a later pass cannot overtake this review's wait or initial reads.
+        self._skill_reviews[agent_id] = self._skill_reviews.get(agent_id, 0) + 1
+        lock = self._skill_review_locks.setdefault(agent_id, asyncio.Lock())
+        try:
+            async with lock:
+                await self._librarian_wait(agent_id)
+                if self._closed:
+                    raise ReflectionUnavailableError("Reflection is shutting down")
+                yield
+        finally:
+            remaining = self._skill_reviews[agent_id] - 1
+            if remaining:
+                self._skill_reviews[agent_id] = remaining
+            else:
+                del self._skill_reviews[agent_id]
 
     # -- background trigger ----------------------------------------------------
 
@@ -451,63 +488,77 @@ class ReflectionService:
             raise ReflectionUnavailableError(
                 f"Reflection scope {review_scope} needs Tools this Agent cannot call"
             )
-        instruction = await _REFLECTION_WORKERS.run(
-            reflection_brief, self._runtime.storage, scope, focus=focus
-        )
-        sessions = self._runtime.chat_sessions
-        source_address = SessionAddress(
-            project_id=project_id, agent_id=agent_id, session_id=session_id
-        )
-        source_title = str(
-            await sessions.metadata_value_async(source_address, "title") or ""
-        ).strip()
-        run_kind = REFLECTION_RUN_KINDS[scope]
-        # The fork is titled with the agent's display name so review forks stay
-        # distinguishable in a session list that spans agents; the run-kind
-        # marker on the row already says "reflection" (a fork would otherwise
-        # inherit the source session's title). Both commit with the fork.
-        counters = None
-        async with self._accounting_lock:
-            if consume_counters:
-                counters = await _REFLECTION_WORKERS.run(self._read_counters, source_address)
-            fork = await sessions.fork(
-                source_address,
-                target_project_id=project_id,
-                title=f"{agent.name}: {source_title}" if source_title else agent.name,
-                run_kind=run_kind,
+        async with self._coordinate_review(agent_id, scope):
+            instruction = await _REFLECTION_WORKERS.run(
+                reflection_brief, self._runtime.storage, scope, focus=focus
             )
-        if on_fork_created is not None:
-            on_fork_created(fork.id)
-        # The fork is fresh and never busy — start directly, no queueing needed.
-        # Streaming loop so an accessor watching the fork sees the live timeline.
-        review_run = await self._runtime.chat_loop.start_run(
-            agent_id,
-            instruction,
-            session_id=fork.id,
-            internal=True,
-            reply_surface=reply_surface,
-            project_id=project_id,
-            tool_restriction=REFLECTION_TOOL_RESTRICTIONS[scope],
-            tool_denial_resolver=_review_tool_denial_resolver(scope),
-            run_kind=run_kind,
-            contributes_to_agent_activity=False,
-            source_session_id=session_id,
-        )
-        final_message = await review_run.wait()
-        if counters is not None:
-            reviewed_memory, reviewed_skill = _scope_dimensions(scope)
-            await _REFLECTION_WORKERS.run(
-                self._consume_reviewed_counters,
+            sessions = self._runtime.chat_sessions
+            source_address = SessionAddress(
+                project_id=project_id, agent_id=agent_id, session_id=session_id
+            )
+            source_title = str(
+                await sessions.metadata_value_async(source_address, "title") or ""
+            ).strip()
+            run_kind = REFLECTION_RUN_KINDS[scope]
+            # The fork is titled with the agent's display name so review forks stay
+            # distinguishable in a session list that spans agents; the run-kind
+            # marker on the row already says "reflection" (a fork would otherwise
+            # inherit the source session's title). Both commit with the fork.
+            counters = None
+            async with self._accounting_lock:
+                if consume_counters:
+                    counters = await _REFLECTION_WORKERS.run(self._read_counters, source_address)
+                fork = await sessions.fork(
+                    source_address,
+                    target_project_id=project_id,
+                    title=f"{agent.name}: {source_title}" if source_title else agent.name,
+                    run_kind=run_kind,
+                )
+            if on_fork_created is not None:
+                on_fork_created(fork.id)
+            # The fork is fresh and never busy — start directly, no queueing needed.
+            # Streaming loop so an accessor watching the fork sees the live timeline.
+            review_run = await self._runtime.chat_loop.start_run(
                 agent_id,
-                session_id,
+                instruction,
+                session_id=fork.id,
+                internal=True,
+                reply_surface=reply_surface,
                 project_id=project_id,
-                counter_generation=counters.generation,
-                reviewed_turns=counters.turns if reviewed_memory else 0,
-                reviewed_iterations=counters.iterations if reviewed_skill else 0,
+                tool_restriction=REFLECTION_TOOL_RESTRICTIONS[scope],
+                tool_denial_resolver=_review_tool_denial_resolver(scope),
+                run_kind=run_kind,
+                contributes_to_agent_activity=False,
+                source_session_id=session_id,
             )
-        return ReflectionResult(
-            session_id=fork.id, summary=_final_text(final_message.content), scope=scope
-        )
+            try:
+                final_message = await review_run.wait()
+            except asyncio.CancelledError:
+                # The waiter does not own Run.wait's execution task. Keep the
+                # Skill reservation until the admitted Run has actually stopped,
+                # even if shutdown or another cancellation interrupts this drain.
+                await finish_despite_cancel(
+                    self._runtime.chat_run_manager.cancel(
+                        review_run.id,
+                        reason="shutdown" if self._closed else "user",
+                        initiator="reflection",
+                    )
+                )
+                raise
+            if counters is not None:
+                reviewed_memory, reviewed_skill = _scope_dimensions(scope)
+                await _REFLECTION_WORKERS.run(
+                    self._consume_reviewed_counters,
+                    agent_id,
+                    session_id,
+                    project_id=project_id,
+                    counter_generation=counters.generation,
+                    reviewed_turns=counters.turns if reviewed_memory else 0,
+                    reviewed_iterations=counters.iterations if reviewed_skill else 0,
+                )
+            return ReflectionResult(
+                session_id=fork.id, summary=_final_text(final_message.content), scope=scope
+            )
 
     def available_review_scope(
         self, agent: Any, requested: ReflectionScope = "combined"

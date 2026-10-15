@@ -362,11 +362,10 @@ def _existing_swarm_ids(db: SwarmDatabase, swarm_ids: Sequence[str]) -> set[str]
     return {str(row["id"]) for row in rows}
 
 
-def _get_swarm(db: SwarmDatabase, swarm_id: str) -> Json:
+def _get_swarm(db: SwarmDatabase, swarm_id: str, include_snapshot: bool = True) -> Json:
     with db._read() as connection:
-        row = connection.execute(
-            f"SELECT {SWARM_COLUMNS} FROM swarms WHERE id=?", (swarm_id,)
-        ).fetchone()
+        columns = SWARM_COLUMNS if include_snapshot else "id,state,created_at"
+        row = connection.execute(f"SELECT {columns} FROM swarms WHERE id=?", (swarm_id,)).fetchone()
         if row is None:
             raise SwarmStoreError("swarm_not_found")
         participants = connection.execute(
@@ -390,9 +389,15 @@ def _get_swarm(db: SwarmDatabase, swarm_id: str) -> Json:
         ).fetchone()
         return {
             "id": swarm_id,
-            "prompt": row["prompt"],
-            "profile_snapshot": _load(row["profile_snapshot"]),
-            "effective_configuration": _load(row["effective_configuration"]),
+            **(
+                {
+                    "prompt": row["prompt"],
+                    "profile_snapshot": _load(row["profile_snapshot"]),
+                    "effective_configuration": _load(row["effective_configuration"]),
+                }
+                if include_snapshot
+                else {}
+            ),
             "state": row["state"],
             "created_at": str(row["created_at"]),
             "delivery": _load(

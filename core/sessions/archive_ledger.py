@@ -91,6 +91,12 @@ class SessionArchiveLedger:
             )
         )
 
+    def scope_addresses(self, scope: ArchiveScope) -> tuple[SessionAddress, ...]:
+        """Live scope Sessions and their review followers, including other owners."""
+        return self._store._read(
+            lambda connection: _store_archive.scope_addresses(connection, scope)
+        )
+
     def commit_scope(
         self,
         entry_key: int,

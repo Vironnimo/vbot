@@ -25,10 +25,12 @@ from core.sessions import ChatSession, ChatSessionManager
 from core.statistics.index import (
     SESSION_FACT_TABLES,
     StatisticsIndex,
+    StatisticsScope,
     StatisticsUnavailableError,
 )
 from core.statistics.report import JsonObject, RunActivityReport
 from core.tools import tool_success
+from core.usage import UsageRecorder
 from tests.core.sessions.history_fixtures import complete_run, seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
@@ -144,7 +146,7 @@ def test_a_corrupt_kernel_projection_is_discarded_and_rebuilt_once(
     expected_identity = {
         "application_id": APPLICATION_IDS["statistics"],
         "database_name": "statistics",
-        "projection_version": "7",
+        "projection_version": "8",
     }
     assert _index_identity(tmp_path).items() >= expected_identity.items()
     # Corrupt at rest: under WAL an open connection keeps reading its own pages.
@@ -313,13 +315,27 @@ def test_replaced_canonical_session_rebuilds_only_that_projection(
 
 
 def test_restored_session_history_rebuilds_the_projection(
-    tmp_path: Path, manager: ChatSessionManager, statistics: StatisticsFactory
+    tmp_path: Path,
+    manager: ChatSessionManager,
+    statistics: StatisticsFactory,
+    index: StatisticsIndex,
+    ledger: UsageRecorder,
 ) -> None:
     session = _append_run(manager.create("main"), "kept", minutes=0, input_tokens=7)
+    other = manager.create("main", session_id="other")
+    manager.create("main", session_id="third")
+    manager.set_metadata(other.address, {"is_subagent_session": True})
+
+    async def record_requests() -> None:
+        for scope in ({}, {"agent_id": "main", "session_id": other.id}):
+            identifier = await ledger.start(model="task/m", kind="decision", **scope)
+            await ledger.finish(identifier, {"input_tokens": 3})
+
+    asyncio.run(record_requests())
     snapshot = create_data_snapshot(tmp_path, reason="test", databases=(manager.database,))
     assert snapshot is not None
     _append_run(manager.get(session.address), "discarded", minutes=1, input_tokens=99)
-    assert _run_input_tokens(statistics().report()) == 7 + 99
+    assert _run_input_tokens(statistics(index=index, usage_recorder=ledger).report()) == 7 + 99
     projected = manager.list_history_versions([session.address])[session.address]
     manager.close()
 
@@ -331,7 +347,23 @@ def test_restored_session_history_rebuilds_the_projection(
     try:
         _append_run(restored.get(session.address), "new", minutes=2, input_tokens=5)
         assert restored.list_history_versions([session.address])[session.address] == projected
-        report = statistics(sessions=restored).report()
+        # A group-style scoped read after restore cannot retain stale unrelated
+        # Session generations or join an unknown request to every one of them.
+        scope = StatisticsScope(None, "main", "main", ({"id": session.id},))
+
+        def inspect(view):
+            connection = view.connection
+            assert connection.execute("SELECT COUNT(*) FROM stat_sessions").fetchone()[0] == 1
+            assert connection.execute("SELECT SUM(calls) FROM agg_usage").fetchone()[0] == 4
+            assert (
+                connection.execute(
+                    "SELECT SUM(calls) FROM agg_usage WHERE origin='subagent'"
+                ).fetchone()[0]
+                is None
+            )
+
+        index.read(restored, (scope,), inspect, prune=False, usage_recorder=ledger)
+        report = statistics(sessions=restored, index=index, usage_recorder=ledger).report()
     finally:
         restored.close()
 
@@ -575,7 +607,7 @@ def test_an_index_of_another_shape_is_discarded_and_rebuilt(
     report = statistics().report()
 
     assert _run_input_tokens(report) == 10
-    assert _index_identity(tmp_path)["projection_version"] == "7"
+    assert _index_identity(tmp_path)["projection_version"] == "8"
     with closing(sqlite3.connect(_index_path(tmp_path))) as connection:
         error_columns = {
             row[1]: row[3] for row in connection.execute("PRAGMA table_info(stat_errors)")

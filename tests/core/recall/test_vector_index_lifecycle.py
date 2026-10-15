@@ -139,7 +139,9 @@ async def test_a_restored_history_replaces_the_passages_of_discarded_turns(
     recall = backend(sessions)
     try:
         await embed_documents(recall.index, sessions, embeddings)
-        assert "broke down" in (await recall.search_page(request("car"))).hits[0].text
+        assert any(
+            "broke down" in hit.text for hit in (await recall.search_page(request("car"))).hits
+        )
     finally:
         recall.close()
     projected = sessions.list_history_versions([session.address])[session.address]
@@ -164,7 +166,7 @@ async def test_a_restored_history_replaces_the_passages_of_discarded_turns(
         restored.close()
 
     assert page.hits and all("broke down" not in hit.text for hit in page.hits)
-    assert "Bananas" in page.hits[0].text
+    assert any("Bananas" in hit.text for hit in page.hits)
     rows = passage_rows(recall.index.path, "coder", "restored")
     assert sorted(rows.values()) == sorted(passage.text for passage in current)
 

@@ -249,6 +249,18 @@ def forbid_database_calls_on_loop(monkeypatch: pytest.MonkeyPatch) -> list[str]:
             raise AssertionError(f"{self.name}.{_name} ran synchronously on the event loop")
 
         monkeypatch.setattr(Database, name, guarded)
+    read_async = Database.read_async
+
+    async def guarded_read_async(self: Database, operation: Any, **kwargs: Any) -> Any:
+        def checked(connection: Any) -> Any:
+            thread = threading.current_thread().name
+            assert thread.startswith(f"vbot-db-{self.name}_")
+            calls.append(f"{self.name}.read")
+            return operation(connection)
+
+        return await read_async(self, checked, **kwargs)
+
+    monkeypatch.setattr(Database, "read_async", guarded_read_async)
     return calls
 
 

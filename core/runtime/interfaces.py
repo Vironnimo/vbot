@@ -13,6 +13,7 @@ from core.providers.accounts import ConnectionRef, ProviderAccount
 
 if TYPE_CHECKING:
     from core.agents.agents import AgentStore
+    from core.automation.references import AutomationReferences
     from core.chat import ChatLoop
     from core.extensions import ExtensionRegistry
     from core.models.models import ModelRegistry
@@ -162,6 +163,11 @@ class RuntimeServices(Protocol):
     @property
     def chat_run_manager(self) -> ChatRunManager:
         """Shared run lifecycle manager and busy-session queue."""
+        ...
+
+    @property
+    def automation_references(self) -> AutomationReferences:
+        """Reference checks and the shared Agent lifecycle serialization lock."""
         ...
 
     @property

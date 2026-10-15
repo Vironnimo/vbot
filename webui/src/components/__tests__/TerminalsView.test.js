@@ -443,10 +443,8 @@ describe('TerminalsView launch and close', () => {
     expect(terminalInstances[0].options.disableStdin).toBe(true);
     expect(document.querySelector('.terminals-view__append-tile')).toBeNull();
 
-    // The title's details card says how the terminal ended and what ran where.
-    document
-      .querySelector('.terminals-view__tile-title')
-      .dispatchEvent(new MouseEvent('pointerenter'));
+    // The existing keyboard-focusable title bar exposes the details card.
+    document.querySelector('.terminals-view__tile-bar').focus();
     await vi.waitFor(() =>
       expect(document.getElementById('app-tooltip')?.dataset.floatingOpen).toBe(
         'true',

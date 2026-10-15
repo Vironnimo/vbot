@@ -1,6 +1,7 @@
 """core.agents — agent persistence and workspace lifecycle."""
 
 from core.agents._config import AGENT_FORMAT_VERSION
+from core.agents._delegation import validate_agent_retirements_file
 from core.agents.agents import (
     LIBRARIAN_AGENT_ID,
     LIBRARIAN_AGENT_NAME,
@@ -85,6 +86,7 @@ __all__ = [
     "validate_agent_order_file",
     "validate_agent_rename_data",
     "validate_agent_rename_file",
+    "validate_agent_retirements_file",
     "TemporaryAgent",
     "TemporaryAgentConfig",
     "TemporaryAgentRegistry",

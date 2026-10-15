@@ -53,7 +53,9 @@ COMMAND_IDLE_WINDOW_SECONDS = 10.0
 # POSIX: a stopped command gets SIGINT first; what still runs after this long is killed.
 COMMAND_STOP_GRACE_SECONDS = 3.0
 
-StopReason = Literal["agent", "parent", "user", "run_cancelled", "shutdown", "scope"]
+StopReason = Literal[
+    "agent", "parent", "user", "run_cancelled", "shutdown", "scope", "server_restart"
+]
 CommandStatus = Literal["running", "completed", "failed", "stopped"]
 # Why the shell ran nothing of a command: it could not read the request that
 # carries the command, could not enter its workdir, or cannot run the bootstrap
@@ -300,6 +302,10 @@ class CommandNotFoundError(CommandManagerError):
 class CommandNotStartedError(CommandManagerError):
     """The command was refused: its Run was cancelled, its execution group closed,
     or vBot is shutting down."""
+
+
+class CommandCheckpointError(CommandManagerError):
+    """The command started, but its background recovery state was not saved."""
 
 
 class CommandCapacityError(CommandManagerError):

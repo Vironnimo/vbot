@@ -6,7 +6,13 @@ from typing import Any
 
 from core.database import DatabaseUnavailableError
 from core.projects import WorkingProjectMissingError
-from core.sessions import AGENT_DEFAULT_PROJECT, ChatSessionManager, SessionAddress
+from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
+    ARCHIVE_KIND_PROJECT,
+    ArchiveScope,
+    ChatSessionManager,
+    SessionAddress,
+)
 
 from .resolver_test_support import (
     AgentResolutionError,
@@ -474,11 +480,24 @@ async def test_an_identity_run_works_in_the_project_of_its_session(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("archive_outcome", ["missing", "restore", "purge"])
 async def test_a_working_project_that_cannot_be_used_is_refused(
-    agents: AgentStore, projects: ProjectStore, repo: Path
+    agents: AgentStore, projects: ProjectStore, repo: Path, archive_outcome: str
 ) -> None:
     _project(projects, repo)
-    agents._session_manager().create("main", session_id="in-gone", working_project_id="gone")
+    sessions = agents._session_manager()
+    sessions.create("main", session_id="in-gone", working_project_id="gone")
+    ledger = sessions.archive_ledger
+    original = None
+    payload = repo.parent / "archived-project"
+    if archive_outcome != "missing":
+        projects.create("gone", "Original", repo.parent / "original")
+        original = ledger.begin(ARCHIVE_KIND_PROJECT, subject_id="gone", project_id="gone")
+        with projects.archive_files("gone", payload):
+            ledger.commit_scope(original.entry_key, ArchiveScope(project_id="gone"))
+        if archive_outcome == "purge":
+            ledger.begin_purge(original.entry_id)
+            ledger.finish_purge(original.entry_key)
     resolver = _resolver(agents, projects, _openai_configured())
     main = SimpleNamespace(id="main", root_project_id="gone")
 
@@ -496,12 +515,33 @@ async def test_a_working_project_that_cannot_be_used_is_refused(
         "Agent main starts new Sessions in Project gone, which no longer exists. "
         "Choose another default Project for the Agent."
     )
-    # A Session whose Project is gone stays where it is and refuses to run.
+    if original is not None:
+        # A new Project can reuse the public id; it never receives the original's Sessions.
+        projects.create("gone", "Replacement", repo.parent / "replacement")
+        sessions.create("main", session_id="replacement", working_project_id="gone")
+        assert resolver.resolve_working_project(None, main, session_id="replacement") == "gone"
+    # A missing, archived or purged original stays unavailable despite public-id reuse.
+    with pytest.raises(WorkingProjectMissingError):
+        resolver.resolve_working_project(None, main, session_id="in-gone")
     with pytest.raises(WorkingProjectMissingError) as missing:
         await resolver.resolve_working_project_async(None, main, session_id="in-gone")
     assert missing.value.project_id == "gone"
     with pytest.raises(WorkingProjectMissingError):
         await resolver.session_working_project_async(SessionAddress(None, "main", "in-gone"))
+    if archive_outcome == "restore":
+        assert original is not None
+        ledger.begin_restore(original.entry_id, {"target_id": "returned"})
+        with projects.restore_files(payload, "returned"):
+            ledger.commit_restore(original.entry_key, project_id="returned")
+        assert resolver.resolve_working_project(None, main, session_id="in-gone") == "returned"
+        assert (
+            await resolver.resolve_working_project_async(None, main, session_id="in-gone")
+            == "returned"
+        )
+        assert (
+            await resolver.session_working_project_async(SessionAddress(None, "main", "in-gone"))
+            == "returned"
+        )
 
 
 @pytest.mark.parametrize(

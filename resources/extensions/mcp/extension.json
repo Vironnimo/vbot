@@ -1,1 +1,9 @@
-{"name":"MCP","version":"1.0.0","description":"Manage MCP connections, tools, resources, prompts, and server requests.","api_version":11}
+{
+  "name": "MCP",
+  "version": "1.0.0",
+  "description": "Manage MCP connections, tools, resources, prompts, and server requests.",
+  "api_version": 15,
+  "config_documents": {
+    "connections.json": "config:validate_connections_file"
+  }
+}

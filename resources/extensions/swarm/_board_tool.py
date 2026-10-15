@@ -195,6 +195,8 @@ class BoardCall:
         self.main = swarm["main_discussion_id"]
         self.roster = Roster.of(swarm, binding.participant_id)
         self.notes = notes
+        self.discussions_changed = False
+        self.post_discussions: tuple[str, ...] = ()
         self._discussion_rows: list[Json] | None = None
 
     async def list(self, arguments: Json) -> Json:
@@ -355,6 +357,8 @@ class BoardCall:
                 "post_id": post_ref(data["sequence"]),
                 "discussion": await self._label(data["discussion_id"]),
             }
+        if not data.get("replayed"):
+            self.post_discussions = (data["discussion_id"],)
         in_main = data["discussion_id"] == self.main
         long_main = in_main and len(values["text"]) > text.FULL_POST_CHARS
         addressed = data.get("addressed", [])
@@ -404,6 +408,9 @@ class BoardCall:
             expected_epoch=self.swarm["epoch"],
             **values,
         )
+        if not data.get("replayed"):
+            self.discussions_changed = True
+            self.post_discussions = (data["discussion_id"], self.main)
         self._discussion_rows = None
         created = await self._discussion(data["discussion_id"])
         opening = await self._post(data["opening_post_id"])
@@ -432,6 +439,7 @@ class BoardCall:
             )
         except SwarmStoreError as error:
             raise await self._write_error(error, arguments) from error
+        self.discussions_changed = not data["already"]
         recent = data["recent"]
         await self.service._record_read(self.context, self.binding, recent["entries"])
         row = await self._discussion(data["discussion_id"])
@@ -462,6 +470,7 @@ class BoardCall:
             )
         except SwarmStoreError as error:
             raise await self._write_error(error, arguments) from error
+        self.discussions_changed = not data["already"]
         return {
             "discussion": await self._label(data["discussion_id"]),
             "status": text.BOARD_ALREADY_LEFT if data["already"] else text.BOARD_LEFT,

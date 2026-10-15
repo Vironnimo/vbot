@@ -64,6 +64,7 @@ export const reflectionTaskRows = (sessionState) => {
     .map(([runId, entry]) => ({
       runId,
       sessionId: entry.sessionId,
+      ...(entry.agentId ? { agentId: entry.agentId } : {}),
       runKind: entry.runKind,
       scope: reflectionScopeForRunKind(entry.runKind),
       status:

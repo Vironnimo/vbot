@@ -28,6 +28,10 @@ A secret declaration supplies an explicit `env_key`, cannot carry a normal defau
 
 `extensions.list` and `extensions.reload` return the same `{extensions: [...], settings: {...}}` catalog shape. `settings` is the persisted `extensions` section as `settings.update` writes it (`disabled` in saved order, `config`), including entries of Extensions without a record, so a writer can change one entry and send the section it read as `base` (`webui/autosave.md`). Each record projection includes status/path/error/shadowing/manifest metadata, persisted non-secret config, loaded schema metadata, capability summary, and derived readiness; secret fields expose only their `env_key` and live `set` boolean. Declared Commands are projected with their name and whether the stable live `CommandDispatcher` currently registers that name to this Extension, so collision-skipped declarations remain visible without being reported as active.
 
+Catalog projection reads persisted Settings on its bounded worker, then captures
+the current registry and evaluates live readiness on the Event Loop. Catalog reads,
+explicit reload and secret edits share the Settings mutation lock with enable/disable.
+
 Readiness is a display projection, not a stored Extension status. A loaded Extension with declared Tools is `waiting` when at least one currently applied Tool is not ready; otherwise it is `ready`. A collision-skipped Tool is not applied and therefore not ready.
 
 ## Enable, disable, and configuration decisions
@@ -49,7 +53,9 @@ While the runtime is closing, reload and enable/disable changes, like a lookup o
 
 Once admitted, reload, live disable, and startup finish their structural work before propagating caller cancellation; cancellation while waiting for admission makes no changes. A later mutation failure is logged with its operation and traceback before caller cancellation propagates. Async Runtime shutdown closes Extension mutation admission and drains the admitted operation under the same lock before shutting down the final registry and clearing service references.
 
-Reload and live disable await the bounded asynchronous Skill scan before completing structural work. Registry installation remains on the Event Loop, and cancellation/shutdown wait for that publication.
+Reload and live disable read their persisted Settings on a bounded worker and pass
+that snapshot into Recall recovery/rebuild; live backend and registry changes stay
+on the Event Loop. They await the bounded asynchronous Skill scan before completing structural work. Registry installation remains on the Event Loop, and cancellation/shutdown wait for that publication.
 
 The rebuild is restart-equivalent for the Extension layer, not atomic Run draining. A concurrently executing handler may finish against old code; normal per-handler fail-open isolation is the accepted boundary. Prepared Extension Commands carry a registration identity, so deferred Channel work that has not started execution cannot invoke removed code or a replacement owner.
 

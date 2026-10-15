@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import logging
+import threading
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -607,3 +610,39 @@ def test_custom_provider_cannot_shadow_bundled_provider(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError):
         ProviderRegistry.load(resources, custom_providers={"minimal": _custom("none")})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("newer_async", [False, True])
+async def test_slow_provider_reload_cannot_replace_a_newer_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, newer_async: bool
+) -> None:
+    registry = ProviderRegistry.load(tmp_path, custom_providers={})
+    assemble = registry._assemble_configs
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def held_catalog(
+        resources: Path, custom: Mapping[str, Mapping[str, Any]], *, tolerate_invalid: bool
+    ) -> dict[str, ProviderConfig]:
+        if "stale" in custom:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5)
+        return assemble(resources, custom, tolerate_invalid=tolerate_invalid)
+
+    monkeypatch.setattr(registry, "_assemble_configs", held_catalog)
+    pending = asyncio.create_task(
+        registry.reload_async(tmp_path, custom_providers={"stale": _custom("none")})
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert registry.list_ids() == []
+        if newer_async:
+            await registry.reload_async(tmp_path, custom_providers={"newer": _custom("none")})
+        else:
+            registry.reload(tmp_path, custom_providers={"newer": _custom("none")})
+    finally:
+        release.set()
+        await pending
+    assert registry.list_ids() == ["newer"]

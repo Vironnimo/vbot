@@ -44,6 +44,7 @@ class LiveSession:
     session_key: int
     display_key: str
     address: SessionAddress
+    generation_id: str
     title: str | None
     created_at: str | None
     offered_skills: tuple[str, ...]
@@ -193,10 +194,10 @@ class ReportContext:
     ``sessions_table`` and ``units_table`` load the listed Sessions and the
     ledger units into temporary tables on first use, each with its report
     actor (the display key per-agent rows use), its Project id (``""`` for
-    none) and an address id shared by every Session and unit at one Session
-    address. A unit at a listed Session's address takes that Session's actor
-    and title; another unit is attributed to its Extension owner, else to its
-    Agent, else to the standalone actor ``""``.
+    none) and an address id shared only by the same Session generation at
+    the same accounting address. A known generation supplies its current
+    title, including after a move; accounting actors retain their original
+    attribution. Unknown generations keep their stored title snapshot.
     """
 
     def __init__(
@@ -214,11 +215,12 @@ class ReportContext:
         self.sessions = tuple(sessions)
         self.skill_inventory = skill_inventory
         self.by_key: dict[int, LiveSession] = {}
-        self._live_addresses: dict[_AddressKey, LiveSession] = {}
+        self._live_generations: dict[str, LiveSession] = {}
         for session in self.sessions:
             self.by_key.setdefault(session.session_key, session)
-            self._live_addresses.setdefault(_address_key(session.address), session)
-        self._address_ids: dict[_AddressKey, int] = {}
+            if session.generation_id:
+                self._live_generations.setdefault(session.generation_id, session)
+        self._address_ids: dict[tuple[_AddressKey, str], int] = {}
         # Address id -> (actor, Session id, title) for Session-level rows.
         self.addresses: dict[int, tuple[str, str, str | None]] = {}
         # Listed Session key -> its address id.
@@ -238,7 +240,10 @@ class ReportContext:
         )
         for key, session in self.by_key.items():
             self.session_addresses[key] = self._address_id(
-                _address_key(session.address), session.display_key, session.title
+                _address_key(session.address),
+                session.generation_id,
+                session.display_key,
+                session.title,
             )
         self.connection.executemany(
             "INSERT INTO temp.report_sessions VALUES (?, ?, ?, ?)",
@@ -255,14 +260,17 @@ class ReportContext:
     def units_table(self) -> str:
         self.sessions_table  # noqa: B018 - Session address ids come first.
         rows = []
-        for key, project, agent, session_id, owner, title in self.connection.execute(
-            "SELECT session_key, project_id, agent_id, session_id, owner_name, session_title "
+        for key, project, agent, session_id, owner, title, generation in self.connection.execute(
+            "SELECT session_key, project_id, agent_id, session_id, owner_name, session_title, "
+            "session_generation_id "
             "FROM stat_usage_units"
         ):
             address: int | None = None
-            live = self._live_addresses.get((project, agent, session_id))
+            live = self._live_generations.get(generation)
             if live is not None:
-                actor, title = live.display_key, live.title or title
+                title = live.title or title
+            if live is not None and _address_key(live.address) == (project, agent, session_id):
+                actor = live.display_key
             elif owner:
                 actor = extension_actor_key(owner)
             elif agent:
@@ -270,7 +278,7 @@ class ReportContext:
             else:
                 actor = ""
             if agent and session_id:
-                address = self._address_id((project, agent, session_id), actor, title)
+                address = self._address_id((project, agent, session_id), generation, actor, title)
             rows.append((key, actor, project, address))
         self.connection.execute(
             "CREATE TEMP TABLE report_units (unit_key INTEGER PRIMARY KEY, "
@@ -279,10 +287,11 @@ class ReportContext:
         self.connection.executemany("INSERT INTO temp.report_units VALUES (?, ?, ?, ?)", rows)
         return "temp.report_units"
 
-    def _address_id(self, key: _AddressKey, actor: str, title: str | None) -> int:
-        address = self._address_ids.get(key)
+    def _address_id(self, key: _AddressKey, generation: str, actor: str, title: str | None) -> int:
+        identity = (key, generation)
+        address = self._address_ids.get(identity)
         if address is None:
-            address = self._address_ids[key] = len(self._address_ids)
+            address = self._address_ids[identity] = len(self._address_ids)
             self.addresses[address] = (actor, key[2], title)
         return address
 

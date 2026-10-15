@@ -4,7 +4,7 @@ Read-only daily log viewer subsystem spanning backend parsing/watching and the W
 
 ## Overview
 
-The logs subsystem exposes application log files from `<data_dir>/logs/` for inspection in the WebUI. It owns daily file discovery, parsing the canonical log format into structured entries, and live updates for one selected file through a dedicated WebSocket. It does not write logs, edit or delete log files, or reuse the shared app event bus; the writing pipeline deletes old daily files (Retention in `logging.md`), and open views see that as a catalog event. Every read and event carries a bounded page of entries; filtering stays local in the WebUI over the entries it has loaded of one file.
+The logs subsystem exposes server log files from `<data_dir>/logs/` for inspection in the WebUI. A packaged server also exposes its installation's `<install root>/logs/` under the `application/` namespace, including update phases and packaged CLI logs. `server/_log_sources.py` discovers the running installation off the Event Loop and includes it only when its recorded server data directory matches this Runtime; source checkouts and unrelated server instances expose no installation logs. It owns daily file discovery, parsing the canonical log format into structured entries, and live updates for one selected file through a dedicated WebSocket. It does not write logs, edit or delete log files, or reuse the shared app event bus; the writing pipeline deletes old daily files (Retention in `logging.md`), and open views see that as a catalog event. Every read and event carries a bounded page of entries; filtering stays local in the WebUI over the entries it has loaded of one file.
 
 ## Data Model
 
@@ -44,7 +44,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 ## Conventions
 
 - Treat the log format `timestamp [LEVEL] name - message` as the canonical parse contract.
-- Validate file names strictly; never allow path traversal or absolute paths.
+- Validate file names strictly; only configured namespace prefixes are accepted. Never allow path traversal, absolute paths, Windows alternate streams, linked files or linked log directories. Cursors include the full namespace-qualified name, so identical basenames in different sources never share a cursor.
 - If a line does not match the header format, append it to the previous entry's `continuation` when possible; otherwise keep it visible as an `unknown` entry.
 - The level filter is based only on parsed `level`. Logger names are searchable through free-text search, not separate filter UI.
 - Entry ordering is accessor-local UI state. Switching between newest-first and oldest-first must not trigger another `log.read` call for the same file.
@@ -55,7 +55,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 
 ## External Dependencies
 
-- `watchfiles` - `awatch` watches the whole logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=50`, `debounce=100`), not the single selected file. Timeouts are yielded for reliable watcher teardown. Empty batches compare only selected-file and log-directory metadata before lock acquisition; unchanged metadata stops there, while changed metadata triggers a targeted tail advance or catalog reconciliation. Live append/reset events are derived by advancing the file's tail (below), while a changed sorted filename tuple emits a catalog event even when the selected file did not change - this polling setup is deliberate for reliable Windows behavior and naturally covers daily rollover.
+- `watchfiles` - `awatch` watches every existing registered logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=50`, `debounce=100`), not the single selected file. Timeouts are yielded for reliable watcher teardown. Empty batches compare only selected-file and log-directory metadata before lock acquisition; unchanged metadata stops there, while changed metadata triggers a targeted tail advance or catalog reconciliation. Live append/reset events are derived by advancing the file's tail (below), while a changed sorted filename tuple emits a catalog event even when the selected file did not change - this polling setup is deliberate for reliable Windows behavior and naturally covers daily rollover.
 
 ## Constraints & Gotchas
 

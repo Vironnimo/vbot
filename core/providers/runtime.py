@@ -51,7 +51,7 @@ from core.providers.wire_profiles import (
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
 from core.utils.retry import caller_owns_retries
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 # Minimum pause between automatic local sweeps, measured from the end of the
 # previous sweep. It is also the probes' retry policy: each sweep makes one
@@ -288,7 +288,7 @@ class ProviderRuntime:
                 and now - self.refresh_at < LOCAL_CATALOG_REFRESH_TTL_SECONDS
             ):
                 return
-            targets = self._auto_refresh_targets()
+            targets = await _LOCAL_CATALOG_WORKERS.run(self._auto_refresh_targets)
             if not targets:
                 return
 
@@ -310,7 +310,8 @@ class ProviderRuntime:
                 for provider_id, provider, connection in targets:
                     connection_id = f"{provider_id}:{connection.id}"
                     try:
-                        credential_value = self._credentials.get_credentials(
+                        credential_value = await _LOCAL_CATALOG_WORKERS.run(
+                            self._credentials.get_credentials,
                             provider_id,
                             connection_id,
                         )
@@ -359,17 +360,9 @@ class ProviderRuntime:
                     refreshed.add(provider_id)
 
                 if refreshed:
-                    custom_providers = await _LOCAL_CATALOG_WORKERS.run(
-                        self._publish_staged_catalog,
-                        database_refresh,
-                        refreshed,
+                    await settle_before_cancelling(
+                        self._publish_and_reload_catalog(database_refresh, refreshed)
                     )
-                    if await self._models.reload_async(
-                        self._resources_path,
-                        runtime_models_dir=self._storage.layout.models,
-                        custom_providers=custom_providers,
-                    ):
-                        self._notify_catalog_changed()
             except Exception as error:
                 self._logger.warning("Local catalog refresh could not be published: %s", error)
             finally:
@@ -378,6 +371,20 @@ class ProviderRuntime:
                 self.refresh_at = time.monotonic()
                 for staged_refresh in staged:
                     await _LOCAL_CATALOG_WORKERS.run(_discard_staged_refresh, staged_refresh)
+
+    async def _publish_and_reload_catalog(
+        self, database_refresh: ModelDatabaseRefresh, refreshed: set[str]
+    ) -> None:
+        """Finish the live swap after publication even when the sweep is cancelled."""
+        custom_providers = await _LOCAL_CATALOG_WORKERS.run(
+            self._publish_staged_catalog, database_refresh, refreshed
+        )
+        if await self._models.reload_async(
+            self._resources_path,
+            runtime_models_dir=self._storage.layout.models,
+            custom_providers=custom_providers,
+        ):
+            self._notify_catalog_changed()
 
     def add_catalog_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to Model catalog changes a local catalog sweep publishes.

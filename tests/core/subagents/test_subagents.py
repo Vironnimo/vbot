@@ -12,7 +12,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, Literal, override
 
 import pytest
 import pytest_asyncio
@@ -20,6 +21,7 @@ import pytest_asyncio
 import core.subagents.subagents as subagents_module
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
+from core.database import DatabaseUnavailableError
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
 from core.runs import (
     Run,
@@ -40,6 +42,12 @@ from core.subagents._constants import (
     FACTS_NOTHING_RUNNING_TEXT,
     MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE,
 )
+from core.tools.terminal_manager import (
+    TerminalClosedError,
+    TerminalManager,
+    TerminalManagerError,
+    TerminalOwner,
+)
 from tests.core.subagents.subagents_test_support import (
     SubAgentHarness,
     address,
@@ -49,6 +57,8 @@ from tests.core.subagents.subagents_test_support import (
 )
 from tests.core.tools.command_manager_helpers import Harness as CommandHarness
 from tests.core.tools.command_manager_helpers import command_harness
+from tests.core.tools.terminal_manager_helpers import AdapterFactory, FakeTerminalAdapter
+from tests.core.tools.terminal_manager_helpers import terminal_manager as terminal_manager
 
 pytestmark = pytest.mark.asyncio
 
@@ -156,6 +166,90 @@ async def test_targets_outside_the_callers_choices_are_refused_with_them(
     assert "agent_id" in result["error"]["message"]
     assert harness.loop.turns == []
     assert harness.sessions.list("worker") == []
+
+
+async def test_a_bound_target_replaced_during_validation_cannot_start(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live_identity = "original"
+    harness.runtime.automation_references = SimpleNamespace(lock=asyncio.Lock())
+    harness.runtime.agents.delegation_target_allowed = lambda _target, binding: (
+        binding == live_identity
+    )
+    resolve = harness.resolver.resolve_agent_async
+
+    async def resolve_then_replace(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        nonlocal live_identity
+        result = await resolve(*args, **kwargs)
+        async with harness.runtime.automation_references.lock:
+            live_identity = "replacement"
+        return result
+
+    monkeypatch.setattr(harness.resolver, "resolve_agent_async", resolve_then_replace)
+
+    result = await harness.call(
+        {"description": "Do review", "content": "review", "agent_id": "worker"},
+        allowed_agents=["worker"],
+        delegation_bindings={"worker": "original"},
+    )
+
+    assert result["error"]["code"] == "agent_not_allowed"
+    assert harness.loop.turns == []
+    assert harness.sessions.list("worker") == []
+
+
+async def test_a_bound_target_is_protected_until_its_run_is_admitted(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mutation_waiting = asyncio.Event()
+
+    class LifecycleLock(asyncio.Lock):
+        @override
+        async def acquire(self) -> Literal[True]:
+            if self.locked():
+                mutation_waiting.set()
+            return await super().acquire()
+
+    lifecycle_lock = LifecycleLock()
+    harness.runtime.automation_references = SimpleNamespace(lock=lifecycle_lock)
+    harness.runtime.agents.delegation_target_allowed = lambda _target, binding: (
+        binding == "original"
+    )
+    before_admission, continue_admission = asyncio.Event(), asyncio.Event()
+    start = harness.manager.start
+
+    async def delayed_start(*args: Any, **kwargs: Any) -> Run:
+        before_admission.set()
+        await continue_admission.wait()
+        return await start(*args, **kwargs)
+
+    monkeypatch.setattr(harness.manager, "start", delayed_start)
+    harness.loop.hold("review")
+    call = asyncio.create_task(
+        harness.call(
+            {"description": "Do review", "content": "review", "agent_id": "worker"},
+            allowed_agents=["worker"],
+            delegation_bindings={"worker": "original"},
+        )
+    )
+    await before_admission.wait()
+
+    async def replace_target() -> None:
+        async with (
+            lifecycle_lock,
+            harness.manager.agent_admission_guard("worker", project_id=None),
+        ):
+            pytest.fail("The bound Agent was replaceable between validation and Run admission")
+
+    replacement = asyncio.create_task(replace_target())
+    try:
+        await mutation_waiting.wait()
+        assert not replacement.done()
+    finally:
+        continue_admission.set()
+    assert (await call)["ok"]
+    with pytest.raises(RunAdmissionBlockedError):
+        await replacement
 
 
 async def test_subagent_in_another_scope_is_addressed_by_its_qualified_agent_id(
@@ -782,7 +876,15 @@ async def test_a_tree_stop_stops_its_background_commands_without_delivery(
 
     if user_stop:
         # Stop all: the Session's own commands and those of every Sub-Agent below it.
+        assert await harness.coordinator.work_snapshot(harness.parent) == {
+            "run_active": False,
+            "background_work_running": True,
+        }
         assert await harness.coordinator.stop_tree(harness.parent) == 2
+        assert await harness.coordinator.work_snapshot(harness.parent) == {
+            "run_active": False,
+            "background_work_running": False,
+        }
         stopped = [own, childs]
     else:
         result = await harness.background_tasks({"action": "stop", "id": child["id"]})
@@ -799,6 +901,208 @@ async def test_a_tree_stop_stops_its_background_commands_without_delivery(
         f"command:{ended}"
     ]
     assert commands.sink.cancellations == [f"command:{ended}"]
+
+
+@pytest.mark.parametrize("work_kind", ["run", "queued", "terminal", "pending-terminal"])
+async def test_work_snapshot_finds_live_descendants_without_loading_history(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, work_kind: str
+) -> None:
+    child = await harness.spawn("child")
+    child_session = harness.subagent_session(child["id"])
+    deep = await harness.spawn("deep", child_session)
+    deep_session = harness.subagent_session(deep["id"])
+    await harness.settle()
+    assert (await harness.coordinator.work_snapshot(harness.parent))[
+        "background_work_running"
+    ] is False
+    if work_kind == "run":
+        harness.loop.hold("continued")
+        await harness.start_turn(deep_session, "continued")
+    elif work_kind == "queued":
+        real_queued = harness.manager.list_queued
+        monkeypatch.setattr(
+            harness.manager,
+            "list_queued",
+            lambda agent_id, session_id, *, project_id: (
+                [object()]
+                if SessionAddress(project_id, agent_id, session_id) == deep_session
+                else real_queued(agent_id, session_id, project_id=project_id)
+            ),
+        )
+    else:
+        owner = TerminalOwner(
+            deep_session.project_id, deep_session.agent_id, deep_session.session_id
+        )
+        harness.runtime.terminal_manager = SimpleNamespace(
+            busy_addresses=lambda: {deep_session} if work_kind == "pending-terminal" else set(),
+            list_terminals=lambda: (
+                [SimpleNamespace(finished_at=None, lifecycle_owner=None, attachment=owner)]
+                if work_kind == "terminal"
+                else []
+            ),
+        )
+    try:
+        assert await harness.coordinator.work_snapshot(harness.parent) == {
+            "run_active": False,
+            "background_work_running": True,
+        }
+        # An unrelated Project with the same agent/session strings is separate.
+        other = SessionAddress("other-project", harness.parent.agent_id, harness.parent.session_id)
+        assert (await harness.coordinator.work_snapshot(other))["background_work_running"] is False
+    finally:
+        harness.runtime.terminal_manager = None
+        monkeypatch.undo()
+
+
+@pytest.mark.parametrize(
+    ("pending", "interruption"),
+    [(False, None), (True, None), (True, "cancel"), (True, "stop-failure")],
+)
+async def test_stop_all_drains_terminals_of_the_complete_tree(
+    harness: SubAgentHarness,
+    commands: CommandHarness,
+    terminal_manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pending: bool,
+    interruption: str | None,
+) -> None:
+    child = await harness.spawn("child")
+    child_session = harness.subagent_session(child["id"])
+    deep = await harness.spawn("deep", child_session)
+    deep_session = harness.subagent_session(deep["id"])
+    await harness.settle()
+    manager, factory = terminal_manager
+    harness.runtime.terminal_manager = manager
+    entered, release, closing = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    adapters: list[FakeTerminalAdapter] = []
+    start_process = manager._start_process  # noqa: SLF001
+    close_scopes = manager.close_scopes
+
+    async def blocked_start(argv, *args):
+        if argv == ["pending"]:
+            adapter = FakeTerminalAdapter()
+            adapters.append(adapter)
+            if len(adapters) == 2:
+                entered.set()
+            await release.wait()
+            return adapter
+        return await start_process(argv, *args)
+
+    async def observed_close(owners: list[TerminalOwner]) -> int:
+        closing.set()
+        return await close_scopes(owners)
+
+    monkeypatch.setattr(manager, "_start_process", blocked_start)
+    monkeypatch.setattr(manager, "close_scopes", observed_close)
+    command_ids = [
+        await _background_command(commands, target, "Serve")
+        for target in (harness.parent, deep_session)
+    ]
+    denied = interruption == "stop-failure"
+
+    def kill_tree(adapter: FakeTerminalAdapter, *, targets: list[object]) -> None:
+        if denied and adapter is adapters[0]:
+            raise PermissionError("child remains alive")
+        adapter.terminate()
+
+    monkeypatch.setattr("core.tools.terminal_backend.kill_process_tree", kill_tree)
+    unrelated = TerminalOwner("other-project", harness.parent.agent_id, harness.parent.session_id)
+    other = await manager.spawn(
+        unrelated, ["unrelated"], cwd=tmp_path, env=None, origin_run_id="other-run"
+    )
+    launches = [
+        asyncio.create_task(
+            manager.spawn(
+                TerminalOwner(target.project_id, target.agent_id, target.session_id),
+                ["pending" if pending else "published"],
+                cwd=tmp_path,
+                env=None,
+                origin_run_id="ended-run",
+            )
+        )
+        for target in (harness.parent, deep_session)
+    ]
+    stop = None
+    try:
+        if pending:
+            await entered.wait()
+        else:
+            published = await asyncio.gather(*launches)
+            # A descendant-owned Terminal attached to the root is one resource.
+            child_owner = TerminalOwner(
+                deep_session.project_id, deep_session.agent_id, deep_session.session_id
+            )
+            parent_owner = TerminalOwner(
+                harness.parent.project_id, harness.parent.agent_id, harness.parent.session_id
+            )
+            manager.detach(published[1].terminal_id, child_owner)
+            manager.attach(published[1].terminal_id, parent_owner, origin_run_id="parent-run")
+        assert (await harness.coordinator.work_snapshot(harness.parent))["background_work_running"]
+        stop = asyncio.create_task(harness.coordinator.stop_tree(harness.parent))
+        await closing.wait()
+        if interruption == "cancel":
+            stop.cancel()
+            await asyncio.sleep(0)
+            assert not stop.done()
+        release.set()
+        if interruption == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await stop
+        elif interruption == "stop-failure":
+            with pytest.raises(TerminalManagerError, match="so they can still be running"):
+                await stop
+        else:
+            assert await stop == 4
+        outcomes = await asyncio.gather(*launches, return_exceptions=True)
+        for command_id in command_ids:
+            assert commands.manager.status(command_id) == "stopped"
+        if pending:
+            if interruption == "stop-failure":
+                assert isinstance(outcomes[0], TerminalManagerError)
+                assert adapters[0].alive
+                assert not adapters[1].alive
+                assert (await harness.coordinator.work_snapshot(harness.parent))[
+                    "background_work_running"
+                ]
+                denied = False
+                assert await harness.coordinator.stop_tree(harness.parent) == 1
+            else:
+                assert all(isinstance(outcome, TerminalClosedError) for outcome in outcomes)
+            assert all(not adapter.alive for adapter in adapters)
+        assert (await harness.coordinator.work_snapshot(harness.parent)) == {
+            "run_active": False,
+            "background_work_running": False,
+        }
+        assert factory.adapters[0].alive
+        assert [
+            info.terminal_id for info in manager.list_terminals() if info.finished_at is None
+        ] == [other.terminal_id]
+    finally:
+        denied = False
+        release.set()
+        await asyncio.gather(
+            *launches, *([stop] if stop is not None else []), return_exceptions=True
+        )
+        harness.runtime.terminal_manager = None
+
+
+async def test_work_snapshot_refuses_unreadable_tree_instead_of_reporting_idle(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    child = await harness.spawn("child")
+    await harness.settle()
+    child_session = harness.subagent_session(child["id"])
+    original = harness.sessions.get_metadata
+
+    def read_metadata(target: SessionAddress) -> dict[str, Any]:
+        if target == child_session:
+            raise DatabaseUnavailableError("injected busy read")
+        return original(target)
+
+    monkeypatch.setattr(harness.sessions, "get_metadata", read_metadata)
+    with pytest.raises(DatabaseUnavailableError):
+        await harness.coordinator.work_snapshot(harness.parent)
 
 
 async def test_stop_all_includes_a_child_whose_admission_is_in_flight(

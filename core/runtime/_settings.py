@@ -64,16 +64,16 @@ async def apply_settings_change(
 
     recall_changed = "recall" in refresh_sections or previous.get("recall") != current.get("recall")
     if recall_changed and not rebuild_extensions:
-        runtime.reload_recall_backend()
+        runtime.reload_recall_backend(current)
     if text_embedding_binding(previous) != text_embedding_binding(current):
         runtime.recall.embedding_binding_changed()
 
     if previous.get("archive") != current.get("archive"):
         runtime.archive.retention_changed()
     if previous.get("keep_awake") != current.get("keep_awake"):
-        runtime.reload_keep_awake()
+        runtime.reload_keep_awake(current)
     if previous.get("timezone") != current.get("timezone"):
-        runtime.reload_timezone()
+        runtime.reload_timezone(current)
     changed_speech = [
         task_type
         for task_type in _SPEECH_TASKS

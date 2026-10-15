@@ -14,8 +14,9 @@ root starts:
   when it is tracked can create a process in the moment before the job
   assignment, which escapes; a root created suspended and resumed only after
   tracking has no such moment.
-- POSIX: the root is a session leader; the tree is every process of its
-  session. A process that starts its own session (``setsid``, daemons) leaves.
+- Linux guarded launches: the root is a subreaper which retains orphaned
+  descendants across ``setsid`` and double-fork. Its exit confirms the whole
+  tree ended. Other POSIX launches retain session-based observation.
 
 ``observe_process_tree`` captures an interactive program's tree the same way,
 for its liveness and CPU time only: closing it kills nothing.
@@ -43,6 +44,8 @@ from pathlib import PurePath, PureWindowsPath
 from typing import Any, Protocol, cast
 
 import psutil  # type: ignore[import-untyped]
+
+from core.utils.processes import find_process_guardian, stop_process_guardian
 
 # CPU time a whole tree may use within a quiet or idle window and still count
 # as quiet: a trace, not work.
@@ -148,8 +151,19 @@ class _PosixSessionTree:
     def __init__(self, root_pid: int) -> None:
         self._sid = root_pid
         self._started: set[int] = set()
+        self._guardian = find_process_guardian(root_pid)
 
     def _members(self) -> list[Any]:
+        if self._guardian is not None:
+            try:
+                # The live subreaper adopts double-forked/setsid descendants.
+                # It stays alive until every descendant has been reaped.
+                children = list(self._guardian.children(recursive=True))
+                # A reparent can race psutil's enumeration. Only the guardian's
+                # own exit proves the tree empty (waitpid reported ECHILD).
+                return children or [self._guardian]
+            except psutil.NoSuchProcess:
+                return []
         members = []
         getsid = cast(Any, os).getsid
         for process in psutil.process_iter(["pid", "name"]):
@@ -172,7 +186,18 @@ class _PosixSessionTree:
                 continue
             cpu += float(times.user) + float(times.system)
             self._started.add(process.pid)
-            running.append(RunningProcess(process.pid, str(process.info.get("name") or "")))
+            try:
+                name = process.name()
+            except psutil.NoSuchProcess:
+                continue
+            running.append(RunningProcess(process.pid, name))
+        if not running and self._guardian is not None:
+            with contextlib.suppress(psutil.NoSuchProcess):
+                if self._guardian.is_running() and self._guardian.status() != psutil.STATUS_ZOMBIE:
+                    # Enumeration can catch the old parent as a zombie while
+                    # its children are being adopted. Keep the task live until
+                    # the guardian itself confirms no child remains.
+                    running.append(RunningProcess(self._sid, self._guardian.name()))
         return ProcessTreeFacts(
             running=tuple(running[:_MAX_LISTED_PROCESSES]),
             cpu_seconds=cpu,
@@ -184,6 +209,14 @@ class _PosixSessionTree:
         return 0
 
     def terminate(self) -> None:
+        if self._guardian is not None:
+            try:
+                stop_process_guardian(self._guardian, timeout=_TERMINATE_CONFIRM_SECONDS)
+            except PermissionError:
+                raise
+            except OSError as error:
+                raise KillNotConfirmedError(str(error)) from error
+            return
         kill = cast(Any, os).killpg
         hard = getattr(signal, "SIGKILL", signal.SIGTERM)
         # Whether the kill reached a process: only then can the tree be ending of it.

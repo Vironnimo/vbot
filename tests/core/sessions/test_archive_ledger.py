@@ -330,8 +330,10 @@ async def test_purge_deletes_members_and_materializes_their_history_into_descend
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("moved", [False, True])
 async def test_review_forks_join_their_session_entry_and_go_before_it_on_purge(
     manager: ChatSessionManager,
+    moved: bool,
 ) -> None:
     ledger = manager.archive_ledger
     source = manager.create("coder", session_id="source", project_id="app")
@@ -354,6 +356,10 @@ async def test_review_forks_join_their_session_entry_and_go_before_it_on_purge(
     elsewhere = await fork(source.address, RunKind.MEMORY_REFLECTION, "other")
     running = await fork(source.address, RunKind.REFLECTION)
     await admit_run(manager, running, RunKind.REFLECTION)
+    if moved:
+        target = SessionAddress("new-project", "new-agent", source.id)
+        await manager.move(source.address, target)
+        source = manager.get(target)
     assert manager.review_forks(source.address) == (review, nested, running)
 
     ref = await manager.archive(source.address)
@@ -367,6 +373,20 @@ async def test_review_forks_join_their_session_entry_and_go_before_it_on_purge(
     assert (entry.session_count, entry.review_fork_count) == (3, 2)
     # The review forks keep their ids, so the entry still takes a new Session id.
     assert ledger.holds_one_session(ref.entry_key)
+    if moved:
+        ledger.begin_restore(ref.entry_id, {})
+        target = SessionAddress("restored-project", "restored-agent", "restored-source")
+        restored = ledger.commit_restore(
+            ref.entry_key,
+            project_id=target.project_id,
+            agent_id=target.agent_id,
+            session_id=target.session_id,
+        )
+        assert restored == (target, review, nested)
+        ledger.finish_restore(ref.entry_key)
+        source = manager.get(target)
+        assert manager.review_forks(source.address) == (review, nested, running)
+        ref = await manager.archive(source.address)
     deleted: list[str] = []
     ledger.begin_purge(ref.entry_id)
     while True:
@@ -378,7 +398,7 @@ async def test_review_forks_join_their_session_entry_and_go_before_it_on_purge(
 
     # Each review fork goes while its source still holds what they share, so
     # only the Sessions that stay receive copies.
-    assert deleted == [nested.session_id, review.session_id, "source"]
+    assert deleted == [nested.session_id, review.session_id, source.id]
     assert [_texts(manager, address) for address in (*user_forks, elsewhere, running)] == [
         ["shared"],
         ["shared", "reviewed"],

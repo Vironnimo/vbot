@@ -373,7 +373,14 @@ describe('Reflection reviews', () => {
       operationOverrides: {
         loadChatHistory: vi.fn().mockResolvedValue({
           messages: [],
-          reflection_runs: [{ ...reflectionRun(), outcome: OUTCOME }],
+          reflection_runs: [
+            {
+              ...reflectionRun(),
+              agent_id: 'original',
+              project_id: null,
+              outcome: OUTCOME,
+            },
+          ],
         }),
       },
     });
@@ -383,6 +390,7 @@ describe('Reflection reviews', () => {
       chatState.sessions['alpha::source'].reflectionTasks['review-one'],
     ).toEqual({
       sessionId: 'review-session',
+      agentId: 'original',
       runKind: 'memory_reflection',
       status: 'completed',
       startedAt: '2026-09-05T10:00:00Z',
@@ -465,52 +473,64 @@ describe('Reflection reviews', () => {
 });
 
 describe('Review changes', () => {
-  it('loads the changes of one review and undoes them into its row', async () => {
-    const loadLearningChanges = vi.fn().mockResolvedValue(runChanges(false));
-    const undoLearningChanges = vi.fn().mockResolvedValue(runChanges(true));
-    const { chatState, controller } = setupController({
-      operationOverrides: { loadLearningChanges, undoLearningChanges },
-    });
-    const source = reviewedSource(chatState);
+  it.each([
+    ['alpha', null, null],
+    ['beta', 'alpha', null],
+    ['beta@project', 'alpha', null],
+    ['beta', 'alpha', 'renamed'],
+  ])(
+    'loads and undoes a review shown under %s using its owner %s',
+    async (sourceAddress, owner, renamed) => {
+      const loadLearningChanges = vi.fn().mockResolvedValue(runChanges(false));
+      const undoLearningChanges = vi.fn().mockResolvedValue(runChanges(true));
+      const { chatState, controller } = setupController({
+        operationOverrides: { loadLearningChanges, undoLearningChanges },
+      });
+      const source = reviewedSource(chatState, sourceAddress);
+      if (owner) source.reflectionTasks['review-one'].agentId = owner;
+      if (renamed) controller.renameAgent(owner, renamed);
 
-    expect(await controller.loadReflectionChanges(source, 'review-one')).toBe(
-      true,
-    );
-    expect(loadLearningChanges).toHaveBeenCalledExactlyOnceWith(
-      'alpha',
-      'review-one',
-    );
-    expect(source.reflectionDetails['review-one']).toMatchObject({
-      changes: REVIEW_CHANGES,
-      loading: false,
-      loadError: '',
-    });
+      expect(await controller.loadReflectionChanges(source, 'review-one')).toBe(
+        true,
+      );
+      expect(loadLearningChanges).toHaveBeenCalledExactlyOnceWith(
+        renamed ?? 'alpha',
+        'review-one',
+      );
+      expect(source.reflectionDetails['review-one']).toMatchObject({
+        changes: REVIEW_CHANGES,
+        loading: false,
+        loadError: '',
+      });
 
-    expect(await controller.undoReflection(source, 'review-one')).toBe(true);
-    expect(undoLearningChanges).toHaveBeenCalledExactlyOnceWith(
-      'alpha',
-      'review-one',
-    );
-    // The row now says it was undone, and its list shows what was taken back.
-    expect(source.reflectionTasks['review-one'].outcome).toEqual({
-      ...OUTCOME,
-      undone: true,
-    });
-    expect(source.reflectionDetails['review-one']).toMatchObject({
-      changes: [{ ...REVIEW_CHANGES[0], undone: true }],
-      undoing: false,
-      undoError: null,
-    });
+      expect(await controller.undoReflection(source, 'review-one')).toBe(true);
+      expect(undoLearningChanges).toHaveBeenCalledExactlyOnceWith(
+        renamed ?? 'alpha',
+        'review-one',
+      );
+      // The row now says it was undone, and its list shows what was taken back.
+      expect(source.reflectionTasks['review-one'].outcome).toEqual({
+        ...OUTCOME,
+        undone: true,
+      });
+      expect(source.reflectionDetails['review-one']).toMatchObject({
+        changes: [{ ...REVIEW_CHANGES[0], undone: true }],
+        undoing: false,
+        undoError: null,
+      });
 
-    // Only Identity Agents learn: a Project Session has no review changes.
-    const project = reviewedSource(chatState, 'alpha@project');
-    expect(await controller.loadReflectionChanges(project, 'review-one')).toBe(
-      false,
-    );
-    expect(await controller.undoReflection(project, 'review-one')).toBe(false);
-    expect(loadLearningChanges).toHaveBeenCalledOnce();
-    expect(undoLearningChanges).toHaveBeenCalledOnce();
-  });
+      // Only Identity Agents learn: a Project Session has no review changes.
+      const project = reviewedSource(chatState, 'alpha@project');
+      expect(
+        await controller.loadReflectionChanges(project, 'review-one'),
+      ).toBe(false);
+      expect(await controller.undoReflection(project, 'review-one')).toBe(
+        false,
+      );
+      expect(loadLearningChanges).toHaveBeenCalledOnce();
+      expect(undoLearningChanges).toHaveBeenCalledOnce();
+    },
+  );
 
   it('keeps a refused undo with the later change that blocks it until the list reopens', async () => {
     const conflict = {

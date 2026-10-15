@@ -10,7 +10,6 @@ import queue
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import closing
 from pathlib import Path
 from threading import Event
@@ -204,7 +203,7 @@ def test_an_online_snapshot_is_one_consistent_copy_while_another_thread_keeps_wr
     monkeypatch.setattr("core.database._runtime.BUSY_TIMEOUT_MS", 0)
     # The anchor, like the Session database, keeps taking writes while it is copied.
     database = open_database(notes_spec(data_dir, snapshot_capture=ANCHOR_CAPTURE))
-    writer = ThreadPoolExecutor(max_workers=1)
+    writer = ThreadPoolExecutor(max_workers=2)
     overlapping: list[Future[None]] = []
     committed_during_copy: list[bool] = []
     try:
@@ -215,13 +214,17 @@ def test_an_online_snapshot_is_one_consistent_copy_while_another_thread_keeps_wr
         def write_during_the_copy() -> bool:
             # The copy reads through its own connection beside this database's.
             if database.live_connection_count() > idle_connections and not overlapping:
+                # A rollback copy must not hold the runtime's writer lock and
+                # make unrelated readers wait until the whole copy finishes.
+                assert writer.submit(note_count, database).result(timeout=10) == 5000
                 overlapping.append(writer.submit(_write_without_patience, database))
                 try:
-                    # WAL commits while the copy keeps reading its snapshot; the
-                    # rollback journal queues the write until the copy finishes.
-                    overlapping[0].result(timeout=10.0 if journal_mode == "wal" else 0.05)
+                    # WAL commits alongside the copy. Rollback commits cannot,
+                    # and zero patience must refuse immediately instead of
+                    # waiting behind the entire copy on a Python lock.
+                    overlapping[0].result(timeout=10)
                     committed_during_copy.append(True)
-                except FutureTimeoutError:
+                except DatabaseUnavailableError:
                     committed_during_copy.append(False)
             return False
 
@@ -229,7 +232,12 @@ def test_an_online_snapshot_is_one_consistent_copy_while_another_thread_keeps_wr
             data_dir, reason="test", databases=(database,), cancelled=write_during_the_copy
         )
         assert overlapping, "the copy never polled while it was reading"
-        overlapping[0].result(timeout=10.0)
+        if journal_mode == "delete":
+            with pytest.raises(DatabaseUnavailableError):
+                overlapping[0].result(timeout=10.0)
+            _write_without_patience(database)
+        else:
+            overlapping[0].result(timeout=10.0)
         assert note_count(database) == 5001
     finally:
         writer.shutdown(wait=True)

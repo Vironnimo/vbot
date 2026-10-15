@@ -22,7 +22,6 @@ import pytest
 
 from core.utils import processes as process_utils
 from core.utils.processes import (
-    GuardedProcessLaunch,
     guarded_process_launch,
     subprocess_creation_flags,
 )
@@ -190,34 +189,13 @@ def test_guarded_posix_launch_wraps_exact_argv_and_lifetime_descriptor(
     assert launch.pass_fds == pass_fds
 
 
-# Runs the guardian as a kernel without pidfd_open would (before Linux 5.3, or
-# under a seccomp filter that denies it): it then waits for its child through a
-# reaper thread instead of a pidfd.
-_WITHOUT_PIDFD = (
-    "import errno, os, runpy, sys\n"
-    "def pidfd_open(*_arguments):\n"
-    "    raise OSError(errno.ENOSYS, os.strerror(errno.ENOSYS))\n"
-    "os.pidfd_open = pidfd_open\n"
-    "sys.argv = sys.argv[1:]\n"
-    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
-)
-CHILD_WAITS = pytest.mark.parametrize("child_wait", ["pidfd", "reaper-thread"])
-
-
-def guardian_argv(launch: GuardedProcessLaunch, child_wait: str) -> list[str]:
-    """The guardian's argv, waiting for its child the given way."""
-    argv = list(launch.argv)
-    if child_wait == "reaper-thread":
-        # Before the guardian script, after the interpreter options.
-        argv[6:6] = ["-c", _WITHOUT_PIDFD]
-    return argv
-
-
 @pytest.mark.skipif(os.name == "nt", reason="POSIX lifetime pipe contract")
-@CHILD_WAITS
+@pytest.mark.parametrize("scenario", ["ordinary", "escaped", "explicit-stop"])
 def test_guardian_kills_child_group_when_server_pipe_closes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, child_wait: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, scenario: str
 ) -> None:
+    if scenario != "ordinary" and sys.platform != "linux":
+        pytest.skip("Linux subreaper contract")
     read_fd, write_fd = os.pipe()
     pid_path = tmp_path / "child.pid"
     child_code = (
@@ -225,16 +203,24 @@ def test_guardian_kills_child_group_when_server_pipe_closes(
         "pathlib.Path(os.environ['CHILD_PID_PATH']).write_text(str(os.getpid())); "
         "time.sleep(60)"
     )
+    if scenario != "ordinary":
+        child_code = (
+            "import os\nif os.fork(): os._exit(7)\nos.setsid()\nif os.fork(): os._exit(0)\n"
+        ) + child_code
     environment = dict(os.environ)
     environment["CHILD_PID_PATH"] = str(pid_path)
     monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
-    launch = guarded_process_launch([sys.executable, "-c", child_code], env=environment)
+    launch = guarded_process_launch(
+        [sys.executable, "-c", child_code], env=environment, report_exit=True
+    )
     guardian = subprocess.Popen(
-        guardian_argv(launch, child_wait),
+        launch.argv,
         env=environment,
         pass_fds=launch.pass_fds,
         start_new_session=True,
     )
+    if launch.child_exit is not None:
+        launch.child_exit.spawned()
     os.close(read_fd)
     try:
         for _ in range(50):
@@ -243,24 +229,30 @@ def test_guardian_kills_child_group_when_server_pipe_closes(
             time.sleep(0.1)
         child_pid = int(pid_path.read_text(encoding="utf-8"))
 
-        os.close(write_fd)
+        if scenario != "ordinary":
+            assert launch.child_exit is not None
+            assert launch.child_exit.wait_blocking(5) == 7
+            assert guardian.poll() is None
+        if scenario == "explicit-stop":
+            process_utils.kill_process_tree(guardian)
+        else:
+            os.close(write_fd)
         guardian.wait(timeout=10)
         wait_until_gone(child_pid)
 
         assert not psutil.pid_exists(child_pid)
     finally:
         if guardian.poll() is None:
-            kill_process_group = os.killpg  # type: ignore[attr-defined]
-            kill_process_group(guardian.pid, 9)
+            process_utils.kill_process_tree(guardian)
+            guardian.wait(timeout=10)
+        if launch.child_exit is not None:
+            launch.child_exit.close()
         with contextlib.suppress(OSError):
             os.close(write_fd)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX lifetime pipe contract")
-@CHILD_WAITS
-def test_guardian_reports_the_child_exit_as_it_happens(
-    monkeypatch: pytest.MonkeyPatch, child_wait: str
-) -> None:
+def test_guardian_reports_the_child_exit_as_it_happens(monkeypatch: pytest.MonkeyPatch) -> None:
     read_fd, write_fd = os.pipe()
     monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
     # The child prints when it ends, then dies of SIGTERM.
@@ -276,7 +268,7 @@ def test_guardian_reports_the_child_exit_as_it_happens(
         # poll before). Up to three runs keep a load spike from failing the test.
         for _attempt in range(3):
             guardian = subprocess.Popen(
-                guardian_argv(launch, child_wait),
+                launch.argv,
                 stdout=subprocess.PIPE,
                 pass_fds=launch.pass_fds,
                 start_new_session=True,

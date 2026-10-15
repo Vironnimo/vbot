@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, override
@@ -118,6 +119,9 @@ class _Runtime(SimpleNamespace):
 
     def reload_environment_credentials(self) -> None:
         self._live = dict(self.storage.credentials)
+
+    async def reload_environment_credentials_async(self) -> None:
+        self.reload_environment_credentials()
 
     async def reload_extensions(self) -> None:
         if self.reload_error is not None:
@@ -290,9 +294,28 @@ async def test_extensions_list_projects_every_record_state() -> None:
     ids=["tool-not-ready", "tool-ready", "tool-unregistered", "no-tools"],
 )
 async def test_extension_ready_state_follows_declared_tool_readiness(
-    tools: _ToolRegistry, record: ExtensionRecord, ready_state: str, tool_states: list[bool]
+    tools: _ToolRegistry,
+    record: ExtensionRecord,
+    ready_state: str,
+    tool_states: list[bool],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result = await rpc_result(_state_with_records([record], tools=tools), "extensions.list")
+    state = _state_with_records([record], tools=tools)
+    loop_thread = threading.get_ident()
+    load_settings = state.runtime.storage.load_extensions_settings
+    get_tool = tools.get
+
+    def worker_settings() -> JsonObject:
+        assert threading.get_ident() != loop_thread
+        return dict(load_settings())
+
+    def live_tool(name: str) -> Any:
+        assert threading.get_ident() == loop_thread
+        return get_tool(name)
+
+    monkeypatch.setattr(state.runtime.storage, "load_extensions_settings", worker_settings)
+    monkeypatch.setattr(tools, "get", live_tool)
+    result = await rpc_result(state, "extensions.list")
 
     [item] = result["extensions"]
     assert item["ready_state"] == ready_state

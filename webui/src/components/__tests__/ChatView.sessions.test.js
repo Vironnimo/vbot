@@ -1125,42 +1125,60 @@ describe('ChatView Sessions', () => {
   });
 
   describe('Session info', () => {
-    it('renders a restored Reflection and opens its Session', async () => {
-      const baseRpc = createChatRpcMock({
-        sessionMessages: {
-          'review-session': [
-            message('review-result', 'Restored review result'),
+    it.each([
+      [{}, 'alpha'],
+      [{ agent_id: 'beta', project_id: null }, 'beta'],
+      [{ agent_id: 'beta', project_id: 'project' }, 'beta@project'],
+    ])(
+      'opens a restored Reflection with owner %j at %s',
+      async (owner, address) => {
+        const baseRpc = createChatRpcMock({
+          sessionMessages: {
+            'review-session': [
+              message('review-result', 'Restored review result'),
+            ],
+          },
+        });
+        rpcMock.mockImplementation(async (method, params) => {
+          const result = await baseRpc(method, params);
+          return method === 'chat.history' && params.session_id === 'session-1'
+            ? {
+                ...result,
+                reflection_runs: [
+                  {
+                    run_id: 'review-run',
+                    ...owner,
+                    session_id: 'review-session',
+                    run_kind: 'memory_reflection',
+                    status: 'completed',
+                    started_at: '2026-09-05T10:00:00Z',
+                  },
+                ],
+              }
+            : result;
+        });
+        await chat.mountChat({
+          sharedAgents: [
+            createAgent(),
+            createAgent({ id: 'beta', name: 'Beta' }),
           ],
-        },
-      });
-      rpcMock.mockImplementation(async (method, params) => {
-        const result = await baseRpc(method, params);
-        return method === 'chat.history' && params.session_id === 'session-1'
-          ? {
-              ...result,
-              reflection_runs: [
-                {
-                  run_id: 'review-run',
-                  session_id: 'review-session',
-                  run_kind: 'memory_reflection',
-                  status: 'completed',
-                  started_at: '2026-09-05T10:00:00Z',
-                },
-              ],
-            }
-          : result;
-      });
-      await chat.mountChat();
+        });
 
-      document.querySelector('.chat-activity__rail').click();
-      await waitForCondition(() =>
-        document.querySelector('.chat-activity__task-link'),
-      );
-      const reviewLink = document.querySelector('.chat-activity__task-link');
-      expect(reviewLink.getAttribute('aria-label')).toContain('Completed');
-      reviewLink.click();
-      await waitForText('Restored review result');
-    });
+        document.querySelector('.chat-activity__rail').click();
+        await waitForCondition(() =>
+          document.querySelector('.chat-activity__task-link'),
+        );
+        const reviewLink = document.querySelector('.chat-activity__task-link');
+        expect(reviewLink.getAttribute('aria-label')).toContain('Completed');
+        reviewLink.click();
+        await waitForText('Restored review result');
+        expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+          agent_id: address,
+          session_id: 'review-session',
+          limit: 100,
+        });
+      },
+    );
 
     it('opens the source Session from a Reflection Session link', async () => {
       serveSessions({

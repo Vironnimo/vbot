@@ -72,7 +72,7 @@ async def open_xai_live_wire(
     transport failures raise :class:`~core.providers.errors.NetworkError`.
     """
 
-    client = _XaiLiveClient.from_runtime(runtime, target_ref)
+    client = await _XaiLiveClient.from_runtime_async(runtime, target_ref)
     socket = await client.connect(connect or websocket_connect)
     session = XaiSession(tools=tools, clock=clock, wall_clock=wall_clock)
     try:

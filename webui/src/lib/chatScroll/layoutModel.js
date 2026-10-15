@@ -44,6 +44,24 @@ export function createLayoutModel() {
   const estimates = new Map();
   let offsets = new Float64Array(1);
   let offsetsDirty = true;
+  let measuredWidth = null;
+
+  // Heights belong to the wrapping width at which they were observed. Hidden
+  // content has no width and keeps its last measurements until shown again.
+  function setWidth(width) {
+    if (!Number.isFinite(width) || width <= 0) return false;
+    if (measuredWidth !== null && Math.abs(width - measuredWidth) < 0.5)
+      return false;
+    const changed = measuredWidth !== null;
+    measuredWidth = width;
+    if (changed) {
+      measured.clear();
+      kindStats.clear();
+      estimates.clear();
+      offsetsDirty = true;
+    }
+    return changed;
+  }
 
   function addStat(kind, height) {
     const stat = kindStats.get(kind) ?? { sum: 0, count: 0 };
@@ -185,6 +203,7 @@ export function createLayoutModel() {
 
   return {
     sync,
+    setWidth,
     setMeasured,
     refreshEstimates,
     indexAt,

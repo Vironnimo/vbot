@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -22,8 +23,8 @@ from core.automation.reflection import (
     ReflectionUnavailableError,
 )
 from core.chat import ChatMessage
-from core.prompts.briefs import learn_brief, reflection_brief
-from core.runs import RunKind
+from core.prompts.briefs import ReflectionScope, learn_brief, reflection_brief
+from core.runs import ChatRunManager, Run, RunKind
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import StorageManager
 from core.tools.availability import ToolAccess
@@ -148,6 +149,7 @@ def _make_service(
     chat_sessions: ChatSessionManager | None = None,
     agent: Any = None,
     librarian_running: set[str] | None = None,
+    librarian_wait: Callable[[str], Awaitable[None]] | None = None,
 ) -> tuple[ReflectionService, _FakeSessions, _FakeLoop]:
     """Build the service over the fake Sessions, or over real ``chat_sessions``.
 
@@ -177,7 +179,16 @@ def _make_service(
         tools=SimpleNamespace(list_tools=lambda: list(_TOOLS)),
     )
     curated = librarian_running if librarian_running is not None else set()
-    service = ReflectionService(cast("Any", runtime), librarian_running=curated.__contains__)
+
+    async def wait_for_pass(agent_id: str) -> None:
+        if librarian_wait is not None:
+            await librarian_wait(agent_id)
+
+    service = ReflectionService(
+        cast("Any", runtime),
+        librarian_running=curated.__contains__,
+        librarian_wait=wait_for_pass,
+    )
     return service, sessions, loop
 
 
@@ -914,6 +925,150 @@ async def test_tool_reset_during_review_preserves_activity_after_reset(
 
 
 # --- run_review orchestration --------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["memory", "skill", "combined"])
+async def test_manual_review_coordinates_skill_writes_with_librarian(
+    scope: ReflectionScope,
+) -> None:
+    pass_finished = asyncio.Event()
+    waiting = asyncio.Event()
+
+    async def wait_for_pass(_agent_id: str) -> None:
+        waiting.set()
+        await pass_finished.wait()
+
+    service, sessions, loop = _make_service(
+        librarian_running={"main"}, librarian_wait=wait_for_pass
+    )
+    review = asyncio.create_task(service.run_review("main", "s1", review_scope=scope))
+    if scope != "memory":
+        await waiting.wait()
+        assert service.reviewing("main")
+        assert sessions.forks == []
+        assert loop.started == []
+        pass_finished.set()
+    result = await review
+    assert result.scope == scope
+    assert len(loop.started) == 1
+    assert not service.reviewing("main")
+    assert waiting.is_set() is (scope != "memory")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_manual_review_releases_its_wait_without_forking() -> None:
+    waiting = asyncio.Event()
+    pass_finished = asyncio.Event()
+
+    async def wait_for_pass(_agent_id: str) -> None:
+        waiting.set()
+        await pass_finished.wait()
+
+    service, sessions, loop = _make_service(librarian_wait=wait_for_pass)
+    review = asyncio.create_task(service.run_review("main", "s1"))
+    await waiting.wait()
+    review.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await review
+    assert not service.reviewing("main")
+    assert sessions.forks == []
+    assert loop.started == []
+    assert not pass_finished.is_set()
+    pass_finished.set()
+    await service.run_review("main", "s1")
+    assert len(loop.started) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["admission", "running", "repeated_cancel", "shutdown"])
+async def test_cancelled_review_drains_its_run_before_releasing_skill_ownership(
+    phase: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, sessions, loop = _make_service(memory_turn_interval=1, skill_model_step_interval=1)
+    manager = ChatRunManager()
+    cast(Any, service._runtime).chat_run_manager = manager
+    admitting = asyncio.Event()
+    admitted = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    started: list[Run] = []
+
+    async def execute(run: Run) -> Any:
+        admitted.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await cleanup_finished.wait()
+
+    async def start_run(agent_id: str, content: str, **kwargs: Any) -> Run:
+        admitting.set()
+        if phase == "admission":
+            await asyncio.Event().wait()
+        run = await manager.start(
+            SessionAddress(kwargs.get("project_id"), agent_id, kwargs["session_id"]), execute
+        )
+        started.append(run)
+        return run
+
+    monkeypatch.setattr(loop, "start_run", start_run)
+    closing: asyncio.Task[None] | None = None
+    review: asyncio.Task[Any]
+    if phase == "shutdown":
+        service.notify_run_end(
+            cast(Any, _FakeRun(iteration_count=1)),
+            _identity_agent(),
+            internal=False,
+            outcome="success",
+        )
+        review = next(iter(service._background_tasks))
+    else:
+        review = asyncio.create_task(service.run_review("main", "s1", review_scope="skill"))
+    try:
+        await admitting.wait()
+        if phase == "admission":
+            review.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await review
+            assert not started
+            assert not manager.active_runs()
+            assert not service.reviewing("main")
+            return
+        await admitted.wait()
+        if phase == "shutdown":
+            closing = asyncio.create_task(service.aclose())
+        else:
+            review.cancel()
+        await cleanup_started.wait()
+        assert service.reviewing("main")
+        assert not review.done()
+        if phase == "repeated_cancel":
+            review.cancel()
+            await asyncio.sleep(0)
+            assert not review.done()
+        if phase != "shutdown":
+            successor = asyncio.create_task(service.run_review("main", "s2", review_scope="skill"))
+            await asyncio.sleep(0)
+            assert len(sessions.forks) == 1
+            successor.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await successor
+        cleanup_finished.set()
+        if closing is not None:
+            await closing
+        with pytest.raises(asyncio.CancelledError):
+            await review
+        assert not manager.active_runs()
+        assert not service.reviewing("main")
+        assert started[0].cancel_reason == ("shutdown" if phase == "shutdown" else "user")
+    finally:
+        cleanup_finished.set()
+        review.cancel()
+        await asyncio.gather(review, return_exceptions=True)
+        if closing is not None:
+            await closing
+        await manager.aclose()
 
 
 @pytest.mark.asyncio

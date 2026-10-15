@@ -75,6 +75,7 @@ from ._management import (
     invoke_for_agent,
     register_management,
 )
+from ._recovery import TaskRecovery
 from ._views import compact
 from .config import ConnectionStore, validate_connection
 from .content import ContentStore
@@ -141,6 +142,7 @@ class MCPService:
         self.connectors = ConnectorCatalog(())
         self._closed = False
         self._startup_error: str | None = None
+        self.recovery: TaskRecovery | None = None
 
     async def start(self, host: ExtensionHost) -> None:
         if host.state_dir is None:
@@ -165,15 +167,20 @@ class MCPService:
             )
         # Saved summaries first, so each connection Tool starts with its known names.
         await self.catalogs.open(host)
+        self.recovery = TaskRecovery(host, self.api.logger)
+        await self.recovery.open()
         if self.connections:
             await _load_protocol_client()
         for config in self.connections.values():
             self._runner(config)
             if config["enabled"]:
                 self._runner(config).start()
+        await self.recovery.resume(self.runners)
 
     async def close(self) -> None:
         self._closed = True
+        if self.recovery is not None:
+            await self.recovery.close()
         await self.jobs.close()
         await asyncio.gather(*(runner.close() for runner in self.runners.values()))
         self.runners.clear()
@@ -231,6 +238,7 @@ class MCPService:
                 self.inputs,
                 self._publish,
                 authorize=self._authorize,
+                recovery=self.recovery,
                 on_change=lambda: self._connection_changed(identifier),
             )
             self._publish(self.runners[identifier], None)
@@ -320,9 +328,9 @@ class MCPService:
             )
         return None
 
-    def _authorize(self, context: ToolContext) -> None:
+    async def _authorize(self, context: ToolContext) -> None:
         """Recheck the ordinary Tool policy when a queued invocation begins."""
-        if context.tool_name not in self._allowed(context):
+        if context.tool_name not in await self._allowed(context):
             raise ValueError(MCP_MESSAGES["access_denied"])
 
     def _handler(
@@ -343,7 +351,7 @@ class MCPService:
                         retryable=False,
                     )
                 try:
-                    self._authorize(context)
+                    await self._authorize(context)
                 except ValueError:
                     return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
                 runner = self._runner(config)
@@ -382,8 +390,13 @@ class MCPService:
 
         return invoke
 
-    def _allowed(self, context: ToolContext) -> tuple[str, ...]:
-        agent = self._host().resolve_tool_agent(context)
+    async def _allowed(self, context: ToolContext) -> tuple[str, ...]:
+        host = self._host()
+        agent = (
+            await host.resolve_tool_agent_async(context)
+            if host.resolve_tool_agent_async is not None
+            else await run_tool_worker(host.resolve_tool_agent, context)
+        )
         registry = self.api.operations.tool_registry
         if registry is None:
             raise RuntimeError("MCP Tools are not bound")
@@ -406,7 +419,7 @@ class MCPService:
         """Run one normalized search, describe, call, or read of the connection Tool."""
         if self.content is None:
             raise RuntimeError("MCP content store was not initialized")
-        allowed = self._allowed(context)
+        allowed = await self._allowed(context)
         if f"mcp_{runner.id}" not in allowed:
             return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
         action = arguments["action"]
@@ -421,7 +434,7 @@ class MCPService:
             gone = self._gone(runner.id)
             if gone is not None:
                 return gone
-            allowed = self._allowed(context)
+            allowed = await self._allowed(context)
             if not self._connection(runner.id)["enabled"]:
                 return tool_failure(
                     "mcp_access_denied",
@@ -458,7 +471,15 @@ class MCPService:
     ) -> dict[str, Any]:
         assert self.content is not None
         try:
-            document = await self.content.load_result(arguments["result_id"], context, runner.id)
+            document = (
+                await self.recovery.load_result(arguments["result_id"], context, runner.id)
+                if self.recovery is not None
+                else None
+            )
+            if document is None:
+                document = await self.content.load_result(
+                    arguments["result_id"], context, runner.id
+                )
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error))
         if document["source"] and remote_tool_name(runner.id, document["source"]) not in allowed:
@@ -948,6 +969,8 @@ class MCPService:
                 runner = self._runner(config)
                 if config["enabled"]:
                     runner.start()
+        if self.recovery is not None:
+            await self.recovery.resume(self.runners)
         self.api.logger.info("MCP connection configured (connection=%s)", identifier)
         return self._status(identifier)
 
@@ -981,6 +1004,8 @@ class MCPService:
                 # Republished, its Tools no longer say the connection is disabled.
                 self._publish(runner, runner.catalog or None)
                 runner.start()
+        if self.recovery is not None:
+            await self.recovery.resume(self.runners)
         self.api.logger.info(
             "MCP connection updated (connection=%s operation=%s)", identifier, operation
         )
@@ -1022,10 +1047,14 @@ class MCPService:
 
     async def _stop(self, identifier: str) -> None:
         runner = self.runners.pop(identifier, None)
+        if self.recovery is not None:
+            await self.recovery.stop_connection(identifier, runner=runner)
         try:
             if runner is not None:
                 await runner.close()
         finally:
+            if self.recovery is not None and identifier not in self.connections:
+                await self.recovery.stop_connection(identifier, remove=True)
             self.api.operations.replace_tools(identifier, [])
 
 

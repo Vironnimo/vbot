@@ -117,6 +117,7 @@
     // (`command_status_changed`: `{ status, stillRunning, sessionId }`); the
     // controller re-applies the whole map.
     commandStatuses = {},
+    terminalsRefreshToken = 0,
     connectionSnapshot = null,
     // Bumped by App when Session-list continuity is uncertain (replay gap or
     // server restart): activity, the drawer, and the Parent Session link
@@ -381,19 +382,22 @@
       chatState.commandStatuses,
     ),
   );
-  // Known work that outlives the Run: a running Sub-Agent or background
-  // command the loaded rows started, processes such a command left running,
-  // or a command a Sub-Agent below still runs. It keeps Stop all offered once
-  // the Run ended.
-  let backgroundWorkRunning = $derived(
-    Object.keys(displayedSubAgentCommands).length > 0 ||
+  // The server covers all work, including directly opened Terminals and
+  // descendants absent from the loaded History. Local rows bridge the first
+  // read only; an accepted empty projection retires stale local work hints.
+  let backgroundWorkRunning = $derived.by(() => {
+    const work = target.activeSessionState?.workProjection;
+    if (work) return work.background_work_running || work.run_active;
+    return (
+      Object.keys(displayedSubAgentCommands).length > 0 ||
       backgroundTasks(
         activeTimelineItems,
         chatState.subAgentStatuses,
         target.activeSessionState?.backgroundCommandStatuses,
         displayedCommandStatuses,
-      ).some((task) => task.dotStatus === 'running'),
-  );
+      ).some((task) => task.dotStatus === 'running')
+    );
+  });
   // Every Agent the picker offers: Identity Agents, then each Project Team.
   let pickerAgentAddresses = $derived([
     ...chatState.agents.map((agent) => agent.id),
@@ -687,6 +691,18 @@
   $effect(() => {
     const statuses = commandStatuses;
     untrack(() => chatController.applyCommandStatuses(statuses));
+  });
+
+  $effect(() => {
+    const sessionState = active ? target.activeSessionState : null;
+    void runEvents?.lifecycle;
+    void commandStatuses;
+    void queueInvalidation;
+    void terminalsRefreshToken;
+    void connectionSnapshot;
+    void sessionsRefreshToken;
+    void sessionInvalidations;
+    untrack(() => chatController.syncSessionWork(sessionState));
   });
 
   // Durable completion activity for the displayed Agent addresses. A reconnect

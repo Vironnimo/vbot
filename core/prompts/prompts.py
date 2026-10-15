@@ -15,14 +15,19 @@ from core.memory import (
     MEMORY_FILES_PRODUCER_NAME,
     MemoryService,
     memory_block_definition,
-    memory_prompt_file_paths,
-    read_memory_files,
 )
 from core.prompts._catalog import (
     PromptBlockCatalog,
     _normalize_prompt_scope,
     _require_scope_agent_id,
     load_bundled_default_layout,
+)
+from core.prompts._context import (
+    render_memory_files,
+    render_project_files,
+    render_project_skills,
+    render_soul,
+    render_working_project,
 )
 from core.prompts._formatting import (
     _channel_line,
@@ -31,6 +36,7 @@ from core.prompts._formatting import (
     _format_skill_catalog,
     _format_tool_list,
 )
+from core.prompts._tool_policy import OnDemandEntries, PromptToolPolicy, _tool_names
 from core.prompts._types import (
     AGENT_SCOPE_KEY_PREFIX,
     BLOCK_OWNER_ALWAYS,
@@ -89,31 +95,17 @@ from core.prompts.blocks import (
     PromptFileIssue,
     RenderedBlock,
     ToolAvailability,
-    apply_replacements,
     assemble_system_prompt,
-    expand_workspace_includes,
     render_dynamic_block,
-    render_prompt_file,
     resolve_block_text,
     resolve_layout,
 )
 from core.tools.availability import (
-    MEMORY_TOOL_NAME,
-    agent_tool_settings,
-    apply_agent_target_tool_visibility,
     memory_tool_enabled,
-    resolve_tool_access,
-    subagent_allowed_agents,
 )
-from core.tools.model_names import model_tool_name
 from core.tools.on_demand import (
-    LOAD_TOOLS_TOOL_NAME,
     ON_DEMAND_TOOL_LIST_PRODUCER,
-    loads_tools_on_demand,
-    on_demand_tool_entries,
-    on_demand_tools,
 )
-from core.tools.tools import ToolDefinitionProfileContext
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 from core.utils.workers import BoundedWorkerPool
@@ -171,9 +163,6 @@ _LOGGER = get_logger("prompts")
 # "{title} changed since your System Prompt listed them."
 CHANNEL_CATALOG_TITLE = "Your configured channels"
 
-# ``(registry name, summary)`` of each On-demand Tool, resolved on first use.
-OnDemandEntries = Callable[[], tuple[tuple[str, str], ...]]
-
 _PROMPT_WORKERS = BoundedWorkerPool(
     name="prompt",
     max_workers=PROMPT_WORKER_LIMIT,
@@ -205,7 +194,7 @@ class SystemPromptManager:
         agent_store: PromptAgentStore | None = None,
     ) -> None:
         self._storage = storage
-        self._tool_registry = tool_registry
+        self._tool_policy = PromptToolPolicy(tool_registry, agent_store)
         self._skill_registry = skill_registry
         self._channel_registry = channel_registry
         self._memory_provider = memory_provider or MemoryService()
@@ -344,7 +333,7 @@ class SystemPromptManager:
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._catalog.scope_key(prompt_scope)
-        on_demand = self._on_demand_entries(
+        on_demand = self._tool_policy.on_demand_entries(
             agent,
             effective_tool_definitions=effective_tool_definitions,
             on_demand_tools=on_demand_tools,
@@ -445,7 +434,7 @@ class SystemPromptManager:
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._catalog.scope_key(prompt_scope)
-        on_demand = self._on_demand_entries(
+        on_demand = self._tool_policy.on_demand_entries(
             agent,
             effective_tool_definitions=effective_tool_definitions,
             on_demand_tools=on_demand_tools,
@@ -572,7 +561,7 @@ class SystemPromptManager:
             subagent_session=subagent_session,
             scope=scope_key,
             read_observer=read_observer,
-            tool_available=self._tool_availability(
+            tool_available=self._tool_policy.tool_availability(
                 agent,
                 effective_tool_names=effective_tool_names,
                 session_tool_grants=session_tool_grants,
@@ -720,7 +709,7 @@ class SystemPromptManager:
         """
         if context.soul_context is not None:
             return context.soul_context
-        return self._render_soul(context.agent, context.tool_available, context.read_observer)
+        return render_soul(context.agent, context.tool_available, context.read_observer)
 
     def render_soul(
         self, agent: PromptAgent, *, on_read: Callable[[Path], None] | None = None
@@ -733,23 +722,7 @@ class SystemPromptManager:
         ``SOUL.md`` notice names ``read`` only when the Agent's current Tool policy
         offers it.
         """
-        return self._render_soul(agent, self._tool_availability(agent), on_read)
-
-    def _render_soul(
-        self,
-        agent: PromptAgent,
-        tool_available: ToolAvailability,
-        on_read: Callable[[Path], None] | None,
-    ) -> str:
-        rendered = expand_workspace_includes(
-            SOUL_INCLUDE_MARKER,
-            agent.workspace,
-            tool_available=tool_available,
-            on_read=on_read,
-        )
-        if not rendered:
-            return ""
-        return f"{SOUL_FRAMING}\n\n{rendered}"
+        return render_soul(agent, self._tool_policy.tool_availability(agent), on_read)
 
     def _render_working_project_block(self, context: BlockRenderContext) -> str:
         """Render the file-backed ``core:working_project`` data block."""
@@ -757,8 +730,8 @@ class SystemPromptManager:
             return context.working_project_context
         if context.project_context is None:
             return ""
-        return self._render_working_project(
-            context.project_context, context.tool_available, context.read_observer
+        return render_working_project(
+            self._storage, context.project_context, context.tool_available, context.read_observer
         )
 
     def render_working_project_context(
@@ -773,30 +746,9 @@ class SystemPromptManager:
         *agent* is the Agent that receives the block: a notice for an oversized
         auto-load file names ``read`` only when its current Tool policy offers it.
         """
-        return self._render_working_project(
-            project_context, self._tool_availability(agent), on_read
+        return render_working_project(
+            self._storage, project_context, self._tool_policy.tool_availability(agent), on_read
         )
-
-    def _render_working_project(
-        self,
-        project_context: ProjectPromptContext,
-        tool_available: ToolAvailability,
-        on_read: Callable[[Path], None] | None,
-    ) -> str:
-        project_files = [
-            _indent_project_file_frame(block)
-            for block in self._project_file_blocks(project_context, tool_available, on_read)
-        ]
-        template = self._storage.read_prompt_fragment("working_project.md")
-        return apply_replacements(
-            template,
-            {
-                "{project_id}": project_context.project_id,
-                "{project_name}": " ".join(project_context.project_name.split()),
-                "{project_workspace}": model_path(project_context.cwd),
-                "{project_files}": "\n\n".join(project_files),
-            },
-        ).strip()
 
     async def render_working_project_context_async(
         self,
@@ -861,7 +813,7 @@ class SystemPromptManager:
         source of what loads. Lazy: returns ``""`` when there is no project context
         or no readable file, so the placeholder collapses. *tool_available* tells
         which Tools the receiving Agent can call; a notice for an oversized file
-        names ``read`` only when it can. See :meth:`_project_file_blocks` for paths
+        names ``read`` only when it can. See :func:`_context._project_file_blocks` for paths
         and :func:`render_prompt_file` for the size limit and fail-soft rules.
 
         ``on_read``, when given, is called with the resolved absolute path of every
@@ -869,10 +821,8 @@ class SystemPromptManager:
         used both for prompt assembly and the explicit ``project`` Tool.
         ``on_issue`` reports omissions so the Tool can explain partial loads.
         """
-        if project_context is None:
-            return ""
-        return "\n".join(
-            self._project_file_blocks(project_context, tool_available, on_read, on_issue)
+        return render_project_files(
+            project_context, tool_available=tool_available, on_read=on_read, on_issue=on_issue
         )
 
     def render_project_skills(
@@ -890,47 +840,7 @@ class SystemPromptManager:
         latest successful Project Tool Result. Returns ``""`` when the Project has
         no Skills, so no empty section is emitted.
         """
-        if not skills:
-            return ""
-        guidance = " - load one by name with the `skill` Tool" if tool_available("skill") else ""
-        lines = [f"Skills from Project '{project_name}'{guidance}:"]
-        lines.extend(
-            f"- {skill.name}: {skill.description}"
-            for skill in sorted(skills, key=lambda item: item.name)
-        )
-        return "\n".join(lines)
-
-    def _project_file_blocks(
-        self,
-        project_context: ProjectPromptContext,
-        tool_available: ToolAvailability,
-        on_read: Callable[[Path], None] | None,
-        on_issue: Callable[[PromptFileIssue], None] | None = None,
-    ) -> list[str]:
-        """Return each existing auto-load file as a ``<file>`` block, in list order.
-
-        The Working Project renderer and the explicit-Tool renderer share this, so
-        path and fail-soft behavior cannot drift. Each path is used **as the user
-        wrote it** in the project's auto-load list: a relative path resolves against
-        the project ``cwd`` at any subfolder depth, an absolute path is read as-is.
-        There is deliberately **no location restriction** — the auto-load list is
-        the user's own config naming the user's own files (project philosophy:
-        maximum agency, minimal restrictions). Missing files are omitted (the
-        seeded AGENTS.md may not exist yet); the optional issue observer lets
-        callers explain omissions. Every other rule is :func:`render_prompt_file`'s.
-        """
-        blocks: list[str] = []
-        for filename in project_context.auto_load:
-            block = render_prompt_file(
-                project_context.cwd / filename,
-                model_path(filename),
-                tool_available=tool_available,
-                on_read=on_read,
-                on_issue=on_issue,
-            )
-            if block is not None:
-                blocks.append(block)
-        return blocks
+        return render_project_skills(project_name, skills, tool_available=tool_available)
 
     def render_skill_catalog(
         self,
@@ -958,12 +868,12 @@ class SystemPromptManager:
         ``skill`` and ``skill_manage`` are ordinary allow-list tools, so they are
         offered exactly when the agent allows them — toggleable per agent like any
         tool. The only extra rule is identity-only visibility (applied inside
-        :meth:`_provider_definitions_for_agent`): ``skill_manage`` writes to the
+        :class:`PromptToolPolicy`): ``skill_manage`` writes to the
         agent's own private skill home, so it is withheld from a config/project agent
         (empty ``workspace``) even under a wildcard allow-list. ``ready_only=False``
         also returns the allowed Tools that are not ready.
         """
-        return self._provider_definitions_for_agent(
+        return self._tool_policy.provider_definitions(
             agent, session_tool_grants, ready_only=ready_only
         )
 
@@ -1027,7 +937,7 @@ class SystemPromptManager:
             return _format_tool_list(
                 [
                     definition
-                    for definition in self._prompt_definitions_for_agent(
+                    for definition in self._tool_policy.prompt_definitions(
                         context.agent, session_tool_grants
                     )
                     if definition.get("name") not in on_demand_names
@@ -1050,8 +960,8 @@ class SystemPromptManager:
         def memory_files(context: BlockRenderContext) -> str:
             if context.memory_files_context is not None:
                 return context.memory_files_context
-            return self._render_memory_files(
-                context.agent, context.tool_available, context.read_observer
+            return render_memory_files(
+                self._memory_provider, context.agent, context.tool_available, context.read_observer
             )
 
         return {
@@ -1076,60 +986,9 @@ class SystemPromptManager:
         workspace (a config agent) reports nothing and must never resolve against
         ``Path(".")``.
         """
-        return self._render_memory_files(agent, self._tool_availability(agent), on_read)
-
-    def _render_memory_files(
-        self,
-        agent: PromptAgent,
-        tool_available: ToolAvailability,
-        on_read: Callable[[Path], None] | None,
-    ) -> str:
-        mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
-        workspace = agent.workspace
-        if not workspace:
-            return ""
-        # Asked only when the mode renders Memory: resolving the Tool set is not free.
-        memory_tool = (
-            model_tool_name(MEMORY_TOOL_NAME)
-            if memory_tool_enabled(mode) and tool_available(MEMORY_TOOL_NAME)
-            else None
+        return render_memory_files(
+            self._memory_provider, agent, self._tool_policy.tool_availability(agent), on_read
         )
-        rendered = read_memory_files(
-            Path(workspace), mode, provider=self._memory_provider, memory_tool=memory_tool
-        )
-        if on_read is not None:
-            for path in memory_prompt_file_paths(Path(workspace), mode):
-                on_read(path)
-        return rendered
-
-    def _tool_availability(
-        self,
-        agent: PromptAgent,
-        *,
-        effective_tool_names: Collection[str] | None = None,
-        session_tool_grants: Sequence[str] = (),
-    ) -> ToolAvailability:
-        """Return which Tools *agent* can call, asked by registry name.
-
-        With *effective_tool_names* (the Tools a request lists) this is plain
-        membership. Otherwise the Agent's live Tool policy is resolved once, on the
-        first question, through the same path the Tool list uses.
-        """
-        if effective_tool_names is not None:
-            listed = effective_tool_names
-            return lambda tool_name: tool_name in listed
-        resolved: frozenset[str] | None = None
-
-        def available(tool_name: str) -> bool:
-            nonlocal resolved
-            if resolved is None:
-                resolved = frozenset(
-                    str(definition.get("name"))
-                    for definition in self._prompt_definitions_for_agent(agent, session_tool_grants)
-                )
-            return tool_name in resolved
-
-        return available
 
     def _is_owner_active(
         self,
@@ -1172,7 +1031,7 @@ class SystemPromptManager:
         tool_prefix = "tool:"
         if owner.startswith(tool_prefix):
             tool_name = owner[len(tool_prefix) :]
-            return self._agent_tool_allowed(
+            return self._tool_policy.agent_tool_allowed(
                 agent,
                 tool_name,
                 effective_tool_names=effective_tool_names,
@@ -1185,147 +1044,6 @@ class SystemPromptManager:
         if owner.startswith(builtin_prefix):
             return getattr(agent, "builtin", None) == owner[len(builtin_prefix) :]
         return False
-
-    def _agent_tool_allowed(
-        self,
-        agent: PromptAgent,
-        tool_name: str,
-        *,
-        effective_tool_names: Collection[str] | None = None,
-        session_tool_grants: Sequence[str] = (),
-    ) -> bool:
-        """Return whether *tool_name* is in the agent's effective prompt tool set.
-
-        With *effective_tool_names* (the Tools the request lists) this is plain
-        membership. Otherwise it reuses the same prompt-definition path the tools
-        block uses (allowlist + derived ``memory`` visibility), so gate 2 cannot
-        drift from what the tool list actually shows. A *tool_name* ending in
-        ``*`` is a prefix: any listed name starting with the rest matches.
-        """
-        if tool_name.endswith("*"):
-            prefix = tool_name[:-1]
-
-            def matches(name: object) -> bool:
-                return isinstance(name, str) and name.startswith(prefix)
-        else:
-
-            def matches(name: object) -> bool:
-                return name == tool_name
-
-        if effective_tool_names is not None:
-            return any(matches(name) for name in effective_tool_names)
-        definitions = self._prompt_definitions_for_agent(agent, session_tool_grants)
-        return any(matches(definition.get("name")) for definition in definitions)
-
-    def _provider_definitions_for_agent(
-        self,
-        agent: PromptAgent,
-        session_tool_grants: Sequence[str] = (),
-        *,
-        ready_only: bool = True,
-    ) -> list[JsonObject]:
-        profile_context = ToolDefinitionProfileContext(
-            agent_id=agent.id, project_id=getattr(agent, "project_id", None)
-        )
-        resolution = resolve_tool_access(
-            agent.tool_access,
-            self._tool_registry.list_tools(),
-            agent.memory_prompt_mode,
-            workspace=agent.workspace,
-            session_tool_grants=session_tool_grants,
-        )
-        definitions = self._tool_registry.provider_definitions(
-            resolution.allowed_tools,
-            session_grants=resolution.session_tool_grants,
-            ready_only=ready_only,
-            profile_context=profile_context,
-        )
-        return _with_load_tools(
-            agent,
-            apply_agent_target_tool_visibility(
-                definitions,
-                agent_id=agent.id,
-                allowed_agents=subagent_allowed_agents(
-                    agent_tool_settings(getattr(agent, "tools", {}))
-                ),
-            ),
-            session_tool_grants,
-            lambda: self._tool_registry.provider_definitions(
-                [LOAD_TOOLS_TOOL_NAME],
-                include_internal=True,
-                ready_only=ready_only,
-                profile_context=profile_context,
-            ),
-        )
-
-    def _prompt_definitions_for_agent(
-        self,
-        agent: PromptAgent,
-        session_tool_grants: Sequence[str] = (),
-    ) -> list[JsonObject]:
-        profile_context = ToolDefinitionProfileContext(
-            agent_id=agent.id, project_id=getattr(agent, "project_id", None)
-        )
-        resolution = resolve_tool_access(
-            agent.tool_access,
-            self._tool_registry.list_tools(),
-            agent.memory_prompt_mode,
-            workspace=agent.workspace,
-            session_tool_grants=session_tool_grants,
-        )
-        definitions = self._tool_registry.prompt_definitions(
-            resolution.allowed_tools,
-            session_grants=resolution.session_tool_grants,
-            profile_context=profile_context,
-        )
-        return _with_load_tools(
-            agent,
-            apply_agent_target_tool_visibility(
-                definitions,
-                agent_id=agent.id,
-                allowed_agents=subagent_allowed_agents(
-                    agent_tool_settings(getattr(agent, "tools", {}))
-                ),
-            ),
-            session_tool_grants,
-            lambda: self._tool_registry.prompt_definitions(
-                [LOAD_TOOLS_TOOL_NAME], include_internal=True, profile_context=profile_context
-            ),
-        )
-
-    def _on_demand_entries(
-        self,
-        agent: PromptAgent,
-        *,
-        effective_tool_definitions: Sequence[Mapping[str, Any]] | None,
-        on_demand_tools: Sequence[tuple[str, str]] | None,
-        session_tool_grants: Sequence[str],
-    ) -> OnDemandEntries:
-        """Return the On-demand Tools one build lists, resolved on first use.
-
-        Given *on_demand_tools* are used as they are. Without them, a build with
-        *effective_tool_definitions* lists none, and a live build classifies the
-        Tools the Agent's Tool list would offer.
-        """
-        if on_demand_tools is not None:
-            given = tuple((str(name), str(summary)) for name, summary in on_demand_tools)
-            return lambda: given
-        if effective_tool_definitions is not None or not loads_tools_on_demand(agent):
-            return tuple
-        resolved: tuple[tuple[str, str], ...] | None = None
-
-        def entries() -> tuple[tuple[str, str], ...]:
-            nonlocal resolved
-            if resolved is None:
-                resolved = on_demand_tool_entries(
-                    self._tool_registry,
-                    agent,
-                    self._provider_definitions_for_agent(agent, session_tool_grants),
-                    session_tool_grants=session_tool_grants,
-                )
-            return resolved
-
-        return entries
 
     def _resolve_build_scope(self, agent: PromptAgent, scope: Any = None) -> PromptScope:
         if scope is None:
@@ -1402,39 +1120,6 @@ class SystemPromptManager:
         return self._catalog.reset_layout(scope)
 
 
-def _tool_names(
-    definitions: Sequence[Mapping[str, Any]] | None, on_demand: OnDemandEntries
-) -> frozenset[str] | None:
-    """Return the Tools a build with *definitions* counts as available, or ``None`` (live).
-
-    The On-demand Tools count: the Agent can call them.
-    """
-    if definitions is None:
-        return None
-    return frozenset(
-        [*(str(definition["name"]) for definition in definitions), *(n for n, _ in on_demand())]
-    )
-
-
-def _with_load_tools(
-    agent: PromptAgent,
-    definitions: list[JsonObject],
-    session_tool_grants: Sequence[str],
-    load_tools: Callable[[], list[JsonObject]],
-) -> list[JsonObject]:
-    """Return *definitions* with ``load_tools`` appended once while one of them is on demand.
-
-    ``load_tools`` belongs to the Agent's Tools exactly while it has a Tool to
-    load, so an Agent whose Tool list keeps every Tool never gets it.
-    """
-    names = [str(definition.get("name")) for definition in definitions]
-    if LOAD_TOOLS_TOOL_NAME in names or not on_demand_tools(
-        agent, names, session_tool_grants=session_tool_grants
-    ):
-        return definitions
-    return [*definitions, *load_tools()]
-
-
 def _selected_layout(
     agent: PromptAgent, definitions: Sequence[BlockDefinition], layout: Sequence[LayoutEntry]
 ) -> Sequence[LayoutEntry]:
@@ -1458,14 +1143,3 @@ def _selected_layout(
 
 def _current_local_date(timezone_name: str) -> str:
     return datetime.now(UTC).astimezone(ZoneInfo(timezone_name)).date().isoformat()
-
-
-def _indent_project_file_frame(block: str) -> str:
-    """Indent only a Project file's wrapper tags, preserving its content exactly."""
-    opening, separator, remainder = block.partition("\n")
-    if not separator:
-        return f" {block}"
-    content, closing_separator, closing = remainder.rpartition("\n")
-    if not closing_separator:
-        return f" {opening}\n{remainder}"
-    return f" {opening}\n{content}\n {closing}"

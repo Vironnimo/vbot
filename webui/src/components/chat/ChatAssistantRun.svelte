@@ -262,10 +262,11 @@
       >{agentName || t('chat.role.assistant').toUpperCase()}</span
     >
     {#if formatTime(timestampForItem(item))}
-      <span
+      <button
+        type="button"
         class="msg-timestamp"
         use:tooltip={() => formatMoment(timestampForItem(item))}
-        >{formatTime(timestampForItem(item))}</span
+        >{formatTime(timestampForItem(item))}</button
       >
     {/if}
     {#if answerCopyText}

@@ -32,6 +32,8 @@ _WEEKLY_STANDUP = {
 def state(tmp_path: Path) -> SimpleNamespace:
     cron_service = Mock()
     cron_service.project_occurrences.return_value = []
+    cron_service.load_projection = AsyncMock()
+    cron_service.projection.return_value = cron_service
     return SimpleNamespace(
         runtime=SimpleNamespace(
             calendar_service=CalendarService(tmp_path, tz="Europe/Berlin"),

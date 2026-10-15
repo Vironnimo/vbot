@@ -94,6 +94,7 @@ from ._conversation_work import (
     _QueuedPreparedCommand,
     _QueuedWork,
 )
+from ._observations import ChannelObservationInbox
 
 _LOGGER = get_logger("channels.engine")
 
@@ -142,6 +143,8 @@ class ChannelConversationEngine:
         command_dispatcher: CommandDispatcher,
         conversation_pointers: ConversationPointerStore,
         pending_replies: PendingReplyStore,
+        observation_inbox: ChannelObservationInbox,
+        previous_observations: tuple[asyncio.Task[None], ...] = (),
         run_button_binding_registry: RunButtonBindingRegistry | None = None,
         access_registry: ChannelAccessRegistry | None = None,
     ) -> None:
@@ -153,6 +156,10 @@ class ChannelConversationEngine:
         self._transport: ConversationTransport | None = None
         self._connected = asyncio.Event()
         self._pending_replies = pending_replies
+        self._observation_inbox = observation_inbox
+        self._previous_observations = previous_observations
+        self._observation_recordings: set[asyncio.Task[None]] = set()
+        self._has_observations = False
         # Names this engine on the replies it records; the Channel's next engine
         # sends the ones it left.
         self._owner = uuid4().hex
@@ -170,6 +177,7 @@ class ChannelConversationEngine:
         self._routing = ChannelSessionRouting(config, chat_sessions, conversation_pointers)
         # One FIFO and worker per conversation while it has work; an idle
         # conversation retires both and the next item creates them again.
+        self._ingress_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._chat_queues: dict[str, deque[_QueuedWork]] = {}
         self._chat_workers: dict[str, asyncio.Task[None]] = {}
         self._busy_reply_times: OrderedDict[str, float] = OrderedDict()
@@ -179,6 +187,11 @@ class ChannelConversationEngine:
     def config(self) -> ChannelConfig:
         """The Channel configuration this engine serves."""
         return self._config
+
+    @property
+    def observation_owner(self) -> str:
+        """Identify this engine's inbox rows so startup cannot overtake live FIFO work."""
+        return self._owner
 
     def attach(self, transport: ConversationTransport) -> None:
         """Use ``transport`` for this Channel's platform I/O; replies wait until it connects."""
@@ -260,7 +273,7 @@ class ChannelConversationEngine:
                     from_ingress=True,
                 )
                 return True
-            if not self._enqueue_chat_work(
+            if not await self._enqueue_chat_work(
                 conversation.chat_id,
                 _QueuedPreparedCommand(
                     conversation=conversation,
@@ -273,13 +286,13 @@ class ChannelConversationEngine:
 
         if not self._access.should_respond(conversation, (message_text,)):
             if self._config.observe_unaddressed and conversation.kind == "group":
-                return self._enqueue_observed_message(
+                return await self._enqueue_observed_message(
                     conversation,
                     _format_observed_message(conversation, message_text),
                 )
             return False
 
-        if not self._enqueue_chat_work(
+        if not await self._enqueue_chat_work(
             conversation.chat_id,
             _QueuedInboundMessage(
                 conversation=conversation,
@@ -322,12 +335,12 @@ class ChannelConversationEngine:
                     )
                     notes.append(_format_observed_message(conversation, body))
                 if notes:
-                    return self._enqueue_observed_message(
+                    return await self._enqueue_observed_message(
                         conversation, notes[0], following_notes=tuple(notes[1:])
                     )
             return False
 
-        if not self._enqueue_chat_work(
+        if not await self._enqueue_chat_work(
             conversation.chat_id,
             _QueuedInboundMedia(
                 conversation=conversation,
@@ -362,7 +375,7 @@ class ChannelConversationEngine:
         acts on it, and its reply is relayed like any other channel answer.
         """
         conversation = await self._access._snapshot_group_sender(conversation)
-        if self._enqueue_chat_work(
+        if await self._enqueue_chat_work(
             conversation.chat_id,
             _QueuedInternalPrompt(conversation=conversation, prompt=prompt),
         ):
@@ -393,7 +406,7 @@ class ChannelConversationEngine:
 
         parsed_binding = parse_bound_run_callback_data(event.data)
         if parsed_binding is None:
-            if self._enqueue_chat_work(
+            if await self._enqueue_chat_work(
                 conversation.chat_id,
                 _QueuedInternalPrompt(
                     conversation=conversation,
@@ -478,7 +491,7 @@ class ChannelConversationEngine:
                     terminal = True
                     return "unavailable"
                 await self._conversation_pointers.run_async(point_at_origin, origin_session_id)
-                admitted = self._enqueue_chat_work(
+                admitted = await self._enqueue_chat_work(
                     conversation.chat_id,
                     _QueuedInternalPrompt(
                         conversation=conversation,
@@ -516,10 +529,10 @@ class ChannelConversationEngine:
 
     # -- Queue / workers --------------------------------------------------------------
 
-    def _enqueue_observed_message(
+    async def _enqueue_observed_message(
         self, conversation: ConversationFacts, note: str, *, following_notes: tuple[str, ...] = ()
     ) -> bool:
-        if self._enqueue_chat_work(
+        if await self._enqueue_chat_work(
             conversation.chat_id,
             _QueuedObservedMessage(
                 conversation=conversation, note=note, following_notes=following_notes
@@ -532,7 +545,13 @@ class ChannelConversationEngine:
         )
         return False
 
-    def _enqueue_chat_work(self, platform_target: str, queued: _QueuedWork) -> bool:
+    async def _enqueue_chat_work(self, platform_target: str, queued: _QueuedWork) -> bool:
+        # Durable admission yields; retain arrival order across those worker hops.
+        lock = self._ingress_locks.setdefault(platform_target, asyncio.Lock())
+        async with lock:
+            return await self._admit_chat_work(platform_target, queued)
+
+    async def _admit_chat_work(self, platform_target: str, queued: _QueuedWork) -> bool:
         """Admit one channel item before it reaches the per-chat FIFO.
 
         The Run manager owns the bounded waiting-work accounting. This ingress
@@ -550,6 +569,33 @@ class ChannelConversationEngine:
             )
         except WaitingWorkLimitError:
             return False
+
+        observations = (
+            (queued,)
+            if isinstance(queued, _QueuedObservedMessage)
+            else queued.observed_context
+            if isinstance(queued, (_QueuedInboundMessage, _QueuedInboundMedia))
+            else ()
+        )
+        if observations:
+            self._has_observations = True
+            recording = asyncio.create_task(
+                self._observation_inbox.record(
+                    self._owner, self._config, self._routing, observations
+                )
+            )
+            self._observation_recordings.add(recording)
+            try:
+                await asyncio.shield(recording)
+            except BaseException:
+                self._trigger_service.release_waiting_work(admission)
+                raise
+            finally:
+                if recording.done():
+                    self._observation_recordings.discard(recording)
+            if self._stopped:
+                self._trigger_service.release_waiting_work(admission)
+                return True
 
         queue = self._chat_queues.get(platform_target)
         if queue is None:
@@ -575,12 +621,14 @@ class ChannelConversationEngine:
     ) -> None:
         """Process one conversation's FIFO, then retire with it once it is empty.
 
-        Enqueueing is synchronous, and nothing awaits between the empty check and
-        the retirement, so an item arriving later either joins this queue while
-        the worker runs or finds no worker and starts a new one: one worker per
-        conversation at a time, in arrival order.
+        Admission may await durable context recording. Queue append and worker
+        selection do not await, nor does the empty check before retirement, so
+        later admitted work joins this worker or starts the next one: one worker
+        per conversation at a time, in arrival order.
         """
         try:
+            for recovery in self._previous_observations:
+                await asyncio.shield(recovery)
             while queue:
                 queued = queue.popleft()
                 try:
@@ -667,19 +715,8 @@ class ChannelConversationEngine:
 
     async def _process_queued_observed_message(self, queued: _QueuedObservedMessage) -> None:
         self._trigger_service.release_waiting_work(queued.admission)
-        route, _reply_plan = await self._routing._prepare_inbound_route_async(queued.conversation)
-        # Wait for any open tool cycle on this shared session (a Run via another
-        # accessor) so the observed note lands after the cycle, never inside it.
-        async with self._chat_sessions.write_lock(
-            _session_address(route.agent_id, route.session_id)
-        ):
-            for note in (queued.note, *queued.following_notes):
-                await self._chat_sessions.run_async(
-                    self._routing._append_session_note,
-                    route.agent_id,
-                    route.session_id,
-                    note,
-                )
+        await self._observation_inbox.prepare(queued.delivery_id, self._routing)
+        await self._observation_inbox.deliver(queued.delivery_id)
 
     async def _process_queued_message(self, queued: _QueuedInboundMessage) -> None:
         # Prepared commands have their own queued-work type; only plain messages
@@ -1435,6 +1472,17 @@ class ChannelConversationEngine:
             await asyncio.gather(*tasks, return_exceptions=True)
         if self._recordings:
             await asyncio.gather(*self._recordings, return_exceptions=True)
+        if self._observation_recordings:
+            await asyncio.gather(*self._observation_recordings)
+            self._observation_recordings.clear()
+        # Preserve routes before config changes clear pointers or reassign the Agent.
+        # This never takes a Session write lease, which shutdown's active Run holds.
+        if self._has_observations:
+            await self._observation_inbox.freeze(self._owner, self._routing)
+
+    async def recover_observations(self) -> None:
+        """Finish this ended engine's Notes after stop returned."""
+        await self._observation_inbox.recover(self._owner)
 
 
 def _log_failed_reply(reply_plan: ReplyPlanFacts, error: Exception) -> None:

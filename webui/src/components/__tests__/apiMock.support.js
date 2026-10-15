@@ -134,6 +134,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       }),
     stopAll: (agentId, sessionId) =>
       call('chat.stop_all', { agent_id: agentId, session_id: sessionId }),
+    getSessionWork: (agentId, sessionId) =>
+      call('chat.work', { agent_id: agentId, session_id: sessionId }),
     stopCommand: (sessionId, commandId) =>
       call('chat.stop_command', {
         session_id: sessionId,

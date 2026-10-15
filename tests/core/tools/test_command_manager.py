@@ -24,8 +24,9 @@ import psutil  # type: ignore[import-untyped]
 import pytest
 import pytest_asyncio
 
-from core.runs import RunExecutionOwner
-from core.sessions import SessionAddress
+from core.database import write_bootstrap_marker
+from core.runs import RunAdmissionBlockedError, RunExecutionOwner
+from core.sessions import ChatSessionManager, SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.tools import _command_output as command_output_module
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
@@ -57,6 +58,7 @@ from tests.core.tools.command_manager_helpers import (
     format_report,
     turns,
 )
+from tests.core.tools.terminal_manager_helpers import eventually
 
 CHILD = SessionAddress("project-a", "sub-agent", "session-child")
 OTHER = SessionAddress("project-a", "agent-b", "session-b")
@@ -714,6 +716,208 @@ async def test_a_failed_stop_keeps_its_reason_only_once_its_kill_was_sent(
 
 
 # --- Background and delivery -------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "running",
+        "ended",
+        "delivered",
+        "withdrawn",
+        "moved",
+        "stop_after_restart",
+        "ack_after_restart",
+        "move_after_restart",
+        "closed_execution",
+        "replaced_session",
+        "expired",
+        "moved_before_handoff",
+        "owned_running",
+        "owned_ended",
+        "owned_delivered",
+    ],
+)
+async def test_background_checkpoint_recovers_once_after_restart(
+    tmp_path: Path,
+    outcome: str,
+) -> None:
+    """A crash recovers an armed command and never repeats its persisted Note."""
+    data = tmp_path / "sessions"
+    write_bootstrap_marker(data)
+    sessions = ChatSessionManager(data)
+    sessions.create(OWNER.agent_id, OWNER.session_id, OWNER.project_id)
+    generation_id = sessions.get(OWNER).generation_id
+    assert generation_id is not None
+    execution_owner = (
+        RunExecutionOwner("ext", "closed-group", "participant", generation_id, "old-epoch")
+        if outcome.startswith("owned_")
+        else None
+    )
+    running_outcomes = {"running", "moved", "owned_running"}
+    restored_owner = OWNER
+    try:
+        async with command_harness(tmp_path, checkpoint_store=sessions) as harness:
+            await harness.manager.wait_recovered()
+            command_id, process = await harness.launch(execution_owner=execution_owner)
+            if outcome == "moved_before_handoff":
+                restored_owner = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
+                await sessions.move(OWNER, restored_owner)
+            await harness.manager.to_background_durably(command_id, deliver=True)
+            if outcome not in running_outcomes:
+                process.exit(0)
+                await harness.finish(command_id)
+                await eventually(lambda: bool(harness.sink.submissions))
+            if outcome in {"delivered", "owned_delivered"}:
+                # The Session commit succeeded, but its acknowledgement did not
+                # get back to the checkpoint before the server disappeared.
+                await sessions.get(OWNER).add_note_async(harness.sink.bodies[0])
+            elif outcome == "withdrawn":
+                harness.manager.acknowledge(command_id)
+            await harness.manager.flush()
+            checkpoint = sessions.background_command_read()[0]["checkpoint"]
+        # The harness closes fake processes; restore the exact durable crash
+        # boundary rather than running an actual server/process crash.
+        if outcome == "expired":
+            checkpoint.update(pending=False, retained_until=0)
+        if outcome == "replaced_session":
+            sessions.delete(OWNER)
+            sessions.create(OWNER.agent_id, OWNER.session_id, OWNER.project_id)
+        sessions.background_command_put(
+            OWNER,
+            command_id,
+            "run-a",
+            checkpoint,
+            generation_id=generation_id,
+        )
+        if outcome == "moved":
+            restored_owner = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
+            await sessions.move(OWNER, restored_owner)
+    finally:
+        sessions.close()
+
+    sessions = ChatSessionManager(data)
+    try:
+        async with command_harness(tmp_path, checkpoint_store=sessions) as restored:
+            if outcome in {"replaced_session", "expired"}:
+                await restored.manager.wait_recovered()
+                assert restored.manager.commands([OWNER]) == []
+                assert sessions.background_command_read() == []
+                return
+            expected_delivery = (
+                outcome not in {"delivered", "withdrawn"} and execution_owner is None
+            )
+            submission_count = int(expected_delivery)
+            if expected_delivery:
+                await eventually(lambda: bool(restored.sink.submissions))
+                assert restored.sink.submissions[0]["agent_id"] == restored_owner.agent_id
+                if outcome == "stop_after_restart":
+                    assert await restored.manager.close_scope(restored_owner) == 0
+                    assert restored.sink.futures[0].cancelled()
+                elif outcome == "ack_after_restart":
+                    restored.manager.acknowledge(command_id)
+                    assert restored.sink.futures[0].cancelled()
+                elif outcome == "closed_execution":
+                    restored.sink.futures[0].set_exception(RunAdmissionBlockedError("closed"))
+                else:
+                    if outcome == "move_after_restart":
+                        target = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
+                        await sessions.move(restored_owner, target)
+                        assert restored.manager.transfer_scope(restored_owner, target) == 1
+                        restored_owner = target
+                        await eventually(lambda: len(restored.sink.submissions) == 2)
+                        assert restored.sink.futures[0].cancelled()
+                        assert restored.sink.submissions[-1]["agent_id"] == target.agent_id
+                        submission_count = 2
+                    await sessions.get(restored_owner).add_note_async(restored.sink.bodies[-1])
+                    restored.sink.futures[-1].set_result(None)
+            await restored.manager.wait_recovered()
+            assert len(restored.sink.submissions) == submission_count
+            if execution_owner is not None:
+                # The old group epoch must never enter TriggerService or start
+                # another Run. Its one outcome stays in the original Session.
+                notes = [
+                    message
+                    for message in sessions.get(restored_owner).load()
+                    if message.role == "note"
+                ]
+                assert len(notes) == 1
+                assert command_id in str(notes[0].content)
+            report = restored.manager.report(command_id)
+            assert report.finished
+            assert report.owner == restored_owner
+            assert report.status == ("stopped" if outcome in running_outcomes else "completed")
+            assert restored.manager.busy_addresses() == set()
+            assert restored.launcher.processes == []
+            assert not sessions.background_command_read()[0]["checkpoint"]["pending"]
+            retained_until = sessions.background_command_read()[0]["checkpoint"]["retained_until"]
+        async with command_harness(tmp_path, checkpoint_store=sessions) as again:
+            await again.manager.wait_recovered()
+            assert again.sink.submissions == []
+            if execution_owner is not None:
+                assert (
+                    len(
+                        [
+                            message
+                            for message in sessions.get(restored_owner).load()
+                            if message.role == "note"
+                        ]
+                    )
+                    == 1
+                )
+            assert (
+                sessions.background_command_read()[0]["checkpoint"]["retained_until"]
+                == retained_until
+            )
+    finally:
+        sessions.close()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_checkpoint_cannot_be_hidden_by_another_commands_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = tmp_path / "sessions"
+    write_bootstrap_marker(data)
+    sessions = ChatSessionManager(data)
+    sessions.create(OWNER.agent_id, OWNER.session_id, OWNER.project_id)
+    put = sessions.background_command_put
+    fail: set[str] = set()
+
+    def save(
+        address: SessionAddress,
+        command_id: str,
+        origin_run_id: str,
+        checkpoint: dict[str, object],
+        *,
+        generation_id: str,
+    ) -> None:
+        if command_id in fail:
+            raise OSError("checkpoint disk unavailable")
+        put(address, command_id, origin_run_id, checkpoint, generation_id=generation_id)
+
+    monkeypatch.setattr(sessions, "background_command_put", save)
+    try:
+        async with command_harness(tmp_path, checkpoint_store=sessions) as harness:
+            await harness.manager.wait_recovered()
+            first, _process = await harness.launch()
+            second, _other = await harness.launch()
+            fail.add(first)
+            harness.manager.to_background(first, deliver=True)
+            harness.manager.to_background(second, deliver=True)
+            with pytest.raises(OSError, match="checkpoint disk unavailable"):
+                await harness.manager.flush()
+            assert [row["command_id"] for row in sessions.background_command_read()] == [second]
+            fail.clear()
+            await harness.manager.to_background_durably(first, deliver=True)
+            assert {row["command_id"] for row in sessions.background_command_read()} == {
+                first,
+                second,
+            }
+    finally:
+        sessions.close()
 
 
 @pytest.mark.asyncio

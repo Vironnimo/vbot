@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
 
 import pytest
 
@@ -109,3 +111,41 @@ def test_environment_credentials_prefer_the_process_and_reload_into_live_resolve
         runtime.agent_resolver.require_model_configured(model)
     finally:
         runtime.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", ["reload", "restart"])
+async def test_async_credential_reload_cannot_restore_a_superseded_snapshot(
+    config: Config, monkeypatch: pytest.MonkeyPatch, replacement: str
+) -> None:
+    monkeypatch.delenv("CHANNEL_TOKEN_TEST", raising=False)
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    load_environment = runtime.storage.load_environment
+
+    def old_snapshot() -> dict[str, str]:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        return {"CHANNEL_TOKEN_TEST": "old"}
+
+    monkeypatch.setattr(runtime.storage, "load_environment", old_snapshot)
+    pending = asyncio.create_task(runtime.reload_environment_credentials_async())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        monkeypatch.setattr(runtime.storage, "load_environment", load_environment)
+        runtime.storage.set_data_dir_credential("CHANNEL_TOKEN_TEST", "new")
+        if replacement == "restart":
+            await runtime.aclose()
+            runtime.start()
+        else:
+            runtime.reload_environment_credentials()
+        release.set()
+        await pending
+        assert runtime.resolve_environment_credential("CHANNEL_TOKEN_TEST") == "new"
+    finally:
+        release.set()
+        await pending
+        await runtime.aclose()

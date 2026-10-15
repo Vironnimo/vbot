@@ -183,6 +183,31 @@ def test_a_busy_write_retries_as_one_idempotent_unit_until_its_patience(data_dir
         with pytest.raises(DatabaseUnavailableError, match="stayed busy"):
             database.write(always_busy, patience_s=0.0)
         assert database.writer.in_transaction is False
+
+        entered, release = threading.Event(), threading.Event()
+
+        def hold_writer(_connection: sqlite3.Connection) -> None:
+            entered.set()
+            assert release.wait(10)
+
+        with ThreadPoolExecutor(1) as workers:
+            holder = workers.submit(database.write, hold_writer)
+            try:
+                assert entered.wait(10)
+                # The Python transaction lock obeys the same budget as SQLite.
+                with pytest.raises(DatabaseUnavailableError):
+                    database.write(always_busy, patience_s=0.0)
+            finally:
+                release.set()
+                holder.result(10)
+
+        with closing(sqlite3.connect(database.path, isolation_level=None)) as external:
+            external.execute("BEGIN IMMEDIATE")
+            # A native busy handler must not add its former one-second wait.
+            assert database.writer.execute("PRAGMA busy_timeout").fetchone()[0] == 0
+            with pytest.raises(DatabaseUnavailableError):
+                database.write(always_busy, patience_s=0.0)
+            external.execute("ROLLBACK")
     finally:
         database.close()
 
@@ -286,10 +311,12 @@ def test_readers_are_bounded_permits_with_bounded_page_caches(wal_database: Data
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("warm_reader", [False, True], ids=["cold", "pooled"])
-async def test_wal_readers_keep_their_snapshot_while_a_writer_commits(
-    wal_database: Database, warm_reader: bool
+@pytest.mark.parametrize("journal_mode", ["wal", "delete"])
+async def test_readers_keep_their_snapshot_while_a_writer_runs(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, warm_reader: bool, journal_mode: str
 ) -> None:
-    database = wal_database
+    pin_journal_mode(monkeypatch, journal_mode)
+    database = _open(data_dir)
     add_note(database, "before")
     writer_connection = database.writer
     if warm_reader:
@@ -301,7 +328,8 @@ async def test_wal_readers_keep_their_snapshot_while_a_writer_commits(
 
     def hold_write(connection: sqlite3.Connection) -> None:
         connection.execute("UPDATE notes SET body = 'after'")
-        writing.set_result(None)
+        if not writing.done():
+            writing.set_result(None)
         assert release_writer.wait(10)
 
     def read_snapshot(connection: sqlite3.Connection) -> tuple[str, str]:
@@ -320,9 +348,11 @@ async def test_wal_readers_keep_their_snapshot_while_a_writer_commits(
         assert await asyncio.wait_for(asyncio.wrap_future(observed), timeout=10) == "before"
         assert not writer.done()
         release_writer.set()
-        await asyncio.wait_for(writer, timeout=10)
+        if journal_mode == "wal":
+            await asyncio.wait_for(writer, timeout=10)
         release_reader.set()
         assert await reader == ("before", "before")
+        await asyncio.wait_for(writer, timeout=10)
         assert note_bodies(database) == ["after"]
     finally:
         release_writer.set()
@@ -330,6 +360,7 @@ async def test_wal_readers_keep_their_snapshot_while_a_writer_commits(
         await asyncio.gather(
             writer, *([reader] if reader is not None else []), return_exceptions=True
         )
+        database.close()
 
 
 def test_a_failed_reader_open_falls_back_to_the_writer_and_retries_later(
@@ -341,7 +372,7 @@ def test_a_failed_reader_open_falls_back_to_the_writer_and_retries_later(
         nonlocal prepared
         prepared += 1
         if prepared == 2:
-            raise sqlite3.OperationalError("database is locked")
+            raise sqlite3.OperationalError("unable to open database file")
 
     database = _open_in_wal(data_dir, connection_setup=fail_first_reader)
     try:
@@ -373,6 +404,58 @@ def test_a_failed_reader_open_falls_back_to_the_writer_and_retries_later(
     finally:
         database.close()
     assert database.live_connection_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_read_contention_is_immediate_or_retried_off_loop_with_a_budget(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pin_journal_mode(monkeypatch, "delete")
+    database = _open(data_dir)
+    add_note(database, "committed")
+    retrying: Future[None] = Future()
+    release = threading.Event()
+    attempts = 0
+
+    def retry(_deadline: float, patience_s: float) -> bool:
+        nonlocal attempts
+        if patience_s == 0:
+            return False
+        attempts += 1
+        retrying.set_result(None)
+        assert release.wait(10)
+        return True
+
+    monkeypatch.setattr(database._runtime, "_sleep_before_retry", retry)
+    task: asyncio.Task[str] | None = None
+    try:
+        with closing(sqlite3.connect(database.path, isolation_level=None)) as external:
+            external.execute("BEGIN EXCLUSIVE")
+            with pytest.raises(DatabaseUnavailableError), database.read() as connection:
+                connection.execute("SELECT body FROM notes").fetchone()
+            with pytest.raises(DatabaseUnavailableError):
+                await database.read_async(
+                    lambda connection: connection.execute("SELECT body FROM notes").fetchone()[0],
+                    patience_s=0,
+                )
+            task = asyncio.create_task(
+                database.read_async(
+                    lambda connection: connection.execute("SELECT body FROM notes").fetchone()[0]
+                )
+            )
+            await asyncio.wait_for(asyncio.wrap_future(retrying), timeout=10)
+            external.execute("ROLLBACK")
+            release.set()
+            assert await asyncio.wait_for(task, timeout=10) == "committed"
+            assert attempts == 1
+            # Transient SQLite contention must not disable pooled opens for 60s.
+            with database.read() as connection:
+                assert connection is not database.writer
+    finally:
+        release.set()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        database.close()
 
 
 def test_a_checkpoint_with_an_open_reader_keeps_the_runtime_usable(
@@ -459,7 +542,7 @@ def test_a_database_copy_never_writes_over_an_existing_file_or_its_sidecars(
     assert destination.exists() is False
 
 
-def test_without_wal_every_read_is_a_transaction_on_the_writer(
+def test_without_wal_reads_use_independent_query_only_transactions(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pin_journal_mode(monkeypatch, "delete")
@@ -467,14 +550,15 @@ def test_without_wal_every_read_is_a_transaction_on_the_writer(
     try:
         assert database.wal_active() is False
         with database.read() as reader:
-            assert reader is database.writer
+            assert reader is not database.writer
             assert reader.in_transaction is True
+            assert reader.execute("PRAGMA query_only").fetchone()[0] == 1
         # The caller's own statement errors reach it unchanged, after the rollback.
         with pytest.raises(sqlite3.OperationalError, match="no such column"), database.read() as r:
             r.execute("SELECT missing FROM notes")
         assert database.writer.in_transaction is False
         database.checkpoint()  # Nothing to checkpoint without WAL.
-        assert database.reader_stats() == (0, 0)
+        assert database.reader_stats() == (0, 0)  # The failed reader is discarded.
         assert database.live_connection_count() == 1
     finally:
         database.close()

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
@@ -130,7 +131,7 @@ from core.tools.tools import (
 )
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
-from core.utils.workers import finish_despite_cancel
+from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
@@ -430,6 +431,49 @@ class SubAgentCoordinator:
         # Without stopped_by the Session the user works in is always stopped.
         return stopped or 0
 
+    async def work_snapshot(self, address: SessionAddress) -> dict[str, bool]:
+        """Project Stop all's live scope, independently of loaded History.
+
+        The root's own Queue is retained by Stop all and does not make background
+        work stoppable. Descendant Queues, commands and Terminal attachments do.
+        An unavailable tree read propagates instead of reporting an idle tree.
+        """
+        runtime = self._runtime
+        sessions = runtime.chat_sessions
+        async with self._admission_lock:
+            links = await sessions.run_async(descendants, sessions, address, strict=True)
+            below = {link.session for link in links}
+            tree = {address, *below}
+            run_active = (
+                runtime.chat_run_manager.active_run(
+                    agent_id=address.agent_id,
+                    session_id=address.session_id,
+                    project_id=address.project_id,
+                )
+                is not None
+            )
+            background = any(is_working(runtime, child) for child in below)
+            commands = runtime.command_manager
+            if commands is not None:
+                background |= bool(commands.busy_addresses() & below) or any(
+                    not report.finished for report in commands.commands([address])
+                )
+                if not run_active:
+                    background |= address in commands.busy_addresses()
+            terminals = runtime.terminal_manager
+            if terminals is not None:
+                background |= bool(terminals.busy_addresses() & tree) or any(
+                    info.finished_at is None
+                    and any(
+                        owner is not None
+                        and SessionAddress(owner.project_id, owner.agent_id, owner.session_id)
+                        in tree
+                        for owner in (info.lifecycle_owner, info.attachment)
+                    )
+                    for info in terminals.list_terminals()
+                )
+            return {"run_active": run_active, "background_work_running": background}
+
     async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
         """Return *caller*'s Sub-Agents at every depth, breadth first, as they are now.
 
@@ -559,7 +603,9 @@ class SubAgentCoordinator:
         if arguments.get("background") is False:
             notes.append(SUBAGENT_BACKGROUND_IGNORED_NOTE)
         agent_address = optional_text(arguments, "agent_id")
-        if agent_address is not None and is_generic_target(runtime, context, agent_address):
+        if agent_address is not None and await sessions.run_async(
+            is_generic_target, runtime, context, agent_address
+        ):
             notes.append(SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE.format(name=quoted(agent_address)))
             agent_address = None
         target_agent_id, target_project_id = _resolve_target_address(
@@ -568,10 +614,11 @@ class SubAgentCoordinator:
         target_address = agent_address or format_agent_address(target_agent_id, target_project_id)
         overrides = _parse_session_overrides(arguments)
         if not _target_is_allowed(context, target_agent_id, target_project_id):
+            choices = await sessions.run_async(target_choices, runtime, context)
             return tool_failure(
                 "agent_not_allowed",
                 SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE.format(
-                    target=target_address, choices=target_choices(runtime, context)
+                    target=target_address, choices=choices
                 ),
             )
         temporary_parent = await self._temporary_parent(context, target_agent_id, target_project_id)
@@ -588,9 +635,10 @@ class SubAgentCoordinator:
             error = failure["error"]
             if error["code"] in {"agent_not_found", "project_not_found"}:
                 reason = str(error["message"]).rstrip(".")
+                choices = await sessions.run_async(target_choices, runtime, context)
                 return tool_failure(
                     error["code"],
-                    f"Nothing was started. {reason}. {target_choices(runtime, context)}",
+                    f"Nothing was started. {reason}. {choices}",
                 )
             return failure
 
@@ -648,31 +696,48 @@ class SubAgentCoordinator:
         runtime = self._runtime
         sessions = runtime.chat_sessions
         new_subagent_id = new_id("sub")
-        session = await sessions.run_async(
-            _open_subagent_session,
-            runtime,
-            target_agent_id,
-            target_project_id,
-            _session_title(description),
-            new_subagent_id,
-            context,
-            overrides,
-        )
-        address = session.address
-        executor = runtime.chat_loop.run_executor(
-            content, parent_agent_input=True, temporary_parent_binding=temporary_parent
-        )
-        try:
-            run = await runtime.chat_run_manager.start(
-                address,
-                executor,
-                admission=_admission(
-                    context, new_subagent_id, _child_working_project(context, target_project_id)
-                ),
+        async with AsyncExitStack() as lifecycle:
+            binding = _target_binding(context, target_agent_id, target_project_id)
+            if binding is not None:
+                # Agent create/rename/archive/restore hold this same lock. Keep
+                # the identity check and Run admission together; afterwards an
+                # active Run itself prevents replacing its Agent.
+                await lifecycle.enter_async_context(runtime.automation_references.lock)
+                if not await sessions.run_async(
+                    runtime.agents.delegation_target_allowed, target_agent_id, binding
+                ):
+                    choices = await sessions.run_async(target_choices, runtime, context)
+                    return tool_failure(
+                        "agent_not_allowed",
+                        SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE.format(
+                            target=target_agent_id, choices=choices
+                        ),
+                    )
+            session = await sessions.run_async(
+                _open_subagent_session,
+                runtime,
+                target_agent_id,
+                target_project_id,
+                _session_title(description),
+                new_subagent_id,
+                context,
+                overrides,
             )
-        except Exception:
-            await _remove_unstarted_session(runtime, address)
-            raise
+            address = session.address
+            executor = runtime.chat_loop.run_executor(
+                content, parent_agent_input=True, temporary_parent_binding=temporary_parent
+            )
+            try:
+                run = await runtime.chat_run_manager.start(
+                    address,
+                    executor,
+                    admission=_admission(
+                        context, new_subagent_id, _child_working_project(context, target_project_id)
+                    ),
+                )
+            except Exception:
+                await _remove_unstarted_session(runtime, address)
+                raise
         activity = await self._activities.ensure(address)
         activity_file = self._activities.path(address)
         _LOGGER.info(
@@ -958,7 +1023,7 @@ class SubAgentCoordinator:
         # Cancel every captured Run while admissions are still excluded, so a
         # descendant cannot create or resume work during another Run's cleanup.
         async with self._admission_lock:
-            below = await sessions.run_async(descendants, sessions, root)
+            below = await sessions.run_async(descendants, sessions, root, strict=True)
             addresses = [root, *(link.session for link in below)]
             for address in addresses:
                 if address != root or clear_root_queue:
@@ -976,30 +1041,39 @@ class SubAgentCoordinator:
                     run.request_cancel(reason=reason, initiator=initiator)
                     runs.append(run)
                     stopped += 1
-        # Cleanup can wait on other work; never hold the admission lock here.
-        for address in addresses:
+
+        async def cleanup() -> int:
+            # Cleanup can wait on other work; never hold the admission lock here.
+            # One failed resource must not leave the rest of the captured tree running.
+            closed = 0
+            failures: list[Exception] = []
             if terminals is not None:
-                owner = TerminalOwner(
-                    project_id=address.project_id,
-                    agent_id=address.agent_id,
-                    session_id=address.session_id,
-                )
-                running = [
-                    info
-                    for info in terminals.list_terminals()
-                    if info.finished_at is None and owner in (info.lifecycle_owner, info.attachment)
+                owners = [
+                    TerminalOwner(address.project_id, address.agent_id, address.session_id)
+                    for address in addresses
                 ]
-                if running:
-                    stopped += len(running)
-                    await terminals.close_scope(owner)
-            if commands is not None:
-                # Commands still inside their call end with the cancelled Run;
-                # only background ones count as work of their own.
-                stopped += sum(1 for report in commands.commands([address]) if not report.finished)
-                await commands.close_scope(address)
-        if runs:
-            await asyncio.gather(*(_run_end(run) for run in runs))
-        return stopped
+                try:
+                    closed += await terminals.close_scopes(owners)
+                except Exception as error:
+                    failures.append(error)
+            for address in addresses:
+                if commands is not None:
+                    # Commands still inside their call end with the cancelled Run;
+                    # only background ones count as work of their own.
+                    closed += sum(
+                        1 for report in commands.commands([address]) if not report.finished
+                    )
+                    try:
+                        await commands.close_scope(address)
+                    except Exception as error:
+                        failures.append(error)
+            if runs:
+                await asyncio.gather(*(_run_end(run) for run in runs))
+            if failures:
+                raise failures[0]
+            return closed
+
+        return stopped + await settle_before_cancelling(cleanup())
 
     async def _temporary_parent(
         self, context: ToolContext, target_agent_id: str, target_project_id: str | None
@@ -1386,6 +1460,20 @@ def _resolve_target_address(address: str, caller_project_id: str | None) -> tupl
     """Resolve the Tool's address; a bare address inherits the caller's Project scope."""
     agent_id, addressed_project_id = parse_agent_address(address)
     return agent_id, addressed_project_id or caller_project_id
+
+
+def _target_binding(
+    context: ToolContext, target_agent_id: str, target_project_id: str | None
+) -> str | int | None:
+    """Return an explicit Identity grant's captured incarnation, if it has one."""
+    if (
+        context.project_id is not None
+        or target_project_id is not None
+        or target_agent_id == context.agent_id
+        or "*" in subagent_allowed_agents(context.tool_settings)
+    ):
+        return None
+    return context.delegation_bindings.get(target_agent_id)
 
 
 def _target_is_allowed(

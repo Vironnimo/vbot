@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import re
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
@@ -39,6 +39,7 @@ from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 from core.utils.processes import process_tree_runs
+from core.utils.workers import settle_before_cancelling
 
 from ._terminal_catalog import TerminalCatalog
 from ._terminal_launch import ShellLaunch, interactive_shell, shell_launch
@@ -157,6 +158,7 @@ class TerminalManager:
         self._sessions: dict[str, TerminalSession] = {}
         self._pending_spawns: dict[asyncio.Task[TerminalSession], TerminalOwner | None] = {}
         self._pending_execution_spawns: dict[asyncio.Task[TerminalSession], RunExecutionOwner] = {}
+        self._closing_scopes: list[Callable[[TerminalOwner], bool]] = []
         self._closed_execution_groups: set[tuple[str, str, str]] = set()
         self._closed = False
         self._program_probe = program_probe
@@ -414,7 +416,9 @@ class TerminalManager:
         **kwargs: Any,
     ) -> TerminalSession:
         """Reserve capacity before starting work and retain ownership through cancellation."""
-        if self._closed:
+        if self._closed or (
+            owner is not None and any(matches(owner) for matches in self._closing_scopes)
+        ):
             raise TerminalClosedError("Terminal Session is no longer running")
         if (
             execution_owner is not None
@@ -505,10 +509,12 @@ class TerminalManager:
                     process_env.update(integration.environment)
                     if integration.scratch is not None:
                         cleanup = integration.remove_scratch
+            if self._closed or (
+                owner is not None and any(matches(owner) for matches in self._closing_scopes)
+            ):
+                raise TerminalClosedError("Terminal Session is no longer running")
             adapter = await self._start_process(argv, cwd, process_env, rows, columns, command_line)
             observer = await self._observe(adapter.pid)
-            if self._closed:
-                raise TerminalClosedError("Terminal Session is no longer running")
         except Exception as error:
             if adapter is not None:
                 with contextlib.suppress(OSError, ProcessLookupError):
@@ -548,6 +554,19 @@ class TerminalManager:
             services=self._services,
             observer=observer,
         )
+        if self._closed or (
+            owner is not None and any(matches(owner) for matches in self._closing_scopes)
+        ):
+            try:
+                await session.terminate(suppress_attention=True)
+            except Exception:
+                # An unconfirmed stop must retain the process and captured
+                # descendant identities under the normal retryable owner.
+                self._sessions[terminal_id] = session
+                session.start()
+                raise
+            session.release()
+            raise TerminalClosedError("Terminal Session is no longer running")
         if group_id is not None:
             self._catalog.add_to_group(group_id, terminal_id)
         self._sessions[terminal_id] = session
@@ -915,19 +934,29 @@ class TerminalManager:
             # closed marker is released instead of accumulating for the server life.
             self._closed_execution_groups.discard(key)
 
-    async def close_scope(self, owner: TerminalOwner) -> None:
-        """Apply Terminal lifecycle and attachment cleanup for a removed Session."""
-        await self._close_matching(lambda scope: scope == owner)
+    async def close_scope(self, owner: TerminalOwner) -> int:
+        """Stop a Session's live and launching terminals, and detach its other bindings.
 
-    async def close_agent_scope(self, agent_id: str, project_id: str | None) -> None:
+        Returns the number of live terminals stopped or detached, including
+        pending launches. New launches in this scope are refused until cleanup
+        settles; a later Run can start terminals normally.
+        """
+        return await self.close_scopes((owner,))
+
+    async def close_scopes(self, owners: Collection[TerminalOwner]) -> int:
+        """Close a captured Session tree under one fence, counting each terminal once."""
+        scopes = frozenset(owners)
+        return await self._close_matching(scopes.__contains__)
+
+    async def close_agent_scope(self, agent_id: str, project_id: str | None) -> int:
         """Apply Terminal lifecycle and attachment cleanup for a removed Agent scope."""
-        await self._close_matching(
+        return await self._close_matching(
             lambda scope: scope.agent_id == agent_id and scope.project_id == project_id
         )
 
-    async def close_project_scope(self, project_id: str) -> None:
+    async def close_project_scope(self, project_id: str) -> int:
         """Apply Terminal lifecycle and attachment cleanup for a removed Project."""
-        await self._close_matching(lambda scope: scope.project_id == project_id)
+        return await self._close_matching(lambda scope: scope.project_id == project_id)
 
     def transfer_scope(self, source: TerminalOwner, target: TerminalOwner) -> int:
         """Transfer lifecycle and attachment scopes after a successful Session move."""
@@ -952,20 +981,52 @@ class TerminalManager:
             moved += bool(scopes)
         return moved
 
-    async def _close_matching(self, matches: Callable[[TerminalOwner], bool]) -> None:
-        """Stop terminals whose lifecycle owner matches; detach the others' attachments."""
-        terminating = [
-            session
-            for session in self._sessions.values()
-            if session.lifecycle_owner is not None and matches(session.lifecycle_owner)
-        ]
-        for session in self._sessions.values():
-            attachment = session.attachment
-            if session not in terminating and attachment is not None and matches(attachment):
-                session.detach()
-        await asyncio.gather(
-            *(session.terminate(suppress_attention=True) for session in terminating)
-        )
+    async def _close_matching(self, matches: Callable[[TerminalOwner], bool]) -> int:
+        """Fence matching launches, drain them and stop only matching lifecycle owners."""
+        self._closing_scopes.append(matches)
+        try:
+            pending = [
+                task
+                for task, owner in self._pending_spawns.items()
+                if not task.done() and owner is not None and matches(owner)
+            ]
+            terminating = [
+                session
+                for session in self._sessions.values()
+                if session.lifecycle_owner is not None and matches(session.lifecycle_owner)
+            ]
+            stopped = len(pending) + sum(not session.finished for session in terminating)
+            for session in self._sessions.values():
+                attachment = session.attachment
+                if session not in terminating and attachment is not None and matches(attachment):
+                    stopped += not session.finished
+                    session.detach()
+
+            async def drain() -> None:
+                # A native launch cannot be cancelled safely. Its publication
+                # check sees the fence and disposes the child before returning.
+                # Published terminals can stop while those launches are settling.
+                results = await asyncio.gather(
+                    asyncio.gather(*pending, return_exceptions=True),
+                    *(session.terminate(suppress_attention=True) for session in terminating),
+                    return_exceptions=True,
+                )
+                pending_results = results[0]
+                failures = [result for result in results[1:] if isinstance(result, BaseException)]
+                if isinstance(pending_results, list):
+                    failures.extend(
+                        result
+                        for result in pending_results
+                        if isinstance(result, BaseException)
+                        and not isinstance(result, (TerminalClosedError, TerminalLaunchError))
+                    )
+                if failures:
+                    raise failures[0]
+
+            await settle_before_cancelling(drain())
+            return stopped
+        finally:
+            self._closing_scopes.remove(matches)
 
     # Retention
 

@@ -8,6 +8,7 @@ import pytest
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.recall import (
+    HybridRecallBackend,
     RecallBackendContext,
     RecallSearchError,
     RecallSearchPage,
@@ -24,8 +25,10 @@ from tests.core.tools.session_search_test_support import search, success
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
 
-async def test_fts_hit_includes_question_and_final_answer_without_loading_history(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("passage_backend", [False, True], ids=["messages", "passages"])
+@pytest.mark.parametrize("inherited", [False, True], ids=["own", "inherited"])
+async def test_hit_includes_question_and_final_answer_without_loading_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, passage_backend: bool, inherited: bool
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="target", project_id="p1")
@@ -39,7 +42,10 @@ async def test_fts_hit_includes_question_and_final_answer_without_loading_histor
         tool_call_id="call", name="bash", content="private machine output" * 10000
     )
     answer = ChatMessage.assistant(model="test", content="Correction: keep thirty days.")
-    session.append_many([question, interim, tool, answer, ChatMessage.user("Unrelated question")])
+    session.append_many([question, interim, tool, answer])
+    if inherited:
+        session = await sessions.fork(session.address, target_project_id="p1")
+    session.append(ChatMessage.user("Unrelated question"))
     sessions.create("coder", session_id="target").append(ChatMessage.user("Retention wrong scope"))
 
     def reject_load(*_args: object) -> None:
@@ -47,9 +53,18 @@ async def test_fts_hit_includes_question_and_final_answer_without_loading_histor
 
     monkeypatch.setattr(ChatSession, "load", reject_load)
     monkeypatch.setattr(ChatSession, "load_active", reject_load)
-    backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))
-    data = success(await search(tmp_path, {"query": "Retention"}, backend, project_id="p1"))
-    missing = success(await search(tmp_path, {"query": "absent"}, backend, project_id="p1"))
+    context = RecallBackendContext(tmp_path, sessions)
+    backend = HybridRecallBackend(context) if passage_backend else SqliteFtsRecallBackend(context)
+    try:
+        data = success(
+            await search(
+                tmp_path, {"query": "Retention", "session_id": session.id}, backend, project_id="p1"
+            )
+        )
+        missing = success(await search(tmp_path, {"query": "absent"}, backend, project_id="p1"))
+    finally:
+        if isinstance(backend, HybridRecallBackend):
+            backend.close()
 
     hit = data["items"][0]
     assert hit["message_id"] == interim.id
@@ -57,7 +72,7 @@ async def test_fts_hit_includes_question_and_final_answer_without_loading_histor
     assert [item["text"] for item in hit["context"]] == [question.content, answer.content]
     assert "read_ref" not in hit
     assert hit["context_is_partial"] is True
-    assert data["sessions"] == [{"agent_id": "coder", "session_id": "target"}]
+    assert data["sessions"] == [{"agent_id": "coder", "session_id": session.id}]
     assert missing["items"] == []
 
 
@@ -140,7 +155,7 @@ async def test_summary_hits_are_labeled_and_carry_no_context(tmp_path: Path) -> 
     assert data["items"][0]["context"] == []
 
 
-async def test_multi_message_passage_does_not_attribute_all_text_to_first_speaker(
+async def test_passage_keeps_its_speaker_and_adds_other_turns_as_context(
     tmp_path: Path,
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -150,14 +165,19 @@ async def test_multi_message_passage_does_not_attribute_all_text_to_first_speake
     session.append_many([question, answer])
     embeddings = FixtureEmbeddings()
     backend = VectorRecallBackend(RecallBackendContext(tmp_path, sessions, embeddings=embeddings))
-    await embed_documents(backend.index, sessions, embeddings)
-    data = success(await search(tmp_path, {"query": "Aurora Aufbewahrung"}, backend))
-    hit = data["items"][0]
-    assert hit["content_kind"] == "conversation_excerpt"
-    assert "role" not in hit
-    assert hit["message_id"] == question.id
-    assert hit["end_message_id"] == answer.id
-    assert "30 Tage." in hit["excerpt"]["text"]
+    try:
+        await embed_documents(backend.index, sessions, embeddings)
+        data = success(await search(tmp_path, {"query": "Aurora Aufbewahrung"}, backend))
+    finally:
+        backend.close()
+    hit = next(item for item in data["items"] if item["message_id"] == question.id)
+    assert hit["role"] == "user"
+    assert hit["end_message_id"] == question.id
+    assert hit["excerpt"]["text"] == question.content
+    assert any(
+        item["message_id"] == answer.id and item["text"] == answer.content
+        for item in hit["context"]
+    )
     assert not {"passage_id", "sources"} & hit.keys()
 
 

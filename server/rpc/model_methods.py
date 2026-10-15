@@ -32,7 +32,9 @@ from core.providers.accounts import ConnectionRef
 from core.providers.errors import NetworkError, ProviderError
 from core.utils.errors import ConfigError
 from core.utils.retry import caller_owns_retries
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 from server.events import RESOURCE_KIND_MODELS
+from server.rpc._mutations import state_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
@@ -80,6 +82,8 @@ _MODEL_REFRESH_TARGETS = frozenset({_MODEL_REFRESH_TARGET_RUNTIME, _MODEL_REFRES
 LOCAL_CATALOG_REFRESH_WAIT_SECONDS = 3.0
 
 _BACKGROUND_REFRESH_TASKS: dict[int, set[asyncio.Task[None]]] = {}
+_MODEL_DB_WORKERS = BoundedWorkerPool(name="model-db-refresh", max_workers=1)
+_MODEL_READ_WORKERS = BoundedWorkerPool(name="model-access", max_workers=4)
 
 
 @dataclass(frozen=True)
@@ -104,56 +108,60 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
     # call serves the last known catalog. The runtime method is throttled and
     # never raises.
     await _await_local_catalog_refresh(state.runtime)
-
-    try:
-        runtime = state.runtime
-        local_context_windows = runtime.storage.load_local_models_settings()["context_windows"]
-        usable_connections_by_provider: dict[str, list[Any]] = {}
-
-        def _usable_connections(provider_id: str) -> list[Any]:
-            cached = usable_connections_by_provider.get(provider_id)
-            if cached is not None:
-                return cached
-            provider = _provider_config_or_none(runtime, provider_id)
-            connections = [
-                connection
-                for connection in getattr(provider, "connections", [])
-                if runtime.provider_credentials.is_usable(
-                    provider_id, f"{provider_id}:{connection.id}"
-                )
-            ]
-            usable_connections_by_provider[provider_id] = connections
-            return connections
-
-        models = []
-        for provider_id, model in runtime.models.query(model_query):
-            allowed_connections = [
-                connection
-                for connection in _usable_connections(provider_id)
-                if model.allows_connection(connection.id)
-            ]
-            if not allowed_connections:
-                continue
-            response = _model_response(
-                provider_id,
-                model,
-                provider_config=_provider_config_or_none(runtime, provider_id),
-                local_context_windows=local_context_windows,
+    # A Provider mutation publishes Settings, credentials and registries as one read boundary.
+    async with state_lock(state, "_settings_mutation_lock"):
+        try:
+            runtime = state.runtime
+            selected_models = runtime.models.query(model_query)
+            local_context_windows, usable_connections_by_provider = await _MODEL_READ_WORKERS.run(
+                _model_access_snapshot, runtime, {provider_id for provider_id, _ in selected_models}
             )
-            response["wire_profiles"] = {
-                connection.id: _wire_status_response(
-                    *runtime.wire_status(provider_id, connection.id, model.model_id)
+
+            models = []
+            for provider_id, model in selected_models:
+                allowed_connections = [
+                    connection
+                    for connection in usable_connections_by_provider[provider_id]
+                    if model.allows_connection(connection.id)
+                ]
+                if not allowed_connections:
+                    continue
+                response = _model_response(
+                    provider_id,
+                    model,
+                    provider_config=_provider_config_or_none(runtime, provider_id),
+                    local_context_windows=local_context_windows,
                 )
-                for connection in allowed_connections
-            }
-            reachable = _model_reachability(runtime, provider_id, allowed_connections)
-            if reachable is not None:
-                response["reachable"] = reachable
-            models.append(response)
-        models.sort(key=lambda model: (model["provider_id"], model["model_id"]))
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    return {"models": models}
+                response["wire_profiles"] = {
+                    connection.id: _wire_status_response(
+                        *runtime.wire_status(provider_id, connection.id, model.model_id)
+                    )
+                    for connection in allowed_connections
+                }
+                reachable = _model_reachability(runtime, provider_id, allowed_connections)
+                if reachable is not None:
+                    response["reachable"] = reachable
+                models.append(response)
+            models.sort(key=lambda model: (model["provider_id"], model["model_id"]))
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        return {"models": models}
+
+
+def _model_access_snapshot(
+    runtime: Any, provider_ids: set[str]
+) -> tuple[Any, dict[str, list[Any]]]:
+    """Read credential/settings projections together, without loop-owned wire state."""
+    windows = runtime.storage.load_local_models_settings()["context_windows"]
+    usable: dict[str, list[Any]] = {}
+    for provider_id in provider_ids:
+        provider = _provider_config_or_none(runtime, provider_id)
+        usable[provider_id] = [
+            connection
+            for connection in getattr(provider, "connections", ())
+            if runtime.provider_credentials.is_usable(provider_id, f"{provider_id}:{connection.id}")
+        ]
+    return windows, usable
 
 
 async def _get_model(state: Any, params: JsonObject) -> JsonObject:
@@ -172,53 +180,54 @@ async def _get_model(state: Any, params: JsonObject) -> JsonObject:
         )
 
     await _await_local_catalog_refresh(state.runtime)
-    runtime = state.runtime
-    try:
-        model = runtime.models.get(provider_id, model_id)
-    except KeyError as exc:
-        candidates = [
-            f"{candidate_provider}/{candidate_model.model_id}"
-            for candidate_provider, candidate_model in runtime.models.query(ModelQuery())
-        ]
-        suggestions = get_close_matches(bare_reference, candidates, n=3, cutoff=0.35)
-        suffix = f"; did you mean: {', '.join(suggestions)}" if suggestions else ""
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unknown Model {bare_reference!r}{suffix}",
-        ) from exc
+    # A Provider mutation publishes Settings, credentials and registries as one read boundary.
+    async with state_lock(state, "_settings_mutation_lock"):
+        runtime = state.runtime
+        try:
+            model = runtime.models.get(provider_id, model_id)
+        except KeyError as exc:
+            candidates = [
+                f"{candidate_provider}/{candidate_model.model_id}"
+                for candidate_provider, candidate_model in runtime.models.query(ModelQuery())
+            ]
+            suggestions = get_close_matches(bare_reference, candidates, n=3, cutoff=0.35)
+            suffix = f"; did you mean: {', '.join(suggestions)}" if suggestions else ""
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"unknown Model {bare_reference!r}{suffix}",
+            ) from exc
 
-    local_context_windows = runtime.storage.load_local_models_settings()["context_windows"]
-    response = _model_detail_response(
-        provider_id,
-        model,
-        provider_config=_provider_config_or_none(runtime, provider_id),
-        local_context_windows=local_context_windows,
-    )
-    provider = _provider_config_or_none(runtime, provider_id)
-    allowed_connections = [
-        connection
-        for connection in getattr(provider, "connections", ())
-        if model.allows_connection(connection.id)
-    ]
-    response["usable_connections"] = [
-        connection.id
-        for connection in allowed_connections
-        if runtime.provider_credentials.is_usable(
+        local_context_windows, usable_connections = await _MODEL_READ_WORKERS.run(
+            _model_access_snapshot, runtime, {provider_id}
+        )
+        response = _model_detail_response(
             provider_id,
-            f"{provider_id}:{connection.id}",
+            model,
+            provider_config=_provider_config_or_none(runtime, provider_id),
+            local_context_windows=local_context_windows,
         )
-    ]
-    response["wire_profiles"] = {
-        connection_id: _wire_profile_detail_response(
-            runtime.wire_profile(provider_id, connection_id, model.model_id),
-            runtime.learned_wire_facts(provider_id, connection_id, model.model_id),
-        )
-        for connection_id in response["usable_connections"]
-    }
-    reachable = _model_reachability(runtime, provider_id, allowed_connections)
-    if reachable is not None:
-        response["reachable"] = reachable
-    return {"model": response}
+        provider = _provider_config_or_none(runtime, provider_id)
+        allowed_connections = [
+            connection
+            for connection in getattr(provider, "connections", ())
+            if model.allows_connection(connection.id)
+        ]
+        response["usable_connections"] = [
+            connection.id
+            for connection in allowed_connections
+            if connection in usable_connections[provider_id]
+        ]
+        response["wire_profiles"] = {
+            connection_id: _wire_profile_detail_response(
+                runtime.wire_profile(provider_id, connection_id, model.model_id),
+                runtime.learned_wire_facts(provider_id, connection_id, model.model_id),
+            )
+            for connection_id in response["usable_connections"]
+        }
+        reachable = _model_reachability(runtime, provider_id, allowed_connections)
+        if reachable is not None:
+            response["reachable"] = reachable
+        return {"model": response}
 
 
 async def _forget_wire_facts(state: Any, params: JsonObject) -> JsonObject:
@@ -269,33 +278,30 @@ async def _routing_provider_options(state: Any, params: JsonObject) -> JsonObjec
             raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.model_id must be a non-empty string")
         model_id = model_id.strip()
 
+    adapter: Any = None
     try:
         runtime = state.runtime
-        provider = runtime.providers.get(provider_id)
-        connection_id = next(
-            (
-                f"{provider_id}:{connection.id}"
-                for connection in provider.connections
-                if runtime.provider_credentials.is_usable(
-                    provider_id,
-                    f"{provider_id}:{connection.id}",
-                )
-            ),
-            None,
+        _windows, usable = await _MODEL_READ_WORKERS.run(
+            _model_access_snapshot, runtime, {provider_id}
         )
-        if connection_id is None:
+        if not usable[provider_id]:
             raise ConfigError("OpenRouter has no usable Connection")
-        adapter = runtime.get_adapter(ConnectionRef(provider_id, connection_id))
+        connection_id = f"{provider_id}:{usable[provider_id][0].id}"
+
+        def prepare() -> None:
+            nonlocal adapter
+            adapter = runtime.get_adapter(ConnectionRef(provider_id, connection_id))
+
+        await _MODEL_READ_WORKERS.run(prepare)
         loader = getattr(adapter, "routing_provider_options", None)
         if not callable(loader):
-            await adapter.aclose()
             raise ConfigError("OpenRouter Adapter does not expose routing options")
-        try:
-            providers = await loader(model_id)
-        finally:
-            await adapter.aclose()
+        providers = await loader(model_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    finally:
+        if adapter is not None:
+            await adapter.aclose()
     return {"providers": providers}
 
 
@@ -404,7 +410,9 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
             begin = _runtime_refresh_beginner(runtime)
         else:
             expected_resources_dir = _required_string(params, "expected_resources_dir")
-            if Path(expected_resources_dir).resolve() != system_resources_dir.resolve():
+            if not await _MODEL_READ_WORKERS.run(
+                lambda: Path(expected_resources_dir).resolve() == system_resources_dir.resolve()
+            ):
                 raise RpcError(
                     RPC_ERROR_INVALID_REQUEST,
                     "the serving checkout does not match the requested system Model DB",
@@ -493,17 +501,35 @@ async def _publish_model_db_refresh(
     the outcome and the number of entries Load ignores.
     """
 
-    database_refresh = begin()
+    staged: list[ModelDatabaseRefresh] = []
+
+    def stage() -> None:
+        # Retain the result inside the worker: a cancelled caller still owns
+        # the staged directory after cancellation waits for staging to finish.
+        staged.append(begin())
+
+    async def publish(database_refresh: ModelDatabaseRefresh, outcome: _RefreshOutcome) -> None:
+        await _MODEL_DB_WORKERS.run(
+            database_refresh.commit, providers=outcome.providers, canonical=outcome.canonical
+        )
+        await _reload_runtime_model_registry(runtime, runtime.storage.resources_dir)
+
     try:
+        await _MODEL_DB_WORKERS.run(stage)
+        database_refresh = staged[0]
         outcome = await refresh(database_refresh.resources_dir)
         # Validation collects instead of logging: the live reload below logs
         # each entry Load ignores, so the refresh reports it once.
-        invalid_entry_count = len(ModelRegistry.validate(database_refresh.resources_dir))
-        database_refresh.commit(providers=outcome.providers, canonical=outcome.canonical)
-        await _reload_runtime_model_registry(runtime, runtime.storage.resources_dir)
+        invalid_entry_count = len(
+            await _MODEL_DB_WORKERS.run(ModelRegistry.validate, database_refresh.resources_dir)
+        )
+        # Publication and the in-memory swap are one admitted operation. Once
+        # publication starts, cancellation may not leave the registry stale.
+        await settle_before_cancelling(publish(database_refresh, outcome))
     finally:
-        ModelRegistry.invalidate(database_refresh.resources_dir)
-        database_refresh.discard()
+        for database_refresh in staged:
+            ModelRegistry.invalidate(database_refresh.resources_dir)
+            await _MODEL_DB_WORKERS.run(database_refresh.discard)
     return outcome, invalid_entry_count
 
 
@@ -761,7 +787,10 @@ async def _refresh_provider_model_db(
         if errors:
             raise RpcError(RPC_ERROR_DOMAIN, str(errors[0]["error"]))
         raise RpcError(
-            RPC_ERROR_DOMAIN, _no_refreshable_connection_message(runtime, provider_id, provider)
+            RPC_ERROR_DOMAIN,
+            await _MODEL_READ_WORKERS.run(
+                _no_refreshable_connection_message, runtime, provider_id, provider
+            ),
         )
     canonical_result = await _refresh_canonical_layer_if_possible(
         catalog,
@@ -847,8 +876,8 @@ async def _refresh_provider_connections(
             continue
         connection_id = f"{provider_id}:{connection.id}"
         requires_credentials = getattr(connection, "catalog_requires_credentials", True)
-        if requires_credentials and not runtime.provider_credentials.is_usable(
-            provider_id, connection_id
+        if requires_credentials and not await _MODEL_READ_WORKERS.run(
+            runtime.provider_credentials.is_usable, provider_id, connection_id
         ):
             continue
         try:
@@ -903,7 +932,9 @@ async def _reload_runtime_model_registry(runtime: Any, system_resources_dir: Pat
     await runtime.models.reload_async(
         system_resources_dir,
         runtime_models_dir=runtime.storage.layout.models,
-        custom_providers=runtime.storage.load_custom_providers_settings(),
+        custom_providers=await _MODEL_READ_WORKERS.run(
+            runtime.storage.load_custom_providers_settings
+        ),
     )
 
 

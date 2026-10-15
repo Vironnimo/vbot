@@ -691,17 +691,23 @@ def test_a_slow_echo_canceller_does_not_hold_back_listening(
         )
 
         before = read_items(subscriptions[0], 3)
-        assert all(isinstance(item, AudioBlock) and item.recording_rate == 16000 for item in before)
+        assert all(isinstance(item, AudioBlock) and item.recording_rate == 48000 for item in before)
         assert run.statuses[0].echo_state == "starting"
 
         ready.set()
         items = read_items_until(
             subscriptions[0],
-            lambda item: isinstance(item, AudioBlock) and item.recording_rate == 48000,
+            lambda _item: len(stage.processed) >= 3,
         )
 
-        # The stage changes the recording rate, so its first block follows a gap.
-        assert items[-2] == CaptureGap("echo_attached")
+        # A cold echo stage keeps the recording's sample rate and history intact.
+        combined = before + items
+        assert all(
+            isinstance(item, AudioBlock) and item.recording_rate == 48000 for item in combined
+        )
+        assert [item.index for item in combined if isinstance(item, AudioBlock)] == list(
+            range(len(combined))
+        )
         assert stage.log[0] == "stage.open:16000"
         wait_until(lambda: run.capture.status.echo_state == "active")
 

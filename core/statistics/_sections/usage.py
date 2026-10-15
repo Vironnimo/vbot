@@ -174,8 +174,8 @@ def _recent_calls(context: ReportContext, units: str) -> list[JsonObject]:
         CROSS JOIN stat_usage_calls c ON c.session_key = r.session_key AND c.seq = r.seq
         CROSS JOIN stat_usage_units u ON u.session_key = r.session_key
         CROSS JOIN {units} ru ON ru.unit_key = r.session_key
-        LEFT JOIN stat_sessions s ON s.project_id = u.project_id AND s.agent_id = u.agent_id
-            AND s.session_id = u.session_id
+        LEFT JOIN stat_sessions s ON s.generation_id = u.session_generation_id
+            AND u.session_generation_id <> ''
         LEFT JOIN stat_run_records rr ON rr.session_key = s.session_key AND rr.run_id = r.run_id
         WHERE {context.instant_condition("r.instant")}
         ORDER BY r.instant DESC, r.seq DESC

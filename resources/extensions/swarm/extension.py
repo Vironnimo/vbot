@@ -95,14 +95,6 @@ _TOOL_PARAMETERS = (
 # for wake pacing.
 _BOARD_READS = frozenset({"list", "read"})
 _WIKI_READS = frozenset({"list", "read", "history"})
-# What each Board mutation changes for the open page (``SwarmExtension._changed``).
-# Creating a discussion also posts its opening and the main-discussion announcement.
-_BOARD_CHANGES = {
-    "post": ("posts",),
-    "create": ("discussions", "posts"),
-    "join": ("discussions",),
-    "leave": ("discussions",),
-}
 # Accepted without being offered: a Participant's own identity copied from its
 # reminders, the single action of the inbox and state Tools, explicit Board
 # recipients, which "@" before names in the post text replaces, the offset
@@ -334,8 +326,14 @@ class SwarmExtension:
                 arguments["recipients"] = recipients.ids
                 notes.extend(recipients.notes)
             data = await getattr(call, action)(arguments)
-            for resource in _BOARD_CHANGES.get(action, ()):
-                self._changed(resource, binding.group_id, swarm["settings_revision"])
+            if call.discussions_changed:
+                self._changed("discussions", binding.group_id, swarm["settings_revision"])
+            for discussion_id in call.post_discussions:
+                self._changed(
+                    "discussion_posts",
+                    f"{binding.group_id}/{discussion_id}",
+                    swarm["settings_revision"],
+                )
             if action in {"post", "create"}:
                 self._enqueue_wakes(binding.group_id)
             return tool_success(with_notes(data, notes))
@@ -463,10 +461,11 @@ class SwarmExtension:
         return data
 
     # The open page reloads only what shows a change, so each change names what
-    # changed. ``profiles`` names a profile id; the other resources name a Swarm
+    # changed. ``profiles`` names a profile id; ``discussion_posts`` names a
+    # Swarm/discussion pair; the other resources name a Swarm
     # id: ``swarms`` its entry in the Swarm list (created, deleted, state, title,
     # settings), ``participants`` their Runs, states and pending messages,
-    # ``posts`` new Board posts, ``discussions`` discussions and their members,
+    # ``discussions`` discussions and their members,
     # ``wiki`` its Wiki pages.
     def _changed(self, resource: str, record_id: str, revision: int = 0) -> None:
         host = self.host
@@ -638,8 +637,13 @@ class SwarmExtension:
         return result
 
     async def _swarms_get(self, arguments: Json) -> Json:
-        _exact(arguments, {"swarm_id"})
-        swarm = await self._store().get_swarm(_string(arguments, "swarm_id"))
+        _exact(arguments, {"swarm_id", "include_snapshot"}, required={"swarm_id"})
+        include_snapshot = arguments.get("include_snapshot", True)
+        if type(include_snapshot) is not bool:
+            raise SwarmStoreError("invalid_arguments", field="include_snapshot")
+        swarm = await self._store().get_swarm(
+            _string(arguments, "swarm_id"), include_snapshot=include_snapshot
+        )
         host = self.host
         groups = None if host is None else host.temporary_agents
         run_ids = [
@@ -889,7 +893,12 @@ class SwarmExtension:
                     "Swarm message saved but resume failed (swarm=%s)", swarm_id, exc_info=True
                 )
                 result["resume_failed"] = True
-        self._changed("posts", swarm_id, snapshot["settings_revision"])
+        if not result.get("replayed"):
+            self._changed(
+                "discussion_posts",
+                f"{swarm_id}/{result['discussion_id']}",
+                snapshot["settings_revision"],
+            )
         self._enqueue_wakes(swarm_id)
         return result
 

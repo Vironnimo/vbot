@@ -185,8 +185,8 @@ class SwarmStore:
     async def delete_swarm(self, swarm_id: str) -> None:
         await self._run(_delete_swarm, swarm_id)
 
-    async def get_swarm(self, swarm_id: str) -> Json:
-        return await self._run(_get_swarm, swarm_id)
+    async def get_swarm(self, swarm_id: str, *, include_snapshot: bool = True) -> Json:
+        return await self._run(_get_swarm, swarm_id, include_snapshot)
 
     async def existing_swarm_ids(self, swarm_ids: Sequence[str]) -> set[str]:
         """Return which of these ids name a Swarm in this database, in any state."""

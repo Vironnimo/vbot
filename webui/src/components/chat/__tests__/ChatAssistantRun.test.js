@@ -48,6 +48,18 @@ function stubClipboard() {
 describe('ChatAssistantRun', () => {
   const run = setupChatAssistantRunSuite();
 
+  it('exposes the full timestamp on keyboard focus', () => {
+    run.mount({ item: assistantRun() });
+    const timestamp = document.querySelector('.msg-timestamp');
+    expect(timestamp.tabIndex).toBe(0);
+    timestamp.focus();
+    flushSync();
+    expect(timestamp.getAttribute('aria-describedby')).toBe('app-tooltip');
+    expect(document.querySelector('#app-tooltip').textContent).toContain(
+      '2026',
+    );
+  });
+
   describe('row actions', () => {
     it.each([
       [

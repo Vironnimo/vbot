@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
+from core.automation._cron_projection import CronProjection
 from core.calendar import (
     BoundJob,
     CalendarEventNotFoundError,
+    CalendarProjection,
     CalendarStorageError,
     EventJobTargetMissingError,
 )
@@ -413,6 +415,28 @@ class CronService:
             return False
         return self._event_job_can_fire(job, event, now or _timing._utc_now())
 
+    async def load_projection(self) -> None:
+        """Preload the persisted job catalog before capturing a display projection."""
+        if not self._jobs_loaded:
+            await _CRON_WRITER.call_async(partial(self._ensure_jobs_loaded, allow_degraded=True))
+
+    def projection(self) -> CronProjection:
+        """Detach scheduled jobs and their bound event records from the live owner."""
+        self._ensure_jobs_loaded(allow_degraded=True)
+        jobs = tuple(self._clone_job(job) for job in self._jobs.values())
+        events = [event for job in jobs if (event := self._bound_event(job)) is not None]
+        calendar_zone = (
+            self._calendar.system_timezone_name()
+            if self._calendar is not None
+            else str(self._timezone)
+        )
+        return CronProjection(
+            jobs,
+            self._timezone,
+            _timing._utc_now(),
+            CalendarProjection(events, ZoneInfo(calendar_zone)),
+        )
+
     def project_occurrences(
         self,
         window_start_utc: datetime,
@@ -420,35 +444,10 @@ class CronService:
         *,
         max_per_job: int = MAX_PROJECTED_OCCURRENCES_PER_JOB,
     ) -> list[CronOccurrence]:
-        """Project scheduled fire instants of active jobs into a UTC window.
-
-        Read-only display projection for the calendar: nothing is persisted and
-        no Run is started. Paused and terminal jobs never project. A job's
-        future ticks respect its remaining-runs budget; ticks before the current
-        time inside the window are shown as schedule history.
-        """
-        self._ensure_jobs_loaded(allow_degraded=True)
-        window_start = _as_utc(window_start_utc)
-        window_end = _as_utc(window_end_utc)
-        if window_end <= window_start:
-            raise CronJobValidationError("projection window end must be after its start")
-        now_utc = _timing._utc_now()
-        occurrences: list[CronOccurrence] = []
-        for job in sorted(self._jobs.values(), key=lambda item: (item.created_at, item.id)):
-            if job.status != "active" or job.remaining_runs == 0:
-                continue
-            if job.schedule_type == "event":
-                occurrences.extend(
-                    self._project_event_job(job, window_start, window_end, max_per_job)
-                )
-                continue
-            occurrences.extend(
-                _schedule._project_job_occurrences(
-                    self._timezone, job, window_start, window_end, now_utc, max_per_job
-                )
-            )
-        occurrences.sort(key=lambda item: (item.fire_at_utc, item.job_id))
-        return occurrences
+        """Project committed schedules without mutating scheduler state."""
+        return self.projection().project_occurrences(
+            window_start_utc, window_end_utc, max_per_job=max_per_job
+        )
 
     async def update_job(
         self, job_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
@@ -1663,26 +1662,6 @@ class CronService:
             raise CronStorageError(f"The calendar cannot be read: {error}") from error
         if event is None:
             raise CronJobValidationError(f"Calendar event not found: {job.event_id}")
-
-    def _project_event_job(
-        self, job: CronJob, window_start: datetime, window_end: datetime, cap: int
-    ) -> list[CronOccurrence]:
-        event = self._bound_event(job)
-        if event is None or self._calendar is None:
-            return []
-        return [
-            CronOccurrence(
-                job_id=job.id,
-                name=job.name,
-                fire_at_utc=due.due_at,
-                schedule_type="event",
-                event_id=due.occurrence.event_id,
-                occurrence_id=due.occurrence.id,
-            )
-            for due in _events.dues_in_window(
-                self._calendar, event, job, window_start, window_end, cap
-            )
-        ]
 
     def _missing_targets(self, jobs: list[CronJob]) -> list[tuple[str, str]]:
         """Pair each job whose target is partly gone with what is missing; blocking."""

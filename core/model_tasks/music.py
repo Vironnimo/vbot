@@ -122,7 +122,9 @@ class MusicService:
             raise MusicConfigurationError("Prompt must not be empty")
 
         try:
-            _binding, options, target_ref = self._resolver.resolve(TASK_MUSIC_GENERATION)
+            _binding, options, target_ref = await self._resolver.resolve_async(
+                TASK_MUSIC_GENERATION
+            )
         except MusicConfigurationError as exc:
             raise MusicConfigurationError("no Music generation model is chosen") from exc
         model = self._validated_model(target_ref)
@@ -133,7 +135,7 @@ class MusicService:
             )
         images = await asyncio.to_thread(load_image_inputs, source_paths)
 
-        client = ProviderMusicClient.from_runtime(
+        client = await ProviderMusicClient.from_runtime_async(
             self._runtime,
             target_ref,
             usage_observer=TaskUsage(

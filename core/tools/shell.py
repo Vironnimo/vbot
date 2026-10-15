@@ -78,6 +78,7 @@ from core.tools.arguments import optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.command_manager import (
     CommandCapacityError,
+    CommandCheckpointError,
     CommandLaunchError,
     CommandManager,
     CommandManagerError,
@@ -614,9 +615,33 @@ class ShellTool:
         if handoff is not None:
             self._keep(self._release_when_finished(command_id, handoff))
         if call.background:
-            report = self._commands.to_background(command_id, deliver=True)
-            return _result(call, report, names, reason="background")
+            return await self._background_result(call, command_id, names, reason="background")
         return await self._wait(context, call, command_id, names)
+
+    async def _background_result(
+        self,
+        call: _ShellCall,
+        command_id: str,
+        names: ToolNames,
+        *,
+        reason: str,
+        idle: bool = False,
+    ) -> JsonObject:
+        recovery_failed = False
+        try:
+            report = await self._commands.to_background_durably(
+                command_id,
+                deliver=not self._commands.report(command_id).ended,
+            )
+        except CommandCheckpointError:
+            _LOGGER.warning(
+                "Command recovery state unavailable (command=%s)", command_id, exc_info=True
+            )
+            report = self._commands.report(command_id)
+            recovery_failed = True
+        return _result(
+            call, report, names, reason=reason, idle=idle, recovery_failed=recovery_failed
+        )
 
     async def _start(
         self,
@@ -738,11 +763,10 @@ class ShellTool:
         # Listed from now on, so the user and the Agent can see and stop it; a
         # command that ended is delivered by this result, not later.
         handed_off = True
-        report = self._commands.to_background(command_id, deliver=not report.ended)
         reason = "timeout" if call.timeout_given else "default"
         if moved.is_set():
             reason = "moved"
-        return _result(call, report, names, reason=reason, idle=idle)
+        return await self._background_result(call, command_id, names, reason=reason, idle=idle)
 
     async def _stop(self, command_id: str, reason: StopReason) -> None:
         try:
@@ -783,6 +807,7 @@ def _result(
     *,
     reason: str = "",
     idle: bool = False,
+    recovery_failed: bool = False,
 ) -> JsonObject:
     """The Tool result of one call; *reason* says why a running command was
     returned, *idle* that its processes were idle when the wait passed."""
@@ -806,6 +831,17 @@ def _result(
         )
     if call.notes:
         data["notes"] = list(call.notes)
+    if recovery_failed:
+        data.setdefault("notes", []).append(
+            "vBot could not save recovery state for this command. The command has already "
+            "started; its completion notification is not guaranteed. Check its status and "
+            "effects before repeating it."
+        )
+        if not report.ended:
+            data["next"] = (
+                f"The command continues as {report.command_id}.{running_output_note(report)} "
+                f"{stop_with(report, names)}"
+            ).rstrip()
     return tool_success(data)
 
 

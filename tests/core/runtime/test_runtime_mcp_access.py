@@ -65,7 +65,8 @@ async def test_temporary_mcp_caller_uses_bound_policy_and_keeps_generation_scope
             execution_owner=owner,
         )
         host = root.for_owner(runtime.extensions.registration_identity("mcp"))
-        agent = host.resolve_tool_agent(ctx)
+        assert host.resolve_tool_agent_async is not None
+        agent = await host.resolve_tool_agent_async(ctx)
         assert agent.tool_access.granted == ("mcp_example",)
         assert not runtime.agents.exists(ctx.agent_id)
         api = ExtensionAPI(
@@ -80,7 +81,9 @@ async def test_temporary_mcp_caller_uses_bound_policy_and_keeps_generation_scope
         runner = service._runner(service.connections["example"])
         runner.state = "connected"
         runner.catalog = {"tools": [], "resources": [], "resource_templates": [], "prompts": []}
-        result = await runtime.tools.dispatch(ctx, {"action": "search"}, service._allowed(ctx))
+        result = await runtime.tools.dispatch(
+            ctx, {"action": "search"}, await service._allowed(ctx)
+        )
         assert result["ok"]
         for invalid in (
             None,

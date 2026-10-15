@@ -13,7 +13,7 @@ from typing import Any, cast
 import pytest
 
 from desktop import connection as desktop_connection
-from desktop.bridge import BridgeError, DesktopBridge
+from desktop.bridge import BridgeError, DesktopBridge, configure_bridge_logging
 from desktop.connection import ConnectionController
 from desktop.main import DesktopProbeResult, DesktopTarget
 from desktop.page_events import PageEventDispatcher
@@ -181,6 +181,28 @@ def test_an_unexpected_failure_logs_its_traceback_and_rejects_without_an_error_c
 
     assert str(rejected.value) == message
     assert caplog.records[-1].exc_info is not None
+
+
+@pytest.mark.parametrize(
+    "error", [VoiceControlError("Unavailable", error_code="unavailable"), OSError("disk full")]
+)
+def test_pywebview_does_not_repeat_a_bridge_failure(
+    error: Exception, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native = logging.getLogger("pywebview")
+    monkeypatch.setattr(native, "filters", [])
+    configure_bridge_logging()
+    bridge, _ = _bridge(error=error)
+    with caplog.at_level(logging.WARNING):
+        try:
+            bridge.retryVoice()
+        except Exception:
+            native.error("Native bridge traceback")
+        native.error("Unrelated native failure")
+    assert len([record for record in caplog.records if record.name == "vbot.desktop.bridge"]) == 1
+    assert [record.getMessage() for record in caplog.records if record.name == "pywebview"] == [
+        "Unrelated native failure"
+    ]
 
 
 @pytest.mark.parametrize(

@@ -5,31 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal, cast, override
+from typing import Any, Literal, cast
 
-from core.attachments.attachments import (
-    AttachmentError,
-    AttachmentNotFoundError,
-    AttachmentTooLargeError,
-    AttachmentTypeNotAllowedError,
-)
 from core.extensions.extensions import ExtensionUnavailableError
 from core.extensions.oauth_redirects import CALLBACK_PATH as OAUTH_CALLBACK_PATH
-from core.model_tasks import (
-    SpeechArtifactNotFoundError,
-    SpeechConfigurationError,
-    SpeechError,
-    SpeechExecutionError,
-    SpeechUnsupportedTargetError,
-)
-from core.model_tasks.speech_input import SpeechInputError
-from core.model_tasks.speech_playback import PLAYBACK_MEDIA_TYPE, SpeechPlayback
-from core.model_tasks.speech_types import SpeechAudioChunk, SpeechBusyError, SpeechProgress
 from core.runs import RunNotFoundError
-from core.skills import SKILL_ARCHIVE_MAX_BYTES
 from core.tools.terminal_manager import TerminalNotFoundError
 from core.utils.config import Config
 from core.utils.server_control import (
@@ -39,7 +22,6 @@ from core.utils.server_control import (
     is_authorized_control_token,
     normalize_stop_initiator,
 )
-from core.utils.workers import finish_despite_cancel
 from server._app_lifecycle import (
     _app_chat_runs,
     _fire_extension_startup,
@@ -72,21 +54,19 @@ from server._http_dependencies import (
     FastAPIType,
     FileResponse,
     HTTPException,
-    MultiPartException,
-    MultiPartParser,
     RedirectResponse,
     Request,
     Response,
-    StarletteUploadFile,
     StaticFiles,
     StreamingResponse,
-    UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
 from server._oauth_callback import callback_url as oauth_callback_url
 from server._oauth_callback import oauth_callback_response
 from server._origins import _BrowserOriginGuardMiddleware, _configured_browser_origins
+from server._request_bodies import _read_json_payload_with_limit, _require_json_media_type
+from server._speech_routes import register_speech_routes
 from server._streams import (
     REPLAY_STATUS_RESUMED,
     _active_runs_snapshot,
@@ -105,13 +85,13 @@ from server._streams import (
     _unregister_ws_client,
 )
 from server._terminal_socket import serve_terminal_socket
+from server._upload_routes import register_upload_routes
 from server.events import SERVER_STOPPING_EVENT
 from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
-from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
 from server.rpc.methods import dispatch_rpc
 from server.rpc.model_methods import start_installation_catalog_restore
-from server.rpc.skill_methods import install_skill_upload
 
 JsonObject = dict[str, Any]
 
@@ -122,116 +102,6 @@ WEBUI_DOCUMENT_CACHE_HEADERS = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
-
-UPLOAD_READ_CHUNK_SIZE_BYTES = 1_048_576
-
-MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES = 65_536
-
-MULTIPART_MAX_FORM_FIELDS = 16
-
-JSON_MEDIA_TYPE = "application/json"
-
-JSON_REQUEST_BODY_MAX_BYTES = 1_048_576
-
-# How often a speech progress stream reports while the operation still runs.
-SPEECH_PROGRESS_HEARTBEAT_SECONDS = 0.5
-
-
-class _SpeechStreamingResponse(StreamingResponse):  # type: ignore[misc]
-    """Close speech generators even when the connection ends during a send."""
-
-    def __init__(self, content: AsyncGenerator[str | bytes], **kwargs: Any) -> None:
-        super().__init__(content, **kwargs)
-        self._speech_stream = content
-
-    @override
-    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        try:
-            await super().__call__(scope, receive, send)
-        finally:
-            # StreamingResponse does not close an iterator suspended at yield.
-            # Its request-local inference or spool reader must settle now.
-            await finish_despite_cancel(self._speech_stream.aclose())
-
-
-class _UploadTooLargeMultipartError(MultiPartException):  # type: ignore[misc]
-    """Abort multipart parsing before an oversized file part is spooled."""
-
-
-class _SizeLimitedMultiPartParser(MultiPartParser):  # type: ignore[misc]
-    """Starlette multipart parser with an exact per-file byte limit."""
-
-    def __init__(
-        self,
-        *args: Any,
-        max_file_size_bytes: int,
-        upload_kind: str,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(*args, **kwargs)
-        self._max_file_size_bytes = max_file_size_bytes
-        self._upload_kind = upload_kind
-        self._current_file_size_bytes = 0
-
-    @override
-    def on_part_begin(self) -> None:
-        super().on_part_begin()
-        self._current_file_size_bytes = 0
-
-    @override
-    def on_part_data(self, data: bytes, start: int, end: int) -> None:
-        part_size_bytes = end - start
-        if self._current_part.file is not None:
-            next_size_bytes = self._current_file_size_bytes + part_size_bytes
-            if next_size_bytes > self._max_file_size_bytes:
-                raise _UploadTooLargeMultipartError(
-                    f"{self._upload_kind} size exceeds limit {self._max_file_size_bytes}"
-                )
-            self._current_file_size_bytes = next_size_bytes
-        super().on_part_data(data, start, end)
-
-
-def _require_json_media_type(request: Request) -> None:
-    content_type = request.headers.get("content-type")
-    media_type = content_type.partition(";")[0].strip().casefold() if content_type else ""
-    if media_type != JSON_MEDIA_TYPE:
-        raise HTTPException(
-            status_code=415,
-            detail="Content-Type must be application/json",
-        )
-
-
-async def _read_json_body_with_limit(request: Request) -> bytes:
-    """Read a JSON request body incrementally without allowing unbounded buffering."""
-    content_length = request.headers.get("content-length")
-    if content_length is not None:
-        try:
-            declared_size = int(content_length)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400, detail="Content-Length must be an integer"
-            ) from exc
-        if declared_size < 0:
-            raise HTTPException(status_code=400, detail="Content-Length must not be negative")
-        if declared_size > JSON_REQUEST_BODY_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="Request body exceeds size limit")
-
-    chunks: list[bytes] = []
-    size_bytes = 0
-    async for chunk in request.stream():
-        size_bytes += len(chunk)
-        if size_bytes > JSON_REQUEST_BODY_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="Request body exceeds size limit")
-        chunks.append(chunk)
-    return b"".join(chunks)
-
-
-async def _read_json_payload_with_limit(request: Request) -> object:
-    body = await _read_json_body_with_limit(request)
-    try:
-        return json.loads(body)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ValueError("Request body must be valid JSON") from exc
 
 
 class _VerificationOnlyGuardMiddleware:
@@ -313,7 +183,14 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
-        _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
+        from server._log_sources import build_log_viewer
+
+        _initialize_app_state(
+            app,
+            app_runtime,
+            server_bind=resolved_server_bind,
+            log_viewer=await build_log_viewer(app_runtime.storage.data_dir),
+        )
         app.state.shutdown_event = shutdown_event if shutdown_event is not None else asyncio.Event()
         oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
         if oauth_redirects is not None:
@@ -444,169 +321,8 @@ def create_app(
                 "error": {"code": RPC_ERROR_INTERNAL, "message": "Internal server error"},
             }
 
-    @app.post("/api/skills/install")
-    async def upload_skill(request: Request) -> JsonObject:
-        params: JsonObject = dict(request.query_params)
-        if set(params) - {"scope", "path", "replace", "dry_run", "expected_sha256"}:
-            raise HTTPException(status_code=422, detail="Unsupported Skill upload parameters")
-        for key in ("replace", "dry_run"):
-            if key in params:
-                if params[key] not in {"true", "false"}:
-                    raise HTTPException(status_code=422, detail=f"{key} must be true or false")
-                params[key] = params[key] == "true"
-        file = await _parse_upload_file_with_limit(
-            request, max_size_bytes=SKILL_ARCHIVE_MAX_BYTES, upload_kind="Skill archive"
-        )
-        try:
-            data = await _read_upload_file_with_limit(
-                file, max_size_bytes=SKILL_ARCHIVE_MAX_BYTES, upload_kind="Skill archive"
-            )
-            return await install_skill_upload(
-                request.app.state, params, data=data, filename=file.filename or "upload.skill"
-            )
-        except RpcError as error:
-            raise HTTPException(status_code=400, detail=error.message) from error
-        finally:
-            await file.close()
-
-    @app.post("/api/upload")
-    async def upload_attachment(request: Request) -> JsonObject:
-        attachment_store = request.app.state.runtime.attachment_store
-        file = await _parse_upload_file_with_limit(
-            request,
-            max_size_bytes=attachment_store.max_size_bytes,
-            upload_kind="Attachment",
-        )
-        filename = file.filename or "upload"
-        try:
-            data = await _read_upload_file_with_limit(
-                file,
-                max_size_bytes=attachment_store.max_size_bytes,
-                upload_kind="Attachment",
-            )
-            record = await attachment_store.store_async(filename, data)
-        except AttachmentTooLargeError as exc:
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
-        except AttachmentTypeNotAllowedError as exc:
-            raise HTTPException(status_code=415, detail=str(exc)) from exc
-        finally:
-            await file.close()
-
-        return {
-            "attachment_id": record.id,
-            "filename": record.filename,
-            "media_type": record.media_type,
-            "size_bytes": record.size_bytes,
-        }
-
-    @app.get("/api/attachments/{attachment_id}")
-    async def get_attachment(request: Request, attachment_id: str) -> FileResponse:
-        attachment_store = request.app.state.runtime.attachment_store
-        try:
-            record = attachment_store.get(attachment_id)
-        except AttachmentNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except AttachmentError as exc:
-            # Unreadable stored metadata is an expected storage failure: report the
-            # attachment as unavailable without exposing its internal path.
-            logging.getLogger("vbot.server.app").warning(
-                "Attachment is unavailable (attachment=%s): %s", attachment_id, exc
-            )
-            raise HTTPException(status_code=404, detail="Attachment is unavailable") from exc
-        return FileResponse(
-            record.file_path,
-            media_type=record.media_type,
-            filename=record.filename,
-            content_disposition_type="inline",
-        )
-
-    @app.post("/api/speech/transcribe")
-    async def transcribe_speech(request: Request) -> Any:
-        runtime = request.app.state.runtime
-        speech_service = runtime.speech
-        file = await _parse_upload_file_with_limit(
-            request,
-            max_size_bytes=runtime.speech_upload_max_size_bytes,
-            upload_kind="Speech audio",
-        )
-        filename = file.filename or "recording.webm"
-        media_type = file.content_type or "application/octet-stream"
-        try:
-            audio = await _read_upload_file_with_limit(
-                file,
-                max_size_bytes=runtime.speech_upload_max_size_bytes,
-                upload_kind="Speech audio",
-            )
-        finally:
-            await file.close()
-        if "application/x-ndjson" in request.headers.get("accept", ""):
-            return _SpeechStreamingResponse(
-                _stream_speech(
-                    lambda progress: speech_service.transcribe(
-                        audio, filename=filename, media_type=media_type, progress=progress
-                    )
-                ),
-                media_type="application/x-ndjson",
-                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
-            )
-        try:
-            result = await _speech_until_disconnect(
-                request,
-                speech_service.transcribe(audio, filename=filename, media_type=media_type),
-            )
-        except SpeechError as exc:
-            raise _speech_http_exception(exc) from exc
-        return cast(JsonObject, result.to_dict())
-
-    @app.post("/api/speech/synthesize")
-    async def synthesize_speech(request: Request) -> Response:
-        _require_json_media_type(request)
-        speech_service = request.app.state.runtime.speech
-        try:
-            payload = await _read_json_payload_with_limit(request)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Request body must be valid JSON",
-            ) from exc
-        text = payload.get("text") if isinstance(payload, dict) else None
-        if not isinstance(text, str) or not text.strip():
-            raise HTTPException(status_code=400, detail="text must be a non-empty string")
-        if "application/x-ndjson" in request.headers.get("accept", ""):
-            return _SpeechStreamingResponse(
-                _stream_synthesis(speech_service, text),
-                media_type="application/x-ndjson",
-                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
-            )
-        try:
-            result = await _speech_until_disconnect(request, speech_service.synthesize(text))
-        except SpeechError as exc:
-            raise _speech_http_exception(exc) from exc
-        return Response(content=result.audio, media_type=result.media_type)
-
-    @app.get("/api/speech/playback/{playback_id}")
-    async def get_speech_playback(request: Request, playback_id: str) -> StreamingResponse:
-        playback = request.app.state.runtime.speech.playbacks.get(playback_id)
-        if playback is None:
-            raise HTTPException(status_code=410, detail="Speech playback is no longer available")
-        return _SpeechStreamingResponse(
-            playback.frames(),
-            media_type=PLAYBACK_MEDIA_TYPE,
-            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
-        )
-
-    @app.get("/api/speech/artifacts/{artifact_id}")
-    async def get_speech_artifact(request: Request, artifact_id: str) -> FileResponse:
-        speech_service = request.app.state.runtime.speech
-        try:
-            artifact = speech_service.get_artifact(artifact_id)
-        except SpeechError as exc:
-            raise _speech_http_exception(exc) from exc
-        return FileResponse(
-            artifact.file_path,
-            media_type=artifact.media_type,
-            filename=artifact.filename,
-        )
+    register_upload_routes(app)
+    register_speech_routes(app)
 
     @app.get("/api/files/{token}")
     async def get_assistant_file(request: Request, token: str, download: bool = False) -> Response:
@@ -899,237 +615,6 @@ def create_app(
     _mount_webui(app)
 
     return app
-
-
-async def _read_upload_file_with_limit(
-    file: UploadFile,
-    *,
-    max_size_bytes: int,
-    upload_kind: str,
-) -> bytes:
-    chunks: list[bytes] = []
-    size_bytes = 0
-    while True:
-        read_size = min(UPLOAD_READ_CHUNK_SIZE_BYTES, max_size_bytes - size_bytes + 1)
-        chunk = await file.read(read_size)
-        if not chunk:
-            return b"".join(chunks)
-        size_bytes += len(chunk)
-        if size_bytes > max_size_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail=f"{upload_kind} size {size_bytes} exceeds limit {max_size_bytes}",
-            )
-        chunks.append(chunk)
-
-
-async def _parse_upload_file_with_limit(
-    request: Request,
-    *,
-    max_size_bytes: int,
-    upload_kind: str,
-) -> UploadFile:
-    content_type = request.headers.get("content-type", "")
-    media_type = content_type.partition(";")[0].strip().casefold()
-    if media_type != "multipart/form-data":
-        raise HTTPException(status_code=422, detail="multipart file field 'file' is required")
-
-    max_body_size_bytes = max_size_bytes + MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES
-    content_length = _request_content_length(request)
-    if content_length is not None and content_length > max_body_size_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"{upload_kind} request body exceeds limit {max_body_size_bytes}",
-        )
-
-    parser = _SizeLimitedMultiPartParser(
-        request.headers,
-        _stream_request_body_with_limit(
-            request,
-            max_body_size_bytes=max_body_size_bytes,
-            upload_kind=upload_kind,
-        ),
-        max_files=1,
-        max_fields=MULTIPART_MAX_FORM_FIELDS,
-        max_part_size=MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES,
-        max_file_size_bytes=max_size_bytes,
-        upload_kind=upload_kind,
-    )
-    try:
-        form = await parser.parse()
-    except _UploadTooLargeMultipartError as exc:
-        raise HTTPException(status_code=413, detail=exc.message) from exc
-    except MultiPartException as exc:
-        raise HTTPException(status_code=400, detail=exc.message) from exc
-
-    file = form.get("file")
-    if not isinstance(file, StarletteUploadFile):
-        await form.close()
-        raise HTTPException(status_code=422, detail="multipart file field 'file' is required")
-    return cast(UploadFile, file)
-
-
-def _request_content_length(request: Request) -> int | None:
-    value = request.headers.get("content-length")
-    if value is None:
-        return None
-    try:
-        content_length = int(value)
-    except ValueError:
-        return None
-    return content_length if content_length >= 0 else None
-
-
-async def _stream_request_body_with_limit(
-    request: Request,
-    *,
-    max_body_size_bytes: int,
-    upload_kind: str,
-) -> AsyncGenerator[bytes]:
-    received_size_bytes = 0
-    async for chunk in request.stream():
-        received_size_bytes += len(chunk)
-        if received_size_bytes > max_body_size_bytes:
-            raise _UploadTooLargeMultipartError(
-                f"{upload_kind} request body exceeds limit {max_body_size_bytes}"
-            )
-        yield chunk
-
-
-async def _speech_until_disconnect[Result](
-    request: Request, operation: Awaitable[Result]
-) -> Result:
-    """Run speech after the upload, cancelling and settling it when the client leaves."""
-
-    async def disconnected() -> None:
-        while True:
-            if (await request.receive())["type"] == "http.disconnect":
-                return
-
-    task = asyncio.ensure_future(operation)
-    disconnect = asyncio.create_task(disconnected(), name="speech-disconnect")
-    try:
-        done, _pending = await asyncio.wait({task, disconnect}, return_when=asyncio.FIRST_COMPLETED)
-        if task in done:
-            return task.result()
-        disconnect.result()
-        # Nothing reaches the departed client; finish the request without an
-        # unhandled cancellation or an internal-error log.
-        raise HTTPException(status_code=499, detail="Client disconnected")
-    finally:
-        if not task.done():
-            task.cancel()
-        disconnect.cancel()
-        await finish_despite_cancel(asyncio.gather(task, disconnect, return_exceptions=True))
-
-
-async def _stream_speech(
-    operation: Callable[[SpeechProgress], Awaitable[Any]],
-    *,
-    updates: asyncio.Queue[JsonObject] | None = None,
-) -> AsyncGenerator[str]:
-    """Request-local progress heartbeats followed by one terminal result."""
-    progress = SpeechProgress()
-    task = asyncio.ensure_future(operation(progress))
-    update_task: asyncio.Task[JsonObject] | None = None
-    try:
-        while not task.done():
-            yield json.dumps({"type": "progress", **progress.snapshot()}) + "\n"
-            if updates is None:
-                await asyncio.wait({task}, timeout=SPEECH_PROGRESS_HEARTBEAT_SECONDS)
-            else:
-                if update_task is None:
-                    update_task = asyncio.create_task(updates.get(), name="speech-playback-ready")
-                await asyncio.wait(
-                    {task, update_task},
-                    timeout=SPEECH_PROGRESS_HEARTBEAT_SECONDS,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if update_task.done():
-                    yield json.dumps(update_task.result()) + "\n"
-                    update_task = None
-        if updates is not None:
-            while not updates.empty():
-                yield json.dumps(updates.get_nowait()) + "\n"
-        try:
-            result = task.result()
-        except SpeechError as exc:
-            error = _speech_http_exception(exc)
-            yield (
-                json.dumps({"type": "error", "detail": error.detail, "status": error.status_code})
-                + "\n"
-            )
-        except Exception:
-            logging.getLogger("vbot.server.app").exception("Speech stream failed")
-            yield (
-                json.dumps({"type": "error", "detail": "Speech request failed", "status": 500})
-                + "\n"
-            )
-        else:
-            yield json.dumps({"type": "result", "result": result.to_dict()}) + "\n"
-    finally:
-        if not task.done():
-            task.cancel()
-        if update_task is not None:
-            update_task.cancel()
-        # Local inference keeps its existing cancellation-safe worker semantics:
-        # a disconnected client cannot release an engine still doing work.
-        await finish_despite_cancel(
-            asyncio.gather(
-                task, *([update_task] if update_task is not None else []), return_exceptions=True
-            )
-        )
-
-
-def _stream_synthesis(speech_service: Any, text: str) -> AsyncGenerator[str]:
-    """Announce early binary playback, then retain the ordinary artifact result."""
-    updates: asyncio.Queue[JsonObject] = asyncio.Queue(maxsize=1)
-    playback: SpeechPlayback | None = None
-
-    async def publish_audio(chunk: SpeechAudioChunk) -> None:
-        nonlocal playback
-        first = playback is None
-        if first:
-            playback = speech_service.playbacks.create()
-        if playback is None:
-            return
-        await playback.append(chunk.audio, chunk.sample_rate_hz)
-        if first:
-            updates.put_nowait({"type": "playback", "url": playback.url})
-
-    async def synthesize(progress: SpeechProgress) -> Any:
-        try:
-            result = await speech_service.synthesize_artifact(
-                text, progress=progress, on_audio=publish_audio
-            )
-        except BaseException as exc:
-            if playback is not None:
-                playback.finish(
-                    "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
-                )
-            raise
-        else:
-            if playback is not None:
-                playback.finish()
-            return result
-
-    return _stream_speech(synthesize, updates=updates)
-
-
-def _speech_http_exception(error: SpeechError) -> HTTPException:
-    if isinstance(error, SpeechArtifactNotFoundError):
-        return HTTPException(status_code=404, detail=str(error))
-    if isinstance(error, SpeechBusyError):
-        return HTTPException(status_code=429, detail=str(error))
-    if isinstance(error, SpeechInputError):
-        return HTTPException(status_code=413 if error.too_large else 400, detail=str(error))
-    if isinstance(error, SpeechConfigurationError):
-        return HTTPException(status_code=409, detail=str(error))
-    if isinstance(error, SpeechUnsupportedTargetError):
-        return HTTPException(status_code=422, detail=str(error))
-    if isinstance(error, SpeechExecutionError):
-        return HTTPException(status_code=502, detail=str(error))
-    return HTTPException(status_code=400, detail=str(error))
 
 
 def _build_default_runtime(

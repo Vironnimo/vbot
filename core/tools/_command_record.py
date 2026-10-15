@@ -83,6 +83,8 @@ class CommandServices:
     run_blocking: BlockingRunner
     # A background command's status may have changed.
     changed: Callable[[str], None]
+    checkpoint: Callable[[str], None]
+    flush: Callable[[], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -207,6 +209,14 @@ class CommandRecord:
     def notice_id(self) -> str:
         return f"command:{self.command_id}"
 
+    @property
+    def delivery_pending(self) -> bool:
+        return self._delivering
+
+    @property
+    def delivery_body(self) -> str | None:
+        return self._delivered_body
+
     def report(self) -> CommandReport:
         now = self._services.monotonic()
         facts = self._facts
@@ -311,6 +321,7 @@ class CommandRecord:
         if self.owner != source:
             return False
         self.owner = target
+        self._changed()
         sink = self._services.trigger_service
         body = self._delivered_body
         if (
@@ -401,6 +412,7 @@ class CommandRecord:
         """
         self._deliver = False
         self._withdraw_submitted()
+        self._services.checkpoint(self.command_id)
 
     async def kill_and_release(self) -> bool:
         """Kill every process off the Event Loop, withdraw the delivery and release
@@ -803,8 +815,15 @@ class CommandRecord:
         """Submit the result *body* to the command's Session."""
         self._delivered_to = self.owner
         self._delivered_body = body
-        try:
-            delivery = asyncio.ensure_future(
+        self._services.checkpoint(self.command_id)
+
+        async def submit() -> None:
+            # Persist the end before handing it over. A crash after Session
+            # persistence but before acknowledgement is deduplicated on restart.
+            await self._services.flush()
+            if not self._delivering:
+                return
+            await self._await_delivery(
                 sink.submit_completion(
                     self.owner.agent_id,
                     self.owner.session_id,
@@ -816,12 +835,8 @@ class CommandRecord:
                     wake=True,
                 )
             )
-        except Exception:
-            _LOGGER.error(
-                "Could not deliver the result of command %s", self.command_id, exc_info=True
-            )
-            return
-        self._delivery_task = self._task(self._await_delivery(delivery), "delivery")
+
+        self._delivery_task = self._task(submit(), "delivery")
 
     def _withdraw_submitted(self) -> bool:
         """Withdraw a submitted result not yet delivered; whether one was withdrawn.
@@ -868,12 +883,17 @@ class CommandRecord:
                 "Command result dropped for a closed execution owner (command=%s)",
                 self.command_id,
             )
+            self._deliver = False
+            self._services.checkpoint(self.command_id)
         except asyncio.CancelledError:
             raise
         except Exception:
             _LOGGER.warning(
                 "Delivering the result of command %s failed", self.command_id, exc_info=True
             )
+        else:
+            self._deliver = False
+            self._services.checkpoint(self.command_id)
 
     # Helpers
 

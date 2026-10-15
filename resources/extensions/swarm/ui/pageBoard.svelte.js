@@ -3,7 +3,7 @@ import { tick } from 'svelte';
 import { t } from '../../../../webui/src/lib/i18n.js';
 import { page, participantCard, requestId } from './pagePresentation.js';
 import { failureText } from './failureText.js';
-import { swarmChanged } from './pageRefresh.js';
+import { discussionPostsChanged, swarmChanged } from './pageRefresh.js';
 import { referenceLinks } from './referenceLinks.js';
 
 // Posts per Board read: the newest page, an earlier or newer page, new posts,
@@ -136,7 +136,7 @@ export function createSwarmPageBoard(host) {
     const changed = (resource) => swarmChanged(changes, swarm.id, resource);
     return Promise.all([
       changed('discussions') ? loadDiscussions(swarm) : null,
-      !changed('posts')
+      !discussionPostsChanged(changes, swarm.id, selectedDiscussion)
         ? null
         : changes
           ? loadNewPosts(swarm)

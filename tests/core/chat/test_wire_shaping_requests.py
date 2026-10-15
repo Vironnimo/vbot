@@ -795,6 +795,8 @@ def test_rebuilt_request_gives_each_tool_result_only_its_own_media(tmp_path: Pat
     class NamingResolver:
         """Resolve each media block to a text block naming its attachment."""
 
+        max_image_bytes = 1024
+
         async def resolve_messages(
             self, messages: list[dict[str, Any]], **_kwargs: Any
         ) -> list[dict[str, Any]]:

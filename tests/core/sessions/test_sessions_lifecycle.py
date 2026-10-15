@@ -216,6 +216,8 @@ def test_a_project_restored_under_a_new_id_takes_only_its_own_sessions(
     # archive's associations, and restores remain independent in either order.
     replacement = ledger.begin(ARCHIVE_KIND_PROJECT, subject_id="alpha", project_id="alpha")
     ledger.commit_scope(replacement.entry_key, ArchiveScope(project_id="alpha"))
+    assert manager.working_project(original_fork.address).archived
+    assert all(manager.working_project(address).archived for address in replacements)
     ledger.begin_restore(entry.entry_id, {"target_id": "alpha-2"})
     ledger.commit_restore(entry.entry_key, project_id="alpha-2")
 
@@ -228,6 +230,8 @@ def test_a_project_restored_under_a_new_id_takes_only_its_own_sessions(
         "later": "alpha",
     }
     assert _working_project(manager, original_fork.address) == "alpha-2"
+    assert not manager.working_project(original_fork.address).archived
+    assert all(manager.working_project(address).archived for address in replacements)
     assert [_working_project(manager, address) for address in replacements] == ["alpha", "alpha"]
     ledger.begin_restore(replacement.entry_id, {"target_id": "alpha-3"})
     ledger.commit_restore(replacement.entry_key, project_id="alpha-3")
@@ -236,6 +240,7 @@ def test_a_project_restored_under_a_new_id_takes_only_its_own_sessions(
         "alpha-3",
         "alpha-3",
     ]
+    assert all(not manager.working_project(address).archived for address in replacements)
 
 
 _AGENT_RENDERED_PINS = {

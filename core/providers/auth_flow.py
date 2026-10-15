@@ -40,6 +40,7 @@ from core.utils.errors import ProviderError
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tls import shared_ssl_context
+from core.utils.workers import cancel_and_wait
 
 _LOGGER = get_logger("providers.auth_flow")
 
@@ -131,6 +132,8 @@ class DeviceFlowEngine:
         ] = {}
         self._authorization_tasks: set[asyncio.Task[DeviceFlowSession]] = set()
         self._closed = False
+        self._flow_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+        self._flow_epochs: dict[tuple[str, str, str], int] = {}
         self._minimax_code_verifiers: dict[tuple[str, str, str, str], str] = {}
 
     async def connect(
@@ -150,15 +153,18 @@ class DeviceFlowEngine:
         if self._closed:
             raise RuntimeError("Device Flow engine is closed")
         flow_key = (provider_id, local_connection_id, account_id)
-        self.cancel_flow(provider_id, local_connection_id, account_id)
-        authorization = asyncio.create_task(
-            self._request_device_session(
-                provider_id, local_connection_id, oauth_config, account_id=account_id
-            ),
-            name=f"device-flow-authorize:{provider_id}:{local_connection_id}",
-        )
-        self._active_authorizations[flow_key] = authorization
-        self._authorization_tasks.add(authorization)
+        async with self._flow_lock(flow_key):
+            await self._cancel_flow_and_wait(provider_id, local_connection_id, account_id)
+            if self._closed:
+                raise RuntimeError("Device Flow engine is closed")
+            authorization = asyncio.create_task(
+                self._request_device_session(
+                    provider_id, local_connection_id, oauth_config, account_id=account_id
+                ),
+                name=f"device-flow-authorize:{provider_id}:{local_connection_id}",
+            )
+            self._active_authorizations[flow_key] = authorization
+            self._authorization_tasks.add(authorization)
         try:
             session = await authorization
             if self._closed or self._active_authorizations.get(flow_key) is not authorization:
@@ -334,6 +340,37 @@ class DeviceFlowEngine:
                 None,
             )
 
+    def _flow_lock(self, key: tuple[str, str, str]) -> asyncio.Lock:
+        return self._flow_locks.setdefault(key, asyncio.Lock())
+
+    async def cancel_flow_and_wait(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> None:
+        """Drain any admitted token save before disconnect removes its credential."""
+        async with self._flow_lock((provider_id, local_connection_id, account_id)):
+            await self._cancel_flow_and_wait(provider_id, local_connection_id, account_id)
+
+    async def _cancel_flow_and_wait(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        account_id: str,
+    ) -> None:
+        key = (provider_id, local_connection_id, account_id)
+        tasks = [
+            task
+            for task in (self._active_authorizations.get(key), self._active_flows.get(key))
+            if task is not None
+        ]
+        self.cancel_flow(provider_id, local_connection_id, account_id)
+        epoch = self._flow_epochs[key]
+        await cancel_and_wait(*tasks)
+        if self._flow_epochs.get(key) != epoch:
+            raise asyncio.CancelledError
+
     def cancel_flow(
         self,
         provider_id: str,
@@ -341,6 +378,8 @@ class DeviceFlowEngine:
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
         """Cancel authorization and polling for the provider connection account."""
+        key = (provider_id, local_connection_id, account_id)
+        self._flow_epochs[key] = self._flow_epochs.get(key, 0) + 1
 
         authorization = self._active_authorizations.pop(
             (provider_id, local_connection_id, account_id), None
@@ -413,7 +452,7 @@ class DeviceFlowEngine:
                     raise DeviceFlowTerminalError(data["error"])
 
                 token = await self._build_token(client, oauth_config, data)
-                self._token_store.save(
+                await self._token_store.save_async(
                     provider_id, local_connection_id, token, account_id=account_id
                 )
                 return

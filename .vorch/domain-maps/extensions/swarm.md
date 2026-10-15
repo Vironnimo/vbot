@@ -1191,23 +1191,32 @@ e.g. a reconnect) is not held by that interval and moves a waiting pass forward;
 the explicit `run()` (mount, Wiki activation) and the full `refresh()` after user
 actions (post, Start, Stop/Resume, delete) bypass the scheduler
 (`pageRefresh.test.js`). Each published change names what changed:
-`profiles` carries a profile id; the other resources carry a Swarm id -
+`profiles` carries a profile id; `discussion_posts` carries a
+`<swarm_id>/<discussion_id>` pair; the other resources carry a Swarm id -
 `swarms` its Swarm list entry (Start, title, settings, Stop, Resume, delete, a
 failed wake, and a changed aggregate state), `participants` their Runs, states and
 pending counts (delivery acknowledgments, wake admission, Run start and finish),
-`posts` new Board posts (Board Tool post and create, `board.post`), `discussions`
+`discussion_posts` new Board posts (Board Tool post and create, `board.post`), `discussions`
 discussions and members (Board Tool create, join, leave) and `wiki` Wiki pages
-(`_changed` and `_BOARD_CHANGES` in `extension.py`). A change whose registration
+(`BoardCall` records actual mutations; `extension.py::_changed` publishes them).
+Create publishes both its new discussion and the main-discussion announcement;
+replayed/duplicate posts and already-joined/left memberships publish no change.
+A change whose registration
 already retired for reload or disable (`publish_change` raises `ValueError`) is skipped:
 the mutation is stored, so the call that made it still succeeds
 (`test_post_stored_while_the_registration_retires_is_reported_as_posted`). The overview reloads profiles
 only for `profiles`, the Run list only for `swarms`, and the selected Swarm
 (`swarms.get`) for any change naming it, plus the changed parts of its visible
-tab: on the Board `board.list` for `discussions` and, for `posts`, a `board.read`
+tab. After loading a Swarm once, `include_snapshot: false` omits its immutable
+prompt, profile snapshot and effective configuration from the database read and
+response; the page retains those fields and replaces mutable state. The default
+read still includes the complete snapshot. On the Board `board.list` refreshes for
+`discussions` and, for `discussion_posts` naming the shown discussion, a `board.read`
 after the newest shown post, repeated while `has_more` (a Board not yet showing
 the discussion loads its newest page instead), but only while the Board shows the
 discussion's newest posts; around a revealed post, new posts wait for the newer
-bar. `null` or an unknown resource
+bar. Legacy `posts` invalidations still refresh the shown discussion broadly.
+`null` or an unknown resource
 reloads everything, so reconnects, reloads and owner-less invalidations still
 refresh fully (`SwarmPage.test.js`, `SwarmPage.board.test.js`,
 `test_swarm_operations.py`, `test_swarm_board_tool.py`). Under the 3-participant

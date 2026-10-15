@@ -316,6 +316,9 @@ export function createChatRpcMock({
     if (method === 'chat.stop_all') {
       return { ok: true, stopped: 0 };
     }
+    if (method === 'chat.work') {
+      return { run_active: false, background_work_running: false };
+    }
 
     if (method === 'chat.control_run') {
       return {

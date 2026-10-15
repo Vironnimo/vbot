@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../../lib/i18n.js';
+import { reactiveProps } from '../../__tests__/reactiveProps.support.svelte.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
@@ -73,6 +74,67 @@ describe('MarkdownContent', () => {
       expect(writeText).toHaveBeenCalledWith(code);
     },
   );
+
+  it('preserves streaming paragraphs, code controls and focused file links while reconciling Markdown changes', async () => {
+    const prefix =
+      'Stable paragraph.\n\n```js\nconst answer = 42;\n```\n\n[site.html](/api/files/site "original.html")\n\n';
+    const props = reactiveProps({
+      source: prefix + 'Growing',
+      streaming: true,
+      class: 'msg-markdown',
+      caret: true,
+    });
+    mountedComponent = mount(MarkdownContent, { target: document.body, props });
+    flushSync();
+    const paragraph = document.querySelector('p');
+    const copy = document.querySelector('.msg-code__copy');
+    const link = document.querySelector('[data-delivered-file]');
+    const external = document.querySelector('[data-file-external]');
+    const tail =
+      document.querySelector('.msg-markdown').lastElementChild
+        .previousElementSibling;
+    const text = tail.firstChild;
+    link.focus();
+    props.source += ' answer';
+    flushSync();
+    expect(document.querySelector('p')).toBe(paragraph);
+    expect(document.querySelector('.msg-code__copy')).toBe(copy);
+    expect(document.querySelector('[data-file-external]')).toBe(external);
+    expect(document.activeElement).toBe(link);
+    expect(tail.firstChild).toBe(text);
+    expect(text.data).toBe('Growing answer');
+    copy.click();
+    await flushAsync();
+    expect(writeText).toHaveBeenCalledWith('const answer = 42;\n');
+
+    props.source = props.source.replace('original.html', 'renamed.html');
+    flushSync();
+    expect(document.querySelector('[data-delivered-file]')).toBe(link);
+    expect(link.dataset.filePath).toBe('renamed.html');
+    props.source = props.source.replace(' "renamed.html"', '');
+    flushSync();
+    expect(link.dataset.filePath).toBe('');
+    expect(link.hasAttribute('title')).toBe(false);
+
+    // A later reference can revise earlier Markdown. Reconcile that structure,
+    // and clean removed controls without weakening the renderer's escaping.
+    props.source =
+      '[reference][ref]\n\n[ref]: https://example.com\n\n<script>alert(1)</script>';
+    props.streaming = false;
+    props.caret = false;
+    flushSync();
+    await flushAsync();
+    expect(document.querySelector('a').getAttribute('href')).toBe(
+      'https://example.com',
+    );
+    expect(document.querySelector('script')).toBeNull();
+    expect(document.querySelector('.msg-markdown').textContent).toContain(
+      '<script>alert(1)</script>',
+    );
+    expect(document.querySelector('[data-file-external]')).toBeNull();
+    expect(document.querySelector('.msg-code__copy')).toBeNull();
+    expect(document.querySelector('.streaming-caret')).toBeNull();
+  });
 
   it('withholds code copy while a streaming fence is incomplete', () => {
     mountMarkdown({ source: '```js\nconst partial = true;', streaming: true });

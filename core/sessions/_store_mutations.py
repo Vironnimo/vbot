@@ -233,6 +233,14 @@ def record_run_kind_by_key(connection: sqlite3.Connection, session_key: int, run
         (session_key, run_kind),
     ).rowcount
     if inserted:
+        connection.execute(
+            "INSERT OR IGNORE INTO session_review_forks (session_key, source_key) "
+            "SELECT s.session_key, p.session_key FROM sessions s "
+            "JOIN sessions p ON p.session_key = s.fork_parent_key "
+            "AND p.project_id = s.project_id AND p.agent_id = s.agent_id "
+            f"WHERE s.session_key = ? AND ? IN {_store_values._REFLECTION_RUN_KINDS_SQL}",
+            (session_key, run_kind),
+        )
         _store_values._refresh_visibility(connection, session_key)
         _store_values._touch_state(connection, session_key)
 
@@ -542,7 +550,7 @@ def delete_session(connection: sqlite3.Connection, session_key: int) -> None:
 
 
 def review_forks(
-    connection: sqlite3.Connection, session_key: int, *, idle: bool = False
+    connection: sqlite3.Connection, session_key: int, *, idle: bool = False, recursive: bool = True
 ) -> list[sqlite3.Row]:
     """The live review forks that follow one Session, oldest first.
 
@@ -557,28 +565,30 @@ def review_forks(
         if idle
         else ""
     )
+    direct = "" if recursive else " AND p.session_key = ?"
     return list(
         connection.execute(
             "WITH RECURSIVE followers (session_key) AS (SELECT ? UNION "
             "SELECT f.session_key FROM followers AS t "
             "JOIN sessions AS p ON p.session_key = t.session_key "
             f"JOIN sessions AS f ON {_store_values._review_fork_of('f', 'p')} "
-            f"WHERE f.state = 'live'{running}) "
+            f"WHERE f.state = 'live'{running}{direct}) "
             "SELECT s.session_key, s.project_id, s.agent_id, s.session_id "
             "FROM followers AS t JOIN sessions AS s ON s.session_key = t.session_key "
             "WHERE s.session_key <> ? ORDER BY s.session_key",
-            (session_key, session_key),
+            (session_key, session_key) if recursive else (session_key, session_key, session_key),
         )
     )
 
 
 def review_fork_addresses(
-    connection: sqlite3.Connection, address: SessionAddress
+    connection: sqlite3.Connection, address: SessionAddress, *, recursive: bool = True
 ) -> tuple[SessionAddress, ...]:
     """The addresses of one live Session's live review forks, oldest first."""
     state = _store_values._require_live(connection, address)
     return tuple(
-        _store_values._address(row) for row in review_forks(connection, int(state["session_key"]))
+        _store_values._address(row)
+        for row in review_forks(connection, int(state["session_key"]), recursive=recursive)
     )
 
 

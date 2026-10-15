@@ -168,32 +168,67 @@ describe('ChatTimeline virtualization', () => {
     expect(mountedRow('user-0')).toBeNull();
   });
 
-  it('restores a reading position whose rows were unmounted by a Session switch', async () => {
-    const chatState = createChatState();
-    const first = sessionWithHistory(
-      'session-first',
-      historyTurns(100),
-      chatState,
-    );
-    const second = sessionWithHistory(
-      'session-second',
-      historyTurns(40, 'other-'),
-      chatState,
-    );
-    const props = await mountWithLayout({ sessionState: first });
-    layout.scrollTo(Math.round(layout.maxScrollTop() / 2));
+  it('invalidates offscreen heights on width changes while preserving the reading anchor', async () => {
+    let width = 600;
+    layout = installFakeLayout({
+      viewportHeight: VIEWPORT_HEIGHT,
+      rowHeight: () => (width === 600 ? 100 : 200),
+    });
+    timeline.mount({
+      agentName: 'Alpha',
+      sessionState: sessionWithHistory('resized', historyTurns(40)),
+    });
     await layout.settle();
-    const anchorId = layout.firstVisibleRowId();
-    const anchorTop = layout.rowTop(anchorId);
-
-    props.sessionState = second;
+    // Measure the entire history at its original width, then read its middle.
+    await scrollInSteps(-400, () => layout.scrollTop() === 0);
+    layout.scrollTo(3000);
     await layout.settle();
-    expect(mountedRow(anchorId)).toBeNull();
-
-    props.sessionState = first;
+    const anchor = layout.firstVisibleRowId();
+    const top = layout.rowTop(anchor);
+    width = 300;
+    layout.resizeWidth(width);
     await layout.settle();
-    expectSameTop(layout.rowTop(anchorId), anchorTop);
+    expectSameTop(layout.rowTop(anchor), top);
+    // Every offscreen row now uses estimates from the new width, not its old
+    // measured 100px height. All rows have the same real height in this case.
+    expect(layout.maxScrollTop()).toBe(80 * 200 - VIEWPORT_HEIGHT);
+    expect(mountedRowIds().length).toBeLessThan(30);
+    await scrollInSteps(-400, () => layout.scrollTop() === 0);
   });
+
+  it.each([false, true])(
+    'restores a reading position after a Session switch with width changed %s',
+    async (resize) => {
+      const chatState = createChatState();
+      const first = sessionWithHistory(
+        'session-first',
+        historyTurns(100),
+        chatState,
+      );
+      const second = sessionWithHistory(
+        'session-second',
+        historyTurns(40, 'other-'),
+        chatState,
+      );
+      const props = await mountWithLayout({ sessionState: first });
+      layout.scrollTo(Math.round(layout.maxScrollTop() / 2));
+      await layout.settle();
+      const anchorId = layout.firstVisibleRowId();
+      const anchorTop = layout.rowTop(anchorId);
+
+      props.sessionState = second;
+      await layout.settle();
+      expect(mountedRow(anchorId)).toBeNull();
+      if (resize) {
+        layout.resizeWidth(400);
+        await layout.settle();
+      }
+
+      props.sessionState = first;
+      await layout.settle();
+      expectSameTop(layout.rowTop(anchorId), anchorTop);
+    },
+  );
 
   it('keeps the reading position when older History loads above it', async () => {
     let props = null;

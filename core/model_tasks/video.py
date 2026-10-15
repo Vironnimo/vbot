@@ -220,7 +220,9 @@ class VideoService:
             raise VideoOptionError("Prompt must not be empty")
 
         try:
-            _binding, options, target_ref = self._resolver.resolve(TASK_VIDEO_GENERATION)
+            _binding, options, target_ref = await self._resolver.resolve_async(
+                TASK_VIDEO_GENERATION
+            )
         except VideoConfigurationError as exc:
             raise VideoConfigurationError("no Video generation model is chosen") from exc
         model = self._validated_model(target_ref)
@@ -229,7 +231,7 @@ class VideoService:
         merged_options = {**_shape_options(options, requested, profile), **requested}
         frames = await self._load_frames(profile, frame_paths or {})
 
-        client = ProviderVideoClient.from_runtime(
+        client = await ProviderVideoClient.from_runtime_async(
             self._runtime,
             target_ref,
             usage_observer=TaskUsage(

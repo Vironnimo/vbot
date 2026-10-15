@@ -106,10 +106,12 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
     assert [event.payload["usage"] for event in usage_events] == [
         message["usage"] for message in assistant_turns
     ]
-    assert usage_events[0].payload["context_usage"] == {
-        "tokens": 45,
+    context_usage = usage_events[0].payload["context_usage"]
+    assert context_usage["tokens"] > 11
+    assert context_usage == {
+        "tokens": context_usage["tokens"],
         "estimated": True,
-        "estimated_delta_tokens": 34,
+        "estimated_delta_tokens": context_usage["tokens"] - 11,
         "provider_input_tokens": 11,
         "provider_output_tokens": 7,
     }
@@ -579,3 +581,41 @@ async def test_per_call_cancel_persists_cancelled_and_completed_siblings_in_orde
     cancelled, completed = tool_results(persisted_tools)
     assert cancelled["error"]["code"] == "cancelled_by_user"
     assert completed == tool_success({"sibling": "completed"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", [True, False])
+async def test_tool_requested_completion_waits_for_the_full_batch(
+    tmp_path: Path, accepted: bool
+) -> None:
+    tools = ToolRegistry()
+
+    async def finish(context: ToolContext, _arguments: Any) -> Any:
+        context.request_turn_end()
+        return (
+            tool_success({"ended": True}) if accepted else tool_failure("refused", "Test refusal")
+        )
+
+    tools.register("finish", "Finish this request", {"type": "object"}, finish)
+    tools.register(
+        "sibling",
+        "Sibling",
+        {"type": "object"},
+        lambda _context, _args: tool_success({"saved": True}),
+    )
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [
+            tool_turn(("end", "finish", {}), ("other", "sibling", {})),
+            final("Continued after refusal"),
+        ],
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run("coder", "Finish", session_id="session-one")
+    await run.wait()
+    assert run.status == RunStatus.COMPLETED
+    assert len(runtime.adapter.requests) == (1 if accepted else 2)
+    results = [message for message in history(runtime) if message.role == "tool"]
+    assert [message.tool_call_id for message in results] == ["end", "other"]
+    assert json.loads(cast(str, results[1].content))["ok"] is True

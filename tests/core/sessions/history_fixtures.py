@@ -55,7 +55,7 @@ def complete_run(session: ChatSession, summary: ChatMessage) -> ChatMessage:
     """
     assert summary.role == "run_summary" and summary.run_id and summary.timing is not None
     assert summary.status is not None
-    session._store.finish_run(
+    session._store.execution.finish_run(
         session.address,
         SessionRunCompletion(
             run_id=summary.run_id,
@@ -81,10 +81,10 @@ def settle_run(
     Admission creates a missing Session, and the Run's summary entry is
     appended to its history, as the Run manager's lifecycle does.
     """
-    manager._store.admit_run(
+    manager._store.execution.admit_run(
         address, SessionRunAdmission(run_id=run_id, run_kind="user", started_at=completed_at)
     )
-    manager._store.finish_run(
+    manager._store.execution.finish_run(
         address,
         SessionRunCompletion(
             run_id=run_id,
@@ -159,7 +159,7 @@ def _admit_segment(
 ) -> ChatSession:
     """Admit a segment's Run at its recorded start, else at its first Message."""
     started_at = (summary.timing or {}).get("started_at") if summary else None
-    session._store.admit_run(
+    session._store.execution.admit_run(
         session.address,
         SessionRunAdmission(
             run_id=run_id,

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from core.subagents.catalog import build_subagent_prompt_targets
 
 
@@ -87,7 +89,10 @@ def test_identity_wildcard_catalog_qualifies_project_agents_and_excludes_self() 
     ]
 
 
-def test_identity_explicit_catalog_omits_unknown_and_calling_agent_entries() -> None:
+@pytest.mark.parametrize("bound_identity", [None, "original", "replacement"])
+def test_identity_explicit_catalog_omits_unknown_and_calling_agent_entries(
+    bound_identity: str | None,
+) -> None:
     runtime = _runtime(
         identities=[
             SimpleNamespace(id="main", name="Main"),
@@ -98,8 +103,13 @@ def test_identity_explicit_catalog_omits_unknown_and_calling_agent_entries() -> 
     agent = SimpleNamespace(
         id="main",
         tools={"subagent": {"allowed_agents": ["main", "missing", "researcher", "builder@vbot"]}},
+        delegation_bindings={} if bound_identity is None else {"researcher": bound_identity},
     )
+    runtime.agents.delegation_target_allowed = lambda _target, binding: binding == "original"
 
     targets = build_subagent_prompt_targets(runtime, agent, None)
 
-    assert [target.agent_id for target in targets] == ["builder@vbot", "researcher"]
+    expected = ["builder@vbot"]
+    if bound_identity != "replacement":
+        expected.append("researcher")
+    assert [target.agent_id for target in targets] == expected

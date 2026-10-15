@@ -179,6 +179,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+button.msg-timestamp {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  cursor: help;
+}
+
 .msg-content {
   display: flex;
   flex-direction: column;

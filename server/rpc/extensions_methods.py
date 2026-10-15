@@ -10,6 +10,7 @@ from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS, RESOURCE_KIND_SKILLS
 from server.file_delivery import FILE_PREVIEW_WORKERS
+from server.rpc._mutations import serialized_mutation, serialized_read
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -22,9 +23,10 @@ _LOGGER = get_logger("server.rpc.extensions")
 # Projects an already-read temporary Session History snapshot (CPU and file
 # capability checks); the Session read itself runs on the Session database's pool.
 _HISTORY_WORKERS = BoundedWorkerPool(name="extension-history", max_workers=2)
+_SETTINGS_WORKERS = BoundedWorkerPool(name="extension-settings", max_workers=2)
 
 
-def _list_extensions(state: Any, params: JsonObject) -> JsonObject:
+async def _list_extensions(state: Any, params: JsonObject) -> JsonObject:
     """Return every discovered extension record plus its persisted config.
 
     Records come from the runtime's :class:`ExtensionRegistry` (in load order);
@@ -37,7 +39,7 @@ def _list_extensions(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.list does not accept params")
     try:
-        return _extensions_payload(state)
+        return await _extensions_payload(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -55,7 +57,7 @@ async def _reload_extensions(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.reload does not accept params")
     try:
         await state.runtime.reload_extensions()
-        payload = _extensions_payload(state)
+        payload = await _extensions_payload(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # The rebuild also rescans the Skill layer, including Extension Skill folders.
@@ -65,15 +67,15 @@ async def _reload_extensions(state: Any, params: JsonObject) -> JsonObject:
     return payload
 
 
-def _extensions_payload(state: Any) -> JsonObject:
+async def _extensions_payload(state: Any) -> JsonObject:
     """Build the shared ``extensions.list`` / ``extensions.reload`` catalog payload.
 
     ``settings`` is the persisted ``extensions`` section as ``settings.update``
     writes it, entries without a record and the saved ``disabled`` order included,
     so a writer can change one entry and send the section it read as ``base``.
     """
+    settings = await _SETTINGS_WORKERS.run(state.runtime.storage.load_extensions_settings)
     registry = state.runtime.extensions
-    settings = state.runtime.storage.load_extensions_settings()
     config_map = settings["config"]
     records = registry.records() if registry is not None else []
     return {
@@ -230,7 +232,7 @@ def _extension_ready_state(record: ExtensionRecord, state: Any) -> str:
     return "ready"
 
 
-def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:
+async def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:
     """Set or clear a schema'd extension's secret in the data-dir ``.env``.
 
     ``key`` is the **schema field key**, never the env key — the server looks up
@@ -252,15 +254,19 @@ def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         runtime = state.runtime
-        previous_value = runtime.storage.load_environment().get(env_key)
+        previous_value = (await _SETTINGS_WORKERS.run(runtime.storage.load_environment)).get(
+            env_key
+        )
         if value == "":
-            changed = runtime.storage.remove_data_dir_credential(env_key)
+            changed = await _SETTINGS_WORKERS.run(
+                runtime.storage.remove_data_dir_credential, env_key
+            )
             new_state = False
         else:
-            runtime.storage.set_data_dir_credential(env_key, value)
+            await _SETTINGS_WORKERS.run(runtime.storage.set_data_dir_credential, env_key, value)
             changed = previous_value != value
             new_state = True
-        runtime.reload_environment_credentials()
+        await runtime.reload_environment_credentials_async()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -559,13 +565,19 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return extension visibility and secret RPC handlers."""
 
     return {
-        "extensions.list": _list_extensions,
+        "extensions.list": serialized_read(
+            _list_extensions, lock_attribute="_settings_mutation_lock"
+        ),
         "extensions.operation": _extension_operation,
         "extensions.page_history": _extension_page_history,
         "extensions.page_run": _extension_page_run,
         "extensions.page_cancel_tool": _extension_page_cancel_tool,
         "extensions.pages": _extension_pages,
         "extensions.requests": _extension_requests,
-        "extensions.reload": _reload_extensions,
-        "extensions.set_secret": _set_extension_secret,
+        "extensions.reload": serialized_mutation(
+            _reload_extensions, lock_attribute="_settings_mutation_lock"
+        ),
+        "extensions.set_secret": serialized_mutation(
+            _set_extension_secret, lock_attribute="_settings_mutation_lock"
+        ),
     }

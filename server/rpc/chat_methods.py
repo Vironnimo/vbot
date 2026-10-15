@@ -220,9 +220,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             # Capture running reviews before the durable read. If one finishes
             # during that read, its persisted terminal status wins.
             active_reviews = (
-                _active_reflection_runs(state, address)
-                if before is None and after is None
-                else None
+                _active_reflection_runs(state) if before is None and after is None else None
             )
             # The Sub-Agent tree walk costs milliseconds for a large tree; skip it
             # when no other Session has a background command it could find.
@@ -355,7 +353,7 @@ def _read_chat_history(
     return _ChatHistoryRead(
         history,
         _session_compaction_policy(state, address, agent) if agent is not None else None,
-        None if active_reviews is None else _read_reflection_runs(session, active_reviews),
+        None if active_reviews is None else _read_reflection_runs(state, session, active_reviews),
         _resolve_context_window(state, str(getattr(agent, "model", "") or ""))
         if agent is not None
         else None,
@@ -411,63 +409,69 @@ def _session_compaction_policy(state: Any, address: SessionAddress, agent: Any) 
     )
 
 
-def _active_reflection_runs(state: Any, address: SessionAddress) -> list[Run]:
-    """Active Review Runs of this Session.
-
-    Review Runs execute in same-scope forks and carry the Session they examine.
-    """
-    return [
-        run
-        for run in _state_chat_runs(state).active_runs()
-        if run.agent_id == address.agent_id
-        and run.project_id == address.project_id
-        and run.source_session_id == address.session_id
-    ]
+def _active_reflection_runs(state: Any) -> list[Run]:
+    """Capture live reviews; the worker resolves their canonical source lineage."""
+    return [run for run in _state_chat_runs(state).active_runs() if run.source_session_id]
 
 
-def _read_reflection_runs(session: ChatSession, active_reviews: list[Run]) -> list[JsonObject]:
+def _read_reflection_runs(
+    state: Any, session: ChatSession, active_reviews: list[Run]
+) -> list[JsonObject]:
+    reviews = (
+        set(state.runtime.chat_sessions.review_forks(session.address, recursive=False))
+        if active_reviews
+        else set()
+    )
     rows = {
-        run.id: {
+        (run.project_id, run.agent_id, run.session_id, run.id): {
             "run_id": run.id,
             "session_id": run.session_id,
+            "agent_id": run.agent_id,
+            "project_id": run.project_id,
             "run_kind": run.run_kind.value,
             "status": "running",
             "started_at": run.created_at,
         }
         for run in active_reviews
+        if SessionAddress(run.project_id, run.agent_id, run.session_id) in reviews
     }
-    rows.update({row["run_id"]: row for row in session.reflection_runs()})
+    rows.update(
+        {
+            (row["project_id"], row["agent_id"], row["session_id"], row["run_id"]): row
+            for row in session.reflection_runs()
+        }
+    )
     return list(rows.values())
 
 
 async def _with_learning_outcomes(
     state: Any, address: SessionAddress, rows: list[JsonObject]
 ) -> list[JsonObject]:
-    """Add each finished review's ``outcome``: what it changed in Memory and Skills.
-
-    The counts are derived from the Agent's Memory and Skill histories by the
-    review's Run id, so they stay current after an undo. Only Identity Agents
-    learn; rows of a Project Session and rows whose histories cannot be read
-    carry no outcome.
-    """
-    finished = [row["run_id"] for row in rows if row.get("status") != "running"]
-    if address.project_id is not None or not finished:
-        return rows
-    try:
-        summaries = await _CHAT_RPC_WORKERS.run(
-            state.runtime.learning_changes.summaries, address.agent_id, finished
+    """Read changes from each review's original Identity Agent, including after a source move."""
+    by_agent: dict[str, list[str]] = {}
+    for row in rows:
+        if row.get("status") != "running" and row.get("project_id") is None:
+            by_agent.setdefault(str(row["agent_id"]), []).append(str(row["run_id"]))
+    outcomes: dict[tuple[str, str], JsonObject] = {}
+    for agent_id, run_ids in by_agent.items():
+        try:
+            summaries = await _CHAT_RPC_WORKERS.run(
+                state.runtime.learning_changes.summaries, agent_id, run_ids
+            )
+        except LearningError as exc:
+            _LOGGER.warning(
+                "Review outcomes unavailable (agent=%s session=%s): %s",
+                agent_id,
+                address.session_id,
+                exc,
+            )
+            continue
+        outcomes.update(
+            {(agent_id, run_id): summary.to_dict() for run_id, summary in summaries.items()}
         )
-    except LearningError as exc:
-        _LOGGER.warning(
-            "Review outcomes unavailable (agent=%s session=%s): %s",
-            address.agent_id,
-            address.session_id,
-            exc,
-        )
-        return rows
     return [
-        {**row, "outcome": summaries[row["run_id"]].to_dict()}
-        if row["run_id"] in summaries
+        {**row, "outcome": outcome}
+        if (outcome := outcomes.get((str(row["agent_id"]), str(row["run_id"])))) is not None
         else row
         for row in rows
     ]
@@ -480,11 +484,11 @@ async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
     address = SessionAddress(project_id, agent_id, session_id)
     # Capture running reviews before the durable read. If one finishes during
     # that read, its persisted terminal status wins over the active snapshot.
-    active_reviews = _active_reflection_runs(state, address)
+    active_reviews = _active_reflection_runs(state)
 
     def read() -> list[JsonObject]:
         session = state.runtime.chat_sessions.get(address)
-        return _read_reflection_runs(session, active_reviews)
+        return _read_reflection_runs(state, session, active_reviews)
 
     try:
         rows = await state.runtime.chat_sessions.run_async(read)
@@ -1140,6 +1144,18 @@ async def _stop_all_chat(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True, "stopped": stopped}
 
 
+async def _chat_work(state: Any, params: JsonObject) -> JsonObject:
+    """Current stoppable work of the complete Session subtree, without History."""
+    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.work")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+    try:
+        return cast(JsonObject, await state.runtime.subagents.work_snapshot(address))
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
 def _session_command(state: Any, params: JsonObject, method: str) -> CommandReport:
     """The background command ``command_id`` of the Session ``session_id``.
 
@@ -1417,6 +1433,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.edit": _edit_chat,
         "chat.cancel": _cancel_chat,
         "chat.stop_all": _stop_all_chat,
+        "chat.work": _chat_work,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
         "chat.stop_command": _stop_command_chat,
         "chat.command_output": _command_output_chat,

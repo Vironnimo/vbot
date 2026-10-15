@@ -143,22 +143,49 @@ async def test_an_interrupted_archive_beside_an_intact_source_never_loses_either
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("kind", "planned"),
-    [("agent", False), ("agent", True), ("project", False)],
-    ids=["agent-old-plan", "agent-current-plan", "project"],
+    ("kind", "planned", "missing_review_owner"),
+    [
+        ("agent", False, False),
+        ("agent", True, False),
+        ("project", False, False),
+        ("agent", True, True),
+        ("project", False, True),
+    ],
+    ids=["agent-old-plan", "agent-current-plan", "project", "agent-review", "project-review"],
 )
 async def test_restore_recovery_rewrites_a_moved_tree_under_its_new_id(
-    world: ArchiveWorld, tmp_path: Path, kind: str, planned: bool
+    world: ArchiveWorld, tmp_path: Path, kind: str, planned: bool, missing_review_owner: bool
 ) -> None:
     sessions, ledger = world.sessions, world.sessions.archive_ledger
     if kind == "agent":
         agent = agent_with_session(world, "original")
         session_id = agent.current_session_id
-        entry_id = (await world.service.archive_agent("original")).entry_id
     else:
         world.projects.create("original", "Original", tmp_path / "repo")
         session_id = sessions.create("coder", project_id="original").id
-        entry_id = (await world.service.archive_project("original")).entry_id
+    review = None
+    if missing_review_owner:
+        from core.runs import RunKind
+
+        owner = agent_with_session(world, "review-owner")
+        source = SessionAddress(None, owner.id, owner.current_session_id)
+        review = (await sessions.fork(source, run_kind=RunKind.MEMORY_REFLECTION)).address
+        await sessions.move(
+            source,
+            SessionAddress(
+                None if kind == "agent" else "original",
+                "original" if kind == "agent" else "coder",
+                source.session_id,
+            ),
+        )
+    entry_id = (
+        (await world.service.archive_agent("original")).entry_id
+        if kind == "agent"
+        else (await world.service.archive_project("original")).entry_id
+    )
+    owner_entry = (
+        await world.service.archive_agent("review-owner") if missing_review_owner else None
+    )
     plan: dict[str, Any] = {"target_id": "restored", "strip_channel_keys": True}
     if planned and kind == "agent":
         plan.update(workspace=None, root_project_id=None)
@@ -167,6 +194,11 @@ async def test_restore_recovery_rewrites_a_moved_tree_under_its_new_id(
     target = world.data_dir / f"{kind}s" / "restored"
     os.replace(payload, target)
     world.service.recover()
+    if owner_entry is not None:
+        assert world.entry(entry_id).state == "restoring"
+        assert review is not None and not sessions.exists(review)
+        assert target.exists() and not payload.exists()
+        await world.service.restore(owner_entry.entry_id)
     world.service.recover()
     assert ledger.entry(entry_id) is None
     if kind == "agent":
@@ -177,6 +209,8 @@ async def test_restore_recovery_rewrites_a_moved_tree_under_its_new_id(
     else:
         assert world.projects.get("restored").project_id == "restored"
         assert sessions.exists(SessionAddress("restored", "coder", session_id))
+    if review is not None:
+        assert sessions.exists(review)
 
 
 @pytest.mark.asyncio
@@ -184,7 +218,7 @@ async def test_restore_recovery_rewrites_a_moved_tree_under_its_new_id(
 async def test_a_failed_agent_cleanup_keeps_the_archive_and_completes_at_the_next_start(
     world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, id_reused: bool
 ) -> None:
-    world.agents.create("coder")
+    coder = world.agents.create("coder")
     world.agents.create("manager", tools={"subagent": {"allowed_agents": ["coder"]}})
     monkeypatch.setattr(world.agents, "remove_delegation_grants", _fail)
 
@@ -217,6 +251,7 @@ async def test_a_failed_agent_cleanup_keeps_the_archive_and_completes_at_the_nex
                 {
                     "agent_id": "manager",
                     "agent_created_at": world.agents.get("manager").created_at,
+                    "target_created_at": coder.created_at,
                     "index": 0,
                 }
             ],

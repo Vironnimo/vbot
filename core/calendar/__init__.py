@@ -1,6 +1,7 @@
 """Calendar domain public API."""
 
 from core.calendar._events import occurrence_id, parse_occurrence_id
+from core.calendar._projection import CalendarProjection
 from core.calendar.errors import (
     CalendarEventNotFoundError,
     CalendarServiceError,
@@ -28,6 +29,7 @@ __all__ = [
     "BoundJob",
     "CalendarEvent",
     "CalendarEventNotFoundError",
+    "CalendarProjection",
     "CalendarService",
     "CalendarServiceError",
     "CalendarStorageError",

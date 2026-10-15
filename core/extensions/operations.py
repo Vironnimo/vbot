@@ -56,6 +56,12 @@ class ExtensionHost:
     # API v11: browser redirects the server receives for OAuth sign-ins
     # (``core/extensions/oauth_redirects.py``); ``None`` without a Runtime.
     oauth_redirects: OAuthRedirects | None = None
+    # API v15: Agent and Session resolution can perform storage I/O.
+    resolve_tool_agent_async: Callable[[ToolContext], Awaitable[Any]] | None = None
+    # API v15: durable original-call ownership for deferred Extension outcomes.
+    capture_tool_call: Callable[[ToolContext], Awaitable[str | None]] | None = None
+    restore_tool_call: Callable[[str], Awaitable[ToolContext | None]] | None = None
+    deliver_tool_outcome: Callable[[str, str], Awaitable[bool]] | None = None
 
 
 @dataclass(frozen=True)

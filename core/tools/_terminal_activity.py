@@ -24,12 +24,11 @@ which the evidence decides, by the first reason that holds:
   CPU time nor a new process in it.
 
 A spontaneous cycle ends only as declared or by the fallback: a program that
-resumed on its own can pause again without being done. Output that comes
-after a ``quiet`` end of a cycle input or start-up began, before that cycle's
-fallback was due, shows that the program had only paused: it resumes that
-cycle, once, so its next quiet end wakes the Agent instead of the fallback,
-while a program that keeps refreshing its screen (a clock, ``top``) is still
-spontaneous from its second refresh on. Only an idle
+resumed on its own can pause again without being done. Output after a ``quiet``
+end, before that cycle's fallback was due, can resume the input/start-up work.
+Each resumption must show fresh work: sustained output, CPU use or a process
+the cycle started. Isolated redraw frames (a clock, ``top``) are not enough.
+There is no limit on the number of evidenced resumptions. Only an idle
 boundary wakes the attached Agent, and only with a screen the Agent has not
 seen. Every output or input also starts a new generation of the quiet timer,
 whose quiet boundary ends the reply to input or start.
@@ -66,6 +65,10 @@ PROCESS_SAMPLE_SECONDS = 0.5
 # A pause in the evidence of work longer than this share of the quiet period
 # shows that the program can pause while it works.
 _CONTINUITY_SHARE = 0.75
+# Output spanning this share of the quiet period is a burst of work, rather
+# than one redraw split into chunks by the transport. Counting chunks alone
+# makes identical output behave differently across PTY reads.
+_OUTPUT_BURST_SHARE = 0.5
 # The tree works while it uses at least this share of one core, measured
 # over the samples of the last second.
 _BUSY_CPU_SHARE = 0.2
@@ -110,6 +113,7 @@ class ProcessSample(NamedTuple):
 @dataclass(slots=True)
 class _Cycle:
     origin: _Origin
+    opened_at: float
     last_output_at: float
     last_evidence_at: float
     # No pause in the evidence of work longer than the continuity gap so far.
@@ -120,8 +124,9 @@ class _Cycle:
     # Processes running when the cycle started; None until sampled.
     baseline: frozenset[int] | None = None
     child_running: bool = False
-    # The cycle resumed one that ended as quiet; it is not resumed again.
+    # A resumed quiet cycle needs fresh work, not just one redraw frame.
     resumed: bool = False
+    work_observed: bool = False
 
 
 class _Sample(NamedTuple):
@@ -151,9 +156,9 @@ class TerminalActivity:
         self._cycle: _Cycle | None = None
         # Origin of the next cycle that output opens: the program's start-up first.
         self._next_origin: _Origin = "start"
-        # A cycle that ended as quiet and its fallback time: output before then
-        # resumes it.
-        self._resumable: tuple[_Origin, float] | None = None
+        # A quiet cycle can resume before its fallback was due. Keep its
+        # process baseline so a child started meanwhile still counts as work.
+        self._resumable: _Cycle | None = None
         # A progress indicator (OSC 9;4) shows work; it outlives cycles.
         self._progress = False
         self._samples: deque[_Sample] = deque()
@@ -202,13 +207,19 @@ class TerminalActivity:
         cycle = self._cycle
         if cycle is None:
             resumable = self._resumable
-            if resumable is not None and now < resumable[1] - _EPSILON:
-                cycle = self._open(resumable[0], now)
+            if (
+                resumable is not None
+                and now < resumable.last_output_at + self._idle_seconds - _EPSILON
+            ):
+                cycle = self._open(resumable.origin, now)
                 cycle.resumed = True
+                cycle.baseline = resumable.baseline
             else:
                 cycle = self._open(self._next_origin, now)
         else:
             self._evidence(cycle, now)
+            if now - cycle.opened_at >= self._quiet_seconds * _OUTPUT_BURST_SHARE - _EPSILON:
+                cycle.work_observed = True
         cycle.last_output_at = now
         self._apply_signals(cycle, signals)
         restart = self._restart(notify=attached, supersede=delivery_pending)
@@ -258,6 +269,7 @@ class TerminalActivity:
             cycle.baseline = sample.running
         cycle.child_running = bool(sample.running - cycle.baseline)
         if cycle.child_running or self._progress or self._cpu_busy():
+            cycle.work_observed = True
             self._evidence(cycle, now)
 
     def settle(self, generation: int, signature: str) -> SettleKind | None:
@@ -313,8 +325,8 @@ class TerminalActivity:
             self._next_origin = "start"
             return IdleEffect(False, False, reason)
         self._next_origin = "output"
-        if reason == "quiet" and not cycle.resumed:
-            self._resumable = (cycle.origin, cycle.last_output_at + self._idle_seconds)
+        if reason == "quiet":
+            self._resumable = cycle
         if seen or signature == self._baseline:
             self._baseline = signature
             return IdleEffect(False, False, reason)
@@ -342,7 +354,7 @@ class TerminalActivity:
         self._repaint_deadline = None
 
     def _open(self, origin: _Origin, now: float) -> _Cycle:
-        self._cycle = _Cycle(origin, last_output_at=now, last_evidence_at=now)
+        self._cycle = _Cycle(origin, opened_at=now, last_output_at=now, last_evidence_at=now)
         self._next_origin = "output"
         self._resumable = None
         self.idle_reason = None
@@ -383,6 +395,7 @@ class TerminalActivity:
         if (
             cycle.origin != "output"
             and cycle.continuous
+            and (not cycle.resumed or cycle.work_observed)
             and not cycle.child_running
             and not cycle.command_running
             and not self._progress

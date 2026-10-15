@@ -102,6 +102,22 @@ describe('History reads', () => {
     expect(source.backgroundCommandStatuses).toEqual({
       cmd_one: { status: 'completed', stillRunning: true },
     });
+
+    // A policy refreshed from another window while History is in flight must
+    // not be overwritten by that older snapshot; its messages still apply.
+    const pendingHistory = deferred();
+    loadChatHistory.mockReturnValueOnce(pendingHistory.promise);
+    const loading = controller.loadHistoryForSession('alpha', 'source');
+    const changedPolicy = { ...policy, enabled: false };
+    controller.applySessionCompactionPolicy('alpha', 'source', changedPolicy);
+    pendingHistory.resolve({
+      messages: [{ id: 'next', role: 'assistant', content: 'Next' }],
+      incremental: true,
+      compaction_policy: policy,
+    });
+    await loading;
+    expect(source.compactionPolicy).toBe(changedPolicy);
+    expect(source.messages.at(-1).id).toBe('next');
   });
 
   it('folds background status deltas, the newest still-running lists and Run records across incremental pages', async () => {

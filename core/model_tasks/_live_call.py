@@ -55,7 +55,8 @@ from core.model_tasks._live_wire import (
     WireToolCall,
     WireUsage,
 )
-from core.tools.live import TOOL_VBOT_REQUEST, LiveToolHost, LiveToolHosts
+from core.tools import called_tool_name
+from core.tools.live import TOOL_END_CALL, TOOL_VBOT_REQUEST, LiveToolHost, LiveToolHosts
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -181,6 +182,8 @@ class LiveCallSession:
         self._reader: asyncio.Task[None] | None = None
         self._watchdog: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._voice_calls: dict[asyncio.Task[Any], str] = {}
+        self._hangup_completed = False
         self._send_lock = asyncio.Lock()
         self._delegation_slots = asyncio.Semaphore(MAX_CONCURRENT_DELEGATIONS)
         self._busy = 0
@@ -428,7 +431,10 @@ class LiveCallSession:
     async def run_live_tool(self, name: str, arguments: Any) -> JsonObject:
         """Run a Live Tool call of either Session through the server's host."""
         try:
-            return await self._host.run_live_tool(name, arguments)
+            result = await self._host.run_live_tool(name, arguments)
+            if name == TOOL_END_CALL and result.get("ok") is True:
+                self._hangup_completed = True
+            return result
         except Exception as exc:
             _LOGGER.warning(
                 "Live Tool failed unexpectedly (call=%s error_type=%s)",
@@ -506,6 +512,11 @@ class LiveCallSession:
         timeout = self._delegation_timeout
         if name == TOOL_VBOT_REQUEST:
             timeout += _REQUEST_EXTRA_SECONDS
+        task = asyncio.current_task()
+        assert task is not None
+        self._voice_calls[task] = called_tool_name(
+            name, [str(tool["name"]) for tool in self._voice.tool_definitions]
+        )
         try:
             async with self._delegation_slots:
                 self._set_busy(1)
@@ -527,6 +538,8 @@ class LiveCallSession:
                 type(exc).__name__,
             )
             return None
+        finally:
+            self._voice_calls.pop(task, None)
 
     async def _pump_audio(self) -> None:
         """Forward microphone audio in arrival order until the call ends."""
@@ -625,7 +638,8 @@ class LiveCallSession:
 
     async def _teardown(self) -> None:
         for task in list(self._tasks):
-            task.cancel()
+            if not self._hangup_call(task):
+                task.cancel()
         cancelled = False
         try:
             async with asyncio.timeout(_TEARDOWN_TIMEOUT_SECONDS):
@@ -654,7 +668,8 @@ class LiveCallSession:
             return
         self._finishing = True
         for task in list(self._tasks):
-            task.cancel()
+            if not self._hangup_call(task):
+                task.cancel()
         watchdog = self._watchdog
         if watchdog is not None and watchdog is not asyncio.current_task():
             watchdog.cancel()
@@ -733,7 +748,10 @@ class LiveCallSession:
         try:
             if self._backend is not None:
                 async with asyncio.timeout(_TEARDOWN_TIMEOUT_SECONDS):
-                    await self._backend.aclose()
+                    if self._hangup_completed:
+                        await self._backend.aclose(finish_request=True)
+                    else:
+                        await self._backend.aclose()
         except Exception as exc:
             _LOGGER.warning(
                 "Live call backend cleanup failed (call=%s error_type=%s)",
@@ -741,6 +759,11 @@ class LiveCallSession:
                 type(exc).__name__,
             )
         try:
+            pending = [task for task in self._voice_calls if self._hangup_call(task)]
+            if pending:
+                await asyncio.wait(pending, timeout=_RECORD_DRAIN_SECONDS)
+            for task in list(self._tasks):
+                task.cancel()
             async with asyncio.timeout(_RECORD_DRAIN_SECONDS):
                 await self._store_records()
             await self._voice.finish(failure=failure)
@@ -752,6 +775,13 @@ class LiveCallSession:
             )
         finally:
             self._hosts.unbind(self._voice.session_id, self)
+
+    def _hangup_call(self, task: asyncio.Task[Any]) -> bool:
+        """A successful hangup closes media now and stores its outcome before teardown."""
+        return self._hangup_completed and self._voice_calls.get(task) in {
+            TOOL_END_CALL,
+            TOOL_VBOT_REQUEST,
+        }
 
     def _save_usage(self) -> None:
         """Save the latest cumulative Usage in the background; the reader never waits."""

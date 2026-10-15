@@ -122,7 +122,11 @@ def _available_targets(
 ) -> Sequence[SubAgentPromptTarget]:
     try:
         return subagent_targets(
-            runtime, context.agent_id, context.project_id, context.tool_settings
+            runtime,
+            context.agent_id,
+            context.project_id,
+            context.tool_settings,
+            delegation_bindings=context.delegation_bindings,
         )
     except Exception:
         # Naming choices only improves a message; a catalog failure must not

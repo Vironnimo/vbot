@@ -210,6 +210,36 @@ def read_to_end(adapter: terminal_backend.TerminalAdapter) -> str:
     raise AssertionError(f"The terminal did not end: {output!r}")
 
 
+def test_posix_terminal_close_reaps_detached_children_after_its_program_exits(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    if sys.platform != "linux":
+        pytest.skip("Linux subreaper and PTY contract")
+    read_fd, write_fd = os.pipe()
+    monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
+    program = (
+        "import os,time\n"
+        "if os.fork(): os._exit(7)\n"
+        "os.setsid()\n"
+        "if os.fork(): os._exit(0)\n"
+        "print(str(os.getpid()) + '<ready>', flush=True)\n"
+        "time.sleep(60)\n"
+    )
+    adapter = spawn_posix_terminal([sys.executable, "-c", program], tmp_path)
+    try:
+        output = read_until(adapter, "<ready>")
+        descendant = int(output.split("<ready>")[0].strip())
+        assert adapter.exit_code() == 7
+        assert not adapter.is_alive()
+        adapter.close()
+        assert not Path(f"/proc/{descendant}").exists()
+    finally:
+        adapter.close()
+        os.close(read_fd)
+        os.close(write_fd)
+
+
 @pytest.mark.usefixtures("server_lifetime")
 def test_posix_terminal_gives_a_shell_its_controlling_terminal(tmp_path: Path) -> None:
     if sys.platform != "linux":

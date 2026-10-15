@@ -889,9 +889,7 @@ async def test_saved_settings_apply_their_live_effects(
     runtime.storage.save_settings(seed)
     previous_skills = runtime.skills
     keep_awake: list[bool] = []
-    runtime.reload_keep_awake = lambda: keep_awake.append(
-        runtime.storage.load_settings()["keep_awake"]
-    )
+    runtime.reload_keep_awake = lambda settings: keep_awake.append(settings["keep_awake"])
 
     await rpc_result(state, method, **params)
 

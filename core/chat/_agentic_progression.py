@@ -289,7 +289,9 @@ class AgenticProgression:
             tool_messages, media_outputs = await tool_round.settle_cancelled()
             if not tool_messages:
                 return
-            tool_messages, _ = await self._requests.store_tool_media(tool_messages, media_outputs)
+            tool_messages, _ = await self._requests.media.store_tool_media(
+                tool_messages, media_outputs
+            )
             await self._persist_tool_results(
                 context, tool_dispatch_context, assistant_message_id, tool_messages
             )
@@ -355,7 +357,7 @@ class AgenticProgression:
                 # Keep speech-to-text cancellable and outside the Session lock.
                 # Pass its result directly: failed attempts have no cached text
                 # and must not retry inside the protected persistence boundary.
-                content = await self._requests.transcribe_user_audio(executor.request.content)
+                content = await self._requests.media.transcribe_user_audio(executor.request.content)
                 async with self._dependencies.sessions.write_lock(session_address):
                     await _finish_visible_boundary(
                         persist_steering_input(context, item, self._dependencies, content),
@@ -661,17 +663,17 @@ class AgenticProgression:
 
             while True:
                 run.raise_if_cancelled()
+                context_window = await self._requests.targets.resolve_context_window_async(
+                    agent, target
+                )
                 request_context_usage = context.context_usage.project_prepared(
                     request_estimate,
-                    context_window=self._requests.resolve_context_window(agent, target),
+                    context_window=context_window,
                 )
-                self._requests._raise_if_measured_context_exhausted(
+                self._requests.targets.raise_if_measured_context_exhausted(
                     context.session_snapshot.active_messages,
-                    messages_for_request,
-                    tools,
-                    agent,
                     run,
-                    target,
+                    context_window,
                     context_usage=request_context_usage,
                 )
                 try:
@@ -826,7 +828,9 @@ class AgenticProgression:
                     target=target,
                     tools=request_tools,
                     scope=context.prompt_cache_affinity_id,
-                    context_window=self._requests.resolve_context_window(agent, target),
+                    context_window=await self._requests.targets.resolve_context_window_async(
+                        agent, target
+                    ),
                 )
 
             (
@@ -1040,7 +1044,9 @@ class AgenticProgression:
                     # From here until their Results are persisted and
                     # acknowledged, a Run cancel must not drop work already done.
                     tool_messages, media_outputs = await _finish_visible_boundary(
-                        self._requests.store_tool_media(tool_messages, media_outputs), run, True
+                        self._requests.media.store_tool_media(tool_messages, media_outputs),
+                        run,
+                        True,
                     )
                     tool_request_messages: list[JsonObject] = []
                     for tool_message in tool_messages:
@@ -1092,7 +1098,7 @@ class AgenticProgression:
                         raise assistant_step.failure
                     if terminal_error is not None:
                         raise terminal_error
-                    await self._requests._attach_tool_result_content(
+                    await self._requests.media.attach_tool_result_content(
                         tool_request_messages,
                         media_outputs,
                         target.input_modalities,
@@ -1160,6 +1166,9 @@ class AgenticProgression:
                             await context.session_snapshot.refresh(session)
                         if decision.end:
                             return assistant_message
+                    elif tool_dispatch_context.turn_end_requested:
+                        run.raise_if_cancelled()
+                        return assistant_message
                     # Honored only after every sibling tool result is persisted, so
                     # this cooperative stop never itself dangles the assistant turn.
                     # The forceful task.cancel() in Run.request_cancel persists
@@ -1213,7 +1222,9 @@ class AgenticProgression:
             messages[:] = limited_messages
             tool_context_usage = context.context_usage.project_prepared(
                 tool_context_estimate,
-                context_window=self._requests.resolve_context_window(context.agent, target),
+                context_window=await self._requests.targets.resolve_context_window_async(
+                    context.agent, target
+                ),
             )
             run.terminal_payload_extras["context_usage"] = tool_context_usage
 

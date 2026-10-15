@@ -6,6 +6,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Callable
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -564,10 +565,8 @@ async def test_repaint_after_resizing_a_quiet_terminal_does_not_wake_agent(
 async def test_work_the_program_resumed_on_its_own_wakes_at_a_declared_end_or_the_fallback(
     clocked_manager: Clocked, tmp_path: Path, end: str
 ) -> None:
-    """Output soon after the work input started went quiet shows that the work
-    only paused: it resumes that work, once, and its next quiet end wakes the
-    Agent (code review R12: it waited for the fallback). Work that resumes
-    after that, or on its own, pauses between its updates without being done:
+    """Repeated bursts after a quick idle can resume the same work, each
+    settling promptly. Work that resumes later on its own can pause:
     its pauses wake nobody. A declared end (here a bell) wakes the Agent at
     the next quiet boundary; without one, the fallback wakes it once the
     program printed nothing for the idle period."""
@@ -581,33 +580,72 @@ async def test_work_the_program_resumed_on_its_own_wakes_at_a_declared_end_or_th
         await eventually(lambda: terminal_info(manager, terminal_id).screen_revision > revision)
         await eventually(lambda: clock.sleeping)
 
-    await emit("\r\nresumed")
-    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
-    await eventually(lambda: len(trigger.submissions) == 2)
-    resumed = terminal_info(manager, terminal_id).attention
-    assert resumed is not None
-    assert resumed.details["reason"] == "quiet"
+    for burst in range(3):
+        await emit(f"\r\nresumed {burst}")
+        for _chunk in range(2):
+            await clock.advance(TEST_ACTIVITY_QUIET_SECONDS / 4)
+            await emit(" more")
+        await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
+        await eventually(lambda burst=burst: len(trigger.submissions) == burst + 2)
+        resumed = terminal_info(manager, terminal_id).attention
+        assert resumed is not None
+        assert resumed.details["reason"] == "quiet"
 
+    await clock.advance(TEST_IDLE_SECONDS)
     for step in range(3):
         await emit(f"\r\nstep {step}")
         await clock.advance(TEST_IDLE_SECONDS - 0.5)
         await _turns()
-        assert len(trigger.submissions) == 2
+        assert len(trigger.submissions) == 4
         assert terminal_info(manager, terminal_id).state == "working"
 
     await emit("\r\ndone\x07" if end == "declared" else "\r\ndone")
     await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
     await _turns()
     if end == "fallback":
-        assert len(trigger.submissions) == 2
+        assert len(trigger.submissions) == 4
         await clock.advance(TEST_IDLE_SECONDS - TEST_ACTIVITY_QUIET_SECONDS)
-    await eventually(lambda: len(trigger.submissions) == 3)
+    await eventually(lambda: len(trigger.submissions) == 5)
     attention = terminal_info(manager, terminal_id).attention
     assert attention is not None
     assert attention.details["reason"] == end
-    body = trigger.submissions[2][1]["body"]
+    body = trigger.submissions[4][1]["body"]
     assert "step 2\ndone" in body
     assert (f"printed nothing for {TEST_IDLE_SECONDS:g} seconds" in body) == (end == "fallback")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunks", [1, 3])
+async def test_periodic_changed_redraws_do_not_wake_the_agent(
+    clocked_manager: Clocked, tmp_path: Path, chunks: int
+) -> None:
+    """A changed clock frame is no fresh work, including the first refresh
+    after startup and frames split across several transport reads."""
+    manager, factory, trigger, clock = clocked_manager
+    delivered = await _baseline(clocked_manager, tmp_path)
+    terminal_id = delivered.terminal_id
+    for frame in range(4):
+        for chunk in range(chunks):
+            if chunk:
+                await clock.advance(TEST_ACTIVITY_QUIET_SECONDS / 10)
+            revision = terminal_info(manager, terminal_id).screen_revision
+            factory.adapters[0].emit(f"\rclock {frame}.{chunk}")
+            await eventually(
+                lambda revision=revision: (
+                    terminal_info(manager, terminal_id).screen_revision > revision
+                )
+            )
+            await eventually(lambda: clock.sleeping)
+        await clock.advance(TEST_ACTIVITY_QUIET_SECONDS * 2)
+        await _turns()
+        assert len(trigger.submissions) == 1
+        assert terminal_info(manager, terminal_id).state == "working"
+
+    # Once even the periodic redraw ends, its final screen remains observable.
+    await clock.advance(TEST_IDLE_SECONDS - TEST_ACTIVITY_QUIET_SECONDS * 2)
+    await eventually(lambda: len(trigger.submissions) == 2)
+    attention = terminal_info(manager, terminal_id).attention
+    assert attention is not None and attention.details["reason"] == "fallback"
 
 
 @pytest.mark.asyncio
@@ -639,29 +677,37 @@ async def test_work_the_processes_show_keeps_a_quiet_program_working(
     try:
         started = await spawn(manager, tmp_path)
         await _agent_input(manager, started, data="make\r")
-        factory.adapters[0].emit("compiling...")
-        if work == "child":
-            tree.running = (*tree.running, RunningProcess(2, "make.exe"))
-            tree.started += 1
+        for cycle in range(3):
+            began = clock.now
+            revision = terminal_info(manager, started.terminal_id).screen_revision
+            factory.adapters[0].emit(f"\r\ncompiling {cycle}...")
+            await eventually(
+                lambda revision=revision: (
+                    terminal_info(manager, started.terminal_id).screen_revision > revision
+                )
+            )
+            if work == "child":
+                tree.running = (*tree.running, RunningProcess(cycle + 2, "make.exe"))
+                tree.started += 1
 
-        async def run_until(seconds: float) -> None:
-            while clock.now < seconds and not trigger.submissions:
+            async def run_until(seconds: float, cycle: int = cycle, began: float = began) -> None:
+                while clock.now < seconds and len(trigger.submissions) == cycle:
+                    await settle(clock, executor)
+                    if work == "cpu" and clock.now < began + 3:
+                        tree.cpu_seconds += PROCESS_SAMPLE_SECONDS
+                    await clock.advance(PROCESS_SAMPLE_SECONDS)
                 await settle(clock, executor)
-                if work == "cpu" and clock.now < 3:
-                    tree.cpu_seconds += PROCESS_SAMPLE_SECONDS
-                await clock.advance(PROCESS_SAMPLE_SECONDS)
-            await settle(clock, executor)
 
-        await run_until(3)
-        assert trigger.submissions == []
-        assert terminal_info(manager, started.terminal_id).state == "working"
+            await run_until(began + 3)
+            assert len(trigger.submissions) == cycle
+            assert terminal_info(manager, started.terminal_id).state == "working"
 
-        tree.running = tree.running[:1]
-        await run_until(TEST_IDLE_SECONDS - 0.5)
-        assert len(trigger.submissions) == 1
-        attention = terminal_info(manager, started.terminal_id).attention
-        assert attention is not None
-        assert attention.details["reason"] == "quiet"
+            tree.running = tree.running[:1]
+            await run_until(began + TEST_IDLE_SECONDS - 0.5)
+            assert len(trigger.submissions) == cycle + 1
+            attention = terminal_info(manager, started.terminal_id).attention
+            assert attention is not None
+            assert attention.details["reason"] == "quiet"
     finally:
         await manager.aclose()
 
@@ -833,3 +879,96 @@ async def test_terminal_failure_keeps_the_program_until_it_ends_then_delivers_it
         )
         assert body.endswith(f"\n```\n{behind}")
         assert (status["data"]["state"], status["data"]["note"]) == ("exited", behind)
+
+
+@pytest.mark.asyncio
+async def test_renderer_recovery_does_not_back_off_beyond_five_seconds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = FakeClock()
+    factory = AdapterFactory()
+    host = TerminalRenderHost.in_process()
+    manager = TerminalManager(
+        adapter_factory=factory,
+        render_host=host,
+        temporary_files=TemporaryFileManager(tmp_path / "data"),
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+        activity_quiet_seconds=1,
+        idle_seconds=15,
+    )
+    manager.start()
+    try:
+        started = await spawn(manager, tmp_path)
+        attempts: list[float] = []
+        original_feed = TerminalScreen.feed
+        original_open = host.open_screen
+
+        async def broken_feed(_screen: TerminalScreen, _text: str) -> Any:
+            raise RuntimeError("renderer unavailable")
+
+        def broken_open(*_args: Any, **_kwargs: Any) -> TerminalScreen:
+            attempts.append(clock.now)
+            raise RuntimeError("renderer unavailable")
+
+        monkeypatch.setattr(TerminalScreen, "feed", broken_feed)
+        monkeypatch.setattr(host, "open_screen", broken_open)
+        factory.adapters[0].emit("retained output")
+        await eventually(lambda: len(attempts) == 1)
+        for delay in (2, 4, 5, 5, 5, 5):
+            count = len(attempts)
+            await clock.advance(delay)
+            await eventually(lambda count=count: len(attempts) > count)
+        assert max(b - a for a, b in pairwise(attempts)) <= 5
+        monkeypatch.setattr(TerminalScreen, "feed", original_feed)
+        monkeypatch.setattr(host, "open_screen", original_open)
+        await clock.advance(5)
+
+        async def restored() -> bool:
+            view = await manager.read_for_operator(started.terminal_id)
+            return "retained output" in view["screen"]
+
+        await eventually(restored)
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_stuck_final_redraw_does_not_delay_exit_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = AdapterFactory()
+    trigger = PendingTriggerService()
+    manager = TerminalManager(
+        trigger,
+        adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
+        temporary_files=TemporaryFileManager(tmp_path / "data"),
+    )
+    manager.start()
+    try:
+        started = await spawn(manager, tmp_path)
+        replay_started = asyncio.Event()
+
+        async def broken_feed(_screen: TerminalScreen, _text: str) -> Any:
+            raise RuntimeError("renderer unavailable")
+
+        async def blocked_replay(_session: Any) -> bool:
+            replay_started.set()
+            await asyncio.Event().wait()
+            return False
+
+        monkeypatch.setattr(TerminalScreen, "feed", broken_feed)
+        monkeypatch.setattr(terminal_session.TerminalSession, "_redraw_once", blocked_replay)
+        # Exercise the timeout branch without adding one second to the suite.
+        assert terminal_session._FINAL_REDRAW_SECONDS <= 1
+        monkeypatch.setattr(terminal_session, "_FINAL_REDRAW_SECONDS", 0.01)
+        factory.adapters[0].emit("kept in the log")
+        await replay_started.wait()
+        factory.adapters[0].finish(0)
+        await eventually(lambda: bool(trigger.submissions))
+        assert terminal_info(manager, started.terminal_id).state == "exited"
+    finally:
+        await manager.aclose()

@@ -795,10 +795,10 @@ class StubRuntime:
             cast(Runtime, self), previous, current, refresh_sections=refresh_sections
         )
 
-    def reload_keep_awake(self) -> None:
+    def reload_keep_awake(self, settings: Mapping[str, Any] | None = None) -> None:
         pass
 
-    def reload_timezone(self) -> None:
+    def reload_timezone(self, settings: Mapping[str, Any] | None = None) -> None:
         pass
 
     def reload_skills(self) -> None:
@@ -807,7 +807,7 @@ class StubRuntime:
     async def reload_skills_async(self) -> None:
         self.reload_skills()
 
-    def reload_recall_backend(self) -> None:
+    def reload_recall_backend(self, settings: Mapping[str, Any] | None = None) -> None:
         self.recall_reload_count += 1
 
     async def reload_extensions(self) -> None:
@@ -818,6 +818,9 @@ class StubRuntime:
 
     def reload_environment_credentials(self) -> None:
         return None
+
+    async def reload_environment_credentials_async(self) -> None:
+        self.reload_environment_credentials()
 
 
 def make_state(

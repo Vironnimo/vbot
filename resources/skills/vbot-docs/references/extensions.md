@@ -470,6 +470,14 @@ Identity stays the **directory name**; the manifest `name` is display-only. An
 `api_version` greater than the app's `API_VERSION` fails the extension at load
 with a clear message (forward-compatibility guard).
 
+API v15 also accepts `config_documents`, mapping file patterns under your Extension's
+state directory to `module:function` validators, for example
+`"config_documents": {"connections.json": "config:validate_connections_file"}`.
+Each validator receives an absolute `Path` and returns a
+`core.config_validation.JsonValidationReport`. Keep the validation module independent
+of registration: `vbot doctor config` loads it without running your `__init__`,
+`register` or startup, including when the Extension is disabled.
+
 ## Managing extensions
 
 Extensions surface through the normal management flow:
@@ -518,6 +526,22 @@ handlers idempotent (see [Lifecycle](#lifecycle-startup-and-shutdown)). Edit a
 API v4 Extensions can register schema-described management operations with `api.operations.register`, publish complete live Tool catalogs with `api.operations.replace_tools`, and receive injected host capabilities through `api.operations.startup`. The host validates operation arguments, exposes them through RPC and `vbot extensions operations <name>`, and prevents a retired Extension from republishing Tools. Operations that accept credentials must declare `secret=True`; the CLI then requires JSON through `--stdin`.
 
 For the management declaration and host types, read `core/extensions/operations.py`. Register an async startup callback by appending it to `api.operations.startup`; its argument is the injected, owner-bound `ExtensionHost`: `state_dir` is a private directory for persistent Extension files, `open_database(...)` opens the Extension's [databases](#extension-databases), `load_result_payload(context, payload_id)` reads its [Tool result payloads](#tool-result-payloads), `catalog()` provides safe configured choices, and `publish_change(resource, ids, revision)` invalidates its [page](extension-pages.md). For MCP configuration and discovery, read [mcp.md](mcp.md).
+
+API v15 provides `await host.resolve_tool_agent_async(context)` for Tool policy or
+sampling that needs the invoking Agent. Use it from async handlers because Agent
+and Session resolution reads storage.
+
+For a remote operation that returns a persistent task handle, capture
+`receipt = await host.capture_tool_call(context)` and persist the handle with that
+receipt in your Extension database. A `None` receipt means the call has no canonical
+Session owner. After a restart, `await host.restore_tool_call(receipt)` returns the
+original invocation's current context, following Session moves; `None` means it no
+longer needs delivery or has no live owner. Resume the remote task by its saved id,
+without resending the operation. Deliver its outcome with
+`await host.deliver_tool_outcome(receipt, content)`: it adds one persisted note for
+the next ordinary Run, without starting a Run. Quote external content as JSON and
+escape angle brackets; supply no reminder tags. Identical repeated delivery is
+ignored; different content for the same receipt is refused.
 
 ## Extension databases
 

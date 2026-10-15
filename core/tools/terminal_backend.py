@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from core.utils.processes import guarded_process_launch, kill_process_tree
+from core.utils.processes import GuardedChildExit, guarded_process_launch, kill_process_tree
 
 _WINDOWS_INTERACTIVE_SHELLS = ("pwsh.exe", "powershell.exe")
 TERMINAL_READ_TIMEOUT_SECONDS = 0.2
@@ -347,8 +347,14 @@ def _windows_kernel() -> _WindowsKernel:
 class _PosixTerminalAdapter:
     """A PTY master and the session-leading child process that holds its slave."""
 
-    def __init__(self, process: subprocess.Popen[bytes], master_fd: int) -> None:
+    def __init__(
+        self,
+        process: subprocess.Popen[bytes],
+        master_fd: int,
+        child_exit: GuardedChildExit | None = None,
+    ) -> None:
         self._process = process
+        self._child_exit = child_exit
         self._fd = master_fd
         # A byte that is no UTF-8 reads as a lone surrogate, so the Session can
         # log the bytes exactly as they came.
@@ -421,9 +427,15 @@ class _PosixTerminalAdapter:
             _set_window_size(fd, rows, columns)
 
     def is_alive(self) -> bool:
+        if self._child_exit is not None and self._child_exit.poll() is not None:
+            return False
         return self._process.poll() is None
 
     def exit_code(self) -> int | None:
+        if self._child_exit is not None:
+            code = self._child_exit.wait_blocking(_EXIT_STATUS_GRACE_SECONDS)
+            if code is not None:
+                return code
         # Output ends while the kernel still finishes the child's exit.
         try:
             return_code = self._process.wait(timeout=_EXIT_STATUS_GRACE_SECONDS)
@@ -432,7 +444,7 @@ class _PosixTerminalAdapter:
         return return_code if return_code >= 0 else 128 - return_code
 
     def terminate(self) -> None:
-        self._process.kill()
+        kill_process_tree(self._process)
 
     def close(self) -> None:
         with self._lock:
@@ -444,9 +456,12 @@ class _PosixTerminalAdapter:
         try:
             self._process.wait(timeout=_CLOSE_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
-            self._process.kill()
+            kill_process_tree(self._process)
             with contextlib.suppress(subprocess.TimeoutExpired):
                 self._process.wait(timeout=_CLOSE_GRACE_SECONDS)
+        finally:
+            if self._child_exit is not None:
+                self._child_exit.close()
 
 
 def _spawn_posix_terminal(
@@ -462,9 +477,11 @@ def _spawn_posix_terminal(
     if sys.platform == "win32":
         raise OSError("POSIX terminals are not available on Windows")
     _require_program(argv[0], cwd, env)
-    launch = guarded_process_launch(argv, env=env, controlling_terminal=True)
     master_fd, slave_fd = os.openpty()
+    child_exit: GuardedChildExit | None = None
     try:
+        launch = guarded_process_launch(argv, env=env, controlling_terminal=True, report_exit=True)
+        child_exit = launch.child_exit
         _set_window_size(master_fd, rows, columns)
         process = subprocess.Popen(
             launch.argv,
@@ -478,10 +495,14 @@ def _spawn_posix_terminal(
         )
     except BaseException:
         os.close(master_fd)
+        if child_exit is not None:
+            child_exit.close()
         raise
     finally:
         os.close(slave_fd)
-    return _PosixTerminalAdapter(process, master_fd)
+        if child_exit is not None:
+            child_exit.spawned()
+    return _PosixTerminalAdapter(process, master_fd, child_exit)
 
 
 def _require_program(program: str, cwd: Path, env: Mapping[str, str]) -> None:

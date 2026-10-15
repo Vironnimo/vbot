@@ -166,6 +166,17 @@ export function renameAgentInState(state, oldAgentId, newAgentId) {
       sessionState.agentId = newAgentId;
       sessionState.key = sessionKey(newAgentId, sessionState.sessionId);
     }
+    // A moved source can still show reviews owned by the renamed Agent.
+    for (const [runId, review] of Object.entries(
+      sessionState.reflectionTasks,
+    )) {
+      if (review.agentId === oldAgentId) {
+        sessionState.reflectionTasks[runId] = {
+          ...review,
+          agentId: newAgentId,
+        };
+      }
+    }
     sessions[sessionState.key] = sessionState;
   }
   state.sessions = sessions;
@@ -208,6 +219,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       cancellingRunIds: [],
       // True while a Stop all request for this Session is in flight.
       stoppingAll: false,
+      // Complete server work projection, independent of the loaded History.
+      workProjection: null,
       queue: [],
       status: CHAT_STATUS_IDLE,
       error: null,

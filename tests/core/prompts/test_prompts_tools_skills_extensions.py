@@ -130,15 +130,21 @@ def test_provider_tool_definitions_derive_session_read_from_session_search(
 
 
 @pytest.mark.parametrize(
-    ("allowed_agents", "targets"),
+    ("allowed_agents", "binding", "targets"),
     [
-        ([], ["orchestrator"]),
-        (["worker", "builder@vbot"], ["orchestrator", "worker", "builder@vbot"]),
+        ([], None, ["orchestrator"]),
+        (["worker", "builder@vbot"], None, ["orchestrator", "worker", "builder@vbot"]),
+        (["worker", "builder@vbot"], "original", ["orchestrator", "worker", "builder@vbot"]),
+        (["worker", "builder@vbot"], "replaced", ["orchestrator", "builder@vbot"]),
     ],
-    ids=["self-only", "explicit-targets"],
+    ids=["self-only", "explicit-targets", "bound-target", "replaced-target"],
 )
 def test_provider_subagent_definition_narrows_agent_id_to_self_and_allowed_targets(
-    workspace: Path, tmp_path: Path, allowed_agents: list[str], targets: list[str]
+    workspace: Path,
+    tmp_path: Path,
+    allowed_agents: list[str],
+    binding: str | None,
+    targets: list[str],
 ) -> None:
     registry = ToolRegistry()
     registry.register(
@@ -151,13 +157,15 @@ def test_provider_subagent_definition_narrows_agent_id_to_self_and_allowed_targe
         },
         handler=lambda _context, _arguments: tool_success({}),
     )
-    manager = _manager(tmp_path, tools=registry)
+    worker = replace(_agent(workspace, agent_id="worker"), created_at="original")
+    manager = _manager(tmp_path, tools=registry, agents=[worker])
     agent = _agent(
         workspace,
         agent_id="orchestrator",
         allowed_tools=["*"],
         tools={"subagent": {"allowed_agents": allowed_agents}},
     )
+    agent = replace(agent, delegation_bindings={} if binding is None else {"worker": binding})
 
     [definition] = manager.provider_tool_definitions(agent)
 

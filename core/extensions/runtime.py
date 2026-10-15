@@ -14,7 +14,9 @@ from core.extensions.extensions import (
 )
 from core.extensions.operations import ExtensionHost
 from core.storage import StorageManager
-from core.utils.workers import settle_before_cancelling
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
+
+_SETTINGS_WORKERS = BoundedWorkerPool(name="extension-settings", max_workers=2)
 
 
 class ExtensionRuntime:
@@ -36,10 +38,10 @@ class ExtensionRuntime:
         ],
         live_config: Callable[[str], dict[str, Any]],
         resolve_credential: Callable[[str], str],
-        reload_recall: Callable[[], None],
+        reload_recall: Callable[[dict[str, Any]], None],
         refresh_prompts: Callable[[], None],
         reload_skills: Callable[[], Awaitable[None]],
-        recover_recall: Callable[[set[str]], None],
+        recover_recall: Callable[[set[str], dict[str, Any]], None],
         logger: Any,
         make_host: Callable[[], ExtensionHost] | None = None,
         archive_uninstalled_groups: Callable[[frozenset[str]], Awaitable[None]] | None = None,
@@ -72,7 +74,7 @@ class ExtensionRuntime:
             await self._finish_mutation(self._reload(), name="reload")
 
     async def _reload(self) -> None:
-        settings = self._storage.load_settings()
+        settings = await _SETTINGS_WORKERS.run(self._storage.load_settings)
         extension_dirs = self._extra_directories(settings)
         disabled, config = self._load_options(settings)
         dispatcher = self._get_command_dispatcher()
@@ -111,7 +113,7 @@ class ExtensionRuntime:
         new_registry.apply_tools(self._tools)
         if dispatcher is not None:
             new_registry.apply_commands(dispatcher)
-        self._reload_recall()
+        self._reload_recall(settings)
         self._refresh_prompts()
         await self._reload_skills()
         await self._release_uninstalled_owners(new_registry)
@@ -147,7 +149,8 @@ class ExtensionRuntime:
             await registry.deactivate(name, self._tools, dispatcher)
         self._refresh_prompts()
         await self._reload_skills()
-        self._recover_recall(removed_backends)
+        settings = await _SETTINGS_WORKERS.run(self._storage.load_settings)
+        self._recover_recall(removed_backends, settings)
 
     async def startup(self) -> None:
         """Keep initial startup ordered with reload, disable, and shutdown."""

@@ -8,9 +8,13 @@ import ctypes
 import functools
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
+import threading
+import time
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast, override
@@ -51,6 +55,76 @@ class GuardedProcessLaunch:
 
     argv: tuple[str, ...]
     pass_fds: tuple[int, ...] = ()
+    child_exit: GuardedChildExit | None = None
+
+
+class GuardedChildExit:
+    """One shell's exit, independent of the guardian's remaining descendants.
+
+    The launching owner calls spawned after Popen and close when it releases
+    the process. The child never inherits either end of this private pipe.
+    """
+
+    def __init__(self) -> None:
+        self._read, self._write = os.pipe()
+        os.set_blocking(self._read, False)
+        self._code: int | None = None
+        self._eof = False
+        self._lock = threading.Lock()
+        self._release_read = weakref.finalize(self, os.close, self._read)
+        self._release_write = weakref.finalize(self, os.close, self._write)
+
+    @property
+    def writer(self) -> int:
+        return self._write
+
+    def spawned(self) -> None:
+        with self._lock:
+            if self._write >= 0:
+                self._release_write()
+                self._write = -1
+
+    def poll(self) -> int | None:
+        with self._lock:
+            if self._code is None and not self._eof and self._read >= 0:
+                try:
+                    data = os.read(self._read, 32)
+                except BlockingIOError:
+                    return None
+                if data:
+                    self._code = int(data)
+                else:
+                    self._eof = True
+            return self._code
+
+    async def wait(self) -> int | None:
+        loop = asyncio.get_running_loop()
+        ready: asyncio.Future[None] = loop.create_future()
+
+        def readable() -> None:
+            if not ready.done():
+                ready.set_result(None)
+
+        descriptor = self._read
+        if self.poll() is None and not self._eof and descriptor >= 0:
+            loop.add_reader(descriptor, readable)
+            try:
+                await ready
+            finally:
+                loop.remove_reader(descriptor)
+        return self.poll()
+
+    def wait_blocking(self, timeout: float) -> int | None:
+        with self._lock:
+            if self._read >= 0:
+                select.select([self._read], [], [], timeout)
+        return self.poll()
+
+    def close(self) -> None:
+        with self._lock:
+            self._release_read()
+            self._release_write()
+            self._read = self._write = -1
 
 
 def activate_process_containment(*, platform_name: str = os.name) -> None:
@@ -67,6 +141,7 @@ def guarded_process_launch(
     *,
     env: Mapping[str, str],
     controlling_terminal: bool = False,
+    report_exit: bool = False,
     platform_name: str = os.name,
 ) -> GuardedProcessLaunch:
     """Wrap a POSIX child with the private guardian when it needs one.
@@ -87,14 +162,72 @@ def guarded_process_launch(
     options = ["--controlling-terminal"] if controlling_terminal else []
     if lifetime_fd is not None:
         options += ["--lifetime-fd", str(lifetime_fd)]
+    child_exit = (
+        GuardedChildExit()
+        if report_exit and lifetime_fd is not None and sys.platform == "linux"
+        else None
+    )
+    if child_exit is not None:
+        options += ["--status-fd", str(child_exit.writer)]
     # Python's startup may set the guardian's LC_CTYPE (PEP 538 locale coercion);
     # the guardian restores the requested value, or its absence, for the child.
     if "LC_CTYPE" in env:
         options.append(f"--lc-ctype={env['LC_CTYPE']}")
     return GuardedProcessLaunch(
         (sys.executable, *_GUARDIAN_INTERPRETER_OPTIONS, _GUARDIAN_SCRIPT, *options, "--", *argv),
-        () if lifetime_fd is None else (lifetime_fd,),
+        (() if lifetime_fd is None else (lifetime_fd,))
+        + (() if child_exit is None else (child_exit.writer,)),
+        child_exit,
     )
+
+
+def find_process_guardian(pid: int) -> Any | None:
+    """Return this launch's identity-bearing Linux guardian, if it has one.
+
+    Ownership stays in the kernel process tree; no server registry is needed.
+    Only our isolated script with an active lifetime boundary handles a tree
+    stop. Ordinary POSIX process groups retain their existing kill semantics.
+    """
+    if sys.platform != "linux":
+        return None
+    import psutil  # type: ignore[import-untyped]
+
+    try:
+        process = psutil.Process(pid)
+        arguments = process.cmdline()
+        prefix = (*_GUARDIAN_INTERPRETER_OPTIONS, _GUARDIAN_SCRIPT)
+        if tuple(arguments[1 : 1 + len(prefix)]) != prefix:
+            return None
+        options = arguments[1 + len(prefix) :]
+        if "--" in options and "--lifetime-fd" in options[: options.index("--")]:
+            return process
+    except psutil.NoSuchProcess:
+        pass
+    return None
+
+
+def stop_process_guardian(guardian: Any, *, timeout: float = 5.0) -> None:
+    """Ask the subreaper to kill and reap its whole tree, then confirm its exit."""
+    import psutil  # type: ignore[import-untyped]
+
+    try:
+        guardian.terminate()
+    except psutil.NoSuchProcess:
+        return
+    except psutil.AccessDenied as error:
+        raise PermissionError(
+            "The operating system refused to stop the process guardian"
+        ) from error
+    try:
+        deadline = time.monotonic() + timeout
+        while guardian.is_running() and guardian.status() != psutil.STATUS_ZOMBIE:
+            if time.monotonic() >= deadline:
+                raise OSError("The process guardian could not confirm process-tree termination")
+            time.sleep(0.01)
+    except psutil.NoSuchProcess:
+        return
+    except psutil.Error as error:
+        raise OSError("The process guardian's termination could not be inspected") from error
 
 
 def _activate_posix_lifetime_pipe() -> None:
@@ -325,9 +458,27 @@ async def create_subprocess_exec(
             try:
                 await asyncio.to_thread(on_created, transport.get_pid())
             except BaseException:
-                with contextlib.suppress(ProcessLookupError, OSError):
-                    transport.kill()
-                transport.close()
+                release_transport = True
+                try:
+                    if os.name == "nt":
+                        transport.kill()
+                    else:
+                        await asyncio.to_thread(
+                            _kill_process_tree_posix,
+                            _ExitSignallingProcess(transport, protocol, loop),
+                        )
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    # close() sends SIGKILL to a live root. Preserve a guardian
+                    # which still owns an unkillable child: it keeps retrying
+                    # and the child watcher retains the transport until exit.
+                    release_transport = (
+                        os.name == "nt" or find_process_guardian(transport.get_pid()) is None
+                    )
+                    _LOGGER.warning("A rejected launch could not be fully stopped", exc_info=True)
+                if release_transport:
+                    transport.close()
                 raise
         return _ExitSignallingProcess(transport, protocol, loop)
     return await _create_windows_subprocess_exec(
@@ -606,11 +757,15 @@ async def kill_process_tree_async(
             raise OSError("taskkill could not confirm process-tree termination")
         return
 
-    _kill_process_tree_posix(proc)
+    await asyncio.to_thread(_kill_process_tree_posix, proc)
 
 
 def _kill_process_tree_posix(proc: ProcessIdentity) -> None:
     """Kill a POSIX process group; re-raises ProcessLookupError."""
+    guardian = find_process_guardian(proc.pid)
+    if guardian is not None:
+        stop_process_guardian(guardian)
+        return
     kill_process_group = cast(Any, os).__dict__["killpg"]
     kill_process_group(proc.pid, HARD_KILL_SIGNAL)
 

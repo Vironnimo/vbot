@@ -31,8 +31,10 @@ CREATE TABLE stat_usage_units (
     owner_name TEXT NOT NULL,
     group_id TEXT NOT NULL,
     session_title TEXT,
-    UNIQUE (project_id, agent_id, session_id, owner_name, group_id)
+    session_generation_id TEXT NOT NULL DEFAULT '',
+    UNIQUE (project_id, agent_id, session_id, owner_name, group_id, session_generation_id)
 );
+CREATE INDEX stat_usage_units_generation ON stat_usage_units(session_generation_id);
 CREATE TABLE stat_usage_records (
     seq INTEGER PRIMARY KEY,
     session_key INTEGER NOT NULL,
@@ -135,19 +137,21 @@ def _project_calls(
             record.session_id or "",
             record.owner_name or "",
             record.group_id or "",
+            record.session_generation_id or "",
         )
         unit = connection.execute(
             "SELECT session_key, session_title FROM stat_usage_units "
             "WHERE project_id = ? AND agent_id = ? AND session_id = ? "
-            "AND owner_name = ? AND group_id = ?",
+            "AND owner_name = ? AND group_id = ? AND session_generation_id = ?",
             address,
         ).fetchone()
         if unit is None:
             unit_key = int(
                 connection.execute(
                     "INSERT INTO stat_usage_units "
-                    "(project_id, agent_id, session_id, owner_name, group_id, session_title) "
-                    "VALUES (?, ?, ?, ?, ?, ?) RETURNING session_key",
+                    "(project_id, agent_id, session_id, owner_name, group_id, "
+                    "session_generation_id, session_title) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING session_key",
                     (*address, record.session_title),
                 ).fetchone()[0]
             )

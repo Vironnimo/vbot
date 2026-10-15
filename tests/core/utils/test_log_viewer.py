@@ -741,7 +741,7 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
         file_name=selected_file.name,
         tail=_read_tail(selected_file),
         catalog=(selected_file.name,),
-        directory_modified_ns=logs_dir.stat().st_mtime_ns,
+        directory_modified_ns=(logs_dir.stat().st_mtime_ns,),
         subscribers=[subscriber],
     )
     file_reads = 0
@@ -998,7 +998,7 @@ async def test_watch_file_skips_polls_it_cannot_read_and_catches_up_after(
         file_name=log_file.name,
         tail=_read_tail(log_file),
         catalog=(log_file.name,),
-        directory_modified_ns=logs_dir.stat().st_mtime_ns,
+        directory_modified_ns=(logs_dir.stat().st_mtime_ns,),
         subscribers=[subscriber],
     )
     denied = PermissionError(13, "The process cannot access the file", str(log_file))
@@ -1053,3 +1053,40 @@ async def test_read_file_rejects_invalid_name(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         await viewer.read_file("../2026-05-11")
+
+
+@pytest.mark.asyncio
+async def test_registered_log_source_reads_and_replays_without_colliding(tmp_path: Path) -> None:
+    server_logs, app_logs = tmp_path / "logs", tmp_path / "application-logs"
+    server_logs.mkdir()
+    app_logs.mkdir()
+    name = "2026-05-11.log"
+    (server_logs / name).write_text(_text(_line(0, "Server")), encoding="utf-8")
+    path = app_logs / name
+    path.write_text(_text(_line(0, "Update")), encoding="utf-8")
+    viewer = LogViewer(tmp_path, additional_directories={"application": app_logs})
+    source = f"application/{name}"
+    try:
+        catalog = await viewer.list_files()
+        assert catalog == {"files": [name, source], "default_file": name}
+        first = await viewer.read_file(source)
+        assert first["file"] == source
+        assert _messages(first) == ["Update"]
+        assert first["cursor"] != (await viewer.read_file(name))["cursor"]
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(_text(_line(1, "Activated")))
+        async with aclosing(viewer.subscribe(source, cursor=first["cursor"])) as stream:
+            event = await anext(stream)
+            assert event["file"] == source
+            assert _messages(event)[-1] == "Activated"
+        for invalid in (
+            "../secret",
+            "unknown/file",
+            "application/../secret",
+            "application/file:stream",
+            "/2026-05-11.log",
+        ):
+            with pytest.raises(ValueError):
+                await viewer.read_file(invalid)
+    finally:
+        await viewer.aclose()

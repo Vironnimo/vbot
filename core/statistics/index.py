@@ -81,7 +81,7 @@ _GLOBAL_SCOPE = ""
 # version. Bump it when the fact or aggregate tables or the meaning of their
 # rows change; the kernel adds a new table empty, so a new aggregate needs a
 # bump to be filled.
-_PROJECTION_VERSION = 7
+_PROJECTION_VERSION = 8
 # A busy index fails the read quickly as retryable instead of queueing it.
 _WRITE_PATIENCE_S = 1.0
 
@@ -112,6 +112,8 @@ CREATE TABLE stat_sessions (
     is_subagent INTEGER NOT NULL,
     UNIQUE (project_id, agent_id, session_id)
 );
+CREATE UNIQUE INDEX stat_sessions_generation ON stat_sessions(generation_id)
+    WHERE generation_id <> '';
 CREATE TABLE stat_session_state (
     history_id TEXT PRIMARY KEY
 ) WITHOUT ROWID;
@@ -580,8 +582,31 @@ def _reconcile(
                 (owner_name, int(summary.get("is_subagent_session") is True)),
             )
     versions = _source(sessions.list_history_versions, [entry.address for entry in listed.values()])
-    _follow_history(connection, _source(lambda: sessions.history_id))
+    _follow_history(connection, _source(lambda: sessions.history_id), changes)
     stored = _stored_sessions(connection)
+    # A scoped read need not prune other scopes, but an observed generation
+    # at a new address proves its old projection obsolete. Retire it before
+    # inserting the destination so ledger joins have exactly one Session.
+    generation_addresses = {
+        version[0]: key
+        for key, entry in listed.items()
+        if (version := versions.get(entry.address)) is not None
+    }
+    moved = [
+        (key, row)
+        for key, row in stored.items()
+        if row.generation_id in generation_addresses
+        and generation_addresses[row.generation_id] != key
+    ]
+    if moved:
+        _delete_facts(connection, [row.session_key for _key, row in moved])
+        connection.executemany(
+            "DELETE FROM stat_sessions WHERE session_key = ?",
+            [(row.session_key,) for _key, row in moved],
+        )
+        for moved_key, moved_row in moved:
+            changes.session(moved_row.session_key, moved_row.generation_id)
+            del stored[moved_key]
     current: dict[tuple[str, str, str], IndexedSession] = {}
     changed: list[tuple[tuple[str, str, str], _Listed, tuple[str, int], _StoredSession | None]] = []
     for key, entry in listed.items():
@@ -597,7 +622,7 @@ def _reconcile(
             current[key] = IndexedSession(row.session_key, row.generation_id, entry.summary)
             if row.flags != entry.flags:
                 _write_flags(connection, row.session_key, entry.flags)
-                changes.session(row.session_key, key)
+                changes.session(row.session_key, row.generation_id)
         else:
             changed.append((key, entry, version, row))
     stale = [row.session_key for key, row in stored.items() if key not in current] if prune else []
@@ -624,27 +649,32 @@ def _reconcile(
                 "DELETE FROM stat_sessions WHERE session_key = ?",
                 [(row.session_key,) for _key, row in stale_rows],
             )
-            for key, row in stale_rows:
-                changes.session(row.session_key, key)
+            for _key, row in stale_rows:
+                changes.session(row.session_key, row.generation_id)
             removed = True
     if removed:
         prune_pricing(connection)
     return current
 
 
-def _follow_history(connection: sqlite3.Connection, history_id: str) -> None:
-    """Have every stored Session reread whole when the Session history is another.
+def _follow_history(
+    connection: sqlite3.Connection, history_id: str, changes: RollupChanges
+) -> None:
+    """Invalidate every Session projection when its canonical history changes.
 
-    A data snapshot restore brings back older history, after which a Session
-    can reach a stored ``(generation_id, history_revision)`` again with other
-    content, so stamps taken from another history prove nothing. An empty
-    generation never matches a live Session: each is replaced from its whole
-    history, or pruned when it is gone. The same history writes nothing.
+    A restore can reuse generations and revisions with different content.
+    Preserve the old generation identities for usage-origin recomputation, then
+    discard their facts even during a scoped read; unlisted scopes are stale
+    until their next canonical read. Durable accounting is unaffected.
     """
     row = connection.execute("SELECT history_id FROM stat_session_state").fetchone()
     if row is not None and row[0] == history_id:
         return
-    connection.execute("UPDATE stat_sessions SET generation_id = ''")
+    stale = list(connection.execute("SELECT session_key, generation_id FROM stat_sessions"))
+    for session_key, generation_id in stale:
+        changes.session(int(session_key), str(generation_id))
+    _delete_facts(connection, [int(session_key) for session_key, _generation_id in stale])
+    connection.execute("DELETE FROM stat_sessions")
     connection.execute("DELETE FROM stat_session_state")
     connection.execute("INSERT INTO stat_session_state (history_id) VALUES (?)", (history_id,))
 
@@ -726,6 +756,7 @@ def _replace(
         session_key = int(cursor.lastrowid or 0)
     else:
         session_key = row.session_key
+        changes.generations.add(row.generation_id)
         _delete_facts(connection, [session_key])
     rows = _project_batch(session_key, batch)
     _insert_rows(connection, rows)
@@ -738,7 +769,7 @@ def _replace(
         max_instant=rows.max_instant,
     )
     _write_flags(connection, session_key, entry.flags)
-    changes.session(session_key, key)
+    changes.session(session_key, batch.cursor.generation_id)
     return IndexedSession(session_key, batch.cursor.generation_id, entry.summary)
 
 
@@ -784,7 +815,7 @@ def _append(
     )
     if row.flags != entry.flags:
         _write_flags(connection, session_key, entry.flags)
-        changes.session(session_key, key)
+        changes.session(session_key, batch.cursor.generation_id)
         return
     changes.session_runs(
         session_key,

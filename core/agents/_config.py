@@ -137,6 +137,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "builtin",
         "compaction_policy",
         "created_at",
+        "delegation_bindings",
         "current_session_id",
         "custom_system_prompt_enabled",
         "excluded_skills",
@@ -181,6 +182,7 @@ AGENT_SHAPE = json_document(
         "compaction_policy": COMPACTION_POLICY_SHAPE,
         "tool_access": TOOL_ACCESS_SHAPE,
         "tool_loading": TOOL_LOADING_SHAPE,
+        "delegation_bindings": json_map(OPAQUE),
         "tools": json_map(
             OPAQUE,
             known={
@@ -287,6 +289,10 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         return diagnostics
 
     warn_unknown_keys(diagnostics, "$", data, AGENT_SHAPE.fields, "agent field")
+    if "delegation_bindings" in data:
+        from ._delegation import validate_bindings
+
+        diagnostics.extend(validate_bindings(data["delegation_bindings"]))
     _validate_agent_config_id(diagnostics, "$.id", data.get("id"))
     validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=False)
     validate_string(diagnostics, "$.model", data.get("model"), required=False)
@@ -699,6 +705,7 @@ def _agent_from_dict(
         allowed_skills=_validate_allowed_items("allowed_skills", data.get("allowed_skills")),
         excluded_skills=_validate_excluded_skills(data.get("excluded_skills")),
         tools=_normalize_agent_tools(data.get("tools")),
+        delegation_bindings=dict(data.get("delegation_bindings", {})),
         custom_system_prompt_enabled=bool(
             data.get("custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED)
         ),
@@ -757,6 +764,8 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
     persisted["tool_access"] = agent.tool_access.to_dict()
     if not persisted["tools"]:
         persisted.pop("tools")
+    if not persisted["delegation_bindings"]:
+        persisted.pop("delegation_bindings")
     if not persisted["excluded_skills"]:
         persisted.pop("excluded_skills")
     if persisted["top_p"] is None:

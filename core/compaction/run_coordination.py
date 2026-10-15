@@ -446,7 +446,9 @@ class CompactionRunCoordinator:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "run_finished"})
             return current_state
 
-        context_window = self._host.resolve_context_window(agent, target)
+        context_window = await self._host.run_transform(
+            self._host.resolve_context_window, agent, target
+        )
         if context_window is None:
             if forced:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "context_window_unavailable"})
@@ -536,18 +538,26 @@ class CompactionRunCoordinator:
             settings.threshold,
             token_limit,
         )
-        summary_adapter, summary_model_id, summary_provider_id = self._host.resolve_summary_adapter(
-            agent,
-            target.adapter,
-            target.model_id,
-            settings,
-            active_provider_id=target.provider_id,
-            active_connection_id=target.connection_id,
-        )
-        close_summary_adapter = summary_adapter is not target.adapter
+        summary_adapter = target.adapter
+
+        def acquire_summary() -> tuple[str, str]:
+            nonlocal summary_adapter
+            summary_adapter, model_id, provider_id = self._host.resolve_summary_adapter(
+                agent,
+                target.adapter,
+                target.model_id,
+                settings,
+                active_provider_id=target.provider_id,
+                active_connection_id=target.connection_id,
+            )
+            return model_id, provider_id
+
         compaction_started_perf = time.perf_counter()
         compaction_track = session_track(run.agent_id, run.session_id, run.project_id)
         try:
+            # Keep the acquired Adapter owned here even if cancellation wins the
+            # worker await after construction has already completed.
+            summary_model_id, summary_provider_id = await self._host.run_transform(acquire_summary)
             run.emit(
                 COMPACTION_STARTED_EVENT,
                 {
@@ -622,9 +632,6 @@ class CompactionRunCoordinator:
                         cause,
                     )
                 return current_state
-            finally:
-                if close_summary_adapter:
-                    await self._host.close_adapter(summary_adapter)
 
             checkpoint = await self._host.finalize_checkpoint(
                 checkpoint,
@@ -738,13 +745,17 @@ class CompactionRunCoordinator:
             )
             return rebuilt_state
         finally:
-            record_span(
-                "chat.compaction",
-                compaction_started_perf,
-                track=compaction_track,
-                name="compaction",
-                args={"run_id": run.id, "trigger": "auto"},
-            )
+            try:
+                if summary_adapter is not target.adapter:
+                    await self._host.close_adapter(summary_adapter)
+            finally:
+                record_span(
+                    "chat.compaction",
+                    compaction_started_perf,
+                    track=compaction_track,
+                    name="compaction",
+                    args={"run_id": run.id, "trigger": "auto"},
+                )
 
     @staticmethod
     def _abort_failed_projection(run: Run) -> None:

@@ -28,6 +28,7 @@ from core.database import (
     read_marker,
 )
 from core.database.snapshots import SNAPSHOT_MANIFEST_NAME
+from core.runs import RunKind
 from core.sessions import ChatSessionManager, SessionAddress, _store_schema
 from core.sessions._store_schema import session_database_spec
 from core.sessions._types import SessionRunAdmission, SessionRunCompletion
@@ -213,13 +214,13 @@ def test_a_populated_database_keeps_every_row_when_tables_are_added(tmp_path: Pa
         store.replace_metadata(
             address, {"title": "Retained title", "custom": {"unicode": "Gruesse"}}
         )
-        store.admit_run(
+        store.execution.admit_run(
             address,
             SessionRunAdmission(
                 run_id="retained-run", run_kind="user", started_at="2026-05-01T11:59:00Z"
             ),
         )
-        store.finish_run(
+        store.execution.finish_run(
             address,
             SessionRunCompletion(
                 run_id="retained-run",
@@ -515,5 +516,41 @@ async def test_restore_provenance_adopts_only_unambiguous_legacy_parent_generati
     try:
         assert manager.subagent_children(_address("unique-restored")) == [children[0]]
         assert manager.subagent_children(reused) == [children[1]]
+    finally:
+        manager.close()
+
+
+@pytest.mark.asyncio
+async def test_review_lineage_upgrade_captures_proven_sources_and_survives_moves(
+    tmp_path: Path,
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    source = manager.create("coder", session_id="source").address
+    review = (await manager.fork(source, run_kind=RunKind.MEMORY_REFLECTION)).address
+    elsewhere = (
+        await manager.fork(source, target_agent_id="other", run_kind=RunKind.MEMORY_REFLECTION)
+    ).address
+    manager.close()
+    with closing(sqlite3.connect(tmp_path / "sessions.db")) as connection:
+        connection.execute("DROP TABLE session_review_forks")
+        connection.execute(
+            "DELETE FROM kernel_migrations WHERE name = 'sessions.0006_review_lineage'"
+        )
+        connection.commit()
+    manager = ChatSessionManager(tmp_path)
+    moved = SessionAddress("project", "new-agent", source.session_id)
+    try:
+        assert manager.review_forks(source) == (review,)
+        await manager.move(source, moved)
+        manager.create(source.agent_id, session_id=source.session_id)
+        assert manager.review_forks(source) == ()
+    finally:
+        manager.close()
+    manager = ChatSessionManager(tmp_path)
+    try:
+        assert manager.review_forks(moved) == (review,)
+        manager.delete(moved)
+        assert not manager.exists(review)
+        assert manager.exists(elsewhere)
     finally:
         manager.close()

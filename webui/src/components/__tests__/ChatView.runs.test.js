@@ -30,6 +30,7 @@ import {
   sessionListButton,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { createRunEventFeed } from '../../lib/runEventFeed.svelte.js';
 import { t } from '../../lib/i18n.js';
 
@@ -667,6 +668,60 @@ describe('ChatView Runs', () => {
       },
     );
 
+    it('offers Stop all for authoritative work absent from History and refreshes on lifecycle changes', async () => {
+      const fallback = createChatRpcMock();
+      let running = true;
+      rpcMock.mockImplementation(async (method, params) => {
+        if (method === 'chat.work')
+          return { run_active: false, background_work_running: running };
+        if (method === 'chat.stop_all') {
+          running = false;
+          return { stopped: 1 };
+        }
+        return fallback(method, params);
+      });
+      const feed = createRunEventFeed();
+      const props = reactiveProps({ ...alphaProps(), runEvents: feed });
+      await chat.mountChat(props);
+      await waitForCondition(() => Boolean(labelledButton(t('chat.stopAll'))));
+      expect(findCancelRunButton()).toBeUndefined();
+      labelledButton(t('chat.stopAll')).click();
+      await waitForCondition(() => labelledButton(t('chat.stopAll')) === null);
+
+      // An independently launched Terminal needs no Tool row in this History.
+      running = true;
+      props.terminalsRefreshToken = 1;
+      await waitForCondition(() => Boolean(labelledButton(t('chat.stopAll'))));
+      running = false;
+      props.commandStatuses = {
+        cmd_outside_page: { status: 'completed', sessionId: 'session-1' },
+      };
+      await waitForCondition(() => labelledButton(t('chat.stopAll')) === null);
+      running = true;
+      props.queueInvalidation = {
+        agentId: 'worker',
+        sessionId: 'child-outside-page',
+      };
+      await waitForCondition(() => Boolean(labelledButton(t('chat.stopAll'))));
+      running = false;
+      feed.append(
+        runServerEvent('run_completed', {
+          run_id: 'run-unloaded',
+          agent_id: 'worker',
+          session_id: 'child-outside-page',
+          sequence: 2,
+        }),
+      );
+      await waitForCondition(() => labelledButton(t('chat.stopAll')) === null);
+      running = true;
+      props.connectionSnapshot = {
+        active_runs: [],
+        epoch: 'new',
+        last_sequence: 1,
+      };
+      await waitForCondition(() => Boolean(labelledButton(t('chat.stopAll'))));
+    });
+
     const finishedChild = subSessionHistory({
       messages: [
         {
@@ -742,6 +797,11 @@ describe('ChatView Runs', () => {
           },
         });
         rpcMock.mockImplementation(async (method, params) => {
+          if (method === 'chat.work')
+            return {
+              run_active: false,
+              background_work_running: offers === 'offers',
+            };
           if (method !== 'chat.history') return fallback(method, params);
           if (params?.session_id === 'sub-session-1') return childHistory;
           return {

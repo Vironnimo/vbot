@@ -37,7 +37,7 @@ _ONE_DAY = timedelta(days=1)
 EVENT_TIME_GRAMMAR = "start or end, optionally + or - a duration such as 'start - 30m'"
 
 
-class EventCalendar(Protocol):
+class EventCalendarRead(Protocol):
     """What event jobs read from the calendar.
 
     ``get_event`` raises ``CalendarEventNotFoundError`` for an unknown id and
@@ -55,6 +55,10 @@ class EventCalendar(Protocol):
     def system_timezone_name(self) -> str:
         """The zone whose local days all-day events span."""
         ...
+
+
+class EventCalendar(EventCalendarRead, Protocol):
+    """Live event catalog with change subscriptions."""
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Call ``callback`` after every calendar change; return an unsubscribe function."""
@@ -113,7 +117,7 @@ def coverage(job: CronJob) -> datetime:
 
 
 def owed_occurrence(
-    calendar: EventCalendar,
+    calendar: EventCalendarRead,
     event: CalendarEvent,
     job: CronJob,
     now: datetime,
@@ -159,7 +163,7 @@ def _consumed_at(job: CronJob, instant: datetime) -> tuple[str, ...] | None:
 
 
 def next_due(
-    calendar: EventCalendar, event: CalendarEvent, job: CronJob, after: datetime
+    calendar: EventCalendarRead, event: CalendarEvent, job: CronJob, after: datetime
 ) -> EventDue | None:
     """The occurrence the job is next due for strictly after ``after``; None after the last."""
     offset = _offset(job)
@@ -175,7 +179,7 @@ def next_due(
 
 
 def dues_in_window(
-    calendar: EventCalendar,
+    calendar: EventCalendarRead,
     event: CalendarEvent,
     job: CronJob,
     window_start: datetime,
@@ -188,7 +192,9 @@ def dues_in_window(
     return [_event_due(calendar, event, occurrence, due_at) for occurrence, due_at in found[:limit]]
 
 
-def can_fire(calendar: EventCalendar, event: CalendarEvent, job: CronJob, now: datetime) -> bool:
+def can_fire(
+    calendar: EventCalendarRead, event: CalendarEvent, job: CronJob, now: datetime
+) -> bool:
     """Whether the job can still start a Run for ``event``: an owed or a later occurrence.
 
     An inactive job owes nothing: enabling it covers what came due before.
@@ -217,7 +223,7 @@ def context_note(job: CronJob, due: EventDue) -> str:
 
 
 def _dues_between(
-    calendar: EventCalendar,
+    calendar: EventCalendarRead,
     event: CalendarEvent,
     job: CronJob,
     after: datetime,
@@ -239,7 +245,7 @@ def _dues_between(
 
 
 def _closes_at(
-    calendar: EventCalendar, event: CalendarEvent, occurrence: EventOccurrence, due_at: datetime
+    calendar: EventCalendarRead, event: CalendarEvent, occurrence: EventOccurrence, due_at: datetime
 ) -> datetime | None:
     """Until when an occurrence due at ``due_at`` can still start; None for no limit."""
     if due_at < occurrence.start_utc:
@@ -263,7 +269,7 @@ def _offset(job: CronJob) -> timedelta:
 
 
 def _event_due(
-    calendar: EventCalendar, event: CalendarEvent, occurrence: EventOccurrence, due_at: datetime
+    calendar: EventCalendarRead, event: CalendarEvent, occurrence: EventOccurrence, due_at: datetime
 ) -> EventDue:
     zone_name = event.tz_name or calendar.system_timezone_name()
     return EventDue(occurrence=occurrence, due_at=due_at, zone_name=zone_name)

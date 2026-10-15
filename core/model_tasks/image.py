@@ -49,6 +49,7 @@ from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
+from core.utils.workers import BoundedWorkerPool
 
 JsonObject = JsonObject
 _LOGGER = get_logger("image")
@@ -56,6 +57,7 @@ DEFAULT_IMAGE_INPUT_MAX_BYTES = 20 * 1024 * 1024
 DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES = 6
 DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES = 100 * 1024 * 1024
 _IMAGE_ANALYSIS_CONCURRENCY_LIMIT = 1
+_IMAGE_SETUP_WORKERS = BoundedWorkerPool(name="image-setup", max_workers=2)
 
 IMAGE_UNDERSTANDING_SYSTEM_PROMPT = (
     "You are a visual analysis service for another AI agent. Examine the supplied "
@@ -269,22 +271,21 @@ class ImageService:
     async def analysis_is_available(self) -> bool:
         """Return whether the configured understanding target can carry images."""
 
-        if not self._model_tasks.binding_is_usable(TASK_IMAGE_UNDERSTANDING):
+        if not await _IMAGE_SETUP_WORKERS.run(
+            self._model_tasks.binding_is_usable, TASK_IMAGE_UNDERSTANDING
+        ):
             return False
 
         adapter = None
         target_ref = None
         try:
-            binding = self._resolver.binding_for(TASK_IMAGE_UNDERSTANDING)
+            binding = await _IMAGE_SETUP_WORKERS.run(
+                self._resolver.binding_for, TASK_IMAGE_UNDERSTANDING
+            )
             target_ref = self._resolver.parse_target(binding.target)
             if target_ref.kind == "local":
                 return False
-            adapter = self._runtime.get_adapter(
-                ConnectionRef(
-                    target_ref.provider_id,
-                    target_ref.connection_id,
-                )
-            )
+            adapter = await self._analysis_adapter(target_ref)
             wire_media_types = frozenset(adapter.wire_media_support(target_ref.model_id))
             return any(media_type.startswith("image/") for media_type in wire_media_types)
         except ImageConfigurationError, VBotError, KeyError, RuntimeError:
@@ -319,7 +320,7 @@ class ImageService:
         if not normalized_prompt:
             raise ImageConfigurationError("Prompt must not be empty")
 
-        _binding, options, target_ref = self._resolver.resolve(TASK_IMAGE_GENERATION)
+        _binding, options, target_ref = await self._resolver.resolve_async(TASK_IMAGE_GENERATION)
 
         if target_ref.kind == "local":
             raise ImageUnsupportedTargetError(
@@ -351,7 +352,7 @@ class ImageService:
             max_size_bytes=self._max_input_bytes,
         )
 
-        provider_client = ProviderImageClient.from_runtime(
+        provider_client = await ProviderImageClient.from_runtime_async(
             self._runtime,
             target_ref,
             usage_observer=TaskUsage(
@@ -451,7 +452,9 @@ class ImageService:
         """Execute one bounded image-understanding request."""
 
         try:
-            _binding, _options, target_ref = self._resolver.resolve(TASK_IMAGE_UNDERSTANDING)
+            _binding, _options, target_ref = await self._resolver.resolve_async(
+                TASK_IMAGE_UNDERSTANDING
+            )
         except ImageConfigurationError as exc:
             raise ImageUnderstandingUnavailableError(str(exc)) from exc
         if target_ref.kind == "local":
@@ -477,12 +480,7 @@ class ImageService:
         adapter = None
         try:
             try:
-                adapter = self._runtime.get_adapter(
-                    ConnectionRef(
-                        target_ref.provider_id,
-                        target_ref.connection_id,
-                    )
-                )
+                adapter = await self._analysis_adapter(target_ref)
             except (ConfigError, KeyError) as exc:
                 safe_error = _safe_error_text(exc, target_ref)
                 _LOGGER.warning(
@@ -577,6 +575,23 @@ class ImageService:
         finally:
             if adapter is not None:
                 await _close_adapter_safely(adapter, target_ref)
+
+    async def _analysis_adapter(self, target: TaskModelTargetRef) -> Any:
+        adapter: Any = None
+
+        def prepare() -> Any:
+            nonlocal adapter
+            adapter = self._runtime.get_adapter(
+                ConnectionRef(target.provider_id, target.connection_id)
+            )
+            return adapter
+
+        try:
+            return await _IMAGE_SETUP_WORKERS.run(prepare)
+        except BaseException:
+            if adapter is not None:
+                await _close_adapter_safely(adapter, target)
+            raise
 
     async def _prepare_analysis_images(
         self,

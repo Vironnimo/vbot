@@ -107,6 +107,20 @@ def archive_agent(services: ArchiveServices, agent_id: str) -> AgentArchiveOutco
     )
 
 
+def _repair_review_currents(services: ArchiveServices, entry_key: int, scope: ArchiveScope) -> None:
+    """Re-aim surviving review owners before grant/roster reads repair their pointers."""
+    for member in services.sessions.archive_ledger.members(entry_key, limit=None):
+        address = member.address
+        if (
+            address.project_id is None
+            and (scope.project_id is not None or address.agent_id != scope.agent_id)
+            and services.agents.exists(address.agent_id)
+        ):
+            services.agents.reset_current_after_session_removed(
+                address.agent_id, address.session_id
+            )
+
+
 def _agent_facts(archived: ArchivedAgent) -> dict[str, Any]:
     return {
         "name": archived.agent.name,
@@ -131,6 +145,7 @@ def cleanup_agent(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, 
     cleanup finishes without touching or recording them.
     """
     ledger = services.sessions.archive_ledger
+    _repair_review_currents(services, entry.entry_key, ArchiveScope(agent_id=entry.agent_id))
     if services.agents.exists(entry.subject_id):
         ledger.finish_cleanup(entry.entry_key)
         return ()
@@ -221,6 +236,7 @@ def archive_project(
             if _undo_unroots(services, completed):
                 _abandon_unless_retained(services, ref, (tree,))
             raise
+        _repair_review_currents(services, ref.entry_key, ArchiveScope(project_id=project_id))
     return ProjectArchiveOutcome(
         entry_id=ref.entry_id,
         project_id=project_id,

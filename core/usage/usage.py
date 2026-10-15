@@ -20,6 +20,7 @@ from typing import Any, NamedTuple, Protocol
 
 from core.database import Database, open_database
 from core.models.pricing import TokenPricing, nonnegative_amount, price_usage, project_cost
+from core.sessions import SessionAddress
 from core.usage._calibration import InputEstimateCalibration
 from core.usage._schema import usage_database_spec
 from core.utils.ids import new_id
@@ -27,7 +28,7 @@ from core.utils.timestamps import utc_now_timestamp
 
 _COLUMNS = (
     "id,revision,timestamp,model,kind,status,usage_json,agent_id,project_id,"
-    "session_id,run_id,connection_id,session_title,owner_name,group_id"
+    "session_id,run_id,connection_id,session_title,owner_name,group_id,session_generation_id"
 )
 _COUNTERS = (
     "input_tokens",
@@ -37,7 +38,7 @@ _COUNTERS = (
     "cache_write_tokens",
 )
 _FLAGS = ("input_tokens_estimated", "output_tokens_estimated", "estimated")
-_IMPORT_NAME = "session-history-v1"
+_IMPORT_NAME = "session-history-v2"
 READ_PAGE_SIZE = 1000
 
 
@@ -48,6 +49,18 @@ class UsageHistorySource(Protocol):
     def usage_history(
         self, after_entry_key: int = 0, *, limit: int = 1000
     ) -> tuple[dict[str, Any], ...]: ...
+
+
+class UsageSessionSource(Protocol):
+    """Resolve a request's immutable Session generation at dispatch."""
+
+    def list_history_versions(
+        self, addresses: list[SessionAddress]
+    ) -> dict[SessionAddress, tuple[str, int]]: ...
+
+    async def run_async[Result](
+        self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
+    ) -> Result: ...
 
 
 @dataclass(frozen=True)
@@ -67,6 +80,7 @@ class UsageRecord:
     session_title: str | None = None
     owner_name: str | None = None
     group_id: str | None = None
+    session_generation_id: str | None = None
 
 
 class UsagePage(NamedTuple):
@@ -172,10 +186,15 @@ class UsageRecorder:
     """Canonical accounting owner; the Statistics database remains disposable."""
 
     def __init__(
-        self, path: Path, *, pricing_lookup: Callable[[str], TokenPricing | None] | None = None
+        self,
+        path: Path,
+        *,
+        pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
+        session_source: UsageSessionSource | None = None,
     ) -> None:
         self.database = open_database(usage_database_spec(path))
         self._pricing_lookup = pricing_lookup
+        self._session_source = session_source
         self._import_lock = threading.Lock()
         try:
             self.database.write(self._interrupt_unfinished)
@@ -227,12 +246,20 @@ class UsageRecorder:
     ) -> str:
         if not model or not kind:
             raise ValueError("Usage requires a Model and request kind")
+        generation_id = None
+        if self._session_source is not None and agent_id and session_id:
+            address = SessionAddress(project_id, agent_id, session_id)
+            versions = await self._session_source.run_async(
+                self._session_source.list_history_versions, [address]
+            )
+            if version := versions.get(address):
+                generation_id = version[0]
         identifier = new_id("use")
         stamp = utc_now_timestamp()
 
         def operation(connection: sqlite3.Connection) -> str:
             connection.execute(
-                f"INSERT INTO usage_calls ({_COLUMNS}) VALUES ({','.join('?' for _ in range(15))})",
+                f"INSERT INTO usage_calls ({_COLUMNS}) VALUES ({','.join('?' for _ in range(16))})",
                 (
                     identifier,
                     _revision(connection),
@@ -249,6 +276,7 @@ class UsageRecorder:
                     session_title,
                     owner_name,
                     group_id,
+                    generation_id,
                 ),
             )
             return identifier
@@ -429,7 +457,9 @@ class UsageRecorder:
                         else ("legacy_" + hashlib.sha256(identity.encode()).hexdigest())
                     )
                     existing = connection.execute(
-                        "SELECT status,usage_json FROM usage_calls WHERE id=?", (identifier,)
+                        "SELECT status,usage_json,session_generation_id "
+                        "FROM usage_calls WHERE id=?",
+                        (identifier,),
                     ).fetchone()
                     status = "interrupted" if record.get("interrupted") else "completed"
                     previous = json.loads(existing["usage_json"]) if existing else {}
@@ -439,16 +469,22 @@ class UsageRecorder:
                     if existing is not None:
                         if existing["status"] not in {"started", "interrupted"}:
                             status = existing["status"]
-                        if encoded != existing["usage_json"] or status != existing["status"]:
+                        generation_id = existing["session_generation_id"] or record["generation_id"]
+                        if (
+                            encoded != existing["usage_json"]
+                            or status != existing["status"]
+                            or generation_id != existing["session_generation_id"]
+                        ):
                             connection.execute(
-                                "UPDATE usage_calls SET revision=?,status=?,usage_json=? "
+                                "UPDATE usage_calls SET revision=?,status=?,usage_json=?,"
+                                "session_generation_id=? "
                                 "WHERE id=?",
-                                (_revision(connection), status, encoded, identifier),
+                                (_revision(connection), status, encoded, generation_id, identifier),
                             )
                         continue
                     connection.execute(
                         f"INSERT INTO usage_calls ({_COLUMNS}) VALUES "
-                        f"({','.join('?' for _ in range(15))})",
+                        f"({','.join('?' for _ in range(16))})",
                         (
                             identifier,
                             _revision(connection),
@@ -465,6 +501,7 @@ class UsageRecorder:
                             record["session_title"],
                             record["owner_name"],
                             record["group_id"],
+                            record["generation_id"],
                         ),
                     )
                 _import_cursor(connection, source_id, source_restore_id, batch[-1]["entry_key"])

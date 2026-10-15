@@ -482,8 +482,16 @@ async def test_run_refuses_clearly_and_changes_nothing(
     # Passes run one at a time.
     with pytest.raises(LibrarianBusyError, match="pass of Agent main is running"):
         await harness.service.run("second")
+    cancelled_waiter = asyncio.create_task(harness.service.wait_for_pass("main"))
+    await asyncio.sleep(0)
+    cancelled_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_waiter
+    assert harness.service.running("main")
+    waiter = asyncio.create_task(harness.service.wait_for_pass("main"))
     harness.run_gate.set()
-    await asyncio.gather(*(a.task for a in harness.service._active.values() if a.task))
+    await waiter
+    assert not harness.service.running("main")
 
     harness.busy.add("main")
     with pytest.raises(LibrarianBusyError, match="Agent main has an active or queued Run"):

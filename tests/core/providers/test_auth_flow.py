@@ -10,6 +10,7 @@ import asyncio
 import base64
 import hashlib
 import logging
+import threading
 from collections.abc import AsyncIterator, Awaitable
 from datetime import UTC, datetime, timedelta
 from typing import Any, override
@@ -750,3 +751,52 @@ async def test_cancelled_connect_retires_the_authorization_verifier(
     assert not engine._minimax_code_verifiers
     assert not engine.is_flow_active("provider", "oauth")
     poll.assert_not_awaited()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_cancel_flow_waits_for_an_admitted_token_save(
+    engine: DeviceFlowEngine, store: TokenStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Disconnect can delete credentials only after an already-started save settles."""
+    config = github_oauth_config()
+    respx.post(config.device_auth_url).mock(
+        return_value=httpx.Response(200, json=GITHUB_AUTHORIZATION)
+    )
+    respx.post(config.token_url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": "granted",
+                "refresh_token": "refresh",
+                "expires_in": 3600,
+            },
+        )
+    )
+    loop = asyncio.get_running_loop()
+    saving = asyncio.Event()
+    release = threading.Event()
+    save = store.save
+
+    def held_save(*args: Any, **kwargs: Any) -> None:
+        loop.call_soon_threadsafe(saving.set)
+        assert release.wait(2)
+        save(*args, **kwargs)
+
+    monkeypatch.setattr(store, "save", held_save)
+    completion = Completion()
+    await engine.connect("provider", "oauth", config, completion)
+    draining: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(saving.wait(), 1)
+        draining = asyncio.create_task(engine.cancel_flow_and_wait("provider", "oauth"))
+        await asyncio.sleep(0)
+        assert not draining.done()
+    finally:
+        release.set()
+    assert draining is not None
+    await draining
+    assert store.load("provider", "oauth") is not None
+    store.delete("provider", "oauth")
+    assert not store.exists("provider", "oauth")
+    assert completion.outcomes == []

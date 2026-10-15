@@ -20,6 +20,7 @@ from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
 from core.utils.tls import shared_ssl_context
 from core.utils.tokens import estimate_json_tokens
+from core.utils.workers import BoundedWorkerPool
 
 # The most items one classify call judges.
 ITEM_LIMIT = 100
@@ -27,6 +28,7 @@ ITEM_LIMIT = 100
 INPUT_TOKEN_LIMIT = 32_000
 # Items judged at the same time; each is one Provider request.
 _ITEM_CONCURRENCY = 8
+_DECISION_SETUP_WORKERS = BoundedWorkerPool(name="decision-setup", max_workers=2)
 
 NOT_CONFIGURED_MESSAGE = (
     "Configure an available Decision model in Settings → Tools → Decision Model."
@@ -92,7 +94,7 @@ class DecisionService:
         for state in states:
             if not isinstance(state, str | dict | list):
                 raise DecisionError("Each item must be text, a JSON object, or a JSON array.")
-        target = self._target()
+        target = await _DECISION_SETUP_WORKERS.run(self._target)
         slots = asyncio.Semaphore(_ITEM_CONCURRENCY)
 
         async def judge(
@@ -136,7 +138,7 @@ class DecisionService:
     ) -> dict[str, Any]:
         ref = parse_task_model_target_id(target)
         try:
-            client = ProviderDecisionClient.from_runtime(
+            client = await ProviderDecisionClient.from_runtime_async(
                 self._runtime,
                 ref,
                 usage_observer=TaskUsage(

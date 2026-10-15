@@ -205,6 +205,27 @@ async def test_stop_all_stops_the_session_tree_and_reports_how_much_it_stopped()
     assert stopped == [SessionAddress(project_id="vbot", agent_id="builder", session_id="s1")]
 
 
+@pytest.mark.asyncio
+async def test_work_projects_the_complete_exact_session_scope_without_history() -> None:
+    inspected: list[SessionAddress] = []
+
+    async def work_snapshot(address: SessionAddress) -> dict[str, bool]:
+        inspected.append(address)
+        return {"run_active": False, "background_work_running": True}
+
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(subagents=SimpleNamespace(work_snapshot=work_snapshot))
+    )
+    response = await call(state, "chat.work", agent_id="builder@vbot", session_id="s1")
+    assert response == {
+        "ok": True,
+        "result": {"run_active": False, "background_work_running": True},
+    }
+    assert inspected == [SessionAddress("vbot", "builder", "s1")]
+    refused = await call(state, "chat.work", agent_id="builder@vbot", session_id="s1", after="old")
+    assert refused["error"]["code"] == RPC_ERROR_INVALID_REQUEST
+
+
 def _commands_state(commands: Harness) -> SimpleNamespace:
     return SimpleNamespace(runtime=SimpleNamespace(command_manager=commands.manager))
 

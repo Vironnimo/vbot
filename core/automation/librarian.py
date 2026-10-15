@@ -421,6 +421,7 @@ class _ActivePass:
     # The name of the Agent whose Skills the pass curates, for its Session title and brief.
     agent_name: str = ""
     task: asyncio.Task[None] | None = field(default=None, repr=False)
+    finished: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     base: LibrarianState | None = None
     # Every Agent's Skill use by ``(agent id, name)``, read for this pass or its check.
     usage: Sequence[SkillActivationUse] | None = field(default=None, repr=False)
@@ -784,6 +785,12 @@ class LibrarianService:
         """Whether a pass of the Agent runs."""
         return agent_id in self._active
 
+    async def wait_for_pass(self, agent_id: str) -> None:
+        """Wait for an existing pass without cancelling its work with the waiter."""
+        active = self._active.get(agent_id)
+        if active is not None:
+            await active.finished.wait()
+
     def _busy(self, agent_id: str) -> bool:
         """Whether a pass runs, or the Agent or the Librarian has an active or queued Run."""
         return bool(self._active) or self._agent_active(agent_id) or self._librarian_active()
@@ -889,6 +896,7 @@ class LibrarianService:
             if self._active.get(agent_id) is active:
                 del self._active[agent_id]
                 self._announce()
+            active.finished.set()
 
     # -- one pass ----------------------------------------------------------------
 

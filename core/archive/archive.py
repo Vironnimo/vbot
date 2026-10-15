@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import builtins
 import threading
-from collections.abc import Awaitable, Callable, Sequence
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +56,7 @@ from core.sessions import (
     ArchiveEntryCursor,
     ArchiveEntryFilter,
     ArchiveEntryNotFoundError,
+    ArchiveScope,
     SessionAddress,
 )
 from core.tools.terminal_manager import TerminalOwner
@@ -80,6 +81,12 @@ _PURGE_PAGE = 200
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _in_scope(address: SessionAddress, scope: ArchiveScope) -> bool:
+    return address.project_id == scope.project_id and (
+        scope.agent_id is None or address.agent_id == scope.agent_id
+    )
 
 
 @dataclass(frozen=True)
@@ -162,20 +169,25 @@ class ArchiveService:
         stays where it is. The Agent's id leaves every delegation list.
         """
         services = self._services
+        scope = ArchiveScope(agent_id=agent_id)
         async with services.runs.agent_admission_guard(agent_id, project_id=None):
             references = await services.agent_references(agent_id)
             if references:
                 raise ArchiveSubjectInUseError(ARCHIVE_KIND_AGENT, agent_id, references)
-            await services.terminals.close_agent_scope(agent_id, None)
-            await services.commands.close_agent_scope(agent_id, None)
-            addresses = await services.sessions.run_async(
-                services.sessions.list_addresses, agent_id=agent_id
-            )
-            scratch_roots = await services.scratch_areas.roots_for_archive(addresses)
-            outcome = await services.sessions.run_async(
-                _operations.archive_agent, services, agent_id
-            )
-            await services.scratch_areas.remove_areas(scratch_roots)
+            async with self._scope_review_guard(scope) as (addresses, reviews):
+                await services.terminals.close_agent_scope(agent_id, None)
+                await services.commands.close_agent_scope(agent_id, None)
+                await self._close_review_work(reviews)
+                scratch_roots = await services.scratch_areas.roots_for_archive(addresses)
+                async with services.snapshot_barrier.compound_mutation_async():
+                    outcome = await services.sessions.run_async(
+                        _operations.archive_agent, services, agent_id
+                    )
+                    archived_reviews = await self._finish_scope_archive(
+                        outcome.entry_id, scope, reviews
+                    )
+                    outcome = replace(outcome, review_addresses=archived_reviews)
+                await services.scratch_areas.remove_areas(scratch_roots)
             # The archive has succeeded; what follows only brings caches, listeners
             # and the Recall index in step, so a failure there never hides it.
             try:
@@ -208,6 +220,7 @@ class ArchiveService:
         Project and with ``RunAdmissionBlockedError`` while it has Runs.
         """
         services = self._services
+        scope = ArchiveScope(project_id=project_id)
         await services.sessions.run_async(services.projects.get, project_id)
         async with services.runs.project_admission_guard(project_id):
             references = services.automation.project_references(project_id)
@@ -218,18 +231,22 @@ class ArchiveService:
                     [reference.label for reference in references],
                     [reference.to_dict() for reference in references],
                 )
-            await services.terminals.close_project_scope(project_id)
-            await services.commands.close_project_scope(project_id)
-            addresses = await services.sessions.run_async(
-                services.sessions.list_addresses, project_id
-            )
-            scratch_roots = await services.scratch_areas.roots_for_archive(addresses)
-            outcome = await services.sessions.run_async(
-                lambda: _operations.archive_project(
-                    services, project_id, copy_identity_files=copy_identity_files
-                )
-            )
-            await services.scratch_areas.remove_areas(scratch_roots)
+            async with self._scope_review_guard(scope) as (addresses, reviews):
+                await services.terminals.close_project_scope(project_id)
+                await services.commands.close_project_scope(project_id)
+                await self._close_review_work(reviews)
+                scratch_roots = await services.scratch_areas.roots_for_archive(addresses)
+                async with services.snapshot_barrier.compound_mutation_async():
+                    outcome = await services.sessions.run_async(
+                        lambda: _operations.archive_project(
+                            services, project_id, copy_identity_files=copy_identity_files
+                        )
+                    )
+                    archived_reviews = await self._finish_scope_archive(
+                        outcome.entry_id, scope, reviews
+                    )
+                    outcome = replace(outcome, review_addresses=archived_reviews)
+                await services.scratch_areas.remove_areas(scratch_roots)
         try:
             services.invalidate_project(project_id)
         except Exception:
@@ -247,6 +264,60 @@ class ArchiveService:
             actor,
         )
         return outcome
+
+    @asynccontextmanager
+    async def _scope_review_guard(
+        self, scope: ArchiveScope
+    ) -> AsyncIterator[tuple[tuple[SessionAddress, ...], tuple[SessionAddress, ...]]]:
+        """Extend the held scope guard to reviews that retained another owner."""
+        services = self._services
+        addresses = await services.sessions.run_async(
+            services.sessions.archive_ledger.scope_addresses, scope
+        )
+        reviews = tuple(address for address in addresses if not _in_scope(address, scope))
+        guard = services.runs.session_admission_guard(*reviews) if reviews else nullcontext()
+        async with guard:
+            references = [
+                reference
+                for address in reviews
+                for reference in services.automation.session_references(address)
+            ]
+            if references:
+                raise ArchiveSubjectInUseError(
+                    ARCHIVE_KIND_PROJECT if scope.project_id else ARCHIVE_KIND_AGENT,
+                    scope.project_id or scope.agent_id or "",
+                    [reference.label for reference in references],
+                    [reference.to_dict() for reference in references],
+                )
+            yield addresses, reviews
+
+    async def _close_review_work(self, addresses: Sequence[SessionAddress]) -> None:
+        for address in addresses:
+            await self._services.terminals.close_scope(
+                TerminalOwner(address.project_id, address.agent_id, address.session_id)
+            )
+            await self._services.commands.close_scope(address)
+
+    async def _finish_scope_archive(
+        self, entry_id: str, scope: ArchiveScope, prepared: Sequence[SessionAddress]
+    ) -> tuple[SessionAddress, ...]:
+        """Use the membership that actually committed for resource and UI cleanup."""
+        services = self._services
+
+        def finish() -> tuple[SessionAddress, ...]:
+            entry = self._require_entry(entry_id)
+            reviews = tuple(
+                member.address
+                for member in services.sessions.archive_ledger.members(entry.entry_key, limit=None)
+                if not _in_scope(member.address, scope)
+            )
+            return reviews
+
+        reviews = await services.sessions.run_async(finish)
+        # Like a Session archive, an idle review created after guard acquisition
+        # can join at commit. Close its retained work as well.
+        await self._close_review_work([address for address in reviews if address not in prepared])
+        return reviews
 
     async def archive_session(
         self, address: SessionAddress, *, actor: str = "rpc"
@@ -278,15 +349,26 @@ class ArchiveService:
                     [reference.to_dict() for reference in references],
                 )
             await sessions.get_async(address)
-            removed_current: str | None = None
-            if address.project_id is None:
-                current = await sessions.run_async(
-                    lambda: services.agents.get(address.agent_id).current_session_id
-                )
-                removed_current = next(
-                    (member.session_id for member in members if member.session_id == current),
-                    None,
-                )
+
+            def current_members() -> dict[str, str]:
+                removed: dict[str, str] = {}
+                for agent_id in {
+                    member.agent_id for member in members if member.project_id is None
+                }:
+                    current = services.agents.get(agent_id).current_session_id
+                    if any(
+                        member.project_id is None
+                        and member.agent_id == agent_id
+                        and member.session_id == current
+                        for member in members
+                    ):
+                        removed[agent_id] = current
+                return removed
+
+            removed_currents = await sessions.run_async(current_members)
+            removed_current = (
+                removed_currents.get(address.agent_id) if address.project_id is None else None
+            )
             for member in members:
                 await services.terminals.close_scope(
                     TerminalOwner(member.project_id, member.agent_id, member.session_id)
@@ -310,6 +392,12 @@ class ArchiveService:
                         removed_current or address.session_id,
                     )
                     next_session_id = agent.current_session_id or None
+                for review_agent, current in removed_currents.items():
+                    if address.project_id is None and review_agent == address.agent_id:
+                        continue
+                    await sessions.run_async(
+                        services.agents.reset_current_after_session_removed, review_agent, current
+                    )
             await services.scratch_areas.remove_areas(scratch_roots)
             # Review forks carry a reflection Run kind, which keeps them out of Recall.
             await services.remove_session_from_recall(
@@ -326,7 +414,7 @@ class ArchiveService:
             actor,
         )
         return SessionArchiveOutcome(
-            ref.entry_id, address, next_session_id, removed_current is not None, archived_addresses
+            ref.entry_id, address, next_session_id, bool(removed_currents), archived_addresses
         )
 
     # -- Restore -----------------------------------------------------------------
@@ -352,7 +440,7 @@ class ArchiveService:
         services = self._services
         entry = await services.sessions.run_async(self._require_entry, entry_id)
         target = entry.subject_id if target_id is None else target_id
-        async with await self._restore_guard(entry, target):
+        async with self._restore_guard(entry, target):
             outcome = await services.sessions.run_async(
                 _restore.restore, services, entry_id, target_id
             )
@@ -372,28 +460,40 @@ class ArchiveService:
         )
         return outcome
 
-    async def _restore_guard(
-        self, entry: ArchiveEntry, target: str
-    ) -> AbstractAsyncContextManager[None]:
+    @asynccontextmanager
+    async def _restore_guard(self, entry: ArchiveEntry, target: str) -> AsyncIterator[None]:
         runs = self._services.runs
-        if entry.kind == ARCHIVE_KIND_AGENT:
-            return runs.agent_admission_guard(target, project_id=None)
-        if entry.kind == ARCHIVE_KIND_PROJECT:
-            return runs.project_admission_guard(target)
-        members = await self._services.sessions.run_async(
-            self._services.sessions.archive_ledger.members, entry.entry_key, limit=None
-        )
-        renamed = target != entry.subject_id
-        # A new Session id names the entry's Session; its review forks keep theirs.
-        addresses = [
-            SessionAddress(
-                member.address.project_id,
-                member.address.agent_id,
-                target if renamed and not member.review_fork else member.address.session_id,
+        async with AsyncExitStack() as guards:
+            if entry.kind == ARCHIVE_KIND_AGENT:
+                await guards.enter_async_context(
+                    runs.agent_admission_guard(target, project_id=None)
+                )
+                scope = ArchiveScope(agent_id=entry.agent_id)
+            elif entry.kind == ARCHIVE_KIND_PROJECT:
+                await guards.enter_async_context(runs.project_admission_guard(target))
+                scope = ArchiveScope(project_id=entry.project_id)
+            else:
+                scope = None
+            members = await self._services.sessions.run_async(
+                self._services.sessions.archive_ledger.members, entry.entry_key, limit=None
             )
-            for member in members
-        ]
-        return runs.session_admission_guard(*addresses)
+            renamed = target != entry.subject_id
+            # The restored scope's guard covers its retargeted members. Reviews
+            # belonging elsewhere keep their addresses and need their own guard.
+            addresses = [
+                SessionAddress(
+                    member.address.project_id,
+                    member.address.agent_id,
+                    target
+                    if scope is None and renamed and not member.review_fork
+                    else member.address.session_id,
+                )
+                for member in members
+                if scope is None or not _in_scope(member.address, scope)
+            ]
+            if addresses:
+                await guards.enter_async_context(runs.session_admission_guard(*addresses))
+            yield
 
     # -- Purge -------------------------------------------------------------------
 

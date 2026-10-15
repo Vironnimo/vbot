@@ -7,6 +7,7 @@ Writes (``settings.update`` and ``settings.patch``) live in
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -86,6 +87,14 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         "port_source": "settings.server_port",
     }
 
+    loop_thread = threading.get_ident()
+    load_settings = state.runtime.storage.load_settings
+
+    def worker_settings() -> JsonObject:
+        assert threading.get_ident() != loop_thread
+        return dict(load_settings())
+
+    monkeypatch.setattr(state.runtime.storage, "load_settings", worker_settings)
     result = await rpc_result(state, "settings.get")
 
     timezone = result["general"].pop("timezone")

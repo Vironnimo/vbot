@@ -100,14 +100,16 @@ export function createPageRefresh(refresh) {
 }
 
 // The Swarm Extension names what changed: `profiles` carries profile ids; the
-// other resources carry Swarm ids and name a part of that Swarm's view:
+// `discussion_posts` carries Swarm/discussion pairs; the other resources
+// carry Swarm ids and name a part of that Swarm's view:
 // `swarms` its entry in the Swarm list, `participants` their Runs and pending
-// messages, `posts` new Board posts, `discussions` the discussions and their
+// messages, legacy `posts` any Board posts, `discussions` the discussions and their
 // members, `wiki` its Wiki pages.
 const SWARM_RESOURCES = new Set([
   'swarms',
   'participants',
   'posts',
+  'discussion_posts',
   'discussions',
   'wiki',
 ]);
@@ -128,9 +130,23 @@ export function swarmChanged(changes, swarmId, resource = null) {
   for (const [name, ids] of changes)
     if (
       SWARM_RESOURCES.has(name) &&
-      (resource === null || name === resource) &&
-      ids.has(swarmId)
+      (resource === null ||
+        name === resource ||
+        (resource === 'posts' && name === 'discussion_posts')) &&
+      (name === 'discussion_posts'
+        ? [...ids].some((id) => id.startsWith(`${swarmId}/`))
+        : ids.has(swarmId))
     )
       return true;
   return false;
+}
+
+// Old broad invalidations remain valid; a scoped post change reads only
+// the discussion currently on screen. Unknown resources still reload all.
+export function discussionPostsChanged(changes, swarmId, discussionId) {
+  return (
+    everythingChanged(changes) ||
+    changes.get('posts')?.has(swarmId) ||
+    changes.get('discussion_posts')?.has(`${swarmId}/${discussionId}`)
+  );
 }

@@ -486,6 +486,19 @@ def test_logger_proxy_forwards_formatted_records_that_pass_its_filters() -> None
             ),
         ):
             handler.handle(record)
+        try:
+            failure = RuntimeError("startup sentinel")
+            object.__setattr__(failure, "_vbot_startup_failure_logged", True)
+            raise failure
+        except RuntimeError:
+            # Starlette sends its traceback to uvicorn while handling the error.
+            handler.handle(
+                make_websocket_record(
+                    name="uvicorn.error",
+                    level=logging.ERROR,
+                    message="Traceback (most recent call last):\nRuntimeError: startup sentinel",
+                )
+            )
     finally:
         target_logger.removeHandler(capture_handler)
         handler.close()

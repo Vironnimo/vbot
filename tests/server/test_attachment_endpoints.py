@@ -11,11 +11,11 @@ from fastapi import HTTPException, Request  # type: ignore[import-not-found]
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.attachments import AttachmentStore
-from server.app import (
+from server._request_bodies import (
     MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES,
     _parse_upload_file_with_limit,
-    create_app,
 )
+from server.app import create_app
 from tests.server.app_test_support import ServerStubRuntime
 
 _JPEG = b"\xff\xd8\xff\xe0" + (b"\x00" * 32)

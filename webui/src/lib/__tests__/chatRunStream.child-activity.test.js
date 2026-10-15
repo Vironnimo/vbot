@@ -335,6 +335,7 @@ describe('reflection review tracking', () => {
     expect(sourceReflectionTasks(harness)).toEqual({
       'run-refl-1': {
         sessionId: 'session-fork',
+        agentId: 'alpha',
         runKind: 'memory_reflection',
         status: 'running',
         startedAt: '2026-08-24T10:00:00.000Z',
@@ -421,6 +422,7 @@ describe('reflection review tracking', () => {
     expect(source.reflectionTasks).toEqual({
       'run-refl-live': {
         sessionId: 'session-fork',
+        agentId: 'alpha',
         runKind: 'memory_reflection',
         status: 'running',
         startedAt: '2026-08-24T11:00:00.000Z',

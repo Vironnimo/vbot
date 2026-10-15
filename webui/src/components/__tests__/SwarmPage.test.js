@@ -239,6 +239,21 @@ describe('SwarmPage overview', () => {
       { ...open, 'board.read after': 1 },
     ],
     [
+      "the shown discussion's posts",
+      [changed('discussion_posts', 'swr-a/dsc-main')],
+      { ...open, 'board.read after': 1 },
+    ],
+    [
+      "another discussion's posts",
+      [changed('discussion_posts', 'swr-a/dsc-findings')],
+      open,
+    ],
+    [
+      "another Swarm's discussion posts",
+      [changed('discussion_posts', 'swr-b/dsc-main')],
+      none,
+    ],
+    [
       "the open Swarm's discussions",
       [changed('discussions', 'swr-a')],
       { ...open, 'board.list': 1 },
@@ -288,6 +303,16 @@ describe('SwarmPage overview', () => {
           ),
         ).toEqual(expected),
       );
+      if (expected['swarms.get']) {
+        expect(callsTo(operation, 'swarms.get').at(-1)).toEqual([
+          'swarms.get',
+          { swarm_id: 'swr-a', include_snapshot: false },
+        ]);
+        // The response omits this immutable text; the page retains it.
+        expect(document.querySelector('.swarm-head').textContent).toContain(
+          'Research',
+        );
+      }
     },
   );
 

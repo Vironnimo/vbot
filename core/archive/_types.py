@@ -55,6 +55,8 @@ class AgentArchiveOutcome:
     session_count: int
     policy_agent_ids: tuple[str, ...]
     external_workspace: str | None = None
+    # Reviews outside the removed scope retain a live owner and need scoped UI invalidation.
+    review_addresses: tuple[SessionAddress, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,14 +69,16 @@ class ProjectArchiveOutcome:
     affected_agent_ids: tuple[str, ...]
     copied_files: Mapping[str, tuple[str, ...]]
     backed_up_files: Mapping[str, tuple[str, ...]]
+    review_addresses: tuple[SessionAddress, ...] = ()
 
 
 @dataclass(frozen=True)
 class SessionArchiveOutcome:
     """An archived Session and, for an Identity Agent, its current Session afterwards.
 
-    ``was_current`` tells whether that current Session was archived: the Session
-    itself or one of the review forks that went with it.
+    ``was_current`` tells whether any Identity Agent's current Session was
+    archived: the source or a review fork, including its original Agent after
+    the source moved. ``next_session_id`` is only the source Agent's landing.
     """
 
     entry_id: str

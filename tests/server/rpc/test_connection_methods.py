@@ -387,14 +387,16 @@ async def test_opencode_key_mutations_update_both_provider_accounts(tmp_path: Pa
     providers = ProviderRegistry.load(_REPO_RESOURCES)
     storage = StorageManager(tmp_path)
     resolver = ProviderCredentialResolver(providers, process_env={})
+
+    async def reload_credentials() -> None:
+        resolver.reload_fallback_credentials(storage.load_environment())
+
     state = SimpleNamespace(
         runtime=SimpleNamespace(
             providers=providers,
             storage=storage,
             provider_credentials=resolver,
-            reload_environment_credentials=lambda: resolver.reload_fallback_credentials(
-                storage.load_environment()
-            ),
+            reload_environment_credentials_async=reload_credentials,
         ),
         event_bus=ServerEventBus(),
     )

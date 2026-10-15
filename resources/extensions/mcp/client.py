@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import warnings
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, suppress
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -49,6 +49,7 @@ from ._network import http_client
 from ._oauth import ConnectionOAuth
 from ._tasks import (
     TASKS_EXTENSION,
+    TERMINAL_STATUSES,
     ExtensionWire,
     LegacyWire,
     TaskEndedError,
@@ -433,14 +434,16 @@ class ConnectionRunner:
         inputs: InputRequests,
         publish: Any,
         *,
-        authorize: Callable[[ToolContext], None] | None = None,
+        authorize: Callable[[ToolContext], Awaitable[None] | None] | None = None,
         on_change: Callable[[], None] | None = None,
+        recovery: Any = None,
     ) -> None:
         self.config = config
         self.host = host
         self.inputs = inputs
         self.publish = publish
         self._authorize = authorize
+        self._recovery = recovery
         self.id = config["id"]
         self._on_change = on_change
         self._state = "disconnected"
@@ -667,6 +670,16 @@ class ConnectionRunner:
             self._events.record("read_retry", {"operation": operation, "attempt": attempt + 1})
             await _sleep(delay)
         raise AssertionError("Read retry loop must return or raise")
+
+    async def recover_task(
+        self, run: TaskRun, context: ToolContext, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Read a persisted server task. This path never sends the original Tool call."""
+        call = await self._submit("tools/call", arguments, context, run)
+        try:
+            return await call.result
+        except (TaskEndedError, TaskUnknownError) as error:
+            return {"isError": True, "content": [{"type": "text", "text": str(error)}]}
 
     async def _resume(self, lost: _Call, error: ValueError) -> dict[str, Any]:
         """Wait on the next connection for the server task of *lost*, whose connection ended.
@@ -1119,11 +1132,30 @@ class ConnectionRunner:
                 continue
             if call.context is not None and self._authorize is not None:
                 try:
-                    self._authorize(call.context)
+                    authorized = self._authorize(call.context)
+                    if authorized is not None:
+                        await authorized
+                except asyncio.CancelledError:
+                    if not call.result.done():
+                        call.result.set_exception(
+                            InvocationNotSentError(
+                                "MCP connection closed before authorization finished"
+                            )
+                        )
+                    slots.release()
+                    raise
                 except (ValueError, VBotError) as error:
-                    call.result.set_exception(InvocationNotSentError(str(error), denied=True))
+                    if not call.result.done():
+                        call.result.set_exception(InvocationNotSentError(str(error), denied=True))
                     slots.release()
                     continue
+            if call.result.done() or self._closing or call.owner is not self._task:
+                if not call.result.done():
+                    call.result.set_exception(
+                        InvocationNotSentError("MCP connection closed before the call was sent")
+                    )
+                slots.release()
+                continue
             self._start(call, slots)
 
     def _start(self, call: _Call, slots: asyncio.Semaphore) -> None:
@@ -1512,8 +1544,6 @@ class ConnectionRunner:
         *resumed* continues the task of a call whose connection was lost.
         """
         call = _CURRENT_CALL.get()
-        if call is not None and call.runner is self:
-            call.server_task = run
         last: tuple[str, str | None] | None = None
 
         def observe(state: TaskState) -> None:
@@ -1526,7 +1556,29 @@ class ConnectionRunner:
                 )
 
         abandon = functools.partial(self._abandon_task, wire)
-        return await drive(wire, run, observe=observe, abandon=abandon, resumed=resumed)
+        driving = False
+        try:
+            if call is not None and call.runner is self:
+                call.server_task = run
+                if self._recovery is not None:
+                    await self._recovery.remember(self, call.context, call.arguments, run)
+                    run.checkpoint = lambda: self._recovery.checkpoint(run)
+            driving = True
+            result = await drive(wire, run, observe=observe, abandon=abandon, resumed=resumed)
+            if self._recovery is not None:
+                await self._recovery.finish(run, dump(result))
+            return result
+        except BaseException as error:
+            if not driving and run.state.status not in TERMINAL_STATUSES and not run.kept:
+                abandon(run.state.task_id)
+            if (
+                self._recovery is not None
+                and run.receipt_id is not None
+                and not run.kept
+                and (not driving or isinstance(error, asyncio.CancelledError))
+            ):
+                await self._recovery.forget(run.receipt_id)
+            raise
 
     def _abandon_task(self, wire: TaskWire, task_id: str) -> None:
         """Cancel the server task of a call that stopped waiting, without blocking it."""

@@ -1,5 +1,7 @@
-"""POSIX child wrapper: takes a PTY child's controlling terminal and ties its process
-group to the vBot server lifetime.
+"""POSIX child wrapper: controlling terminal and server-lifetime containment.
+
+On Linux a subreaper retains descendants across setsid and double-fork, reports
+the root's exit independently, and confirms a stop only after reaping the tree.
 
 Standard library only: ``core.utils.processes.guarded_process_launch`` runs this
 file by path in isolated mode, in the child's working directory and environment,
@@ -32,8 +34,9 @@ def run_guardian(
     *,
     lc_ctype: str | None,
     controlling_terminal: bool = False,
+    status_fd: int | None = None,
 ) -> int:
-    """Run the exact child, killing its process group when the server pipe closes.
+    """Run the exact child and contain its lifetime while the server pipe is open.
 
     The launcher starts the guardian as a session leader. With
     *controlling_terminal* the guardian first makes the PTY on its stdin the
@@ -72,6 +75,8 @@ def run_guardian(
     # must start with the default action.
     for terminal_signal in (signal.SIGINT, signal.SIGQUIT):
         signal.signal(terminal_signal, _leave_to_child)
+    if sys.platform == "linux":
+        return _run_subreaper(lifetime_fd, argv, status_fd=status_fd)
     child_pid = _spawn(argv, lifetime_fd)
     exit_fd = _child_exit_descriptor(child_pid)
     try:
@@ -90,6 +95,95 @@ def run_guardian(
         for descriptor in (exit_fd, lifetime_fd):
             with suppress(OSError):
                 os.close(descriptor)
+
+
+def _run_subreaper(lifetime_fd: int, argv: Sequence[str], *, status_fd: int | None) -> int:
+    """Keep every descendant until reaped, even after double-fork and setsid.
+
+    Killing direct children repeatedly is sufficient: their descendants become
+    our children before waitpid can report ECHILD. No process enumeration race
+    can report a successful stop while an escaped descendant remains alive.
+    The shell's exit travels separately; quiet children may outlive its result.
+    """
+    if sys.platform != "linux":
+        raise RuntimeError("Subreaper containment requires Linux")
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    wake_read, wake_write = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+    signal.set_wakeup_fd(wake_write)
+    stopping = False
+
+    def stop(_number: int, _frame: FrameType | None) -> None:
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGCHLD, _leave_to_child)
+    signal.signal(signal.SIGTERM, stop)
+    # Closing a PTY master sends SIGHUP to its session leader. Treat it as a
+    # tree stop instead of losing the subreaper while detached children live.
+    signal.signal(signal.SIGHUP, stop)
+    # Open before starting user code: a missing/inaccessible procfs must fail
+    # the launch rather than leave a tree whose children we cannot enumerate.
+    with open(f"/proc/self/task/{os.getpid()}/children", encoding="ascii") as children_file:
+        if status_fd is not None:
+            os.set_inheritable(status_fd, False)
+        root = _spawn(argv, lifetime_fd)
+        # Only the command and its children own its streams. Holding our copies
+        # would manufacture an open output pipe after the shell has exited.
+        for descriptor in (0, 1, 2):
+            with suppress(OSError):
+                os.close(descriptor)
+        watched = select.poll()
+        watched.register(wake_read, select.POLLIN)
+        watched.register(lifetime_fd, select.POLLIN)
+        result = 128 + signal.SIGTERM
+        try:
+            while True:
+                while True:
+                    try:
+                        pid, status = os.waitpid(-1, os.WNOHANG)
+                    except ChildProcessError:
+                        return result
+                    if pid == 0:
+                        break
+                    if pid == root:
+                        code = os.waitstatus_to_exitcode(status)
+                        result = code if code >= 0 else 128 - code
+                        if status_fd is not None:
+                            with suppress(BrokenPipeError):
+                                os.write(status_fd, f"{result}\n".encode("ascii"))
+                            os.close(status_fd)
+                            status_fd = None
+                if stopping:
+                    # We are single-threaded and do not reap between this read and
+                    # kill: an exited child's PID remains ours as a zombie, so it
+                    # cannot be reused for an unrelated process.
+                    children_file.seek(0)
+                    pids = children_file.read().split()
+                    for pid_text in pids:
+                        # Retain custody when a child cannot currently be killed;
+                        # the owner reports an unconfirmed stop, never success.
+                        with suppress(ProcessLookupError, PermissionError):
+                            os.kill(int(pid_text), signal.SIGKILL)
+                for descriptor, _events in watched.poll(100 if stopping else None):
+                    if descriptor == lifetime_fd:
+                        if not os.read(lifetime_fd, _READ_SIZE_BYTES):
+                            stopping = True
+                            watched.unregister(lifetime_fd)
+                    else:
+                        with suppress(BlockingIOError):
+                            while os.read(wake_read, 4096):
+                                pass
+        finally:
+            signal.set_wakeup_fd(-1)
+            for remaining in (wake_read, wake_write, lifetime_fd, status_fd):
+                if remaining is not None:
+                    with suppress(OSError):
+                        os.close(remaining)
 
 
 def _spawn(argv: Sequence[str], lifetime_fd: int) -> int:
@@ -119,14 +213,11 @@ def _exit_code(child_pid: int) -> int:
 def _child_exit_descriptor(child_pid: int) -> int:
     """Return a descriptor that becomes readable once the child has exited.
 
-    A pidfd on Linux 5.3 and later. Where the kernel lacks ``pidfd_open``, a
-    seccomp filter denies it, or on another system, a thread reaps the child and
-    then closes the write end of a pipe, which makes its read end readable.
+    The non-Linux fallback reaps the child on a thread, then closes the write
+    end of a pipe, which makes its read end readable. Linux uses the subreaper's
+    SIGCHLD wakeup instead, including on kernels without pidfd support.
     """
 
-    if sys.platform == "linux":
-        with suppress(OSError):
-            return os.pidfd_open(child_pid)
     import threading
 
     read_fd, write_fd = os.pipe()
@@ -149,13 +240,14 @@ def main(argv: Sequence[str]) -> int:
     """Run the private guardian protocol and return the child exit code.
 
     ``guarded_process_launch`` writes it: ``[--controlling-terminal]
-    [--lifetime-fd N] [--lc-ctype=VALUE] -- CHILD...``.
+    [--lifetime-fd N] [--status-fd N] [--lc-ctype=VALUE] -- CHILD...``.
     """
 
     arguments = list(argv)
     lifetime_fd: int | None = None
     lc_ctype: str | None = None
     controlling_terminal = False
+    status_fd: int | None = None
     while arguments:
         option = arguments.pop(0)
         if option == "--":
@@ -164,12 +256,18 @@ def main(argv: Sequence[str]) -> int:
             controlling_terminal = True
         elif option == "--lifetime-fd" and arguments:
             lifetime_fd = int(arguments.pop(0))
+        elif option == "--status-fd" and arguments:
+            status_fd = int(arguments.pop(0))
         elif option.startswith("--lc-ctype="):
             lc_ctype = option.partition("=")[2]
         else:
             raise SystemExit(f"process_guardian: unexpected argument {option!r}")
     return run_guardian(
-        lifetime_fd, arguments, lc_ctype=lc_ctype, controlling_terminal=controlling_terminal
+        lifetime_fd,
+        arguments,
+        lc_ctype=lc_ctype,
+        controlling_terminal=controlling_terminal,
+        status_fd=status_fd,
     )
 
 

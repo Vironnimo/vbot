@@ -191,8 +191,15 @@ function createBridge(initialProfile = profile, detail = swarm) {
         entries: [{ ...detail, participant_count: detail.participants.length }],
         has_more: false,
       });
-    if (name === 'swarms.get')
-      return Promise.resolve({ swarm: structuredClone(detail) });
+    if (name === 'swarms.get') {
+      const snapshot = structuredClone(detail);
+      if (args.include_snapshot === false) {
+        delete snapshot.prompt;
+        delete snapshot.profile_snapshot;
+        delete snapshot.effective_configuration;
+      }
+      return Promise.resolve({ swarm: snapshot });
+    }
     if (name === 'board.list')
       return Promise.resolve({ entries: structuredClone(detail.discussions) });
     if (name === 'board.read')

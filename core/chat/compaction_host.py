@@ -11,9 +11,8 @@ from core.chat._boundaries import _finish_visible_boundary
 from core.chat._request_builder import (
     RequestBuilder,
     _finalize_compaction_checkpoint,
-    _resolve_request_image_limit,
-    _resolved_model_reference,
 )
+from core.chat._request_targets import _resolve_request_image_limit, _resolved_model_reference
 from core.chat._run_state import (
     ChatLoopDependencies,
     RequestBuildInputs,
@@ -133,7 +132,7 @@ class ChatCompactionHost:
         active_provider_id: str,
         active_connection_id: str,
     ) -> tuple[Any, str, str]:
-        return self._requests.resolve_summary_adapter(
+        return self._requests.targets.resolve_summary_adapter(
             agent,
             adapter,
             model_id,
@@ -143,7 +142,7 @@ class ChatCompactionHost:
         )
 
     def resolve_context_window(self, agent: Any, target: Any) -> int | None:
-        return self._requests.resolve_context_window(agent, target)
+        return self._requests.targets.resolve_context_window(agent, target)
 
     def context_accounting(self, messages: list[ChatMessage]) -> RequestContextUsage:
         """The Session's Context accounting, continuing its newest measurement."""
@@ -158,13 +157,21 @@ class ChatCompactionHost:
         settings: CompactionSettings,
     ) -> ManualCompactionRequest:
         """Build the exact manual Compaction request and acquire its adapters."""
-        project_cwd = self._requests.resolve_project_cwd(run.working_project_id)
-        provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
-        adapter = self._dependencies.get_adapter(ConnectionRef(provider_id, connection_id))
-        _model_provider_id, model_id = _split_agent_model(agent.model)
+        project_cwd = await self.run_transform(
+            self._requests.resolve_project_cwd, run.working_project_id
+        )
+        provider_id, connection_id = await self.run_transform(
+            _resolve_agent_connection, self._dependencies, agent
+        )
+        adapter: Any | None = None
         summary_adapter: Any | None = None
-        try:
-            summary_adapter, summary_model_id, summary_provider_id = self.resolve_summary_adapter(
+        _model_provider_id, model_id = _split_agent_model(agent.model)
+
+        def acquire_adapters() -> tuple[str, str]:
+            # Retain ownership before a worker result can be lost to cancellation.
+            nonlocal adapter, summary_adapter
+            adapter = self._dependencies.get_adapter(ConnectionRef(provider_id, connection_id))
+            summary_adapter, summary_model, summary_provider = self.resolve_summary_adapter(
                 agent,
                 adapter,
                 model_id,
@@ -172,7 +179,13 @@ class ChatCompactionHost:
                 active_provider_id=provider_id,
                 active_connection_id=connection_id,
             )
-            prompt_project = resolve_prompt_project(
+            return summary_model, summary_provider
+
+        try:
+            summary_model_id, summary_provider_id = await self.run_transform(acquire_adapters)
+            assert adapter is not None
+            prompt_project = await self.run_transform(
+                resolve_prompt_project,
                 self._dependencies.projects,
                 run.working_project_id,
             )
@@ -256,7 +269,7 @@ class ChatCompactionHost:
                     model_id,
                 ),
                 wire_media_types=adapter.wire_media_support(model_id),
-                max_image_bytes=self._requests._image_size_limit(adapter, model_id),
+                max_image_bytes=self._requests.targets.image_size_limit(adapter, model_id),
                 max_request_images=_resolve_request_image_limit(adapter, model_id),
                 agent_body=agent_body,
                 project_context=prompt_context,
@@ -289,7 +302,8 @@ class ChatCompactionHost:
         except BaseException:
             if summary_adapter is not None and summary_adapter is not adapter:
                 await _close_adapter(summary_adapter)
-            await _close_adapter(adapter)
+            if adapter is not None:
+                await _close_adapter(adapter)
             raise
 
     async def close_manual_request(self, request: ManualCompactionRequest) -> None:

@@ -56,10 +56,10 @@ def _runtime(
         load_options=lambda _settings: (set(), {}),
         live_config=lambda _name: {},
         resolve_credential=lambda _key: "",
-        reload_recall=lambda: None,
+        reload_recall=lambda _settings: None,
         refresh_prompts=lambda: None,
         reload_skills=reload_skills or AsyncMock(),
-        recover_recall=recover_recall,
+        recover_recall=lambda names, _settings: recover_recall(names),
         logger=logging.getLogger(_LOGGER_NAME),
         make_host=make_host,
     )

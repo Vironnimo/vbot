@@ -20,7 +20,7 @@ import asyncio
 import hashlib
 import os
 import re
-from collections.abc import AsyncGenerator, Iterable, Sequence
+from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +28,8 @@ from typing import Any, BinaryIO
 
 from watchfiles import awatch
 
+from core.utils.file_status import is_link_status
+from core.utils.ids import is_reserved_name
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import (
     extract_websocket_path_from_message,
@@ -142,7 +144,7 @@ class _WatcherState:
     file_name: str
     tail: _LogTail
     catalog: tuple[str, ...]
-    directory_modified_ns: int | None = None
+    directory_modified_ns: tuple[int | None, ...] | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     subscribers: list[_SubscriberQueue] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
@@ -161,7 +163,7 @@ class _WatchRefresh:
     """What one worker read found for a watched file; ``None`` means not read."""
 
     catalog: tuple[str, ...] | None = None
-    directory_modified_ns: int | None = None
+    directory_modified_ns: tuple[int | None, ...] | None = None
     tail: _LogTail | None = None
     event: JsonObject | None = None
 
@@ -417,6 +419,7 @@ def _advance_tails(
 def _read_tail(file_path: Path) -> _LogTail:
     """Return a tail at the file's current end without reading a page of it."""
 
+    _reject_log_links(file_path)
     try:
         handle = file_path.open("rb")
     except FileNotFoundError:
@@ -438,6 +441,7 @@ def _read_subscribe_start(
     file's cursor) replays as a reset with the newest page.
     """
 
+    _reject_log_links(file_path)
     try:
         handle = file_path.open("rb")
     except FileNotFoundError:
@@ -506,6 +510,7 @@ def _resync_event(file_path: Path, file_name: str, tail: _LogTail) -> JsonObject
 
     if not tail.exists:
         return _reset_event(file_name, [], None)
+    _reject_log_links(file_path)
     try:
         handle = file_path.open("rb")
     except FileNotFoundError:
@@ -559,8 +564,15 @@ def _end_stream(queue: _SubscriberQueue) -> None:
 class LogViewer:
     """Read daily log files and stream file-specific updates."""
 
-    def __init__(self, data_dir: str | Path) -> None:
+    def __init__(
+        self, data_dir: str | Path, *, additional_directories: Mapping[str, Path] | None = None
+    ) -> None:
         self._logs_dir = Path(data_dir).expanduser() / "logs"
+        self._directories = {"": self._logs_dir}
+        for namespace, directory in (additional_directories or {}).items():
+            if not re.fullmatch(r"[a-z][a-z0-9_-]*", namespace):
+                raise ValueError("invalid log namespace")
+            self._directories[namespace] = directory
         self._watchers: dict[str, _WatcherState] = {}
         self._watch_lock = asyncio.Lock()
         # Files whose watcher polls currently fail, so a failure logs once per streak.
@@ -615,11 +627,11 @@ class LogViewer:
         orphan: asyncio.Task[None] | None = None
         try:
             async with self._watch_lock:
-                watcher = await self._ensure_watcher(file_path.name)
+                watcher = await self._ensure_watcher(file_name)
                 # One read brings the watcher and this reader's cursor to the same point.
                 try:
                     watcher.tail, catch_up_event, replay_event = await _LOG_WORKERS.run(
-                        _read_subscribe_start, file_path, file_path.name, watcher.tail, read_cursor
+                        _read_subscribe_start, file_path, file_name, watcher.tail, read_cursor
                     )
                 except BaseException:
                     # No subscriber would ever leave a watcher this failed read started.
@@ -653,8 +665,8 @@ class LogViewer:
                     yield item
                     continue
                 if item.catalog is not None:
-                    yield _catalog_event(file_path.name, item.catalog)
-                yield await _LOG_WORKERS.run(_resync_event, file_path, file_path.name, item.tail)
+                    yield _catalog_event(file_name, item.catalog)
+                yield await _LOG_WORKERS.run(_resync_event, file_path, file_name, item.tail)
         except asyncio.CancelledError:
             return
         finally:
@@ -694,7 +706,7 @@ class LogViewer:
             self._retire_locked(watcher)
 
         directory_modified_ns, catalog, tail = await _LOG_WORKERS.run(
-            self._read_watch_start, self._logs_dir / file_name
+            self._read_watch_start, self._file_path(file_name)
         )
         watcher = _WatcherState(
             file_name=file_name,
@@ -757,7 +769,7 @@ class LogViewer:
     async def _watch_file(self, watcher: _WatcherState) -> None:
         try:
             async for changes in awatch(
-                self._logs_dir,
+                *await _LOG_WORKERS.run(self._watch_directories),
                 recursive=False,
                 debounce=100,
                 step=50,
@@ -793,13 +805,13 @@ class LogViewer:
 
     async def _poll(self, watcher: _WatcherState, changes: set[tuple[Any, str]]) -> None:
         """Reconcile one watch batch (empty on a timeout) and fan out its events."""
-        watched_path = self._logs_dir / watcher.file_name
+        watched_path = self._file_path(watcher.file_name)
         should_refresh_catalog = bool(changes)
         should_read_file = _includes_path(changes, str(watched_path))
         if not changes:
             should_refresh_catalog, should_read_file = await _LOG_WORKERS.run(
                 _metadata_changes,
-                self._logs_dir,
+                tuple(self._directories.values()),
                 watcher.directory_modified_ns,
                 watched_path,
                 watcher.tail,
@@ -836,7 +848,7 @@ class LogViewer:
     # Worker-pool operations: they touch the filesystem and never watcher state.
 
     def _list_files(self) -> JsonObject:
-        names = [path.name for path in self._iter_log_files()]
+        names = list(self._iter_log_files())
         daily = sorted((name for name in names if _DAILY_FILE_PREFIX.match(name)), reverse=True)
         other = sorted(name for name in names if not _DAILY_FILE_PREFIX.match(name))
         files = daily + other
@@ -847,8 +859,8 @@ class LogViewer:
         with file_path.open("rb") as handle:
             size = os.fstat(handle.fileno()).st_size
             page = _read_page(handle, size, LOG_PAGE_ENTRIES)
-            cursor = _encode_cursor(handle, file_path.name, size)
-        return file_path.name, page, cursor
+            cursor = _encode_cursor(handle, file_name, size)
+        return file_name, page, cursor
 
     def _read_older(self, file_name: str, before: int) -> tuple[str, _Page]:
         file_path = self._resolve_existing_file(file_name)
@@ -856,13 +868,15 @@ class LogViewer:
             if before > os.fstat(handle.fileno()).st_size:
                 raise ValueError("log position is past the end of the file")
             page = _read_page(handle, before, LOG_PAGE_ENTRIES)
-        return file_path.name, page
+        return file_name, page
 
     # The directory stamp is always taken before listing, so a file added in
     # between still counts as a change on the next metadata check.
 
-    def _read_watch_start(self, file_path: Path) -> tuple[int | None, tuple[str, ...], _LogTail]:
-        directory_modified_ns = _path_modified_ns(self._logs_dir)
+    def _read_watch_start(
+        self, file_path: Path
+    ) -> tuple[tuple[int | None, ...], tuple[str, ...], _LogTail]:
+        directory_modified_ns = _directory_stamp(tuple(self._directories.values()))
         catalog = tuple(self._list_files()["files"])
         return directory_modified_ns, catalog, _read_tail(file_path)
 
@@ -875,22 +889,43 @@ class LogViewer:
         catalog: bool,
         content: bool,
     ) -> _WatchRefresh:
+        _reject_log_links(file_path)
         refresh = _WatchRefresh()
         if catalog:
-            refresh.directory_modified_ns = _path_modified_ns(self._logs_dir)
+            refresh.directory_modified_ns = _directory_stamp(tuple(self._directories.values()))
             refresh.catalog = tuple(self._list_files()["files"])
         if content:
             refresh.tail, refresh.event = _advance_tails(file_path, file_name, [tail])[0]
         return refresh
 
-    def _iter_log_files(self) -> Iterable[Path]:
-        if not self._logs_dir.exists():
-            return ()
-        return (path for path in self._logs_dir.iterdir() if path.is_file())
+    def _watch_directories(self) -> tuple[Path, ...]:
+        return tuple(directory for directory in self._directories.values() if directory.is_dir())
+
+    def _iter_log_files(self) -> Iterable[str]:
+        for namespace, directory in self._directories.items():
+            try:
+                if is_link_status(directory.lstat()):
+                    continue
+                for path in directory.iterdir():
+                    if (
+                        not is_link_status(path.lstat())
+                        and path.is_file()
+                        and not is_reserved_name(path.name)
+                    ):
+                        yield f"{namespace}/{path.name}" if namespace else path.name
+            except FileNotFoundError:
+                continue
+
+    def _file_path(self, file_name: str) -> Path:
+        normalized = self._normalize_file_name(file_name)
+        namespace, _, name = normalized.rpartition("/")
+        return self._directories[namespace] / name
 
     def _resolve_existing_file(self, file_name: str) -> Path:
         normalized_name = self._normalize_file_name(file_name)
-        file_path = self._logs_dir / normalized_name
+        file_path = self._file_path(normalized_name)
+        if is_link_status(file_path.parent.lstat()) or is_link_status(file_path.lstat()):
+            raise ValueError("log files must not be links")
         if not file_path.is_file():
             raise FileNotFoundError(f"log file not found: {normalized_name}")
         return file_path
@@ -898,7 +933,16 @@ class LogViewer:
     def _normalize_file_name(self, file_name: str) -> str:
         if not isinstance(file_name, str) or not file_name:
             raise ValueError("log file name must be a non-empty string")
-        if Path(file_name).name != file_name or "/" in file_name or "\\" in file_name:
+        namespace, _, name = file_name.rpartition("/")
+        if (
+            namespace not in self._directories
+            or (not namespace and "/" in file_name)
+            or not name
+            or is_reserved_name(name)
+            or Path(name).name != name
+            or name in {".", ".."}
+            or "\\" in file_name
+        ):
             raise ValueError(f"invalid log file name: {file_name}")
         return file_name
 
@@ -953,16 +997,29 @@ def _log_watcher_crash_if_already_dead(task: asyncio.Task[None]) -> bool:
 
 
 def _metadata_changes(
-    logs_dir: Path,
-    directory_modified_ns: int | None,
+    logs_dir: tuple[Path, ...],
+    directory_modified_ns: tuple[int | None, ...] | None,
     file_path: Path,
     tail: _LogTail,
 ) -> tuple[bool, bool]:
     """Return whether the catalog and the watched file need a re-read."""
     return (
-        _path_modified_ns(logs_dir) != directory_modified_ns,
+        _directory_stamp(logs_dir) != directory_modified_ns,
         _file_metadata_changed(file_path, tail),
     )
+
+
+def _directory_stamp(directories: tuple[Path, ...]) -> tuple[int | None, ...]:
+    return tuple(_path_modified_ns(directory) for directory in directories)
+
+
+def _reject_log_links(path: Path) -> None:
+    for candidate in (path.parent, path):
+        try:
+            if is_link_status(candidate.lstat()):
+                raise ValueError("log files must not be links")
+        except FileNotFoundError:
+            continue
 
 
 def _includes_path(changes: set[tuple[Any, str]], watched_path: str) -> bool:

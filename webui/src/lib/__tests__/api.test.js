@@ -556,6 +556,11 @@ describe('RPC wrappers', () => {
       { run_id: 'run-2' },
     ],
     [
+      'chat.work',
+      (o) => api.getSessionWork('builder@vbot', 'session-1', o),
+      { agent_id: 'builder@vbot', session_id: 'session-1' },
+    ],
+    [
       'chat.stop_all',
       (o) => api.stopAll('builder@vbot', 'session-1', o),
       { agent_id: 'builder@vbot', session_id: 'session-1' },

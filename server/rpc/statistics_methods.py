@@ -10,12 +10,13 @@ pool and expose no raw Tool arguments or Reasoning.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, cast
 
 from core.settings.settings import SettingsValidationError, validate_timezone_name
 from core.skills import project_skill_origin, scan_skill_names
 from core.statistics import REPORT_SECTIONS, StatisticsService
+from core.utils.timestamps import parse_timestamp
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _reject_unsupported
@@ -88,7 +89,7 @@ def _required_utc_timestamp(params: JsonObject, key: str) -> datetime:
     if parsed is None:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            f"params.{key} must be an ISO 8601 timestamp string",
+            f"params.{key} must be an ISO 8601 timestamp string with an explicit offset",
         )
     return parsed
 
@@ -100,25 +101,22 @@ def _optional_utc_timestamp(params: JsonObject, key: str) -> datetime | None:
     if not isinstance(value, str) or not value:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            f"params.{key} must be an ISO 8601 timestamp string",
+            f"params.{key} must be an ISO 8601 timestamp string with an explicit offset",
         )
     parsed = _parse_iso_utc(value)
     if parsed is None:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            f"params.{key} must be an ISO 8601 timestamp string",
+            f"params.{key} must be an ISO 8601 timestamp string with an explicit offset",
         )
     return parsed
 
 
 def _parse_iso_utc(value: str) -> datetime | None:
     try:
-        parsed = datetime.fromisoformat(value)
+        return parse_timestamp(value)
     except ValueError:
         return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 class _RuntimeSkillInventory:

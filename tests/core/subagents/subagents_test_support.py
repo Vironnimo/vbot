@@ -296,6 +296,7 @@ class SubAgentHarness:
         execution_owner: Any | None = None,
         working_project_id: str | None = None,
         cancellation_hook: Callable[[], bool] | None = None,
+        delegation_bindings: dict[str, str | int] | None = None,
     ) -> ToolContext:
         session = session or self.parent
         # Chat grants message_parent to Sub-Agent Sessions; the Tool itself checks the link.
@@ -316,6 +317,7 @@ class SubAgentHarness:
             session_tool_grants=grants,
             emit_hook=self._record_event,
             cancellation_hook=cancellation_hook,
+            delegation_bindings=delegation_bindings or {},
             tool_settings=(
                 None if allowed_agents is None else {"subagent": {"allowed_agents": allowed_agents}}
             ),

@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from core.archive import (
+    AgentArchiveOutcome,
     ArchiveEntryBusyError,
     ArchiveEntryNotFoundError,
     ArchiveNotRestorableError,
@@ -21,10 +22,11 @@ from core.archive import (
     ArchiveService,
     KeptEntry,
     PendingPurge,
+    ProjectArchiveOutcome,
     SkippedPurge,
     _purge,
 )
-from core.chat import ChatSessionError
+from core.chat import ChatMessage, ChatSessionError
 from core.runs import RunAdmissionBlockedError, RunKind
 from core.sessions import (
     ARCHIVE_KIND_FILES,
@@ -437,7 +439,7 @@ async def test_a_failed_project_archive_leaves_the_project_its_agents_and_no_ent
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("current", ["session", "review-fork"])
+@pytest.mark.parametrize("current", ["session", "review-fork", "moved-review-fork"])
 async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_pointer(
     world: ArchiveWorld, current: str
 ) -> None:
@@ -448,8 +450,13 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
     review = (await world.sessions.fork(session, run_kind=RunKind.MEMORY_REFLECTION)).address
     scratch = await world.scratch_areas.folder_for(session)
     review_scratch = await world.scratch_areas.folder_for(review)
-    if current == "review-fork":
+    if current.endswith("review-fork"):
         world.agents.update("coder", current_session_id=review.session_id)
+    if current == "moved-review-fork":
+        agent_with_session(world, "other")
+        target = SessionAddress(None, "other", session.session_id)
+        await world.sessions.move(session, target)
+        session = target
     # A review still in flight keeps its Session from leaving.
     async with world.runs.session_admission_guard(review):
         with pytest.raises(RunAdmissionBlockedError):
@@ -457,27 +464,132 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
 
     archived = await world.service.archive_session(session)
 
-    assert (archived.was_current, archived.next_session_id) == (True, "other")
+    assert (archived.was_current, archived.next_session_id) == (
+        True,
+        "other-first" if current == "moved-review-fork" else "other",
+    )
     assert archived.addresses == (session, review)
     assert world.agents.get("coder").current_session_id == "other"
     assert not world.sessions.exists(session) and not world.sessions.exists(review)
     assert world.commands.closed == [("session", session), ("session", review)]
-    assert world.recall_removals == [(None, "coder", session.session_id)]
+    assert world.recall_removals == [(None, session.agent_id, session.session_id)]
     assert not scratch.area.exists() and not review_scratch.area.exists()
     assert (await world.service.show(archived.entry_id)).listing.accepts_target_id
     # Channel routing started a new Session at the archived address meanwhile.
-    world.sessions.create("coder", session_id=session.session_id)
+    world.sessions.create(session.agent_id, session_id=session.session_id)
     with pytest.raises(ArchiveRestoreConflictError) as taken:
         await world.service.restore(archived.entry_id)
     assert [conflict.code for conflict in taken.value.conflicts] == ["session_address_taken"]
 
+    if current == "moved-review-fork":
+        owner_archive = await world.service.archive_agent("coder")
+        check = await world.service.restore_check(archived.entry_id, target_id="planning-old")
+        assert [blocker.code for blocker in check.blockers] == ["scope_missing"]
+        with pytest.raises(ArchiveNotRestorableError):
+            await world.service.restore(archived.entry_id, target_id="planning-old")
+        assert not world.sessions.exists(review)
+        await world.service.restore(owner_archive.entry_id)
+
     restored = await world.service.restore(archived.entry_id, target_id="planning-old")
 
     # The new id names the Session; its review fork keeps its own and follows it again.
-    renamed = SessionAddress(None, "coder", "planning-old")
+    renamed = SessionAddress(None, session.agent_id, "planning-old")
     assert restored.addresses == (renamed, review)
     assert world.sessions.get_metadata(renamed)["title"] == "Planning"
     assert world.sessions.review_forks(renamed) == (review,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope_kind", ["agent", "project"])
+@pytest.mark.parametrize("review_project", [None, "original"])
+async def test_scope_archive_carries_moved_reviews_with_their_original_owners(
+    world: ArchiveWorld, tmp_path: Path, scope_kind: str, review_project: str | None
+) -> None:
+    sessions = world.sessions
+    if review_project is None:
+        agent = agent_with_session(world, "original")
+        source = SessionAddress(None, "original", agent.current_session_id)
+        sessions.create("original", session_id="landing")
+    else:
+        world.projects.create(review_project, "Original", _repo(tmp_path, "original"))
+        world.team.members.add((review_project, "reviewer"))
+        source = sessions.create("reviewer", project_id=review_project).address
+    sessions.get(source).append(ChatMessage.user("retained history"))
+    review = (
+        await sessions.fork(
+            source, target_project_id=review_project, run_kind=RunKind.MEMORY_REFLECTION
+        )
+    ).address
+    nested = (
+        await sessions.fork(
+            review, target_project_id=review_project, run_kind=RunKind.SKILL_REFLECTION
+        )
+    ).address
+    ordinary = (await sessions.fork(review, target_project_id=review_project)).address
+    if review_project is None:
+        world.agents.update("original", current_session_id=review.session_id)
+    review_scratch = await world.scratch_areas.folder_for(review)
+    archive: Callable[[str], Awaitable[AgentArchiveOutcome | ProjectArchiveOutcome]]
+    if scope_kind == "agent":
+        world.agents.create("destination")
+        target = SessionAddress(None, "destination", source.session_id)
+        archive = world.service.archive_agent
+    else:
+        world.projects.create("destination", "Destination", _repo(tmp_path, "destination"))
+        target = SessionAddress("destination", "worker", source.session_id)
+        archive = world.service.archive_project
+    await sessions.move(source, target)
+
+    # A review's original owner lies outside the removed Agent/Project, but its
+    # running or guarded work still blocks the entire archive before resources close.
+    async with world.runs.session_admission_guard(nested):
+        with pytest.raises(RunAdmissionBlockedError):
+            await archive("destination")
+    assert not world.commands.closed
+    archived = await archive("destination")
+    assert archived.session_count == 3
+    assert archived.review_addresses == (review, nested)
+    assert not any(sessions.exists(address) for address in (target, review, nested))
+    assert sessions.exists(ordinary)
+    assert world.commands.closed[-2:] == [("session", review), ("session", nested)]
+    assert not review_scratch.area.exists()
+    if review_project is None:
+        assert world.agents.get("original").current_session_id != review.session_id
+
+    # Every original owner is required, even when restoring an Agent or Project
+    # under a new name. Its unrelated user fork belongs to its separate archive.
+    original_archive = (
+        await world.service.archive_agent("original")
+        if review_project is None
+        else await world.service.archive_project(review_project)
+    )
+    check = await world.service.restore_check(archived.entry_id, target_id="restored")
+    assert [problem.code for problem in check.blockers] == ["scope_missing"]
+    with pytest.raises(ArchiveNotRestorableError):
+        await world.service.restore(archived.entry_id, target_id="restored")
+    await world.service.restore(original_archive.entry_id)
+    if review_project is not None:
+        world.team.members.remove((review_project, "reviewer"))
+        check = await world.service.restore_check(archived.entry_id, target_id="restored")
+        assert [problem.code for problem in check.blockers] == ["scope_missing"]
+        world.team.members.add((review_project, "reviewer"))
+    async with world.runs.session_admission_guard(review):
+        with pytest.raises(RunAdmissionBlockedError):
+            await world.service.restore(archived.entry_id, target_id="restored")
+    restored = await world.service.restore(archived.entry_id, target_id="restored")
+    moved = replace(target, **{"agent_id" if scope_kind == "agent" else "project_id": "restored"})
+    assert set(restored.addresses) == {moved, review, nested}
+    assert sessions.review_forks(moved) == (review, nested)
+
+    # Permanent removal follows the same membership; only an ordinary fork
+    # receives materialized history and stays live.
+    repeated = await archive("restored")
+    await world.service.purge([repeated.entry_id])
+    assert sessions.exists(ordinary)
+    assert [message.content for message in sessions.get(ordinary).load_active()] == [
+        "retained history"
+    ]
+    assert not any(sessions.exists(address) for address in (moved, review, nested))
 
 
 @pytest.mark.asyncio

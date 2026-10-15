@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -238,9 +239,19 @@ def bootstrap(runtime: Runtime) -> None:
             runtime_models_dir=runtime._storage.layout.models,
             custom_providers=custom_providers,
         )
+        # Sessions are a canonical service: it opens and verifies one database
+        # before any Agent lifecycle operation can create or validate a Session.
+        # Partial startup must close every Session resource in reverse order so a
+        # failed start does not leak descriptors or leave a half-open database.
+        runtime._chat_sessions = ChatSessionManager(
+            runtime._storage.data_dir,
+            store_path=runtime._storage.layout.sessions_db_path,
+        )
+        runtime._attachment_store.collect_session_orphans(runtime._chat_sessions)
         runtime._usage_recorder = UsageRecorder(
             canonical_database_path(runtime._storage.data_dir, "model_usage"),
             pricing_lookup=runtime._models.pricing_for,
+            session_source=runtime._chat_sessions,
         )
         runtime._provider_runtime = ProviderRuntime(
             providers=runtime._providers,
@@ -305,14 +316,6 @@ def bootstrap(runtime: Runtime) -> None:
             runtime,
             hosts=runtime._live_tool_hosts,
             usage_recorder=runtime._usage_recorder,
-        )
-        # Sessions are a canonical service: it opens and verifies one database
-        # before any Agent lifecycle operation can create or validate a Session.
-        # Partial startup must close every Session resource in reverse order so a
-        # failed start does not leak descriptors or leave a half-open database.
-        runtime._chat_sessions = ChatSessionManager(
-            runtime._storage.data_dir,
-            store_path=runtime._storage.layout.sessions_db_path,
         )
         # Retained Usage enters the ledger before any Agent lifecycle work or
         # accessor can delete history. It resumes from its persisted cursor, so a
@@ -569,12 +572,19 @@ def bootstrap(runtime: Runtime) -> None:
         compaction_service = CompactionService(
             pricing_lookup=runtime._models.pricing_for, usage_recorder=runtime._usage_recorder
         )
+
         # The reflection service starts review runs through the runtime's
         # streaming loop lazily at review time, so constructing it before the
         # loops is safe — the loops only need its notify hook.
+        async def wait_for_librarian(agent_id: str) -> None:
+            librarian = runtime._librarian_service
+            if librarian is not None:
+                await librarian.wait_for_pass(agent_id)
+
         runtime._reflection_service = ReflectionService(
             runtime,
             # Built later; a background review leaves the Skills to a running pass.
+            librarian_wait=wait_for_librarian,
             librarian_running=lambda agent_id: (
                 runtime._librarian_service is not None
                 and runtime._librarian_service.running(agent_id)
@@ -662,9 +672,11 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._start_terminal_manager()
         runtime._command_manager = CommandManager(
-            runtime._trigger_service, temporary_files=runtime._storage.temporary_files
+            runtime._trigger_service,
+            temporary_files=runtime._storage.temporary_files,
+            checkpoint_store=runtime._chat_sessions,
         )
-        runtime._command_manager.start()
+        runtime._command_manager.start(recover=runtime.safe_startup_mode is None)
         runtime._bootstrap_service = BootstrapService(
             runtime._trigger_service,
             runtime._storage.data_dir,
@@ -673,6 +685,8 @@ def bootstrap(runtime: Runtime) -> None:
             sessions=runtime._chat_sessions,
         )
         runtime._calendar_service = CalendarService(runtime._storage.data_dir, tz=timezone_name)
+        # Load before the scheduler and live requests can consult the catalog.
+        runtime._calendar_service.list_events()
         runtime._cron_service = CronService(
             runtime._trigger_service,
             runtime._storage.data_dir,
@@ -1008,14 +1022,17 @@ def _build_performance_service(
 def _log_startup_failure(runtime: Runtime) -> None:
     """Record a failed startup with its traceback before cleanup closes logging.
 
-    The server host reports the re-raised error only after cleanup has closed the
-    managed handlers, so this is the failure's single entry in the log file. A
-    missing data root is never created just to hold the log.
+    Mark the reported exception so the server's uvicorn log proxy does not
+    repeat its traceback after cleanup restores the host logging pipeline.
+    A missing data root is never created just to hold the log.
     """
     if not runtime._data_dir.exists():
         return
     with suppress(Exception):
         runtime._open_log_manager().get_logger("core").exception("Runtime startup failed")
+        error = sys.exception()
+        if error is not None:
+            object.__setattr__(error, "_vbot_startup_failure_logged", True)
 
 
 @dataclass(frozen=True)

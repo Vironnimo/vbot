@@ -69,6 +69,7 @@ from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
+from ._command_checkpoint import CommandCheckpoints, CommandCheckpointStore
 from ._command_launch import PipeLauncher
 from ._command_output import CommandOutput, command_output_host
 from ._command_record import BlockingRunner, CommandRecord, CommandServices
@@ -88,6 +89,7 @@ from ._command_types import (
     COMMAND_TEMPORARY_CATEGORY,
     CommandCapacityError,
     CommandChangedCallback,
+    CommandCheckpointError,
     CommandHandle,
     CommandLauncher,
     CommandLaunchError,
@@ -146,6 +148,7 @@ class CommandManager:
         retention_seconds: float = COMMAND_RETENTION_SECONDS,
         sweep_interval_seconds: float = COMMAND_SWEEP_INTERVAL_SECONDS,
         output_host: InterpreterHost | None = None,
+        checkpoint_store: CommandCheckpointStore | None = None,
     ) -> None:
         """*output_host* cleans the commands' output; by default the manager
         owns one with subinterpreter workers and closes it with itself."""
@@ -164,12 +167,21 @@ class CommandManager:
         self._sweep_interval_seconds = sweep_interval_seconds
         self._owns_output_host = output_host is None
         self._output_host = output_host or command_output_host()
+        self._checkpoints = (
+            CommandCheckpoints(checkpoint_store, retention_seconds=retention_seconds)
+            if checkpoint_store
+            else None
+        )
+        self._recovery_task: asyncio.Task[None] | None = None
+        self._recovered: dict[str, tuple[CommandReport, float]] = {}
         self._services = CommandServices(
             trigger_service=trigger_service,
             monotonic=monotonic,
             sleep=sleep,
             run_blocking=run_blocking,
             changed=self._notify,
+            checkpoint=self._checkpoint,
+            flush=self.flush,
         )
         self._records: dict[str, CommandRecord] = {}
         self._pending: dict[asyncio.Task[CommandRecord], _PendingLaunch] = {}
@@ -182,8 +194,8 @@ class CommandManager:
 
     # Manager lifecycle
 
-    def start(self) -> None:
-        """Start forgetting finished commands after their retention (needs an Event Loop)."""
+    def start(self, *, recover: bool = True) -> None:
+        """Start retention; normal startup also restores durable background work."""
         if self._sweeper is not None and not self._sweeper.done():
             return
         try:
@@ -191,6 +203,31 @@ class CommandManager:
         except RuntimeError:
             return
         self._sweeper = asyncio.create_task(self._sweep_loop(), name="command-manager-sweep")
+        if recover and self._checkpoints is not None and self._recovery_task is None:
+            self._recovery_task = asyncio.create_task(
+                self._checkpoints.recover(self._services.trigger_service, self._recovered_report),
+                name="command-recovery",
+            )
+
+    def _recovered_report(self, report: CommandReport) -> None:
+        assert self._checkpoints is not None
+        retained_at = (
+            self._monotonic()
+            + self._checkpoints.remaining_retention(report.command_id)
+            - self._retention_seconds
+        )
+        self._recovered[report.command_id] = (report, retained_at)
+        self._notify(report.command_id)
+
+    async def flush(self) -> None:
+        """Wait until every queued command checkpoint is durable."""
+        if self._checkpoints is not None:
+            await self._checkpoints.flush()
+
+    async def wait_recovered(self) -> None:
+        """Wait for startup recovery and its durable completion deliveries."""
+        if self._recovery_task is not None:
+            await asyncio.shield(self._recovery_task)
 
     def add_changed_callback(self, callback: CommandChangedCallback) -> Callable[[], None]:
         """Call *callback* with a background command's id when its status may have changed.
@@ -223,6 +260,7 @@ class CommandManager:
             [record for record in self._records.values() if not record.finished], "shutdown"
         )
         # Let the deliveries the stops submitted hand their results over.
+        await self.flush()
         await asyncio.sleep(0)
 
     def close(self) -> None:
@@ -233,6 +271,8 @@ class CommandManager:
         """
         self._closed = True
         self._stop_sweeper()
+        if self._recovery_task is not None:
+            self._recovery_task.cancel()
         try:
             self._launcher.close()
         except Exception:
@@ -268,10 +308,14 @@ class CommandManager:
         tasks: list[asyncio.Task[object]] = [*self._pending]
         if self._sweeper is not None:
             tasks.append(self._sweeper)
+        if self._recovery_task is not None:
+            self._recovery_task.cancel()
+            tasks.append(self._recovery_task)
         for record in self._records.values():
             tasks.extend(record.pending_tasks())
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        await self.flush()
         if self._owns_output_host:
             # Waits for the output work already queued.
             await self._run_blocking(self._output_host.close)
@@ -335,6 +379,10 @@ class CommandManager:
         """
         if not owner.agent_id or not owner.session_id:
             raise ValueError("A command needs the Agent and Session it belongs to")
+        if self._checkpoints is not None:
+            # Snapshot the previous server's commands before any new command
+            # can publish a checkpoint, even when launch races startup recovery.
+            await self._checkpoints.load()
         if not argv or any(not isinstance(token, str) for token in argv) or not argv[0]:
             raise ValueError("A command needs a program and string arguments")
         self._admit(origin_run_id, execution_owner)
@@ -396,6 +444,17 @@ class CommandManager:
         record.to_background(deliver=deliver)
         return record.report()
 
+    async def to_background_durably(self, command_id: str, *, deliver: bool) -> CommandReport:
+        """Publish a background handoff only after its recovery state is durable."""
+        report = self.to_background(command_id, deliver=deliver)
+        try:
+            await self.flush()
+        except Exception as error:
+            raise CommandCheckpointError(
+                f"Recovery state for the started command {command_id} could not be saved"
+            ) from error
+        return report
+
     async def stop(self, command_id: str, reason: StopReason) -> CommandReport:
         """Stop the command and every process it started; return its final report.
 
@@ -412,6 +471,8 @@ class CommandManager:
         stopped, an end it reaches by itself reports its exit code, and a
         background result is delivered unless a ``scope`` stop withdrew it.
         """
+        if command_id in self._recovered:
+            return self.report(command_id)
         record = self._get(command_id)
         await record.stop(reason)
         return record.report()
@@ -427,19 +488,29 @@ class CommandManager:
         record = self._records.get(command_id)
         if record is not None:
             record.acknowledge()
+        elif self._checkpoints is not None:
+            self._checkpoints.acknowledge(command_id)
 
     def report(self, command_id: str) -> CommandReport:
         """The command's report as of now."""
+        self._expire()
+        if command_id in self._recovered:
+            return self._recovered[command_id][0]
         return self._get(command_id).report()
 
     def latest_output(self, command_id: str, lines: int) -> str:
         """The newest *lines* clean output lines (at most ``COMMAND_RECENT_LINES``),
         the line still being written included."""
+        if command_id in self._recovered:
+            report = self.report(command_id)
+            return "\n".join((*report.transcript.head, *report.transcript.tail)[-lines:])
         return self._get(command_id).latest(lines)
 
     def status(self, command_id: str) -> CommandStatus | None:
         """A background command's status; None for an unknown or foreground command."""
         self._expire()
+        if command_id in self._recovered:
+            return self._recovered[command_id][0].status
         record = self._records.get(command_id)
         if record is None or not record.background:
             return None
@@ -463,7 +534,9 @@ class CommandManager:
             key=lambda record: record.started_at,
             reverse=True,
         )
-        return [record.report() for record in records]
+        return [record.report() for record in records] + [
+            report for report, _at in self._recovered.values() if report.owner in sessions
+        ]
 
     def busy_addresses(self) -> set[SessionAddress]:
         """Sessions with a pending launch or any command process still running."""
@@ -533,7 +606,14 @@ class CommandManager:
         yet delivered is withdrawn there and submitted again, unless its
         delivery already claimed it.
         """
-        return sum(record.transfer(source, target) for record in self._records.values())
+        moved = sum(record.transfer(source, target) for record in self._records.values())
+        if self._checkpoints is not None:
+            moved += self._checkpoints.transfer(source, target)
+        for command_id, (report, retained_at) in tuple(self._recovered.items()):
+            if report.owner == source:
+                self._recovered[command_id] = (replace(report, owner=target), retained_at)
+                self._notify(command_id)
+        return moved
 
     def transfer_agent_scope(self, agent_id: str, new_agent_id: str) -> int:
         """Move the commands of a renamed Identity Agent to its new id; returns how many.
@@ -545,6 +625,16 @@ class CommandManager:
             owner = record.owner
             if owner.project_id is None and owner.agent_id == agent_id:
                 moved += record.transfer(owner, replace(owner, agent_id=new_agent_id))
+        if self._checkpoints is not None:
+            moved += self._checkpoints.transfer_agent(agent_id, new_agent_id)
+        for command_id, (report, retained_at) in tuple(self._recovered.items()):
+            owner = report.owner
+            if owner.project_id is None and owner.agent_id == agent_id:
+                self._recovered[command_id] = (
+                    replace(report, owner=replace(owner, agent_id=new_agent_id)),
+                    retained_at,
+                )
+                self._notify(command_id)
         return moved
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:
@@ -579,6 +669,8 @@ class CommandManager:
         key = (extension, group_id, epoch)
         self._closed_execution_groups.add(key)
         try:
+            if self._checkpoints is not None:
+                self._checkpoints.withdraw_execution(extension, group_id, epoch)
             await _settle(
                 [
                     task
@@ -596,6 +688,7 @@ class CommandManager:
                     and not record.finished
                 ]
             )
+            await self.flush()
         finally:
             # Each epoch key is used once and its launches are drained above.
             self._closed_execution_groups.discard(key)
@@ -641,6 +734,11 @@ class CommandManager:
         output: CommandOutput | None = None
         process: CommandProcess | None = None
         try:
+            generation_id = None
+            if self._checkpoints is not None:
+                generation_id = await self._checkpoints.capture_generation(owner)
+                if generation_id is None:
+                    raise CommandNotStartedError("The Session that owned this command closed")
             if not await self._run_blocking(cwd.is_dir):
                 raise CommandLaunchError(f"The workdir is not a directory: {model_path(cwd)}")
             if self._temporary_files is not None:
@@ -668,6 +766,8 @@ class CommandManager:
                 lease.finish()
             raise
         command_id = new_id("cmd", claim=lambda candidate: candidate not in self._records)
+        if self._checkpoints is not None and generation_id is not None:
+            self._checkpoints.bind(command_id, generation_id)
         record = CommandRecord(
             command_id,
             owner=owner,
@@ -704,6 +804,8 @@ class CommandManager:
             )
 
     async def _close_matching(self, matches: Callable[[CommandOwner], bool]) -> int:
+        if self._checkpoints is not None:
+            self._checkpoints.withdraw(matches)
         await _settle([task for task, launch in self._pending.items() if matches(launch.owner)])
         matching = [record for record in self._records.values() if matches(record.owner)]
         running = [record for record in matching if not record.finished]
@@ -711,6 +813,7 @@ class CommandManager:
             if record.finished:
                 record.withdraw_delivery()
         await self._stop_scope(running)
+        await self.flush()
         return len(running)
 
     async def _stop_scope(self, records: list[CommandRecord]) -> None:
@@ -748,12 +851,28 @@ class CommandManager:
             for record in self._records.values()
             if record.finished_at is not None
             and now - record.finished_at >= self._retention_seconds
+            and not (self._checkpoints is not None and record.delivery_pending)
         ]
         for record in expired:
             del self._records[record.command_id]
+            if self._checkpoints is not None:
+                self._checkpoints.delete(record.command_id)
         for record in expired:
             if record.background:
                 self._notify(record.command_id)
+        for command_id, (_report, retained_at) in tuple(self._recovered.items()):
+            if now - retained_at >= self._retention_seconds and not (
+                self._checkpoints is not None and command_id in self._checkpoints.pending_ids
+            ):
+                del self._recovered[command_id]
+                # Recovery can still be waiting for delivery. Its checkpoint is
+                # kept until that operation has finished.
+                if (
+                    self._checkpoints is not None
+                    and command_id not in self._checkpoints.pending_ids
+                ):
+                    self._checkpoints.delete(command_id)
+                self._notify(command_id)
 
     async def _sweep_loop(self) -> None:
         try:
@@ -763,7 +882,19 @@ class CommandManager:
         except asyncio.CancelledError:
             return
 
+    def _checkpoint(self, command_id: str) -> None:
+        record = self._records.get(command_id)
+        if self._checkpoints is not None and record is not None and record.background:
+            self._checkpoints.put(
+                record.report(),
+                record.origin_run_id,
+                pending=record.delivery_pending,
+                body=record.delivery_body,
+                execution_owner=record.execution_owner,
+            )
+
     def _notify(self, command_id: str) -> None:
+        self._checkpoint(command_id)
         for callback in list(self._callbacks):
             try:
                 callback(command_id)
@@ -819,6 +950,7 @@ __all__ = [
     "COMMAND_TAIL_CHARS",
     "COMMAND_TEMPORARY_CATEGORY",
     "CommandCapacityError",
+    "CommandCheckpointError",
     "CommandChangedCallback",
     "CommandHandle",
     "CommandLaunchError",

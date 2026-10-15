@@ -71,7 +71,7 @@ class ChatSession:
 
     def start_run(self, run_id: str) -> ChatSession:
         """Admit a plain User Run now and return its explicitly bound Session writer."""
-        self._store.admit_run(
+        self._store.execution.admit_run(
             self.address,
             SessionRunAdmission(
                 run_id=run_id,
@@ -235,7 +235,7 @@ class ChatSession:
         """Store the bound running Run's change statistics so far."""
         run_id = self._require_run_id("Change statistics")
         await self._store.run_async(
-            lambda: self._store.record_run_changes(self.address, run_id, change_stats)
+            lambda: self._store.execution.record_run_changes(self.address, run_id, change_stats)
         )
 
     async def append_stream_draft_async(
@@ -254,7 +254,7 @@ class ChatSession:
         """
         run_id = self._require_run_id("A stream draft")
         await self._store.run_async(
-            lambda: self._store.append_stream_draft(
+            lambda: self._store.execution.append_stream_draft(
                 self.address,
                 run_id,
                 model=model,
@@ -267,7 +267,9 @@ class ChatSession:
     async def discard_stream_draft_async(self) -> None:
         """Delete the bound running Run's stream draft, whose Model step starts over."""
         run_id = self._require_run_id("A stream draft")
-        await self._store.run_async(lambda: self._store.discard_stream_draft(self.address, run_id))
+        await self._store.run_async(
+            lambda: self._store.execution.discard_stream_draft(self.address, run_id)
+        )
 
     def _require_run_id(self, subject: str) -> str:
         if self.run_id is None:

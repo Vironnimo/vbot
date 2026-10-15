@@ -173,14 +173,14 @@ class EmbeddingService:
         if purpose is not None and purpose not in EMBEDDING_PURPOSES:
             raise EmbeddingConfigurationError(f"Unsupported embedding purpose: {purpose}")
 
-        _binding, options, target_ref = self._resolver.resolve(TASK_TEXT_EMBEDDING)
+        _binding, options, target_ref = await self._resolver.resolve_async(TASK_TEXT_EMBEDDING)
 
         if target_ref.kind == "local":
             return await self._embed_local(texts, purpose, options, target_ref)
 
         identity = self._space_identity(target_ref, options)
         request = embedding_profile(target_ref.model_id).request(texts, purpose)
-        provider_client = ProviderEmbeddingClient.from_runtime(
+        provider_client = await ProviderEmbeddingClient.from_runtime_async(
             self._runtime,
             target_ref,
             usage_observer=TaskUsage(self._usage_recorder, TASK_TEXT_EMBEDDING, target_ref),

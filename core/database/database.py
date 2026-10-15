@@ -169,7 +169,10 @@ class Database:
         return self._runtime.writer
 
     def read(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
-        """One read transaction on a pooled reader, or on the writer without WAL."""
+        """One consistent read; contention fails immediately as unavailable.
+
+        Use ``read_async`` when the complete read callback should wait and retry.
+        """
         return self._runtime.read_ctx()
 
     def write[Result](
@@ -206,8 +209,14 @@ class Database:
                 raise DatabaseUnavailableError(f"{self.name} is closed") from exc
             raise
 
-    async def read_async[Result](self, operation: Callable[[sqlite3.Connection], Result]) -> Result:
-        return await self.run_async(self._read_operation, operation)
+    async def read_async[Result](
+        self,
+        operation: Callable[[sqlite3.Connection], Result],
+        *,
+        patience_s: float = WRITE_PATIENCE_S,
+    ) -> Result:
+        """Run a side-effect-free read callback with bounded contention retry."""
+        return await self.run_async(self._runtime.execute_read, operation, patience_s=patience_s)
 
     async def write_async[Result](
         self,
@@ -216,10 +225,6 @@ class Database:
         patience_s: float = WRITE_PATIENCE_S,
     ) -> Result:
         return await self.run_async(self.write, operation, patience_s=patience_s)
-
-    def _read_operation[Result](self, operation: Callable[[sqlite3.Connection], Result]) -> Result:
-        with self.read() as connection:
-            return operation(connection)
 
     def backup(self, destination: Path, *, cancelled: Callable[[], bool] | None = None) -> bool:
         """Write one consistent standalone copy; ``False`` when ``cancelled`` stopped it.

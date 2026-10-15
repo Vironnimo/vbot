@@ -201,6 +201,10 @@ class PromptAgentStore(Protocol):
         """Return all Agents."""
         ...
 
+    def delegation_target_allowed(self, target_id: str, binding: str | int) -> bool:
+        """Whether an explicit grant still addresses the current Identity Agent."""
+        ...
+
 
 class ToolPromptRegistry(Protocol):
     """Tool registry methods needed for prompt and provider definitions."""

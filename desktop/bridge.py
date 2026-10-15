@@ -29,9 +29,10 @@ import functools
 import inspect
 import logging
 import re
+import sys
 import threading
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, override
 
 from desktop.restart import RestartError
 from desktop.system_actions import DesktopSystemActions
@@ -64,6 +65,23 @@ class BridgeError(Exception):
     def __init__(self, error_code: str) -> None:
         super().__init__(error_code)
         self.error_code = error_code
+        self._desktop_bridge_logged = False
+
+
+class _BridgeLogFilter(logging.Filter):
+    """pywebview reports rejected calls again; the facade already owns their logs."""
+
+    @override
+    def filter(self, record: logging.LogRecord) -> bool:
+        error = sys.exception()
+        return error is None or not getattr(error, "_desktop_bridge_logged", False)
+
+
+def configure_bridge_logging() -> None:
+    """Keep native pywebview failures, but avoid repeating facade-owned failures."""
+    native_logger = logging.getLogger("pywebview")
+    if not any(isinstance(item, _BridgeLogFilter) for item in native_logger.filters):
+        native_logger.addFilter(_BridgeLogFilter())
 
 
 def _reject_with_error_codes[BridgeClass: type](cls: BridgeClass) -> BridgeClass:
@@ -92,10 +110,15 @@ def _bridge_method(method: Callable[..., Any]) -> Callable[..., Any]:
                     f", field={field}" if field else "",
                     exc,
                 )
-                raise BridgeError(error_code) from exc
+                failure = BridgeError(error_code)
+                failure._desktop_bridge_logged = True
+                raise failure from exc
             logger.exception("Desktop bridge %s failed unexpectedly", name)
             if _ERROR_CODE.fullmatch(str(exc)):
-                raise RuntimeError(f"The Desktop could not complete {name}") from exc
+                exc = RuntimeError(f"The Desktop could not complete {name}")
+                object.__setattr__(exc, "_desktop_bridge_logged", True)
+                raise exc
+            object.__setattr__(exc, "_desktop_bridge_logged", True)
             raise
 
     # pywebview reads the JavaScript parameter names from the signature.

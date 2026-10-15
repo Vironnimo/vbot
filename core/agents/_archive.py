@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.agents import _delegation
 from core.agents._config import (
     AGENT_FORMAT,
     AGENT_FORMAT_VERSION,
@@ -74,6 +75,8 @@ def archive_files(store: AgentStore, agent_id: str, tree: Path) -> Iterator[Arch
         agent = store._read_agent_config(store._require_agent_path(agent_id))
         if agent.builtin is not None:
             raise BuiltinAgentError(f"The {agent.name} is built into vBot and cannot be deleted")
+        _delegation.retire(store, agent_id)
+        agent = store._read_agent_config(store._require_agent_path(agent_id))
         order = store._load_agent_order()
         roster_index = (
             order.agent_ids.index(agent_id)
@@ -136,6 +139,7 @@ def remove_delegation_grants(
                     "agent_id": holder.id,
                     "agent_created_at": holder.created_at,
                     "index": allowed.index(agent_id),
+                    **_delegation.archived_binding(store, agent_id, holder),
                 }
                 for holder, allowed in store._allow_lists_naming(agent_id)
             ]
@@ -306,20 +310,41 @@ def _delegation_grant_holder(store: AgentStore, grant: Grant) -> tuple[Agent | N
     if not isinstance(holder_id, str) or not is_valid_agent_id(holder_id):
         return None, "holder_unproven"
     holder_path = store._agent_dir(holder_id) / "agent.json"
-    if not has_id_entry(store.data_dir / "agents", holder_id) or not is_file_strict(holder_path):
-        return None, "holder_missing"
-    data = _validated_agent_data(holder_path)
+    present = has_id_entry(store.data_dir / "agents", holder_id) and is_file_strict(holder_path)
+    data = _validated_agent_data(holder_path) if present else {}
+    problem = "holder_unproven" if present else "holder_missing"
     recorded_creation = grant.get("agent_created_at")
     holder_creation = data.get("created_at")
-    if not isinstance(recorded_creation, str) or not isinstance(holder_creation, str):
-        return None, "holder_unproven"
+    if not isinstance(recorded_creation, str):
+        return None, problem
     try:
         parse_timestamp(recorded_creation)
-        parse_timestamp(holder_creation)
     except ValueError:
-        return None, "holder_unproven"
+        return None, problem
     if holder_creation != recorded_creation:
-        return None, "holder_replaced"
+        if isinstance(holder_creation, str):
+            try:
+                parse_timestamp(holder_creation)
+            except ValueError:
+                pass
+            else:
+                problem = "holder_replaced"
+        # A holder may have been renamed while its target was archived. Only a
+        # unique persisted match proves it; synthesized defaults never do.
+        matches: builtins.list[dict[str, Any]] = []
+        for path in (store.data_dir / "agents").glob("*/agent.json"):
+            if path == holder_path:
+                continue
+            try:
+                candidate = _validated_agent_data(path)
+            except AgentError, OSError:
+                continue
+            if candidate.get("created_at") == recorded_creation:
+                matches.append(candidate)
+        if len(matches) != 1:
+            return None, "holder_unproven" if matches else problem
+        data = matches[0]
+        holder_id = data["id"]
     return (
         _agent_from_dict(
             data, data_dir=store.data_dir, default_workspace=store._default_workspace(holder_id)
@@ -352,12 +377,26 @@ def restore_delegation_grants(
         for grant in grants:
             holder_id = grant.get("agent_id")
             index = grant.get("index")
-            if not isinstance(holder_id, str) or holder_id == target_id:
+            if not isinstance(holder_id, str):
                 continue
             try:
                 holder, _problem = _delegation_grant_holder(store, grant)
-                if holder is None:
+                if holder is None or holder.id == target_id:
                     continue
+                bindings = dict(holder.delegation_bindings)
+                if "target_created_at" in grant:
+                    target_creation = grant["target_created_at"]
+                    if not isinstance(target_creation, str):
+                        continue
+                    try:
+                        parse_timestamp(target_creation)
+                    except ValueError:
+                        continue
+                    if store.exists(target_id) and not store.delegation_target_allowed(
+                        target_id, target_creation
+                    ):
+                        continue
+                    bindings[target_id] = target_creation
                 tools = deepcopy(holder.tools)
                 subagent = tools.get("subagent")
                 if not isinstance(subagent, dict):
@@ -368,7 +407,17 @@ def restore_delegation_grants(
                 position = index if isinstance(index, int) and index >= 0 else len(allowed)
                 allowed.insert(min(position, len(allowed)), target_id)
                 subagent["allowed_agents"] = allowed
-                store._write_agent(replace(holder, tools=tools, updated_at=utc_now_timestamp()))
+                updated = _delegation.bind_changes(
+                    store,
+                    replace(
+                        holder,
+                        tools=tools,
+                        delegation_bindings=bindings,
+                        updated_at=utc_now_timestamp(),
+                    ),
+                    holder,
+                )
+                store._write_agent(updated)
             except (AgentError, OSError) as error:
                 _LOGGER.warning(
                     "Could not restore a delegation grant (agent=%s policy_agent=%s): %s",
@@ -377,7 +426,7 @@ def restore_delegation_grants(
                     error,
                 )
                 continue
-            changed.append(holder_id)
+            changed.append(holder.id)
     return tuple(changed)
 
 

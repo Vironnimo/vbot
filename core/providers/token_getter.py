@@ -30,6 +30,7 @@ from core.utils.http_status import is_retryable_status
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tls import shared_ssl_context
+from core.utils.workers import settle_before_cancelling
 
 _LOGGER = get_logger("providers.token_getter")
 
@@ -172,7 +173,7 @@ class OAuthTokenGetter:
         """Return a valid OAuth-backed API token, refreshing when needed."""
 
         async with self._lock:
-            token = self._token_store.load(
+            token = await self._token_store.load_async(
                 self._provider_id,
                 self._local_connection_id,
                 account_id=self._account_id,
@@ -211,7 +212,7 @@ class OAuthTokenGetter:
                 return None
 
         async with self._lock:
-            token = self._token_store.load(
+            token = await self._token_store.load_async(
                 self._provider_id,
                 self._local_connection_id,
                 account_id=self._account_id,
@@ -263,7 +264,7 @@ class OAuthTokenGetter:
                 **copilot_token_extra(response_data, github_oauth_token, access_token),
             },
         )
-        return self._save_refreshed_token(token, refreshed_token)
+        return await settle_before_cancelling(self._save_refreshed_token(token, refreshed_token))
 
     async def _refresh_oauth_token(self, token: OAuthToken, stored_refresh_token: str) -> str:
         now = datetime.now(UTC)
@@ -317,7 +318,7 @@ class OAuthTokenGetter:
                 and not isinstance(exc, _InconclusiveRejectionError)
                 and self._oauth_config.device_flow in ROTATING_REFRESH_DEVICE_FLOWS
             ):
-                self._token_store.replace_if_current(
+                await self._token_store.replace_if_current_async(
                     self._provider_id,
                     self._local_connection_id,
                     token,
@@ -326,17 +327,17 @@ class OAuthTokenGetter:
                 )
             self._log_refresh_failure(exc)
             raise
-        return self._save_refreshed_token(token, refreshed_token)
+        return await settle_before_cancelling(self._save_refreshed_token(token, refreshed_token))
 
-    def _save_refreshed_token(self, original: OAuthToken, refreshed: OAuthToken) -> str:
-        if not self._token_store.replace_if_current(
+    async def _save_refreshed_token(self, original: OAuthToken, refreshed: OAuthToken) -> str:
+        if not await self._token_store.replace_if_current_async(
             self._provider_id,
             self._local_connection_id,
             original,
             refreshed,
             account_id=self._account_id,
         ):
-            current = self._token_store.load(
+            current = await self._token_store.load_async(
                 self._provider_id, self._local_connection_id, account_id=self._account_id
             )
             if current is not None and not _is_expiring(current):

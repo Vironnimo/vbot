@@ -27,7 +27,7 @@ import sqlite3
 import stat
 import uuid
 from collections.abc import Callable, Iterable, Mapping
-from contextlib import suppress
+from contextlib import closing, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -73,7 +73,7 @@ from core.database.spec import (
     validate_database_name,
 )
 from core.utils.atomic import atomic_write_text, replace_path
-from core.utils.file_status import exists_strict, is_file_strict
+from core.utils.file_status import exists_strict, is_file_strict, is_link_status
 from core.utils.timestamps import (
     is_canonical_timestamp,
     parse_canonical_timestamp,
@@ -620,6 +620,71 @@ def _published_children(data_dir: Path) -> list[Path]:
         for child in children
         if child.is_dir() and not child.is_symlink() and not child.name.startswith(".")
     ]
+
+
+def read_retained_snapshot_members[Result](
+    data_dir: Path,
+    name: str,
+    read: Callable[[sqlite3.Connection], Result],
+) -> list[Result]:
+    """Read one owner's member from every retained snapshot without changing it.
+
+    A resource collector uses these copies as additional roots. Hold the
+    operation lock so publication/pruning cannot race the inventory, and fail
+    closed on an unreadable or malformed published snapshot. This is not a
+    restore verification: immutable published copies were verified at capture;
+    the read checks identity and schema, without rehashing every database.
+    """
+    validate_database_name(name)
+    results: list[Result] = []
+    with operation_lock(data_dir):
+        try:
+            children = list(snapshot_root(data_dir).iterdir())
+        except FileNotFoundError:
+            return results
+        except OSError as exc:
+            raise DatabaseUnavailableError("snapshot inventory is unavailable") from exc
+        for child in children:
+            if child.name.startswith("."):
+                continue
+            try:
+                status = child.lstat()
+                if is_link_status(status) or not stat.S_ISDIR(status.st_mode):
+                    continue
+                manifest = read_manifest(data_dir, child)
+                if manifest is None:
+                    raise DatabaseCorruptError("retained snapshot manifest is invalid")
+                member = manifest.members.get(name)
+                if member is None:
+                    continue
+                path = member_path(child, member)
+                if path is None:
+                    raise DatabaseCorruptError(f"retained snapshot member {name} is missing")
+                with closing(sqlite3.connect(readonly_sqlite_uri(path), uri=True)) as connection:
+                    connection.row_factory = sqlite3.Row
+                    identity = dict(connection.execute("SELECT key, value FROM kernel_meta"))
+                    migrations = tuple(
+                        sorted(
+                            str(row[0])
+                            for row in connection.execute("SELECT name FROM kernel_migrations")
+                        )
+                    )
+                    if (
+                        identity.get("database_name") != name
+                        or identity.get("database_id") != member.database_id
+                        or int(connection.execute("PRAGMA application_id").fetchone()[0])
+                        != member.application_id
+                        or int(connection.execute("PRAGMA user_version").fetchone()[0])
+                        != member.format_generation
+                        or migrations != member.migrations
+                    ):
+                        raise DatabaseCorruptError(f"retained snapshot member {name} has changed")
+                    results.append(read(connection))
+            except (OSError, sqlite3.Error) as exc:
+                raise DatabaseUnavailableError(
+                    f"retained snapshot member {name} is unavailable"
+                ) from exc
+    return results
 
 
 def verified_snapshots(

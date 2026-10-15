@@ -658,6 +658,7 @@
               draggable={groupReorderable}
               ondragstart={(event) => onTileDragStart(event, item.terminal_id)}
               ondragover={(event) => onTileDragOver(event, item.terminal_id)}
+              use:tooltip={() => terminalDetails(item)}
               ondragend={onTileDragEnd}
               ondrop={(event) => onTileDrop(event, item.terminal_id)}
               onclick={() => activateTerminal(item.terminal_id)}
@@ -673,9 +674,7 @@
               }}
             >
               <div class="terminals-view__tile-bar-primary">
-                <span
-                  class="terminals-view__tile-title"
-                  use:tooltip={() => terminalDetails(item)}
+                <span class="terminals-view__tile-title"
                   >{terminalTitle(item)}</span
                 >
                 <span

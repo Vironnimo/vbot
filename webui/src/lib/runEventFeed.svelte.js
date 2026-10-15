@@ -22,6 +22,7 @@ export function createRunEventFeed({ capacity = MAX_RUN_EVENTS } = {}) {
   const terminalPositions = new Map();
   let end = $state(0);
   let runStarts = $state(0);
+  let lifecycle = $state(0);
   let activeRuns = [];
 
   function forgetEvicted(position) {
@@ -45,6 +46,10 @@ export function createRunEventFeed({ capacity = MAX_RUN_EVENTS } = {}) {
     get runStarts() {
       return runStarts;
     },
+    // Work-state readers follow starts/ends without polling on output chunks.
+    get lifecycle() {
+      return lifecycle;
+    },
     // The Runs active now: the latest `connection_ready.active_runs`, plus
     // Runs started since, minus Runs that ended since. Retained events cannot
     // provide this for an owner that starts later or missed events, because
@@ -63,6 +68,12 @@ export function createRunEventFeed({ capacity = MAX_RUN_EVENTS } = {}) {
       activeRuns = nextActiveRuns(activeRuns, serverEvent);
       if (serverEvent?.type === 'run_started') {
         runStarts += 1;
+      }
+      if (
+        serverEvent?.type === 'run_started' ||
+        TERMINAL_RUN_EVENT_TYPES.has(serverEvent?.type)
+      ) {
+        lifecycle += 1;
       }
       end = position;
     },

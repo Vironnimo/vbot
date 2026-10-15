@@ -684,8 +684,17 @@ export function createSwarmPageModel(host) {
       board.composeOpen = false;
     }
     try {
-      const swarm = (await call('swarms.get', { swarm_id: id })).swarm;
+      // A Swarm's prompt and saved profile/configuration never change. Keep
+      // their first snapshot while refreshing the complete mutable state.
+      const retained = selectedSwarm?.id === id ? selectedSwarm : null;
+      const snapshot = (
+        await call('swarms.get', {
+          swarm_id: id,
+          ...(retained ? { include_snapshot: false } : {}),
+        })
+      ).swarm;
       if (disposed || request !== selectionRequest) return;
+      const swarm = retained ? { ...retained, ...snapshot } : snapshot;
       if (selectedSwarm?.id !== id) {
         board.reset(swarm);
         usage.reset();
