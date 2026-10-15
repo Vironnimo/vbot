@@ -74,14 +74,10 @@ export function createChatScrollController(
   let restorePending = false;
   let restoreToPinned = true;
   let expectedScrollTop = 0;
-  // Set by upward user input and consumed by the next scroll event: the
-  // gesture owns that event even when the position happens to match our last
-  // write (e.g. scrolling at the very top, where nothing moves).
-  let pendingUpwardInput = false;
-  // True after upward input released the pin but the user has not actually
-  // moved yet: there is no reading position to protect, so content growth
-  // neither follows nor corrects until the first real scroll event.
-  let awaitingUserPosition = false;
+  // Position at upward input, until the browser moves (null otherwise).
+  // This also protects an existing reading position: a queued resize/render
+  // correction must not undo motion whose scroll event has not arrived yet.
+  let pendingUserScrollTop = null;
   // Each Session owns its pending page; a slow request must not block a
   // different Session after navigation.
   const loadingOlderSessions = new Set();
@@ -188,8 +184,7 @@ export function createChatScrollController(
   function writeScroll(top) {
     container.scrollTop = top;
     expectedScrollTop = container.scrollTop;
-    awaitingUserPosition = false;
-    pendingUpwardInput = false;
+    pendingUserScrollTop = null;
   }
 
   function writeBottom() {
@@ -211,12 +206,11 @@ export function createChatScrollController(
       return;
     }
     const actual = container.scrollTop;
-    const upwardGesture = pendingUpwardInput;
-    pendingUpwardInput = false;
     if (
-      !upwardGesture &&
       Math.abs(actual - expectedScrollTop) <= PROGRAMMATIC_ECHO_TOLERANCE_PX
     ) {
+      // An earlier correction's echo can arrive after new upward input.
+      // It must not end the handover before that gesture actually moves.
       return;
     }
     classifyUserScroll(actual);
@@ -224,7 +218,7 @@ export function createChatScrollController(
 
   function classifyUserScroll(actual) {
     expectedScrollTop = actual;
-    awaitingUserPosition = false;
+    pendingUserScrollTop = null;
     const viewport = viewportFor(currentSessionId);
     if (isNearBottom()) {
       viewport.pinned = true;
@@ -364,15 +358,24 @@ export function createChatScrollController(
       return;
     }
     const viewport = viewportFor(currentSessionId);
-    if (awaitingUserPosition) {
-      // Upward input released the pin but the user has not moved yet; if the
-      // release turned out to be a no-op at the bottom, resume following.
-      if (isNearBottom()) {
-        viewport.pinned = true;
-        awaitingUserPosition = false;
-        onViewChanged();
+    if (pendingUserScrollTop !== null) {
+      if (
+        Math.abs(container.scrollTop - pendingUserScrollTop) >
+        PROGRAMMATIC_ECHO_TOLERANCE_PX
+      ) {
+        // Read native motion now, before a queued correction or window
+        // update can put back the old anchor. Its later scroll event is
+        // just an echo of this already accepted position.
+        classifyUserScroll(container.scrollTop);
+      } else {
+        // An ineffective gesture at the bottom must not stop following.
+        if (isNearBottom()) {
+          viewport.pinned = true;
+          pendingUserScrollTop = null;
+          onViewChanged();
+        }
+        return;
       }
-      return;
     }
     if (viewport.pinned) {
       writeBottom();
@@ -415,7 +418,7 @@ export function createChatScrollController(
     const viewport = viewportFor(currentSessionId);
     restorePending = true;
     restoreToPinned = viewport.pinned;
-    awaitingUserPosition = false;
+    pendingUserScrollTop = null;
     aimWindow(viewport);
     onViewChanged();
   }
@@ -530,15 +533,14 @@ export function createChatScrollController(
       }
       return;
     }
-    pendingUpwardInput = true;
     restorePending = false;
+    pendingUserScrollTop ??= container.scrollTop;
     const viewport = viewportFor(currentSessionId);
     if (!viewport.pinned) {
       maybeRequestLoadOlder();
       return;
     }
     viewport.pinned = false;
-    awaitingUserPosition = true;
     onViewChanged();
     maybeRequestLoadOlder();
   }
@@ -657,7 +659,7 @@ export function createChatScrollController(
     const viewport = viewportFor(currentSessionId);
     if (
       !restorePending &&
-      !awaitingUserPosition &&
+      pendingUserScrollTop === null &&
       !viewport.pinned &&
       !viewport.anchorId
     ) {
@@ -763,7 +765,7 @@ export function createChatScrollController(
     const changed = layout.window.update(
       container.scrollTop - origin,
       container.clientHeight,
-      { followTail: viewport.pinned && !awaitingUserPosition },
+      { followTail: viewport.pinned && pendingUserScrollTop === null },
     );
     if (changed) {
       publish();

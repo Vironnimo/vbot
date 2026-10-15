@@ -489,23 +489,40 @@ describe('ChatTimeline scrolling', () => {
     await waitForCondition(() => view.geometry.currentScrollTop() === 2000);
   });
 
-  it('releases follow mode before upward wheel scrolling can race content growth', async () => {
-    const view = await mountSessions();
+  it.each(['pinned', 'reading'])(
+    'lets upward wheel motion from %s win over queued content growth',
+    async (mode) => {
+      const view = await mountSessions();
+      if (mode === 'reading') {
+        scrollAsUser(view.container, view.geometry, 900);
+      }
+      const before = view.geometry.currentScrollTop();
 
-    // Tool output may resize between the wheel input and the browser's scroll
-    // event. The upward intent must already own the viewport at that point.
-    view.container.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 }));
-    view.geometry.setScrollHeight(2400);
-    timeline.notifyContentResize();
-    await waitForCondition(() => view.geometry.currentScrollTop() === 2000);
+      // Tool output may resize between the wheel input and the browser's scroll
+      // event. The upward intent must already own the viewport at that point.
+      view.container.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 }));
+      // A prior programmatic scroll's echo is still not the new movement.
+      view.container.dispatchEvent(new Event('scroll'));
+      view.geometry.setScrollHeight(2400);
+      timeline.notifyContentResize();
+      await waitForCondition(() => view.geometry.currentScrollTop() === before);
 
-    // A user-owned reading position stays put while content grows.
-    view.geometry.setScrollTop(600);
-    view.container.dispatchEvent(new Event('scroll'));
-    view.geometry.setScrollHeight(2600);
-    timeline.notifyContentResize();
-    await waitForCondition(() => view.geometry.currentScrollTop() === 600);
-  });
+      // A user-owned reading position stays put while content grows.
+      view.geometry.setScrollTop(600);
+      view.geometry.setScrollHeight(2600);
+      timeline.notifyContentResize();
+      // Let the resize correction run before the native scroll event arrives.
+      await tick();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(view.geometry.currentScrollTop()).toBe(600);
+      view.container.dispatchEvent(new Event('scroll'));
+      view.geometry.setScrollHeight(2800);
+      timeline.notifyContentResize();
+      await tick();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(view.geometry.currentScrollTop()).toBe(600);
+    },
+  );
 
   it('keeps nested output scrolling independent of timeline following and reading', async () => {
     const view = await mountSessions();

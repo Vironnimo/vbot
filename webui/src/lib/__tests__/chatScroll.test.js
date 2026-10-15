@@ -103,28 +103,51 @@ describe('createChatScrollController', () => {
     controller.destroy();
   });
 
-  it('releases the pin on upward input before the browser scrolls', () => {
-    const container = createFakeContainer();
-    const controller = createController(container);
-    controller.sessionChanged('session-a');
-    controller.contentChanged();
-    expect(container.scrollTop).toBe(2000);
+  it.each(['pinned', 'reading'])(
+    'preserves upward motion from %s before its scroll event arrives',
+    (mode) => {
+      const container = createClampedContainer();
+      const controller = createController(container);
+      let earlierTop = 650;
+      container.querySelectorAll = vi.fn(() => [
+        createElement('earlier', earlierTop, container),
+        createElement('later', 1000, container),
+      ]);
+      controller.sessionChanged('session-a');
+      controller.contentChanged();
+      if (mode === 'reading') {
+        container.scrollTop = 900;
+        container.dispatchScroll();
+      }
+      const before = container.scrollTop;
+      controller.noteUserInput({ upward: true });
+      // A queued echo from the preceding correction is not this gesture.
+      container.dispatchScroll();
+      container.scrollHeight = 2400;
+      controller.contentChanged();
+      expect(container.scrollTop).toBe(before);
 
-    controller.noteUserInput({ upward: true });
-    container.scrollHeight = 2400;
-    controller.contentChanged();
+      // The browser has moved, but a queued content/resize update runs
+      // before the scroll listener. It must not undo the reader's movement.
+      container.scrollTop = 600;
+      // Fast wheel input can arrive again before the first scroll event.
+      controller.noteUserInput({ upward: true });
+      container.scrollHeight = 2600;
+      controller.contentChanged();
+      expect(container.scrollTop).toBe(600);
 
-    // No snap to the new bottom: the gesture owns the viewport.
-    expect(container.scrollTop).toBe(2000);
-
-    // Once the gesture moves, later growth preserves the reading position.
-    container.scrollTop = 600;
-    container.dispatchScroll();
-    container.scrollHeight = 2600;
-    controller.contentChanged();
-    expect(container.scrollTop).toBe(600);
-    controller.destroy();
-  });
+      // Accept that new reading anchor immediately: a further reflow above
+      // it still needs compensation before the delayed scroll event.
+      earlierTop += 120;
+      container.scrollHeight += 120;
+      controller.contentChanged();
+      expect(container.scrollTop).toBe(720);
+      container.dispatchScroll();
+      controller.contentChanged();
+      expect(container.scrollTop).toBe(720);
+      controller.destroy();
+    },
+  );
 
   it('keeps following after upward input that cannot move a short timeline', () => {
     const container = createClampedContainer();
