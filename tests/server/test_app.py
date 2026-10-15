@@ -22,6 +22,7 @@ from core.runtime import Runtime
 from core.sessions import ChatSessionManager
 from core.statistics import StatisticsIndex
 from core.utils.config import Config
+from core.utils.errors import ConfigError
 from core.utils.server_control import (
     CONTROL_INITIATOR_HEADER,
     CONTROL_SHUTDOWN_PATH,
@@ -210,6 +211,12 @@ def test_server_bind_prefers_explicit_state_then_environment_then_settings(
         "port_source": "VBOT_SERVER_PORT",
     }
     assert explicit == {"listen_host": "0.0.0.0", "listen_port": 9100, "port_source": "cli"}
+    (data_dir / "settings.json").write_text("{", encoding="utf-8")
+    assert served_bind() == from_environment
+    monkeypatch.delenv("VBOT_SERVER_PORT")
+    with pytest.raises(ConfigError):
+        served_bind()
+    assert served_bind(server_bind=explicit) == explicit
 
 
 @pytest.mark.parametrize(

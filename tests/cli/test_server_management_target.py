@@ -256,8 +256,8 @@ LOCAL_PROBE_TIMEOUT = httpx.Timeout(0.5, connect=0.2)
 @pytest.mark.parametrize(
     ("host", "listeners", "requested"),
     [
-        pytest.param("127.0.0.1", [], None, id="nothing-listens"),
-        pytest.param("127.0.0.1", [("127.0.0.1", 9999)], None, id="other-port-only"),
+        pytest.param("127.0.0.1", [], LOCAL_PROBE_TIMEOUT, id="listener-absent-from-host-table"),
+        pytest.param("127.0.0.1", [("127.0.0.1", 9999)], LOCAL_PROBE_TIMEOUT, id="other-port-only"),
         pytest.param("127.0.0.1", [("127.0.0.1", 8420)], LOCAL_PROBE_TIMEOUT, id="listener"),
         # A wildcard or dual-stack socket may accept the target's traffic.
         pytest.param("127.0.0.1", [("::", 8420)], LOCAL_PROBE_TIMEOUT, id="any-address"),
@@ -265,17 +265,14 @@ LOCAL_PROBE_TIMEOUT = httpx.Timeout(0.5, connect=0.2)
         pytest.param("192.0.2.40", [], 0.5, id="remote-target"),
     ],
 )
-def test_probe_health_asks_the_socket_table_before_connecting_to_a_local_target(
+def test_probe_health_contacts_the_target_independently_of_the_host_socket_table(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     host: str,
     listeners: list[tuple[str, int]] | None,
-    requested: httpx.Timeout | float | None,
+    requested: httpx.Timeout | float,
 ) -> None:
-    """On Windows a refused connect waits out its budget, so a free port gets no request.
-
-    ``requested`` is the timeout of the one request sent, or ``None`` for no request.
-    """
+    """A table cannot prove absence; every local probe keeps its short connect budget."""
 
     instance = make_instance(tmp_path, host=host)
     if listeners is None:
@@ -296,14 +293,8 @@ def test_probe_health_asks_the_socket_table_before_connecting_to_a_local_target(
 
     health = probe_health(instance)
 
-    if requested is None:
-        assert timeouts == []
-        assert health == HealthProbeResult(
-            reachable=False, is_vbot=False, error=_server_target.NO_LISTENER_ERROR
-        )
-    else:
-        assert timeouts == [requested]
-        assert health.is_vbot
+    assert timeouts == [requested]
+    assert health.is_vbot
 
 
 BUSY_ABSENT = HealthProbeResult(reachable=False, is_vbot=False, error="ReadTimeout", timed_out=True)

@@ -12,6 +12,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, TypedDict
 
+from core.utils.errors import ConfigError
+
 # core.settings loads lazily inside the functions that read settings.json, so
 # light callers (the CLI parser reads DEFAULT_HOST) skip its import chain.
 
@@ -383,15 +385,21 @@ def _load_settings_for_port(config: Config) -> dict[str, Any]:
     from core.settings import SettingsValidationError, load_runtime_settings_json
 
     settings_path = config.data_dir / "settings.json"
+    problem = (
+        f"Cannot determine the server port from invalid Settings in {settings_path}. "
+        "Repair that file or select the intended server explicitly with --port "
+        "or VBOT_SERVER_PORT."
+    )
     try:
         settings, ignored = load_runtime_settings_json(settings_path)
     except SettingsValidationError as exc:
-        _LOGGER.warning(
-            "Ignoring invalid settings file %s for server bind and using the default port: %s",
-            settings_path,
-            exc,
-        )
-        return {}
+        raise ConfigError(problem) from exc
+    ignored_paths = {diagnostic.path for diagnostic in ignored}
+    for key in PORT_SETTING_KEYS:
+        if f"$.{key}" in ignored_paths:
+            raise ConfigError(problem)
+        if settings.get(key) is not None:
+            break
     if ignored:
         details = "; ".join(f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored)
         _LOGGER.warning(

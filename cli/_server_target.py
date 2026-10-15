@@ -28,11 +28,6 @@ DEFAULT_PROBE_TIMEOUT_SECONDS = 0.5
 LOCAL_CONNECT_TIMEOUT_SECONDS = 0.2
 
 
-# ``HealthProbeResult.error`` when the socket table shows nothing listening on a
-# local target's port, so no request was sent.
-NO_LISTENER_ERROR = "NoListener"
-
-
 # A busy Event Loop (heavy Run load, a large replay) can hold back a reply for
 # seconds. Lifecycle decisions that would treat "no answer" as "not running" give
 # a listener this long before concluding it is unresponsive.
@@ -64,8 +59,7 @@ class HealthProbeResult:
     none arrived in time: it does not prove a listener exists, because Windows
     reports a refused connection to a closed port as a connect timeout under a
     short budget. ``unresponsive`` is the conclusion of ``probe_health_patiently``:
-    a local listener holds the target but never answered. ``error`` is
-    ``NO_LISTENER_ERROR`` when nothing listened on a local target's port.
+    a local listener holds the target but never answered.
     """
 
     reachable: bool
@@ -156,10 +150,9 @@ def probe_health(
 ) -> HealthProbeResult:
     """Probe `/health` and classify only the exact vBot health response as vBot.
 
-    A local target is asked first whether anything listens on its port. When the
-    socket table shows nothing, the probe answers without a request, which on
-    Windows would wait out its connect budget; otherwise a local request gets
-    ``LOCAL_CONNECT_TIMEOUT_SECONDS`` to connect.
+    Always ask the target: a host socket table can omit a listener in another
+    network namespace. A local request gets ``LOCAL_CONNECT_TIMEOUT_SECONDS``
+    to connect, bounding the delay of a refused connection on Windows.
     """
 
     import httpx
@@ -167,8 +160,6 @@ def probe_health(
     from core.utils.tls import ssl_context_for
 
     local = is_local_target(instance)
-    if local and _port_listening(instance.port) is False:
-        return HealthProbeResult(reachable=False, is_vbot=False, error=NO_LISTENER_ERROR)
     timeout: httpx.Timeout | float = timeout_seconds
     if local:
         connect = min(timeout_seconds, LOCAL_CONNECT_TIMEOUT_SECONDS)
@@ -303,24 +294,6 @@ def has_local_listener(instance: ServerInstance) -> bool:
     return any(
         connection.status == psutil.CONN_LISTEN
         and _connection_matches_instance(connection, instance)
-        for connection in connections
-    )
-
-
-def _port_listening(port: int) -> bool | None:
-    """Return whether any local socket listens on ``port``; ``None`` if unreadable.
-
-    Any address counts: a wildcard or dual-stack socket may accept the target's
-    traffic, so only a port nothing listens on proves a connect would be refused.
-    """
-
-    try:
-        connections = psutil.net_connections(kind="tcp")
-    except psutil.Error, OSError:
-        return None
-    return any(
-        connection.status == psutil.CONN_LISTEN
-        and getattr(getattr(connection, "laddr", None), "port", None) == port
         for connection in connections
     )
 
