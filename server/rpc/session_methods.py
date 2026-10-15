@@ -682,6 +682,7 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     if previous_link != (channel_id, channel_config.platform, platform_conv_id):
+        publish_session_changed(state, None, agent_id, session_id)
         _LOGGER.info(
             "Session linked to Channel (agent=%s session=%s channel=%s)",
             agent_id,
