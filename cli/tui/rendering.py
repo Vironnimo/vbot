@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import textwrap
 from typing import Any
 
 from textual.containers import Vertical
@@ -11,6 +12,13 @@ from textual.markup import escape
 from textual.widgets import Collapsible, Markdown, Static
 
 from core.utils.ids import is_safe_id
+
+# A Tool row is one line; the complete payload stays in its expanded detail.
+_TOOL_TITLE_WIDTH = 72
+
+# A notice block names its level; its text reads as the message's own sentence.
+_NOTICE_LABELS = {"warning": "Warning", "error": "Error"}
+_MEMORY_CHANGE_MARKS = {"added": "+", "removed": "-", "replaced": "~"}
 
 type JsonObject = dict[str, Any]
 
@@ -38,13 +46,62 @@ def content_text(content: Any) -> str:
                 label = block.get(
                     "filename", block.get("path", block.get("attachment_id", "attachment"))
                 )
-                result.append(f"\n📎 {label}")
+                result.append(f"\nfile: {label}")
         return terminal_text("\n".join(result))
     return "" if content is None else terminal_text(str(content))
 
 
+def one_line(value: str, width: int = 96) -> str:
+    """One picker row for content that may span many lines."""
+    return textwrap.shorten(" ".join(value.split()), width=width, placeholder="…")
+
+
+def scalar_text(value: Any) -> str:
+    if value is None:
+        return "none"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return terminal_text(str(value))
+
+
+def structured(value: Any, *, level: int = 0) -> str:
+    """Read a payload as indented `key: value` lines instead of raw JSON.
+
+    Detail dialogs and expanded Tool rows show machine payloads to a human, so
+    braces, quotes and commas only cost attention here.
+    """
+    pad = "  " * level
+    if isinstance(value, dict):
+        lines: list[str] = []
+        for key, item in value.items():
+            if isinstance(item, (dict, list)) and item:
+                lines.append(f"{pad}{key}:")
+                lines.append(structured(item, level=level + 1))
+            elif isinstance(item, str) and "\n" in item:
+                lines.append(f"{pad}{key}:")
+                lines.append("\n".join(f"{pad}  {line}" for line in item.splitlines()))
+            elif item == "" or item is None:
+                continue
+            else:
+                lines.append(f"{pad}{key}: {scalar_text(item)}")
+        return "\n".join(lines)
+    if isinstance(value, list):
+        if not value:
+            return ""
+        lines = []
+        for item in value:
+            if isinstance(item, (dict, list)) and item:
+                lines.append(f"{pad}-")
+                lines.append(structured(item, level=level + 1))
+            else:
+                lines.append(f"{pad}- {scalar_text(item)}")
+        return "\n".join(lines)
+    return f"{pad}{scalar_text(value)}"
+
+
 def pretty(value: Any) -> str:
-    return terminal_text(json.dumps(value, indent=2, ensure_ascii=False, default=str))
+    """Kept name for callers that render a payload for a human to read."""
+    return structured(value)
 
 
 def item_text(item: JsonObject) -> str:
@@ -93,11 +150,15 @@ def item_text(item: JsonObject) -> str:
 
 
 def item_heading(item: JsonObject) -> str | None:
+    """Name only the rows whose kind is not obvious from how they look."""
     kind = item.get("type")
     if kind == "message":
-        return str((item.get("message") or {}).get("role", "message")).capitalize()
+        role = str((item.get("message") or {}).get("role", "message"))
+        # The operator's own rows carry an accent bar, model output reads as the
+        # default body; a label above each of them repeats what the eye sees.
+        return None if role in {"user", "assistant"} else role.capitalize()
     if kind == "user_message":
-        return "User Steer · Delivered"
+        return "User Steer · delivered"
     if kind == "takeover_separator":
         return "Agent takeover"
     if kind == "compaction_separator":
@@ -108,29 +169,129 @@ def item_heading(item: JsonObject) -> str | None:
     return None
 
 
+def tool_title(item: JsonObject) -> str:
+    """One readable line per Tool call, shortened instead of clipped at the edge."""
+    title = str(item.get("name", "Tool"))
+    summary = (item.get("display") or {}).get("summary")
+    if summary:
+        title += f" · {terminal_text(str(summary))}"
+    status = str(item.get("status") or "")
+    # A Tool that ran through needs no verdict in its row; running and failed
+    # calls are the two the operator must not read past.
+    if status not in {"success", "completed", ""}:
+        title += f" · {status}"
+    return escape(textwrap.shorten(title, width=_TOOL_TITLE_WIDTH, placeholder="…"))
+
+
 def tool_detail(item: JsonObject) -> str:
     display = item.get("display") or {}
     hidden = display.get("hidden_argument_keys") or []
     args = {key: value for key, value in (item.get("arguments") or {}).items() if key not in hidden}
-    parts = ["Arguments", pretty(args)]
+    parts: list[str] = []
+    if args:
+        parts.extend(["Arguments", structured(args)])
     if item.get("output"):
         parts.extend(["Output", content_text(item["output"])])
     if item.get("result") is not None:
-        parts.extend(["Result", pretty(item["result"])])
+        parts.extend(["Result", structured(_json_value(item["result"]))])
     for detail in display.get("details") or []:
+        if not isinstance(detail, dict):
+            continue
         if detail.get("type") == "file_changes":
             for change in detail.get("files", []):
-                parts.append(f"{change.get('change', '')} {change.get('path', '')}")
+                parts.append(f"{change.get('change', '')} {change.get('path', '')}".strip())
                 for hunk in change.get("hunks", []):
                     parts.append(f"@@ -{hunk.get('old_start')} +{hunk.get('new_start')} @@")
                     parts.extend(hunk.get("lines", []))
                 if change.get("omitted_lines"):
                     parts.append(f"{change['omitted_lines']} more diff lines omitted by the server")
-        else:
-            parts.append(pretty(detail))
+            continue
+        block = _detail_block(detail, item)
+        if block:
+            parts.append(block)
     if display.get("media"):
-        parts.extend(["Files (download through F8)", pretty(display["media"])])
+        parts.extend(["Files (download through F8)", structured(display["media"])])
     return terminal_text("\n\n".join(parts))
+
+
+def _indent(text: str, pad: str = "  ") -> str:
+    return "\n".join(f"{pad}{line}" if line else "" for line in text.splitlines())
+
+
+def _path_value(value: Any, path: list[Any]) -> Any:
+    for key in path:
+        if isinstance(value, dict) and isinstance(key, str):
+            value = value.get(key)
+        elif isinstance(value, list) and isinstance(key, int) and 0 <= key < len(value):
+            value = value[key]
+        else:
+            return None
+    return value
+
+
+def _source_text(source: Any, item: JsonObject) -> str:
+    """Read a detail block's value from the call's arguments or its own result."""
+    if not isinstance(source, dict):
+        return ""
+    origin = source.get("from")
+    path = source.get("path")
+    if origin not in {"arguments", "result"} or not isinstance(path, list):
+        return ""
+    root = item.get("arguments") if origin == "arguments" else _json_value(item.get("result"))
+    value = _path_value(root, path)
+    if value is None or value == "":
+        return ""
+    if isinstance(value, dict | list):
+        return structured(value)
+    return scalar_text(value)
+
+
+def _detail_block(block: JsonObject, item: JsonObject) -> str:
+    """Read one of a Tool's structured detail blocks as text a human reads."""
+    kind = block.get("type")
+    if kind == "notice":
+        text = scalar_text(block.get("text"))
+        prefix = _NOTICE_LABELS.get(str(block.get("level")))
+        return f"{prefix}: {text}" if prefix else text
+    if kind == "text":
+        label = scalar_text(block.get("label") or "text")
+        given = block.get("text")
+        text = given if isinstance(given, str) else _source_text(block.get("source"), item)
+        text = text.strip()
+        if not text:
+            return ""
+        return f"{label}:\n{_indent(text)}" if "\n" in text else f"{label}: {text}"
+    if kind == "results":
+        rows: list[str] = []
+        for entry in block.get("items") or []:
+            if not isinstance(entry, dict):
+                continue
+            head = " · ".join(
+                scalar_text(entry[field]) for field in ("title", "meta", "time") if entry.get(field)
+            )
+            if head:
+                rows.append(head)
+            body = entry.get("text")
+            if isinstance(body, str) and body.strip():
+                rows.append(_indent(body.strip()))
+        return "\n".join(rows)
+    if kind == "memory_changes":
+        revision = block.get("revision")
+        rows = [
+            f"Memory ({scalar_text(block.get('scope'))})"
+            + (f" · revision {revision}" if isinstance(revision, int) else "")
+        ]
+        for change in block.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            mark = _MEMORY_CHANGE_MARKS.get(str(change.get("op")), "·")
+            previous = change.get("previous")
+            if change.get("op") == "replaced" and previous:
+                rows.append(f"{mark} {scalar_text(previous)} → {scalar_text(change.get('text'))}")
+            else:
+                rows.append(f"{mark} {scalar_text(change.get('text'))}")
+        return "\n".join(rows)
+    return structured(block)
 
 
 def flatten(items: list[JsonObject]) -> list[JsonObject]:
@@ -210,8 +371,11 @@ class TimelineEntry(Vertical):
     TimelineEntry > .entry-heading { color: $text-muted; height: auto; }
     TimelineEntry Markdown { height: auto; background: transparent; padding: 0; }
     TimelineEntry Collapsible { padding: 0; margin: 0; border: none; }
-    TimelineEntry .tool-detail { padding: 1; }
-    TimelineEntry.user-entry { border-left: thick $accent; }
+    TimelineEntry Collapsible > CollapsibleTitle { color: $text-muted; }
+    TimelineEntry.failed-entry Collapsible > CollapsibleTitle { color: $error; }
+    TimelineEntry .tool-detail { padding: 1 0 1 2; color: $text-muted; }
+    TimelineEntry.reasoning-entry Collapsible > CollapsibleTitle { text-style: italic; }
+    TimelineEntry.user-entry { border-left: thick $accent; background: $panel; }
     """
 
     def __init__(self) -> None:
@@ -231,10 +395,18 @@ class TimelineEntry(Vertical):
         self.item = item
         kind = item.get("type")
         if kind == "assistant_run":
+            status = str(item.get("status", ""))
+            # A finished Run needs no label: the answer speaks for itself. A Run
+            # that ended badly is the case where naming it helps.
+            label = (
+                f"Assistant · {status}" if status in {"failed", "cancelled", "interrupted"} else ""
+            )
             if self.heading is None:
                 self.heading = Static(markup=False, classes="entry-heading")
                 await self.mount(self.heading)
-            self.heading.update(f"Assistant · {item.get('status', '')}")
+            self.heading.update(label)
+            self.heading.display = bool(label)
+            self.set_class(status == "failed", "failed-entry")
             children = item.get("items", [])
             wanted = {str(child["id"]) for child in children}
             for key in list(self.entries):
@@ -259,11 +431,8 @@ class TimelineEntry(Vertical):
             return
         text = item_text(item)
         if kind == "tool_call":
-            title = f"{item.get('name', 'Tool')} · {item.get('status', '')}"
-            summary = (item.get("display") or {}).get("summary")
-            if summary:
-                title += f" · {summary}"
-            title = escape(terminal_text(title))
+            title = tool_title(item)
+            self.set_class(str(item.get("status", "")) in {"error", "failed"}, "failed-entry")
             if first:
                 self.body = Static(tool_detail(item), markup=False, classes="tool-detail")
                 self.fold = Collapsible(self.body, title=title, collapsed=True)
@@ -277,6 +446,7 @@ class TimelineEntry(Vertical):
                 self.body = Markdown(text, open_links=False)
                 self.fold = Collapsible(self.body, title="Reasoning", collapsed=True)
                 await self.mount(self.fold)
+                self.set_class(True, "reasoning-entry")
             else:
                 assert self.body is not None
                 assert isinstance(self.body, Markdown)

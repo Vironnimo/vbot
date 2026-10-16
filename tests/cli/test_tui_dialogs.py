@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, override
 from unittest.mock import AsyncMock, call
@@ -9,7 +10,7 @@ from unittest.mock import AsyncMock, call
 import httpx
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Button, Checkbox, Input, Select, SelectionList, TextArea
+from textual.widgets import Button, Checkbox, DirectoryTree, Input, Select, SelectionList, TextArea
 
 from cli.tui.app import ConversationApp
 from cli.tui.dialogs import ExtensionDialog, PathDialog, Picker
@@ -297,6 +298,48 @@ async def test_path_dialog_accepts_existing_open_file_and_nonexistent_safe_desti
         assert save_result == [str(destination)]
         assert not destination.exists()
         assert existing.read_text(encoding="utf-8") == "source"
+
+
+@pytest.mark.asyncio
+async def test_path_dialog_save_mode_treats_a_folder_as_the_base_not_the_answer(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "results"
+    folder.mkdir()
+    app = _PathDialogHost()
+    async with app.run_test(size=(100, 35)) as pilot:
+        result: list[str | None] = []
+        await app.push_screen(
+            PathDialog("Download destination", str(tmp_path / "result.txt"), must_exist=False),
+            callback=result.append,
+        )
+        await pilot.pause()
+        dialog = app.screen
+        assert isinstance(dialog, PathDialog)
+
+        # A folder where a file name belongs is a mistake the operator can
+        # correct here, not an answer: say so and keep the dialog open.
+        dialog.query_one("#path", Input).value = str(folder)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert result == []
+        assert isinstance(app.screen, PathDialog)
+        assert "This is a folder" in dialog.problem
+        assert f"{os.sep}name.txt" in dialog.problem
+
+        # Picking a folder in the tree keeps it as the base for the file name
+        # the operator types next, instead of naming the folder as the file.
+        tree = dialog.query_one(DirectoryTree)
+        dialog.post_message(DirectoryTree.DirectorySelected(tree.root, folder))
+        await pilot.pause()
+        assert dialog.query_one("#path", Input).value == str(folder) + os.sep
+
+        destination = folder / "result.txt"
+        dialog.query_one("#path", Input).value = str(destination)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert result == [str(destination)]
+        assert not destination.exists()
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,68 @@ from typing import Any, override
 import pytest
 from textual.app import App, ComposeResult
 
-from cli.tui.rendering import TimelineEntry, file_links, item_heading, item_text
+from cli.tui.rendering import (
+    TimelineEntry,
+    file_links,
+    item_heading,
+    item_text,
+    tool_detail,
+    tool_title,
+)
+
+
+def _search_tool_call(**overrides: Any) -> JsonObject:
+    item: JsonObject = {
+        "id": "tool-one",
+        "type": "tool_call",
+        "name": "session_search",
+        "status": "success",
+        "arguments": {"query": "telegram", "limit": 20},
+        "result": json.dumps({"ok": True, "data": {"items": []}}),
+        "display": {
+            "summary": "telegram",
+            "hidden_argument_keys": ["query"],
+            "details": [
+                {
+                    "type": "text",
+                    "label": "query",
+                    "source": {"from": "arguments", "path": ["query"]},
+                },
+                {
+                    "type": "results",
+                    "items": [
+                        {
+                            "title": "Telegram photos",
+                            "meta": "Assistant",
+                            "time": "2026-06-06T10:00:00Z",
+                            "text": "sent a logo",
+                        }
+                    ],
+                },
+                {"type": "notice", "level": "warning", "text": "Skipped one conversation."},
+            ],
+        },
+    }
+    item.update(overrides)
+    return item
+
+
+def test_tool_row_shows_what_ran_and_names_only_the_calls_that_went_wrong() -> None:
+    item = _search_tool_call()
+
+    assert tool_title(item) == "session_search · telegram"
+    assert tool_title(item | {"status": "failed"}) == "session_search · telegram · failed"
+
+
+def test_tool_detail_reads_its_blocks_and_keeps_hidden_arguments_out() -> None:
+    detail = tool_detail(_search_tool_call())
+
+    assert "limit: 20" in detail
+    assert "query: telegram" in detail
+    assert "Telegram photos · Assistant · 2026-06-06T10:00:00Z" in detail
+    assert "  sent a logo" in detail
+    assert "Warning: Skipped one conversation." in detail
+
 
 type JsonObject = dict[str, Any]
 
@@ -34,7 +95,7 @@ def test_semantic_timeline_rows_name_user_steer_takeover_and_compaction_states()
         },
     }
 
-    assert item_heading(steer) == "User Steer · Delivered"
+    assert item_heading(steer) == "User Steer · delivered"
     assert item_text(steer) == "Keep going"
     assert item_heading(takeover) == "Agent takeover"
     assert item_text(takeover) == "worker → worker@project"

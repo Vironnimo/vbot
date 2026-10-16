@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, override
 
@@ -34,16 +35,16 @@ type JsonObject = dict[str, Any]
 class Picker(ModalScreen[Any]):
     """Filter user-visible labels, carrying exact server identities as values."""
 
+    # The box fits its content: three choices do not need a full screen.
     BINDINGS = [("escape", "dismiss(None)", "Close")]
     DEFAULT_CSS = """
     Picker { align: center middle; }
     Picker > Vertical {
-        width: 86%; max-width: 120; height: 80%; border: round $accent;
-        background: $surface; padding: 1 2;
+        width: 86%; max-width: 120; height: auto; max-height: 90%; border: round $accent;
+        background: $surface; padding: 0 2;
     }
-    Picker Label { height: auto; margin-bottom: 1; }
-    Picker Input { margin-bottom: 1; }
-    Picker OptionList { height: 1fr; }
+    Picker Label { width: 1fr; height: auto; }
+    Picker OptionList { height: auto; max-height: 14; }
     """
 
     def __init__(self, title: str, choices: list[tuple[str, Any]], *, query: str = "") -> None:
@@ -57,9 +58,12 @@ class Picker(ModalScreen[Any]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(self.heading, markup=False)
-            yield Input(value=self.initial_query, placeholder="Search…", id="search")
+            yield Input(
+                value=self.initial_query,
+                placeholder="Search · ↑↓ select · Enter open · Esc close",
+                id="search",
+            )
             yield OptionList(id="choices", markup=False)
-            yield Static("↑ ↓ select · Enter open · Esc return", markup=False)
 
     def on_mount(self) -> None:
         self.filter(self.initial_query)
@@ -113,10 +117,9 @@ class TextDialog(ModalScreen[str | None]):
     DEFAULT_CSS = """
     TextDialog { align: center middle; }
     TextDialog > Vertical {
-        width: 86%; max-width: 120; height: 70%; border: round $accent;
-        background: $surface; padding: 1 2;
+        width: 86%; max-width: 120; height: 75%; border: round $accent;
+        background: $surface; padding: 0 2;
     }
-    TextDialog Label { height: auto; margin-bottom: 1; }
     TextDialog TextArea { height: 1fr; }
     TextDialog Horizontal { height: 3; margin-top: 1; }
     """
@@ -129,8 +132,7 @@ class TextDialog(ModalScreen[str | None]):
 
     @override
     def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label(self.heading, markup=False)
+        with Vertical(id="text-dialog-body"):
             yield TextArea(self.initial, read_only=self.read_only, id="text")
             with Horizontal():
                 if not self.read_only:
@@ -138,6 +140,7 @@ class TextDialog(ModalScreen[str | None]):
                 yield Button("Close", id="close")
 
     def on_mount(self) -> None:
+        self.query_one("#text-dialog-body", Vertical).border_title = self.heading
         self.query_one(TextArea).focus()
 
     @on(Button.Pressed)
@@ -159,10 +162,9 @@ class PathDialog(ModalScreen[str | None]):
     DEFAULT_CSS = """
     PathDialog { align: center middle; }
     PathDialog > Vertical {
-        width: 94%; max-width: 140; height: 92%; border: round $accent;
-        background: $surface; padding: 1 2;
+        width: 94%; max-width: 140; height: 80%; border: round $accent;
+        background: $surface; padding: 0 2;
     }
-    PathDialog Label { height: auto; margin-bottom: 1; }
     PathDialog Input { margin-bottom: 1; }
     PathDialog DirectoryTree { height: 1fr; border: round $panel; }
     PathDialog #problem { color: $error; height: auto; }
@@ -194,8 +196,7 @@ class PathDialog(ModalScreen[str | None]):
 
     @override
     def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label(self.heading, markup=False)
+        with Vertical(id="path-dialog-body"):
             yield Input(value=self.initial, placeholder="Local path", id="path")
             yield DirectoryTree(self.root, id="path-tree")
             yield Static(
@@ -213,17 +214,29 @@ class PathDialog(ModalScreen[str | None]):
                 yield Button("Close", id="close")
 
     def on_mount(self) -> None:
+        self.query_one("#path-dialog-body", Vertical).border_title = self.heading
         self.query_one(Input).focus()
+
+    @on(Input.Submitted)
+    def path_submitted(self) -> None:
+        # The hint tells the operator to type a path, so Enter accepts it.
+        self.action_choose()
 
     @on(DirectoryTree.FileSelected)
     def file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        # A destination that must not exist yet can never be an existing file.
+        if not self.must_exist:
+            return
         self.query_one("#path", Input).value = str(event.path)
 
     @on(DirectoryTree.DirectorySelected)
     def directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
-        # The selected directory stays in the path field as a convenient base
-        # when the caller is choosing a destination that does not yet exist.
-        self.query_one("#path", Input).value = str(event.path)
+        # Opening a file: a folder is a step of browsing, not the answer. Saving a
+        # new file: the folder is the base, kept with its separator so the name the
+        # operator types next lands inside it.
+        if self.must_exist:
+            return
+        self.query_one("#path", Input).value = str(event.path) + os.sep
 
     @on(Button.Pressed)
     def button_pressed(self, event: Button.Pressed) -> None:
@@ -244,6 +257,11 @@ class PathDialog(ModalScreen[str | None]):
                 if not is_file_strict(path):
                     raise ValueError("Choose an existing local file.")
             else:
+                if is_dir_strict(path):
+                    raise ValueError(
+                        "This is a folder; add a file name, for example "
+                        f"{str(path).rstrip(os.sep)}{os.sep}name.txt"
+                    )
                 if exists_strict(path, follow_symlinks=False):
                     raise ValueError("That path already exists; choose a new destination.")
                 if not is_dir_strict(path.parent):
@@ -266,12 +284,12 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
     DEFAULT_CSS = """
     ExtensionDialog { align: center middle; }
     ExtensionDialog > Vertical {
-        width: 88%; max-width: 120; height: 88%; border: round $warning;
-        background: $surface; padding: 1 2;
+        width: 88%; max-width: 120; height: 85%; border: round $warning;
+        background: $surface; padding: 0 2;
     }
     ExtensionDialog VerticalScroll { height: 1fr; }
     ExtensionDialog Label { height: auto; margin-top: 1; }
-    ExtensionDialog Horizontal { height: 3; }
+    ExtensionDialog Horizontal { height: 3; margin-top: 1; }
     ExtensionDialog #problem { color: $error; height: auto; }
     ExtensionDialog TextArea { min-height: 5; max-height: 12; }
     """
@@ -296,11 +314,7 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
     @override
     def compose(self) -> ComposeResult:
         payload = self.request.get("payload") or {}
-        with Vertical():
-            yield Label(
-                f"{self.request.get('extension', '')} · {self.request.get('kind', 'Request')}",
-                markup=False,
-            )
+        with Vertical(id="extension-dialog-body"):
             with VerticalScroll():
                 yield Markdown(
                     terminal_text(str(payload.get("message", payload.get("title", "")))),
@@ -391,6 +405,13 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
                 )
                 yield Button("Decline", id="decline")
                 yield Button("Cancel request", id="cancel", variant="error")
+
+    def on_mount(self) -> None:
+        self.query_one(
+            "#extension-dialog-body", Vertical
+        ).border_title = (
+            f"{self.request.get('extension', '')} · {self.request.get('kind', 'Request')}"
+        )
 
     @on(Button.Pressed)
     def respond(self, event: Button.Pressed) -> None:
