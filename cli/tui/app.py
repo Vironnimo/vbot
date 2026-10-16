@@ -14,7 +14,7 @@ from time import monotonic
 from typing import Any, override
 from urllib.parse import quote
 
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -1128,8 +1128,6 @@ class ConversationApp(App[int]):
             status = str(active.get("status") or "working")
             label = "Working" if status in {"running", "working"} else status.capitalize()
             return f"{spinner} {label}{elapsed} · Ctrl+X stops", "info"
-        if view.unread_output:
-            return "New output · F12 jumps to the latest", "info"
         if self.queue_items:
             return f"{len(self.queue_items)} queued message(s) · F6", "info"
         if self.requests:
@@ -1823,6 +1821,13 @@ class ConversationApp(App[int]):
     def transcript_left(self) -> None:
         self.query_one("#composer", TextArea).focus()
 
+    def on_text_selected(self, event: events.TextSelected) -> None:
+        """Copy on select, as terminals do: the mouse belongs to the app here."""
+        text = self.screen.get_selected_text()
+        if text and text.strip():
+            self.copy_to_clipboard(text)
+            self._notice("Copied to the clipboard")
+
     async def _load_run_history(self, view: Conversation, gap: JsonObject) -> None:
         if view is None or id(view) in self.older_loading:
             # Busy with another page: the gap asks again when it next shows.
@@ -2096,11 +2101,7 @@ class ConversationApp(App[int]):
         await self._guard(actions.menu(self))
 
     def action_latest(self) -> None:
-        if self.conversation:
-            self.conversation.follow_tail = True
-            self.conversation.unread_output = False
-            self.transcript.scroll_to_latest()
-            self._header()
+        self.transcript.scroll_to_latest()
 
     @work(group="find", exclusive=True, exit_on_error=False)
     async def action_find(self) -> None:

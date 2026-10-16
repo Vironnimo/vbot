@@ -51,6 +51,8 @@ _FAILED = {"failed", "error"}
 _LIVE = {"running", "pending", "queued", "streaming"}
 # Rows the operator opens and closes: one header line, an optional body.
 _DISCLOSURES = {"tool_call", "reasoning"}
+# Floats over the bottom-right corner while the newest lines are out of view.
+_JUMP = " ↓ Jump to latest "
 
 
 def display_rows(items: list[JsonObject]) -> list[JsonObject]:
@@ -126,6 +128,8 @@ class Transcript(ScrollView, can_focus=True):
         "transcript--error",
         "transcript--hover",
         "transcript--placeholder",
+        "transcript--jump",
+        "transcript--jump-new",
     }
 
     DEFAULT_CSS = """
@@ -139,6 +143,8 @@ class Transcript(ScrollView, can_focus=True):
     Transcript > .transcript--error { color: $error; }
     Transcript > .transcript--hover { background: $panel; }
     Transcript > .transcript--placeholder { color: $text-muted; }
+    Transcript > .transcript--jump { background: $foreground 15%; color: $foreground; }
+    Transcript > .transcript--jump-new { background: $accent; color: $text; text-style: bold; }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -178,6 +184,7 @@ class Transcript(ScrollView, can_focus=True):
         self._placeholder = ""
         self._adjusting = False
         self._hover: str | None = None
+        self._jump_hover = False
         self._cursor: str | None = None
         self._requested_gaps: set[tuple[str, str]] = set()
         self._measure_scheduled = False
@@ -270,6 +277,7 @@ class Transcript(ScrollView, can_focus=True):
     def scroll_to_latest(self) -> None:
         if self.view is not None:
             self.view.follow_tail = True
+            self.view.unread_output = False
         self._settle()
 
     @property
@@ -453,6 +461,8 @@ class Transcript(ScrollView, can_focus=True):
             if index is not None and not self._at_end():
                 self._scroll_quietly(self._offsets[index] + delta)
         self.view.follow_tail = self._at_end()
+        if self.view.follow_tail:
+            self.view.unread_output = False
         self.view.reading_anchor = self.reading_anchor()
         self._after_move()
 
@@ -698,37 +708,73 @@ class Transcript(ScrollView, can_focus=True):
                 ).extend_cell_length(width, style)
             return Strip.blank(width, style)
         line = round(self.scroll_y) + y
+        strip = self._line(line, width).extend_cell_length(width, style).crop(0, width)
+        selection = self.text_selection
+        if selection is not None and (span := selection.get_span(line)) is not None:
+            start, end = span
+            end = width if end == -1 else end
+            # Only the selection's background, over the row's own: its
+            # foreground is "transparent" (keep the text's colour), which a
+            # resolved style would turn into the background colour.
+            selected = Style(
+                bgcolor=self.screen.get_component_rich_style("screen--selection").bgcolor
+            )
+            strip = Strip.join(
+                [
+                    strip.crop(0, start),
+                    Strip(Segment.apply_style(strip.crop(start, end), post_style=selected)),
+                    strip.crop(end, width),
+                ]
+            )
+        strip = strip.apply_style(style).apply_offsets(0, line)
+        if y == self._jump_line():
+            strip = Strip.join(
+                [strip.crop(0, width - len(_JUMP) - 1), self._jump(), strip.crop(width - 1, width)]
+            )
+        return strip
+
+    def _line(self, line: int, width: int) -> Strip:
+        """Transcript line `line` as painted, without selection or overlays."""
         if line >= self._offsets[-1]:
-            return Strip.blank(width, style)
+            return Strip([])
         index = self._row_at(line)
         row = self._rows[index]
         within = line - self._offsets[index] - row.gap
         if within < 0:
-            return Strip.blank(width, style)
+            return Strip([])
         if row.lines is None or row.width != width:
             # Painted on demand when a jump outran the settle step; the next
             # settle fixes the height around it.
             self._paint_row(row, width)
             assert row.lines is not None
         if within >= len(row.lines):
-            return Strip.blank(width, style)
-        strip = row.lines[within]
+            return Strip([])
         if within == 0 and (row.live or row.key in {self._hover, self._cursor}):
-            strip = self._header(row, width)
-        strip = strip.extend_cell_length(width, style).crop(0, width)
-        selection = self.text_selection
-        if selection is not None and (span := selection.get_span(line)) is not None:
-            start, end = span
-            end = strip.cell_length if end == -1 else end
-            selected = self.screen.get_component_rich_style("screen--selection")
-            strip = Strip.join(
-                [
-                    strip.crop(0, start),
-                    strip.crop(start, end).apply_style(selected),
-                    strip.crop(end, strip.cell_length),
-                ]
-            )
-        return strip.apply_style(style).apply_offsets(0, line)
+            return self._header(row, width)
+        return row.lines[within]
+
+    # --- Jump to latest ---------------------------------------------------
+
+    def _jump_line(self) -> int | None:
+        """The viewport line the jump control covers, while it shows."""
+        if self.view is None or not self._rows or self._at_end():
+            return None
+        return (self.scrollable_content_region.height or self.size.height) - 1
+
+    def _jump(self) -> Strip:
+        style = self._style("jump-new" if self.view and self.view.unread_output else "jump")
+        if self._jump_hover:
+            style += Style(bold=True, underline=True)
+        return Strip([Segment(_JUMP, style)])
+
+    def _on_jump(self, event: events.MouseEvent) -> bool:
+        offset = event.get_content_offset(self)
+        width = self._width()
+        return (
+            offset is not None
+            and offset.y == self._jump_line()
+            and width - len(_JUMP) - 1 <= offset.x < width - 1
+        )
 
     def _theme_switched(self) -> None:
         self.call_after_refresh(self._theme_changed)
@@ -796,7 +842,12 @@ class Transcript(ScrollView, can_focus=True):
         return None
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
-        row = self._disclosure_at(event)
+        jump = self._on_jump(event)
+        if jump != self._jump_hover:
+            self._jump_hover = jump
+            if (line := self._jump_line()) is not None:
+                self.refresh_line(round(self.scroll_y) + line)
+        row = None if jump else self._disclosure_at(event)
         key = row.key if row else None
         if key != self._hover:
             previous, self._hover = self._hover, key
@@ -804,12 +855,17 @@ class Transcript(ScrollView, can_focus=True):
             self._refresh_header(key)
 
     def on_leave(self, event: events.Leave) -> None:
+        self._jump_hover = False
         previous, self._hover = self._hover, None
         self._refresh_header(previous)
 
     def on_click(self, event: events.Click) -> None:
         selection = self.text_selection
         if selection is not None and selection.start != selection.end:
+            return
+        if self._on_jump(event):
+            event.stop()
+            self.scroll_to_latest()
             return
         link = event.style.link
         if link:

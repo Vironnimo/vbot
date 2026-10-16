@@ -303,7 +303,7 @@ async def help(app: ConversationApp) -> None:
             "something needs attention.\n"
             "Tab moves into the conversation: ↑↓ step through Tools and Reasoning,\n"
             "Enter or Space opens and closes one, Esc returns to the composer.\n"
-            "A click opens and closes them too; dragging selects text.\n"
+            "A click opens and closes them too; dragging selects and copies text.\n"
             "@file paths are server paths. Local files are uploaded through F8.\n"
             "Drafts are saved locally per server. After a lost send response the draft\n"
             "stays marked uncertain, and no resend is automatic.",

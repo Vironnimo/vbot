@@ -87,10 +87,17 @@ async def test_long_run_viewport_keeps_disclosures_and_reading_position() -> Non
         await pilot.pause()
         assert transcript.reading_anchor() == anchor
 
-        # Disclosure state belongs to the Conversation and survives repainting.
-        app.action_latest()
+        # Away from the tail a click on the floating control returns there,
+        # which then gives its line back to the conversation.
+        bottom = transcript.scrollable_content_region.height - 1
+        assert "Jump to latest" in transcript.render_line(bottom).text
+        await pilot.click(transcript, offset=(transcript.size.width - 8, bottom + 1))
         await pilot.pause()
         assert transcript.is_vertical_scroll_end
+        assert not view.unread_output
+        assert "Jump to latest" not in transcript.render_line(bottom).text
+
+        # Disclosure state belongs to the Conversation and survives repainting.
         row = transcript._rows[transcript._index["tool-999"]]
         assert row.lines is not None and len(row.lines) > 1
         transcript.toggle("tool-999")
