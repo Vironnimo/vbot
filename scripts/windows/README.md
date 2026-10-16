@@ -43,6 +43,12 @@ Exercise a built payload in disposable installation and data directories, adding
 python scripts/windows/smoke.py --package build/windows/windows-x86_64/server
 ```
 
+The smoke runs in the built runtime with its own vBot Windows Job, which allows
+the updater to outlive its requester while the CI runner still contains every
+disposable process. It does not rely on WMI creating processes outside the
+runner's restrictive Job. The detached-update check retains its separate inner
+Job and verifies that ending the requester does not end the updater.
+
 The workflow file shows the `ISCC.exe` definitions that compile
 [vbot.iss](vbot.iss) into the installer. `smoke_installer.ps1` installs and
 uninstalls that installer for real and therefore runs only in a disposable CI
