@@ -4,6 +4,7 @@
   { "id": "core:runtime", "enabled": true, "source": "core" },
   { "id": "core:identity_runtime", "enabled": true, "source": "core" },
   { "id": "core:tools", "enabled": true, "source": "core" },
+  { "id": "extension:mcp_guidance", "enabled": true, "source": "extension" },
   { "id": "core:system_reminders", "enabled": true, "source": "core" },
   { "id": "core:subagent_role", "enabled": true, "source": "core" },
   { "id": "tool:subagent", "enabled": true, "source": "tool" },

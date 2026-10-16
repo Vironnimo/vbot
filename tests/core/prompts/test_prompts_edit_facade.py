@@ -20,6 +20,7 @@ _BUNDLED_LAYOUT = [
     "core:runtime",
     "core:identity_runtime",
     "core:tools",
+    "extension:mcp_guidance",
     "core:system_reminders",
     "core:subagent_role",
     "tool:subagent",
@@ -45,10 +46,10 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
 
     blocks = manager.list_blocks()
 
-    # Layout order follows the bundled default layout; its tool:* entries have no
-    # registered definition here, so they are inert.
+    # Layout order follows the bundled default layout; its tool:* and extension:*
+    # entries have no registered definition here, so they are inert.
     assert [block["id"] for block in blocks] == [
-        block_id for block_id in _BUNDLED_LAYOUT if not block_id.startswith("tool:")
+        block_id for block_id in _BUNDLED_LAYOUT if not block_id.startswith(("tool:", "extension:"))
     ]
     # Ranks are the layout positions, 0-based and contiguous.
     assert [block["rank"] for block in blocks] == list(range(len(blocks)))

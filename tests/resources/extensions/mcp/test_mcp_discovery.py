@@ -119,9 +119,13 @@ def test_guidance_block_renders_while_a_connection_tool_is_listed(tmp_path):
             agent, effective_tool_definitions=[{"name": name} for name in tools]
         )
 
-    assert MCP_GUIDANCE in prompt("read_file", "mcp_blender", "mcp_godot")
-    assert prompt("read_file", "mcp_blender").count("## MCP connections") == 1
-    assert "## MCP connections" not in prompt("read_file")
+    rendered = prompt("read_file", "mcp_blender", "mcp_godot")
+    assert MCP_GUIDANCE in rendered
+    # It directly follows the Tool Call Style block, the other text about calling Tools.
+    after_style = rendered[rendered.index("## Tool Call Style") + 1 :]
+    assert after_style.index("## ") == after_style.index("## MCP Connections")
+    assert prompt("read_file", "mcp_blender").count("## MCP Connections") == 1
+    assert "## MCP Connections" not in prompt("read_file")
 
 
 @pytest.mark.asyncio
