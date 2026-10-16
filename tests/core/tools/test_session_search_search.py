@@ -85,12 +85,14 @@ async def test_unscoped_search_keeps_repeated_hits_and_one_session_descriptor(
     data = success(result)
     registry = ToolRegistry()
     register_session_search_tool(registry, backend, sessions)
-    details = registry.display_for_call(SESSION_SEARCH_TOOL_NAME, {"query": "x"}, result=result)[
-        "details"
-    ]
+    payload = registry.display_for_call(SESSION_SEARCH_TOOL_NAME, {"query": "x"}, result=result)
+    details = payload["details"]
     empty = await search(tmp_path, {"query": "absent"}, backend)
 
     assert [item["message_id"] for item in data["items"]] == [second.id, first.id]
+    # The row shows the query itself, not the name of the argument carrying it.
+    assert payload["summary"] == "x"
+    assert [part["value"] for part in payload["primary"]] == ["x"]
     # The user sees the query and each match with its conversation, speaker and time.
     assert details == [
         {"type": "text", "label": "query", "source": {"from": "arguments", "path": ["query"]}},
