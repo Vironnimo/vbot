@@ -8,6 +8,7 @@ import json
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine
+from contextlib import suppress
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Any, override
@@ -894,8 +895,10 @@ class ConversationApp(App[int]):
         self._completion_if_visible()
         view = self.conversation
         if view is not None and view.facts.get("active_run"):
-            # The status row's spinner and elapsed time.
-            self._update_status(view)
+            # The status row's spinner and elapsed time; the tick can outlive the
+            # widgets while the app shuts down.
+            with suppress(NoMatches):
+                self._update_status(view)
         if (
             self.render_dirty
             and not self.rendering

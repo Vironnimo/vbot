@@ -26,6 +26,7 @@ from rich.markdown import Markdown
 from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
+from rich.theme import Theme as RichTheme
 from textual import events
 from textual.binding import Binding, BindingType
 from textual.geometry import Size
@@ -181,6 +182,7 @@ class Transcript(ScrollView, can_focus=True):
         self._requested_gaps: set[tuple[str, str]] = set()
         self._measure_scheduled = False
         self._painted: list[JsonObject] | None = None
+        self._markdown_styles: tuple[str, RichTheme] | None = None
 
     # --- Public interface -------------------------------------------------
 
@@ -532,7 +534,31 @@ class Transcript(ScrollView, can_focus=True):
             hyperlinks=True,
             inline_code_lexer=None,
         )
-        return self._lines(renderable, width, style)
+        with self.app.console.use_theme(self._markdown_theme()):
+            return self._lines(renderable, width, style)
+
+    def _markdown_theme(self) -> RichTheme:
+        """Rich's Markdown styles in the accessor's palette instead of its defaults."""
+        if self._markdown_styles is None or self._markdown_styles[0] != self.app.theme:
+            accent = self._style("bar").color
+            muted = self._style("muted").color
+            styles = {
+                "markdown.code": Style(color=accent, bold=True),
+                "markdown.h1": Style(color=accent, bold=True),
+                "markdown.h1.border": Style(color=muted),
+                "markdown.h2": Style(bold=True, underline=True),
+                "markdown.h3": Style(bold=True),
+                "markdown.h4": Style(bold=True, italic=True),
+                "markdown.link": Style(color=accent, underline=True),
+                "markdown.link_url": Style(color=muted, underline=True),
+                "markdown.block_quote": Style(color=muted, italic=True),
+                "markdown.hr": Style(color=muted),
+                "markdown.item.bullet": Style(color=muted),
+                "markdown.item.number": Style(color=muted),
+                "markdown.table.border": Style(color=muted),
+            }
+            self._markdown_styles = (self.app.theme, RichTheme(styles, inherit=True))
+        return self._markdown_styles[1]
 
     def _lines(
         self, renderable: RenderableType, width: int, style: Style | None = None
@@ -628,6 +654,9 @@ class Transcript(ScrollView, can_focus=True):
             else:
                 mark = ("●", self._style("success"))
             name, _, summary = tool_title(item).partition(" · ")
+            if row.live:
+                # The spinner already says it runs.
+                summary = summary.removesuffix(f" · {status}").removesuffix(status)
             text = Text.assemble(
                 ("  ", ""),
                 mark,
