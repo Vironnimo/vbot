@@ -244,8 +244,14 @@ def test_unusable_attempt_stays_one_correlated_rejected_call(
             id="bare-values",
         ),
         pytest.param('{"paths": [src, "docs"]}', {"paths": ["src", "docs"]}, None, id="array-item"),
+        pytest.param(
+            '{"context": 4, "path": C:/repo/core, "pattern": "x"}',
+            {"context": 4, "path": "C:/repo/core", "pattern": "x"},
+            None,
+            id="drive-path",
+        ),
         # Each of these has another reading than text, or none: the call stays rejected.
-        pytest.param('{"path": C:/repo}', None, "C:/repo", id="colon"),
+        pytest.param('{"options": recursive:true}', None, "options", id="colon-pair"),
         pytest.param('{"path": src\\\\app}', None, "path", id="backslash"),
         pytest.param('{"command": ls -la}', None, "command", id="whitespace"),
         pytest.param('{"path": None}', None, "None", id="value-word-none"),
