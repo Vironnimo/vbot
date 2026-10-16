@@ -382,7 +382,7 @@ def stop_server(
             return CommandResult(
                 ok=True, message="stopped", instance=instance, health=health, process_id=process.pid
             )
-        _log_forced_stop(
+        log_bypassed_stop(
             instance,
             logging.WARNING,
             "Server process terminated after its shutdown request failed (pid=%s)",
@@ -471,7 +471,7 @@ def _await_process_exit(
         process.wait(timeout=shutdown_timeout_seconds)
     except psutil.TimeoutExpired:
         forced = True
-        _log_forced_stop(
+        log_bypassed_stop(
             instance,
             logging.WARNING,
             "Server process killed after stop timeout (pid=%s timeout=%.0fs)",
@@ -482,7 +482,7 @@ def _await_process_exit(
             process.kill()
             process.wait(timeout=shutdown_timeout_seconds)
         except psutil.TimeoutExpired:
-            _log_forced_stop(
+            log_bypassed_stop(
                 instance,
                 logging.ERROR,
                 "Server process did not exit after kill (pid=%s)",
@@ -511,15 +511,25 @@ def _await_process_exit(
     )
 
 
-def _log_forced_stop(instance: ServerInstance, level: int, message: str, *args: object) -> None:
-    """Record a stop that bypassed the server's own shutdown in the target's log."""
+def log_bypassed_stop(
+    instance: ServerInstance,
+    level: int,
+    message: str,
+    *args: object,
+    logger_name: str = CLI_SERVER_LOGGER_NAME,
+) -> None:
+    """Record a stop that bypassed the server's own shutdown in the target's daily log.
+
+    The server's own start and stop lines are there, so the line completes its
+    story. A missing data directory is never created for it.
+    """
 
     if not instance.data_dir.is_dir():
         # A stop must not initialize a data directory as a side effect.
         return
     manager = _create_cli_log_manager(instance)
     try:
-        manager.get_logger(CLI_SERVER_LOGGER_NAME).log(level, message, *args)
+        manager.get_logger(logger_name).log(level, message, *args)
     finally:
         manager.close()
 
@@ -820,6 +830,7 @@ __all__ = [
     "find_listening_process",
     "ServerState",
     "classify_server",
+    "log_bypassed_stop",
     "stop_server",
     "restart_server",
     "has_vbot_run_context",

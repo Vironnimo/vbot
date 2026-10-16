@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +15,7 @@ from cli.application.activity import (
     ActivityRecorder,
 )
 from cli.application.monitor import MonitorStatus
+from cli.application.server_exit import ServerEnd
 
 _NOW = datetime(2026, 10, 5, 12, 58, 29, tzinfo=UTC)
 _EARLIER = "2026-10-05T09:31:05.000000Z"
@@ -53,6 +54,22 @@ def test_journal_keeps_a_bounded_history_across_trays_and_skips_bad_lines(tmp_pa
 
 def _connected(started_at: str) -> MonitorStatus:
     return MonitorStatus("http://127.0.0.1:8420", "connected", True, "0.4.10", started_at)
+
+
+class _ServerExit:
+    """Follows the server process like ``ServerExitWatch``, without a process."""
+
+    def __init__(self) -> None:
+        self.tracked: list[str] = []
+        self.reports = 0
+
+    def track(self, started_at: str) -> None:
+        self.tracked.append(started_at)
+
+    def report(self) -> ServerEnd:
+        self.reports += 1
+        # An access violation, as a native crash ends a process on Windows.
+        return ServerEnd(25464, None, None, timedelta(hours=2, minutes=21), 0xC0000005)
 
 
 @pytest.mark.parametrize(
@@ -162,7 +179,10 @@ def test_recorder_tells_what_happened_to_the_server(
     steps: list[tuple[str, Any]],
     kinds: list[tuple[str, str]],
 ):
-    recorder = ActivityRecorder(_journal(tmp_path), owns_server=owns_server, now=lambda: _NOW)
+    server_exit = _ServerExit() if owns_server else None
+    recorder = ActivityRecorder(
+        _journal(tmp_path), owns_server=owns_server, now=lambda: _NOW, server_exit=server_exit
+    )
     for step, value in steps:
         if step == "status":
             recorder.status_changed(value)
@@ -179,7 +199,19 @@ def test_recorder_tells_what_happened_to_the_server(
         else:
             assert recorder.phase() == value
 
-    assert [(entry.kind, entry.level) for entry in recorder.journal.entries()] == kinds
+    entries = recorder.journal.entries()
+    assert [(entry.kind, entry.level) for entry in entries] == kinds
+    if server_exit is not None:
+        # Each connected server process is followed; only a crash is reported.
+        assert server_exit.tracked == [
+            value.started_at
+            for step, value in steps
+            if step == "status" and value.connection == "connected"
+        ]
+        crashes = [entry for entry in entries if entry.kind == "server_crashed"]
+        assert server_exit.reports == len(crashes)
+        # The entry names the process and how it ended.
+        assert all("25464" in entry.text and "0xC0000005" in entry.text for entry in crashes)
 
 
 def test_recorder_records_each_server_process_once_across_trays(tmp_path: Path):

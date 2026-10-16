@@ -21,6 +21,7 @@ from cli.application import operations, processes
 from cli.application.activity import JOURNAL_NAME, ActivityJournal, ActivityRecorder
 from cli.application.monitor import MonitorStatus, ServerMonitor
 from cli.application.notifications import Notifier
+from cli.application.server_exit import ServerExitWatch
 from cli.application.state import (
     ApplicationError,
     Installation,
@@ -84,9 +85,12 @@ class ApplicationFacade:
         self._progress_history = False
         self._observed = False
         self._last_update = ""
+        # Tells how the owned server process ended when it bypassed its shutdown.
+        self._server_exit = ServerExitWatch(self._server_target) if install.owns_server else None
         self._activity = ActivityRecorder(
             ActivityJournal(install.root / "logs" / JOURNAL_NAME),
             owns_server=install.owns_server,
+            server_exit=self._server_exit,
         )
 
     def state(self) -> TrayState:
@@ -155,6 +159,8 @@ class ApplicationFacade:
     def unwatch(self) -> None:
         if self._monitor is not None:
             self._monitor.close()
+        if self._server_exit is not None:
+            self._server_exit.close()
 
     def start_server(self) -> None:
         self._require_server()

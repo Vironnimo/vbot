@@ -20,9 +20,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from cli.application.monitor import COOPERATIVE_CLOSE_CODES, MonitorStatus
+from cli.application.server_exit import ServerEnd, exit_code_text
 from core.utils.timestamps import format_canonical_timestamp, parse_timestamp
 
 _LOGGER = logging.getLogger("vbot.application.activity")
@@ -145,6 +146,14 @@ class ActivityJournal:
             _LOGGER.warning("Could not write the tray activity journal: %s", error)
 
 
+class ServerExit(Protocol):
+    """Follows the server process to tell how it ended (``server_exit.ServerExitWatch``)."""
+
+    def track(self, started_at: str) -> None: ...
+
+    def report(self) -> ServerEnd: ...
+
+
 class ActivityRecorder:
     """Turn server observations and tray actions into activity entries.
 
@@ -155,6 +164,9 @@ class ActivityRecorder:
     listens. Starts are recorded when the stream of a new server process opens,
     once per process. ``phase`` tells a starting server process from a stopping
     one while it does not listen.
+
+    ``server_exit`` follows each connected server process; a crash is reported
+    through it, and the entry names the process and how it ended.
     """
 
     def __init__(
@@ -163,10 +175,12 @@ class ActivityRecorder:
         *,
         owns_server: bool,
         now: Callable[[], datetime] | None = None,
+        server_exit: ServerExit | None = None,
     ) -> None:
         self._journal = journal
         self._owns_server = owns_server
         self._now = now or (lambda: datetime.now(UTC))
+        self._server_exit = server_exit
         self._lock = threading.Lock()
         self._connection = "unknown"
         self._started_at = ""
@@ -257,7 +271,31 @@ class ActivityRecorder:
                 self._tray_start = False
         if entry is not None:
             kind, text, level, ref = entry
+            if kind == "server_crashed":
+                text += self._crash_details()
             self._journal.record(kind, text, level=level, ref=ref)
+        if connection == "connected" and self._server_exit is not None:
+            try:
+                self._server_exit.track(status.started_at)
+            except Exception:
+                # The history and the tray's view go on without the exit facts.
+                _LOGGER.exception("Could not follow the server process")
+
+    def _crash_details(self) -> str:
+        """Report the crashed server process; name it and how it ended for the entry."""
+
+        if self._server_exit is None:
+            return ""
+        try:
+            end = self._server_exit.report()
+        except Exception:
+            _LOGGER.exception("Could not report how the server process ended")
+            return ""
+        return _details(
+            f"pid {end.pid}" if end.pid is not None else "",
+            f"ran {_uptime(end.uptime)}" if end.uptime is not None else "",
+            f"exit code {exit_code_text(end.exit_code)}" if end.exit_code is not None else "",
+        )
 
     def _down_entry(
         self, previous: str, connection: str, crashed: bool
@@ -312,6 +350,17 @@ def local_time(value: str, *, seconds: bool = False) -> str:
 def _details(*parts: str) -> str:
     present = [part for part in parts if part]
     return f" ({', '.join(present)})" if present else ""
+
+
+def _uptime(value: timedelta) -> str:
+    seconds = max(0, int(value.total_seconds()))
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    if seconds < 86_400:
+        return f"{seconds // 3600} h {seconds % 3600 // 60} min"
+    return f"{seconds // 86_400} d {seconds % 86_400 // 3600} h"
 
 
 def _duration(started_at: str, now: datetime) -> str:
