@@ -2,16 +2,16 @@
 
 VT rendering is pure-Python CPU work proportional to program output. Each
 screen is a ``TerminalEmulator`` on a renderer worker: a subinterpreter loaded
-with only ``terminal_emulator.py``, its image painter ``_terminal_image.py``
-and pyte. ``inline`` hosts render in the calling thread instead:
-deterministic tests, and the fallback when no subinterpreter can start.
+with only ``terminal_emulator.py`` and pyte. ``inline`` hosts render in the
+calling thread instead: deterministic tests, and the fallback when no
+subinterpreter can start.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from core.tools import _terminal_image, terminal_emulator
+from core.tools import terminal_emulator
 from core.tools.terminal_emulator import EmulatorUpdate, ScreenObservation, TerminalEmulator
 
 from ._interpreter_host import DEFAULT_WORKERS, HostedObject, InterpreterHost
@@ -64,11 +64,6 @@ class TerminalScreen:
         ansi: str = await self._emulator.call("ansi_snapshot")
         return ansi
 
-    async def screenshot(self) -> bytes:
-        """The screen as a PNG image (``TerminalEmulator.screenshot``)."""
-        image: bytes = await self._emulator.call("screenshot")
-        return image
-
     def close(self) -> None:
         """Release the screen; later calls fail."""
         self._emulator.close()
@@ -79,10 +74,7 @@ class TerminalRenderHost:
 
     def __init__(self, *, workers: int = DEFAULT_WORKERS, inline: bool = False) -> None:
         self._host = InterpreterHost(
-            (_terminal_image, terminal_emulator),
-            name="terminal render",
-            workers=workers,
-            inline=inline,
+            (terminal_emulator,), name="terminal render", workers=workers, inline=inline
         )
 
     @classmethod

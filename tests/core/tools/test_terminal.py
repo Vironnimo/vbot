@@ -79,7 +79,6 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
         "start_line",
         "expected_screen_revision",
         "after_revision",
-        "screenshot",
     }
     assert properties["action"]["enum"] == list(TERMINAL_ACTIONS)
     assert (properties["lines"]["default"], properties["timeout"]["default"]) == (30, 60)

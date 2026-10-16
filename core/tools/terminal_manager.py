@@ -771,20 +771,18 @@ class TerminalManager:
         *,
         lines: int = TERMINAL_STATUS_DEFAULT_LINES,
         start_line: int | None = None,
-        screenshot: bool = False,
     ) -> dict[str, Any]:
         """Return the screen and one history page of any terminal, attached or not.
 
         Reading attaches nothing and acknowledges nothing: no Agent's
-        deliveries change. With *screenshot* the snapshot also holds the
-        screen as a PNG image (``TerminalSession.snapshot``).
+        deliveries change.
         """
         if not 1 <= lines <= TERMINAL_STATUS_MAX_LINES:
             raise ValueError(f"lines must be between 1 and {TERMINAL_STATUS_MAX_LINES}")
         if start_line is not None and start_line < 0:
             raise ValueError("start_line must be a non-negative integer")
         return await self._get(terminal_id).snapshot(
-            lines=lines, start_line=start_line, include_name=True, screenshot=screenshot
+            lines=lines, start_line=start_line, include_name=True
         )
 
     async def wait(

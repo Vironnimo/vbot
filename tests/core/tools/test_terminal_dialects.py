@@ -636,7 +636,6 @@ async def test_fields_that_only_shape_a_result_are_dropped_where_unused(
             "terminal_id": terminal_id,
             "timeout_ms": 5000,
             "lines": 40,
-            "screenshot": True,
             "workdir": "elsewhere",
             "name": "build",
         }

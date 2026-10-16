@@ -1,9 +1,8 @@
 """VT emulation for Terminal Sessions: rendered screen, history and replies.
 
-The module imports only the standard library, pyte and ``_terminal_image``
-(itself standard library only), so a Terminal renderer host can load it into
-an isolated subinterpreter without vBot's packages
-(``_terminal_render_host.py``). Keep it free of other ``core`` imports.
+The module imports only the standard library and pyte, so a Terminal renderer
+host can load it into an isolated subinterpreter without vBot's packages
+(``_terminal_render_host.py``). Keep it free of ``core`` imports.
 """
 
 from __future__ import annotations
@@ -21,8 +20,6 @@ import pyte
 from pyte import charsets, graphics
 from pyte import modes as screen_modes
 from pyte.screens import Cursor, Savepoint, wcwidth
-
-from core.tools._terminal_image import paint_screen
 
 _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
 _BRACKETED_PASTE_MODE = 2004
@@ -1349,20 +1346,6 @@ class TerminalEmulator:
             self._next_line,
             self._history[0].number if self._history else self._next_line,
             self._next_line + screen.primary_cursor_row,
-        )
-
-    def screenshot(self) -> bytes:
-        """The screen as a PNG image with its colors, text styles and visible cursor."""
-        screen = self._screen
-        cursor = screen.cursor
-        return paint_screen(
-            [
-                _visible_cells(screen.buffer[row], self.columns, conceal=False)
-                for row in range(self.rows)
-            ],
-            columns=self.columns,
-            cursor=None if cursor.hidden else (cursor.y, min(cursor.x, self.columns - 1)),
-            reverse_screen=screen_modes.DECSCNM in screen.mode,
         )
 
     def _signature(self) -> str:
