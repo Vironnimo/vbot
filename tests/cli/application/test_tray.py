@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from typing import override
@@ -333,9 +334,8 @@ def test_clicked_toast_opens_its_session_or_the_status_window():
 def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
     start_entered = threading.Event()
     release_start = threading.Event()
-    logs_entered = threading.Event()
-    release_logs = threading.Event()
-    server_logs_entered = threading.Event()
+    update_entered = threading.Event()
+    release_update = threading.Event()
     callback_threads: list[int] = []
 
     # The callbacks block without a deadline: `finally` releases them, and a
@@ -349,41 +349,91 @@ def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
             raise RuntimeError("test failure")
 
         @override
-        def open_logs(self) -> None:
+        def start_update(self) -> None:
             callback_threads.append(threading.get_ident())
-            logs_entered.set()
-            release_logs.wait()
-
-        @override
-        def open_server_logs(self) -> None:
-            server_logs_entered.set()
+            update_entered.set()
+            release_update.wait()
 
     actions = ControlledActions(TrayState("stopped", "server"))
     controller = TrayController(actions)
     controller._poll_state()
-    normal_status = controller.menu_items()[0].label
+    controller.start()
+    try:
+        controller.invoke("start_server")
+        assert start_entered.wait(timeout=5)
+        controller.invoke("start_update")
+        assert not update_entered.is_set()
+
+        release_start.set()
+        assert update_entered.wait(timeout=5)
+        # Entering the next callback proves the first exception was handled.
+        # Keep it blocked so successful recovery cannot clear the status yet.
+        assert _last_error(controller)
+        assert callback_threads[0] == callback_threads[1] != threading.get_ident()
+
+        release_update.set()
+        # A successful action clears the last error.
+        deadline = time.monotonic() + 5
+        while _last_error(controller) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not _last_error(controller)
+    finally:
+        release_start.set()
+        release_update.set()
+        controller.close()
+
+
+def _last_error(controller: TrayController) -> bool:
+    return any(label == "Last error" for label, _value in controller.presentation().status.rows)
+
+
+def test_log_folders_open_at_once_while_a_server_start_runs():
+    start_entered = threading.Event()
+    release_start = threading.Event()
+    opened: list[str] = []
+    both_opened = threading.Event()
+
+    class SlowStart(Actions):
+        @override
+        def start_server(self) -> None:
+            start_entered.set()
+            release_start.wait()  # released at the latest by `finally`
+            raise RuntimeError("test failure")
+
+        @override
+        def open_logs(self) -> None:
+            opened.append("open_logs")
+
+        @override
+        def open_server_logs(self) -> None:
+            opened.append("open_server_logs")
+            both_opened.set()
+
+    actions = SlowStart(TrayState("stopped", "server"))
+    controller = TrayController(actions)
+    controller._poll_state()
     controller.start()
     try:
         controller.invoke("start_server")
         assert start_entered.wait(timeout=5)
         controller.invoke("open_logs")
-        assert not logs_entered.is_set()
+        controller.invoke("open_server_logs")
+        assert both_opened.wait(timeout=5)
+        assert opened == ["open_logs", "open_server_logs"]
 
         release_start.set()
-        assert logs_entered.wait(timeout=5)
-        # Entering the next callback proves the first exception was handled.
-        # Keep it blocked so successful recovery cannot clear the status yet.
-        assert controller.menu_items()[0].label != normal_status
-        assert callback_threads[0] == callback_threads[1] != threading.get_ident()
-
-        controller.invoke("open_server_logs")
-        release_logs.set()
-        # Entering the callback queued behind it proves the successful one finished.
-        assert server_logs_entered.wait(timeout=5)
-        assert controller.menu_items()[0].label == normal_status
+        deadline = time.monotonic() + 5
+        while not _last_error(controller) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        # Opening a folder later leaves the failed start visible.
+        controller.invoke("open_logs")
+        deadline = time.monotonic() + 5
+        while opened.count("open_logs") < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert opened.count("open_logs") == 2
+        assert _last_error(controller)
     finally:
         release_start.set()
-        release_logs.set()
         controller.close()
 
 
@@ -563,16 +613,16 @@ def test_pending_restart_waits_for_an_idle_tray_and_retries_ten_minutes_after_a_
     now[0] += 1
     actions.fail = None
     # A queued tray action goes first; the handoff never quits or stops the server.
-    controller.invoke("open_logs")
+    controller.invoke("open_browser")
     controller._poll_state()
     _run_queued(controller)
-    assert actions.calls == ["restart", "open_logs"]
+    assert actions.calls == ["restart", "open_browser"]
     controller._poll_state()
     _run_queued(controller)
     assert view.stopped is True
     controller._poll_state()
     _run_queued(controller)
-    assert actions.calls == ["restart", "open_logs", "restart"]
+    assert actions.calls == ["restart", "open_browser", "restart"]
 
 
 class Commands:

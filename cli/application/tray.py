@@ -35,6 +35,9 @@ _ACTION_TRANSITIONS = {
     "quit": "stopping",
 }
 _TRANSITIONS = frozenset({"starting", "stopping", "restarting"})
+#: Actions that only open a folder: they run at once on their own thread instead
+#: of waiting behind a server start or update on the action thread.
+_OPEN_ACTIONS = frozenset({"open_logs", "open_server_logs"})
 _SERVER_LINES = {
     "running": "Server running",
     "starting": "Server starting…",
@@ -186,7 +189,8 @@ class TrayController:
     """Run facade actions on one action thread and project facade state onto one native view.
 
     State refreshes run on their own thread, so the view keeps showing what
-    happens while an action such as a server start takes its time. A queued or
+    happens while an action such as a server start takes its time. Opening a
+    log folder runs on a third thread, so it never waits for such an action. A queued or
     running lifecycle action shows as its transition (starting, stopping,
     restarting) and withholds the lifecycle actions until it finished.
     """
@@ -210,20 +214,27 @@ class TrayController:
         self._restart_retry_at: float | None = None
         self._pending: list[str] = []
         self._work: queue.Queue[Callable[[], object] | None] = queue.Queue()
+        self._open_work: queue.Queue[Callable[[], object] | None] = queue.Queue()
         self._wake = threading.Event()
         self._closed = threading.Event()
         self._view: TrayView | None = None
         self._state_lock = threading.Lock()
         self._publish_lock = threading.Lock()
         self._published: TrayPresentation | None = None
-        self._worker = threading.Thread(target=self._run_worker, name="vbot-tray", daemon=True)
+        self._worker = threading.Thread(
+            target=self._run_queue, args=(self._work,), name="vbot-tray", daemon=True
+        )
         self._poller = threading.Thread(target=self._run_poller, name="vbot-tray-poll", daemon=True)
+        self._opener = threading.Thread(
+            target=self._run_queue, args=(self._open_work,), name="vbot-tray-open", daemon=True
+        )
 
     def start(self, *, start_server: bool = False) -> None:
         """Start the action and refresh threads; optionally start the server first."""
 
         self._worker.start()
         self._poller.start()
+        self._opener.start()
         if start_server:
             self._queue("start_server", self._actions.start_server)
         self.changed()
@@ -234,7 +245,8 @@ class TrayController:
         self._closed.set()
         self._wake.set()
         self._work.put(None)
-        for thread in (self._poller, self._worker):
+        self._open_work.put(None)
+        for thread in (self._poller, self._worker, self._opener):
             if thread.is_alive():
                 thread.join(timeout=self._poll_interval + 1.0)
 
@@ -357,6 +369,10 @@ class TrayController:
             if self._view is not None:
                 self._view.show_status()
             return
+        if action in _OPEN_ACTIONS:
+            callback = getattr(self._actions, action)
+            self._open_work.put(lambda: self._run_action(action, callback, clears_error=False))
+            return
         if action == "start_update":
             with self._state_lock:
                 self._update_requested = True
@@ -408,8 +424,9 @@ class TrayController:
         self._work.put(run)
         self._publish()
 
-    def _run_worker(self) -> None:
-        while (work := self._work.get()) is not None:
+    @staticmethod
+    def _run_queue(work_queue: queue.Queue[Callable[[], object] | None]) -> None:
+        while (work := work_queue.get()) is not None:
             work()
 
     def _run_poller(self) -> None:
@@ -469,7 +486,11 @@ class TrayController:
         else:
             self._restart_retry_at = self._clock() + _RESTART_RETRY_SECONDS
 
-    def _run_action(self, action: str, callback: Callable[[], None]) -> bool:
+    def _run_action(
+        self, action: str, callback: Callable[[], None], *, clears_error: bool = True
+    ) -> bool:
+        """Run one facade action; a failure becomes the last error, which a later
+        successful action clears unless it only opened a folder."""
         try:
             callback()
         except Exception as error:  # no facade exception may leave the worker unusable
@@ -478,6 +499,8 @@ class TrayController:
                     self._update_requested = False
             self._record_error(f"Could not {action.replace('_', ' ')}", error)
             return False
+        if not clears_error:
+            return True
         with self._state_lock:
             self._status_error = ""
         if action in {"quit", "restart_tray"} and self._view is not None:
