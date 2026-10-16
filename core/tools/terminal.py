@@ -9,6 +9,7 @@ without one, and ``background_tasks`` serves the ones it left running, so the
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import re
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.projects import ProjectStore
 from core.sessions import SessionAddress
+from core.storage.layout import DataDirectoryLayout
 from core.storage.temp_files import TEMPORARY_FILE_RETENTION
 from core.tools._background_tasks_arguments import (
     BACKGROUND_TASKS_TOOL_NAME,
@@ -35,6 +37,7 @@ from core.tools._terminal_arguments import (
 )
 from core.tools._workdir import ProjectWorkdirError, is_project_workdir, project_workdir
 from core.tools.arguments import (
+    optional_bool,
     optional_int,
     optional_number,
     optional_string,
@@ -85,9 +88,11 @@ from core.tools.tools import (
     display_results,
     display_text,
     result_count_fact_builder,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
+from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
@@ -101,6 +106,7 @@ TERMINAL_ACTIONS = (
     "start",
     "list",
     "status",
+    "screenshot",
     "wait",
     "input",
     "resize",
@@ -157,17 +163,17 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "enum": list(TERMINAL_ACTIONS),
             "description": (
                 "start launches a program attached to this Session and returns its first "
-                "screen; status shows a terminal's screen; wait waits until the program exits, "
-                "prints output matching pattern, or the timeout passes; without pattern, it "
-                "also ends when the program goes idle showing something new; input types text "
-                "and keys; resize sets columns and rows, returning the screen; kill stops "
-                "the program and everything it started; attach takes over an unattached "
-                "terminal; detach releases it for another Session."
+                "screen; status shows a terminal's screen; screenshot also shows it as an image "
+                "with colors and styles; wait waits until the program exits, prints output "
+                "matching pattern, or the timeout passes; without pattern, it also ends when the "
+                "program goes idle showing something new; input types text and keys; resize sets "
+                "columns and rows; kill stops the program and everything it started; attach "
+                "takes over an unattached terminal; detach releases it."
             ),
         },
         "terminal_id": {
             "type": "string",
-            "description": ("From start or list; required except for start and list."),
+            "description": "Required except for start and list.",
         },
         "command": {
             "type": "string",
@@ -235,7 +241,7 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "minimum": 1,
             "maximum": TERMINAL_STATUS_MAX_LINES,
             "default": TERMINAL_STATUS_DEFAULT_LINES,
-            "description": "History lines status shows above the screen.",
+            "description": "History lines status shows.",
         },
         "pattern": {
             "type": "string",
@@ -260,13 +266,15 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
     "required": ["action"],
 }
 # Accepted and validated, never advertised: milliseconds from other harnesses,
-# history paging the results address themselves, and the screen guard and wait
-# baseline the terminal tracks itself.
+# history paging the results address themselves, the screen guard and wait
+# baseline the terminal tracks itself, and the image flag the screenshot action
+# stands for.
 TERMINAL_UNADVERTISED_PARAMETERS: JsonObject = {
     "timeout_ms": {"type": "number", "minimum": 0},
     "start_line": {"type": "integer", "minimum": 0},
     "expected_screen_revision": {"type": "integer", "minimum": 0},
     "after_revision": {"type": "integer", "minimum": 0},
+    "screenshot": {"type": "boolean"},
 }
 
 
@@ -343,7 +351,10 @@ async def _handle_terminal(
             return _handle_attach(terminal_manager, context, arguments)
         if action == "detach":
             return _handle_detach(terminal_manager, context, arguments)
-        if action == "status":
+        if action in {"status", "screenshot"}:
+            # The argument normalizer reads screenshot as status with the image.
+            if action == "screenshot":
+                arguments = {**arguments, "action": "status", "screenshot": True}
             return await _handle_status(terminal_manager, subagents, context, arguments)
         if action == "wait":
             return await _handle_wait(terminal_manager, context, arguments)
@@ -750,9 +761,13 @@ async def _handle_status(
         default=None,
         minimum=0,
     )
+    screenshot = optional_bool(arguments.get("screenshot"), field_name="screenshot", default=False)
     owner = _owner(context)
     info = _terminal_info(terminal_manager, terminal_id)
-    snapshot = await terminal_manager.read(terminal_id, lines=lines, start_line=start_line)
+    snapshot = await terminal_manager.read(
+        terminal_id, lines=lines, start_line=start_line, screenshot=screenshot
+    )
+    image = snapshot.pop("screenshot", None)
     attached_here = info.attachment == owner
     if attached_here and start_line is None:
         _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
@@ -765,11 +780,45 @@ async def _handle_status(
         unseen_by_you=attached_here,
         requested_start=start_line,
     )
+    if screenshot and not await _attach_screen_image(context, terminal_id, image):
+        data = _with_notes(data, [_NO_SCREEN_IMAGE_NOTE])
     if not attached_here:
         holders = await _subagent_holders(subagents, owner, [info])
         data.update(_attachment_fields(info, owner, holders))
         data["next"] = _not_attached_text(info, terminal_id)
     return tool_success(data)
+
+
+_NO_SCREEN_IMAGE_NOTE = "The screen image could not be made, so only the screen text is shown."
+
+
+async def _attach_screen_image(context: ToolContext, terminal_id: str, image: bytes | None) -> bool:
+    """Give the Model the screen image with the result and show it to the user.
+
+    The image goes the way of every Tool image (``ToolContext.result_media``):
+    a Model without vision gets its file path and why the image is missing.
+    False when there is no image to give.
+    """
+    if image is None:
+        return False
+    directory = DataDirectoryLayout(context.data_root).temporary / TERMINAL_TEMPORARY_CATEGORY
+    try:
+        path = await run_tool_worker(write_id_file, directory, "screen", ".png", image)
+    except OSError:
+        _LOGGER.warning(
+            "Terminal screen image could not be saved (terminal=%s)", terminal_id, exc_info=True
+        )
+        return False
+    context.result_media.append(
+        {
+            "path": str(path),
+            "filename": path.name,
+            "media_type": "image/png",
+            "base64": base64.b64encode(image).decode("ascii"),
+        }
+    )
+    context.add_display_media(path, "image/png")
+    return True
 
 
 async def _handle_wait(
