@@ -202,6 +202,7 @@ class ConversationApp(App[int]):
         self.last_notice = ""
         self.notice_level = "info"
         self.notice_expires = 0.0
+        self._copied_selection: object = None
         self.completion = CompletionState()
         # Catalogs the popup offers from, keyed by conversation and kind; they are
         # fetched once per view while the popup is open and never block typing.
@@ -1823,8 +1824,13 @@ class ConversationApp(App[int]):
 
     def on_text_selected(self, event: events.TextSelected) -> None:
         """Copy on select, as terminals do: the mouse belongs to the app here."""
+        selections = self.screen.selections
+        if selections is self._copied_selection:
+            # A double click reports its selection along with the mouse release.
+            return
         text = self.screen.get_selected_text()
         if text and text.strip():
+            self._copied_selection = selections
             self.copy_to_clipboard(text)
             self._notice("Copied to the clipboard")
 

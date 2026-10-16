@@ -29,7 +29,7 @@ from rich.text import Text
 from rich.theme import Theme as RichTheme
 from textual import events
 from textual.binding import Binding, BindingType
-from textual.geometry import Size
+from textual.geometry import Offset, Size
 from textual.message import Message
 from textual.scroll_view import ScrollView
 from textual.selection import Selection
@@ -51,6 +51,10 @@ _FAILED = {"failed", "error"}
 _LIVE = {"running", "pending", "queued", "streaming"}
 # Rows the operator opens and closes: one header line, an optional body.
 _DISCLOSURES = {"tool_call", "reasoning"}
+# A double click selects up to these, as terminals and editors do; paths and
+# dotted names stay whole, trailing sentence punctuation does not.
+_WORD_BREAKS = frozenset(" 	()[]{}<>\"'`|,;│⎿▌●")
+_WORD_TRAIL = ".:!?"
 # Floats over the bottom-right corner while the newest lines are out of view.
 _JUMP = " ↓ Jump to latest "
 
@@ -358,7 +362,8 @@ class Transcript(ScrollView, can_focus=True):
     def _paint_row(self, row: _Row, width: int) -> None:
         lines = self._render_row(row, width)
         row.lines, row.width = lines, width
-        row.text = [line.text for line in lines]
+        # Without the padding Rich adds, so copied lines carry no trailing blanks.
+        row.text = [line.text.rstrip() for line in lines]
         row.height, row.exact = len(lines), True
         if self.view is not None:
             self.view.row_heights[row.key] = row.height
@@ -826,6 +831,68 @@ class Transcript(ScrollView, can_focus=True):
     def selection_updated(self, selection: Selection | None) -> None:
         self.refresh()
 
+    def _text_line(self, line: int) -> str:
+        """Plain text of transcript line `line`, as selection extracts it."""
+        if not self._rows or not 0 <= line < self._offsets[-1]:
+            return ""
+        index = self._row_at(line)
+        row = self._rows[index]
+        within = line - self._offsets[index] - row.gap
+        if within < 0:
+            return ""
+        if row.text is None or row.width != self._width():
+            self._paint_row(row, self._width())
+        assert row.text is not None
+        return row.text[within] if within < len(row.text) else ""
+
+    def _word_at(self, line: int, x: int) -> Selection | None:
+        text = self._text_line(line)
+        if not 0 <= x < len(text) or text[x] in _WORD_BREAKS:
+            return None
+        start = x
+        while start > 0 and text[start - 1] not in _WORD_BREAKS:
+            start -= 1
+        end = x + 1
+        while end < len(text) and text[end] not in _WORD_BREAKS:
+            end += 1
+        while end - 1 > x and text[end - 1] in _WORD_TRAIL:
+            end -= 1
+        return Selection(Offset(start, line), Offset(end, line))
+
+    def _paragraph_at(self, line: int) -> Selection | None:
+        """The run of non-blank lines around `line` within its row."""
+        if not self._text_line(line).strip():
+            return None
+        index = self._row_at(line)
+        first = self._offsets[index] + self._rows[index].gap
+        last = self._offsets[index + 1] - 1
+        top = line
+        while top > first and self._text_line(top - 1).strip():
+            top -= 1
+        bottom = line
+        while bottom < last and self._text_line(bottom + 1).strip():
+            bottom += 1
+        head = self._text_line(top)
+        indent = len(head) - len(head.lstrip())
+        return Selection(Offset(indent, top), Offset(len(self._text_line(bottom)), bottom))
+
+    def _select_clicked(self, event: events.Click) -> None:
+        """Select the word, or on a triple click the paragraph, and copy it.
+
+        Textual would select the whole widget, which here is the whole
+        conversation.
+        """
+        event.prevent_default()
+        offset = event.get_content_offset(self)
+        if offset is None or self._on_jump(event):
+            return
+        line = round(self.scroll_y) + offset.y
+        selection = self._word_at(line, offset.x) if event.chain == 2 else self._paragraph_at(line)
+        if selection is not None:
+            self.screen.selections = {self: selection}
+            # Copied as a drag selection is.
+            self.screen.post_message(events.TextSelected())
+
     # --- Mouse and keyboard -----------------------------------------------
 
     def _disclosure_at(self, event: events.MouseEvent) -> _Row | None:
@@ -860,8 +927,11 @@ class Transcript(ScrollView, can_focus=True):
         self._refresh_header(previous)
 
     def on_click(self, event: events.Click) -> None:
+        if event.chain in (2, 3):
+            self._select_clicked(event)
+            return
         selection = self.text_selection
-        if selection is not None and selection.start != selection.end:
+        if event.chain > 1 or (selection is not None and selection.start != selection.end):
             return
         if self._on_jump(event):
             event.stop()

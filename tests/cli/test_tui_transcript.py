@@ -282,3 +282,43 @@ async def test_earlier_run_steps_load_once_their_gap_comes_into_view() -> None:
         assert [page["before"] for page in pages] == ["step-2"]
         assert app.transcript.displays("step-0")
         assert not app.transcript.displays("run-gap")
+
+
+@pytest.mark.asyncio
+async def test_double_and_triple_click_select_and_copy_a_word_and_its_paragraph() -> None:
+    server = Server()
+    server.items = [
+        {
+            "id": "answer",
+            "type": "message",
+            "message": {"role": "assistant", "content": "Open cli/tui/app.py now.\n\nNext."},
+        }
+    ]
+    copied: list[str] = []
+
+    class CopyingApp(ConversationApp):
+        @override
+        def copy_to_clipboard(self, text: str) -> None:
+            copied.append(text)
+
+    app = CopyingApp(server, agent_id="main", session_id="session-one")
+    async with app.run_test(size=(100, 35)) as pilot:
+        transcript = app.transcript
+        for _ in range(10):
+            await pilot.pause()
+            if transcript.displays("answer"):
+                break
+        lines = range(transcript._offsets[-1])
+        line = next(y for y in lines if "app.py" in transcript._text_line(y))
+        x = transcript._text_line(line).index("app.py")
+        offset = (x + transcript.styles.padding.left, line - round(transcript.scroll_y) + 1)
+
+        await pilot.double_click(transcript, offset=offset)
+        await pilot.pause()
+        # A path stays whole; the sentence's full stop is not part of it.
+        assert copied[-1] == "cli/tui/app.py"
+
+        await pilot.triple_click(transcript, offset=offset)
+        await pilot.pause()
+        assert copied[-1] == "Open cli/tui/app.py now."
+        assert copied.count("Open cli/tui/app.py now.") == 1
