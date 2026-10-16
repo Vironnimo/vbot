@@ -608,7 +608,7 @@ describe('App Run events', () => {
     flushSync();
     await waitForCondition(() =>
       expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-        '/api/runs/run-follow-up/timeline',
+        '/api/runs/run-follow-up/timeline?child_limit=100',
         expect.any(Object),
         {
           eventTypes: ['timeline_snapshot', 'timeline_update'],
@@ -617,7 +617,7 @@ describe('App Run events', () => {
       ),
     );
     const [, stream] = subscribeRunEventsMock.mock.calls.find(
-      ([url]) => url === '/api/runs/run-follow-up/timeline',
+      ([url]) => url === '/api/runs/run-follow-up/timeline?child_limit=100',
     );
     stream.onEvent({
       type: 'timeline_snapshot',
@@ -635,7 +635,7 @@ describe('App Run events', () => {
       expect(document.body.textContent).toContain('assistant-output-sentinel');
     });
     expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-      '/api/runs/run-follow-up/timeline',
+      '/api/runs/run-follow-up/timeline?child_limit=100',
       expect.any(Object),
       {
         eventTypes: ['timeline_snapshot', 'timeline_update'],
@@ -682,8 +682,8 @@ describe('App Run events', () => {
     flushSync();
 
     expect(streamedRuns().slice(streamedBefore)).toEqual([
-      '/api/runs/run-snapshot-1/timeline',
-      '/api/runs/run-plain/timeline',
+      '/api/runs/run-snapshot-1/timeline?child_limit=100',
+      '/api/runs/run-plain/timeline?child_limit=100',
     ]);
   });
 

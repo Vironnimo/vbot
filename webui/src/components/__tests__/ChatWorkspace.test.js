@@ -1110,6 +1110,7 @@ describe('ChatWorkspace', () => {
       agent_id: 'beta',
       session_id: 'child-session',
       limit: 100,
+      child_limit: 100,
     });
     expect(pane(0).textContent).toContain('Hello');
     expect(pane(0).textContent).not.toContain('Child history sentinel');

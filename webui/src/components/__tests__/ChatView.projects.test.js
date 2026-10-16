@@ -85,6 +85,7 @@ describe('ChatView Projects', () => {
         agent_id: 'alpha',
         session_id: 'session-1',
         limit: 100,
+        child_limit: 100,
       });
 
       sendComposerMessage('Personal hello');
@@ -128,6 +129,7 @@ describe('ChatView Projects', () => {
         agent_id: 'builder@vbot',
         session_id: 'builder-session',
         limit: 100,
+        child_limit: 100,
       });
       expect(listQueueMock).toHaveBeenCalledWith(
         'builder@vbot',
@@ -590,6 +592,7 @@ describe('ChatView Projects', () => {
         agent_id: 'worker@vbot',
         session_id: 'worker-session',
         limit: 100,
+        child_limit: 100,
       });
       expect(document.body.textContent).toContain(
         t('chat.subagentSessionNotice'),
@@ -728,6 +731,7 @@ describe('ChatView Projects', () => {
         agent_id: 'builder@vbot',
         session_id: 'builder-old',
         limit: 100,
+        child_limit: 100,
       });
       // Session selection is ordinary navigation: no return banner.
       expect(findButtonByText(t('chat.returnToCurrentSession'))).toBeFalsy();

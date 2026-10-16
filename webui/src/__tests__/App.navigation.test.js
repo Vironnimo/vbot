@@ -324,6 +324,7 @@ describe('App navigation', () => {
         agent_id: 'beta',
         session_id: 'session-beta',
         limit: 100,
+        child_limit: 100,
       });
     });
   });
@@ -654,6 +655,7 @@ describe('App navigation', () => {
           agent_id: 'beta',
           session_id: 'session-beta',
           limit: 100,
+          child_limit: 100,
         });
         expect(document.body.textContent).not.toContain('Session not found');
       });
@@ -668,6 +670,7 @@ describe('App navigation', () => {
           agent_id: 'alpha',
           session_id: 'session-alpha',
           limit: 100,
+          child_limit: 100,
         });
       });
 

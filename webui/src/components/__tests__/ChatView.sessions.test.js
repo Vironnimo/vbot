@@ -274,7 +274,7 @@ describe('ChatView Sessions', () => {
           .find((agent) => agent.id === 'alpha').current_session_id,
       ).toBe('created-alpha');
       expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-        '/api/runs/run-one/timeline',
+        '/api/runs/run-one/timeline?child_limit=100',
         expect.any(Object),
         {
           eventTypes: ['timeline_snapshot', 'timeline_update'],
@@ -462,6 +462,7 @@ describe('ChatView Sessions', () => {
             agent_id: 'alpha',
             session_id: 'session-2',
             limit: 100,
+            child_limit: 100,
           });
 
           findNewSessionButton().click();
@@ -698,11 +699,17 @@ describe('ChatView Sessions', () => {
           messages.scrollTop === 400,
       );
       expect(rpcCalls('chat.timeline')).toEqual([
-        { agent_id: 'alpha', session_id: 'session-1', limit: 100 },
+        {
+          agent_id: 'alpha',
+          session_id: 'session-1',
+          limit: 100,
+          child_limit: 100,
+        },
         {
           agent_id: 'alpha',
           session_id: 'session-1',
           limit: 50,
+          child_limit: 100,
           before: 'message-021',
         },
       ]);
@@ -845,6 +852,7 @@ describe('ChatView Sessions', () => {
           agent_id: override.agentId,
           session_id: override.sessionId,
           limit: 100,
+          child_limit: 100,
         });
         expect(selectedAgentName()).toBe(scenario.childAgentName);
         const notice = document.querySelector(
@@ -869,6 +877,7 @@ describe('ChatView Sessions', () => {
           agent_id: current.agentId,
           session_id: current.sessionId,
           limit: 100,
+          child_limit: 100,
         });
         expect(historyReads('beta-current-session')).toBe(0);
         expect(selectedAgentName()).toBe('Alpha');
@@ -909,7 +918,7 @@ describe('ChatView Sessions', () => {
           () => subscribeRunEventsMock.mock.calls.length === 1,
         );
         expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-          '/api/runs/child-run-continue/timeline',
+          '/api/runs/child-run-continue/timeline?child_limit=100',
           expect.any(Object),
           {
             eventTypes: ['timeline_snapshot', 'timeline_update'],
@@ -1034,6 +1043,7 @@ describe('ChatView Sessions', () => {
         agent_id: 'alpha',
         session_id: 'root-session',
         limit: 100,
+        child_limit: 100,
       });
       expect(returnToParentButton()).toBeFalsy();
       expect(returnToCurrentButton()).toBeFalsy();
@@ -1078,6 +1088,7 @@ describe('ChatView Sessions', () => {
         agent_id: 'librarian',
         session_id: 'lib-1',
         limit: 100,
+        child_limit: 100,
       });
       expect(selectedAgentName()).toBe(t('librarian.name'));
       expect(composerInput().disabled).toBe(false);
@@ -1192,6 +1203,7 @@ describe('ChatView Sessions', () => {
           agent_id: address,
           session_id: 'review-session',
           limit: 100,
+          child_limit: 100,
         });
       },
     );
@@ -1232,6 +1244,7 @@ describe('ChatView Sessions', () => {
         agent_id: 'alpha',
         session_id: 'source-session',
         limit: 100,
+        child_limit: 100,
       });
     });
   });

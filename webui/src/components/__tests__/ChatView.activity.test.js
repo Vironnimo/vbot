@@ -135,6 +135,7 @@ describe('ChatView Agent activity', () => {
           agent_id: 'beta',
           session_id: 'session-beta',
           limit: 100,
+          child_limit: 100,
         });
         await waitForCondition(() =>
           markedRead('beta', 'session-beta', 'run-beta'),
@@ -448,6 +449,7 @@ describe('ChatView Agent activity', () => {
           agent_id: 'explorer@vbot',
           session_id: 'explorer-unread',
           limit: 100,
+          child_limit: 100,
         });
         expect(document.body.textContent).not.toContain('Explorer earlier');
         expect(selectedAgentName()).toBe(projectAgentName('Explorer'));

@@ -254,6 +254,7 @@ describe('ChatView slash commands', () => {
           agent_id: agentId,
           session_id: data.session_id,
           limit: 100,
+          child_limit: 100,
         });
         expect(historyReads('beta-current')).toBe(0);
         expect(subscribeRunEventsMock).not.toHaveBeenCalled();
@@ -630,7 +631,7 @@ describe('ChatView slash commands', () => {
       );
       expect(historyReads('session-1')).toBe(historyReadsBefore);
       expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-        '/api/runs/run-manual-compaction/timeline',
+        '/api/runs/run-manual-compaction/timeline?child_limit=100',
         expect.any(Object),
         {
           eventTypes: ['timeline_snapshot', 'timeline_update'],

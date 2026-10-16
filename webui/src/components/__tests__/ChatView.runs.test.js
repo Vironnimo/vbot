@@ -311,7 +311,7 @@ describe('ChatView Runs', () => {
           () => subscribeRunEventsMock.mock.calls.length === 1,
         );
         expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-          '/api/runs/active-sub-run/timeline',
+          '/api/runs/active-sub-run/timeline?child_limit=100',
           expect.any(Object),
           {
             eventTypes: ['timeline_snapshot', 'timeline_update'],
@@ -378,7 +378,7 @@ describe('ChatView Runs', () => {
         () => subscribeRunEventsMock.mock.calls.length === 1,
       );
       expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-        '/api/runs/pushed-run/timeline',
+        '/api/runs/pushed-run/timeline?child_limit=100',
         expect.any(Object),
         {
           eventTypes: ['timeline_snapshot', 'timeline_update'],
