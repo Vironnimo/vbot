@@ -10,7 +10,8 @@ names the next action.
 Design rules (keep them when adding a pattern):
 
 * Only non-zero exit codes get a hint, except for a command that did not run as
-  written: a typographic quote or a \\" that ended a PowerShell string, a
+  written: a typographic quote or a \\" that ended a PowerShell string, variables
+  of a nested PowerShell's double-quoted -Command code that this shell expanded, a
   statement PowerShell could not run behind exit code 0 (a command it did not
   recognize, a redirection to /dev/null), or a program that failed in a
   pipeline with a Select-Object -First stage; a successful command with
@@ -39,7 +40,7 @@ from __future__ import annotations
 import bisect
 import re
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path, PureWindowsPath
@@ -406,15 +407,17 @@ def _hint_powershell_alias_flags(failure: _Failure) -> str | None:
     return None
 
 
-# -Recurse after Select-String in the same pipeline step. An attempt ends at the
-# next Select-String, which starts its own, so a long command is scanned once.
+# -Recurse after Select-String in the same pipeline step, searched in the command
+# with its strings blanked, so a | inside a quoted -Pattern does not end the step.
+# An attempt ends at the next Select-String, which starts its own, so a long
+# command is scanned once.
 _SELECT_STRING_RECURSE = re.compile(r"Select-String\b(?:(?!Select-String\b)[^|;\n])*-Recurse", re.I)
 
 
 def _hint_select_string_recurse(failure: _Failure) -> str | None:
-    if not _SELECT_STRING_RECURSE.search(failure.command):
-        return None
     if "Select-String" not in failure.output or not _quoted_in("Recurse", failure.output):
+        return None
+    if not _SELECT_STRING_RECURSE.search(_powershell_code(failure.command).flat):
         return None
     hint = (
         "Select-String has no -Recurse: pipe files in with "
@@ -459,6 +462,17 @@ _INPUT_REDIRECTION = re.compile(rf"[{_QUOTES}]<[{_QUOTES}] operator is reserved 
 # A { } block passed to a native program, as when \" ended a python -c "..." string
 # early: "python.exe: ScriptBlock should only be specified as a value of the Command parameter."
 _SCRIPT_BLOCK_ARGUMENT = "ScriptBlock should only be specified as a value of the Command parameter"
+# An argument a cmdlet has no parameter for, as when \" ended a -Pattern "..." early,
+# on English and German hosts: "Select-String: A positional parameter cannot be found
+# that accepts argument 'b\|c'."
+_EXTRA_ARGUMENT = re.compile(
+    rf"A positional parameter cannot be found that accepts argument [{_QUOTES}](.+)[{_QUOTES}]\."
+    rf"|Es wurde kein Positionsparameter gefunden, der das Argument [{_QUOTES}](.+)[{_QUOTES}] "
+    r"akzeptiert"
+)
+# A bare word, as PowerShell reads one in an argument: up to a blank, a quote or
+# a separator.
+_BARE_WORD = re.compile(rf"[^\s{_QUOTES};|&(){{}},]+")
 
 # Python source sent as the command: after blank and comment lines, its first line
 # imports, or defines a function or a class. A PowerShell class opens a { block,
@@ -800,7 +814,8 @@ def _hint_escaped_quote(
     string at the \\", and the rest of the code becomes more arguments, script
     blocks or commands of their own: a quoted title's ``(English)`` ran as a
     command, and the not-installed hint answered it; a SyntaxError and a
-    ScriptBlock error went unexplained when a later statement exited with 0.
+    ScriptBlock error went unexplained when a later statement exited with 0; and
+    the rest of a Select-String -Pattern became an argument the cmdlet refused.
     Only an error the early end explains counts.
     """
     if not _POWERSHELL or '\\"' not in command:
@@ -825,6 +840,18 @@ def _hint_escaped_quote(
             f'In PowerShell, \\" does not escape a quote: it ended the string, so `{missing[1]}` '
             f"from inside it ran as a command. {_ESCAPED_QUOTE_FIX}"
         )
+    extra = _EXTRA_ARGUMENT.search(window)
+    if extra is not None:
+        # The argument the cmdlet refused starts with the word after the \".
+        argument = extra[1] or extra[2]
+        word = _BARE_WORD.match(command, code.escaped_end + 1)
+        if word is not None and argument.startswith(word[0]):
+            if len(argument) > _STRING_SHOWN_CHARS:
+                argument = argument[: _STRING_SHOWN_CHARS - 3] + "..."
+            return (
+                'In PowerShell, \\" does not escape a quote: it ended the string, so the rest '
+                f"became the extra argument `{argument}`. {_ESCAPED_QUOTE_FIX}"
+            )
     if "SyntaxError" in window and (exit_code or failed_programs):
         return _ESCAPED_QUOTE_HINT
     return None
@@ -901,22 +928,20 @@ _EXPANDED_VARIABLE = re.compile(r"`[\s\S]|\$(?:\{[\w:]+\}|[\w]+(?::[\w]+)?)")
 _SUBEXPRESSION = re.compile(r"`[\s\S]|\$\(")
 
 
-def _hint_python_interpolation(command: str, exit_code: int | None) -> str | None:
-    """Name variable expansion in a direct double-quoted Python source argument.
+def _program_strings(command: str) -> Iterator[tuple[str, str, int, int]]:
+    """Each double-quoted string a working program gets as a whole argument.
 
-    This is a syntax observation, not proof that a branch ran, a variable was
-    empty, or interpolation was unintended. Never inspect or rewrite Python
-    code; even its single-quoted strings are inside PowerShell's outer quotes.
+    Yields the program (lowercase, without .exe) that starts the string's
+    pipeline, the text between the program and the string with strings blanked,
+    and the string's opening and closing offsets. This bounded recognizer is
+    not PowerShell's parser: a subexpression can contain its own quotes, and a
+    nested block comment can contain apparent code after the inner #>, so such
+    commands yield nothing and are left to the shell itself.
     """
-    if not _POWERSHELL or exit_code != 0 or "$" not in command:
-        return None
-    # This bounded recognizer is not PowerShell's parser. A subexpression can
-    # contain its own quotes, and a nested block comment can contain apparent
-    # code after the inner #>. Leave those commands to the shell itself.
     if any(match[0] == "$(" for match in _SUBEXPRESSION.finditer(command)):
-        return None
+        return
     if command.count("<#") > 1:
-        return None
+        return
     code = _powershell_code(command)
     starts = [0, *(match.end() for match in _PIPELINE_START.finditer(code.flat))]
     for start, stop in code.double_strings:
@@ -929,9 +954,29 @@ def _hint_python_interpolation(command: str, exit_code: int | None) -> str | Non
         if first is None:
             continue
         program = _program_at(command, code.flat, pipeline, start)
-        if program is None or re.fullmatch(r"(?:pythonw?|py)(?:[\d.]+)?", program) is None:
+        if program is not None:
+            yield program, code.flat[first.end() : start], start, stop
+
+
+def _shown_variables(names: Sequence[str]) -> str:
+    """The first three of *names* in backticks, each bounded to 40 characters."""
+    shown = ", ".join(f"`{name}`" if len(name) <= 40 else f"`{name[:37]}...`" for name in names[:3])
+    return f"{shown} and other variables" if len(names) > 3 else shown
+
+
+def _hint_python_interpolation(command: str, exit_code: int | None) -> str | None:
+    """Name variable expansion in a direct double-quoted Python source argument.
+
+    This is a syntax observation, not proof that a branch ran, a variable was
+    empty, or interpolation was unintended. Never inspect or rewrite Python
+    code; even its single-quoted strings are inside PowerShell's outer quotes.
+    """
+    if not _POWERSHELL or exit_code != 0 or "$" not in command:
+        return None
+    for program, flags, start, stop in _program_strings(command):
+        if re.fullmatch(r"(?:pythonw?|py)(?:[\d.]+)?", program) is None:
             continue
-        if not _PYTHON_SOURCE_FLAGS.fullmatch(code.flat[first.end() : start]):
+        if not _PYTHON_SOURCE_FLAGS.fullmatch(flags):
             continue
         # Scoped variables explicitly name PowerShell state; a whole $code
         # argument deliberately passes that variable's Python source.
@@ -949,16 +994,63 @@ def _hint_python_interpolation(command: str, exit_code: int | None) -> str | Non
             continue
         if command[start + 1 : stop].strip() in names:
             continue
-        shown = ", ".join(
-            f"`{name}`" if len(name) <= 40 else f"`{name[:37]}...`" for name in names[:3]
-        )
-        if len(names) > 3:
-            shown += " and other variables"
         return (
-            f"PowerShell expands {shown} inside the double-quoted Python source before "
-            "Python runs. If this was meant as literal text, use a single-quoted here-string. "
-            "Check any files this command changed before repeating it."
+            f"PowerShell expands {_shown_variables(names)} inside the double-quoted Python "
+            "source before Python runs. If this was meant as literal text, use a single-quoted "
+            "here-string. Check any files this command changed before repeating it."
         )
+    return None
+
+
+# The flag before a nested PowerShell's code: -Command or a prefix of it, such as -c.
+_COMMAND_FLAG = re.compile(r"(?:^|[ \t])-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?[ \t]+\Z", re.I)
+# An assignment to the variable before it: = or an operator such as +=.
+_ASSIGNMENT = re.compile(r"[ \t]*+[-+*/%]?=(?!=)")
+# The variables a pipeline sets for the script block that handles each object.
+_PIPELINE_VARIABLES = frozenset({"$_", "$psitem"})
+_NESTED_SHELL = re.compile(r"pwsh|powershell", re.I)
+
+
+def _hint_nested_powershell(command: str) -> str | None:
+    """Name the variables this shell expanded in a nested PowerShell's own code.
+
+    ``pwsh -Command "$r = ...; $_.Name"`` passes the code in double quotes, so
+    this PowerShell replaces $r and $_ before the inner one starts, which then
+    fails on ``= ...`` or ``.Name`` with an error that names no cause, or prints
+    nothing. Read from the command alone, whatever the exit code: the code did
+    not run as written either way. Only variables the inner code needs for
+    itself count, the ones it assigns and $_ or $PSItem after one of its { };
+    any other may be this shell's on purpose.
+    """
+    if not _POWERSHELL or "$" not in command or not _NESTED_SHELL.search(command):
+        return None
+    for program, flags, start, stop in _program_strings(command):
+        if program not in ("pwsh", "powershell") or "|" in flags:
+            continue
+        if not _COMMAND_FLAG.search(flags):
+            continue
+        block = command.find("{", start + 1, stop)
+        names = list(
+            islice(
+                dict.fromkeys(
+                    match[0]
+                    for match in _EXPANDED_VARIABLE.finditer(command, start + 1, stop)
+                    if match[0].startswith("$")
+                    and (
+                        _ASSIGNMENT.match(command, match.end(), stop) is not None
+                        or (match[0].lower() in _PIPELINE_VARIABLES and 0 <= block < match.start())
+                    )
+                ),
+                4,
+            )
+        )
+        if names:
+            return (
+                f"PowerShell expands {_shown_variables(names)} inside the double-quoted -Command "
+                "code before the inner PowerShell runs, so that code did not run as written. Run "
+                "the code directly in this shell, or escape each $ meant for the inner PowerShell "
+                "with a backtick."
+            )
     return None
 
 
@@ -1982,11 +2074,12 @@ def annotate_failure(
 
     A command that did not run as written gets a hint whatever its exit code,
     since a later statement's success can hide its failure: a typographic quote
-    or a \\" ended a string early (first, since every error follows from it), a
-    statement PowerShell could not run behind exit code 0 (a command it did not
-    recognize, a redirection to /dev/null), or a program failed in a pipeline
-    with a Select-Object -First stage. A non-zero exit code can
-    come from a pipeline whose failed program made && skip the rest. Last, a
+    or a \\" ended a string early, or this shell expanded the variables of a
+    nested PowerShell's double-quoted -Command code (first, since every error
+    follows from it), a statement PowerShell could not run behind exit code 0
+    (a command it did not recognize, a redirection to /dev/null), or a program
+    failed in a pipeline with a Select-Object -First stage. A non-zero exit code
+    can come from a pipeline whose failed program made && skip the rest. Last, a
     successful command with expandable variables in double-quoted Python source
     is told how to preserve literal text. A command that sleeps to read a
     background command's log is told that the result arrives as a message.
@@ -1995,8 +2088,10 @@ def annotate_failure(
     command = command or ""
     output = output or ""
     try:
-        quote = _hint_typographic_quote(command) or _hint_escaped_quote(
-            command, exit_code, output, failed_programs
+        quote = (
+            _hint_typographic_quote(command)
+            or _hint_escaped_quote(command, exit_code, output, failed_programs)
+            or _hint_nested_powershell(command)
         )
     except Exception:
         quote = None

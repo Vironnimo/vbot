@@ -102,6 +102,13 @@ _FAILED = ("python.exe exited with code 1",)
             ["`Get-ChildItem -Recurse -File | Select-String 'text'`"],
             id="long_command_is_scanned_once",
         ),
+        pytest.param(
+            'Select-String -Path *.py -Pattern "todo|fixme" -Recurse',
+            1,
+            "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
+            ["`Get-ChildItem -Recurse -File | Select-String 'text'`"],
+            id="pipe_inside_the_quoted_pattern",
+        ),
         # Windows' app execution alias stands in for python3, not for python.
         (
             "python3 app.py",
@@ -720,6 +727,22 @@ _ESCAPED_QUOTE = 'In PowerShell, \\" does not escape a quote'
             _FAILED,
             "",
         ),
+        # The rest of a pattern became an argument Select-String has no parameter for.
+        (
+            'Select-String -Path *.py -Pattern "a|\\"b\\"|c"',
+            1,
+            "Select-String: A positional parameter cannot be found that accepts argument 'b\\|c'.",
+            (),
+            "`b\\|c`",
+        ),
+        (
+            'Select-String -Path *.py -Pattern "a|\\"b\\":"; echo done',
+            0,
+            "Select-String: Es wurde kein Positionsparameter gefunden, der das Argument "
+            "„b\\:“ akzeptiert.\ndone",
+            (),
+            "`b\\:`",
+        ),
         # A SyntaxError printed as data, a \" that ends a path's string, and a
         # missing command from outside the string are not the early end's.
         (
@@ -740,6 +763,13 @@ _ESCAPED_QUOTE = 'In PowerShell, \\" does not escape a quote'
             'cargo build; python -c "print(\\"x\\")"',
             1,
             _NOT_RECOGNIZED.format(name="cargo"),
+            (),
+            None,
+        ),
+        (
+            'Get-ChildItem a b c; python -c "print(\\"x\\")"',
+            1,
+            "Get-ChildItem: A positional parameter cannot be found that accepts argument 'c'.",
             (),
             None,
         ),
@@ -818,6 +848,39 @@ def test_python_source_expansion_names_only_unescaped_literal_variables(
     assert annotate_failure(command, None, "") is None
     monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
     assert annotate_failure(command, 0, "") is None
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+@pytest.mark.parametrize(
+    ("command", "names"),
+    [
+        ('pwsh -NoProfile -Command "$r = Get-Item .; $r.Name"', ("$r",)),
+        ('powershell -c "Get-ChildItem | ForEach-Object { $_.Name }"', ("$_",)),
+        ('& pwsh.exe -Command "try { $n += 1 } catch { $PSItem }"', ("$n", "$PSItem")),
+        # This shell's own variables, escaped ones, single quotes and other programs.
+        ('pwsh -Command "cargo test $filter"', ()),
+        ('pwsh -Command "`$r = Get-Item .; `$r.Name"', ()),
+        ("pwsh -Command '$r = Get-Item .; $r.Name'", ()),
+        ('pwsh -Command "$_"', ()),
+        ('pwsh -File run.ps1 "$r = 1"', ()),
+        ('node -e "$r = 1"', ()),
+    ],
+)
+def test_nested_powershell_code_names_the_variables_this_shell_expanded(
+    monkeypatch: pytest.MonkeyPatch, command: str, names: tuple[str, ...], exit_code: int
+) -> None:
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, exit_code, "")
+
+    if names:
+        assert hint is not None
+        for name in names:
+            assert f"`{name}`" in hint
+    else:
+        assert hint is None
+    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    assert annotate_failure(command, exit_code, "") is None
 
 
 @pytest.mark.parametrize(
