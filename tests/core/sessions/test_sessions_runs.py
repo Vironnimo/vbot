@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
+import re
 import sqlite3
 
 import pytest
@@ -163,7 +165,9 @@ async def test_run_admission_requires_the_expected_live_generation(manager, sess
 
 
 @pytest.mark.asyncio
-async def test_restart_settles_run_streamed_output_and_unfinished_calls_once(manager):
+async def test_restart_settles_run_streamed_output_and_unfinished_calls_once(
+    manager, caplog: pytest.LogCaptureFixture
+):
     session = manager.create("coder").start_run("abandoned")
     session.append(
         ChatMessage.assistant(
@@ -181,10 +185,22 @@ async def test_restart_settles_run_streamed_output_and_unfinished_calls_once(man
         content_delta=" an answer",
         tool_calls=[{"id": "started", "name": "read", "arguments": {"path": "a.txt"}}],
     )
-    manager.recover_interrupted_runs()
-    first = session.load()
-    manager.recover_interrupted_runs()
+    with caplog.at_level(logging.WARNING, logger="vbot.sessions"):
+        manager.recover_interrupted_runs()
+        first = session.load()
+        manager.recover_interrupted_runs()
     assert session.load() == first
+    # The settled Run gets its one terminal line, as the Run manager writes for others.
+    [line] = [record for record in caplog.records if record.name == "vbot.sessions"]
+    assert line.levelno == logging.WARNING
+    fields = dict(re.findall(r"(\w+)=([^\s)]+)", line.getMessage()))
+    assert {
+        "run": "abandoned",
+        "agent": "coder",
+        "session": session.id,
+        "kind": "user",
+        "cause": "process_restart",
+    }.items() <= fields.items()
     partial = first[-2]
     assert (partial.role, partial.model, partial.content, partial.reasoning) == (
         "assistant",

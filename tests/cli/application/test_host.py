@@ -6,12 +6,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import psutil  # type: ignore[import-untyped]
 import pytest
 
 from cli._server_target import HealthProbeResult
@@ -20,6 +22,8 @@ from cli.application.activity import JOURNAL_NAME, ActivityJournal
 from cli.application.monitor import MonitorStatus
 from cli.application.notifications import Toast
 from cli.application.state import ApplicationError, Installation, Operation
+from core.utils.logging import resolve_daily_log_path
+from core.utils.server_control import create_server_control, process_started
 
 
 def _install(root: Path, *, shape: str = "server") -> Installation:
@@ -186,11 +190,8 @@ def _watched(
     install: Installation, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[host.ApplicationFacade, _Monitor, _Sink]:
     monkeypatch.setattr(host, "ServerMonitor", _Monitor)
-    monkeypatch.setattr(
-        host.processes,
-        "target",
-        lambda _install: SimpleNamespace(url="http://127.0.0.1:8420", data_dir=Path("data")),
-    )
+    target = SimpleNamespace(url="http://127.0.0.1:8420", port=8420, data_dir=install.root / "data")
+    monkeypatch.setattr(host.processes, "target", lambda _install: target)
     facade, sink = host.ApplicationFacade(install), _Sink()
     facade.watch(sink)
     return facade, _Monitor.instances[-1], sink
@@ -305,6 +306,35 @@ def test_tray_initiated_stop_never_counts_as_an_unexpected_server_stop(
     assert monitor.reconnects == 1
     # The activity names the tray's own stop, never a crash.
     assert _activity(install) == ["server_stopped"]
+
+
+def test_server_end_without_shutdown_is_logged_where_the_server_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install = _install(tmp_path)
+    _facade, monitor, _sink = _watched(install, monkeypatch)
+    data_dir = install.root / "data"
+    # This test process stands in for the server process its control record names.
+    create_server_control(
+        data_dir, 8420, process_create_time=process_started(psutil.Process()), token="t"
+    )
+    connected = MonitorStatus("u", "connected", True, "0.4.2", "2026-01-01T00:00:00.000000Z")
+    _on_monitor_loop(lambda: monitor.listener.status_changed(connected))
+    # The stream vanishes without a stop announcement, then nothing listens.
+    monitor.listener.connection_lost(1006)
+    monitor.listener.status_changed(MonitorStatus("u", "refused"))
+
+    lines = resolve_daily_log_path(data_dir).read_text(encoding="utf-8").splitlines()
+    [line] = [line for line in lines if " vbot.application.server_exit - " in line]
+    fields = dict(re.findall(r"(\w+)=([^\s)]+)", line))
+    assert "[WARN]" in line
+    assert fields["pid"] == str(os.getpid())
+    assert "unknown" not in (fields["started"], fields["uptime"])
+    # The process still lives here, so it has no exit code yet.
+    assert fields["exit_code"] == "unknown"
+    journal = ActivityJournal(install.root / "logs" / JOURNAL_NAME)
+    [crash] = [entry for entry in journal.entries() if entry.kind == "server_crashed"]
+    assert str(os.getpid()) in crash.text
 
 
 def test_malformed_host_exit_request_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

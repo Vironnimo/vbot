@@ -408,7 +408,24 @@ class ChatSessionManager:
         self._store.record_seen_skills(address, update)
 
     def recover_interrupted_runs(self) -> None:
-        self._store.execution.recover_interrupted_runs()
+        """Settle the Runs a previous process left running, each with its terminal line.
+
+        These Runs never reach the Run manager, which logs every other Run's outcome.
+        """
+        for run in self._store.execution.recover_interrupted_runs():
+            address = run.address
+            project = "" if address.project_id is None else f" project={address.project_id}"
+            _LOGGER.warning(
+                "Run interrupted (run=%s agent=%s session=%s%s kind=%s started=%s "
+                "iterations=%d cause=process_restart)",
+                run.run_id,
+                address.agent_id,
+                address.session_id,
+                project,
+                run.run_kind,
+                run.started_at,
+                run.iteration_count,
+            )
 
     async def start_run(self, run: Run) -> None:
         """Admit *run* with its Run kind and execution owner in one transaction.

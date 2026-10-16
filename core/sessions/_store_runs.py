@@ -14,6 +14,7 @@ from core.sessions._io import _encode_chat_history_cursor
 from core.sessions._metadata import _RUN_KIND_VALUES, _completion_activity_from_state
 from core.sessions._types import (
     JsonObject,
+    RecoveredRun,
     SessionAddress,
     SessionRunAdmission,
     SessionRunCompletion,
@@ -401,20 +402,22 @@ def _materialize_stream_draft(
     _store_mutations.append_messages(connection, address, [message], run_id=run_id)
 
 
-def recover_interrupted_runs(connection: sqlite3.Connection) -> None:
+def recover_interrupted_runs(connection: sqlite3.Connection) -> tuple[RecoveredRun, ...]:
     """Settle Runs a stopped process left running, without retrying any work.
 
     Output a Run streamed but had not yet stored as an Assistant entry becomes
-    its interrupted Assistant entry, before the Run's summary entry.
+    its interrupted Assistant entry, before the Run's summary entry. Returns
+    the settled Runs.
     """
     now = utc_now_timestamp()
     rows = connection.execute(
-        "SELECT r.run_key, r.run_id, r.work_id, r.contributes_to_activity, r.iteration_count, "
-        "r.started_at, s.project_id, s.agent_id, s.session_id FROM runs AS r "
+        "SELECT r.run_key, r.run_id, r.run_kind, r.work_id, r.contributes_to_activity, "
+        "r.iteration_count, r.started_at, s.project_id, s.agent_id, s.session_id FROM runs AS r "
         "JOIN sessions AS s ON s.session_key = r.session_key "
         "WHERE r.status = 'running' AND r.inherited = 0 AND s.state = 'live' "
         "ORDER BY r.run_key"
     ).fetchall()
+    recovered: list[RecoveredRun] = []
     for row in rows:
         started = datetime.fromisoformat(str(row["started_at"]))
         completed = datetime.fromisoformat(now)
@@ -438,6 +441,16 @@ def recover_interrupted_runs(connection: sqlite3.Connection) -> None:
                 },
             ),
         )
+        recovered.append(
+            RecoveredRun(
+                address=address,
+                run_id=run_id,
+                run_kind=str(row["run_kind"]),
+                started_at=str(row["started_at"]),
+                iteration_count=int(row["iteration_count"] or 0),
+            )
+        )
+    return tuple(recovered)
 
 
 def _completion_activity(connection: sqlite3.Connection, session_key: int) -> sqlite3.Row:

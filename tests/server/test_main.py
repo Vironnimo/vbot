@@ -17,7 +17,11 @@ import uvicorn.server
 from core.database import DataStoreMarker, read_marker
 from core.utils.log_viewer import LOG_LINE_PATTERN
 from core.utils.logging import resolve_daily_log_path
-from core.utils.server_control import SHUTDOWN_FAILED_EXIT_CODE, STARTUP_FAILED_EXIT_CODE
+from core.utils.server_control import (
+    SHUTDOWN_FAILED_EXIT_CODE,
+    STARTUP_FAILED_EXIT_CODE,
+    create_server_control,
+)
 from core.utils.version import BuildIdentity
 from server import main as server_main
 from server.main import main, parse_args
@@ -326,6 +330,22 @@ def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
     assert len(stopped) == 1
     assert stop_fields in stopped[0]
     assert " uptime=" in stopped[0]
+
+
+def test_main_names_a_previous_server_process_that_ended_without_shutting_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_serving(monkeypatch, _serve_until("control"))
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    # A killed server leaves its control record; its pid now names another process.
+    create_server_control(data_dir, 8765, pid=os.getppid(), process_create_time=1.0, token="old")
+
+    main(["--data-dir", str(data_dir), "--port", "8765"])
+
+    lines = resolve_daily_log_path(data_dir).read_text(encoding="utf-8").splitlines()
+    [line] = [line for line in lines if f"pid={os.getppid()})" in line]
+    assert "[WARN] vbot.server - " in line
 
 
 @pytest.mark.parametrize("oversized", [False, True])
