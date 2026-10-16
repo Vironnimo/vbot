@@ -31,6 +31,7 @@ export function createChatRunStream({
   updateSubAgentRunStatuses,
   onReflectionFinished = () => {},
   reportStreamDiagnostic = () => {},
+  childLimit = 0,
 }) {
   const activity = createRunActivityProjection({
     chatState,
@@ -63,9 +64,12 @@ export function createChatRunStream({
   function subscribeToRun(session, url) {
     if (destroyed || !session?.currentRun?.runId) return;
     const runId = session.currentRun.runId;
-    const timelineUrl = url?.endsWith('/timeline')
+    let timelineUrl = url?.split('?')[0].endsWith('/timeline')
       ? url
       : timelineUrlForRun(runId);
+    if (childLimit && !timelineUrl.includes('child_limit=')) {
+      timelineUrl += `${timelineUrl.includes('?') ? '&' : '?'}child_limit=${childLimit}`;
+    }
     const existing = connections.get(session.key);
     if (existing?.runId === runId && existing.url === timelineUrl) return;
     closeSubscriptionFor(session.key);

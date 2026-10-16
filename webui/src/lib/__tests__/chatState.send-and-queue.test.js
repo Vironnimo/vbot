@@ -1014,6 +1014,7 @@ describe('Run controls and cancellation', () => {
       agent_id: 'alpha',
       session_id: 'session-one',
       limit: 100,
+      child_limit: 100,
     });
     expect(sessionState.currentRun).toBeNull();
     expect(visibleTimelineItemsForRender(sessionState)[0].tools).toEqual([

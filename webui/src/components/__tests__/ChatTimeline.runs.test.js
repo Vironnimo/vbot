@@ -47,6 +47,28 @@ const REPORTED_TEXTS = [
 describe('ChatTimeline Runs', () => {
   const timeline = setupChatTimelineSuite();
 
+  it('shows an earlier-steps action and forwards its exact Run cursor', () => {
+    const gap = {
+      id: 'history-gap',
+      type: 'history_gap',
+      run_id: 'one',
+      before: 'first-visible',
+      position: -1,
+    };
+    const session = timelineSession('windowed');
+    session.timelineItems = [
+      assistantRun('one', [gap, outputItem('Latest output')]),
+    ];
+    const onLoadRunHistory = vi.fn();
+    timeline.render(session, { onLoadRunHistory });
+    const button = [...document.querySelectorAll('button')].find((button) =>
+      button.textContent.includes(t('chat.historyEarlierSteps')),
+    );
+    expect(button).toBeDefined();
+    button.click();
+    expect(onLoadRunHistory).toHaveBeenCalledExactlyOnceWith(gap);
+  });
+
   it.each([
     [
       'Thinking before a Tool and answer',

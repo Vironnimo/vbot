@@ -209,6 +209,12 @@ async def test_terminal_send_stream_navigation_and_detach() -> None:
         await app._render()
         assert len(app.query(Collapsible)) == 2
         editor.load_text("Retain this draft")
+        app.query(Collapsible).first().query_one("CollapsibleTitle").focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert editor.text == "Retain this draft"
+        assert len([method for method, _ in server.calls if method == "chat.stream"]) == 1
+        editor.focus()
         await pilot.press("ctrl+p")
         await pilot.pause()
         assert isinstance(app.screen, Picker)
@@ -453,8 +459,8 @@ async def test_render_and_stream_changes_during_an_awaited_mount(
         app.conversation.event(snapshot())
         await app._render()
         await app._render()
-        assert {"run-item", "later"} == set(app.rows)
-        assert updated_rows.count("run-item") == 1
+        assert {"output", "reason", "tool", "later"} == set(app.rows)
+        assert updated_rows.count("output") == 1
         assert len(app.query(Collapsible)) == 2
         app.conversation.event(
             {

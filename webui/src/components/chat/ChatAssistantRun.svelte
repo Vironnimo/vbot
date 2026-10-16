@@ -66,6 +66,7 @@
     // on a Sub-Agent link; null keeps the native menu.
     onSubAgentContextMenu = null,
     onCancelToolCall = () => {},
+    onLoadRunHistory = async () => false,
     onBackgroundToolCall = () => {},
     backgroundToolCallIds = [],
     onCancelSubAgent = () => {},
@@ -95,7 +96,7 @@
   );
 
   let answerCopyText = $derived(
-    visibleRunChildren(item)
+    (item.answerItems ?? visibleRunChildren(item))
       .filter((child) => child.type === 'assistant_output')
       .map((child) =>
         typeof child.content === 'string' ? child.content.trim() : '',
@@ -257,30 +258,44 @@
 {/snippet}
 
 <article class="msg assistant assistant-run">
-  <div class="msg-header">
-    <span class="msg-author"
-      >{agentName || t('chat.role.assistant').toUpperCase()}</span
-    >
-    {#if formatTime(timestampForItem(item))}
-      <button
-        type="button"
-        class="msg-timestamp"
-        use:tooltip={() => formatMoment(timestampForItem(item))}
-        >{formatTime(timestampForItem(item))}</button
+  {#if item.segment_first !== false}
+    <div class="msg-header">
+      <span class="msg-author"
+        >{agentName || t('chat.role.assistant').toUpperCase()}</span
       >
-    {/if}
-    {#if answerCopyText}
-      <CopyButton
-        text={answerCopyText}
-        class="chat-copy-action message-copy"
-        label={t('chat.copyAnswer')}
-        copiedLabel={t('chat.answerCopied')}
-      />
-    {/if}
-  </div>
+      {#if formatTime(timestampForItem(item))}
+        <button
+          type="button"
+          class="msg-timestamp"
+          use:tooltip={() => formatMoment(timestampForItem(item))}
+          >{formatTime(timestampForItem(item))}</button
+        >
+      {/if}
+      {#if answerCopyText}
+        <CopyButton
+          text={answerCopyText}
+          class="chat-copy-action message-copy"
+          label={t('chat.copyAnswer')}
+          copiedLabel={t('chat.answerCopied')}
+        />
+      {/if}
+    </div>
+  {/if}
   <div class="msg-content assistant-run-content">
     {#snippet runChild(child)}
-      {#if child.type === 'reasoning'}
+      {#if child.type === 'history_gap'}
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={viewState.isPending(actionKey('history', child.run_id))}
+          onClick={() =>
+            viewState.runPending(actionKey('history', child.run_id), () =>
+              onLoadRunHistory(child),
+            )}
+        >
+          {t('chat.historyEarlierSteps')}
+        </Button>
+      {:else if child.type === 'reasoning'}
         {@const working = isRunChildWorking(item, child)}
         <ChatReasoning
           source={child.content ?? ''}
@@ -765,7 +780,7 @@
         {@render runChild(group.child)}
       {/if}
     {/each}
-    {#if runFooterParts(item, nowMs).length > 0}
+    {#if item.segment_tail !== false && runFooterParts(item, nowMs).length > 0}
       {@const footerParts = runFooterParts(item, nowMs)}
       {@const changeStats = runChangeStats(item)}
       {@const footerLabel = [

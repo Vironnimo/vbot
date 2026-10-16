@@ -141,7 +141,7 @@ describe('ChatView', () => {
 
       // The displayed Session streams its new Run; the rest waits.
       expect(subscribeRunEventsMock).toHaveBeenCalledExactlyOnceWith(
-        '/api/runs/run-displayed/timeline',
+        '/api/runs/run-displayed/timeline?child_limit=100',
         expect.any(Object),
         {
           eventTypes: ['timeline_snapshot', 'timeline_update'],

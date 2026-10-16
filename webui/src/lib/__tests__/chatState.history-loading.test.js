@@ -21,6 +21,66 @@ import {
 } from './chatState.support.js';
 
 describe('History reads', () => {
+  it('ignores a child page from before a newer history snapshot', async () => {
+    const pending = deferred();
+    const { chatState, controller } = setupController({
+      operationOverrides: {
+        loadTimelineChildren: vi.fn().mockReturnValue(pending.promise),
+        loadChatHistory: vi.fn().mockResolvedValue({
+          messages: [],
+          history_generation: 'g',
+          items: [
+            assistantRun('one', [
+              outputItem('Fresh', { id: 'fresh', position: 5 }),
+            ]),
+          ],
+        }),
+      },
+    });
+    await controller.loadHistoryForSession('alpha', 'one');
+    const session = ensureSessionState(chatState, 'alpha', 'one');
+    const reading = controller.loadRunHistory(session, {
+      run_id: 'one',
+      before: 'fresh',
+    });
+    await controller.loadHistoryForSession('alpha', 'one');
+    pending.resolve({
+      run_id: 'one',
+      history_generation: 'g',
+      items: [outputItem('Stale', { id: 'stale', position: 4 })],
+    });
+    expect(await reading).toBe(false);
+    expect(session.timelineItems[0].items.map((item) => item.id)).toEqual([
+      'fresh',
+    ]);
+  });
+
+  it('evicts departed histories while retaining their Queue state', async () => {
+    const { chatState, controller } = setupController({
+      operationOverrides: {
+        loadChatHistory: vi.fn().mockImplementation(async ({ session_id }) => ({
+          messages: [{ id: session_id, role: 'user', content: 'Saved' }],
+          items: [
+            messageItem({ id: session_id, role: 'user', content: 'Saved' }),
+          ],
+        })),
+      },
+    });
+    for (let i = 0; i < 10; i++) {
+      await controller.loadHistoryForSession('alpha', `session-${i}`);
+      ensureSessionState(chatState, 'alpha', `session-${i}`).queue = [
+        { id: `queued-${i}` },
+      ];
+    }
+    const first = chatState.sessions['alpha::session-0'];
+    expect(first.timelineItems).toEqual([]);
+    expect(first.historyLoaded).toBe(false);
+    expect(first.queue).toEqual([{ id: 'queued-0' }]);
+    expect(chatState.sessions['alpha::session-9'].timelineItems).toHaveLength(
+      1,
+    );
+  });
+
   it('releases a departed History load on a draft and ignores its late completion', async () => {
     const old = deferred();
     const next = deferred();
@@ -99,6 +159,7 @@ describe('History reads', () => {
       agent_id: 'alpha',
       session_id: 'source',
       limit: 500,
+      child_limit: 100,
       after: 'cursor-1',
     });
     expect(source.messages.map((message) => message.id)).toEqual(['reply']);
@@ -265,6 +326,7 @@ describe('History reads', () => {
           agent_id: 'alpha',
           session_id: 'shown',
           limit: 500,
+          child_limit: 100,
           after: 'cursor-1',
         });
       } else {
@@ -567,6 +629,7 @@ describe('older History pages', () => {
       agent_id: 'alpha',
       session_id: 'session-one',
       limit: 50,
+      child_limit: 100,
       before: 'vh1.opaque',
     });
     expect(sessionState.historyBefore).toBe('');
@@ -639,6 +702,7 @@ describe('older History pages', () => {
         agent_id: 'alpha',
         session_id: 'session-one',
         limit: 50,
+        child_limit: 100,
         before: 'cursor-recent',
       });
       expect(sessionState.messages.map((item) => item.id)).toEqual([
@@ -897,6 +961,7 @@ describe('Run recovery', () => {
       agent_id: 'alpha',
       session_id: 'session-one',
       limit: 100,
+      child_limit: 100,
     });
     expect(sessionState.messages.at(-1)).toMatchObject({
       id: 'message-final',

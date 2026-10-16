@@ -5,6 +5,8 @@ import {
   loadTimelineItems,
   mergeTimelineItems,
   visibleTimelineItemsForRender,
+  timelineRowsForViewport,
+  mergeRunChildPage,
 } from '../chatTimeline.js';
 import {
   assistantRun,
@@ -28,6 +30,103 @@ const update = (fields, sequence = 11, baseSequence = 10) => ({
 const state = (items = []) => ({ timelineItems: items, timelineSequences: {} });
 
 describe('server Timeline projection', () => {
+  it('keeps loaded Run prefixes through windowed reconnects and sparse updates', () => {
+    const child = (position) =>
+      outputItem(`step ${position}`, { id: `step-${position}`, position });
+    const gap = (before) => ({
+      id: 'gap',
+      type: 'history_gap',
+      before: `step-${before}`,
+      position: -1,
+    });
+    const session = { ...state(), historyGeneration: 'g' };
+    applyTimelineEvent(
+      session,
+      'timeline_snapshot',
+      snapshot([
+        assistantRun('one', [gap(8), child(8), child(9)], { window_start: 8 }),
+      ]),
+    );
+    expect(
+      mergeRunChildPage(session, {
+        run_id: 'one',
+        history_generation: 'g',
+        items: [gap(6), child(6), child(7)],
+      }),
+    ).toBe(true);
+    applyTimelineEvent(
+      session,
+      'timeline_snapshot',
+      snapshot(
+        [
+          assistantRun('one', [gap(9), child(9), child(10)], {
+            window_start: 9,
+          }),
+        ],
+        11,
+      ),
+    );
+    expect(session.timelineItems[0].items.map((item) => item.position)).toEqual(
+      [-1, 6, 7, 8, 9, 10],
+    );
+    applyTimelineEvent(
+      session,
+      'timeline_update',
+      update(
+        {
+          run: { id: session.timelineItems[0].id },
+          windowed: true,
+          children: [child(11)],
+          positions: { 'step-6': 7, 'step-7': 6 },
+        },
+        12,
+        11,
+      ),
+    );
+    expect(session.timelineItems[0].items.at(-1).position).toBe(11);
+    expect(
+      session.timelineItems[0].items.slice(1, 3).map((item) => item.id),
+    ).toEqual(['step-7', 'step-6']);
+    expect(
+      mergeRunChildPage(session, {
+        run_id: 'one',
+        history_generation: 'other',
+        items: [child(0)],
+      }),
+    ).toBe(false);
+    loadTimelineItems(
+      session,
+      [assistantRun('one', [gap(10), child(10)], { window_start: 10 })],
+      { reset: true },
+    );
+    expect(session.timelineItems[0].items.map((item) => item.position)).toEqual(
+      [-1, 10],
+    );
+  });
+
+  it('gives the viewport bounded parts of a single long Run with stable identities', () => {
+    const children = Array.from({ length: 1000 }, (_, position) =>
+      outputItem(`step ${position}`, { id: `step-${position}`, position }),
+    );
+    const first = timelineRowsForViewport([assistantRun('one', children)]);
+    expect(
+      Math.max(...first.map((part) => part.items.length)),
+    ).toBeLessThanOrEqual(30);
+    expect(first.flatMap((part) => part.items)).toEqual(children);
+    expect(first.at(-1).segment_tail).toBe(true);
+    expect(
+      first.slice(0, -1).every((part) => part.segment_tail === false),
+    ).toBe(true);
+    const next = timelineRowsForViewport([
+      assistantRun('one', [
+        ...children,
+        outputItem('next', { id: 'next', position: 1000 }),
+      ]),
+    ]);
+    expect(next.slice(0, -1).map((part) => part.id)).toEqual(
+      first.slice(0, -1).map((part) => part.id),
+    );
+  });
   it('replaces only the selected Run in place and keeps unrelated rows unchanged', () => {
     const before = messageItem({
       id: 'old-user',

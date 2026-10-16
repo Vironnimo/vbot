@@ -14,6 +14,7 @@ import {
   listSessionActivity as requestListSessionActivity,
   listSessions as requestListSessions,
   loadChatTimeline as requestLoadChatHistory,
+  loadChatTimelineChildren as requestLoadTimelineChildren,
   loadCommandOutput as requestLoadCommandOutput,
   loadLearningChanges as requestLoadLearningChanges,
   loadReflectionRuns as requestLoadReflectionRuns,
@@ -29,7 +30,7 @@ import {
   undoLearningChanges as requestUndoLearningChanges,
 } from '../api.js';
 import { t } from '../i18n.js';
-import { mergeTimelineItems } from '../chatTimeline.js';
+import { mergeTimelineItems, mergeRunChildPage } from '../chatTimeline.js';
 import { createChatActivity } from './activity.js';
 import { createChatChildTasks } from './childTasks.js';
 import { createChatReflections } from './reflections.js';
@@ -125,6 +126,7 @@ function defaultChatOperations() {
     getSessionWork: (...args) => requestGetSessionWork(...args),
     getSessionChangeStats: (...args) => requestGetSessionChangeStats(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
+    loadTimelineChildren: (...args) => requestLoadTimelineChildren(...args),
     loadCommandOutput: (...args) => requestLoadCommandOutput(...args),
     loadLearningChanges: (...args) => requestLoadLearningChanges(...args),
     loadReflectionRuns: (...args) => requestLoadReflectionRuns(...args),
@@ -168,6 +170,37 @@ export function createChatController({
   let initialHistoryPending = false;
   const historyLoadVersions = new Map();
   const queueSyncVersions = new Map();
+  const historyCache = new Map();
+
+  function retainHistory(session) {
+    historyCache.delete(session);
+    historyCache.set(
+      session,
+      JSON.stringify([session.messages, session.timelineItems]).length * 2,
+    );
+    let bytes = [...historyCache.values()].reduce((sum, size) => sum + size, 0);
+    for (const [cached, size] of historyCache) {
+      if (historyCache.size <= 8 && bytes <= 16 * 1024 * 1024) break;
+      if (
+        cached === session ||
+        isDisplayedSession(cached.agentId, cached.sessionId)
+      )
+        continue;
+      runStream.closeSubscriptionFor(cached.key);
+      historyLoadVersions.set(
+        cached.key,
+        (historyLoadVersions.get(cached.key) ?? 0) + 1,
+      );
+      cached.messages = [];
+      cached.timelineItems = [];
+      cached.historyRuns = {};
+      cached.historyLoaded = false;
+      cached.historyAfter = '';
+      cached.historyBefore = '';
+      historyCache.delete(cached);
+      bytes -= size;
+    }
+  }
   // Feed positions: the newest one this owner applied, and the newest one a
   // hidden owner scanned for its displayed Session's Run starts. Those starts
   // apply early, at the positions in `earlyRunStarts`.
@@ -386,6 +419,7 @@ export function createChatController({
         agent_id: sessionState.agentId,
         session_id: sessionState.sessionId,
         limit: after ? 500 : HISTORY_INITIAL_LIMIT,
+        child_limit: 100,
         ...(after ? { after } : {}),
       });
       if (!result || !page.incremental) result = page;
@@ -464,6 +498,7 @@ export function createChatController({
         history?.messages ?? [],
         request.loadOptions(history),
       );
+      retainHistory(sessionState);
       reflectionRequest?.apply(history?.reflection_runs);
       sessionState.markReadFailedRunId = '';
       if (
@@ -570,7 +605,7 @@ export function createChatController({
       !sessionState?.agentId ||
       !sessionState.hasOlderHistory ||
       sessionState.loadingOlderHistory ||
-      sessionState.messages.length === 0
+      (!sessionState.historyBefore && sessionState.messages.length === 0)
     ) {
       return false;
     }
@@ -594,6 +629,7 @@ export function createChatController({
         agent_id: sessionState.agentId,
         session_id: sessionState.sessionId,
         limit: HISTORY_OLDER_LIMIT,
+        child_limit: 100,
         before,
       });
       // A refreshed snapshot owns a new page boundary. Joining a page from
@@ -608,6 +644,7 @@ export function createChatController({
         hasMore: history?.has_more === true,
         nextBefore: history?.next_before,
       });
+      retainHistory(sessionState);
       return true;
     } catch (error) {
       if (isCurrentSnapshot()) {
@@ -616,6 +653,35 @@ export function createChatController({
       return false;
     } finally {
       sessionState.loadingOlderHistory = false;
+    }
+  }
+
+  async function loadRunHistory(sessionState, gap) {
+    if (!sessionState || sessionState.loadingRunHistory) return false;
+    const generation = sessionState.historyGeneration;
+    const version = sessionState.historySnapshotVersion;
+    const isCurrentSnapshot = () =>
+      sessionState.historyGeneration === generation &&
+      sessionState.historySnapshotVersion === version;
+    sessionState.loadingRunHistory = true;
+    try {
+      const page = await operations.loadTimelineChildren({
+        agent_id: sessionState.agentId,
+        session_id: sessionState.sessionId,
+        run_id: gap.run_id,
+        before: gap.before,
+        history_generation: generation,
+        limit: 100,
+      });
+      const merged =
+        isCurrentSnapshot() && mergeRunChildPage(sessionState, page);
+      if (merged) retainHistory(sessionState);
+      return merged;
+    } catch (error) {
+      if (isCurrentSnapshot()) sessionState.actionError = errorMessage(error);
+      return false;
+    } finally {
+      sessionState.loadingRunHistory = false;
     }
   }
 
@@ -1212,6 +1278,7 @@ export function createChatController({
     syncDisplayedHistoryLoad,
     loadHistoryForSession,
     loadOlderHistory,
+    loadRunHistory,
     loadReflectionChanges: reflections.loadChanges,
     loadSubAgentWork,
     loadProject: (projectId) => operations.showProject(projectId),

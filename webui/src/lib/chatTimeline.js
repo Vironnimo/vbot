@@ -11,12 +11,81 @@ export function visibleTimelineItemsForRender(sessionState) {
   );
 }
 
+// Run is a semantic unit, not an indivisible DOM row. Stable position buckets
+// let the existing viewport unmount old parts of one unusually long Run.
+export function timelineRowsForViewport(items) {
+  return items.flatMap((item) => {
+    if (item.type !== 'assistant_run' || item.items.length <= 60) return [item];
+    const groups = new Map();
+    item.items.forEach((child, index) => {
+      const part = Math.floor((child.position ?? index) / 30);
+      if (!groups.has(part)) groups.set(part, []);
+      groups.get(part).push(child);
+    });
+    const parts = [...groups];
+    return parts.map(([part, children], index) => ({
+      ...item,
+      id: `${item.id}:part:${part}`,
+      sourceItemId: item.id,
+      answerItems: item.items,
+      items: children,
+      segment_first: index === 0,
+      segment_tail: index === parts.length - 1,
+    }));
+  });
+}
+
 export function assistantRunChildProgressKey(child) {
   return `${child?.revision ?? child?.sequence ?? ''}:${child?.content?.length ?? 0}:${child?.partialArgumentsText?.length ?? 0}:${child?.output?.length ?? 0}:${child?.status ?? ''}:${Boolean(child?.resultEvent)}:${child?.message?.content?.length ?? 0}`;
 }
 
 function runIdOf(item) {
   return item?.runId ?? item?.run_id ?? item?.message?.history_run_id;
+}
+
+function retainWindowPrefix(previous, incoming) {
+  if (!previous || !Number.isInteger(incoming?.window_start)) return incoming;
+  const incomingIds = new Set((incoming.items ?? []).map((child) => child.id));
+  const prefix = (previous.items ?? []).filter(
+    (child) =>
+      child.type !== 'history_gap' &&
+      !incomingIds.has(child.id) &&
+      child.position < incoming.window_start,
+  );
+  if (!prefix.length) return incoming;
+  return {
+    ...incoming,
+    items: [
+      ...(previous.items ?? []).filter((child) => child.type === 'history_gap'),
+      ...prefix,
+      ...(incoming.items ?? []).filter((child) => child.type !== 'history_gap'),
+    ],
+  };
+}
+
+export function mergeRunChildPage(session, page) {
+  if (session.historyGeneration !== page.history_generation) return false;
+  const run = session.timelineItems.find(
+    (item) => item.type === 'assistant_run' && runIdOf(item) === page.run_id,
+  );
+  if (!run) return false;
+  const children = new Map(
+    run.items
+      .filter((child) => child.type !== 'history_gap')
+      .map((child) => [child.id, child]),
+  );
+  for (const child of page.items ?? [])
+    if (!children.has(child.id)) children.set(child.id, child);
+  const updated = withCollections({
+    ...run,
+    items: [...children.values()].sort(
+      (left, right) => left.position - right.position,
+    ),
+  });
+  session.timelineItems = session.timelineItems.map((item) =>
+    item === run ? updated : item,
+  );
+  return true;
 }
 
 function withCollections(item) {
@@ -62,7 +131,10 @@ export function mergeTimelineItems(
   const updates = new Map(
     (incoming ?? []).map((item) => [
       item.id,
-      reuse(known.get(item.id), withCollections(item)),
+      reuse(
+        known.get(item.id),
+        withCollections(retainWindowPrefix(known.get(item.id), item)),
+      ),
     ]),
   );
   const retained = (existing ?? []).map((item) => updates.get(item.id) ?? item);
@@ -109,9 +181,14 @@ export function loadTimelineItems(sessionState, items, options = {}) {
       options,
     );
   } else {
-    const known = new Map(previous.map((item) => [item.id, item]));
+    const known = new Map(
+      (options.reset ? [] : previous).map((item) => [item.id, item]),
+    );
     sessionState.timelineItems = incoming.map((item) =>
-      reuse(known.get(item.id), withCollections(item)),
+      reuse(
+        known.get(item.id),
+        withCollections(retainWindowPrefix(known.get(item.id), item)),
+      ),
     );
     if (newerLive)
       sessionState.timelineItems.push(
@@ -135,7 +212,10 @@ export function applyTimelineEvent(sessionState, type, data) {
     if (!Array.isArray(data.items)) return false;
     const known = new Map(previous.map((item) => [item.id, item]));
     const replacement = data.items.map((item) =>
-      reuse(known.get(item.id), withCollections(item)),
+      reuse(
+        known.get(item.id),
+        withCollections(retainWindowPrefix(known.get(item.id), item)),
+      ),
     );
     sessionState.timelineItems = replaceRunItems(previous, runId, replacement);
   } else if (type === 'timeline_update') {
@@ -157,6 +237,10 @@ export function applyTimelineEvent(sessionState, type, data) {
           .map((child) => [child.id, child]),
       );
       for (const child of data.children ?? []) children.set(child.id, child);
+      for (const [id, position] of Object.entries(data.positions ?? {})) {
+        if (children.has(id))
+          children.set(id, { ...children.get(id), position });
+      }
       for (const update of data.child_updates ?? []) {
         const previousChild = children.get(update.id);
         if (!previousChild) return false;
@@ -166,7 +250,12 @@ export function applyTimelineEvent(sessionState, type, data) {
         Object.assign(child, update.set ?? {});
         children.set(update.id, child);
       }
-      const order = data.order ?? [...children.keys()];
+      const order = data.windowed
+        ? [...children.keys()].sort(
+            (left, right) =>
+              children.get(left).position - children.get(right).position,
+          )
+        : (data.order ?? [...children.keys()]);
       const updated = withCollections({
         ...oldRun,
         ...data.run,

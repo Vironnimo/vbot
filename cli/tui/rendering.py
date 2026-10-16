@@ -7,9 +7,11 @@ import re
 import textwrap
 from typing import Any
 
+from textual import on
 from textual.containers import Vertical
 from textual.markup import escape
-from textual.widgets import Collapsible, Markdown, Static
+from textual.message import Message
+from textual.widgets import Button, Collapsible, Markdown, Static
 
 from core.utils.ids import is_safe_id
 
@@ -389,14 +391,60 @@ class TimelineEntry(Vertical):
     TimelineEntry.user-entry { border-left: thick $accent; background: $panel; }
     """
 
-    def __init__(self) -> None:
+    class LoadHistory(Message):
+        def __init__(self, item: JsonObject) -> None:
+            super().__init__()
+            self.item = item
+
+    @on(Button.Pressed, ".load-run-history")
+    def load_history(self, event: Button.Pressed) -> None:
+        event.stop()
+        if self.item is not None:
+            self.post_message(self.LoadHistory(self.item))
+
+    def __init__(self, *, expanded: set[str] | None = None) -> None:
         super().__init__()
+        self.expanded = expanded if expanded is not None else set()
         self.item: JsonObject | None = None
         self.entries: dict[str, TimelineEntry] = {}
         self.entry_order: tuple[str, ...] = ()
         self.body: Markdown | Static | None = None
         self.heading: Static | None = None
         self.fold: Collapsible | None = None
+        self.detail_text = ""
+
+    @on(Collapsible.Expanded)
+    async def disclosure_opened(self, event: Collapsible.Expanded) -> None:
+        if event.collapsible is self.fold and self.item is not None:
+            self.expanded.add(str(self.item["id"]))
+            await self._detail_body()
+
+    @on(Collapsible.Collapsed)
+    def disclosure_closed(self, event: Collapsible.Collapsed) -> None:
+        if event.collapsible is self.fold and self.item is not None:
+            self.expanded.discard(str(self.item["id"]))
+
+    async def _detail_body(self) -> None:
+        assert self.item is not None and self.fold is not None
+        text = (
+            tool_detail(self.item) if self.item.get("type") == "tool_call" else item_text(self.item)
+        )
+        if self.body is None:
+            self.body = (
+                Static(text, markup=False, classes="tool-detail")
+                if self.item.get("type") == "tool_call"
+                else Markdown(text, open_links=False)
+            )
+            await self.fold.query_one(Collapsible.Contents).mount(self.body)
+        elif isinstance(self.body, Markdown):
+            if text.startswith(self.detail_text):
+                await self.body.append(text[len(self.detail_text) :])
+            else:
+                await self.body.update(text)
+        else:
+            if text != self.detail_text:
+                self.body.update(text)
+        self.detail_text = text
 
     async def update_item(self, item: JsonObject) -> None:
         if self.item is item:
@@ -405,6 +453,10 @@ class TimelineEntry(Vertical):
         previous_text = item_text(self.item) if self.item is not None else ""
         self.item = item
         kind = item.get("type")
+        if kind == "history_gap":
+            if first:
+                await self.mount(Button("Load earlier steps…", classes="load-run-history"))
+            return
         if kind == "assistant_run":
             status = str(item.get("status", ""))
             # A finished Run needs no label: the answer speaks for itself. A Run
@@ -445,27 +497,25 @@ class TimelineEntry(Vertical):
             title = tool_title(item)
             self.set_class(str(item.get("status", "")) in {"error", "failed"}, "failed-entry")
             if first:
-                self.body = Static(tool_detail(item), markup=False, classes="tool-detail")
-                self.fold = Collapsible(self.body, title=title, collapsed=True)
+                self.fold = Collapsible(title=title, collapsed=str(item["id"]) not in self.expanded)
                 await self.mount(self.fold)
             else:
-                assert self.body is not None and self.fold is not None
+                assert self.fold is not None
                 self.fold.title = title
-                self.body.update(tool_detail(item))
+            if self.fold is not None and not self.fold.collapsed:
+                await self._detail_body()
         elif kind == "reasoning":
             if first:
-                self.body = Markdown(text, open_links=False)
-                self.fold = Collapsible(self.body, title="Reasoning", collapsed=True)
+                self.fold = Collapsible(
+                    title="Reasoning", collapsed=str(item["id"]) not in self.expanded
+                )
                 await self.mount(self.fold)
                 self.set_class(True, "reasoning-entry")
-            else:
-                assert self.body is not None
-                assert isinstance(self.body, Markdown)
-                if text.startswith(previous_text):
-                    await self.body.append(text[len(previous_text) :])
-                else:
-                    await self.body.update(text)
+            if self.fold is not None and not self.fold.collapsed:
+                await self._detail_body()
         else:
+            if kind == "run_status":
+                text = f"Assistant · {item.get('status', '')}"
             if kind == "model_fallback":
                 text = f"*{text or 'Model fallback'}*"
             heading = item_heading(item)

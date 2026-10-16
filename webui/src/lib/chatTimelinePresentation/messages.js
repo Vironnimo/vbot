@@ -420,7 +420,13 @@ export function timestampForItem(item) {
 // command. Cards created on an empty timeline stay at the top; cards with a
 // lost anchor and no usable creation time fall back to the timeline end.
 export function groupTransientCards(items, cards) {
-  const itemIds = new Set((items ?? []).map((item) => item.id));
+  // Each semantic Run may occupy several viewport rows; an anchor belongs
+  // after its last part, including after more history has been loaded.
+  const anchorIds = new Map();
+  for (const item of items ?? []) {
+    anchorIds.set(item.id, item.id);
+    if (item.sourceItemId) anchorIds.set(item.sourceItemId, item.id);
+  }
   const groups = {
     leading: [],
     byItemId: new Map(),
@@ -428,10 +434,11 @@ export function groupTransientCards(items, cards) {
     trailing: [],
   };
   for (const card of cards ?? []) {
-    if (card?.anchorId && itemIds.has(card.anchorId)) {
-      const anchored = groups.byItemId.get(card.anchorId) ?? [];
+    if (card?.anchorId && anchorIds.has(card.anchorId)) {
+      const anchorId = anchorIds.get(card.anchorId);
+      const anchored = groups.byItemId.get(anchorId) ?? [];
       anchored.push(card);
-      groups.byItemId.set(card.anchorId, anchored);
+      groups.byItemId.set(anchorId, anchored);
       continue;
     }
     if (card?.anchorId == null) {

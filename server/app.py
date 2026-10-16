@@ -461,8 +461,13 @@ def create_app(
         )
 
     @app.get("/api/runs/{run_id}/timeline")
-    async def run_timeline(request: Request, run_id: str) -> StreamingResponse:
+    async def run_timeline(
+        request: Request, run_id: str, child_limit: int = 0
+    ) -> StreamingResponse:
         from server.timeline import TimelineStreamingResponse, sse_timeline
+
+        if not 0 <= child_limit <= 200:
+            raise HTTPException(status_code=400, detail="child_limit must be between 0 and 200")
 
         try:
             run = _app_chat_runs(request.app.state).get(run_id)
@@ -473,6 +478,7 @@ def create_app(
                 request.app.state,
                 run,
                 shutdown_event=request.app.state.shutdown_event,
+                child_limit=child_limit,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

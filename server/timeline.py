@@ -32,6 +32,73 @@ TIMELINE_BATCH_INTERVAL_SECONDS = 0.05
 _sleep = asyncio.sleep
 
 
+def window_timeline_items(items: list[JsonObject], limit: int) -> list[JsonObject]:
+    """Bound each Run's initial delivery without changing its semantic identity."""
+    if not limit:
+        return items
+    result = []
+    for item in items:
+        if item.get("type") != "assistant_run":
+            result.append(item)
+            continue
+        children = item.get("items", [])
+        start = max(0, len(children) - limit)
+        visible = [
+            {**child, "position": index} for index, child in enumerate(children) if index >= start
+        ]
+        if start:
+            visible.insert(0, history_gap(item, children[start]["id"], start))
+        result.append({**item, "items": visible, "window_start": start})
+    return result
+
+
+def history_gap(run: JsonObject, before: str, remaining: int) -> JsonObject:
+    return {
+        "id": f"{run['id']}-history-gap",
+        "type": "history_gap",
+        "run_id": run.get("run_id", run.get("runId")),
+        "before": before,
+        "remaining": remaining,
+        "position": -1,
+    }
+
+
+def window_timeline_update(
+    previous: JsonObject, current: JsonObject, known_children: set[str]
+) -> JsonObject:
+    """Sparse updates also work when a client has not loaded earlier children.
+
+    Previously undelivered children are self-contained. Delivered text keeps
+    using suffix edits; positions replace an ever-growing full order array.
+    """
+    patch = timeline_update(previous, current)
+    changed = {child["id"] for child in patch["children"]}
+    changed.update(
+        child["id"] for child in patch["child_updates"] if child["id"] not in known_children
+    )
+    patch["child_updates"] = [
+        child for child in patch["child_updates"] if child["id"] in known_children
+    ]
+    run = next(item for item in current["items"] if item["type"] == "assistant_run")
+    old_run = next(item for item in previous["items"] if item["type"] == "assistant_run")
+    old_positions = {child["id"]: index for index, child in enumerate(old_run["items"])}
+    patch["positions"] = {
+        child["id"]: index
+        for index, child in enumerate(run["items"])
+        if child["id"] not in changed and old_positions.get(child["id"]) != index
+    }
+    patch["children"] = [
+        {**child, "position": index}
+        for index, child in enumerate(run["items"])
+        if child["id"] in changed
+    ]
+    patch.pop("order", None)
+    patch["windowed"] = True
+    known_children.difference_update(patch["remove_children"])
+    known_children.update(changed)
+    return patch
+
+
 class TimelineStreamingResponse(StreamingResponse):  # type: ignore[misc]
     """Close the projection stream also when the socket fails during a yield."""
 
@@ -71,6 +138,7 @@ def capture_run_timeline(run: Run, projection: RunTimeline | None = None) -> Jso
 def project_timeline_history(
     history_response: JsonObject,
     active_run_snapshot: JsonObject | None = None,
+    child_limit: int = 0,
 ) -> JsonObject:
     """Add complete semantic elements to an already public History response."""
     response = {**history_response, "timeline_version": TIMELINE_VERSION}
@@ -95,10 +163,18 @@ def project_timeline_history(
             + [item["run_id"] for item in items if item.get("run_id")]
         )
     )
+    if child_limit:
+        response["items"] = window_timeline_items(items, child_limit)
+        # The semantic rows carry the visible bodies. Raw User records remain
+        # for existing edit admission bookkeeping; Tool payloads are not sent twice.
+        response["messages"] = [
+            message for message in response.get("messages", []) if message.get("role") == "user"
+        ]
+        response["windowed"] = True
     return response
 
 
-async def timeline_snapshot(state: Any, run: Run) -> JsonObject:
+async def timeline_snapshot(state: Any, run: Run, *, child_limit: int = 0) -> JsonObject:
     """Read exactly one Run, including unretained live output or durable completion."""
     snapshot = capture_run_timeline(run)
     if snapshot is None:
@@ -142,7 +218,65 @@ async def timeline_snapshot(state: Any, run: Run) -> JsonObject:
         }
     snapshot["timeline_version"] = TIMELINE_VERSION
     snapshot["history_generation"] = run.expected_session_generation_id
+    if child_limit:
+        snapshot = {
+            **snapshot,
+            "items": window_timeline_items(snapshot["items"], child_limit),
+            "windowed": True,
+        }
     return await _public_frame(state, snapshot, include_file_urls=False)
+
+
+async def timeline_children(
+    state: Any, address: SessionAddress, run_id: str, before: str, limit: int, generation: str
+) -> JsonObject:
+    """Read an earlier child page of exactly one addressed Run, including live work."""
+    session = await state.runtime.chat_sessions.get_async(address)
+    if session.generation_id != generation:
+        raise ValueError("The Session changed; reload its history.")
+    active = state.chat_runs.active_run(
+        agent_id=address.agent_id, session_id=address.session_id, project_id=address.project_id
+    )
+    if active is not None and active.id == run_id:
+        captured = capture_run_timeline(active)
+        assert captured is not None
+        items = captured["items"]
+    else:
+        messages = await session.load_run_messages_async(run_id)
+
+        def project() -> list[JsonObject]:
+            return history_timeline(
+                [
+                    {**record, "history_run_id": run_id}
+                    for message in messages
+                    if (record := history_message(message, file_delivery=state.file_delivery))
+                    is not None
+                ]
+            )
+
+        items = await FILE_PREVIEW_WORKERS.run(project)
+    run = next((item for item in items if item.get("type") == "assistant_run"), None)
+    children = [] if run is None else run.get("items", [])
+    end = next((index for index, child in enumerate(children) if child["id"] == before), None)
+    if run is None or end is None:
+        raise ValueError("The history position is unavailable; reload the conversation.")
+    start = max(0, end - limit)
+    page = [
+        {**child, "position": index} for index, child in enumerate(children) if start <= index < end
+    ]
+    if start:
+        page.insert(0, history_gap(run, children[start]["id"], start))
+    return await _public_frame(
+        state,
+        {
+            "run_id": run_id,
+            "history_generation": generation,
+            "items": page,
+            "before": before,
+            "has_more": start > 0,
+        },
+        include_file_urls=False,
+    )
 
 
 def timeline_update(previous: JsonObject, current: JsonObject) -> JsonObject:
@@ -257,6 +391,7 @@ async def sse_timeline(
     heartbeat_interval_seconds: float = 10.0,
     include_file_urls: bool = False,
     batch_interval_seconds: float = TIMELINE_BATCH_INTERVAL_SECONDS,
+    child_limit: int = 0,
 ) -> AsyncGenerator[str]:
     """Stream one authoritative snapshot, then bounded-rate semantic patches.
 
@@ -267,18 +402,31 @@ async def sse_timeline(
     projection = run.timeline
     previous = capture_run_timeline(run, projection)
     if previous is None:
-        initial = await timeline_snapshot(state, run)
+        initial = await timeline_snapshot(state, run, child_limit=child_limit)
     else:
         previous.update(
             timeline_version=TIMELINE_VERSION, history_generation=run.expected_session_generation_id
         )
         initial = previous
+        if child_limit:
+            initial = {
+                **previous,
+                "items": window_timeline_items(previous["items"], child_limit),
+                "windowed": True,
+            }
     initial = await _public_frame(state, initial, include_file_urls=include_file_urls)
     if shutdown_event is not None and shutdown_event.is_set():
         return
     yield _frame("timeline_snapshot", initial)
     if initial["terminal"] or projection is None or previous is None:
         return
+    known_children = {
+        child["id"]
+        for item in initial["items"]
+        if item["type"] == "assistant_run"
+        for child in item["items"]
+        if child["type"] != "history_gap"
+    }
     changed_task: asyncio.Task[None] | None = None
     shutdown_task = (
         asyncio.create_task(shutdown_event.wait(), name=f"timeline-shutdown:{run.id}")
@@ -308,7 +456,11 @@ async def sse_timeline(
                 await _sleep(batch_interval_seconds)
             current = capture_run_timeline(run, projection)
             assert current is not None
-            patch = timeline_update(previous, current)
+            patch = (
+                window_timeline_update(previous, current, known_children)
+                if child_limit
+                else timeline_update(previous, current)
+            )
             previous = current
             public = await _public_frame(state, patch, include_file_urls=include_file_urls)
             if shutdown_event is not None and shutdown_event.is_set():
