@@ -154,7 +154,7 @@ class CompletionBar(Vertical):
 
     DEFAULT_CSS = """
     CompletionBar { display: none; height: auto; max-height: 10; margin: 0 1;
-        border: round $panel; background: $surface; padding: 0 1; }
+        border: round $rule-strong; background: $surface; padding: 0 1; }
     CompletionBar.visible { display: block; }
     CompletionBar #completion-title { height: 1; color: $text-muted; }
     CompletionBar OptionList { height: auto; max-height: 8; background: transparent;

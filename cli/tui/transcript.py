@@ -25,6 +25,7 @@ from rich.console import RenderableType
 from rich.markdown import Markdown
 from rich.segment import Segment
 from rich.style import Style
+from rich.syntax import PygmentsSyntaxTheme, TokenType
 from rich.text import Text
 from rich.theme import Theme as RichTheme
 from textual import events
@@ -80,6 +81,26 @@ def display_rows(items: list[JsonObject]) -> list[JsonObject]:
         elif status == "completed" and isinstance(item.get("durationMs"), (int, float)):
             rows.append({**item, "id": f"{item['id']}:footer", "type": "run_footer", "items": []})
     return rows
+
+
+class _CodeTheme(PygmentsSyntaxTheme):
+    """A Pygments token palette on the accessor's own code surface."""
+
+    def __init__(self, name: str, surface: str) -> None:
+        super().__init__(name)
+        self._surface = Style(bgcolor=surface)
+
+    @override
+    def get_background_style(self) -> Style:
+        return self._surface
+
+    @override
+    def get_style_for_token(self, token_type: TokenType) -> Style:
+        # Tokens keep their colour, not the palette's own background.
+        style = super().get_style_for_token(token_type)
+        return Style(
+            color=style.color, bold=style.bold, italic=style.italic, underline=style.underline
+        )
 
 
 @dataclass(eq=False)
@@ -189,7 +210,7 @@ class Transcript(ScrollView, can_focus=True):
         self._requested_gaps: set[tuple[str, str]] = set()
         self._measure_scheduled = False
         self._painted: list[JsonObject] | None = None
-        self._markdown_styles: tuple[str, RichTheme] | None = None
+        self._markdown_styles: tuple[str, RichTheme, PygmentsSyntaxTheme] | None = None
 
     # --- Public interface -------------------------------------------------
 
@@ -538,23 +559,31 @@ class Transcript(ScrollView, can_focus=True):
         return style
 
     def _markdown(self, text: str, width: int, style: Style | None = None) -> list[Strip]:
-        dark = self.app.current_theme.dark
+        styles, code_theme = self._markdown_theme()
         renderable = Markdown(
             text or " ",
-            code_theme="github-dark" if dark else "default",
+            # Rich hands the theme object to its Syntax, which accepts one.
+            code_theme=code_theme,  # type: ignore[arg-type]
             hyperlinks=True,
             inline_code_lexer=None,
         )
-        with self.app.console.use_theme(self._markdown_theme()):
+        with self.app.console.use_theme(styles):
             return self._lines(renderable, width, style)
 
-    def _markdown_theme(self) -> RichTheme:
+    def _markdown_theme(self) -> tuple[RichTheme, PygmentsSyntaxTheme]:
         """Rich's Markdown styles in the accessor's palette instead of its defaults."""
         if self._markdown_styles is None or self._markdown_styles[0] != self.app.theme:
+            variables = self.app.get_css_variables()
             accent = self._style("bar").color
             muted = self._style("muted").color
+            # Code reads as the WebUI's: a warm token palette on the surface
+            # one step off the background, and inline code as a raised chip.
+            code_theme = _CodeTheme(
+                "gruvbox-dark" if self.app.current_theme.dark else "gruvbox-light",
+                variables["surface"],
+            )
             styles = {
-                "markdown.code": Style(color=accent, bold=True),
+                "markdown.code": Style(bgcolor=variables["raised"]),
                 "markdown.h1": Style(color=accent, bold=True),
                 "markdown.h1.border": Style(color=muted),
                 "markdown.h2": Style(bold=True, underline=True),
@@ -568,8 +597,8 @@ class Transcript(ScrollView, can_focus=True):
                 "markdown.item.number": Style(color=muted),
                 "markdown.table.border": Style(color=muted),
             }
-            self._markdown_styles = (self.app.theme, RichTheme(styles, inherit=True))
-        return self._markdown_styles[1]
+            self._markdown_styles = (self.app.theme, RichTheme(styles, inherit=True), code_theme)
+        return self._markdown_styles[1], self._markdown_styles[2]
 
     def _lines(
         self, renderable: RenderableType, width: int, style: Style | None = None
