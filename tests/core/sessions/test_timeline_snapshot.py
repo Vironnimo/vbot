@@ -150,7 +150,7 @@ def test_incremental_reads_are_bounded_and_advance_across_hidden_records(manager
 
 def test_semantic_pages_replace_complete_runs_at_both_edges(manager):
     session = manager.create("coder").start_run("first")
-    session.append(ChatMessage.user("first"))
+    session.append_many([ChatMessage.note("hidden first prefix"), ChatMessage.user("first")])
     initial = read(session, complete_runs=True)
     session.append_many(
         [
@@ -160,7 +160,7 @@ def test_semantic_pages_replace_complete_runs_at_both_edges(manager):
     )
     complete_run(session, summary("first"))
     session = session.start_run("second")
-    session.append(ChatMessage.user("second"))
+    session.append_many([ChatMessage.note("hidden second prefix"), ChatMessage.user("second")])
     complete_run(session, summary("second"))
     appended = read(session, after=initial.after_cursor, limit=1, complete_runs=True)
     assert appended.incremental and appended.has_newer
@@ -171,6 +171,9 @@ def test_semantic_pages_replace_complete_runs_at_both_edges(manager):
     assert latest.page.record_run_ids == ("second",) * 2
     older = read(session, before=latest.page.before_cursor, limit=1, complete_runs=True)
     assert older.page.record_run_ids == ("first",) * 4
+    assert not older.page.has_more
+    assert older.page.before_cursor is None
+    assert older.page.messages + latest.page.messages == read(session).page.messages
 
 
 def test_edit_invalidates_append_cursor_and_excludes_old_lineage(manager):

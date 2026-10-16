@@ -359,9 +359,13 @@ def chat_history_snapshot(
             str(row["entry_id"]) for row in batch.rows if _editable(batch, row, takeover)
         )
         if not incremental:
-            page_floor = floor
+            # Run boundaries may include hidden Notes; a before cursor must
+            # anchor a visible entry, as the next page read validates it.
+            page_floor = int(batch.rows[0]["seq"])
             has_more = (
-                _store_history.view_seq(connection, ranges, where=where, params=params, upper=floor)
+                _store_history.view_seq(
+                    connection, ranges, where=where, params=params, upper=page_floor
+                )
                 is not None
             )
     usage = _store_history.session_usage(connection, state)
