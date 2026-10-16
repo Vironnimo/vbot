@@ -162,6 +162,7 @@ def print_command_result(command: str, result: CommandResult) -> None:
     state: Status = "success" if result.ok else "error"
     if result.ok and (
         result.forced
+        or (command in {"start", "restart"} and result.attention)
         or (command == "status" and _running_text(result) != "yes")
         or (command != "stop" and result.webui is not None and not result.webui.available)
     ):
@@ -392,6 +393,7 @@ def _start_like_output_lines(result: CommandResult) -> list[str]:
         lines.append(f"process_id: {result.process_id}")
     if _is_non_vbot_conflict(result):
         lines.append("conflict: port occupied by non-vBot process")
+    lines.extend(f"warning: {note}" for note in result.attention)
     return lines
 
 

@@ -36,6 +36,7 @@ from cli._server_target import (
 )
 from core.storage.layout import initialize_data_directory
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, LogManager
+from core.utils.outside_job import Confinement, start_outside_foreign_job
 from core.utils.processes import outside_service_unit, subprocess_creation_flags
 from core.utils.server_control import (
     CONTROL_INITIATOR_HEADER,
@@ -91,8 +92,24 @@ _SCHEDULED_RESTART_SETTLE_SECONDS = 0.5
 _RUN_CONTEXT_ENV_PREFIX = "VBOT_RUN_"
 
 
-def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
-    """Start the foreground server entrypoint as a background subprocess."""
+# Where the user starts a development server that outlives the application whose
+# Job holds the caller.
+_OUTSIDE_JOB_REMEDY = "To keep it running, start it from a terminal outside that application."
+
+
+def confined_server_warning(confinement: Confinement, *, remedy: str) -> str:
+    """Warn that a server started inside another application's Windows Job ends with it."""
+
+    job = confinement.job
+    return (
+        f"the server runs inside the Windows Job of {job.name} (pid {job.pid}) and ends when "
+        f"that application closes; starting it outside that Job failed ({confinement.reason}). "
+        f"{remedy}"
+    )
+
+
+def _server_command(instance: ServerInstance) -> tuple[list[str], dict[str, str]]:
+    """The background server's command line and environment."""
 
     environment = dict(os.environ)
     environment[CONSOLE_LOGGING_ENV_VAR] = "0"
@@ -107,6 +124,13 @@ def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
         "--data-dir",
         str(instance.data_dir),
     ]
+    return args, environment
+
+
+def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
+    """Start the foreground server entrypoint as a background subprocess."""
+
+    args, environment = _server_command(instance)
     if sys.platform == "win32":
         return _open_server_process(
             args,
@@ -183,7 +207,11 @@ def start_server(
             )
 
         logger.debug("Starting CLI-managed background server at %s", instance.url)
-        process = start_server_process(instance)
+        args, environment = _server_command(instance)
+        # A server started from another application's Windows Job must outlive it.
+        process, confinement = start_outside_foreign_job(
+            args, cwd=os.getcwd(), env=environment, spawn=partial(start_server_process, instance)
+        )
         logger.debug("Started CLI-managed background server process %s", process.pid)
         started_at = time.monotonic()
         deadline = started_at + startup_timeout_seconds
@@ -206,6 +234,11 @@ def start_server(
                     webui=probe_webui(instance),
                     log_path=instance.log_path,
                     process_id=process.pid,
+                    attention=(
+                        (confined_server_warning(confinement, remedy=_OUTSIDE_JOB_REMEDY),)
+                        if confinement is not None
+                        else ()
+                    ),
                 )
             if health.reachable:
                 logger.error(
@@ -590,6 +623,7 @@ def restart_server(
             webui=start_result.webui,
             log_path=start_result.log_path,
             process_id=start_result.process_id,
+            attention=start_result.attention,
         )
     return CommandResult(
         ok=False,
@@ -825,6 +859,7 @@ __all__ = [
     "PROCESS_CREATE_TIME_TOLERANCE_SECONDS",
     "WILDCARD_HOSTS",
     "CLI_SERVER_LOGGER_NAME",
+    "confined_server_warning",
     "start_server_process",
     "start_server",
     "find_listening_process",

@@ -10,9 +10,10 @@ from pathlib import Path
 
 import psutil  # type: ignore[import-untyped]
 
+from cli.application import operations
 from cli.application.autostart import UNIT_NAME, owned_unit, run_command
 from cli.application.operations import child_environment
-from cli.application.state import ApplicationError, Installation, discover
+from cli.application.state import ApplicationError, Installation, discover, exclusive
 from cli.server_management import (
     UNRESPONSIVE_SERVER_MESSAGE,
     CommandResult,
@@ -20,6 +21,7 @@ from cli.server_management import (
     ServerInstance,
     ServerState,
     classify_server,
+    confined_server_warning,
     probe_health,
     probe_health_patiently,
     probe_webui,
@@ -27,12 +29,18 @@ from cli.server_management import (
     stop_server,
 )
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR
+from core.utils.outside_job import Confinement, start_outside_foreign_job
 from core.utils.processes import subprocess_creation_flags
 
 # The startup log keeps one previous generation once it outgrows this bound.
 STARTUP_LOG_ROTATE_BYTES = 1024 * 1024
 
 OCCUPIED_MESSAGE = "Server port is occupied by another application version or startup mode"
+
+# Where the user starts a server that outlives the application whose Job holds the caller.
+_OUTSIDE_JOB_REMEDY = (
+    "To keep it running, start vBot from the Start menu and choose Restart server in its tray menu."
+)
 
 
 def target(install: Installation) -> ServerInstance:
@@ -141,22 +149,38 @@ def start(
     ]
     if verification:
         args.append("--verification-only")
+    app = install.version(version_id) / "app"
+    # The server writes its log lines to its daily log; the startup log keeps
+    # only output that bypasses logging, such as a crash before logging starts.
+    environment = {**child_environment(install), CONSOLE_LOGGING_ENV_VAR: "0"}
     startup_log = install.root / "logs" / "server-startup.log"
     startup_log.parent.mkdir(parents=True, exist_ok=True)
     _rotate_startup_log(startup_log)
-    with startup_log.open("ab") as output:
-        process = subprocess.Popen(
-            args,
-            cwd=install.version(version_id) / "app",
-            # The server writes its log lines to its daily log; the startup log keeps
-            # only output that bypasses logging, such as a crash before logging starts.
-            env={**child_environment(install), CONSOLE_LOGGING_ENV_VAR: "0"},
-            stdin=subprocess.DEVNULL,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            creationflags=subprocess_creation_flags(new_process_group=True, breakaway=breakaway),
-            start_new_session=os.name != "nt",
+
+    def spawn() -> subprocess.Popen[bytes]:
+        with startup_log.open("ab") as output:
+            return subprocess.Popen(
+                args,
+                cwd=app,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                creationflags=subprocess_creation_flags(
+                    new_process_group=True, breakaway=breakaway
+                ),
+                start_new_session=os.name != "nt",
+            )
+
+    confinement: Confinement | None = None
+    if breakaway:
+        # A server started from another application's Job must outlive it; one
+        # started through WMI has no startup log output.
+        process, confinement = start_outside_foreign_job(
+            args, cwd=app, env=environment, spawn=spawn
         )
+    else:
+        process = spawn()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline and process.poll() is None:
         health = probe_health(instance)
@@ -171,6 +195,11 @@ def start(
                 process_id=process.pid,
                 health=health,
                 webui=probe_webui(instance) if not verification else None,
+                attention=(
+                    (confined_server_warning(confinement, remedy=_OUTSIDE_JOB_REMEDY),)
+                    if confinement is not None
+                    else ()
+                ),
             )
         time.sleep(0.25)
     if process.poll() is None:
@@ -252,3 +281,36 @@ def stop(install: Installation, *, initiator: str = "cli") -> CommandResult:
                 instance=result.instance,
             )
     return result
+
+
+def start_or_restart(install: Installation, command: str) -> CommandResult:
+    """Run ``vbot server start`` or ``restart`` (``command``) for a CLI caller.
+
+    A caller that another application's Windows Job confines (a coding agent's
+    shell, say) hands the command to the running tray, which runs outside that
+    Job (``operations.request_server``), so the server outlives that
+    application. Without a tray that takes it, the command runs here, where
+    ``start`` leaves such a Job through WMI. Raises ``ApplicationError`` while
+    another application operation runs.
+    """
+
+    if operations.confining_job() is not None and operations.host_running(install):
+        answer = operations.request_server(install, command)
+        if answer is not None:
+            instance = target(install)
+            ok = answer.get("ok") is True
+            process_id = answer.get("process_id")
+            return CommandResult(
+                ok=ok,
+                message=str(answer.get("message") or ("started" if ok else "failed")),
+                instance=instance,
+                health=probe_health(instance),
+                webui=probe_webui(instance) if ok else None,
+                process_id=process_id if type(process_id) is int else None,
+            )
+    with exclusive(install.root):
+        if command == "restart":
+            stopped = stop(install)
+            if not stopped.ok:
+                return stopped
+        return start(install)

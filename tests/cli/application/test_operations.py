@@ -250,9 +250,11 @@ def test_update_worker_starts_outside_a_foreign_job_of_the_requester(
     if route == "running-tray":
         _running_tray(install)
     elif route == "breakaway-allowed":
-        monkeypatch.setattr(operations, "foreign_job", lambda: ForeignJob("codex.exe", 4711, False))
+        monkeypatch.setattr(
+            core_processes, "foreign_job", lambda: ForeignJob("codex.exe", 4711, False)
+        )
     else:
-        monkeypatch.setattr(operations, "foreign_job", lambda: _CONFINED)
+        monkeypatch.setattr(core_processes, "foreign_job", lambda: _CONFINED)
 
     accepted = operations.request_update(install, host=route == "tray-itself")
 
@@ -276,7 +278,7 @@ def test_handoff_no_tray_takes_is_settled_by_the_requester(
         operations, "spawn_worker", lambda _install, operation: spawned.append(operation.id)
     )
     if confined:
-        monkeypatch.setattr(operations, "foreign_job", lambda: _CONFINED)
+        monkeypatch.setattr(core_processes, "foreign_job", lambda: _CONFINED)
         with pytest.raises(ApplicationError, match="codex.exe"):
             operations.request_update(install)
         failed = cast(Operation, operations.status(install))
@@ -294,7 +296,7 @@ def test_confined_requester_refuses_when_no_tray_can_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install = _install(tmp_path)
-    monkeypatch.setattr(operations, "foreign_job", lambda: _CONFINED)
+    monkeypatch.setattr(core_processes, "foreign_job", lambda: _CONFINED)
     monkeypatch.setattr(operations, "spawn_worker", lambda *_args: pytest.fail("must not spawn"))
 
     def refuse(_install: Installation) -> None:
@@ -306,6 +308,64 @@ def test_confined_requester_refuses_when_no_tray_can_start(
         operations.request_update(install)
     assert cast(Operation, operations.status(install)).phase == "failed"
     assert not (install.root / operations.DISPATCH_REQUEST).exists()
+
+
+@pytest.mark.parametrize(
+    ("tray", "expected"),
+    [
+        pytest.param("answers", {"ok": True, "message": "started", "process_id": 99}, id="answers"),
+        pytest.param("fails", {"ok": False, "message": "port is occupied"}, id="fails"),
+        # A tray of an older version drops the request it cannot read.
+        pytest.param("older", None, id="older-tray"),
+        pytest.param("silent", None, id="silent"),
+        pytest.param("accepts-only", {"ok": False}, id="accepts-only"),
+    ],
+)
+def test_server_request_returns_the_trays_answer_or_none_when_no_tray_took_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tray: str,
+    expected: dict[str, object] | None,
+) -> None:
+    install = _install(tmp_path)
+    request_file = install.root / operations.DISPATCH_REQUEST
+    taken: list[operations.ServerRequest] = []
+
+    def poll(_seconds: float) -> None:
+        """One refresh of the tray while the requester waits."""
+
+        if tray == "older":
+            request_file.unlink(missing_ok=True)
+            return
+        if (request := operations.dispatch_requested(install)) is None:
+            return
+        taken.append(request)
+        if tray == "answers":
+            operations.answer_server_request(
+                install, request, ok=True, message="started", process_id=99
+            )
+        elif tray == "fails":
+            operations.answer_server_request(install, request, ok=False, message="port is occupied")
+
+    monkeypatch.setattr(operations, "_sleep", poll)
+    if tray == "silent":
+        monkeypatch.setattr(operations, "HOST_DISPATCH_SECONDS", 0.0)
+    if tray == "accepts-only":
+        monkeypatch.setattr(operations, "HOST_SERVER_SECONDS", 0.0)
+
+    answer = operations.request_server(install, "restart")
+
+    if expected is None:
+        assert answer is None
+    else:
+        assert answer is not None
+        assert {key: answer.get(key) for key in expected} == expected
+        assert [request.command for request in taken] == ["restart"]
+    if tray == "accepts-only":
+        assert answer is not None and "no result within" in answer["message"]
+    # Nothing is left for a later tray to run by surprise, and no result file lingers.
+    assert not request_file.exists()
+    assert list(install.root.glob("host-server-result-*")) == []
 
 
 def test_tray_consumes_dispatch_requests_once(
@@ -321,10 +381,15 @@ def test_tray_consumes_dispatch_requests_once(
     operations.dispatch_requested(install)
     assert not request.exists()
     # An invalid request is removed, so a tray does not fail on it every second.
-    request.write_text('{"schema_version": 2}', encoding="utf-8")
-    with pytest.raises(ApplicationError):
-        operations.dispatch_requested(install)
-    assert not request.exists()
+    for invalid in (
+        '{"schema_version": 2}',
+        '{"schema_version": 1, "server": "stop", "request": "' + "a" * 32 + '"}',
+        '{"schema_version": 1, "server": "start", "request": "../escape"}',
+    ):
+        request.write_text(invalid, encoding="utf-8")
+        with pytest.raises(ApplicationError):
+            operations.dispatch_requested(install)
+        assert not request.exists()
 
 
 def test_observer_reports_the_newest_operation_and_rereads_only_changed_records(

@@ -34,7 +34,13 @@ from cli.application.state import (
     write_json,
 )
 from cli.application.tray import TraySink, TrayState, run_tray
-from cli.server_management import HealthProbeResult, ServerInstance, ServerState, classify_server
+from cli.server_management import (
+    CommandResult,
+    HealthProbeResult,
+    ServerInstance,
+    ServerState,
+    classify_server,
+)
 from core.utils.logging import LogManager
 from core.utils.processes import subprocess_creation_flags
 from core.utils.server_control import process_started
@@ -85,6 +91,8 @@ class ApplicationFacade:
         self._progress_history = False
         self._observed = False
         self._last_update = ""
+        # A server start or restart another process handed over, until the tray queues it.
+        self._server_request: operations.ServerRequest | None = None
         # Tells how the owned server process ended when it bypassed its shutdown.
         self._server_exit = ServerExitWatch(self._server_target) if install.owns_server else None
         self._activity = ActivityRecorder(
@@ -94,7 +102,8 @@ class ApplicationFacade:
         )
 
     def state(self) -> TrayState:
-        # One stat per poll: another process handed its update worker to this tray.
+        # One stat per poll: another process handed an update worker or a server
+        # start to this tray.
         if (self._install.root / operations.DISPATCH_REQUEST).exists():
             self._dispatch_requested()
         try:
@@ -106,6 +115,8 @@ class ApplicationFacade:
         self._observe_update(operation)
         server_state, server_url = self._server()
         version = self._version()
+        # Handed to the controller exactly once; a failure above keeps it for the next poll.
+        server_request, self._server_request = self._server_request, None
         return TrayState(
             server_state=server_state,
             install_shape=self._install.install_shape,
@@ -119,6 +130,7 @@ class ApplicationFacade:
             running_since=self._activity.running_since(),
             details=self._details(server_url),
             restart_pending=update_idle and self._activation_changed(),
+            server_request=server_request,
         )
 
     def record_tray_start(self, *, successor: bool) -> None:
@@ -166,15 +178,20 @@ class ApplicationFacade:
             self._server_exit.close()
 
     def start_server(self) -> None:
+        self._start_server()
+
+    def _start_server(self) -> CommandResult:
         self._require_server()
         self._activity.expect_start()
         with (
             self._recording("Could not start the server"),
             exclusive(self._install.root, "operation"),
         ):
-            self._require_success(processes.start(self._install))
+            result = processes.start(self._install)
+            self._require_success(result)
         self._clear_status_error()
         self._reconnect()
+        return result
 
     def stop_server(self, *, initiator: str = "tray_stop") -> None:
         self._require_server()
@@ -187,6 +204,9 @@ class ApplicationFacade:
         self._clear_status_error()
 
     def restart_server(self) -> None:
+        self._restart_server()
+
+    def _restart_server(self) -> CommandResult:
         self._require_server()
         self._expect_stop("tray_restart")
         with (
@@ -194,9 +214,31 @@ class ApplicationFacade:
             exclusive(self._install.root, "operation"),
         ):
             self._require_success(processes.stop(self._install, initiator="tray_restart"))
-            self._require_success(processes.start(self._install))
+            result = processes.start(self._install)
+            self._require_success(result)
         self._clear_status_error()
         self._reconnect()
+        return result
+
+    def answer_server_request(self, request: operations.ServerRequest) -> None:
+        """Run a server start or restart another process handed over, and report its result.
+
+        The requester, such as a CLI inside a coding agent's Windows Job, waits
+        for the result; the server this tray starts outlives that application.
+        """
+
+        try:
+            result = (
+                self._restart_server() if request.command == "restart" else self._start_server()
+            )
+        except Exception as error:
+            operations.answer_server_request(
+                self._install, request, ok=False, message=str(error) or type(error).__name__
+            )
+            raise
+        operations.answer_server_request(
+            self._install, request, ok=True, message=result.message, process_id=result.process_id
+        )
 
     def open_desktop(self, *, host: str | None = None, port: int | None = None) -> None:
         from cli.application.desktop import open_desktop
@@ -298,19 +340,24 @@ class ApplicationFacade:
         self._status_error = ""
 
     def _dispatch_requested(self) -> None:
-        """Start the update worker another process handed over (``operations.dispatch_requested``).
+        """Take over what another process handed to this tray (``operations.dispatch_requested``).
 
         This tray runs outside the Windows Job of a requester such as a coding
-        agent's shell, so the worker and the servers it starts outlive that
-        requester. Runs on the refresh thread: the requester waits for it.
+        agent's shell, so the update worker and the servers it starts outlive
+        that requester. Runs on the refresh thread: the requester waits for it.
+        An update worker starts here; a server start or restart is accepted here
+        and runs as a tray action (``answer_server_request``).
         """
 
         try:
-            operations.dispatch_requested(self._install)
+            request = operations.dispatch_requested(self._install)
         except Exception as error:
-            _LOGGER.warning("Requested update worker failed to start (error=%s)", error)
-            self._activity.action_failed(f"Could not start a requested update: {error}")
-            self.report_error(f"Could not start a requested update: {error}")
+            _LOGGER.warning("A request handed to the tray failed (error=%s)", error)
+            self._activity.action_failed(f"Could not run a request handed to the tray: {error}")
+            self.report_error(f"Could not run a request handed to the tray: {error}")
+            return
+        if request is not None:
+            self._server_request = request
 
     def _expect_stop(self, initiator: str) -> None:
         self._activity.expect_stop(initiator)
