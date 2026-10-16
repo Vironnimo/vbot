@@ -781,7 +781,7 @@ def _read_patch(call: _Call) -> _Call:
         raise _RefusalError(
             "invalid_arguments", "old_string and new_string are identical; nothing to change."
         )
-    call.file_path = call.file_path or SKILL_FILENAME
+    # An omitted file_path patches SKILL.md, or the one support file holding the text.
     return call
 
 
@@ -1013,7 +1013,41 @@ def _apply(
 def _patch(
     authoring: SkillAuthoringService, target_root: Path, call: _Call, writer: SkillWriter
 ) -> tuple[SkillWriteResult, str]:
+    """Patch the named file, else SKILL.md or the one support file holding old_string.
+
+    Without file_path, a patch whose old_string is not in SKILL.md but matches
+    once in exactly one support file changes that file, with a note: the text
+    names its place. A named file_path is never exchanged for another file;
+    there, and when the text is in several places, the miss names the file.
+    """
     file_path = call.file_path or SKILL_FILENAME
+    try:
+        return _patch_file(authoring, target_root, call, writer, file_path)
+    except _RefusalError as refusal:
+        if refusal.code != "text_not_found" or file_path != SKILL_FILENAME:
+            raise
+        holders = _support_files_holding(authoring, target_root, call)
+        if len(holders) != 1:
+            raise
+        holder, once = holders[0]
+        if call.file_path is None and once:
+            patched = _patch_file(authoring, target_root, call, writer, holder)
+            call.notes.append(
+                f"old_string was not in SKILL.md but in {holder}, the only file of the Skill "
+                "that holds it, so that file was patched."
+            )
+            return patched
+        hint = f'The text is in {holder}; to patch it there, add "file_path": "{holder}".'
+        raise _RefusalError(refusal.code, f"{refusal.message}\n{hint}") from None
+
+
+def _patch_file(
+    authoring: SkillAuthoringService,
+    target_root: Path,
+    call: _Call,
+    writer: SkillWriter,
+    file_path: str,
+) -> tuple[SkillWriteResult, str]:
     found: list[FuzzyReplacement] = []
     unchanged: list[bool] = []
 
@@ -1024,14 +1058,7 @@ def _patch(
         call.notes.extend(notes)
         return replacement.new_content
 
-    try:
-        result = authoring.rewrite(target_root, call.name, file_path, edit, writer=writer)
-    except _RefusalError as refusal:
-        if refusal.code == "text_not_found" and call.file_path == SKILL_FILENAME:
-            hint = _support_file_hint(authoring, target_root, call)
-            if hint:
-                raise _RefusalError(refusal.code, f"{refusal.message}\n{hint}") from None
-        raise
+    result = authoring.rewrite(target_root, call.name, file_path, edit, writer=writer)
     replacement = found[0]
     where = f"{file_path} of Skill '{call.name}'"
     if unchanged[0]:
@@ -1131,12 +1158,15 @@ def _not_found_message(current: str, old: str, name: str, file_path: str) -> str
     return "\n".join(lines)
 
 
-def _support_file_hint(authoring: SkillAuthoringService, target_root: Path, call: _Call) -> str:
+def _support_files_holding(
+    authoring: SkillAuthoringService, target_root: Path, call: _Call
+) -> list[tuple[str, bool]]:
+    """The support files old_string matches in, each with whether it matches once."""
     package = find_skill_package_dir(target_root, call.name)
     if package is None:
-        return ""
+        return []
     old = _lf(call.old_string or "")
-    matches: list[str] = []
+    holders: list[tuple[str, bool]] = []
     for directory in RESOURCE_DIRECTORIES:
         # Path.walk never enters a link, Windows junctions included.
         walk = (package / directory).walk()
@@ -1148,11 +1178,10 @@ def _support_file_hint(authoring: SkillAuthoringService, target_root: Path, call
                 text = authoring.read_text(target_root, call.name, relative)
             except SkillAuthoringError, OSError:
                 continue
-            if _find(text, old, old, False) is not None:
-                matches.append(relative)
-    if len(matches) != 1:
-        return ""
-    return f'The text is in {matches[0]}; to patch it there, add "file_path": "{matches[0]}".'
+            found = _find(text, old, old, False)
+            if found is not None:
+                holders.append((relative, isinstance(found, FuzzyReplacement)))
+    return holders
 
 
 def _unknown_skill_message(name: str, root: Path, *, own: bool = True) -> str:

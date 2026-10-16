@@ -2,7 +2,8 @@
 
 Models write Tool-call arguments as JSON text, and some Providers pass on an
 argument value they could not decode as text. Two slips have only one reading
-and are repaired here: a bare value (``"path": .`` means ``"path": "."``) and
+and are repaired here: a bare value (``"path": C:/repo`` means
+``"path": "C:/repo"``) and
 a ``"`` inside the text of a known field that should have been written ``\\"``.
 Every other break is explained for the error the Model reads: where it is, in
 which field, the text around it and how to write it.
@@ -22,8 +23,10 @@ from dataclasses import dataclass
 JsonPath = tuple[str | int, ...]
 
 # A bare value: one run without whitespace, quotes, backslashes, commas,
-# colons, braces or brackets, ending where JSON structure continues.
-_BARE_VALUE = re.compile(r"[^\s\"',{}\[\]:\\]+")
+# braces or brackets, ending where JSON structure continues. A colon belongs to
+# it only before a slash, as in a drive path (C:/repo) or a URL (https://...);
+# any other colon can be the separator of a field written without braces.
+_BARE_VALUE = re.compile(r"[^\s\"',{}\[\]:\\](?:[^\s\"',{}\[\]:\\]|:(?=/))*")
 _BARE_VALUE_END = re.compile(r"\s*[,}\]]")
 # Words that name a value rather than being text: quoting them would turn a
 # missing value or a boolean into text.
@@ -65,10 +68,12 @@ def quote_bare_values(text: str) -> str | None:
 
     A bare value stands where JSON expects a value, after ``:`` or as an array
     item, is one run of characters without whitespace, quotes, backslashes,
-    commas, colons, braces or brackets, and is followed by ``,``, ``}`` or
-    ``]``: ``"path": .`` or ``"glob": *.py``. Its one reading is that text. A
-    word that names a value instead (``None``, ``undefined``, ``True``) is not
-    text, so a call holding one stays invalid.
+    commas, braces or brackets, and is followed by ``,``, ``}`` or ``]``:
+    ``"path": .``, ``"glob": *.py`` or ``"path": C:/repo``. A colon belongs to
+    it only before a slash (a drive path or a URL); ``"options": recursive:true``
+    can be a field that lost its braces. Its one reading is that text. A word
+    that names a value instead (``None``, ``undefined``, ``True``) is not text,
+    so a call holding one stays invalid.
     """
     repaired = text
     for _ in range(_MAX_BARE_VALUES):
