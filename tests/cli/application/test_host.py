@@ -282,6 +282,39 @@ def test_update_milestones_are_recorded_once_and_the_result_toasted_once(
     assert any(label == "Last update" for label, _value in facade.state().details)
 
 
+def test_tray_starts_update_workers_itself_and_for_other_requesters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install = _install(tmp_path)
+    facade = host.ApplicationFacade(install)
+    dispatched: list[Path] = []
+    requested: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        host.operations, "dispatch_requested", lambda target: dispatched.append(target.root)
+    )
+    monkeypatch.setattr(
+        host.operations,
+        "request_update",
+        lambda _install, **kwargs: requested.append(kwargs),
+    )
+
+    facade.start_update()
+    assert requested == [{"host": True}]
+    facade.state()
+    assert dispatched == []
+    # Another process, such as a CLI inside a coding agent's Windows Job, handed one over.
+    (install.root / host.operations.DISPATCH_REQUEST).write_text("{}", encoding="utf-8")
+    facade.state()
+    assert dispatched == [install.root]
+
+    def refuse(_install: Installation) -> None:
+        raise ApplicationError("the update process could not start")
+
+    monkeypatch.setattr(host.operations, "dispatch_requested", refuse)
+    assert "the update process could not start" in facade.state().error
+    assert _activity(install)[-1] == "action_failed"
+
+
 def test_tray_initiated_stop_never_counts_as_an_unexpected_server_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -560,8 +593,11 @@ def test_main_recovers_before_the_tray_and_only_a_first_host_starts_the_server(
     monkeypatch.setattr(host, "discover", lambda: install)
     monkeypatch.setattr(host, "exclusive", lock)
     monkeypatch.setattr(host, "LogManager", Manager)
+    # The tray starts the worker itself; it never hands it to another host.
     monkeypatch.setattr(
-        host.operations, "recover_operations", lambda _install: order.append("recover")
+        host.operations,
+        "recover_operations",
+        lambda _install, *, host: order.append(f"recover:host={host}"),
     )
     # The tray shows at once and starts the server as its first action.
     monkeypatch.setattr(
@@ -571,7 +607,13 @@ def test_main_recovers_before_the_tray_and_only_a_first_host_starts_the_server(
     )
 
     assert host.main() == 0
-    assert order == [f"lock:host:{timeout:g}", "logging", "recover", f"tray:start={start}", "close"]
+    assert order == [
+        f"lock:host:{timeout:g}",
+        "logging",
+        "recover:host=True",
+        f"tray:start={start}",
+        "close",
+    ]
     assert _activity(install) == [recorded]
 
 
@@ -598,7 +640,7 @@ def test_main_keeps_tray_running_when_recovery_fails(
     monkeypatch.setattr(
         host.operations,
         "recover_operations",
-        lambda _install: (_ for _ in ()).throw(ApplicationError("record unreadable")),
+        lambda _install, **_kwargs: (_ for _ in ()).throw(ApplicationError("record unreadable")),
     )
     monkeypatch.setattr(
         host,

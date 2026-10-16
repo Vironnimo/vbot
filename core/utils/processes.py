@@ -37,7 +37,9 @@ _JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
 _JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x00001000
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _JOB_OBJECT_BASIC_LIMIT_INFORMATION_CLASS = 2
+_JOB_OBJECT_BASIC_PROCESS_ID_LIST_CLASS = 3
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+_ERROR_MORE_DATA = 234
 _WINDOWS_SERVER_JOB_HANDLE: int | None = None
 _POSIX_LIFETIME_READ_FD: int | None = None
 _POSIX_LIFETIME_WRITE_FD: int | None = None
@@ -636,6 +638,130 @@ def _windows_explicit_breakaway_allowed() -> bool:
     if limit_flags & _JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK:
         return False
     return bool(limit_flags & _JOB_OBJECT_LIMIT_BREAKAWAY_OK)
+
+
+@dataclass(frozen=True, slots=True)
+class ForeignJob:
+    """Another application's Windows Job that holds this process.
+
+    ``name`` and ``pid`` identify the outermost ancestor of this process inside
+    that Job, usually the application whose exit ends the Job and every process
+    in it. ``confines_children`` is true when a child started with
+    ``subprocess_creation_flags(breakaway=True)`` stays inside the Job as well.
+    """
+
+    name: str
+    pid: int
+    confines_children: bool
+
+
+def foreign_job(*, platform_name: str = os.name) -> ForeignJob | None:
+    """Return the Windows Job of another application that holds this process, if any.
+
+    Only the immediate Job is visible. Its outermost member in this process's
+    ancestry decides whose it is: a vBot executable (the tray in the Job of the
+    logon tasks, a server in its own Job) makes it vBot's, and this process
+    itself (its parent is outside the Job, so nothing tells who placed it
+    there) makes it unknown; both return ``None``. Windows API failures raise
+    ``OSError``.
+    """
+    if platform_name != "nt":
+        return None
+    job = _windows_immediate_job()
+    if job is None:
+        return None
+    members, limit_flags = job
+    import psutil  # type: ignore[import-untyped]
+
+    current = owner = psutil.Process()
+    # Ancestry is best effort: an exited or inaccessible parent ends the walk.
+    with contextlib.suppress(psutil.Error):
+        while (parent := owner.parent()) is not None and parent.pid in members:
+            owner = parent
+    if owner.pid == current.pid:
+        return None
+    try:
+        name = str(owner.name())
+    except psutil.Error:
+        name = "an unidentified process"
+    if name.lower().startswith("vbot"):
+        return None
+    escapes = _JOB_OBJECT_LIMIT_BREAKAWAY_OK | _JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
+    return ForeignJob(name, owner.pid, confines_children=not limit_flags & escapes)
+
+
+def _windows_immediate_job() -> tuple[frozenset[int], int] | None:
+    """Return the member pids and limit flags of this process's immediate Job."""
+    from ctypes import wintypes
+
+    windows_ctypes = cast(Any, ctypes)
+
+    class BasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    kernel32 = windows_ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, wintypes.LPBOOL]
+    kernel32.IsProcessInJob.restype = wintypes.BOOL
+    kernel32.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+    in_job = wintypes.BOOL()
+    if not kernel32.IsProcessInJob(kernel32.GetCurrentProcess(), None, ctypes.byref(in_job)):
+        raise windows_ctypes.WinError(windows_ctypes.get_last_error())
+    if not in_job.value:
+        return None
+    limits = BasicLimitInformation()
+    if not kernel32.QueryInformationJobObject(
+        None,
+        _JOB_OBJECT_BASIC_LIMIT_INFORMATION_CLASS,
+        ctypes.byref(limits),
+        ctypes.sizeof(limits),
+        None,
+    ):
+        raise windows_ctypes.WinError(windows_ctypes.get_last_error())
+    capacity = 256
+    while True:
+
+        class ProcessIdList(ctypes.Structure):
+            _fields_ = [
+                ("NumberOfAssignedProcesses", wintypes.DWORD),
+                ("NumberOfProcessIdsInList", wintypes.DWORD),
+                ("ProcessIdList", ctypes.c_size_t * capacity),
+            ]
+
+        listed = ProcessIdList()
+        if kernel32.QueryInformationJobObject(
+            None,
+            _JOB_OBJECT_BASIC_PROCESS_ID_LIST_CLASS,
+            ctypes.byref(listed),
+            ctypes.sizeof(listed),
+            None,
+        ):
+            count = int(listed.NumberOfProcessIdsInList)
+            return frozenset(int(pid) for pid in listed.ProcessIdList[:count]), int(
+                limits.LimitFlags
+            )
+        error = windows_ctypes.get_last_error()
+        if error != _ERROR_MORE_DATA or capacity >= 65536:
+            raise windows_ctypes.WinError(error)
+        capacity = min(65536, max(capacity * 4, int(listed.NumberOfAssignedProcesses) + 64))
 
 
 TASKKILL_TREE_TIMEOUT_SECONDS = 5

@@ -380,6 +380,104 @@ def test_windows_job_kills_descendant_when_containment_owner_crashes(tmp_path: P
     assert not psutil.pid_exists(child_pid)
 
 
+class _FakeProcess:
+    def __init__(self, pid: int, name: str, parent: _FakeProcess | None = None) -> None:
+        self.pid = pid
+        self._name = name
+        self._parent = parent
+
+    def name(self) -> str:
+        return self._name
+
+    def parent(self) -> _FakeProcess | None:
+        return self._parent
+
+
+def _ancestry(*names: str) -> _FakeProcess:
+    """This process first, then its ancestors; pids count 10, 20, 30, ..."""
+    process: _FakeProcess | None = None
+    for index, name in reversed(list(enumerate(names, start=1))):
+        process = _FakeProcess(index * 10, name, process)
+    assert process is not None
+    return process
+
+
+@pytest.mark.parametrize(
+    ("ancestry", "members", "limit_flags", "expected"),
+    [
+        (("vBot.exe", "pwsh.exe"), None, 0, None),
+        (
+            ("vBot.exe", "pwsh.exe", "codex.exe", "explorer.exe"),
+            {10, 20, 30},
+            0,
+            process_utils.ForeignJob("codex.exe", 30, confines_children=True),
+        ),
+        (
+            ("vBot.exe", "pwsh.exe", "codex.exe", "explorer.exe"),
+            {10, 20, 30},
+            process_utils._JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+            process_utils.ForeignJob("codex.exe", 30, confines_children=False),
+        ),
+        (("vBot.Server.exe", "vBot.exe", "svchost.exe"), {10, 20, 99}, 0, None),
+        (("python.exe", "svchost.exe"), {10, 99}, 0, None),
+    ],
+    ids=[
+        "outside-a-job",
+        "coding-agent-job",
+        "breakaway-allowed",
+        "tray-in-logon-task-job",
+        "placed-by-outsider",
+    ],
+)
+def test_foreign_job_names_the_application_that_owns_this_process_job(
+    monkeypatch: pytest.MonkeyPatch,
+    ancestry: tuple[str, ...],
+    members: set[int] | None,
+    limit_flags: int,
+    expected: process_utils.ForeignJob | None,
+) -> None:
+    job = None if members is None else (frozenset(members), limit_flags)
+    monkeypatch.setattr(process_utils, "_windows_immediate_job", lambda: job)
+    current = _ancestry(*ancestry)
+    monkeypatch.setattr(psutil, "Process", lambda: current)
+
+    assert process_utils.foreign_job(platform_name="nt") == expected
+    assert process_utils.foreign_job(platform_name="posix") is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")
+def test_foreign_job_reads_the_real_job_of_a_parent_application() -> None:
+    # The "application" puts itself into a new Job, then starts the inspecting
+    # child with the base interpreter: a venv's python.exe is a launcher that
+    # starts its interpreter outside the caller's view and in a Job of its own.
+    application_code = (
+        "import ctypes,os,subprocess,sys; from ctypes import wintypes; "
+        "k=ctypes.WinDLL('kernel32',use_last_error=True); "
+        "k.CreateJobObjectW.restype=wintypes.HANDLE; "
+        "k.GetCurrentProcess.restype=wintypes.HANDLE; "
+        "k.AssignProcessToJobObject.argtypes=(wintypes.HANDLE,wintypes.HANDLE); "
+        "job=k.CreateJobObjectW(None,None); "
+        "assert k.AssignProcessToJobObject(job,k.GetCurrentProcess()); "
+        "print(os.getpid()); "
+        "print(subprocess.run([getattr(sys,'_base_executable',sys.executable),'-c',"
+        "'from core.utils.processes import foreign_job; print(repr(foreign_job()))'],"
+        "capture_output=True,text=True,timeout=20,"
+        "env={**os.environ,'PYTHONPATH':os.pathsep.join(sys.path)}).stdout.strip())"
+    )
+    result = subprocess.run(
+        [getattr(sys, "_base_executable", sys.executable), "-c", application_code],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+    )
+    pid, output = result.stdout.splitlines()[:2]
+
+    # A Job without limits forbids breakaway, so the worker would stay inside too.
+    assert output.startswith("ForeignJob(name=")
+    assert output.rstrip().endswith(f"pid={pid}, confines_children=True)")
+
+
 # --- tree termination ------------------------------------------------------------
 
 

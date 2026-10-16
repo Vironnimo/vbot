@@ -94,6 +94,9 @@ class ApplicationFacade:
         )
 
     def state(self) -> TrayState:
+        # One stat per poll: another process handed its update worker to this tray.
+        if (self._install.root / operations.DISPATCH_REQUEST).exists():
+            self._dispatch_requested()
         try:
             operation = self._observer.latest()
             update_idle = operation is None or operation.terminal
@@ -224,7 +227,7 @@ class ApplicationFacade:
 
     def start_update(self) -> None:
         with self._recording("Could not start an update"):
-            operations.request_update(self._install)
+            operations.request_update(self._install, host=True)
 
     def open_logs(self) -> None:
         path = self._install.root / "logs"
@@ -293,6 +296,21 @@ class ApplicationFacade:
 
     def _clear_status_error(self) -> None:
         self._status_error = ""
+
+    def _dispatch_requested(self) -> None:
+        """Start the update worker another process handed over (``operations.dispatch_requested``).
+
+        This tray runs outside the Windows Job of a requester such as a coding
+        agent's shell, so the worker and the servers it starts outlive that
+        requester. Runs on the refresh thread: the requester waits for it.
+        """
+
+        try:
+            operations.dispatch_requested(self._install)
+        except Exception as error:
+            _LOGGER.warning("Requested update worker failed to start (error=%s)", error)
+            self._activity.action_failed(f"Could not start a requested update: {error}")
+            self.report_error(f"Could not start a requested update: {error}")
 
     def _expect_stop(self, initiator: str) -> None:
         self._activity.expect_stop(initiator)
@@ -532,7 +550,7 @@ def main() -> int:
                 facade.record_tray_start(successor=successor)
                 start = False
                 try:
-                    operations.recover_operations(install)
+                    operations.recover_operations(install, host=True)
                     operation = operations.status(install)
                     # A successor keeps the server as its predecessor left it,
                     # including a server the user stopped on purpose.
