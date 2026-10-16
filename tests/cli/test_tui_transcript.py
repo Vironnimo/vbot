@@ -1,4 +1,4 @@
-"""Long conversations keep bounded widgets and retain operator-owned state."""
+"""Long conversations paint only what shows and retain operator-owned state."""
 
 from __future__ import annotations
 
@@ -46,20 +46,23 @@ async def test_long_run_viewport_keeps_disclosures_and_reading_position() -> Non
         await ready.wait()
         await pilot.pause()
         view = app.conversation
+        transcript = app.transcript
         assert view is not None
-        assert len(app.rows) < 80
-        assert len(list(app.screen.walk_children())) < 400
-        row = app.rows["tool-999"]
-        assert row.body is None
-        assert row.fold is not None
-        row.fold.collapsed = False
+        # Only the screens around the viewport are painted; the rest are heights.
+        painted = [row for row in transcript._rows if row.lines is not None]
+        assert len(painted) < 200
+        assert transcript.displays("tool-999")
+
+        # Opening a step keeps its header on the same screen line.
+        header = transcript._offsets[transcript._index["tool-999"]] - transcript.scroll_y
+        transcript.toggle("tool-999")
         await pilot.pause()
-        assert row.body is not None
-        app.transcript.scroll_home(animate=False, immediate=True)
-        await app.transcript._refresh_window()
+        assert "tool-999" in view.expanded_rows
+        assert transcript._offsets[transcript._index["tool-999"]] - transcript.scroll_y == header
+
+        transcript.scroll_home(animate=False, immediate=True)
         await pilot.pause()
-        assert "tool-999" not in app.rows
-        anchor = app.transcript.reading_anchor()
+        anchor = transcript.reading_anchor()
         view.items = [
             *view.items,
             {
@@ -70,7 +73,7 @@ async def test_long_run_viewport_keeps_disclosures_and_reading_position() -> Non
         ]
         await app._render()
         await pilot.pause()
-        assert app.transcript.reading_anchor() == anchor
+        assert transcript.reading_anchor() == anchor
         assert view.unread_output
         view.items = [
             {
@@ -82,15 +85,17 @@ async def test_long_run_viewport_keeps_disclosures_and_reading_position() -> Non
         ]
         await app._render()
         await pilot.pause()
-        assert app.transcript.reading_anchor() == anchor
+        assert transcript.reading_anchor() == anchor
+
+        # Disclosure state belongs to the Conversation and survives repainting.
         app.action_latest()
-        app.transcript.scroll_end(animate=False, immediate=True)
-        await app.transcript._refresh_window()
         await pilot.pause()
-        restored = app.rows["tool-999"]
-        assert restored is not row
-        assert restored.fold is not None and not restored.fold.collapsed
-        assert restored.body is not None
+        assert transcript.is_vertical_scroll_end
+        row = transcript._rows[transcript._index["tool-999"]]
+        assert row.lines is not None and len(row.lines) > 1
+        transcript.toggle("tool-999")
+        assert "tool-999" not in view.expanded_rows
+        assert len(row.lines) == 1
 
 
 @pytest.mark.asyncio
@@ -124,7 +129,7 @@ async def test_cached_session_is_visible_while_its_authoritative_refresh_waits()
         server.delay = True
         worker = app._start(lambda: app._open(view))
         await blocked.wait()
-        assert "cached-text" in app.rows
+        assert app.transcript.displays("cached-text")
         assert app.query_one(TextArea).text == "Keep this draft"
         release.set()
         await worker.wait()
@@ -188,6 +193,7 @@ def test_windowed_history_pages_and_reconnect_keep_the_loaded_prefix() -> None:
     view.child_page(
         {
             "run_id": "run",
+            "before": "step-8",
             "items": [
                 {"id": "gap", "type": "history_gap", "position": -1, "before": "step-6"},
                 child(6),
@@ -213,3 +219,59 @@ def test_windowed_history_pages_and_reconnect_keep_the_loaded_prefix() -> None:
     assert [item["id"] for item in view.items[0]["items"]][1:3] == ["step-7", "step-6"]
     view.page({"history_generation": "other", "items": [run(10, 12)]})
     assert [item["position"] for item in view.items[0]["items"]] == [-1, 10, 11]
+
+
+@pytest.mark.asyncio
+async def test_earlier_run_steps_load_once_their_gap_comes_into_view() -> None:
+    def step(position: int) -> dict[str, Any]:
+        return {
+            "id": f"step-{position}",
+            "type": "tool_call",
+            "name": "read",
+            "status": "success",
+            "position": position,
+        }
+
+    def gap(before: int) -> dict[str, Any]:
+        return {
+            "id": "run-gap",
+            "type": "history_gap",
+            "run_id": "run",
+            "before": f"step-{before}",
+            "position": -1,
+        }
+
+    class WindowedServer(Server):
+        @override
+        async def rpc(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            if method == "chat.timeline_children":
+                self.calls.append((method, dict(params or {})))
+                return {
+                    "run_id": "run",
+                    "before": (params or {})["before"],
+                    "history_generation": "one",
+                    "items": [step(0), step(1)],
+                }
+            return await super().rpc(method, params)
+
+    server = WindowedServer()
+    server.items = [
+        {
+            "id": "run",
+            "type": "assistant_run",
+            "run_id": "run",
+            "status": "completed",
+            "window_start": 2,
+            "items": [gap(2), step(2), step(3)],
+        }
+    ]
+    app = ConversationApp(server, agent_id="main", session_id="session-one")
+    async with app.run_test(size=(100, 35)) as pilot:
+        for _ in range(10):
+            await pilot.pause()
+            if app.transcript.displays("step-0"):
+                break
+        pages = [params for method, params in server.calls if method == "chat.timeline_children"]
+        assert [page["before"] for page in pages] == ["step-2"]
+        assert app.transcript.displays("step-0")
+        assert not app.transcript.displays("run-gap")

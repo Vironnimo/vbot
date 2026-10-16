@@ -304,4 +304,5 @@ async def test_the_row_under_the_composer_names_the_project_and_its_directory() 
         assert model.region.width >= len("gpt-5.2 · high")
         assert model.region.right <= app.size.width
         # The Project no longer rides in the header, where the WebUI does not show it.
-        assert str(app.query_one("#header-title", Static).content) == "Test conversation · main"
+        assert str(app.query_one("#header-title", Static).content) == "Test conversation"
+        assert str(app.query_one("#header-agent", Static).content) == "main"

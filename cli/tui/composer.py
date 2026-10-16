@@ -299,8 +299,11 @@ async def help(app: ConversationApp) -> None:
             "\n"
             "The row under the composer names the Project this conversation works in\n"
             "and its directory on the server, then the Model, its thinking effort and\n"
-            "the context load. The row above the conversation shows the newest state.\n"
-            "Tab moves focus. A Tool or Reasoning row expands with Enter or Space.\n"
+            "the context load. A row above the composer appears while a Run works or\n"
+            "something needs attention.\n"
+            "Tab moves into the conversation: ↑↓ step through Tools and Reasoning,\n"
+            "Enter or Space opens and closes one, Esc returns to the composer.\n"
+            "A click opens and closes them too; dragging selects text.\n"
             "@file paths are server paths. Local files are uploaded through F8.\n"
             "Drafts are saved locally per server. After a lost send response the draft\n"
             "stays marked uncertain, and no resend is automatic.",

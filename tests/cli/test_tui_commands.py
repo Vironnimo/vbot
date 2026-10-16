@@ -1,4 +1,4 @@
-"""Footer and palette contracts for the terminal accessor's actions."""
+"""Palette contracts for the terminal accessor's actions."""
 
 from __future__ import annotations
 
@@ -10,22 +10,16 @@ from cli.tui.app import ConversationApp
 from cli.tui.commands import COMMANDS, POPUP_KEYS
 from tests.cli.test_tui import Server
 
-_PRIMARY_KEYS = {"send", "sessions", "new", "model", "stop", "detach", "help"}
-
 
 def _self_bindings() -> list[Binding]:
     """The app's own bindings, as the objects it declares (not tuple shorthands)."""
     return [entry for entry in ConversationApp.BINDINGS if isinstance(entry, Binding)]
 
 
-def test_footer_shows_only_the_primary_keys() -> None:
-    shown = {binding.action for binding in _self_bindings() if binding.show}
-    assert shown == _PRIMARY_KEYS
-
-
-def test_every_key_the_footer_hides_is_reachable_from_the_palette() -> None:
-    hidden = {binding.action for binding in _self_bindings() if not binding.show}
-    assert hidden - POPUP_KEYS <= {action for _label, action, _hint in COMMANDS}
+def test_every_key_is_reachable_from_the_palette() -> None:
+    # There is no key footer: the palette is where every bound action is found.
+    bound = {binding.action for binding in _self_bindings()}
+    assert bound - POPUP_KEYS <= {action for _label, action, _hint in COMMANDS}
 
 
 @pytest.mark.asyncio
