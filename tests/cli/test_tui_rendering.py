@@ -15,7 +15,17 @@ from cli.tui.rendering import (
     item_text,
     tool_detail,
     tool_title,
+    truncated,
 )
+
+
+def test_truncated_keeps_a_one_line_row_inside_the_room_it_has() -> None:
+    path = "Workspace · C:/Users/Viro/.vbot-dev/agents/main/workspace"
+
+    assert truncated(path, len(path)) == path
+    assert truncated(path, 120) == path
+    assert truncated(path, 20) == "Workspace · C:/User…"
+    assert len(truncated(path, 20)) == 20
 
 
 def _search_tool_call(**overrides: Any) -> JsonObject:

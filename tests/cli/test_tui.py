@@ -79,6 +79,34 @@ class Server(TerminalClient):
             return {"requests": []}
         if method == "chat.work":
             return {"run_active": self.active, "background_work_running": False, "running": []}
+        if method == "chat.commands":
+            return {
+                "items": [
+                    {
+                        "name": "help",
+                        "description": "Show the keyboard controls.",
+                        "type": "command",
+                        "argument": "none",
+                    },
+                    {
+                        "name": "model",
+                        "description": "Set the Model.",
+                        "type": "command",
+                        "argument": "required",
+                    },
+                ]
+            }
+        if method == "model.list":
+            return {
+                "models": [
+                    {
+                        "id": "openai/gpt-5.2",
+                        "name": "GPT-5.2",
+                        "provider_id": "openai",
+                        "model_id": "gpt-5.2",
+                    }
+                ]
+            }
         if method == "files.list":
             return {"files": ["first.txt", "later.txt"]}
         if method == "chat.stream":

@@ -7,7 +7,7 @@ from textual.binding import Binding
 from textual.command import CommandPalette
 
 from cli.tui.app import ConversationApp
-from cli.tui.commands import COMMANDS
+from cli.tui.commands import COMMANDS, POPUP_KEYS
 from tests.cli.test_tui import Server
 
 _PRIMARY_KEYS = {"send", "sessions", "new", "model", "stop", "detach", "help"}
@@ -25,7 +25,7 @@ def test_footer_shows_only_the_primary_keys() -> None:
 
 def test_every_key_the_footer_hides_is_reachable_from_the_palette() -> None:
     hidden = {binding.action for binding in _self_bindings() if not binding.show}
-    assert hidden <= {action for _label, action, _hint in COMMANDS}
+    assert hidden - POPUP_KEYS <= {action for _label, action, _hint in COMMANDS}
 
 
 @pytest.mark.asyncio
