@@ -285,6 +285,17 @@ class SessionRunRecord:
 
 
 @dataclass(frozen=True)
+class RecoveredRun:
+    """A Run a previous process left running, which restart recovery settled interrupted."""
+
+    address: SessionAddress
+    run_id: str
+    run_kind: str
+    started_at: str
+    iteration_count: int
+
+
+@dataclass(frozen=True)
 class SessionReadCursor:
     """Where a reader stopped: the next sequence and the entry just before it."""
 

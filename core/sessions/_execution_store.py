@@ -21,7 +21,7 @@ from core.sessions import (
     _store_runs,
 )
 from core.sessions._archive_types import ArchiveEntryRef
-from core.sessions._types import JsonObject, OwnedRunRecord
+from core.sessions._types import JsonObject, OwnedRunRecord, RecoveredRun
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -100,8 +100,8 @@ class SessionExecutionStore:
             lambda connection: _store_runs.discard_stream_draft(connection, address, run_id)
         )
 
-    def recover_interrupted_runs(self) -> None:
-        self._store._execute_write(_store_runs.recover_interrupted_runs)
+    def recover_interrupted_runs(self) -> tuple[RecoveredRun, ...]:
+        return self._store._execute_write(_store_runs.recover_interrupted_runs)
 
     def mark_terminal_run_read(
         self, address: SessionAddress, run_id: str
