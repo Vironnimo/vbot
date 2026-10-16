@@ -9,7 +9,20 @@ import pytest
 
 from cli import main as cli_main
 from cli.server_management import ServerInstance
+from core.utils import processes
 from tests.cli.cli_test_support import FakeRpc, RunCli, make_instance
+
+
+@pytest.fixture(autouse=True)
+def _outside_foreign_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run every command as if no foreign Windows Job held the test process.
+
+    Test runners often run inside one (a coding agent's shell, a CI runner); the
+    real inspection would make server starts and update requests go through WMI
+    or the tray. Tests of those paths patch ``processes.foreign_job`` themselves.
+    """
+
+    monkeypatch.setattr(processes, "foreign_job", lambda: None)
 
 
 @pytest.fixture

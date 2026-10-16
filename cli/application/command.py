@@ -289,15 +289,11 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
             result = get_status(processes.target(install))
             print_command_result("status", result)
             return exit_code_for("status", result)
+        elif args.command == "stop":
+            with exclusive(install.root, allow_removal=True):
+                result = processes.stop(install)
         else:
-            with exclusive(install.root, allow_removal=args.command == "stop"):
-                if args.command in {"stop", "restart"}:
-                    result = processes.stop(install)
-                    if not result.ok:
-                        print_command_result(args.command, result)
-                        return 1
-                if args.command in {"start", "restart"}:
-                    result = processes.start(install)
+            result = processes.start_or_restart(install, args.command)
         print_command_result(args.command, result)
         return 0 if result.ok else 1
     if args.area == "desktop":

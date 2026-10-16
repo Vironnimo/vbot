@@ -5,17 +5,20 @@ the update. A requester inside another application's Windows Job (a coding
 agent's shell, say) cannot give it that: whatever it starts stays in the Job
 and ends when that application closes. The tray host runs outside such Jobs, so
 a running tray starts the worker of every update another process requests, and
-a requester confined to a foreign Job starts a tray outside it first.
+a requester confined to a foreign Job starts a tray outside it first. The same
+dispatch request hands a confined ``vbot server start`` or ``restart`` to the
+running tray (``request_server``).
 """
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import subprocess
 import threading
 import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -34,12 +37,8 @@ from cli.application.state import (
     read_json,
     write_json,
 )
-from core.utils.processes import (
-    ForeignJob,
-    foreign_job,
-    outside_service_unit,
-    subprocess_creation_flags,
-)
+from core.utils.outside_job import confining_job, start_outside_job
+from core.utils.processes import ForeignJob, outside_service_unit, subprocess_creation_flags
 from core.utils.server_control import process_started
 
 #: Set only for a tray host started by its predecessor's restart handoff.
@@ -49,38 +48,22 @@ DISPATCH_REQUEST = "host-dispatch-request.json"
 #: How long a requester waits for the tray host to start the worker it handed over.
 HOST_DISPATCH_SECONDS = 30.0
 _HOST_DISPATCH_POLL_SECONDS = 0.2
-_BROKER_TIMEOUT_SECONDS = 30.0
 _LOGGER = logging.getLogger("vbot.application.update")
 _sleep = time.sleep
+#: How long a requester waits for the result of a server start or restart the tray
+#: accepted: a stop (up to 35 s), a start (up to 90 s) and a tray action ahead of them.
+HOST_SERVER_SECONDS = 300.0
+_SERVER_COMMANDS = frozenset({"start", "restart"})
+# DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: the console bootstrap gets no console window.
+_TRAY_CREATION_FLAGS = 0x00000208
 
-# Win32_Process.Create starts the process from the WMI provider host, outside
-# every Job of the caller, in the caller's interactive session and with the
-# user's default environment. DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: the
-# console bootstrap gets no console window.
-_BROKER_SCRIPT = r"""
-$ErrorActionPreference = "Stop"
-$ProgressPreference = "SilentlyContinue"
-try {
-    $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{
-        CreateFlags = [uint32]0x208
-    }
-    $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-        CommandLine = $env:VBOT_BROKER_COMMAND
-        CurrentDirectory = $env:VBOT_BROKER_DIRECTORY
-        ProcessStartupInformation = $startup
-    }
-    if ($result.ReturnValue -ne 0) {
-        [Console]::Out.WriteLine("Win32_Process.Create returned $($result.ReturnValue)")
-        exit 1
-    }
-    [Console]::Out.WriteLine($result.ProcessId)
-    exit 0
-}
-catch {
-    [Console]::Out.WriteLine($_.Exception.Message)
-    exit 1
-}
-"""
+
+@dataclass(frozen=True, slots=True)
+class ServerRequest:
+    """A ``vbot server start`` or ``restart`` (``command``) another process handed to the tray."""
+
+    id: str
+    command: str
 
 
 def child_environment(install: Installation) -> dict[str, str]:
@@ -310,9 +293,12 @@ def host_running(install: Installation) -> bool:
         return False
 
 
-def dispatch_requested(install: Installation) -> None:
-    """Start the worker another process handed to this tray host (``DISPATCH_REQUEST``).
+def dispatch_requested(install: Installation) -> ServerRequest | None:
+    """Take over what another process handed to this tray host (``DISPATCH_REQUEST``).
 
+    An update request starts its worker here. A server request is accepted (its
+    requester stops waiting for a tray that ignores it) and returned for the
+    tray to run as its own action and answer with ``answer_server_request``.
     The request is consumed first, so a worker that cannot start is not retried
     on every poll; its requester notices and decides (``request_update``).
     """
@@ -323,19 +309,136 @@ def dispatch_requested(install: Installation) -> None:
             record = read_json(request, limit=4096)
         except ApplicationError:
             if not request.exists():
-                return
+                return None
             request.unlink(missing_ok=True)
             raise
         request.unlink(missing_ok=True)
+        if "server" in record:
+            command, request_id = record.get("server"), record.get("request")
+            if (
+                record.get("schema_version") != 1
+                or command not in _SERVER_COMMANDS
+                or not _valid_request_id(request_id)
+            ):
+                raise ApplicationError("Ignored an invalid server dispatch request")
+            assert isinstance(command, str) and isinstance(request_id, str)
+            write_json(
+                _server_result(install, request_id),
+                {"schema_version": 1, "request": request_id, "state": "accepted"},
+            )
+            return ServerRequest(request_id, command)
         operation_id = record.get("operation")
         if record.get("schema_version") != 1 or not isinstance(operation_id, str):
             raise ApplicationError("Ignored an invalid update dispatch request")
         ensure_not_removing(install.root)
         operation = load_operation(install, operation_id)
         if operation.terminal or worker_alive(operation):
-            return
+            return None
         spawn_worker(install, operation)
     _LOGGER.debug("Update worker started for another requester (operation=%s)", operation.id)
+    return None
+
+
+def request_server(install: Installation, command: str) -> dict[str, Any] | None:
+    """Hand ``vbot server <command>`` (start or restart) to the running tray host.
+
+    The tray runs outside the foreign Windows Job that confines the caller, so
+    the server it starts outlives the application that owns that Job. Returns
+    the tray's result (``ok``, ``message``, optional ``process_id``), or ``None``
+    when no tray accepted the request within ``HOST_DISPATCH_SECONDS`` (none
+    answers, or a tray of an older version dropped it), so the caller runs the
+    command itself. A tray that accepted but reports nothing within
+    ``HOST_SERVER_SECONDS`` yields a failed result: it may still be working.
+    """
+
+    request_id = uuid.uuid4().hex
+    request = contained(install.root, DISPATCH_REQUEST)
+    result = _server_result(install, request_id)
+    deadline = time.monotonic() + HOST_DISPATCH_SECONDS
+    # One request at a time: a pending one is consumed within a tray poll.
+    while True:
+        with exclusive(install.root, "dispatch", timeout=5):
+            if not request.exists():
+                write_json(request, {"schema_version": 1, "server": command, "request": request_id})
+                break
+        if time.monotonic() >= deadline:
+            return None
+        _sleep(_HOST_DISPATCH_POLL_SECONDS)
+    try:
+        while not result.exists():
+            if not request.exists() or time.monotonic() >= deadline:
+                # The tray consumes a request and accepts it under this lock.
+                with exclusive(install.root, "dispatch", timeout=5):
+                    if result.exists():
+                        break
+                    if _requested(request, request_id):
+                        request.unlink(missing_ok=True)
+                    return None
+            _sleep(_HOST_DISPATCH_POLL_SECONDS)
+        deadline = time.monotonic() + HOST_SERVER_SECONDS
+        while True:
+            try:
+                answer = read_json(result, limit=4096)
+            except ApplicationError:
+                answer = {}
+            if answer.get("state") == "done":
+                return answer
+            if time.monotonic() >= deadline:
+                return {
+                    "ok": False,
+                    "message": (
+                        f"the vBot tray accepted the server {command} but reported no result "
+                        f"within {HOST_SERVER_SECONDS:g} seconds; check the server with "
+                        "vbot server status"
+                    ),
+                }
+            _sleep(_HOST_DISPATCH_POLL_SECONDS)
+    finally:
+        result.unlink(missing_ok=True)
+
+
+def answer_server_request(
+    install: Installation,
+    request: ServerRequest,
+    *,
+    ok: bool,
+    message: str,
+    process_id: int | None = None,
+) -> None:
+    """Report the outcome of a server request to its waiting requester."""
+
+    write_json(
+        _server_result(install, request.id),
+        {
+            "schema_version": 1,
+            "request": request.id,
+            "state": "done",
+            "ok": ok,
+            "message": message,
+            "process_id": process_id,
+        },
+    )
+
+
+def _server_result(install: Installation, request_id: str) -> Path:
+    return contained(install.root, f"host-server-result-{request_id}.json")
+
+
+def _valid_request_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 32
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _requested(request: Path, request_id: str) -> bool:
+    """Whether the pending dispatch request is still this requester's own."""
+
+    try:
+        return read_json(request, limit=4096).get("request") == request_id
+    except ApplicationError:
+        return False
 
 
 #: How a requester handed its worker over: to the running tray host (``True``), or
@@ -350,7 +453,7 @@ def _dispatch(install: Installation, operation: Operation, *, host: bool) -> _Ha
         if host_running(install):
             _hand_to_host(install, operation)
             return True
-        job = _confining_job()
+        job = confining_job()
         if job is not None:
             _hand_to_host(install, operation)
             return job
@@ -423,7 +526,7 @@ def _settle(
             return operation
         contained(install.root, DISPATCH_REQUEST).unlink(missing_ok=True)
         if job is None:
-            job = _confining_job()
+            job = confining_job()
         if job is None:
             _LOGGER.warning(
                 "Application tray did not start the update worker; starting it here (operation=%s)",
@@ -439,17 +542,6 @@ def _settle(
         raise ApplicationError(message)
 
 
-def _confining_job() -> ForeignJob | None:
-    """The foreign Windows Job that would keep a worker started here, if any."""
-
-    try:
-        job = foreign_job()
-    except OSError as exc:
-        _LOGGER.warning("Inspecting the Windows Job of this process failed (error=%s)", exc)
-        return None
-    return job if job is not None and job.confines_children else None
-
-
 def _confinement(job: ForeignJob) -> str:
     return (
         f"this command runs inside the Windows Job of {job.name} (pid {job.pid}), so the "
@@ -458,41 +550,14 @@ def _confinement(job: ForeignJob) -> str:
 
 
 def _start_host_outside_job(install: Installation) -> None:
-    """Start the tray host through WMI, outside every Job of this process (Windows only)."""
+    """Start the tray host through WMI, outside every Job of this process (Windows only).
 
-    environment = {
-        **os.environ,
-        "VBOT_BROKER_COMMAND": subprocess.list2cmdline([str(install.bootstrap)]),
-        "VBOT_BROKER_DIRECTORY": str(install.root),
-    }
-    script = base64.b64encode(_BROKER_SCRIPT.encode("utf-16-le")).decode("ascii")
-    try:
-        result = subprocess.run(
-            [
-                "powershell.exe",
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-EncodedCommand",
-                script,
-            ],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=_BROKER_TIMEOUT_SECONDS,
-            creationflags=subprocess_creation_flags(),
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError("Windows Management Instrumentation did not answer") from exc
-    detail = (result.stdout.strip().splitlines() or [f"exit code {result.returncode}"])[-1]
-    if result.returncode != 0 or not detail.isdigit():
-        raise OSError(f"Windows Management Instrumentation refused: {detail}")
+    The tray gets the user's default environment, like one started at sign-in.
+    """
+
+    start_outside_job(
+        [str(install.bootstrap)], cwd=install.root, creationflags=_TRAY_CREATION_FLAGS
+    )
 
 
 def status(install: Installation, operation_id: str | None = None) -> Operation | None:

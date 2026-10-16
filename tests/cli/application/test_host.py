@@ -315,6 +315,52 @@ def test_tray_starts_update_workers_itself_and_for_other_requesters(
     assert _activity(install)[-1] == "action_failed"
 
 
+def test_tray_runs_a_handed_server_request_once_and_reports_its_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    install = _install(tmp_path)
+    facade = host.ApplicationFacade(install)
+    request_id = "b" * 32
+    result_file = install.root / f"host-server-result-{request_id}.json"
+
+    @contextmanager
+    def lock(_root: Path, _name: str):
+        yield
+
+    monkeypatch.setattr(host, "exclusive", lock)
+    monkeypatch.setattr(
+        host.processes, "stop", lambda _install, **_kwargs: SimpleNamespace(ok=True)
+    )
+    monkeypatch.setattr(
+        host.processes,
+        "start",
+        lambda _install: SimpleNamespace(ok=True, message="started", process_id=55),
+    )
+    (install.root / host.operations.DISPATCH_REQUEST).write_text(
+        json.dumps({"schema_version": 1, "server": "restart", "request": request_id}),
+        encoding="utf-8",
+    )
+
+    request = facade.state().server_request
+    assert request == host.operations.ServerRequest(request_id, "restart")
+    # The requester sees it accepted; the controller gets it exactly once.
+    assert json.loads(result_file.read_text(encoding="utf-8"))["state"] == "accepted"
+    assert facade.state().server_request is None
+
+    facade.answer_server_request(request)
+    answer = json.loads(result_file.read_text(encoding="utf-8"))
+    assert (answer["state"], answer["ok"], answer["process_id"]) == ("done", True, 55)
+
+    monkeypatch.setattr(
+        host.processes, "start", lambda _install: SimpleNamespace(ok=False, message="occupied")
+    )
+    with pytest.raises(ApplicationError, match="occupied"):
+        facade.answer_server_request(request)
+    answer = json.loads(result_file.read_text(encoding="utf-8"))
+    assert (answer["state"], answer["ok"]) == ("done", False)
+    assert "occupied" in answer["message"]
+
+
 def test_tray_initiated_stop_never_counts_as_an_unexpected_server_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

@@ -15,10 +15,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from cli.application.activity import local_time
 from cli.application.notifications import Toast
+
+if TYPE_CHECKING:
+    from cli.application.operations import ServerRequest
 
 _LOGGER = logging.getLogger("vbot.application.tray")
 _SERVER_SHAPES = frozenset({"server", "server-desktop"})
@@ -62,7 +65,8 @@ class TrayState:
     holds the labeled rows of the status window. ``restart_pending`` means
     another version became active since this tray started and no update is
     running, so the tray should hand over to a successor running the active
-    version.
+    version. ``server_request`` is a server start or restart another process
+    handed to the tray, reported once for the controller to run as an action.
     """
 
     server_state: str
@@ -77,6 +81,7 @@ class TrayState:
     running_since: str = ""
     details: tuple[tuple[str, str], ...] = ()
     restart_pending: bool = False
+    server_request: ServerRequest | None = None
 
 
 class TraySink(Protocol):
@@ -103,6 +108,8 @@ class TrayActions(Protocol):
     def stop_server(self) -> None: ...
 
     def restart_server(self) -> None: ...
+
+    def answer_server_request(self, request: ServerRequest) -> None: ...
 
     def open_desktop(self) -> None: ...
 
@@ -433,6 +440,11 @@ class TrayController:
             if state.update_phase in _FINISHED_UPDATE_PHASES:
                 self._update_requested = False
             quit_pending = "quit" in self._pending
+        if (request := state.server_request) is not None:
+            # Shows as the tray's own transition, like a start or restart from its menu.
+            self._queue(
+                f"{request.command}_server", lambda: self._actions.answer_server_request(request)
+            )
         if state.exit_requested:
             if not quit_pending:
                 self._queue("quit", self._actions.quit)

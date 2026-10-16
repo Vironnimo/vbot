@@ -6,10 +6,13 @@ from types import SimpleNamespace
 import pytest
 
 from cli import server_management
-from cli.application import processes
+from cli.application import operations, processes
 from cli.application.state import Installation
 from cli.server_management import HealthProbeResult, WebUIProbeResult
+from core.utils import outside_job
+from core.utils import processes as core_processes
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR
+from core.utils.processes import ForeignJob
 
 
 def _install(root: Path) -> Installation:
@@ -231,3 +234,113 @@ def test_a_systemd_unit_owns_the_normal_server_but_never_verification(
     _record_server(monkeypatch, tmp_path, command=_VERIFICATION, recorded=lambda: bool(spawned))
     assert processes.start(install, verification=True).message == "started"
     assert commands == []
+
+
+_CONFINED = ForeignJob("codex.exe", 4711, confines_children=True)
+
+
+@pytest.mark.parametrize("broker", ["starts", "refuses"])
+def test_confined_server_start_leaves_the_foreign_job_or_names_its_application(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    broker: str,
+) -> None:
+    from cli._output import print_command_result
+
+    install = _install(tmp_path)
+    spawned: list[dict] = []
+    brokered: list[dict] = []
+    _spawned_server_becomes_ready(monkeypatch, tmp_path, spawned)
+    monkeypatch.setattr(core_processes, "foreign_job", lambda: _CONFINED)
+
+    def start_outside(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        if broker == "refuses":
+            raise OSError("Windows Management Instrumentation refused: access denied")
+        brokered.append({"argv": argv, **kwargs})
+        spawned.append({})
+        return SimpleNamespace(pid=321, poll=lambda: None)
+
+    def spawn(_args, **kwargs):
+        spawned.append(kwargs)
+        return SimpleNamespace(pid=123, poll=lambda: None)
+
+    monkeypatch.setattr(outside_job, "start_outside_job", start_outside)
+    monkeypatch.setattr(processes.subprocess, "Popen", spawn)
+
+    result = processes.start(install)
+    print_command_result("start", result)
+
+    assert result.ok
+    output = capsys.readouterr().out
+    if broker == "starts":
+        (started,) = brokered
+        assert started["argv"][1:3] == ["-m", "server.main"]
+        assert started["cwd"] == install.version() / "app"
+        env = started["env"]
+        assert isinstance(env, dict)
+        assert env[CONSOLE_LOGGING_ENV_VAR] == "0"
+        assert env["VBOT_INSTALL_ROOT"] == str(install.root)
+        assert (result.process_id, result.attention) == (321, ())
+        assert "warning:" not in output
+    else:
+        # The server still starts, inside the Job, and the caller learns what that means.
+        assert result.process_id == 123
+        (note,) = result.attention
+        assert "codex.exe (pid 4711)" in note
+        assert "ends when that application closes" in note
+        assert "access denied" in note
+        assert "Start menu" in note
+        assert f"warning: {note}" in output
+
+
+@pytest.mark.parametrize(
+    ("route", "command"),
+    [
+        pytest.param("tray-answers", "restart", id="confined-tray-answers"),
+        pytest.param("tray-declines", "restart", id="confined-tray-declines"),
+        pytest.param("no-tray", "start", id="confined-no-tray"),
+        pytest.param("unconfined", "restart", id="unconfined-with-tray"),
+    ],
+)
+def test_cli_start_or_restart_hands_a_confined_caller_to_the_running_tray(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: str, command: str
+) -> None:
+    install = _install(tmp_path)
+    calls: list[str] = []
+    if route != "unconfined":
+        monkeypatch.setattr(core_processes, "foreign_job", lambda: _CONFINED)
+    monkeypatch.setattr(operations, "host_running", lambda _install: route != "no-tray")
+
+    def request_server(_install: Installation, requested: str) -> dict | None:
+        calls.append(f"tray:{requested}")
+        if route == "tray-declines":
+            return None
+        return {"state": "done", "ok": True, "message": "restarted", "process_id": 77}
+
+    def local(name: str) -> Callable[..., server_management.CommandResult]:
+        def run(target: Installation, **_kwargs: object) -> server_management.CommandResult:
+            calls.append(name)
+            return server_management.CommandResult(
+                ok=True, message=name, instance=processes.target(target)
+            )
+
+        return run
+
+    monkeypatch.setattr(operations, "request_server", request_server)
+    monkeypatch.setattr(processes, "start", local("start"))
+    monkeypatch.setattr(processes, "stop", local("stop"))
+    monkeypatch.setattr(processes, "probe_health", lambda _instance: _VBOT)
+    monkeypatch.setattr(processes, "probe_webui", lambda _: WebUIProbeResult(available=True))
+
+    result = processes.start_or_restart(install, command)
+
+    assert result.ok
+    if route == "tray-answers":
+        assert calls == ["tray:restart"]
+        assert (result.message, result.process_id) == ("restarted", 77)
+        assert result.health is _VBOT
+    else:
+        local_calls = ["stop", "start"] if command == "restart" else ["start"]
+        handed = [f"tray:{command}"] if route == "tray-declines" else []
+        assert calls == handed + local_calls

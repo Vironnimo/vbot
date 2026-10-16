@@ -11,6 +11,7 @@ from typing import override
 import pytest
 
 from cli.application.notifications import Toast
+from cli.application.operations import ServerRequest
 from cli.application.tray import (
     TrayActions,
     TrayController,
@@ -54,6 +55,10 @@ class Actions(TrayActions):
     @override
     def restart_server(self) -> None:
         self._call("restart_server")
+
+    @override
+    def answer_server_request(self, request: ServerRequest) -> None:
+        self._call(f"answer:{request.command}")
 
     @override
     def open_desktop(self) -> None:
@@ -449,6 +454,25 @@ def test_update_request_disables_duplicate_clicks_until_facade_reports_completio
     controller.invoke("start_update")
     _run_queued(controller)
     assert actions.calls == ["start_update", "start_update"]
+
+
+@pytest.mark.parametrize(
+    ("command", "transition"),
+    [("start", "Server starting…"), ("restart", "Server restarting…")],
+)
+def test_handed_server_request_runs_once_as_the_trays_own_transition(command: str, transition: str):
+    request = ServerRequest("a" * 32, command)
+    actions = Actions(TrayState("running", "server", server_request=request))
+    controller = TrayController(actions)
+
+    controller._poll_state()
+    assert transition in controller.presentation().tooltip
+    actions.current = replace(actions.current, server_request=None)
+    controller._poll_state()
+    _run_queued(controller)
+
+    assert actions.calls == [f"answer:{command}"]
+    assert "Server running" in controller.presentation().tooltip
 
 
 def test_terminal_update_status_keeps_server_health_visible_and_allows_next_update():

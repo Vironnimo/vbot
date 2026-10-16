@@ -28,6 +28,7 @@ from cli.server_management import (
     stop_server,
 )
 from core.database import DataStoreMarker, read_marker
+from core.utils import outside_job
 from core.utils import processes as process_utils
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR
 from tests.cli.cli_test_support import make_instance
@@ -300,6 +301,58 @@ def test_start_server_waits_for_health_and_logs_its_lifecycle(
     assert re.match(MANAGED_CLI_LOG_PATTERN, log_line)
     assert "[INFO]" in log_line
     assert "pid=4321" in log_line and "url=http://127.0.0.1:8420" in log_line
+
+
+@pytest.mark.parametrize("broker", ["starts", "refuses"])
+def test_confined_start_server_leaves_the_foreign_job_or_warns_whose_job_holds_it(
+    instance: ServerInstance,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    broker: str,
+) -> None:
+    from cli._output import print_command_result
+
+    brokered: list[list[str]] = []
+    spawned: list[ServerInstance] = []
+    monkeypatch.setattr(
+        process_utils,
+        "foreign_job",
+        lambda: process_utils.ForeignJob("codex.exe", 4711, confines_children=True),
+    )
+
+    def start_outside(argv: list[str], **kwargs: Any) -> FakeProcess:
+        if broker == "refuses":
+            raise OSError("Windows Management Instrumentation refused: access denied")
+        assert kwargs["env"][CONSOLE_LOGGING_ENV_VAR] == "0"
+        brokered.append(argv)
+        return FakeProcess(pid=777)
+
+    def spawn(target: ServerInstance) -> FakeProcess:
+        spawned.append(target)
+        return FakeProcess(pid=4321)
+
+    answer_health(monkeypatch, UNREACHABLE, VBOT)
+    monkeypatch.setattr(
+        server_management, "probe_webui", lambda _instance: WebUIProbeResult(True, 200)
+    )
+    monkeypatch.setattr(outside_job, "start_outside_job", start_outside)
+    monkeypatch.setattr(server_management, "start_server_process", spawn)
+
+    result = start_server(instance, startup_timeout_seconds=1.0, probe_interval_seconds=0.0)
+    print_command_result("start", result)
+
+    assert result.ok
+    output = capsys.readouterr().out
+    if broker == "starts":
+        [argv] = brokered
+        assert argv[1:3] == ["-m", "server.main"] and str(instance.port) in argv
+        assert (spawned, result.process_id, result.attention) == ([], 777, ())
+    else:
+        assert (spawned, result.process_id) == ([instance], 4321)
+        [note] = result.attention
+        assert "codex.exe (pid 4711)" in note and "ends when that application closes" in note
+        assert "outside that application" in note
+        assert f"warning: {note}" in output
 
 
 @pytest.mark.parametrize(
