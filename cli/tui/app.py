@@ -12,9 +12,10 @@ from typing import Any, override
 from urllib.parse import quote
 
 from textual import on, work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
+from textual.css.query import NoMatches
 from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Markdown, Static, TextArea
@@ -22,6 +23,17 @@ from textual.worker import Worker
 
 from cli.tui import composer
 from cli.tui.commands import ConversationCommands
+from cli.tui.completion import (
+    CompletionBar,
+    CompletionState,
+    Suggestion,
+    Trigger,
+    command_suggestions,
+    file_suggestions,
+    matching,
+    model_suggestions,
+    trigger_for,
+)
 from cli.tui.dialogs import ExtensionDialog, Picker, TextDialog
 from cli.tui.drafts import (
     DraftStore,
@@ -30,7 +42,7 @@ from cli.tui.drafts import (
     restore_draft,
     saved_input_record,
 )
-from cli.tui.mentions import resolve_mentions, retained_mentions
+from cli.tui.mentions import format_mention, resolve_mentions, retained_mentions
 from cli.tui.models import effective_value
 from cli.tui.rendering import (
     TimelineEntry,
@@ -38,6 +50,7 @@ from cli.tui.rendering import (
     flatten,
     pretty,
     terminal_text,
+    truncated,
 )
 from cli.tui.state import Conversation, JsonObject, TimelineGapError
 from cli.tui.theme import DEFAULT_THEME, THEMES, VBOT_DARK, VBOT_LIGHT
@@ -45,6 +58,17 @@ from cli.tui.transport import ClientError, TerminalClient
 from core.utils.ids import new_id
 
 _sleep = asyncio.sleep
+
+# Priority bindings that drive the suggestion popup; without it they belong to
+# the focused widget (see `ConversationApp.check_action`).
+_COMPLETION_ACTIONS = frozenset(
+    {"completion_up", "completion_down", "completion_accept", "completion_close"}
+)
+
+
+def display_path(path: str) -> str:
+    """A path on the server's computer, as the file pickers write it."""
+    return path.replace("\\", "/")
 
 
 def short_model(reference: str) -> str:
@@ -65,14 +89,14 @@ class ConversationApp(App[int]):
     """Keep navigation and drafts local; all conversation decisions use server APIs."""
 
     TITLE = "vBot"
-    # One header row, the transcript, one status row, the composer and the footer.
-    # Buttons are not repeated here: every action the footer does not show stays
-    # reachable by name through Ctrl+K and is documented by F1.
+    # One header row, the transcript, one status row, the composer, the settings
+    # row the WebUI puts under its input and the footer. Buttons are not repeated
+    # here: every action the footer does not show stays reachable by name through
+    # Ctrl+K and is documented by F1.
     CSS = """
     Screen { background: $background; }
     #header { height: 1; padding: 0 1; background: $panel; }
     #header-title { width: 1fr; height: 1; color: $foreground; }
-    #header-context { width: auto; height: 1; color: $text-muted; }
     #timeline { height: 1fr; padding: 0 1; scrollbar-gutter: stable; }
     #empty { color: $text-muted; margin: 1 2; }
     #status { min-height: 1; height: auto; max-height: 2; padding: 0 1; color: $text-muted; }
@@ -81,9 +105,18 @@ class ConversationApp(App[int]):
     #draft-info { height: auto; padding: 0 1; color: $warning; }
     #composer { height: 3; max-height: 10; margin: 0 1; border: round $panel; }
     #composer:focus { border: round $accent; }
+    #settings { height: 1; padding: 0 1; }
+    #settings-where { width: 1fr; height: 1; color: $text-muted; text-overflow: ellipsis; }
+    #settings-model { width: auto; height: 1; color: $text-muted; }
     """
     BINDINGS = [
-        Binding("ctrl+s,alt+enter", "send", "Send", priority=True),
+        Binding("enter", "send", "Send", priority=True),
+        Binding("ctrl+s,alt+enter", "send", "Send", show=False, priority=True),
+        Binding("shift+enter,ctrl+enter", "newline", "New line", show=False, priority=True),
+        Binding("up", "completion_up", "Previous suggestion", show=False, priority=True),
+        Binding("down", "completion_down", "Next suggestion", show=False, priority=True),
+        Binding("tab", "completion_accept", "Use suggestion", show=False, priority=True),
+        Binding("escape", "completion_close", "Close suggestions", show=False, priority=True),
         Binding("f2", "sessions", "Sessions", priority=True),
         Binding("ctrl+p", "sessions", "Sessions", show=False, priority=True),
         Binding("f3", "new", "New", priority=True),
@@ -113,6 +146,10 @@ class ConversationApp(App[int]):
     # binding above; Textual's default (ctrl+p) belongs to Sessions here.
     COMMAND_PALETTE_BINDING = "ctrl+k"
     COMMANDS = App.COMMANDS | {ConversationCommands}
+
+    # Set in `on_mount`; both widgets outlive the screen's lifetime.
+    bar: CompletionBar
+    transcript: VerticalScroll
 
     def __init__(
         self,
@@ -154,6 +191,11 @@ class ConversationApp(App[int]):
         self.last_notice = ""
         self.notice_level = "info"
         self.notice_expires = 0.0
+        self.completion = CompletionState()
+        # Catalogs the popup offers from, keyed by conversation and kind; they are
+        # fetched once per view while the popup is open and never block typing.
+        self.completion_catalogs: dict[tuple[Any, ...], list[Any]] = {}
+        self.completion_loading: set[tuple[Any, ...]] = set()
         self._render_lock = asyncio.Lock()
         self.draft_store = draft_store
         self._draft_lock = asyncio.Lock()
@@ -293,7 +335,6 @@ class ConversationApp(App[int]):
     def compose(self) -> ComposeResult:
         with Horizontal(id="header"):
             yield Static("", id="header-title", markup=False)
-            yield Static("", id="header-context", markup=False)
         with VerticalScroll(id="timeline"):
             yield Static(
                 "Choose an Agent or resume a Session.\nF1 shows the keyboard controls.",
@@ -302,13 +343,22 @@ class ConversationApp(App[int]):
             )
         yield Static("", id="status", markup=False)
         yield Static("", id="draft-info", markup=False)
+        yield CompletionBar(id="completion")
         yield TextArea(placeholder="Write a message…", id="composer")
+        with Horizontal(id="settings"):
+            yield Static("", id="settings-where", markup=False)
+            yield Static("", id="settings-model", markup=False)
         yield Footer(compact=True)
 
     def on_mount(self) -> None:
         editor = self.query_one("#composer", TextArea)
         editor.border_title = "Message"
-        editor.border_subtitle = "Enter: new line · Ctrl+S: send"
+        editor.border_subtitle = "Enter: send · Shift+Enter: new line"
+        # Cached once: the suggestion popup and the read receipt reach for these on
+        # every keystroke and every frame, and a CSS query per frame over a long
+        # transcript is not free.
+        self.bar = self.query_one(CompletionBar)
+        self.transcript = self.query_one("#timeline", VerticalScroll)
         self.set_interval(0.08, self._render_if_dirty)
         self._start(self._events, group="events", exclusive=True)
         self._start(self._bootstrap)
@@ -317,6 +367,10 @@ class ConversationApp(App[int]):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # Priority bindings must not send the hidden composer while a form is open.
         if isinstance(self.screen, ModalScreen) and action != "detach":
+            return False
+        if action in _COMPLETION_ACTIONS and not self.completion.visible:
+            # Without a popup these keys belong to the focused widget: the arrows
+            # move the composer's cursor, Tab moves focus, Escape does nothing.
             return False
         return super().check_action(action, parameters)
 
@@ -833,9 +887,7 @@ class ConversationApp(App[int]):
     def _completion_if_visible(self) -> None:
         view = self.conversation
         frame = getattr(self, "_rendered_frame", None)
-        timeline = next(
-            (widget for widget in self.query(VerticalScroll) if widget.id == "timeline"), None
-        )
+        timeline = getattr(self, "transcript", None)
         if (
             view is None
             or not view.available
@@ -886,11 +938,25 @@ class ConversationApp(App[int]):
         view = self.conversation
         if view is None:
             return
+        # The Project belongs to the row under the composer (as in the WebUI), so
+        # the header names the conversation and its Agent alone. These rows are one
+        # line tall whatever they say, so their update must not ask for a layout: a
+        # reflow costs as much work as the transcript is long.
         title = view.title or "Untitled conversation"
-        if view.project:
-            title = f"{title} · {view.project}"
-        self.query_one("#header-title", Static).update(terminal_text(f"{title} · {view.agent}"))
-        self.query_one("#header-context", Static).update(terminal_text(self._context_text(view)))
+        self.query_one("#header-title", Static).update(
+            terminal_text(f"{title} · {view.agent}"), layout=False
+        )
+        # The Project and directory give way to the Model row and never wrap: the
+        # row is one line tall, so a wrapped path would hide below it.
+        width = self.size.width
+        context = truncated(self._context_text(view), max(12, width - 16))
+        self.query_one("#settings-where", Static).update(
+            terminal_text(truncated(self._where_text(view), max(12, width - len(context) - 4))),
+            layout=False,
+        )
+        # The Model row has an automatic width, so it needs its layout to become
+        # visible at all: only the full-width rows can be updated without one.
+        self.query_one("#settings-model", Static).update(terminal_text(context))
         self._update_status(view)
         draft: list[str] = []
         if view.attachments:
@@ -900,6 +966,48 @@ class ConversationApp(App[int]):
         if view.mentions:
             draft.append("Server files: " + ", ".join(view.mentions))
         self.query_one("#draft-info", Static).update(terminal_text(" · ".join(draft)))
+
+    def _where_text(self, view: Conversation) -> str:
+        """The Project the conversation works in and its server-side directory.
+
+        Mirrors the WebUI's composer row: the Project on the left, the Model and
+        its context load on the right. A draft without a chosen Project works
+        where the Agent's default Project does; an Agent without one works in its
+        Workspace.
+        """
+        project_id = view.project if (view.session or view.project_selected) else None
+        if project_id is None and view.session is None:
+            address_project = view.agent.partition("@")[2] if "@" in view.agent else ""
+            project_id = address_project or self._agent_default_project(view.agent)
+        if project_id:
+            project = next(
+                (row for row in self.projects if row.get("project_id") == project_id),
+                None,
+            )
+            name = str((project or {}).get("display_name") or project_id)
+            cwd = (project or {}).get("cwd")
+            return f"{name} · {display_path(str(cwd))}" if cwd else name
+        workspace = self._agent_workspace(view.agent)
+        if workspace:
+            return f"Workspace · {display_path(workspace)}"
+        return "Workspace"
+
+    def _agent_row(self, agent: str) -> JsonObject | None:
+        identifier = agent.partition("@")[0]
+        return next(
+            (row for row in self.agents if row.get("id") == identifier),
+            None,
+        )
+
+    def _agent_default_project(self, agent: str) -> str | None:
+        row = self._agent_row(agent)
+        value = (row or {}).get("root_project_id")
+        return value if isinstance(value, str) and value else None
+
+    def _agent_workspace(self, agent: str) -> str | None:
+        row = self._agent_row(agent)
+        value = (row or {}).get("workspace")
+        return value if isinstance(value, str) and value else None
 
     def _context_text(self, view: Conversation) -> str:
         """The lasting settings and context load, so the status row stays transient."""
@@ -993,6 +1101,7 @@ class ConversationApp(App[int]):
     @on(TextArea.Changed, "#composer")
     def draft_changed(self, event: TextArea.Changed) -> None:
         self._grow_composer(event.text_area)
+        self._refresh_completion(event.text_area)
         if self.conversation:
             self.conversation.draft = event.text_area.text
             mentions = retained_mentions(self.conversation.draft, self.conversation.mentions)
@@ -1000,6 +1109,172 @@ class ConversationApp(App[int]):
                 self.conversation.mentions = mentions
                 self._header()
             self._view_changed(self.conversation)
+
+    def _modal_owns_the_screen(self) -> bool:
+        """Whether a modal screen holds the terminal, which keeps the popup out of it.
+
+        A composer may change before the app's first screen is on the stack.
+        """
+        try:
+            return isinstance(self.screen, ModalScreen)
+        except ScreenStackError:
+            return False
+
+    def _composer(self) -> TextArea | None:
+        """The composer, or None while a conversation change rebuilds the screen."""
+        try:
+            return self.query_one("#composer", TextArea)
+        except NoMatches:
+            return None
+
+    def _refresh_completion(self, editor: TextArea | None = None) -> None:
+        """Offer the values the draft's token stands for, as the WebUI composer does."""
+        view = self.conversation
+        composer = editor if editor is not None else self._composer()
+        if (
+            view is None
+            or not view.available
+            or composer is None
+            or not composer.is_mounted
+            or self._modal_owns_the_screen()
+        ):
+            self._close_completion()
+            return
+        text = composer.text
+        row, column = composer.cursor_location
+        trigger = trigger_for(text, row, column)
+        if trigger is None or text == self.completion.dismissed:
+            self._close_completion()
+            return
+        self.completion.trigger = trigger
+        self.completion.row = row
+        candidates = self._completion_candidates(view, trigger)
+        self.completion.pending = candidates is None
+        suggestions = matching(candidates or [], trigger.query)
+        if not suggestions:
+            self.bar.hide()
+            self.completion.kind = ""
+            self.completion.suggestions = []
+            return
+        kinds = {"commands": "Commands and Skills", "models": "Models", "files": "Server files"}
+        title = f"{kinds[trigger.kind]} · ↑↓ choose · Enter use · Esc close"
+        self.completion.kind = trigger.kind
+        self.completion.suggestions = suggestions
+        self.completion.index = 0
+        self.completion.title = title
+        self.bar.show(title, suggestions, 0)
+
+    def _completion_candidates(
+        self, view: Conversation, trigger: Trigger
+    ) -> list[Suggestion] | None:
+        """Return the suggestions for the token, or None while their catalog loads."""
+        key = (view.key, trigger.kind)
+        catalog = self.completion_catalogs.get(key)
+        if catalog is None:
+            self._load_completion_catalog(view, trigger.kind)
+            return None
+        if trigger.kind == "commands":
+            return command_suggestions(catalog)
+        if trigger.kind == "models":
+            return model_suggestions(catalog)
+        return file_suggestions(catalog)
+
+    def _load_completion_catalog(self, view: Conversation, kind: str) -> None:
+        """Read the catalog the popup needs, once per conversation and kind."""
+        key = (view.key, kind)
+        if key in self.completion_loading:
+            return
+        self.completion_loading.add(key)
+        if len(self.completion_catalogs) > 40:
+            self.completion_catalogs.clear()
+
+        async def load() -> None:
+            try:
+                if kind == "commands":
+                    response = await self.client.rpc(
+                        "chat.commands", {**view.params(draft=True), "reply_surface": "tui"}
+                    )
+                    items = response.get("items", [])
+                elif kind == "models":
+                    items = (await self.client.rpc("model.list", {"task": "chat"})).get(
+                        "models", []
+                    )
+                else:
+                    items = (await self.client.rpc("files.list", view.params(draft=True))).get(
+                        "files", []
+                    )
+            except ClientError, OSError:
+                items = []
+            finally:
+                self.completion_loading.discard(key)
+            self.completion_catalogs[key] = list(items)
+            if self.conversation is view and view.available:
+                self._refresh_completion()
+
+        self._start(load)
+
+    def _close_completion(self) -> None:
+        self.completion.kind = ""
+        self.completion.suggestions = []
+        self.completion.trigger = None
+        self.completion.pending = False
+        if bar := getattr(self, "bar", None):
+            bar.hide()
+
+    def _move_completion(self, step: int) -> None:
+        total = len(self.completion.suggestions)
+        if not total:
+            return
+        self.completion.index = (self.completion.index + step) % total
+        self.bar.options.highlighted = self.completion.index
+
+    async def accept_completion(self) -> None:
+        """Take the highlighted suggestion, replacing the token it stands for."""
+        view = self.conversation
+        trigger = self.completion.trigger
+        suggestion = self.completion.selected()
+        if view is None or trigger is None or suggestion is None:
+            return
+        editor = self.query_one("#composer", TextArea)
+        row = self.completion.row
+        if suggestion.kind in {"command", "skill"}:
+            # A command without an argument runs as soon as it is chosen; one with
+            # an argument waits for the operator's text.
+            insertion = f"/{suggestion.value}" if suggestion.send else f"/{suggestion.value} "
+        elif suggestion.kind == "model":
+            insertion = suggestion.value
+        else:
+            insertion = format_mention(suggestion.value) + " "
+            if suggestion.value not in view.mentions:
+                view.mentions.append(suggestion.value)
+        editor.replace(insertion, (row, trigger.start), (row, trigger.end))
+        editor.focus()
+        self._close_completion()
+        self._grow_composer(editor)
+        self._view_changed(view)
+        self._header()
+        if suggestion.send:
+            self.action_send()
+
+    def action_completion_up(self) -> None:
+        self._move_completion(-1)
+
+    def action_completion_down(self) -> None:
+        self._move_completion(1)
+
+    async def action_completion_accept(self) -> None:
+        await self.accept_completion()
+
+    def action_completion_close(self) -> None:
+        """Close the popup until the draft changes again, as the WebUI does."""
+        composer = self._composer()
+        if composer is not None:
+            self.completion.dismissed = composer.text
+        self._close_completion()
+
+    def action_newline(self) -> None:
+        """Shift+Enter and Ctrl+Enter break the line; Enter sends."""
+        self.query_one("#composer", TextArea).insert("\n")
 
     def _grow_composer(self, editor: TextArea) -> None:
         """Follow the draft instead of keeping a fixed block of empty rows."""
@@ -1019,6 +1294,15 @@ class ConversationApp(App[int]):
     async def action_send(self) -> None:
         view = self.conversation
         if view is None or id(view) in self.pending:
+            return
+        if self.completion.visible:
+            # Enter takes the highlighted suggestion instead of sending the
+            # half-typed token; while its catalog is still loading, it waits.
+            await self.accept_completion()
+            return
+        if self.completion.pending:
+            # The catalog behind the token is still being read; wait for it rather
+            # than sending a half-typed `@path` or `/model` argument as text.
             return
         if not view.available:
             self._notice("This conversation is no longer available. Choose a live Session first.")

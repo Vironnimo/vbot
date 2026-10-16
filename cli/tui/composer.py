@@ -271,7 +271,9 @@ async def help(app: ConversationApp) -> None:
     await app.push_screen_wait(
         TextDialog(
             "vBot TUI · keyboard controls",
-            "Ctrl+S / Alt+Enter: send · Enter: new line\n"
+            "Enter: send · Shift+Enter or Ctrl+Enter: new line · Ctrl+S: send\n"
+            "Typing / offers Commands and Skills, /model the chat Models and @ the\n"
+            "server files: ↑↓ choose, Enter takes it, Esc closes the list.\n"
             "F2: Sessions · F3: new conversation · F4: Model and effort\n"
             "F8: local uploads, server files and downloads\n"
             "Ctrl+X: stop the current Run · F10: stop all background work\n"
@@ -286,8 +288,9 @@ async def help(app: ConversationApp) -> None:
             "Ctrl+F: find in loaded history · Ctrl+G: copy or save the conversation\n"
             "Alt+Up: input history · Ctrl+R: reconnect · Ctrl+Q: detach\n"
             "\n"
-            "The header shows Model, thinking effort and context; the row under the\n"
-            "conversation shows the newest message, so nothing repeats as a button.\n"
+            "The row under the composer names the Project this conversation works in\n"
+            "and its directory on the server, then the Model, its thinking effort and\n"
+            "the context load. The row above the conversation shows the newest state.\n"
             "Tab moves focus. A Tool or Reasoning row expands with Enter or Space.\n"
             "@file paths are server paths. Local files are uploaded through F8.\n"
             "Drafts are saved locally per server. After a lost send response the draft\n"

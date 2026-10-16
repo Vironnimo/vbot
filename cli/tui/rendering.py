@@ -56,6 +56,17 @@ def one_line(value: str, width: int = 96) -> str:
     return textwrap.shorten(" ".join(value.split()), width=width, placeholder="…")
 
 
+def truncated(value: str, width: int) -> str:
+    """Cut a one-line value to the room it has, so nothing wraps out of sight.
+
+    `one_line` drops whole words and suits prose; a row that carries a path keeps
+    its beginning instead, which is what the width is there to show.
+    """
+    if len(value) <= width:
+        return value
+    return f"{value[: max(1, width - 1)]}…"
+
+
 def scalar_text(value: Any) -> str:
     if value is None:
         return "none"

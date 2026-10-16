@@ -16,9 +16,16 @@ from textual.style import Style
 if TYPE_CHECKING:
     from textual.screen import Screen
 
+# Keys that only act while the suggestion popup is open; offering them by name
+# in the palette would name a gesture, not an action.
+POPUP_KEYS = frozenset(
+    {"completion_up", "completion_down", "completion_accept", "completion_close"}
+)
+
 # (palette label, application action, key hint)
 COMMANDS: tuple[tuple[str, str, str], ...] = (
-    ("Send the draft message", "send", "Ctrl+S"),
+    ("Send the draft message", "send", "Enter"),
+    ("Insert a line break in the draft", "newline", "Shift+Enter"),
     ("Choose a Session", "sessions", "F2"),
     ("Start a new conversation", "new", "F3"),
     ("Choose Model and thinking effort", "model", "F4"),
