@@ -10,8 +10,18 @@ from typing import Any
 
 from core.utils.ids import is_safe_id
 
-# A Tool row is one line; the complete payload stays in its expanded detail.
-_TOOL_TITLE_WIDTH = 72
+# A Tool row is one line, built as the WebUI builds it: its primary values
+# shortened by their own rules, then its facts. The complete values stay in the
+# expanded detail.
+_TOOL_PRIMARY_WIDTH = 64
+_TOOL_PATH_SEGMENTS = 3
+_TOOL_FACT_UNITS = {
+    "edits": ("edit", "edits"),
+    "failures": ("failed", "failed"),
+    "files": ("file", "files"),
+    "matches": ("match", "matches"),
+    "results": ("result", "results"),
+}
 
 # A notice block names its level; its text reads as the message's own sentence.
 _NOTICE_LABELS = {"warning": "Warning", "error": "Error"}
@@ -178,17 +188,76 @@ def item_heading(item: JsonObject) -> str | None:
 
 
 def tool_title(item: JsonObject) -> str:
-    """One readable line per Tool call, shortened instead of clipped at the edge."""
-    title = str(item.get("name", "Tool"))
-    summary = (item.get("display") or {}).get("summary")
-    if summary:
-        title += f" · {terminal_text(str(summary))}"
+    """The Tool's name, what this call worked on, and a status worth reading."""
+    parts = (str(item.get("name") or "Tool"), tool_summary(item))
+    title = " · ".join(part for part in parts if part)
     status = str(item.get("status") or "")
     # A Tool that ran through needs no verdict in its row; running and failed
     # calls are the two the operator must not read past.
     if status not in {"success", "completed", ""}:
         title += f" · {status}"
-    return textwrap.shorten(title, width=_TOOL_TITLE_WIDTH, placeholder="…")
+    return title
+
+
+def tool_summary(item: JsonObject) -> str:
+    """What the call worked on and what came of it, in one short line."""
+    display = item.get("display") or {}
+    primary = [
+        text
+        for part in (display.get("primary") or [])[:2]
+        if isinstance(part, dict) and (text := _primary_text(part))
+    ]
+    if not primary and (summary := terminal_text(str(display.get("summary") or "")).strip()):
+        primary = [_shortened(summary, "end", _TOOL_PRIMARY_WIDTH)]
+    facts = [text for fact in display.get("facts") or [] if (text := _fact_text(fact))]
+    return " · ".join([*primary, *facts])
+
+
+def _primary_text(part: JsonObject) -> str:
+    value = terminal_text(str(part.get("value") or part.get("full_value") or "")).strip()
+    if not value:
+        return ""
+    if part.get("kind") == "path":
+        segments = [segment for segment in value.replace("\\", "/").split("/") if segment]
+        if len(segments) > _TOOL_PATH_SEGMENTS:
+            value = "…/" + "/".join(segments[-_TOOL_PATH_SEGMENTS:])
+    width = part.get("max_characters")
+    if not isinstance(width, int) or width < 1:
+        width = _TOOL_PRIMARY_WIDTH
+    return _shortened(value, str(part.get("truncate") or "end"), width)
+
+
+def _shortened(value: str, mode: str, width: int) -> str:
+    if mode == "never" or len(value) <= width:
+        return value
+    if width == 1:
+        return "…"
+    if mode == "start":
+        return "…" + value[-(width - 1) :]
+    if mode == "middle":
+        head = width // 2
+        return value[:head] + "…" + value[len(value) - (width - 1 - head) :]
+    return value[: width - 1] + "…"
+
+
+def _fact_text(fact: Any) -> str:
+    if not isinstance(fact, dict):
+        return ""
+    kind, value = fact.get("kind"), fact.get("value")
+    if kind == "line_range":
+        start, end = fact.get("start"), fact.get("end")
+        if isinstance(start, int) and isinstance(end, int) and 1 <= start <= end:
+            return f"lines {start}-{end}"
+        return ""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return ""
+    if kind == "line_change" and fact.get("change") in {"added", "removed"}:
+        return f"{'+' if fact['change'] == 'added' else '-'}{value}"
+    if kind == "count" and (labels := _TOOL_FACT_UNITS.get(str(fact.get("unit")))):
+        at_least = fact.get("at_least") is True
+        label = labels[0] if value == 1 and not at_least else labels[1]
+        return f"{value}{'+' if at_least else ''} {label}"
+    return ""
 
 
 def duration_text(milliseconds: float) -> str:

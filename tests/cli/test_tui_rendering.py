@@ -68,6 +68,29 @@ def test_tool_row_shows_what_ran_and_names_only_the_calls_that_went_wrong() -> N
     assert tool_title(item) == "session_search · telegram"
     assert tool_title(item | {"status": "failed"}) == "session_search · telegram · failed"
 
+    # Structured values read as the WebUI shows them: a path keeps its last
+    # segments, a long command its start, and the facts follow.
+    read = {
+        "name": "read",
+        "status": "success",
+        "display": {
+            "summary": "core/runs/projection/_timeline.py",
+            "primary": [{"kind": "path", "value": "core/runs/projection/_timeline.py"}],
+            "facts": [
+                {"kind": "line_range", "start": 1, "end": 40},
+                {"kind": "line_change", "change": "added", "value": 12},
+                {"kind": "count", "unit": "matches", "value": 1},
+                {"kind": "count", "unit": "files", "value": 5, "at_least": True},
+            ],
+        },
+    }
+    assert (
+        tool_title(read)
+        == "read · …/runs/projection/_timeline.py · lines 1-40 · +12 · 1 match · 5+ files"
+    )
+    command = {"kind": "command", "value": "x" * 80, "truncate": "end", "max_characters": 10}
+    assert tool_title({"name": "bash", "display": {"primary": [command]}}) == "bash · xxxxxxxxx…"
+
     # Every call says how long it ran, as the WebUI writes durations; a running
     # one counts up from its start and a call still being prepared has none.
     started = "2026-10-16T18:00:00Z"
