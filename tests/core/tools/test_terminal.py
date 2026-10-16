@@ -68,6 +68,7 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
         "key",
         "data",
         "lines",
+        "screenshot",
         "pattern",
         "timeout",
     ]

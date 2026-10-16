@@ -8,6 +8,17 @@ including PCRE2 10.45. Exact archives and executable digests are recorded in
 `resources/ripgrep.lock.json`. The accompanying MIT and PCRE2 license notices
 are distributed in `resources/licenses/ripgrep.txt` and `resources/licenses/pcre2.txt`.
 
+## Terminal screen font
+
+vBot includes `resources/fonts/unifont-17.0.05-subset.hex.gz`, a subset of the
+glyphs of [GNU Unifont](https://unifoundry.com/unifont/) 17.0.05, copyright
+1998-2026 Roman Czyborra, Paul Hardy, et al. The glyphs are taken unaltered from
+`unifont_all-17.0.05.hex.gz` (SHA-256
+`7b182454966046d35482469b979edce7d262fab5c53c2180e9b1fbb5d0b5e574`); the bundled
+file has SHA-256 `ab61b3198511759b711673ef47fea429dea3aef460593cada533702914068443`.
+It is distributed under the SIL Open Font License 1.1; the license, the full
+copyright statement and the selected ranges are in `resources/licenses/unifont.txt`.
+
 ## Local speech models
 
 Optional local speech recognition downloads unmodified pretrained model weights

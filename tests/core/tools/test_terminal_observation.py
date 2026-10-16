@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import re
 from collections.abc import Callable
@@ -9,9 +11,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from PIL import Image
 
 import core.tools._terminal_session as terminal_session
+from core.attachments.images import ImageConverter
+from core.chat.block_resolver import ContentBlockResolver
 from core.storage.temp_files import TemporaryFileManager
+from core.tools._terminal_image import CELL_HEIGHT, CELL_WIDTH
 from core.tools._terminal_render_host import TerminalScreen
 from core.tools.terminal_manager import (
     TerminalInfo,
@@ -343,6 +349,86 @@ async def test_a_screen_that_cannot_be_drawn_says_so_and_catches_up_later(
     snapshot = await terminal_manager.snapshot(terminal_id, OWNER)
     assert snapshot["log_complete"] is True
     assert log.read_bytes().endswith(tail)
+
+
+@pytest.mark.asyncio
+async def test_status_screenshot_shows_the_screen_with_its_colors(
+    manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """status adds an image of the whole screen only on request: a program's
+    exact colors, reverse video, and box-drawing lines that reach the cell edges.
+    It reaches the Model like every Tool image, a Model without vision gets its
+    file path instead, and an image that cannot be drawn leaves the status intact."""
+    terminal_manager, factory = manager
+    context = make_context(tmp_path)
+    started = await call(terminal_manager, context, {"action": "start", "command": "fake-tui"})
+    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
+    green, rose = (10, 200, 30), (200, 40, 90)
+    await _render(
+        terminal_manager, factory, terminal_id, "\x1b[38;2;10;200;30m█\x1b[48;2;200;40;90m─\x1b[7m "
+    )
+    plain = make_context(tmp_path)
+    await call(terminal_manager, plain, {"action": "status", "terminal_id": terminal_id})
+    assert plain.result_media == []
+
+    status: JsonObject = {"action": "status", "terminal_id": terminal_id, "screenshot": True}
+    result = await call(terminal_manager, context, status)
+
+    data = cast(dict[str, Any], result["data"])
+    assert data["screen"] == "█─⟦ ⟧"
+    # The image travels beside the result, never inside it.
+    assert "screenshot" not in data
+    json.dumps(result)
+    [image] = context.result_media
+    raw = base64.b64decode(image["base64"])
+    assert Path(image["path"]).read_bytes() == raw
+    assert [item["path"] for item in context.presentation_media] == [image["path"]]
+    info = terminal_manager.terminal(terminal_id, OWNER)
+    with Image.open(io.BytesIO(raw)) as png:
+        assert png.size == (info.columns * CELL_WIDTH, info.rows * CELL_HEIGHT)
+        pixels = png.convert("RGB")
+
+    def pixel(column: int, x: int, y: int) -> Any:
+        return pixels.getpixel((column * CELL_WIDTH + x, y))
+
+    assert pixel(0, CELL_WIDTH // 2, CELL_HEIGHT // 2) == green
+    assert {pixel(1, x, y) for x in range(CELL_WIDTH) for y in range(CELL_HEIGHT)} == {
+        green,
+        rose,
+    }
+    # The line meets both neighbours: it reaches each cell edge at the same height.
+    left = [y for y in range(CELL_HEIGHT) if pixel(1, 0, y) == green]
+    assert left and left == [y for y in range(CELL_HEIGHT) if pixel(1, CELL_WIDTH - 1, y) == green]
+    # Reverse video swaps the colors: a blank cell shows the foreground color.
+    assert pixel(2, CELL_WIDTH // 2, CELL_HEIGHT // 2) == green
+
+    converter = ImageConverter()
+    shown = await ContentBlockResolver.resolve_tool_image(
+        image, frozenset({"text", "image"}), frozenset({"image/png"}), converter
+    )
+    assert [part["type"] for part in shown] == ["media", "text"]
+    blind = await ContentBlockResolver.resolve_tool_image(
+        image, frozenset({"text"}), frozenset({"image/png"}), converter
+    )
+    assert [part["type"] for part in blind] == ["text"]
+    assert image["filename"] in blind[0]["text"]
+
+    # Other harnesses' screenshot action is status with the image.
+    shot = make_context(tmp_path)
+    await call(terminal_manager, shot, {"action": "screenshot", "terminal_id": terminal_id})
+    assert [item["media_type"] for item in shot.result_media] == ["image/png"]
+
+    async def broken_screenshot(_screen: TerminalScreen) -> bytes:
+        raise RuntimeError("painter broke")
+
+    monkeypatch.setattr(TerminalScreen, "screenshot", broken_screenshot)
+    failed = make_context(tmp_path)
+    undrawn = await call(terminal_manager, failed, status)
+    assert cast(dict[str, Any], undrawn["data"])["screen"] == data["screen"]
+    assert cast(dict[str, Any], undrawn["data"])["note"]
+    assert failed.result_media == []
 
 
 @pytest.mark.parametrize(

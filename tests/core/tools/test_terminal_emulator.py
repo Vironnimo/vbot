@@ -740,6 +740,8 @@ async def test_render_host_renders_on_a_worker_until_it_is_closed() -> None:
         assert (update.title, update.responses) == ("hosted", "\x1b[2;4R")
         assert await screen.screen_text() == "one\ntwo"
         assert (await screen.page(start_line=0, limit=5))["text"] == "one\ntwo"
+        # The worker draws screen images too, with its bundled font.
+        assert (await screen.screenshot()).startswith(b"\x89PNG\r\n\x1a\n")
     finally:
         host.close()
 

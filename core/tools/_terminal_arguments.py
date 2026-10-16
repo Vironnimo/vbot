@@ -58,9 +58,12 @@ _FIELD_ALIASES = SpellingAliases(
         "expected_screen_revision": ("screen_revision", "expected_revision"),
         "after_revision": ("attention_revision", "since_revision"),
         "pattern": ("regex", "regexp", "until", "wait_for", "expect", "expected", "match"),
+        "screenshot": ("image", "include_image", "with_image", "include_screenshot"),
     }
 )
 _SUBMIT = "submit"
+# A screenshot action is status with its screen image.
+_SCREENSHOT = "screenshot"
 # The terminal's size follows the user's view of it; no call resizes it.
 _RESIZE = "resize"
 # Interrupting what the program does and stopping the program are different
@@ -115,6 +118,7 @@ _ACTION_VALUES = {
         "input",
     ),
     **dict.fromkeys(("submit", "sendline", "writeline"), _SUBMIT),
+    **dict.fromkeys(("screenshot", "takescreenshot"), _SCREENSHOT),
     **dict.fromkeys(("resize", "setsize", "size"), _RESIZE),
     **dict.fromkeys(
         (
@@ -169,6 +173,7 @@ _OBSERVATION_FIELDS = (
     "timeout",
     "pattern",
     "expected_screen_revision",
+    "screenshot",
 )
 # Labels and start settings that change nothing on an existing terminal.
 _START_LABELS = ("name", "group", "workdir")
@@ -192,7 +197,7 @@ _ACCEPTED_FIELDS = {
     "list": frozenset(),
     "attach": frozenset({"terminal_id"}),
     "detach": frozenset({"terminal_id"}),
-    "status": frozenset({"terminal_id", "lines", "start_line"}),
+    "status": frozenset({"terminal_id", "lines", "start_line", "screenshot"}),
     "wait": frozenset({"terminal_id", "after_revision", "timeout_ms", "timeout", "pattern"}),
     # A timeout makes input wait for the reply, as wait does.
     "input": frozenset(
@@ -251,6 +256,9 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
     if normalized.get("action") == _SUBMIT:
         normalized["action"] = "input"
         press_enter = True
+    elif normalized.get("action") == _SCREENSHOT:
+        normalized["action"] = "status"
+        normalized.setdefault("screenshot", True)
     _drop_placeholders(normalized)
     if "action" not in normalized:
         _infer_action(normalized, press_enter)

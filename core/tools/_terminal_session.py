@@ -915,7 +915,7 @@ class TerminalSession:
     # Observation
 
     async def snapshot(
-        self, *, lines: int, start_line: int | None, include_name: bool
+        self, *, lines: int, start_line: int | None, include_name: bool, screenshot: bool = False
     ) -> dict[str, Any]:
         """Return the screen, one history page and the facts an Agent result shows.
 
@@ -925,11 +925,23 @@ class TerminalSession:
         before it saw any screen). ``log_file`` names the output log, and
         ``log_complete`` says whether it holds all output, and
         ``log_end_line`` the first history line it lacks when known. ``screen_behind``
-        is the rendering error while the screen misses output.
+        is the rendering error while the screen misses output. With *screenshot*,
+        ``screenshot`` is the same screen as a PNG image, or None when drawing
+        it failed.
         """
+        image: bytes | None = None
         async with self._lock:
             page = await self._screen.page(start_line=start_line, limit=lines)
             observation = await self._screen.observe()
+            if screenshot:
+                try:
+                    image = await self._screen.screenshot()
+                except Exception:
+                    _LOGGER.warning(
+                        "Terminal screen image failed (terminal=%s)",
+                        self.terminal_id,
+                        exc_info=True,
+                    )
             info = self.info()
         data: dict[str, Any] = {
             "terminal_id": self.terminal_id,
@@ -982,6 +994,8 @@ class TerminalSession:
             data["name"] = info.name
         data["program"] = info.program
         data["stopped"] = info.stopped
+        if screenshot:
+            data["screenshot"] = image
         return data
 
     def acknowledge_screen(self, observation: TerminalObservation) -> None:

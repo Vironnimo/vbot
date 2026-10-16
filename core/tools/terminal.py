@@ -9,6 +9,7 @@ without one, and ``background_tasks`` serves the ones it left running, so the
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 import shutil
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.projects import ProjectStore
 from core.sessions import SessionAddress
+from core.storage.layout import DataDirectoryLayout
 from core.storage.temp_files import TEMPORARY_FILE_RETENTION
 from core.tools._background_tasks_arguments import (
     BACKGROUND_TASKS_TOOL_NAME,
@@ -34,6 +36,7 @@ from core.tools._terminal_arguments import (
 )
 from core.tools._workdir import ProjectWorkdirError, is_project_workdir, project_workdir
 from core.tools.arguments import (
+    optional_bool,
     optional_int,
     optional_number,
     optional_string,
@@ -84,9 +87,11 @@ from core.tools.tools import (
     display_results,
     display_text,
     result_count_fact_builder,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
+from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
@@ -230,6 +235,13 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "maximum": TERMINAL_STATUS_MAX_LINES,
             "default": TERMINAL_STATUS_DEFAULT_LINES,
             "description": "History lines status shows above the screen.",
+        },
+        "screenshot": {
+            "type": "boolean",
+            "description": (
+                "For status: add an image of the screen with its colors and styles. Omit "
+                "unless you need them."
+            ),
         },
         "pattern": {
             "type": "string",
@@ -749,9 +761,13 @@ async def _handle_status(
         default=None,
         minimum=0,
     )
+    screenshot = optional_bool(arguments.get("screenshot"), field_name="screenshot", default=False)
     owner = _owner(context)
     info = _terminal_info(terminal_manager, terminal_id)
-    snapshot = await terminal_manager.read(terminal_id, lines=lines, start_line=start_line)
+    snapshot = await terminal_manager.read(
+        terminal_id, lines=lines, start_line=start_line, screenshot=screenshot
+    )
+    image = snapshot.pop("screenshot", None)
     attached_here = info.attachment == owner
     if attached_here and start_line is None:
         _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
@@ -764,11 +780,45 @@ async def _handle_status(
         unseen_by_you=attached_here,
         requested_start=start_line,
     )
+    if screenshot and not await _attach_screen_image(context, terminal_id, image):
+        data = _with_notes(data, [_NO_SCREEN_IMAGE_NOTE])
     if not attached_here:
         holders = await _subagent_holders(subagents, owner, [info])
         data.update(_attachment_fields(info, owner, holders))
         data["next"] = _not_attached_text(info, terminal_id)
     return tool_success(data)
+
+
+_NO_SCREEN_IMAGE_NOTE = "The screen image could not be made, so only the screen text is shown."
+
+
+async def _attach_screen_image(context: ToolContext, terminal_id: str, image: bytes | None) -> bool:
+    """Give the Model the screen image with the result and show it to the user.
+
+    The image goes the way of every Tool image (``ToolContext.result_media``):
+    a Model without vision gets its file path and why the image is missing.
+    False when there is no image to give.
+    """
+    if image is None:
+        return False
+    directory = DataDirectoryLayout(context.data_root).temporary / TERMINAL_TEMPORARY_CATEGORY
+    try:
+        path = await run_tool_worker(write_id_file, directory, "screen", ".png", image)
+    except OSError:
+        _LOGGER.warning(
+            "Terminal screen image could not be saved (terminal=%s)", terminal_id, exc_info=True
+        )
+        return False
+    context.result_media.append(
+        {
+            "path": str(path),
+            "filename": path.name,
+            "media_type": "image/png",
+            "base64": base64.b64encode(image).decode("ascii"),
+        }
+    )
+    context.add_display_media(path, "image/png")
+    return True
 
 
 async def _handle_wait(
