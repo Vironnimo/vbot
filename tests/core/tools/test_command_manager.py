@@ -30,6 +30,7 @@ from core.sessions import ChatSessionManager, SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.tools import _command_output as command_output_module
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
+from core.tools._interpreter_host import InterpreterHost
 from core.tools.command_manager import (
     COMMAND_HEAD_CHARS,
     COMMAND_RETENTION_SECONDS,
@@ -49,6 +50,7 @@ from core.tools.process_tree import (
     RunningProcess,
     track_process_tree,
 )
+from core.utils.timestamps import parse_timestamp
 from tests.core.tools.command_manager_helpers import (
     OWNER,
     FakeSink,
@@ -56,6 +58,7 @@ from tests.core.tools.command_manager_helpers import (
     Harness,
     command_harness,
     format_report,
+    run_inline,
     turns,
 )
 from tests.core.tools.terminal_manager_helpers import eventually
@@ -305,7 +308,7 @@ async def test_a_log_file_that_cannot_be_written_reports_what_it_kept_and_why(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output", ["lines", "one-line", "erased-long-line", "erased-line-end"])
 async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
-    harness: Harness, output: str
+    harness: Harness, output: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     command_id, process = await harness.launch()
     if output == "lines":
@@ -333,7 +336,8 @@ async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
         await turns()
     process.exit(0)
 
-    transcript = (await harness.finish(command_id)).transcript
+    report = await harness.finish(command_id)
+    transcript = report.transcript
 
     assert transcript.total_lines == len(lines)
     if output == "lines":
@@ -344,6 +348,15 @@ async def test_transcript_keeps_the_first_and_the_last_characters_of_any_output(
         assert transcript.tail == tuple(lines[-tail:])
         assert (transcript.head_cut, transcript.tail_cut) == (0, 0)
         assert transcript.omitted_lines == len(lines) - head - tail
+        # Restart recovery reads the same transcript back from the log file,
+        # also one larger than the windows it reads.
+        monkeypatch.setattr(command_output_module, "_RECOVERY_HEAD_BYTES", 4096)
+        monkeypatch.setattr(command_output_module, "_RECOVERY_TAIL_BYTES", 65_536)
+        assert report.log_path is not None
+        snapshot = await command_output_module.read_log(
+            InterpreterHost.in_process(), report.log_path, run_blocking=run_inline
+        )
+        assert snapshot is not None and snapshot.transcript == transcript
     elif output == "one-line":
         # A line too long for both: its start and its end.
         (line,) = lines
@@ -765,6 +778,10 @@ async def test_background_checkpoint_recovers_once_after_restart(
                 restored_owner = SessionAddress(OWNER.project_id, "renamed-agent", OWNER.session_id)
                 await sessions.move(OWNER, restored_owner)
             await harness.manager.to_background_durably(command_id, deliver=True)
+            if outcome == "running":
+                # Output after its last saved state reaches only the raw log.
+                process.write("compiled 3 files\n")
+                await turns()
             if outcome not in running_outcomes:
                 process.exit(0)
                 await harness.finish(command_id)
@@ -779,6 +796,10 @@ async def test_background_checkpoint_recovers_once_after_restart(
             checkpoint = sessions.background_command_read()[0]["checkpoint"]
         # The harness closes fake processes; restore the exact durable crash
         # boundary rather than running an actual server/process crash.
+        if outcome == "running":
+            # The previous server's last write to the raw log, 2 minutes 5 seconds in.
+            last_write = parse_timestamp(checkpoint["started_at"]).timestamp() + 125
+            os.utime(checkpoint["log_path"], (last_write, last_write))
         if outcome == "expired":
             checkpoint.update(pending=False, retained_until=0)
         if outcome == "replaced_session":
@@ -812,6 +833,10 @@ async def test_background_checkpoint_recovers_once_after_restart(
             if expected_delivery:
                 await eventually(lambda: bool(restored.sink.submissions))
                 assert restored.sink.submissions[0]["agent_id"] == restored_owner.agent_id
+                if outcome == "running":
+                    body = restored.sink.bodies[0]
+                    assert "was stopped after at least 2 minutes 5 seconds: " in body
+                    assert "compiled 3 files" in body
                 if outcome == "stop_after_restart":
                     assert await restored.manager.close_scope(restored_owner) == 0
                     assert restored.sink.futures[0].cancelled()

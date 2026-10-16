@@ -18,6 +18,9 @@ chunk only once the previous one is written and cleaned, so a command that
 prints heavily has one chunk at a time in its worker's queue and delays another
 command by at most that chunk. Terminal screens render on their own host's
 workers.
+
+After an unexpected stop of vBot, restart recovery rebuilds the transcript of a
+command that was still running from its log file the same way (``read_log``).
 """
 
 from __future__ import annotations
@@ -26,6 +29,8 @@ import asyncio
 import contextlib
 import os
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from . import _command_cleaning, _command_decoding
@@ -39,6 +44,14 @@ from ._command_types import (
     LogLoss,
 )
 from ._interpreter_host import DEFAULT_WORKERS, HostedObject, InterpreterHost
+
+# A log file larger than both windows together is read only at its start and its
+# end at restart recovery: cleaning runs at about 28 MB/s (2026-10-16), and the
+# transcript keeps at most COMMAND_HEAD_CHARS of the start and COMMAND_TAIL_CHARS
+# of the end. Its line count is then the count of line feeds.
+_RECOVERY_HEAD_BYTES = 256 * 1024
+_RECOVERY_TAIL_BYTES = 4 * 1024 * 1024
+_RECOVERY_CHUNK_BYTES = 64 * 1024
 
 
 def command_output_host(*, workers: int = DEFAULT_WORKERS) -> InterpreterHost:
@@ -244,6 +257,98 @@ class CommandOutput:
             self._log.close()
 
 
+@dataclass(frozen=True, slots=True)
+class LogSnapshot:
+    """A command's log file as restart recovery reads it."""
+
+    transcript: CommandTranscript
+    # When the file was last written, in seconds since the epoch.
+    modified_at: float
+
+
+async def read_log(
+    host: InterpreterHost, path: Path, *, run_blocking: Callable[..., Awaitable[Any]]
+) -> LogSnapshot | None:
+    """The transcript of the log file *path*, cleaned on *host* as the output was.
+
+    The file holds every byte the command wrote while the server that ran it
+    lived. A file larger than the recovery windows is read only at its start
+    and its end, and its line count is the count of its line feeds. None when
+    the file cannot be read or *host* is closed.
+    """
+    try:
+        status = await run_blocking(os.stat, path)
+        size = status.st_size
+        if size <= _RECOVERY_HEAD_BYTES + _RECOVERY_TAIL_BYTES:
+            transcript = await _clean_range(host, path, 0, size, run_blocking)
+        else:
+            head = await _clean_range(host, path, 0, _RECOVERY_HEAD_BYTES, run_blocking)
+            tail = await _clean_range(
+                host, path, size - _RECOVERY_TAIL_BYTES, _RECOVERY_TAIL_BYTES, run_blocking
+            )
+            lines = await run_blocking(_count_lines, path)
+            transcript = CommandTranscript(
+                head=head.head,
+                tail=tail.tail,
+                # Lines between the windows were left out, also when no line feed counts them.
+                total_lines=max(lines, len(head.head) + len(tail.tail) + 1),
+                head_cut=head.head_cut,
+                tail_cut=tail.tail_cut,
+            )
+    except OSError, RuntimeError:
+        return None
+    return LogSnapshot(transcript, status.st_mtime)
+
+
+async def _clean_range(
+    host: InterpreterHost,
+    path: Path,
+    start: int,
+    length: int,
+    run_blocking: Callable[..., Awaitable[Any]],
+) -> CommandTranscript:
+    """The transcript of *length* bytes of *path* from *start* on."""
+    await run_blocking(host.prepare)
+    output = CommandOutput.open(host, None, run_blocking)
+    try:
+        fd = await run_blocking(os.open, path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        try:
+            offset, end = start, start + length
+            while offset < end:
+                data = await run_blocking(
+                    _read_at, fd, offset, min(_RECOVERY_CHUNK_BYTES, end - offset)
+                )
+                if not data:
+                    break
+                offset += len(data)
+                # When cleaning fails, these bytes and the rest enter uncleaned.
+                with contextlib.suppress(Exception):
+                    await output.feed(data)
+            with contextlib.suppress(Exception):
+                await output.end()
+        finally:
+            os.close(fd)
+        return output.transcript()
+    finally:
+        output.close()
+
+
+def _read_at(fd: int, offset: int, size: int) -> bytes:
+    os.lseek(fd, offset, os.SEEK_SET)
+    return os.read(fd, size)
+
+
+def _count_lines(path: Path) -> int:
+    """The lines of *path*: its line feeds, and a last line without one."""
+    lines = 0
+    last = b""
+    with path.open("rb") as file:
+        while chunk := file.read(1024 * 1024):
+            lines += chunk.count(b"\n")
+            last = chunk[-1:]
+    return lines + (1 if last and last != b"\n" else 0)
+
+
 class _Uncleaned:
     """Output after cleaning failed: decoded and split into lines, not cleaned.
 
@@ -269,4 +374,4 @@ class _Uncleaned:
             self._lines.add_text(text.replace("\r\n", "\n"))
 
 
-__all__ = ["CommandLog", "CommandOutput", "command_output_host"]
+__all__ = ["CommandLog", "CommandOutput", "LogSnapshot", "command_output_host", "read_log"]

@@ -20,6 +20,11 @@ and - with ``deliver`` - submits its result through ``TriggerService`` when it
 ends: once, also to a Sub-Agent Session, starting a Run when the Session is
 idle (notice id ``command:<command_id>``).
 
+With a checkpoint store, a background command keeps a durable checkpoint.
+After an unexpected stop of vBot, the next start (``start``) reads each
+checkpoint and, for a command that was still running, its raw log file, and
+delivers its result as usual.
+
 Stops (``stop``) name a reason; the first reason wins:
 
 - ``agent``: the Agent of the command's Session stopped it with the
@@ -60,6 +65,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 
 from core.runs import RunExecutionOwner
@@ -71,7 +77,7 @@ from core.utils.paths import model_path
 
 from ._command_checkpoint import CommandCheckpoints, CommandCheckpointStore
 from ._command_launch import PipeLauncher
-from ._command_output import CommandOutput, command_output_host
+from ._command_output import CommandOutput, command_output_host, read_log
 from ._command_record import BlockingRunner, CommandRecord, CommandServices
 from ._command_types import (
     COMMAND_DRAIN_SECONDS,
@@ -205,7 +211,11 @@ class CommandManager:
         self._sweeper = asyncio.create_task(self._sweep_loop(), name="command-manager-sweep")
         if recover and self._checkpoints is not None and self._recovery_task is None:
             self._recovery_task = asyncio.create_task(
-                self._checkpoints.recover(self._services.trigger_service, self._recovered_report),
+                self._checkpoints.recover(
+                    self._services.trigger_service,
+                    self._recovered_report,
+                    partial(read_log, self._output_host, run_blocking=self._run_blocking),
+                ),
                 name="command-recovery",
             )
 
