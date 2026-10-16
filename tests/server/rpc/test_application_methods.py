@@ -133,6 +133,8 @@ def test_claimed_update_handoff_arms_the_continuation_after_acknowledgement(
     install = _install(tmp_path / "install", data_dir)
     _route_cli_rpc_to(state, monkeypatch)
     monkeypatch.setattr(operations, "spawn_worker", lambda _install, _operation: None)
+    # This exercises the handoff protocol, independently of the test runner's Job.
+    monkeypatch.setattr(operations, "confining_job", lambda: None)
 
     operation = operations.request_update(install, handoff_token=grant.token)
     repeated = operations.request_update(install, handoff_token=grant.token)

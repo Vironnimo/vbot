@@ -8,6 +8,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import zipfile
@@ -145,6 +146,36 @@ def smoke(package: Path, *, speech: bool = False) -> None:
     if len(versions) != 1:
         raise RuntimeError("Supply a package containing exactly one built version")
     payload = versions[0]
+    # The runner's restrictive Job is not the installation's lifetime. Give
+    # the smoke its own ordinary vBot Job, permitting the updater to leave its
+    # requester while the outer runner still owns every disposable process.
+    # Otherwise an update or tray start tries WMI to escape the CI runner.
+    code = (
+        "import runpy,sys; from pathlib import Path; "
+        "from core.utils.processes import activate_process_containment; "
+        "activate_process_containment(); "
+        "runpy.run_path(sys.argv[1])['_smoke'](Path(sys.argv[2]),Path(sys.argv[3]),"
+        "speech=sys.argv[4]=='1')"
+    )
+    subprocess.run(
+        [
+            str(payload / "runtime" / "vBot.Python.exe"),
+            "-c",
+            code,
+            str(Path(__file__).resolve()),
+            str(package),
+            str(payload),
+            "1" if speech else "0",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        check=True,
+    )
+
+
+def _smoke(package: Path, payload: Path, *, speech: bool) -> None:
     manifest = json.loads((payload / "release.json").read_text(encoding="utf-8"))
     shape = manifest["install_shape"]
     evidence = package.parent.parent / "smoke-evidence" / shape
