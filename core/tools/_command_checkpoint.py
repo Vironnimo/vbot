@@ -1,18 +1,28 @@
-"""Command-owned checkpoints and restart delivery over canonical Session storage."""
+"""Command-owned checkpoints and restart delivery over canonical Session storage.
+
+A checkpoint holds a background command's state with its start time. After an
+unexpected stop of vBot, ``recover`` rebuilds each command that was still
+running from its raw log file: the output it wrote until then, and how long it
+ran at least (from its start to the last write of that file or its last saved
+state). Its result is delivered as usual; nothing is run again.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.logging import get_logger
+from core.utils.timestamps import format_canonical_timestamp, parse_timestamp
 
+from ._command_output import LogSnapshot
 from ._command_types import (
     CommandReport,
     CommandTranscript,
@@ -23,6 +33,8 @@ from ._command_types import (
 )
 
 _LOGGER = get_logger("tools.command_manager")
+# Reads the raw log file a previous server wrote; None when it cannot be read.
+LogReader = Callable[[Path], Awaitable[LogSnapshot | None]]
 
 
 class CommandCheckpointStore(Protocol):
@@ -77,6 +89,8 @@ class CommandCheckpoints:
         self.store = store
         self._retention_seconds = retention_seconds
         self._retained_until: dict[str, float] = {}
+        # When each command started, in seconds since the epoch.
+        self._started_at: dict[str, float] = {}
         self._tail: asyncio.Task[None] | None = None
         self._write_errors: dict[str, Exception] = {}
         self._generations: dict[str, str] = {}
@@ -123,6 +137,9 @@ class CommandCheckpoints:
             self._retained_until.setdefault(
                 report.command_id, time.time() + self._retention_seconds
             )
+        started_at = self._started_at.setdefault(
+            report.command_id, time.time() - report.elapsed_seconds
+        )
         checkpoint = {
             "command": report.command,
             "description": report.description,
@@ -146,6 +163,7 @@ class CommandCheckpoints:
             "body": body,
             "execution_owner": asdict(execution_owner) if execution_owner is not None else None,
             "retained_until": self._retained_until.get(report.command_id),
+            "started_at": format_canonical_timestamp(datetime.fromtimestamp(started_at, UTC)),
         }
         self._queue(
             report.command_id,
@@ -161,6 +179,7 @@ class CommandCheckpoints:
         self._recovered.pop(command_id, None)
         self._generations.pop(command_id, None)
         self._retained_until.pop(command_id, None)
+        self._started_at.pop(command_id, None)
         self.pending_ids.discard(command_id)
         self._queue(command_id, self.store.background_command_delete, command_id)
 
@@ -290,17 +309,25 @@ class CommandCheckpoints:
         )
 
     async def recover(
-        self, sink: CompletionSink | None, publish: Callable[[CommandReport], None]
+        self,
+        sink: CompletionSink | None,
+        publish: Callable[[CommandReport], None],
+        read_log: LogReader | None = None,
     ) -> None:
+        """Restore the previous server's commands; *read_log* reads their raw log files."""
         from ._shell_results import format_command_delivery
 
         self._sink = sink
         rows = await self.load()
+        # Only commands still running then miss output in their saved state.
+        logs = await asyncio.gather(*(_read_unfinished_log(row, read_log) for row in rows))
         deliveries = []
-        for row in rows:
+        for row, log in zip(rows, logs, strict=True):
             state = row["checkpoint"]
             report = _report(row)
             self.bind(report.command_id, row["generation_id"])
+            if (started_at := _started_at(state)) is not None:
+                self._started_at[report.command_id] = started_at
             if (deadline := state.get("retained_until")) is not None:
                 self._retained_until[report.command_id] = float(deadline)
                 if report.finished and not state["pending"] and deadline <= time.time():
@@ -310,20 +337,7 @@ class CommandCheckpoints:
                 report = replace(report, owner=resolve(report.owner))
             body = state.get("body")
             execution = state.get("execution_owner")
-            if not report.finished:
-                # Never attach to a reused PID. The old process tree belongs to
-                # the previous server; its exact exit and effects are unknown.
-                report = (
-                    replace(report, finished=True)
-                    if report.ended
-                    else replace(
-                        report,
-                        ended=True,
-                        finished=True,
-                        exit_code=None,
-                        stop_reason="server_restart",
-                    )
-                )
+            report = self._interrupted(report, log)
             if body is None and state["pending"]:
                 body = format_command_delivery(report)
             entry = _Recovered(
@@ -352,6 +366,30 @@ class CommandCheckpoints:
         if deliveries and sink is not None:
             await asyncio.gather(*(self._deliver(entry, sink) for entry in deliveries))
         await self.flush()
+
+    def _interrupted(self, report: CommandReport, log: LogSnapshot | None) -> CommandReport:
+        """The end of a command as recovery finds it; unchanged when it had finished."""
+        if report.finished:
+            return report
+        if log is not None:
+            report = replace(report, transcript=log.transcript)
+        if report.ended:
+            return replace(report, finished=True)
+        # Never attach to a reused PID. The old process tree belongs to the
+        # previous server; its exact exit and effects are unknown. It ran at
+        # least until its last output or its last saved state.
+        elapsed = report.elapsed_seconds
+        started_at = self._started_at.get(report.command_id)
+        if log is not None and started_at is not None:
+            elapsed = max(elapsed, log.modified_at - started_at)
+        return replace(
+            report,
+            ended=True,
+            finished=True,
+            exit_code=None,
+            stop_reason="server_restart",
+            elapsed_seconds=elapsed,
+        )
 
     async def _deliver(self, entry: _Recovered, sink: CompletionSink) -> None:
         assert entry.body is not None
@@ -446,6 +484,31 @@ class CommandCheckpoints:
             entry.pending = False
             self._save(entry)
             return
+
+
+async def _read_unfinished_log(
+    row: dict[str, Any], read_log: LogReader | None
+) -> LogSnapshot | None:
+    """The raw log of a command that was still running, unless its saved state
+    holds everything it wrote; None otherwise."""
+    state = row["checkpoint"]
+    path = state.get("log_path")
+    if read_log is None or state["finished"] or not path or state.get("log_loss") is not None:
+        # Writing a log that failed kept less than the saved transcript holds.
+        return None
+    return await read_log(Path(path))
+
+
+def _started_at(state: dict[str, Any]) -> float | None:
+    """When the command started, in seconds since the epoch; None for a checkpoint
+    saved before it was recorded."""
+    value = state.get("started_at")
+    if not isinstance(value, str):
+        return None
+    try:
+        return parse_timestamp(value).timestamp()
+    except ValueError:
+        return None
 
 
 def _report(row: dict[str, Any]) -> CommandReport:

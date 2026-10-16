@@ -197,6 +197,7 @@ def leftovers_stop(report: CommandReport, names: ToolNames) -> str:
     return f"Stop them with {call} when they are no longer needed."
 
 
+_RESTART_OUTCOME = "The command's outcome is unknown; inspect its effects before repeating it."
 _STOP_TEXTS: dict[StopReason, str] = {
     # Read by the Session that ran it; _STOP_TEXTS_ABOVE speaks to Agents above it.
     "agent": "you stopped it.",
@@ -204,10 +205,7 @@ _STOP_TEXTS: dict[StopReason, str] = {
     "user": "the user stopped it.",
     "run_cancelled": "the turn that started it was cancelled.",
     "shutdown": "vBot shut down.",
-    "server_restart": (
-        "vBot stopped unexpectedly. The command's outcome is unknown; "
-        "inspect its effects before repeating it."
-    ),
+    "server_restart": f"vBot stopped unexpectedly. {_RESTART_OUTCOME}",
     # Read by the Session that ran it and by Agents above it.
     "scope": "it was stopped together with all other work of the Session that ran it.",
 }
@@ -230,9 +228,29 @@ def stopped_because(
     reason = report.stop_reason or "agent"
     if reason == "user" and not delivery:
         return f"the user stopped it after {duration(report.elapsed_seconds)}."
+    if reason == "server_restart" and not delivery:
+        ran = _restart_minimum(report)
+        if ran is not None:
+            # The output alone does not show how long the command ran before the stop.
+            return (
+                f"vBot stopped unexpectedly at least {ran} after the command started. "
+                f"{_RESTART_OUTCOME}"
+            )
     if subagent is not None and reason in _STOP_TEXTS_ABOVE:
         return _STOP_TEXTS_ABOVE[reason].format(subagent=subagent)
     return _STOP_TEXTS[reason]
+
+
+def _restart_minimum(report: CommandReport) -> str | None:
+    """How long a command that vBot's unexpected stop ended ran at least, in words;
+    None below a second, when nothing showed it running longer.
+
+    Restart recovery measures it from the command's start to the last write of
+    its log file or its last saved state, whichever is later.
+    """
+    if report.elapsed_seconds < 1:
+        return None
+    return duration(report.elapsed_seconds)
 
 
 def not_run_problem(report: CommandReport) -> tuple[str, bool] | None:
@@ -509,8 +527,11 @@ def _kept_output(report: CommandReport) -> str | None:
     path = report.log_path
     if path is None or report.not_run is not None:
         return None
-    if report.stop_reason is not None and holding_stage(report.command) is not None:
-        # The lines the stage held never reached vBot; a file of nothing is no copy.
+    if report.stop_reason == "server_restart" or (
+        report.stop_reason is not None and holding_stage(report.command) is not None
+    ):
+        # The lines a stage held never reached vBot, and a vBot that stopped
+        # unexpectedly wrote nothing after it; a file of nothing is no copy.
         if not report.transcript.total_lines:
             return None
         return f"vBot kept the raw output that reached it in {model_path(path)} for you to read"
@@ -562,7 +583,9 @@ def format_command_delivery(report: CommandReport, *, names: ToolNames = _names_
         )
     ran = duration(report.elapsed_seconds)
     if report.stop_reason == "server_restart":
-        status = f"was stopped after an unknown duration: {stopped_because(report, delivery=True)}"
+        minimum = _restart_minimum(report)
+        ran = "an unknown duration" if minimum is None else f"at least {minimum}"
+        status = f"was stopped after {ran}: {stopped_because(report, delivery=True)}"
     elif report.stop_reason is not None:
         status = f"was stopped after {ran}: {stopped_because(report, delivery=True)}"
     elif report.exit_code is None:
