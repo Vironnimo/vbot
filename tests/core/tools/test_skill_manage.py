@@ -1620,17 +1620,29 @@ def test_patch_miss_names_the_closest_text_and_the_read_call(tmp_path: Path) -> 
     assert skill_file.read_bytes() == before
 
 
-def test_patch_miss_points_to_the_support_file_holding_the_text(tmp_path: Path) -> None:
+_ROLLBACK = "Rollback with make rollback.\n"
+
+
+@pytest.mark.parametrize(
+    ("files", "file_path", "patched"),
+    [
+        # file_path omitted: the one support file that holds the text is patched.
+        ({"references/notes.md": _ROLLBACK}, None, "references/notes.md"),
+        # A file_path the call names is never exchanged for another file.
+        ({"references/notes.md": _ROLLBACK}, "SKILL.md", None),
+        # Twice in one file, or in two files: no single place, so nothing changes.
+        ({"references/notes.md": _ROLLBACK * 2}, None, None),
+        ({"references/notes.md": _ROLLBACK, "scripts/notes.sh": _ROLLBACK}, None, None),
+    ],
+)
+def test_patch_text_missing_from_skill_md_reaches_only_the_one_support_file_holding_it(
+    tmp_path: Path, files: dict[str, str], file_path: str | None, patched: str | None
+) -> None:
     harness, skill_file = _patch_harness(tmp_path)
-    notes = skill_file.parent / "references" / "notes.md"
-    harness.run(
-        {
-            "action": "write_file",
-            "name": "demo",
-            "file_path": "references/notes.md",
-            "content": "Rollback with make rollback.\n",
-        }
-    )
+    for path, content in files.items():
+        harness.run({"action": "write_file", "name": "demo", "file_path": path, "content": content})
+    paths = ["SKILL.md", *files]
+    before = {path: (skill_file.parent / path).read_bytes() for path in paths}
 
     result = harness.run(
         {
@@ -1638,15 +1650,26 @@ def test_patch_miss_points_to_the_support_file_holding_the_text(tmp_path: Path) 
             "name": "demo",
             "old_string": "Rollback with make rollback.",
             "new_string": "Rollback with make undo.",
+            **({} if file_path is None else {"file_path": file_path}),
         }
     )
 
-    assert result["error"]["code"] == "text_not_found"
-    assert result["error"]["message"].endswith(
-        'The text is in references/notes.md; to patch it there, add "file_path": '
-        '"references/notes.md".'
-    )
-    assert notes.read_text(encoding="utf-8") == "Rollback with make rollback.\n"
+    changed = [path for path in paths if (skill_file.parent / path).read_bytes() != before[path]]
+    if patched is not None:
+        assert result["ok"] is True
+        assert changed == [patched]
+        # The result names the file it patched, and that SKILL.md did not hold the text.
+        note = result["data"]["content"].split("\n")[-1]
+        assert note.startswith("Note: ") and "SKILL.md" in note and patched in note
+        assert "Rollback with make undo." in (skill_file.parent / patched).read_text("utf-8")
+    else:
+        assert result["error"]["code"] == "text_not_found"
+        assert changed == []
+        # The miss points to the file when exactly one file holds the text.
+        assert result["error"]["message"].endswith(
+            'The text is in references/notes.md; to patch it there, add "file_path": '
+            '"references/notes.md".'
+        ) is (len(files) == 1)
 
 
 def test_ambiguous_patch_changes_nothing_until_replace_all(tmp_path: Path) -> None:
