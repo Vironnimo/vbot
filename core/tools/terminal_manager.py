@@ -826,6 +826,23 @@ class TerminalManager:
             deadline=self._services.monotonic() + seconds, after_quiet=after_quiet
         )
 
+    async def resize(
+        self, terminal_id: str, owner: TerminalOwner, *, columns: int, rows: int, seconds: float
+    ) -> bool:
+        """Resize an attached terminal and wait up to *seconds* until its program
+        redrew the screen for the new size; False when it already had that size.
+
+        A WebUI view of the terminal resizes it again when it opens or changes.
+        """
+        return await self._attached(terminal_id, owner).resize_for_agent(
+            columns, rows, deadline=self._services.monotonic() + seconds
+        )
+
+    async def release_focus(self, terminal_id: str, owner: TerminalOwner) -> None:
+        """The Agent has the reply to its input: a program that asked for focus
+        reports learns that the terminal lost the focus."""
+        await self._attached(terminal_id, owner).release_focus()
+
     async def wait_for_startup(self, terminal_id: str) -> None:
         """Wait until a started program shows its first screen, at most the start wait.
 

@@ -511,6 +511,16 @@ async def _idle(clocked: Clocked, terminal_id: str, output: str) -> None:
     )
 
 
+async def _unchanged(clocked: Clocked, terminal_id: str, output: str) -> None:
+    """Emit output that draws the screen as it was: it is no work and wakes nobody."""
+    manager, factory, _trigger, _clock = clocked
+    revision = terminal_info(manager, terminal_id).screen_revision
+    factory.adapters[0].emit(output)
+    await eventually(lambda: terminal_info(manager, terminal_id).screen_revision > revision)
+    await _turns()
+    assert terminal_info(manager, terminal_id).state == "ready"
+
+
 async def _turns() -> None:
     """Let a boundary that is due run; the in-process screen needs no thread."""
     for _turn in range(10):
@@ -552,7 +562,7 @@ async def test_repaint_after_resizing_a_quiet_terminal_does_not_wake_agent(
     assert repainted.screen_revision == delivered.screen_revision
     assert repainted.state == "ready"
     # The same screen again, long after the resize, is still known content.
-    await _idle(clocked_manager, terminal_id, "\x1b[2J\x1b[HMENU> ")
+    await _unchanged(clocked_manager, terminal_id, "\x1b[2J\x1b[HMENU> ")
     assert len(trigger.submissions) == 1
 
     await _idle(clocked_manager, terminal_id, "\r\nTask completed.")
@@ -646,6 +656,46 @@ async def test_periodic_changed_redraws_do_not_wake_the_agent(
     await eventually(lambda: len(trigger.submissions) == 2)
     attention = terminal_info(manager, terminal_id).attention
     assert attention is not None and attention.details["reason"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_a_blinking_view_is_no_work_while_it_toggles(
+    clocked_manager: Clocked, tmp_path: Path
+) -> None:
+    """A program that flips its view back within the toggle period, as a
+    blinking cursor does, shows no work: the reply to input ends at the quiet
+    boundary after its last real change. A view that comes back later is work."""
+    manager, factory, _trigger, clock = clocked_manager
+    delivered = await _baseline(clocked_manager, tmp_path)
+    terminal_id = delivered.terminal_id
+    adapter = factory.adapters[0]
+    # A drawn cursor in the top left corner; the terminal's cursor stays put.
+    cursor_on, cursor_off = "\x1b7\x1b[H\x1b[7mX\x1b[0m\x1b8", "\x1b7\x1b[HX\x1b8"
+
+    async def show(output: str) -> None:
+        revision = terminal_info(manager, terminal_id).screen_revision
+        adapter.emit(output)
+        await eventually(lambda: terminal_info(manager, terminal_id).screen_revision > revision)
+
+    sent = await _agent_input(manager, delivered, data="x")
+    # The reply draws both phases of the cursor once: real changes.
+    await show(cursor_on)
+    await show(cursor_off)
+    await eventually(lambda: clock.sleeping)
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS / 2)
+    await show(cursor_on)
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS / 2)
+    await _turns()
+    # One quiet period after the last real change, although the view kept toggling.
+    assert terminal_info(manager, terminal_id).state == "ready"
+    ended = await manager.wait_for_reply(
+        terminal_id, owner(), seconds=0, after_quiet=int(sent["quiet_boundaries"])
+    )
+    assert ended == "quiet"
+
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS * 2)
+    await show(cursor_off)
+    assert terminal_info(manager, terminal_id).state == "working"
 
 
 @pytest.mark.asyncio
@@ -753,7 +803,7 @@ async def test_unchanged_screen_stays_silent_until_content_changes(
     manager, _factory, trigger, _clock = clocked_manager
     delivered = await _baseline(clocked_manager, tmp_path)
 
-    await _idle(clocked_manager, delivered.terminal_id, "\rMENU> ")
+    await _unchanged(clocked_manager, delivered.terminal_id, "\rMENU> ")
     assert len(trigger.submissions) == 1
 
     await _idle(clocked_manager, delivered.terminal_id, "\rMENU> \nsecond option")
@@ -785,7 +835,7 @@ async def test_a_start_result_keeps_only_the_screen_it_showed_from_being_deliver
         acknowledge()
     # Its idle boundary had scheduled the screen; the durable result cancelled it.
     assert len(trigger.cancellations) == len(trigger.submissions)
-    await _idle(clocked_manager, terminal_id, "\rTUI banner")
+    await _unchanged(clocked_manager, terminal_id, "\rTUI banner")
     assert len(trigger.cancellations) == len(trigger.submissions)
 
     shown = len(trigger.submissions)

@@ -9,6 +9,7 @@ without one, and ``background_tasks`` serves the ones it left running, so the
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import shutil
@@ -102,6 +103,7 @@ TERMINAL_ACTIONS = (
     "status",
     "wait",
     "input",
+    "resize",
     "kill",
     "attach",
     "detach",
@@ -155,19 +157,17 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "enum": list(TERMINAL_ACTIONS),
             "description": (
                 "start launches a program attached to this Session and returns its first "
-                "screen; list shows terminals; status shows a terminal's screen; wait waits "
-                "until the program exits, prints output matching pattern, or the timeout "
-                "passes; without pattern, it also ends when the program goes idle showing "
-                "something new; input types text and keys; kill stops the program and "
-                "everything it started; attach takes over an unattached terminal; detach "
-                "releases it for another Session."
+                "screen; status shows a terminal's screen; wait waits until the program exits, "
+                "prints output matching pattern, or the timeout passes; without pattern, it "
+                "also ends when the program goes idle showing something new; input types text "
+                "and keys; resize sets columns and rows, returning the screen; kill stops "
+                "the program and everything it started; attach takes over an unattached "
+                "terminal; detach releases it for another Session."
             ),
         },
         "terminal_id": {
             "type": "string",
-            "description": (
-                "The terminal's id from start or list. Required except for start and list."
-            ),
+            "description": ("From start or list; required except for start and list."),
         },
         "command": {
             "type": "string",
@@ -224,6 +224,12 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
                 "and key cannot express."
             ),
         },
+        # The bounds are checked, not advertised: refusals name them.
+        "columns": {
+            "type": "integer",
+            "description": f"Omit on start for {TERMINAL_DEFAULT_COLUMNS}.",
+        },
+        "rows": {"type": "integer", "description": f"Omit on start for {TERMINAL_DEFAULT_ROWS}."},
         "lines": {
             "type": "integer",
             "minimum": 1,
@@ -254,20 +260,13 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
     "required": ["action"],
 }
 # Accepted and validated, never advertised: milliseconds from other harnesses,
-# history paging the results address themselves, the screen guard and wait
-# baseline the terminal tracks itself, and a start size (the size follows the
-# user's view of the terminal).
+# history paging the results address themselves, and the screen guard and wait
+# baseline the terminal tracks itself.
 TERMINAL_UNADVERTISED_PARAMETERS: JsonObject = {
     "timeout_ms": {"type": "number", "minimum": 0},
     "start_line": {"type": "integer", "minimum": 0},
     "expected_screen_revision": {"type": "integer", "minimum": 0},
     "after_revision": {"type": "integer", "minimum": 0},
-    "columns": {
-        "type": "integer",
-        "minimum": TERMINAL_MIN_COLUMNS,
-        "maximum": TERMINAL_MAX_COLUMNS,
-    },
-    "rows": {"type": "integer", "minimum": TERMINAL_MIN_ROWS, "maximum": TERMINAL_MAX_ROWS},
 }
 
 
@@ -350,6 +349,8 @@ async def _handle_terminal(
             return await _handle_wait(terminal_manager, context, arguments)
         if action == "input":
             return await _handle_input(terminal_manager, context, arguments)
+        if action == "resize":
+            return await _handle_resize(terminal_manager, context, arguments)
         return await _handle_kill(terminal_manager, context, arguments)
     except TerminalNotFoundError:
         return tool_failure(
@@ -954,6 +955,8 @@ async def _handle_input(
     matched: list[str] = []
     try:
         if pattern is not None:
+            # A long wait is no typing: the program works without the focus.
+            await terminal_manager.release_focus(terminal_id, owner)
             ended = await terminal_manager.wait(
                 terminal_id,
                 owner,
@@ -974,6 +977,9 @@ async def _handle_input(
             terminal_manager, terminal_id, error, done="The input was sent"
         )
         return tool_success(_with_notes({**data, **typed}, notes))
+    finally:
+        with contextlib.suppress(Exception):
+            await terminal_manager.release_focus(terminal_id, owner)
     if capped and ended == "timeout":
         notes.append(_capped_wait_note())
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
@@ -992,6 +998,53 @@ async def _handle_input(
     if "next" in result:
         # What to do next closes the result, after what was typed.
         result["next"] = result.pop("next")
+    return tool_success(result)
+
+
+async def _handle_resize(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
+    owner = _owner(context)
+    columns = optional_int(
+        arguments.get("columns"),
+        field_name="columns",
+        default=None,
+        minimum=TERMINAL_MIN_COLUMNS,
+        maximum=TERMINAL_MAX_COLUMNS,
+    )
+    rows = optional_int(
+        arguments.get("rows"),
+        field_name="rows",
+        default=None,
+        minimum=TERMINAL_MIN_ROWS,
+        maximum=TERMINAL_MAX_ROWS,
+    )
+    info = terminal_manager.terminal(terminal_id, owner)
+    if columns is None and rows is None:
+        raise ToolContractError(
+            f"terminal was not run: resize needs columns, rows or both. {terminal_id} is "
+            f"{info.columns} columns x {info.rows} rows; columns can be "
+            f"{TERMINAL_MIN_COLUMNS}-{TERMINAL_MAX_COLUMNS}, rows "
+            f"{TERMINAL_MIN_ROWS}-{TERMINAL_MAX_ROWS}."
+        )
+    columns = info.columns if columns is None else columns
+    rows = info.rows if rows is None else rows
+    changed = await terminal_manager.resize(
+        terminal_id, owner, columns=columns, rows=rows, seconds=TERMINAL_REPLY_SECONDS
+    )
+    snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
+    _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
+    data = _screen_result(snapshot, view="resize", unseen_from=_unseen_from(snapshot))
+    # The Agent asked for this size; the notice is for sizes it did not set.
+    data.pop("size_change", None)
+    notes = [] if changed else [f"{terminal_id} already had this size; nothing changed."]
+    result = _with_notes(data, notes)
+    if snapshot.get("state") == "working":
+        # What to do next closes the result.
+        result["next"] = _reply_pending_text(terminal_id)
     return tool_success(result)
 
 
@@ -1094,7 +1147,7 @@ _ALTERNATE_SCREEN_NOTE = (
 _LAUNCH_FIELDS = ("program", "title", "workdir", "log", "name")
 # Results that follow the program: their history holds only lines the Agent
 # has not seen, and they offer no pages (user decision D1).
-_FOLLOWING_VIEWS = frozenset({"start", "input", "wait"})
+_FOLLOWING_VIEWS = frozenset({"start", "input", "wait", "resize"})
 
 
 def _log_text(path: str, *, complete: bool, end_line: int | None = None) -> str:
@@ -1470,7 +1523,8 @@ def _not_owned_message(terminal_manager: TerminalManager, terminal_id: str, acti
     if info is not None and info.attachment is not None:
         return (
             f"{terminal_id} is attached to another Session; only that Session can wait for it, "
-            f"type into it or kill it. Nothing was done. To read its screen, call {status}."
+            f"type into it, resize it or kill it. Nothing was done. To read its screen, call "
+            f"{status}."
         )
     return (
         f"{terminal_id} is not attached to this Session, so {action} was not done. Attach it "
@@ -1804,6 +1858,9 @@ def _terminal_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...
     terminal_id = arguments.get("terminal_id")
     if isinstance(terminal_id, str) and terminal_id:
         parts.append(ToolDisplayPart(terminal_id, kind="identifier", truncate="middle"))
+        size = [str(arguments[field]) for field in ("columns", "rows") if field in arguments]
+        if action == "resize" and len(size) == 2:
+            parts.append(ToolDisplayPart("×".join(size)))
         return tuple(parts)
     command = arguments.get("command")
     if action == "start":

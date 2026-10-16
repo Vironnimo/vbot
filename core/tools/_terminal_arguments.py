@@ -61,8 +61,6 @@ _FIELD_ALIASES = SpellingAliases(
     }
 )
 _SUBMIT = "submit"
-# The terminal's size follows the user's view of it; no call resizes it.
-_RESIZE = "resize"
 # Interrupting what the program does and stopping the program are different
 # calls; these names fit both (user decision D3).
 _AMBIGUOUS_STOPS = frozenset({"cancel", "abort", "interrupt"})
@@ -115,7 +113,7 @@ _ACTION_VALUES = {
         "input",
     ),
     **dict.fromkeys(("submit", "sendline", "writeline"), _SUBMIT),
-    **dict.fromkeys(("resize", "setsize", "size"), _RESIZE),
+    **dict.fromkeys(("resize", "setsize", "size", "resizeterminal", "setterminalsize"), "resize"),
     **dict.fromkeys(
         (
             "kill",
@@ -207,6 +205,7 @@ _ACCEPTED_FIELDS = {
             "pattern",
         }
     ),
+    "resize": frozenset({"terminal_id", "columns", "rows"}),
     "kill": frozenset({"terminal_id"}),
 }
 # Zero requests nothing for these fields; elsewhere zero is a real value.
@@ -257,15 +256,6 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
     action = normalized.get("action")
     if isinstance(action, str) and spelling(action) in _AMBIGUOUS_STOPS:
         raise ValueError(_not_run(_ambiguous_stop_problem(action, normalized)))
-    if action == _RESIZE:
-        status = _call("status", normalized)
-        raise ValueError(
-            _not_run(
-                "the terminal's size follows the user's view of it, so no call resizes it; "
-                f"nothing was changed. To read the screen at its current size, call terminal "
-                f"{status}."
-            )
-        )
     if not isinstance(action, str) or action not in _ACCEPTED_FIELDS:
         return normalized
     if action == "start":
@@ -290,10 +280,14 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
         if key in {"command", "args"}:
             raise ValueError(_not_run(_command_elsewhere_problem(action, normalized)))
         if key in {"columns", "rows"}:
+            size = {
+                field: normalized[field] for field in ("columns", "rows") if field in normalized
+            }
             raise ValueError(
                 _not_run(
-                    f"{action} does not change the size: the terminal's size follows the user's "
-                    "view of it. Repeat the call without columns and rows."
+                    f"{action} does not change the size; nothing was done. To change it, call "
+                    f"terminal {_call('resize', normalized, **size)}, then repeat the call "
+                    "without columns and rows."
                 )
             )
     return normalized
@@ -385,6 +379,9 @@ def _infer_action(arguments: dict[str, Any], press_enter: bool) -> None:
         # Input into a named terminal: start refuses a live terminal's id with
         # this input call, and no other action types.
         arguments["action"] = "input"
+    elif "command" not in arguments and ("columns" in arguments or "rows" in arguments):
+        # Only start, which takes no terminal_id of a live terminal, and resize take a size.
+        arguments["action"] = "resize"
 
 
 def _pop_enter_flags(arguments: dict[str, Any]) -> bool:

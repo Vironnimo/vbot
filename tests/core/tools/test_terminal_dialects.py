@@ -224,6 +224,23 @@ async def test_start_launches_and_says_how_to_send_the_input_it_got(
 
 
 @pytest.mark.asyncio
+async def test_input_has_the_focus_until_its_reply_was_shown(
+    terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
+) -> None:
+    """A program that reports focus sees typing like a user's: focused while
+    the Agent types and its reply is drawn, then away again."""
+    terminal_id = await terminal.start()
+    adapter = manager[1].adapters[0]
+    adapter.emit("\x1b[?1004h")
+    await eventually(lambda: adapter.writes == ["\x1b[O"])
+
+    await terminal({"action": "input", "terminal_id": terminal_id, "text": "hi"})
+
+    await eventually(lambda: len(adapter.writes) == 4)
+    assert adapter.writes == ["\x1b[O", "\x1b[I", "hi", "\x1b[O"]
+
+
+@pytest.mark.asyncio
 async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
 ) -> None:
@@ -587,17 +604,10 @@ async def test_fields_another_action_owns_fail_with_the_call_that_uses_them(
     )
     sized = await terminal({"action": "status", "terminal_id": terminal_id, "columns": 120})
     assert _error(sized)["message"] == (
-        "terminal was not run: status does not change the size: the terminal's size follows "
-        "the user's view of it. Repeat the call without columns and rows."
-    )
-    resized = await terminal(
-        {"action": "resize", "terminal_id": terminal_id, "columns": 120, "rows": 40}
-    )
-    assert _error(resized)["message"] == (
-        "terminal was not run: the terminal's size follows the user's view of it, so no call "
-        "resizes it; nothing was changed. To read the screen at its current size, call terminal "
-        + json.dumps({"action": "status", "terminal_id": terminal_id})
-        + "."
+        "terminal was not run: status does not change the size; nothing was done. To change "
+        "it, call terminal "
+        + json.dumps({"action": "resize", "terminal_id": terminal_id, "columns": 120})
+        + ", then repeat the call without columns and rows."
     )
     commanded = await terminal({"action": "input", "terminal_id": terminal_id, "command": "ls -la"})
     assert _error(commanded)["message"] == (

@@ -350,7 +350,7 @@ async def test_a_screen_that_cannot_be_drawn_says_so_and_catches_up_later(
     [
         ({"action": "start", "command": "   "}, "command"),
         ({"action": "input", "terminal_id": "missing", "data": "raw", "key": "enter"}, "data"),
-        ({"action": "resize", "terminal_id": "missing", "columns": 120}, "no call resizes it"),
+        ({"action": "resize", "terminal_id": "missing", "columns": 500}, "between 40 and 240"),
         ({"action": "status", "terminal_id": "missing", "lines": 150}, "lines"),
         ({"action": "unknown"}, "action"),
     ],
@@ -444,6 +444,48 @@ async def test_resize_notice_is_consumed_only_with_a_persisted_screen(
     assert "size_change" in await terminal_manager.snapshot(terminal_id, OWNER)
     callbacks.pop()()
     assert "size_change" not in await terminal_manager.snapshot(terminal_id, OWNER)
+
+
+@pytest.mark.asyncio
+async def test_resize_returns_the_screen_the_program_redrew_for_the_new_size(
+    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    terminal_manager, factory = manager
+    terminal_id, callbacks = await _start_persisted(terminal_manager, tmp_path)
+    context = make_context(tmp_path, result_persisted_hook=callbacks.append)
+    adapter = factory.adapters[0]
+    record = adapter.resize
+
+    def redraw(rows: int, columns: int) -> None:
+        record(rows, columns)
+        adapter.emit(f"[2J[Hdrawn at {columns}x{rows}")
+
+    adapter.resize = redraw  # type: ignore[method-assign]
+
+    async def resize(**size: int) -> dict[str, Any]:
+        arguments: JsonObject = {"action": "resize", "terminal_id": terminal_id, **size}
+        return await call(terminal_manager, context, arguments)
+
+    resized = cast(dict[str, Any], (await resize(columns=120, rows=40))["data"])
+    assert resized["screen"] == "drawn at 120x40"
+    # The Agent asked for this size: no notice that the terminal was resized.
+    assert "size_change" not in resized and "note" not in resized
+    # An omitted dimension keeps its current value.
+    narrowed = cast(dict[str, Any], (await resize(columns=100))["data"])
+    assert narrowed["screen"] == "drawn at 100x40"
+    unchanged = cast(dict[str, Any], (await resize(columns=100, rows=40))["data"])
+    assert unchanged["note"] == f"{terminal_id} already had this size; nothing changed."
+    assert adapter.resizes == [(40, 120), (40, 100)]
+    for persisted in callbacks:
+        persisted()
+    shown = await terminal_manager.snapshot(terminal_id, OWNER)
+    assert "size_change" not in shown
+
+    unsized = cast(dict[str, Any], (await resize())["error"])
+    assert unsized["message"] == (
+        f"terminal was not run: resize needs columns, rows or both. {terminal_id} is 100 "
+        "columns x 40 rows; columns can be 40-240, rows 10-80."
+    )
 
 
 @pytest.mark.asyncio

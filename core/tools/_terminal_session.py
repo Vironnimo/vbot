@@ -19,7 +19,12 @@ from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease
 from core.tools import terminal_backend
 from core.tools.terminal_backend import TerminalAdapter
-from core.tools.terminal_emulator import FOCUS_OUT_REPORT, EmulatorUpdate, ScreenObservation
+from core.tools.terminal_emulator import (
+    FOCUS_IN_REPORT,
+    FOCUS_OUT_REPORT,
+    EmulatorUpdate,
+    ScreenObservation,
+)
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
@@ -195,6 +200,9 @@ class TerminalSession:
         self._application_cursor = False
         # The program asked for focus reports; it is told the focus is lost.
         self._focus_reporting = False
+        # The program was told that it has the focus: Agent input is under way,
+        # or its reply has not been shown yet (``release_focus``).
+        self._focused = False
         self._alternate_screen = False
         self._screen_revision = 0
         self._resize_count = 0
@@ -211,6 +219,10 @@ class TerminalSession:
         # Quiet boundaries so far: output paused for the quiet period after
         # activity. Replies to input end at the next one.
         self._quiet_boundaries = 0
+        # Quiet boundaries of any kind, a redraw for a new size included.
+        self._settles = 0
+        # Program output that showed something new.
+        self._shown_outputs = 0
         # A quiet boundary showed something: the program's first screen.
         self._screen_shown = False
         self._snapshot_on_settle = False
@@ -666,6 +678,12 @@ class TerminalSession:
                 self._input_offset = self._log_size
                 await self._mark_input()
                 running = await self._running_before_input()
+                if self._focus_reporting and not self._focused:
+                    # Like a user typing, the Agent has the focus until it
+                    # saw the reply; programs ignore keys or drop the focused
+                    # widget while the terminal has no focus.
+                    self._focused = True
+                    self._queue_write(FOCUS_IN_REPORT)
                 *typed, last = chunks
                 if typed:
                     writing = self._queue_input(typed[0], running, notify=True)
@@ -704,10 +722,6 @@ class TerminalSession:
                 write_error = await asyncio.shield(writing)
                 if write_error is None:
                     async with self._lock:
-                        if self._focus_reporting and last.endswith("\r"):
-                            # The program that works on the submitted input,
-                            # possibly one it starts, learns that its user is away.
-                            self._queue_write(FOCUS_OUT_REPORT)
                         return self._input_result(
                             text_sent + len(last),
                             key,
@@ -724,6 +738,19 @@ class TerminalSession:
                 key_unsent="ended" if isinstance(failure, TerminalClosedError) else "refused",
             )
         raise failure from write_error
+
+    async def release_focus(self) -> None:
+        """Tell a program that Agent input gave the focus that its user is away
+        again, once the Agent has the reply: programs that notify only an absent
+        user then declare the end of the work the input started. A quiet
+        program's redraw for the lost focus shows nothing new."""
+        async with self._lock:
+            if not self._focused or self.finished:
+                return
+            self._focused = False
+            if self._focus_reporting:
+                self._activity.expect_redraw(self._services.monotonic())
+                self._queue_write(FOCUS_OUT_REPORT)
 
     @contextlib.asynccontextmanager
     async def _input_state(self) -> AsyncGenerator[None]:
@@ -895,15 +922,7 @@ class TerminalSession:
             if (columns, rows) != (self._screen.columns, self._screen.rows):
                 # A resize to the current dimensions would only make the
                 # program repaint, so it is skipped.
-                await asyncio.to_thread(self._adapter.resize, rows, columns)
-                self._resizes.append((self._log_size, columns, rows))
-                try:
-                    await self._screen.resize(columns, rows)
-                except Exception as error:
-                    self._render_failed(error, self._log_size)
-                self._resize_count += 1
-                self._activity.resize(self._services.monotonic())
-                self._publish_state()
+                await self._resize_screen(columns, rows)
             return {
                 "terminal_id": self.terminal_id,
                 "state": self.state,
@@ -911,6 +930,47 @@ class TerminalSession:
                 "rows": rows,
                 "screen_revision": self._screen_revision,
             }
+
+    async def resize_for_agent(self, columns: int, rows: int, *, deadline: float) -> bool:
+        """Resize for the attached Agent, then wait until the program redrew.
+
+        The wait ends at the first quiet boundary after the resize, once the
+        repaint window passed without output that showed something new (the
+        program does not redraw), when the program ends, or at *deadline*.
+        False when the terminal already had this size.
+        """
+        _validate_dimensions(columns, rows)
+        async with self._lock:
+            self._require_live()
+            if (columns, rows) == (self._screen.columns, self._screen.rows):
+                return False
+            settles, shown = self._settles, self._shown_outputs
+            await self._resize_screen(columns, rows)
+            if self._activity.state == "working":
+                # Work in progress settles after its redraw, not on its earlier timer.
+                self._restart_quiet(QuietRestart(self._activity.generation, False))
+        services = self._services
+        silent_until = services.monotonic() + TERMINAL_REPAINT_WINDOW_SECONDS
+        while not self.finished and self._settles == settles:
+            change = self._change
+            now = services.monotonic()
+            silent = self._shown_outputs == shown
+            if now >= deadline or (silent and now >= silent_until):
+                break
+            await self._wait_or_sleep(change, (silent_until if silent else deadline) - now)
+        return True
+
+    async def _resize_screen(self, columns: int, rows: int) -> None:
+        """Resize the PTY and the screen to new dimensions; the lock is held."""
+        await asyncio.to_thread(self._adapter.resize, rows, columns)
+        self._resizes.append((self._log_size, columns, rows))
+        try:
+            await self._screen.resize(columns, rows)
+        except Exception as error:
+            self._render_failed(error, self._log_size)
+        self._resize_count += 1
+        self._activity.expect_redraw(self._services.monotonic())
+        self._publish_state()
 
     # Observation
 
@@ -1165,10 +1225,13 @@ class TerminalSession:
             attached=self.attachment is not None,
             delivery_pending=self._delivery_pending(),
             signals=() if update is None else update.signals,
+            # A screen that missed the output cannot tell what changed.
+            view="new" if update is None else update.view_change,
         )
         if effect.changes_screen:
             self._screen_revision += 1
         if effect.restart is not None:
+            self._shown_outputs += 1
             self._restart_quiet(effect.restart)
         if effect.state_changed or facts_changed:
             self._publish_state()
@@ -1399,6 +1462,9 @@ class TerminalSession:
         self._bracketed_paste = update.bracketed_paste
         self._application_cursor = update.application_cursor
         self._focus_reporting = update.focus_reporting
+        if FOCUS_OUT_REPORT in update.responses:
+            # The program asked for focus reports and was told it has no focus.
+            self._focused = False
         self._alternate_screen = update.alternate_screen
         if update.alternate_exited:
             try:
@@ -1447,6 +1513,8 @@ class TerminalSession:
                 settled = self._activity.settle(generation, observation.signature)
                 if settled is None:
                     return
+                self._settles += 1
+                self._signal_change()
                 if observation.screen and not self._screen_shown:
                     # The first screen also shows when the program's first
                     # output came right after a resize and counts as a redraw.
