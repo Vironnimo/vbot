@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,8 +86,13 @@ def _unlock_claim(handle: IO[bytes]) -> None:
 
 
 @contextmanager
-def server_control_claim(data_dir: str | Path, port: int):
-    """Hold the OS-owned lifetime claim for one data-directory/port authority."""
+def server_control_claim(data_dir: str | Path, port: int) -> Iterator[ServerControlRecord | None]:
+    """Hold the OS-owned lifetime claim for one data-directory/port authority.
+
+    Yields the control record of an earlier server process that ended without
+    removing it, which its own shutdown does last: that process never finished
+    its shutdown. ``None`` when no earlier record was left behind.
+    """
     record_path = control_record_path(data_dir, port)
     record_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = record_path.with_suffix(".lock")
@@ -101,6 +107,7 @@ def server_control_claim(data_dir: str | Path, port: int):
         _lock_claim(handle)
         locked = True
         existing = read_server_control(data_dir, port)
+        stale: ServerControlRecord | None = None
         if existing is not None and existing.pid != os.getpid():
             try:
                 process = psutil.Process(existing.pid)
@@ -112,7 +119,8 @@ def server_control_claim(data_dir: str | Path, port: int):
                 alive = False
             if alive:
                 raise RuntimeError("Another live server owns this control authority")
-        yield
+            stale = existing
+        yield stale
     except OSError as exc:
         if not locked:
             raise RuntimeError("Another server process holds this control authority") from exc

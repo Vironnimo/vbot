@@ -106,7 +106,8 @@ def test_control_token_authorization_requires_exact_nonempty_secret() -> None:
 
 
 def test_control_claim_prevents_replacing_current_authority(tmp_path: Path) -> None:
-    with server_control_claim(tmp_path, 8420):
+    with server_control_claim(tmp_path, 8420) as previous:
+        assert previous is None
         original = create_server_control(tmp_path, 8420, token="original")
         with (
             pytest.raises(RuntimeError, match="control authority"),
@@ -158,7 +159,9 @@ def test_process_exit_releases_claim_without_replacing_record(tmp_path: Path) ->
         # A Windows venv interpreter may be a launcher with a Python child.
         kill_process_tree(child)
         child.wait(timeout=10)
-    with server_control_claim(tmp_path, 8420):
+    # The next claim names the killed owner, which never removed its record.
+    with server_control_claim(tmp_path, 8420) as previous:
+        assert previous == original
         replacement = create_server_control(tmp_path, 8420, token="replacement")
     assert read_server_control(tmp_path, 8420) == replacement
 

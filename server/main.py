@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> None:
         # from the canonical layout so it carries the Session store's bootstrap
         # marker; an existing root without that marker is refused at startup.
         initialize_data_directory(config.data_dir, resources_dir=config.get("RESOURCES_PATH"))
-    with server_control_claim(config.data_dir, server_bind["listen_port"]):
+    with server_control_claim(config.data_dir, server_bind["listen_port"]) as previous:
         control = create_server_control(config.data_dir, server_bind["listen_port"])
         lifecycle = _ServerLifecycle(
             config=config,
@@ -198,6 +198,11 @@ def main(argv: list[str] | None = None) -> None:
                 level=config.get("LOG_LEVEL", "INFO"), data_dir=config.data_dir
             )
             _enable_crash_log(config.data_dir)
+            if previous is not None:
+                # Its own shutdown removes the record last, after its stop line.
+                _LOGGER.warning(
+                    "Previous server process ended without shutting down (pid=%s)", previous.pid
+                )
             server = uvicorn.Server(uvicorn_config)
             uvicorn_startup = server.startup
             uvicorn_handle_exit = server.handle_exit
