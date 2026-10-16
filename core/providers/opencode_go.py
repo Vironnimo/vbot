@@ -92,29 +92,55 @@ def _raise_if_permanent_rate_limit(status_code: int, detail: str) -> None:
     )
 
 
-def _raise_if_upstream_json_failure(
+# Observed gateway failures of one upstream behind Go, as (status, error.code,
+# error.message) with error.type ``server_error``; a code of None means the body
+# carries none. Each arrived under a status the shared policy treats as fatal,
+# while the same Connection and request succeeded moments later:
+# - 403, 2026-09-20 (Swarm): the upstream answered with invalid JSON.
+# - 400, 2026-10-16 (deepseek-v4.1-flash, thinking effort high): one upstream
+#   endpoint refused the thinking field the Model otherwise accepts.
+_RECOVERABLE_UPSTREAM_FAILURES = frozenset(
+    {
+        (
+            403,
+            "server_error",
+            "Upstream request failed: [server_error] Upstream response was not valid JSON",
+        ),
+        (
+            400,
+            None,
+            "Upstream request failed: [unsupported_request] "
+            "The thinking request field is not enabled for this endpoint.",
+        ),
+    }
+)
+_RECOVERABLE_UPSTREAM_STATUSES = frozenset(
+    status for status, _, _ in _RECOVERABLE_UPSTREAM_FAILURES
+)
+
+
+def _raise_if_upstream_failure(
     status_code: int,
     detail: str,
     response_headers: httpx.Headers,
 ) -> None:
-    """Recover the observed gateway failure without relaxing ordinary auth errors."""
-    if status_code != 403:
+    """Recover the observed gateway failures without relaxing other errors of their status."""
+    if status_code not in _RECOVERABLE_UPSTREAM_STATUSES:
         return
     try:
         body = json.loads(detail.removeprefix(f"{status_code} "))
     except json.JSONDecodeError:
         return
     error = body.get("error") if isinstance(body, dict) else None
-    if not isinstance(error, dict) or (
-        error.get("type") != "server_error"
-        or error.get("code") != "server_error"
-        or error.get("message")
-        != "Upstream request failed: [server_error] Upstream response was not valid JSON"
+    if (
+        not isinstance(error, dict)
+        or error.get("type") != "server_error"
+        or (status_code, error.get("code"), error.get("message"))
+        not in _RECOVERABLE_UPSTREAM_FAILURES
     ):
         return
-    # Live Go responses use 403 for this upstream failure despite subsequent
-    # successful requests with the same credentials. Keep recovery in the
-    # existing caller-owned budget rather than adding another retry loop.
+    # Keep recovery in the existing caller-owned budget rather than adding
+    # another retry loop.
     upstream_error = ProviderError(f"Provider error: {detail}", retryable=True)
     upstream_error.status_code = status_code
     upstream_error.retry_after = parse_retry_after(response_headers)
@@ -153,7 +179,7 @@ class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
         detail: str,
         response_headers: httpx.Headers,
     ) -> None:
-        _raise_if_upstream_json_failure(status_code, detail, response_headers)
+        _raise_if_upstream_failure(status_code, detail, response_headers)
         _raise_if_permanent_rate_limit(status_code, detail)
         super()._classify_http_status(
             status_code,
@@ -173,7 +199,7 @@ class _OpenCodeGoGeminiAdapter(GeminiCompatibleAdapter):
     def _classify_http_status(
         self, status_code: int, *, detail: str, response_headers: httpx.Headers
     ) -> None:
-        _raise_if_upstream_json_failure(status_code, detail, response_headers)
+        _raise_if_upstream_failure(status_code, detail, response_headers)
         _raise_if_permanent_rate_limit(status_code, detail)
         super()._classify_http_status(status_code, detail=detail, response_headers=response_headers)
 
@@ -427,7 +453,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         detail: str,
         response_headers: httpx.Headers,
     ) -> None:
-        _raise_if_upstream_json_failure(status_code, detail, response_headers)
+        _raise_if_upstream_failure(status_code, detail, response_headers)
         _raise_if_permanent_rate_limit(status_code, detail)
         super()._classify_http_status(
             status_code,
@@ -512,7 +538,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         detail: str,
         response_headers: httpx.Headers,
     ) -> None:
-        _raise_if_upstream_json_failure(status_code, detail, response_headers)
+        _raise_if_upstream_failure(status_code, detail, response_headers)
         _raise_if_permanent_rate_limit(status_code, detail)
         classify_http_status(
             status_code,

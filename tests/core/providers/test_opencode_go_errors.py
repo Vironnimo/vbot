@@ -1,4 +1,4 @@
-"""OpenCode Go error policy: the observed upstream 403, subscription limits and auth failures."""
+"""OpenCode Go error policy: observed upstream failures, subscription limits and auth failures."""
 
 from __future__ import annotations
 
@@ -43,6 +43,17 @@ UPSTREAM_JSON_FAILURE = {
         "message": "Upstream request failed: [server_error] Upstream response was not valid JSON",
     }
 }
+UPSTREAM_THINKING_FAILURE = {
+    "error": {
+        "type": "server_error",
+        "message": "Upstream request failed: [unsupported_request] "
+        "The thinking request field is not enabled for this endpoint.",
+    }
+}
+UPSTREAM_FAILURES = {
+    "403-invalid-json": (403, UPSTREAM_JSON_FAILURE),
+    "400-thinking-endpoint": (400, UPSTREAM_THINKING_FAILURE),
+}
 _WIRE_IDS = list(WIRES)
 
 
@@ -52,14 +63,16 @@ def _affinity(adapter: OpenCodeGoAdapter) -> dict[str, Any]:
     )
 
 
+@pytest.mark.parametrize("failure", list(UPSTREAM_FAILURES))
 @pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @pytest.mark.parametrize("wire", _WIRE_IDS)
 @pytest.mark.asyncio
-async def test_upstream_json_failure_retries_the_identical_request(
-    wire: str, streaming: bool
+async def test_observed_upstream_failure_retries_the_identical_request(
+    wire: str, streaming: bool, failure: str
 ) -> None:
-    """The exact structured 403 keeps its status, body and Retry-After and is retried."""
+    """An observed gateway failure keeps its status, body and Retry-After and is retried."""
     model_id, url = WIRES[wire]
+    status, body = UPSTREAM_FAILURES[failure]
     adapter = go_adapter()
     notices: list[RetryNotice] = []
 
@@ -70,7 +83,7 @@ async def test_upstream_json_failure_retries_the_identical_request(
     ):
         route = respx.post(GEMINI_STREAM_URL if wire == "gemini" and streaming else url).mock(
             side_effect=[
-                httpx.Response(403, json=UPSTREAM_JSON_FAILURE, headers={"retry-after": "7"}),
+                httpx.Response(status, json=body, headers={"retry-after": "7"}),
                 success_response(wire, streaming=streaming),
             ]
         )
@@ -89,9 +102,9 @@ async def test_upstream_json_failure_retries_the_identical_request(
     error = notices[0].error
     assert type(error) is ProviderError
     assert error.retryable is True
-    assert error.status_code == 403
+    assert error.status_code == status
     assert error.retry_after == 7
-    assert json.loads(str(error).split("403 ", 1)[1]) == UPSTREAM_JSON_FAILURE
+    assert json.loads(str(error).split(f"{status} ", 1)[1]) == body
 
 
 @pytest.mark.parametrize(
@@ -152,30 +165,70 @@ async def test_real_forbidden_response_is_a_fatal_auth_error_on_every_wire(
     assert route.call_count == 1
 
 
-def _upstream_error(**changes: str) -> str:
-    return json.dumps({"error": {**UPSTREAM_JSON_FAILURE["error"], **changes}})
+def _upstream_error(failure: dict[str, Any], **changes: str) -> str:
+    return json.dumps({"error": {**failure["error"], **changes}})
+
+
+_THINKING_MESSAGE = UPSTREAM_THINKING_FAILURE["error"]["message"]
 
 
 @pytest.mark.parametrize(
-    ("status", "body"),
+    ("status", "body", "expected"),
     [
-        pytest.param(401, json.dumps(UPSTREAM_JSON_FAILURE), id="401-with-the-same-body"),
-        pytest.param(403, "Forbidden", id="plain-text"),
-        pytest.param(403, "[]", id="non-object-json"),
-        pytest.param(403, '{"error":"server_error"}', id="non-object-error"),
-        pytest.param(403, _upstream_error(code="invalid_api_key"), id="other-code"),
-        pytest.param(403, _upstream_error(message="Other failure"), id="other-message"),
+        pytest.param(
+            401, json.dumps(UPSTREAM_JSON_FAILURE), ProviderAuthError, id="401-with-the-403-body"
+        ),
+        pytest.param(403, "Forbidden", ProviderAuthError, id="plain-text"),
+        pytest.param(403, "[]", ProviderAuthError, id="non-object-json"),
+        pytest.param(403, '{"error":"server_error"}', ProviderAuthError, id="non-object-error"),
+        pytest.param(
+            403,
+            _upstream_error(UPSTREAM_JSON_FAILURE, code="invalid_api_key"),
+            ProviderAuthError,
+            id="other-code",
+        ),
+        pytest.param(
+            403,
+            _upstream_error(UPSTREAM_JSON_FAILURE, message="Other failure"),
+            ProviderAuthError,
+            id="other-message",
+        ),
+        pytest.param(
+            403,
+            json.dumps(UPSTREAM_THINKING_FAILURE),
+            ProviderAuthError,
+            id="403-with-the-400-body",
+        ),
+        pytest.param(
+            400,
+            _upstream_error(UPSTREAM_THINKING_FAILURE, type="invalid_request_error"),
+            ProviderError,
+            id="400-other-type",
+        ),
+        pytest.param(
+            400,
+            _upstream_error(UPSTREAM_THINKING_FAILURE, message="Upstream request failed: [x] y"),
+            ProviderError,
+            id="400-other-message",
+        ),
+        pytest.param(
+            400,
+            json.dumps({"error": {"message": _THINKING_MESSAGE}}),
+            ProviderError,
+            id="400-without-type",
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_only_the_observed_structured_403_escapes_auth_classification(
-    status: int, body: str
+async def test_only_the_observed_upstream_failures_escape_their_status_policy(
+    status: int, body: str, expected: type[ProviderError]
 ) -> None:
     with respx.mock, caller_owns_retries():
         route = respx.post(CHAT_URL).mock(return_value=httpx.Response(status, text=body))
-        with pytest.raises(ProviderAuthError) as failure:
+        with pytest.raises(ProviderError) as failure:
             await go_adapter().send(HELLO, model_id=CHAT_MODEL)
 
+    assert isinstance(failure.value, expected)
     assert failure.value.retryable is False
     assert route.call_count == 1
 
