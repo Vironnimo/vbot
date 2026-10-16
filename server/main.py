@@ -31,7 +31,7 @@ from core.utils.config import (
     resolve_server_bind,
 )
 from core.utils.logging import LogManager, build_uvicorn_log_config, get_logger
-from core.utils.processes import activate_process_containment
+from core.utils.processes import ForeignJob, activate_process_containment, foreign_job
 from core.utils.server_control import (
     SHUTDOWN_FAILED_EXIT_CODE,
     STARTUP_FAILED_EXIT_CODE,
@@ -106,6 +106,8 @@ def main(argv: list[str] | None = None) -> None:
         "verification" if args.verification_only else "test" if args.test_instance else None
     )
     server_bind = resolve_server_bind(config, host=args.host, explicit_port=args.port)
+    # Before containment, which nests this process in a Job of its own.
+    enclosing_job = _enclosing_foreign_job()
     activate_process_containment()
     if not config.data_dir.expanduser().exists():
         # The control claim writes into the data directory. A fresh root must come
@@ -198,6 +200,7 @@ def main(argv: list[str] | None = None) -> None:
                 level=config.get("LOG_LEVEL", "INFO"), data_dir=config.data_dir
             )
             _enable_crash_log(config.data_dir)
+            _log_enclosing_job(enclosing_job)
             server = uvicorn.Server(uvicorn_config)
             uvicorn_startup = server.startup
             uvicorn_handle_exit = server.handle_exit
@@ -325,6 +328,31 @@ class _ServerLifecycle:
             "Server stopped (%s)",
             _format_fields(fields),
         )
+
+
+def _enclosing_foreign_job() -> ForeignJob | OSError | None:
+    """Another application's Windows Job this server started in, or why that is unknown."""
+    try:
+        return foreign_job()
+    except OSError as exc:
+        return exc
+
+
+def _log_enclosing_job(job: ForeignJob | OSError | None) -> None:
+    """Say why this server may later vanish without a stop line.
+
+    Closing the application that owns the Job ends every process in it, this
+    server included, before the server can log anything.
+    """
+    if isinstance(job, ForeignJob):
+        _LOGGER.warning(
+            "Server started inside another application's Windows Job; closing that "
+            "application ends the server without a stop line (owner=%s owner_pid=%s)",
+            job.name,
+            job.pid,
+        )
+    elif job is not None:
+        _LOGGER.debug("Inspecting the Windows Job of the server failed (error=%s)", job)
 
 
 def _installed_version_id() -> str | None:

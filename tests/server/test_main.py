@@ -17,6 +17,7 @@ import uvicorn.server
 from core.database import DataStoreMarker, read_marker
 from core.utils.log_viewer import LOG_LINE_PATTERN
 from core.utils.logging import resolve_daily_log_path
+from core.utils.processes import ForeignJob
 from core.utils.server_control import SHUTDOWN_FAILED_EXIT_CODE, STARTUP_FAILED_EXIT_CODE
 from core.utils.version import BuildIdentity
 from server import main as server_main
@@ -89,6 +90,8 @@ def _patch_serving(
         server_main, "uvicorn", SimpleNamespace(Config=FakeConfig, Server=FakeServer)
     )
     monkeypatch.setattr(server_main, "activate_process_containment", lambda: None)
+    # The test process may run inside a coding agent's or CI runner's Windows Job.
+    monkeypatch.setattr(server_main, "foreign_job", lambda: None)
     monkeypatch.setattr(server_main, "create_app", _fake_create_app)
     # The real hook would freeze the test process heap for the rest of the session.
     monkeypatch.setattr(server_main.gc, "collect", lambda: None)
@@ -279,6 +282,10 @@ def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
         clock[0] += 1.0
 
     _patch_serving(monkeypatch, serve)
+    # Started inside another application's Job, the server says so: closing that
+    # application ends it without the stop line below.
+    job = ForeignJob("codex.exe", 4711, confines_children=True) if cause == "signal" else None
+    monkeypatch.setattr(server_main, "foreign_job", lambda: job)
     monkeypatch.setattr(server_main, "create_app", create_app)
     monkeypatch.setattr(server_main, "perf_counter", lambda: clock[0])
     monkeypatch.setattr(server_main.gc, "collect", collect)
@@ -326,6 +333,9 @@ def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
     assert len(stopped) == 1
     assert stop_fields in stopped[0]
     assert " uptime=" in stopped[0]
+    enclosed = [line for line in lines if "owner=codex.exe owner_pid=4711" in line]
+    assert len(enclosed) == (1 if job else 0)
+    assert all("[WARN] vbot.server - " in line for line in enclosed)
 
 
 @pytest.mark.parametrize("oversized", [False, True])
