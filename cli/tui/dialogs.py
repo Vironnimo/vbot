@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, override
 
@@ -47,12 +48,20 @@ class Picker(ModalScreen[Any]):
     Picker OptionList { height: auto; max-height: 14; }
     """
 
-    def __init__(self, title: str, choices: list[tuple[str, Any]], *, query: str = "") -> None:
+    def __init__(
+        self,
+        title: str,
+        choices: list[tuple[str, Any]],
+        *,
+        query: str = "",
+        search_text: Callable[[Any], str] | None = None,
+    ) -> None:
         super().__init__()
         self.heading = terminal_text(title)
         self.choices = [(terminal_text(label), value) for label, value in choices]
         self.filtered = self.choices
         self.initial_query = query
+        self.search_text = search_text
 
     @override
     def compose(self) -> ComposeResult:
@@ -74,7 +83,10 @@ class Picker(ModalScreen[Any]):
         self.filtered = [
             (label, value)
             for label, value in self.choices
-            if all(word in label.casefold() for word in words)
+            if all(
+                word in (self.search_text(value) if self.search_text else label).casefold()
+                for word in words
+            )
         ]
         options = self.query_one(OptionList)
         options.clear_options()

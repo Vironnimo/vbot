@@ -605,6 +605,55 @@ async def test_history_cursor_is_positional_when_message_ids_repeat(
 
 
 @pytest.mark.asyncio
+async def test_timeline_bounds_run_delivery_and_pages_the_same_durable_children(
+    history: _History,
+) -> None:
+    seed_history(
+        history.session(),
+        [
+            ChatMessage.user("Question"),
+            *[
+                ChatMessage.assistant(model="test/model", content=f"Step {index}")
+                for index in range(10)
+            ],
+            _summary("run-one", "summary"),
+        ],
+    )
+    full = await history.read(method="chat.timeline")
+    bounded = await history.read(method="chat.timeline", child_limit=2)
+    full_run = next(item for item in full["items"] if item["type"] == "assistant_run")
+    run = next(item for item in bounded["items"] if item["type"] == "assistant_run")
+    gap = run["items"][0]
+    assert len(full_run["items"]) == 10
+    assert len(run["items"]) == 3
+    assert [child["id"] for child in run["items"][1:]] == [
+        child["id"] for child in full_run["items"][-2:]
+    ]
+    assert [message["role"] for message in bounded["messages"]] == ["user"]
+    page = await history.read(
+        method="chat.timeline_children",
+        session_id="session-one",
+        run_id="run-one",
+        before=gap["before"],
+        history_generation=bounded["history_generation"],
+        limit=3,
+    )
+    assert [child["id"] for child in page["items"][1:]] == [
+        child["id"] for child in full_run["items"][-5:-2]
+    ]
+    rejected = await call(
+        history.state,
+        "chat.timeline_children",
+        agent_id="coder",
+        session_id="session-one",
+        run_id="run-one",
+        before=gap["before"],
+        history_generation="stale",
+    )
+    assert rejected["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
 async def test_history_expands_the_page_to_complete_the_oldest_run_segment(
     history: _History,
 ) -> None:

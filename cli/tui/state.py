@@ -22,6 +22,12 @@ def _run_id(item: JsonObject) -> str | None:
     return item.get("runId", item.get("run_id"))
 
 
+def _facts(response: JsonObject) -> JsonObject:
+    # Content has one owner. Retaining the wire response here kept every raw
+    # Message and an extra timeline alive after the visible cache was replaced.
+    return {key: value for key, value in response.items() if key not in {"items", "messages"}}
+
+
 def _reuse(previous: Any, incoming: Any) -> Any:
     """Reuse equal snapshot subtrees; published timeline objects stay immutable."""
     if previous is incoming:
@@ -46,7 +52,31 @@ def _reuse(previous: Any, incoming: Any) -> Any:
 
 def _snapshot_items(previous: list[JsonObject], incoming: list[JsonObject]) -> list[JsonObject]:
     known = {item["id"]: item for item in previous}
-    return [_reuse(known.get(item["id"]), copy.deepcopy(item)) for item in incoming]
+    return [
+        _reuse(
+            known.get(item["id"]), _retain_window_prefix(known.get(item["id"]), copy.deepcopy(item))
+        )
+        for item in incoming
+    ]
+
+
+def _retain_window_prefix(previous: JsonObject | None, incoming: JsonObject) -> JsonObject:
+    start = incoming.get("window_start")
+    if previous is None or not isinstance(start, int):
+        return incoming
+    incoming_ids = {child["id"] for child in incoming.get("items", [])}
+    prefix = [
+        child
+        for child in previous.get("items", [])
+        if child.get("type") != "history_gap"
+        and child["id"] not in incoming_ids
+        and child.get("position", start) < start
+    ]
+    if not prefix:
+        return incoming
+    gap = [child for child in previous["items"] if child.get("type") == "history_gap"]
+    tail = [child for child in incoming.get("items", []) if child.get("type") != "history_gap"]
+    return {**incoming, "items": gap + prefix + tail}
 
 
 @dataclass
@@ -62,6 +92,11 @@ class Conversation:
     overrides: JsonObject = field(default_factory=dict)
     scroll_y: float = 0
     follow_tail: bool = True
+    reading_anchor: tuple[str, float] | None = None
+    row_heights: dict[str, int] = field(default_factory=dict)
+    expanded_rows: set[str] = field(default_factory=set)
+    measured_width: int = 0
+    cache_bytes: int = 0
     unread_output: bool = False
     uncertain: bool = False
     uncertain_submission: JsonObject | None = None
@@ -135,7 +170,12 @@ class Conversation:
             current_run = active.get("run_id")
             if current_run != self.stream_run:
                 self.stream_run, self.sequence = current_run, -1
-        incoming = _snapshot_items(self.items, response.get("items", []))
+        reset = response.get("history_reset") or (
+            self.facts.get("history_generation")
+            and response.get("history_generation")
+            and self.facts["history_generation"] != response["history_generation"]
+        )
+        incoming = _snapshot_items([] if reset else self.items, response.get("items", []))
         if older:
             known = {item["id"] for item in self.items}
             self.items = [item for item in incoming if item["id"] not in known] + self.items
@@ -162,16 +202,43 @@ class Conversation:
                 if _run_id(item) not in replaced and item["id"] not in ids
             ]
             self.items[position:position] = incoming
-            self.facts.update(response)
+            self.facts.update(_facts(response))
             if "active_run" not in response:
                 self.facts.pop("active_run", None)
             self.sequence = response.get("timeline_sequence", self.sequence)
         else:
             self.items = incoming
-            self.facts = {**response}
+            self.facts = _facts(response)
             self.sequence = response.get("timeline_sequence", -1)
         if older or not response.get("incremental"):
             self.next_before = response.get("next_before") if response.get("has_more") else None
+
+    def release_history(self) -> None:
+        """Evict reconstructible content while retaining operator-owned state."""
+        self.items = []
+        self.facts = {}
+        self.next_before = None
+        self.sequence = -1
+        self.stream_run = None
+        self.row_heights.clear()
+        self.cache_bytes = 0
+
+    def child_page(self, response: JsonObject) -> None:
+        run_id = response["run_id"]
+        for index, run in enumerate(self.items):
+            if run.get("type") != "assistant_run" or _run_id(run) != run_id:
+                continue
+            children = {
+                child["id"]: child for child in run["items"] if child.get("type") != "history_gap"
+            }
+            for child in response["items"]:
+                children.setdefault(child["id"], child)
+            replacement = {
+                **run,
+                "items": sorted(children.values(), key=lambda child: child.get("position", 0)),
+            }
+            self.items = [*self.items[:index], replacement, *self.items[index + 1 :]]
+            return
 
     def event(self, event: JsonObject) -> bool:
         """Apply only explicit wire edits; false means stale/duplicate delivery."""
@@ -232,6 +299,9 @@ class Conversation:
                 children.pop(item_id, None)
             for item in payload.get("children", []):
                 children[item["id"]] = copy.deepcopy(item)
+            for identifier, position in payload.get("positions", {}).items():
+                if identifier in children:
+                    children[identifier] = {**children[identifier], "position": position}
             for change in payload.get("child_updates", []):
                 child = children.get(change["id"])
                 if child is not None:
@@ -241,6 +311,8 @@ class Conversation:
                     child.update(copy.deepcopy(change.get("set", {})))
                     children[change["id"]] = child
             order = payload.get("order", list(children))
+            if payload.get("windowed"):
+                order = sorted(children, key=lambda key: children[key].get("position", 0))
             updated_run["items"] = [children[item_id] for item_id in order if item_id in children]
             items[positions[run["id"]]] = updated_run
         self.items = items

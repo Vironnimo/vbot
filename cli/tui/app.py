@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable, Coroutine
 from time import monotonic
 from typing import Any, override
@@ -54,6 +55,7 @@ from cli.tui.rendering import (
 )
 from cli.tui.state import Conversation, JsonObject, TimelineGapError
 from cli.tui.theme import DEFAULT_THEME, THEMES, VBOT_DARK, VBOT_LIGHT
+from cli.tui.transcript import Transcript
 from cli.tui.transport import ClientError, TerminalClient
 from core.utils.ids import new_id
 
@@ -149,7 +151,7 @@ class ConversationApp(App[int]):
 
     # Set in `on_mount`; both widgets outlive the screen's lifetime.
     bar: CompletionBar
-    transcript: VerticalScroll
+    transcript: Transcript
 
     def __init__(
         self,
@@ -182,6 +184,10 @@ class ConversationApp(App[int]):
         self.history: list[str] = []
         self.saved_drafts: list[JsonObject] = []
         self.connected = False
+        self.loading_views: set[int] = set()
+        self.roster_loaded = False
+        self.history_cache: OrderedDict[int, Conversation] = OrderedDict()
+        self.older_loading: set[int] = set()
         self.render_dirty = False
         self.rendering = False
         self.render_worker: Worker[Any] | None = None
@@ -335,7 +341,7 @@ class ConversationApp(App[int]):
     def compose(self) -> ComposeResult:
         with Horizontal(id="header"):
             yield Static("", id="header-title", markup=False)
-        with VerticalScroll(id="timeline"):
+        with Transcript(id="timeline"):
             yield Static(
                 "Choose an Agent or resume a Session.\nF1 shows the keyboard controls.",
                 id="empty",
@@ -358,7 +364,8 @@ class ConversationApp(App[int]):
         # every keystroke and every frame, and a CSS query per frame over a long
         # transcript is not free.
         self.bar = self.query_one(CompletionBar)
-        self.transcript = self.query_one("#timeline", VerticalScroll)
+        self.transcript = self.query_one("#timeline", Transcript)
+        self.rows = self.transcript.rows
         self.set_interval(0.08, self._render_if_dirty)
         self._start(self._events, group="events", exclusive=True)
         self._start(self._bootstrap)
@@ -367,6 +374,8 @@ class ConversationApp(App[int]):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # Priority bindings must not send the hidden composer while a form is open.
         if isinstance(self.screen, ModalScreen) and action != "detach":
+            return False
+        if action == "send" and self.focused is not self._composer():
             return False
         if action in _COMPLETION_ACTIONS and not self.completion.visible:
             # Without a popup these keys belong to the focused widget: the arrows
@@ -400,7 +409,10 @@ class ConversationApp(App[int]):
         return None
 
     async def _bootstrap(self) -> None:
-        await self._load_roster()
+        if self.initial_agent and self.initial_session:
+            self._start(self._load_roster, group="roster")
+        else:
+            await self._load_roster()
         agent = self.initial_agent
         if agent is None:
             if len(self.roster) == 1:
@@ -422,6 +434,8 @@ class ConversationApp(App[int]):
         self.query_one("#composer", TextArea).focus()
 
     async def _load_roster(self) -> None:
+        if self.roster_loaded:
+            return
         agents, projects = await asyncio.gather(
             self.client.rpc("agent.list"), self.client.rpc("project.list", {"include_scan": True})
         )
@@ -439,6 +453,8 @@ class ConversationApp(App[int]):
                     self.roster.append(
                         (f"{member.get('display_name', member['agent_id'])} · {address}", address)
                     )
+        self.roster_loaded = True
+        self._header()
 
     def _save_view(self) -> None:
         if self.conversation is not None:
@@ -446,28 +462,42 @@ class ConversationApp(App[int]):
             timeline = self.query_one("#timeline", VerticalScroll)
             self.conversation.scroll_y = timeline.scroll_y
             self.conversation.follow_tail = timeline.is_vertical_scroll_end
+            self.transcript.remember_position()
+            self._cache_history(self.conversation)
             self._view_changed(self.conversation)
 
     async def _open(self, view: Conversation, *, remember: bool = True) -> None:
         self._save_view()
         if remember and self.conversation is not None and self.conversation is not view:
             self.backstack.append(self.conversation)
+            self.backstack = self.backstack[-100:]
         if self.stream:
             self.stream.cancel()
         self.stream, self.stream_path = None, None
         view = self.views.setdefault(view.key, view)
+        self._cache_history(view)
         timeline = self.query_one("#timeline", VerticalScroll)
         async with self._render_lock:
             self.conversation = view
             self.queue_items = []
-            await timeline.remove_children()
-            self.rows.clear()
+            await self.transcript.clear()
         self._view_changed(view)
         self.query_one("#composer", TextArea).load_text(view.draft)
         self._header()
         if view.session or (view.uncertain and view.pending_session_id):
-            await self._refresh(view)
-            await self._render()
+            self.loading_views.add(id(view))
+            try:
+                if view.items:
+                    await self._render()
+                else:
+                    await timeline.mount(Static("Loading conversation…", markup=False))
+                self._header()
+                await self._refresh(view)
+                if self.conversation is view:
+                    await self._render()
+            finally:
+                self.loading_views.discard(id(view))
+                self._header()
         else:
             await timeline.mount(
                 Static(
@@ -478,6 +508,22 @@ class ConversationApp(App[int]):
             self._notice("Ready")
         self.query_one("#composer", TextArea).focus()
 
+    def _cache_history(self, view: Conversation) -> None:
+        """Bound reconstructible Session content; drafts and navigation stay local."""
+        view.cache_bytes = len(json.dumps(view.items, ensure_ascii=False).encode("utf-8"))
+        self.history_cache[id(view)] = view
+        self.history_cache.move_to_end(id(view))
+        retained = sum(entry.cache_bytes for entry in self.history_cache.values())
+        for identifier, entry in list(self.history_cache.items()):
+            if len(self.history_cache) <= 8 and retained <= 16 * 1024 * 1024:
+                break
+            if entry is self.conversation or entry is view:
+                continue
+            retained -= entry.cache_bytes
+            entry.refresh_revision += 1
+            entry.release_history()
+            del self.history_cache[identifier]
+
     async def _read_timeline(self, view: Conversation, revision: int) -> Conversation | None:
         """Drain a read snapshot without publishing a partial or stale catch-up."""
         key = view.key
@@ -485,7 +531,7 @@ class ConversationApp(App[int]):
         candidate.facts = dict(view.facts)
         after = view.facts.get("next_after")
         while True:
-            params = {**view.params(), "limit": 100}
+            params = {**view.params(), "limit": 100, "child_limit": 60}
             if after:
                 params["after"] = after
             response = await self.client.rpc("chat.timeline", params)
@@ -507,7 +553,9 @@ class ConversationApp(App[int]):
         key = view.key
         params = {"agent_id": view.agent, "session_id": target}
         try:
-            history = await self.client.rpc("chat.timeline", {**params, "limit": 100})
+            history = await self.client.rpc(
+                "chat.timeline", {**params, "limit": 100, "child_limit": 60}
+            )
         except ClientError as exc:
             if exc.code in {"session_not_found", "agent_not_found", "project_not_found"}:
                 return False
@@ -526,8 +574,7 @@ class ConversationApp(App[int]):
             self._accept_submission(view, view.uncertain_submission or {})
         if self.conversation is view:
             async with self._render_lock:
-                await self.query_one("#timeline", VerticalScroll).remove_children()
-                self.rows.clear()
+                await self.transcript.clear()
         self._view_changed(view)
         self._notice(
             "Earlier message found in its Session; reconnected without resending."
@@ -613,6 +660,7 @@ class ConversationApp(App[int]):
             self._schedule_refresh()
             return
         view.items, view.facts = candidate.items, candidate.facts
+        self._cache_history(view)
         view.sequence, view.stream_run = candidate.sequence, candidate.stream_run
         view.next_before = candidate.next_before
         session = summary.get("session") or {}
@@ -705,14 +753,25 @@ class ConversationApp(App[int]):
                     delay = 0.5
                     kind = event.get("type", "")
                     if kind == "resource_changed":
-                        await self._resource_changed(event.get("payload") or {})
+                        resource = event.get("payload") or {}
+                        if resource.get("kind") in {"agents", "projects"}:
+                            self.roster_loaded = False
+                        await self._resource_changed(resource)
                     if (
                         kind in {"connection_ready", "connected", "connection", "state", "snapshot"}
                         or "snapshot" in kind
-                        or kind == "resource_changed"
                     ):
                         self._schedule_refresh()
                         self._start(self._load_requests, group="requests-read", exclusive=True)
+                    elif kind == "resource_changed":
+                        resource = event.get("payload") or {}
+                        if resource.get("kind") in {"agents", "projects", "settings", "models"} or (
+                            resource.get("kind") == "sessions"
+                            and self._event_targets_view(resource.get("scope") or {})
+                        ):
+                            self._schedule_refresh()
+                        if resource.get("kind") == "extensions":
+                            self._start(self._load_requests, group="requests-read", exclusive=True)
                     elif kind in {
                         "run_started",
                         "run_completed",
@@ -723,7 +782,8 @@ class ConversationApp(App[int]):
                         "subagent_status_changed",
                         "command_status_changed",
                     }:
-                        self._schedule_refresh()
+                        if self._event_targets_view(event.get("payload") or event):
+                            self._schedule_refresh()
                     self._header()
             except (OSError, ClientError) as exc:
                 self._notice(f"Reconnecting to {self.client.url} · {exc}")
@@ -733,6 +793,20 @@ class ConversationApp(App[int]):
             self._header()
             await _sleep(delay)
             delay = min(10, delay * 2)
+
+    def _event_targets_view(self, payload: JsonObject) -> bool:
+        view = self.conversation
+        if view is None:
+            return False
+        agent = payload.get("agent_id")
+        session = payload.get("session_id") or payload.get("source_session_id")
+        if agent is None and session is None:
+            return True
+        if agent and payload.get("project_id"):
+            agent = f"{agent}@{payload['project_id']}"
+        return (agent is None or agent == view.agent) and (
+            session is None or session == view.session
+        )
 
     def _schedule_refresh(self) -> None:
         if not self.refresh_pending:
@@ -844,40 +918,19 @@ class ConversationApp(App[int]):
         self.rendering = True
         self.render_dirty = False
         items = view.items
-        timeline = self.query_one("#timeline", VerticalScroll)
-        follow = timeline.is_vertical_scroll_end if self.rows else view.follow_tail
-        scroll = timeline.scroll_y if self.rows else view.scroll_y
+        timeline = self.transcript
+        previous = getattr(self, "_rendered_frame", None)
+        if timeline.view is view:
+            timeline.remember_position()
         try:
-            if not follow and any(
-                str(item["id"]) not in self.rows or self.rows[str(item["id"])].item is not item
-                for item in items
+            if (
+                not view.follow_tail
+                and previous
+                and previous[0] is view
+                and previous[1] is not items
             ):
                 view.unread_output = True
-            previous_order = tuple(self.rows)
-            wanted = {str(item["id"]) for item in items}
-            for key in list(self.rows):
-                if key not in wanted:
-                    await self.rows.pop(key).remove()
-            for item in items:
-                key = str(item["id"])
-                if key not in self.rows:
-                    widget = self.rows[key] = TimelineEntry()
-                    await timeline.mount(widget)
-                if self.rows[key].item is not item:
-                    await self.rows[key].update_item(item)
-            order = tuple(str(item["id"]) for item in items)
-            if order != previous_order:
-                for index, key in enumerate(order):
-                    widget = self.rows[key]
-                    if index == 0:
-                        timeline.move_child(widget, before=0)
-                    else:
-                        timeline.move_child(widget, after=self.rows[order[index - 1]])
-                self.rows = {key: self.rows[key] for key in order}
-            if follow:
-                self.call_after_refresh(timeline.scroll_end, animate=False)
-            else:
-                self.call_after_refresh(timeline.scroll_to, y=scroll, animate=False)
+            await timeline.show(view)
             self._header()
             self._rendered_frame = (view, items)
             self.call_after_refresh(self._completion_if_visible)
@@ -908,13 +961,19 @@ class ConversationApp(App[int]):
             view.completion_read_failed,
         }:
             return
-        if view.facts.get("has_newer") or not any(
+        completed_row = next(
             (
-                row.get("runId", row.get("run_id")) == completed
+                row
+                for row in view.items
+                if row.get("runId", row.get("run_id")) == completed
                 and row.get("status") in {"completed", "failed", "cancelled", "interrupted"}
-            )
-            for row in view.items
-        ):
+            ),
+            None,
+        )
+        if view.facts.get("has_newer") or completed_row is None or timeline.view is not view:
+            return
+        children = completed_row.get("items") or []
+        if children and children[-1]["id"] not in timeline.rows:
             return
         view.completion_read_pending = completed
         self._start(lambda: self._mark_completion_read(view, completed), group="read-receipt")
@@ -1041,6 +1100,8 @@ class ConversationApp(App[int]):
             return self.last_notice, self.notice_level
         if not self.connected:
             return f"Connecting to {self.client.url}…", "alert"
+        if id(view) in self.loading_views:
+            return "Updating conversation…" if view.items else "Loading conversation…", "info"
         if view.uncertain:
             return (
                 "Send outcome unknown · Ctrl+R reloads the Session; Send offers recovery",
@@ -1442,8 +1503,7 @@ class ConversationApp(App[int]):
             self.views[view.key] = view
             if self.conversation is view:
                 async with self._render_lock:
-                    await self.query_one("#timeline", VerticalScroll).remove_children()
-                    self.rows.clear()
+                    await self.transcript.clear()
         elif view.session is None:
             view.pending_session_id = None
         self._view_changed(view)
@@ -1716,18 +1776,58 @@ class ConversationApp(App[int]):
     async def action_older(self) -> None:
         await self._guard(self._older())
 
+    @on(Transcript.LoadOlder)
+    def older_history_requested(self) -> None:
+        if self.conversation and id(self.conversation) not in self.older_loading:
+            self.action_older()
+
+    @on(TimelineEntry.LoadHistory)
+    def run_history_requested(self, event: TimelineEntry.LoadHistory) -> None:
+        view = self.conversation
+        if view is not None:
+            self._start(lambda: self._load_run_history(view, event.item), group="run-history")
+
+    async def _load_run_history(self, view: Conversation, gap: JsonObject) -> None:
+        if view is None or id(view) in self.older_loading:
+            return
+        key, revision = view.key, view.refresh_revision
+        self.older_loading.add(id(view))
+        try:
+            page = await self.client.rpc(
+                "chat.timeline_children",
+                {
+                    **view.params(),
+                    "run_id": gap["run_id"],
+                    "before": gap["before"],
+                    "limit": 100,
+                    "history_generation": view.facts.get("history_generation"),
+                },
+            )
+            if self.conversation is view and view.key == key and view.refresh_revision == revision:
+                view.child_page(page)
+                await self._render()
+        except ClientError as exc:
+            self._notice(str(exc), error=True)
+        finally:
+            self.older_loading.discard(id(view))
+
     async def _older(self) -> None:
         view = self.conversation
         if not view or not view.next_before:
             self._notice("All available history is loaded.")
             return
-        timeline = self.query_one("#timeline", VerticalScroll)
-        old_height, scroll = timeline.virtual_size.height, timeline.scroll_y
+        if id(view) in self.older_loading:
+            return
         key, revision = view.key, view.refresh_revision
         generation = view.facts.get("history_generation")
-        page = await self.client.rpc(
-            "chat.timeline", {**view.params(), "limit": 100, "before": view.next_before}
-        )
+        self.older_loading.add(id(view))
+        try:
+            page = await self.client.rpc(
+                "chat.timeline",
+                {**view.params(), "limit": 100, "before": view.next_before, "child_limit": 60},
+            )
+        finally:
+            self.older_loading.discard(id(view))
         if self.conversation is not view or key != view.key or revision != view.refresh_revision:
             return
         if generation and page.get("history_generation", generation) != generation:
@@ -1735,14 +1835,6 @@ class ConversationApp(App[int]):
             return
         view.page(page, older=True)
         await self._render()
-
-        def restore_scroll() -> None:
-            if self.conversation is view and view.key == key and view.refresh_revision == revision:
-                timeline.scroll_to(
-                    y=scroll + timeline.virtual_size.height - old_height, animate=False
-                )
-
-        self.call_after_refresh(restore_scroll)
 
     @work(group="requests", exclusive=True, exit_on_error=False)
     async def action_requests(self) -> None:

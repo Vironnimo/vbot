@@ -39,6 +39,10 @@ export function loadChatTimeline(params = {}, options = {}) {
   return rpc('chat.timeline', params, options);
 }
 
+export function loadChatTimelineChildren(params, options = {}) {
+  return rpc('chat.timeline_children', params, options);
+}
+
 export function loadReflectionRuns(params = {}, options = {}) {
   requirePlainObject(
     params,

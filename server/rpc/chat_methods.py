@@ -190,6 +190,8 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
     page carries neither a background field nor the Compaction Policy.
     """
     supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
+    if timeline:
+        supported_fields.add("child_limit")
     _reject_unsupported(params, supported_fields, "chat.history")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
@@ -197,6 +199,9 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
     limit = _optional_positive_integer(params, "limit", max_value=MAX_CHAT_HISTORY_LIMIT)
     before = _optional_string(params, "before")
     after = _optional_string(params, "after")
+    child_limit = (
+        _optional_positive_integer(params, "child_limit", max_value=200) or 0 if timeline else 0
+    )
     try:
         if session_id is None:
             # A project Session has no anchor-level current pointer (the config
@@ -339,13 +344,46 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
             )
         if active_run is not None:
             active_run.pop("events", None)
-        return await _CHAT_RPC_WORKERS.run(project_timeline_history, response, live_timeline)
+            if child_limit:
+                active_run["timeline_url"] += f"?child_limit={child_limit}"
+        return await _CHAT_RPC_WORKERS.run(
+            project_timeline_history, response, live_timeline, child_limit
+        )
     return response
 
 
 async def _chat_timeline(state: Any, params: JsonObject) -> JsonObject:
     """Read authoritative semantic conversation elements and Session facts."""
     return await _chat_history(state, params, timeline=True)
+
+
+async def _chat_timeline_children(state: Any, params: JsonObject) -> JsonObject:
+    from server.timeline import timeline_children
+
+    _reject_unsupported(
+        params,
+        {"agent_id", "session_id", "run_id", "before", "limit", "history_generation"},
+        "chat.timeline_children",
+    )
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    run_id = _required_string(params, "run_id")
+    before = _required_string(params, "before")
+    generation = _required_string(params, "history_generation")
+    limit = _optional_positive_integer(params, "limit", max_value=200) or 100
+    try:
+        return await timeline_children(
+            state,
+            SessionAddress(project_id, agent_id, session_id),
+            run_id,
+            before,
+            limit,
+            generation,
+        )
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 def _read_chat_history(
@@ -1503,6 +1541,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
         "chat.history": _chat_history,
         "chat.timeline": _chat_timeline,
+        "chat.timeline_children": _chat_timeline_children,
         "chat.run_result": _chat_run_result,
         "chat.reflections": _chat_reflections,
         "chat.send": _send_chat,

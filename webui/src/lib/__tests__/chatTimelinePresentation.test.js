@@ -318,19 +318,26 @@ describe('groupTransientCards', () => {
     ...(createdAt === undefined ? {} : { createdAt }),
   });
 
-  it('anchors a card after the exact item it followed at creation', () => {
-    const groups = groupTransientCards(
-      [
-        userItem('user-1', '2026-08-27T13:40:00Z'),
-        runItem('run-live', '2026-08-27T13:46:00Z'),
-      ],
-      [card('run-live', 0)],
-    );
+  it.each([false, true])(
+    'anchors a card after the exact item it followed, split=%s',
+    (split) => {
+      const run = runItem('run-live', '2026-08-27T13:46:00Z');
+      const rows = split
+        ? [
+            { ...run, id: 'part-1', sourceItemId: run.id },
+            { ...run, id: 'part-2', sourceItemId: run.id },
+          ]
+        : [run];
+      const groups = groupTransientCards(
+        [userItem('user-1', '2026-08-27T13:40:00Z'), ...rows],
+        [card('run-live', 0)],
+      );
 
-    expect(groups.byItemId.get('run-live')).toHaveLength(1);
-    expect(groups.leading).toEqual([]);
-    expect(groups.trailing).toEqual([]);
-  });
+      expect(groups.byItemId.get(rows.at(-1).id)).toHaveLength(1);
+      expect(groups.leading).toEqual([]);
+      expect(groups.trailing).toEqual([]);
+    },
+  );
 
   it('keeps a card whose anchor was replaced at its chronological position', () => {
     // The card was created mid-Run; a History reload replaced the live Run id

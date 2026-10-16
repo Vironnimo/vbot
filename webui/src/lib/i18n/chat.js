@@ -1,4 +1,5 @@
 export default Object.freeze({
+  'chat.historyEarlierSteps': 'Load earlier steps…',
   'audio.label': 'Speech audio',
   'audio.play': 'Play audio',
   'audio.pause': 'Pause audio',

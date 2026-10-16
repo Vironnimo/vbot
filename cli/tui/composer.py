@@ -9,7 +9,7 @@ from textual.widgets import TextArea
 
 from cli.tui.dialogs import PathDialog, Picker, TextDialog
 from cli.tui.mentions import format_mention, open_quoted_mention
-from cli.tui.rendering import file_links, flatten, item_text, one_line
+from cli.tui.rendering import file_links, flatten, item_text, one_line, tool_detail
 
 if TYPE_CHECKING:
     from cli.tui.app import ConversationApp
@@ -180,15 +180,24 @@ async def server_file(app, query: str = "", *, replace: tuple[int, int, int] | N
 async def find(app: ConversationApp) -> None:
     view = app.conversation
     if view:
+
+        def searchable(item: dict[str, Any]) -> str:
+            return tool_detail(item) if item.get("type") == "tool_call" else item_text(item)
+
         choices = [
-            (one_line(item_text(item)), item) for item in flatten(view.items) if item_text(item)
+            (one_line(searchable(item)), item) for item in flatten(view.items) if searchable(item)
         ]
         item = await app.push_screen_wait(
-            Picker("Find in loaded history · Ctrl+O loads earlier pages", choices)
+            Picker(
+                "Find in loaded history · Ctrl+O loads earlier pages",
+                choices,
+                search_text=searchable,
+            )
         )
         if item:
+            app.transcript.reveal(str(item["id"]))
             await app.push_screen_wait(
-                TextDialog("Conversation excerpt", item_text(item), read_only=True)
+                TextDialog("Conversation excerpt", searchable(item), read_only=True)
             )
 
 

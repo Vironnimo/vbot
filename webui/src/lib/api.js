@@ -170,6 +170,7 @@ export {
   loadChatRunResult,
   loadChatHistory,
   loadChatTimeline,
+  loadChatTimelineChildren,
   loadReflectionRuns,
   loadLearningChanges,
   undoLearningChanges,

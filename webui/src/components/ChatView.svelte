@@ -834,6 +834,7 @@
   const loadAgents = (options = {}) => chatController.loadAgents(options);
 
   const runStream = createChatRunStream({
+    childLimit: 100,
     chatState,
     subscribeRunEvents,
     refreshSessionQueue: (sessionState) =>
@@ -1024,6 +1025,8 @@
               ?.backgroundCommandStatuses}
             commandStatuses={displayedCommandStatuses}
             onLoadOlder={actions.loadOlderHistory}
+            onLoadRunHistory={(gap) =>
+              chatController.loadRunHistory(target.activeSessionState, gap)}
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
             otherArea={subAgentOtherArea}
             onCancelToolCall={actions.handleCancelToolCall}

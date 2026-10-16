@@ -10,6 +10,7 @@
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
   import { createChatScrollController } from '$lib/chatScroll.js';
+  import { timelineRowsForViewport } from '$lib/chatTimeline.js';
   import { nestedScrollConsumes } from '$lib/boundedScroll.js';
   import { provideMountHold } from '$lib/mountHold.js';
 
@@ -32,7 +33,7 @@
   let {
     // The displayed Session's rendered rows, projected once by the owner
     // through `visibleTimelineItemsForRender()`.
-    timelineItems = [],
+    timelineItems: sourceTimelineItems = [],
     // Key of the displayed Session: per-Session scroll memory and follow
     // requests.
     sessionKey = '',
@@ -71,11 +72,14 @@
     // placeholder so stepping through sessions does not flash it.
     loadingHistory = false,
     onLoadOlder = async () => false,
+    onLoadRunHistory = async () => false,
     // Reports the scroller's real scrollbar width (0 with overlay
     // scrollbars) so ChatView can keep the floating composer stack clear of
     // the scrollbar column.
     onScrollbarWidthChange = () => {},
   } = $props();
+
+  const timelineItems = $derived(timelineRowsForViewport(sourceTimelineItems));
 
   let nowMs = $state(Date.now());
 
@@ -269,7 +273,7 @@
   });
 
   $effect(() => {
-    const items = timelineItems;
+    const items = sourceTimelineItems;
     const cards = transientCards;
     const key = sessionScrollKey;
     const text = announcer.update(items, cards, key, {
@@ -625,6 +629,7 @@
         {onNavigateToSubAgent}
         onSubAgentContextMenu={otherArea ? openSubAgentMenu : null}
         {onCancelToolCall}
+        {onLoadRunHistory}
         {onBackgroundToolCall}
         backgroundToolCallIds={currentRun?.runId === item.runId &&
         currentRun.status === 'running'

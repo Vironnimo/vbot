@@ -15,8 +15,91 @@ from starlette.requests import ClientDisconnect
 from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
 from core.runs import Run
+from core.sessions import SessionAddress
 from server.file_delivery import FileDelivery
-from server.timeline import TimelineStreamingResponse, sse_timeline, timeline_snapshot
+from server.timeline import (
+    TimelineStreamingResponse,
+    sse_timeline,
+    timeline_children,
+    timeline_snapshot,
+    window_timeline_update,
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("live", [False, True])
+async def test_windowed_run_stream_and_child_pages_preserve_positions_and_generation(
+    live: bool,
+) -> None:
+    active = run()
+    messages = [ChatMessage.assistant(model="test/model", content=f"step {i}") for i in range(30)]
+    for message in messages:
+        active.emit("assistant_output", {"message": message.to_dict()})
+
+    class Session:
+        generation_id = "generation"
+
+        async def load_run_messages_async(self, _run_id: str) -> list[ChatMessage]:
+            return messages
+
+    class Sessions:
+        async def get_async(self, address: SessionAddress) -> Session:
+            assert address == SessionAddress(None, "coder", "session-one")
+            return Session()
+
+    state = SimpleNamespace(
+        file_delivery=None,
+        runtime=SimpleNamespace(chat_sessions=Sessions()),
+        chat_runs=SimpleNamespace(active_run=lambda **_kwargs: active if live else None),
+    )
+    if not live:
+        active.mark_completed(None)
+    async with aclosing(
+        sse_timeline(state, active, child_limit=3, batch_interval_seconds=0)
+    ) as stream:
+        initial = data(await anext(stream))
+        children = initial["items"][0]["items"]
+        gap = children[0]
+        assert gap["type"] == "history_gap"
+        assert [child["position"] for child in children[1:]] == [27, 28, 29]
+        page = await timeline_children(
+            state,
+            SessionAddress(None, "coder", "session-one"),
+            active.id,
+            gap["before"],
+            4,
+            "generation",
+        )
+        assert [child["position"] for child in page["items"][1:]] == [23, 24, 25, 26]
+        assert (
+            len(
+                {
+                    child["id"]
+                    for child in children + page["items"]
+                    if child["type"] != "history_gap"
+                }
+            )
+            == 7
+        )
+        with pytest.raises(ValueError):
+            await timeline_children(
+                state,
+                SessionAddress(None, "coder", "session-one"),
+                active.id,
+                gap["before"],
+                4,
+                "other-generation",
+            )
+        if live:
+            active.emit(
+                "assistant_output",
+                {"message": ChatMessage.assistant(model="test/model", content="latest").to_dict()},
+            )
+            patch = data(await anext(stream))
+            assert patch["windowed"] is True
+            assert "order" not in patch
+            assert len(patch["children"]) == 1
+            assert patch["children"][0]["position"] == 30
 
 
 def run() -> Run:
@@ -32,8 +115,38 @@ def data(frame: str) -> dict[str, Any]:
     )
 
 
+def test_windowed_patch_updates_unloaded_children_and_moves_delivered_text() -> None:
+    text = {"id": "text", "type": "assistant_output", "content": "Hello"}
+    tool = {"id": "tool", "type": "tool_call", "status": "running"}
+
+    def frame(sequence: int, children: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "run_id": "one",
+            "sequence": sequence,
+            "state": {},
+            "terminal": False,
+            "items": [{"id": "one", "type": "assistant_run", "items": children}],
+        }
+
+    known = {"text"}
+    patch = window_timeline_update(
+        frame(1, [text, tool]),
+        frame(2, [{**tool, "status": "success"}, {**text, "content": "Hello world"}]),
+        known,
+    )
+    assert patch["children"] == [{**tool, "status": "success", "position": 0}]
+    assert patch["child_updates"] == [
+        {"id": "text", "type": "assistant_output", "append": {"content": " world"}, "set": {}}
+    ]
+    assert patch["positions"] == {"text": 1}
+    assert known == {"text", "tool"}
+
+
 @pytest.mark.asyncio
-async def test_snapshot_survives_replay_eviction_and_patches_only_new_text() -> None:
+@pytest.mark.parametrize("child_limit", [0, 3])
+async def test_snapshot_survives_replay_eviction_and_patches_only_new_text(
+    child_limit: int,
+) -> None:
     active = run()
     state = SimpleNamespace(file_delivery=FileDelivery())
     active.emit("run_started")
@@ -41,7 +154,9 @@ async def test_snapshot_survives_replay_eviction_and_patches_only_new_text() -> 
         active.emit("assistant_output_delta", {"content_delta": "x" * 1000})
     assert len(active.events) == 4
     projection = active.timeline
-    async with aclosing(sse_timeline(state, active, batch_interval_seconds=0)) as stream:
+    async with aclosing(
+        sse_timeline(state, active, batch_interval_seconds=0, child_limit=child_limit)
+    ) as stream:
         initial = data(await anext(stream))
         [row] = initial["items"]
         [child] = row["items"]
