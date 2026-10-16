@@ -14,7 +14,7 @@ Supplementary to `cli/application.md`. Read when changing the `vBot.exe` tray: i
 
 ## Idle cost contract
 
-The tray does no periodic server I/O. Server state comes from the event stream; `/health` is probed only after a failed connect, and only a refused connect or an unanswered `/health` request adds the local control-record and process check below (no further probe). The controller's 1 s poll only calls `facade.state()`, which must stay cheap (about 0.15 ms; about 0.08 ms with a full activity history): `operations.OperationObserver` rereads only operation records whose mtime/size changed, the release version and server URL are cached, and the activity lines are rendered again only after a new entry or a change of the local date. Do not add network, process or full-directory work to `state()`. Measured idle cost: about 0.02 % of one core (previously 0.5-3 % from a per-second health probe with a fresh HTTP client plus reloading every operation record).
+The tray does no periodic server I/O. Server state comes from the event stream; `/health` is probed only after a failed connect, and only a refused connect or an unanswered `/health` request adds the local control-record and process check below (no further probe). The controller's 1 s poll only calls `facade.state()`, which must stay cheap (about 0.15 ms; about 0.08 ms with a full activity history): `operations.OperationObserver` rereads only operation records whose mtime/size changed, the release version and server URL are cached, and the activity lines are rendered again only after a new entry or a change of the local date. The one other file check per poll is the `exists()` of `host-dispatch-request.json` (Update dispatch). Do not add network, process or full-directory work to `state()`. Measured idle cost: about 0.02 % of one core (previously 0.5-3 % from a per-second health probe with a fresh HTTP client plus reloading every operation record).
 
 ## Server connection
 
@@ -59,6 +59,14 @@ What happened to the server and to updates, shown in the status window and kept 
 - Tray entries: `tray_started` or `tray_restarted` (successor) from `main()`; `action_failed` for a failed start, stop, restart or update request (the facade's `_recording`).
 - Update entries from the facade's update observation: `update_started`, `update_target` (`Updating vBot: <from> -> <to>`), then `update_finished` or `update_failed` (summary from `operations.result_summary`, plus message and reason on failure). Per-phase progress messages are not recorded; the headline shows the current one.
 
+## Update dispatch
+
+The tray starts the update worker for other requesters, because it runs outside their Windows Jobs and the worker and the servers it restarts must outlive them (`cli/application.md` -> Update operation, Worker dispatch).
+
+- `state()` checks for `<install>/host-dispatch-request.json` on each poll; when present, `operations.dispatch_requested` consumes it under the dispatch lock and starts the worker for the named operation unless it is terminal or its worker lives. It runs on the refresh thread, not the action thread, because the requester waits up to 30 s and a long tray action must not delay it. A failure is logged at WARN, recorded as `action_failed` and becomes the last error; the consumed request is not retried, and the waiting requester settles the update.
+- The tray's own update (`start_update`) and its startup recovery pass `host=True`: they start the worker directly and never hand it to a tray.
+- A tray that a confined requester started through WMI has no special mode: its startup recovery finds the waiting operation and starts the worker, and the operation in progress suppresses the initial server start.
+
 ## Restart after activation
 
 A tray host keeps running the code it started with, so after any change of `<install>/active-version` (an update or `update activate` operation, or an installer run) it hands itself over to a successor on the active version. The Desktop has its own restart handoff (`desktop/update-restart.md`).
@@ -72,4 +80,4 @@ A tray host keeps running the code it started with, so after any change of `<ins
 
 ## Tests
 
-`tests/cli/application/test_tray.py` (projections, controller including transitions during a running action, the restart safe point and retry, Win32 menu/toast/badge behavior and `interacting()` with patched `user32`), `test_host.py` (state mapping, update milestones and toast, expected stop, `open_session`, pending restart, restart handoff, startup order and successor startup), `test_activity.py` (journal bound and reload, server scenarios, once per process across trays), `test_monitor.py` (loopback `/ws` server: accessor, hello identity, heartbeat skip, resume cursor, failure classification), `test_notifications.py` (toast policy and texts), `test_integration.py` (toast identity removal).
+`tests/cli/application/test_tray.py` (projections, controller including transitions during a running action, the restart safe point and retry, Win32 menu/toast/badge behavior and `interacting()` with patched `user32`), `test_host.py` (state mapping, update milestones and toast, update dispatch for other requesters, expected stop, `open_session`, pending restart, restart handoff, startup order and successor startup), `test_activity.py` (journal bound and reload, server scenarios, once per process across trays), `test_monitor.py` (loopback `/ws` server: accessor, hello identity, heartbeat skip, resume cursor, failure classification), `test_notifications.py` (toast policy and texts), `test_integration.py` (toast identity removal).

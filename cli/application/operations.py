@@ -1,7 +1,17 @@
-"""Dispatch and observe updates without owning the worker's lifetime."""
+"""Dispatch and observe updates without owning the worker's lifetime.
+
+The worker, and every server it starts, must outlive the process that requested
+the update. A requester inside another application's Windows Job (a coding
+agent's shell, say) cannot give it that: whatever it starts stays in the Job
+and ends when that application closes. The tray host runs outside such Jobs, so
+a running tray starts the worker of every update another process requests, and
+a requester confined to a foreign Job starts a tray outside it first.
+"""
 
 from __future__ import annotations
 
+import base64
+import logging
 import os
 import subprocess
 import threading
@@ -21,12 +31,56 @@ from cli.application.state import (
     exclusive,
     load_operation,
     operations,
+    read_json,
+    write_json,
 )
-from core.utils.processes import outside_service_unit, subprocess_creation_flags
+from core.utils.processes import (
+    ForeignJob,
+    foreign_job,
+    outside_service_unit,
+    subprocess_creation_flags,
+)
 from core.utils.server_control import process_started
 
 #: Set only for a tray host started by its predecessor's restart handoff.
 HOST_SUCCESSOR_ENV = "VBOT_HOST_SUCCESSOR"
+#: Asks the running tray host to start the worker of the named operation.
+DISPATCH_REQUEST = "host-dispatch-request.json"
+#: How long a requester waits for the tray host to start the worker it handed over.
+HOST_DISPATCH_SECONDS = 30.0
+_HOST_DISPATCH_POLL_SECONDS = 0.2
+_BROKER_TIMEOUT_SECONDS = 30.0
+_LOGGER = logging.getLogger("vbot.application.update")
+_sleep = time.sleep
+
+# Win32_Process.Create starts the process from the WMI provider host, outside
+# every Job of the caller, in the caller's interactive session and with the
+# user's default environment. DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: the
+# console bootstrap gets no console window.
+_BROKER_SCRIPT = r"""
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+try {
+    $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{
+        CreateFlags = [uint32]0x208
+    }
+    $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+        CommandLine = $env:VBOT_BROKER_COMMAND
+        CurrentDirectory = $env:VBOT_BROKER_DIRECTORY
+        ProcessStartupInformation = $startup
+    }
+    if ($result.ReturnValue -ne 0) {
+        [Console]::Out.WriteLine("Win32_Process.Create returned $($result.ReturnValue)")
+        exit 1
+    }
+    [Console]::Out.WriteLine($result.ProcessId)
+    exit 0
+}
+catch {
+    [Console]::Out.WriteLine($_.Exception.Message)
+    exit 1
+}
+"""
 
 
 def child_environment(install: Installation) -> dict[str, str]:
@@ -173,7 +227,16 @@ def request_update(
     package: Path | None = None,
     restart: bool = True,
     handoff_token: str | None = None,
+    host: bool = False,
 ) -> Operation:
+    """Request an update, or join the equivalent one in progress.
+
+    ``host`` is true only for the tray host, which always starts the worker
+    itself. Any other requester hands the worker to a running tray, or to a tray
+    it starts outside the foreign Windows Job that confines it (module docstring),
+    and returns once that tray started the worker. A confined requester whose
+    handoff fails raises ``ApplicationError`` instead of starting the worker.
+    """
     if package is not None and not package.expanduser().is_file():
         raise ApplicationError("The selected application package does not exist")
     # Claiming is idempotent per token, so a repeated Agent request coalesces below.
@@ -193,33 +256,243 @@ def request_update(
                     f"Update {operation.id} is already in progress with different options; "
                     f"inspect it with vbot update status {operation.id}"
                 )
-            if not worker_alive(operation):
-                spawn_worker(install, operation)
-            return operation
-        operation = create_operation(
-            install,
-            package=str(package.expanduser().resolve()) if package else None,
-            local_package=package is not None,
-            restart=restart,
-            previous_version=install.version().name,
-            handoff_ticket=handoff_ticket,
-        )
-        try:
-            spawn_worker(install, operation)
-        except (OSError, ApplicationError) as exc:
-            operation.error = str(exc)
-            operation.transition(install, "failed", "Could not start the independent updater")
-            raise
-        return operation
+            if worker_alive(operation):
+                return operation
+            handoff = _dispatch(install, operation, host=host)
+        else:
+            operation = create_operation(
+                install,
+                package=str(package.expanduser().resolve()) if package else None,
+                local_package=package is not None,
+                restart=restart,
+                previous_version=install.version().name,
+                handoff_ticket=handoff_ticket,
+            )
+            try:
+                handoff = _dispatch(install, operation, host=host)
+            except (OSError, ApplicationError) as exc:
+                operation.error = str(exc)
+                operation.transition(install, "failed", "Could not start the independent updater")
+                raise
+    return operation if handoff is None else _await_host(install, operation.id, handoff)
 
 
-def recover_operations(install: Installation) -> None:
+def recover_operations(install: Installation, *, host: bool = False) -> None:
+    """Start a worker for an unfinished operation whose worker is gone, like ``request_update``."""
+
     with exclusive(install.root, "dispatch", timeout=5):
         ensure_not_removing(install.root)
-        for operation in operations(install):
-            if not operation.terminal and not worker_alive(operation):
-                spawn_worker(install, operation)
+        orphan = next(
+            (item for item in operations(install) if not item.terminal and not worker_alive(item)),
+            None,
+        )
+        if orphan is None:
+            return
+        handoff = _dispatch(install, orphan, host=host)
+    if handoff is not None:
+        _await_host(install, orphan.id, handoff)
+
+
+def host_running(install: Installation) -> bool:
+    """Whether the tray host of this installation runs, in another process than this one."""
+
+    try:
+        record = read_json(contained(install.root, "host.json"), limit=4096)
+    except ApplicationError:
+        return False
+    pid, created = record.get("pid"), record.get("process_created")
+    if type(pid) is not int or pid == os.getpid() or not isinstance(created, (int, float)):
+        return False
+    try:
+        process = psutil.Process(pid)
+        return abs(process_started(process) - created) < 0.001 and bool(process.is_running())
+    except psutil.Error:
+        return False
+
+
+def dispatch_requested(install: Installation) -> None:
+    """Start the worker another process handed to this tray host (``DISPATCH_REQUEST``).
+
+    The request is consumed first, so a worker that cannot start is not retried
+    on every poll; its requester notices and decides (``request_update``).
+    """
+
+    with exclusive(install.root, "dispatch", timeout=5):
+        request = contained(install.root, DISPATCH_REQUEST)
+        try:
+            record = read_json(request, limit=4096)
+        except ApplicationError:
+            if not request.exists():
                 return
+            request.unlink(missing_ok=True)
+            raise
+        request.unlink(missing_ok=True)
+        operation_id = record.get("operation")
+        if record.get("schema_version") != 1 or not isinstance(operation_id, str):
+            raise ApplicationError("Ignored an invalid update dispatch request")
+        ensure_not_removing(install.root)
+        operation = load_operation(install, operation_id)
+        if operation.terminal or worker_alive(operation):
+            return
+        spawn_worker(install, operation)
+    _LOGGER.debug("Update worker started for another requester (operation=%s)", operation.id)
+
+
+#: How a requester handed its worker over: to the running tray host (``True``), or
+#: to a tray it still starts outside the named foreign Job.
+type _Handoff = bool | ForeignJob
+
+
+def _dispatch(install: Installation, operation: Operation, *, host: bool) -> _Handoff | None:
+    """Start the worker here (``None``) or hand it to a tray host; under the dispatch lock."""
+
+    if not host:
+        if host_running(install):
+            _hand_to_host(install, operation)
+            return True
+        job = _confining_job()
+        if job is not None:
+            _hand_to_host(install, operation)
+            return job
+    spawn_worker(install, operation)
+    return None
+
+
+def _hand_to_host(install: Installation, operation: Operation) -> None:
+    if operation.worker_pid is not None or operation.worker_created is not None:
+        # The previous worker is gone; the tray's worker claims the operation anew.
+        operation.worker_pid = operation.worker_created = None
+        operation.save(install)
+    write_json(
+        contained(install.root, DISPATCH_REQUEST), {"schema_version": 1, "operation": operation.id}
+    )
+
+
+def _await_host(install: Installation, operation_id: str, handoff: _Handoff) -> Operation:
+    """Wait until a tray host started the handed-over worker, else settle it here."""
+
+    job = handoff if isinstance(handoff, ForeignJob) else None
+    if job is not None:
+        try:
+            _start_host_outside_job(install)
+        except OSError as exc:
+            return _settle(
+                install,
+                operation_id,
+                job,
+                "The vBot tray, which runs the update outside that Job, is not running and "
+                f"could not be started ({exc}). Start vBot from the Start menu, then run the "
+                "command again.",
+            )
+        _LOGGER.info(
+            "Application tray started outside a foreign Windows Job for an update "
+            "(operation=%s job_owner=%s job_owner_pid=%s)",
+            operation_id,
+            job.name,
+            job.pid,
+        )
+    deadline = time.monotonic() + HOST_DISPATCH_SECONDS
+    while True:
+        operation = load_operation(install, operation_id)
+        if operation.terminal or operation.worker_pid is not None:
+            return operation
+        if time.monotonic() >= deadline:
+            break
+        _sleep(_HOST_DISPATCH_POLL_SECONDS)
+    return _settle(
+        install,
+        operation_id,
+        job,
+        f"The vBot tray did not take the update over within {HOST_DISPATCH_SECONDS:g} "
+        "seconds. Restart vBot from the Start menu, then run the command again.",
+    )
+
+
+def _settle(
+    install: Installation, operation_id: str, job: ForeignJob | None, reason: str
+) -> Operation:
+    """Withdraw a handoff no tray took: start the worker here unless a foreign Job confines it.
+
+    A tray of an older version, or one that hangs, ignores the request; outside
+    a foreign Job this requester starts the worker as it always did.
+    """
+
+    with exclusive(install.root, "dispatch", timeout=5):
+        operation = load_operation(install, operation_id)
+        if operation.terminal or operation.worker_pid is not None:
+            return operation
+        contained(install.root, DISPATCH_REQUEST).unlink(missing_ok=True)
+        if job is None:
+            job = _confining_job()
+        if job is None:
+            _LOGGER.warning(
+                "Application tray did not start the update worker; starting it here (operation=%s)",
+                operation.id,
+            )
+            spawn_worker(install, operation)
+            return operation
+        message = f"No update was started: {_confinement(job)} {reason}"
+        if operation.phase == "queued":
+            # Nothing ran yet; a tray started later must not run it by surprise.
+            operation.error = message
+            operation.transition(install, "failed", "The vBot tray did not start the update")
+        raise ApplicationError(message)
+
+
+def _confining_job() -> ForeignJob | None:
+    """The foreign Windows Job that would keep a worker started here, if any."""
+
+    try:
+        job = foreign_job()
+    except OSError as exc:
+        _LOGGER.warning("Inspecting the Windows Job of this process failed (error=%s)", exc)
+        return None
+    return job if job is not None and job.confines_children else None
+
+
+def _confinement(job: ForeignJob) -> str:
+    return (
+        f"this command runs inside the Windows Job of {job.name} (pid {job.pid}), so the "
+        "update and the vBot server it restarts would end when that application closes."
+    )
+
+
+def _start_host_outside_job(install: Installation) -> None:
+    """Start the tray host through WMI, outside every Job of this process (Windows only)."""
+
+    environment = {
+        **os.environ,
+        "VBOT_BROKER_COMMAND": subprocess.list2cmdline([str(install.bootstrap)]),
+        "VBOT_BROKER_DIRECTORY": str(install.root),
+    }
+    script = base64.b64encode(_BROKER_SCRIPT.encode("utf-16-le")).decode("ascii")
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-EncodedCommand",
+                script,
+            ],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_BROKER_TIMEOUT_SECONDS,
+            creationflags=subprocess_creation_flags(),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError("Windows Management Instrumentation did not answer") from exc
+    detail = (result.stdout.strip().splitlines() or [f"exit code {result.returncode}"])[-1]
+    if result.returncode != 0 or not detail.isdigit():
+        raise OSError(f"Windows Management Instrumentation refused: {detail}")
 
 
 def status(install: Installation, operation_id: str | None = None) -> Operation | None:

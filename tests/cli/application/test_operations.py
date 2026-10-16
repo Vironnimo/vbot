@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import psutil  # type: ignore[import-untyped]
 import pytest
 
 from cli.application import operations
 from cli.application.state import ApplicationError, Installation, Operation, load_operation
 from core.utils import processes as core_processes
+from core.utils.processes import ForeignJob
+from core.utils.server_control import process_started
 
 
 def _install(root: Path) -> Installation:
@@ -197,6 +201,130 @@ def test_agent_handoff_requires_a_server_owned_ticket_in_this_data_directory(
         operations.request_update(install, handoff_token="opaque-token")
     assert minted == [{"handoff_token": "opaque-token"}]
     assert operations.operations(install) == []
+
+
+def _running_tray(install: Installation) -> None:
+    """Record a live process other than this one as the installation's tray host."""
+
+    parent = psutil.Process(os.getppid())
+    (install.root / "host.json").write_text(
+        json.dumps(
+            {"schema_version": 1, "pid": parent.pid, "process_created": process_started(parent)}
+        ),
+        encoding="utf-8",
+    )
+
+
+def _tray_dispatches(install: Installation, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Let the tray consume the dispatch request while the requester waits for it."""
+
+    spawned: list[str] = []
+
+    def spawn(_install: Installation, operation: Operation) -> None:
+        spawned.append(operation.id)
+        operation.worker_pid, operation.worker_created = 4242, 1.0
+        operation.save(install)
+
+    monkeypatch.setattr(operations, "spawn_worker", spawn)
+    monkeypatch.setattr(
+        operations, "_sleep", lambda _seconds: operations.dispatch_requested(install)
+    )
+    return spawned
+
+
+_CONFINED = ForeignJob("codex.exe", 4711, confines_children=True)
+
+
+@pytest.mark.parametrize(
+    "route", ["running-tray", "confined-starts-tray", "tray-itself", "breakaway-allowed"]
+)
+def test_update_worker_starts_outside_a_foreign_job_of_the_requester(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    install = _install(tmp_path)
+    spawned = _tray_dispatches(install, monkeypatch)
+    brokered: list[Path] = []
+    monkeypatch.setattr(
+        operations, "_start_host_outside_job", lambda target: brokered.append(target.root)
+    )
+    if route == "running-tray":
+        _running_tray(install)
+    elif route == "breakaway-allowed":
+        monkeypatch.setattr(operations, "foreign_job", lambda: ForeignJob("codex.exe", 4711, False))
+    else:
+        monkeypatch.setattr(operations, "foreign_job", lambda: _CONFINED)
+
+    accepted = operations.request_update(install, host=route == "tray-itself")
+
+    # The worker always runs; only a requester outside the tray hands it over.
+    assert spawned == [accepted.id]
+    assert accepted.worker_pid == 4242
+    assert brokered == ([install.root] if route == "confined-starts-tray" else [])
+    assert not (install.root / operations.DISPATCH_REQUEST).exists()
+
+
+@pytest.mark.parametrize("confined", [False, True], ids=["unconfined", "confined"])
+def test_handoff_no_tray_takes_is_settled_by_the_requester(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, confined: bool
+) -> None:
+    install = _install(tmp_path)
+    _running_tray(install)
+    monkeypatch.setattr(operations, "HOST_DISPATCH_SECONDS", 0.0)
+    monkeypatch.setattr(operations, "_sleep", lambda _seconds: pytest.fail("deadline passed"))
+    spawned: list[str] = []
+    monkeypatch.setattr(
+        operations, "spawn_worker", lambda _install, operation: spawned.append(operation.id)
+    )
+    if confined:
+        monkeypatch.setattr(operations, "foreign_job", lambda: _CONFINED)
+        with pytest.raises(ApplicationError, match="codex.exe"):
+            operations.request_update(install)
+        failed = cast(Operation, operations.status(install))
+        # Nothing ran: the request fails instead of a later tray running it by surprise.
+        assert failed.phase == "failed"
+        assert spawned == []
+    else:
+        # An older tray ignores the request; outside a foreign Job that is harmless.
+        accepted = operations.request_update(install)
+        assert spawned == [accepted.id]
+    assert not (install.root / operations.DISPATCH_REQUEST).exists()
+
+
+def test_confined_requester_refuses_when_no_tray_can_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path)
+    monkeypatch.setattr(operations, "foreign_job", lambda: _CONFINED)
+    monkeypatch.setattr(operations, "spawn_worker", lambda *_args: pytest.fail("must not spawn"))
+
+    def refuse(_install: Installation) -> None:
+        raise OSError("Windows Management Instrumentation refused: access denied")
+
+    monkeypatch.setattr(operations, "_start_host_outside_job", refuse)
+
+    with pytest.raises(ApplicationError, match="could not be started"):
+        operations.request_update(install)
+    assert cast(Operation, operations.status(install)).phase == "failed"
+    assert not (install.root / operations.DISPATCH_REQUEST).exists()
+
+
+def test_tray_consumes_dispatch_requests_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path)
+    request = install.root / operations.DISPATCH_REQUEST
+    monkeypatch.setattr(operations, "spawn_worker", lambda *_args: pytest.fail("must not spawn"))
+    # A request for a finished operation, or no request at all, starts nothing.
+    Operation(id="upd_done", phase="completed", message="done").save(install)
+    request.write_text('{"schema_version": 1, "operation": "upd_done"}', encoding="utf-8")
+    operations.dispatch_requested(install)
+    operations.dispatch_requested(install)
+    assert not request.exists()
+    # An invalid request is removed, so a tray does not fail on it every second.
+    request.write_text('{"schema_version": 2}', encoding="utf-8")
+    with pytest.raises(ApplicationError):
+        operations.dispatch_requested(install)
+    assert not request.exists()
 
 
 def test_observer_reports_the_newest_operation_and_rereads_only_changed_records(

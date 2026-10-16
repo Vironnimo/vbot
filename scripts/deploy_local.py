@@ -27,6 +27,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cli.application.state import ApplicationError, load_installation, package_name
+from core.utils.processes import foreign_job
 from scripts.package_build import version_id
 
 CHECKOUT = Path(__file__).resolve().parent.parent
@@ -103,6 +104,29 @@ def _build_webui(source: Path) -> None:
     _run([npm, "run", "build"], cwd=webui)
 
 
+def confinement_warning() -> str | None:
+    """Explain the risk when this runs inside another application's Windows Job.
+
+    A coding agent's shell typically does: every process it starts, including an
+    update worker and the server that worker restarts, ends when that application
+    closes. The installation's update hands the worker to the vBot tray, which
+    runs outside the Job; an installed version older than that handoff does not.
+    """
+    try:
+        job = foreign_job()
+    except OSError as error:
+        return f"could not inspect the Windows Job of this process ({error})"
+    if job is None or not job.confines_children:
+        return None
+    return (
+        f"this runs inside the Windows Job of {job.name} (pid {job.pid}), which ends every "
+        "process in it when that application closes. The installation hands the update to "
+        "the vBot tray, outside that Job; an installed vBot older than that handoff restarts "
+        f"its server inside the Job instead, so restart the server from the tray before "
+        f"closing {job.name}."
+    )
+
+
 def _remove(path: Path) -> None:
     if path.exists():
         shutil.rmtree(path)
@@ -165,6 +189,9 @@ def deploy(install_root: Path, *, keep_build: bool) -> int:
     archive = output / "artifacts" / package_name(install.install_shape, PLATFORM)
 
     step(f"Installing into {install.root}")
+    warning = confinement_warning()
+    if warning:
+        print(f"deploy_local: warning: {warning}", file=sys.stderr, flush=True)
     # Outside the checkout, so nothing of the development checkout applies to the installation.
     result = subprocess.run(
         [str(install.root / "vBot.exe"), "update", "--package", str(archive)],
