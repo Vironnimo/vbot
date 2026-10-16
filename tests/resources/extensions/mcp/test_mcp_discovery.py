@@ -13,6 +13,7 @@ from core.extensions import ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.tools.availability import ToolAccess
 from core.tools.tools import ToolDefinitionProfileContext
+from resources.extensions.mcp import _discovery as discovery
 from resources.extensions.mcp._tasks import TASKS_EXTENSION
 from resources.extensions.mcp.client import TASK_OPERATIONS, ConnectionRunner
 from resources.extensions.mcp.extension import MCP_GUIDANCE, register, remote_tool_name
@@ -29,7 +30,7 @@ from tests.resources.extensions.mcp.mcp_test_support import (
 _PROFILE = ToolDefinitionProfileContext(agent_id="alice")
 
 
-_USAGE = "Describe a tool for its arguments schema, then call it."
+_USAGE = "Describe tools for their arguments schemas, then call them."
 
 
 def _definitions(registry):
@@ -57,7 +58,7 @@ async def test_connection_target_lists_remote_tool_names_through_disconnects(
     service, registry, runner, calls = context_service
     before = _definitions(registry)
     assert before[0]["description"] == f"MCP connection example. {_USAGE}"
-    assert _target(before[0]).endswith("describe and call. Tools: inspect")
+    assert _target(before[0]).endswith("Required for call. Tools: inspect")
     assert registry.get("mcp_example").summary == "MCP connection example."
     # A Session that knows the connection Tool hears when its listed names change,
     # not when the server's title or the user's description does.
@@ -164,6 +165,43 @@ async def test_search_and_describe_load_only_the_requested_definition(context_se
     assert detail["data"]["description"] == "test-owned-inspection"
     assert "definition" not in detail["data"]
     assert "resources/read" not in json.dumps(detail)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_describe_shows_several_targets_in_order_within_its_size(
+    context_service, host, monkeypatch
+):
+    service, registry, runner, calls = context_service
+    runner.catalog["prompts"] = [{"name": "workflow", "description": "test-owned-workflow"}]
+    names = ["workflow", "missing", "inspect"]
+
+    page = await dispatch(registry, host, {"action": "describe", "targets": names})
+
+    shown = page["data"]["targets"]
+    assert shown[0]["target"].startswith("prompt:workflow:")
+    assert shown[1]["target"] == "missing" and shown[1]["problem"]
+    assert shown[2]["target"].startswith("tool:inspect:")
+    assert shown[2]["arguments_schema"] == runner.catalog["tools"][0]["inputSchema"]
+    assert "not_shown" not in page["data"]
+
+    # Whole definitions only: what does not fit is named with the call that shows it.
+    sizes = [len(json.dumps(item, separators=(",", ":"))) for item in (shown[0], shown[2])]
+    monkeypatch.setattr(discovery, "DESCRIBE_CHARACTERS", max(sizes) + 1)
+    limited = await dispatch(registry, host, {"action": "describe", "targets": names})
+    inspect = shown[2]["target"]
+    assert [item["target"] for item in limited["data"]["targets"]] == [
+        shown[0]["target"],
+        "missing",
+    ]
+    assert limited["data"]["not_shown"] == (
+        f"Not shown, to keep this result within its size: {inspect}. Describe them with "
+        f'{{"action":"describe","targets":["{inspect}"]}}.'
+    )
+
+    nothing = await dispatch(registry, host, {"action": "describe", "targets": ["a1", "b2"]})
+    assert not nothing["ok"]
+    assert nothing["error"]["message"].startswith("Nothing was described:\n- a1: ")
     assert calls == []
 
 

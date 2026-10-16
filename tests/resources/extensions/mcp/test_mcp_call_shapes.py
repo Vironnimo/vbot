@@ -30,6 +30,8 @@ def _with_target(value, target):
         return target.split(":", 1)[1]
     if isinstance(value, dict):
         return {key: _with_target(item, target) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_with_target(item, target) for item in value]
     return value
 
 
@@ -43,6 +45,7 @@ def _with_target(value, target):
         {"action": "CALL", "target": "tool:inspect", "arguments": '{"value": "sentinel"}'},
         {"action": "call", "target": "Inspect", "parameters": {"value": "sentinel"}},
         {"call": {"target": TARGET, "arguments": {"value": "sentinel"}}},
+        {"action": "call", "targets": ["inspect"], "arguments": {"value": "sentinel"}},
         {"Action": "call", "Target": TARGET, "Arguments": {"value": "sentinel"}},
         {"action": "call", "target": UNKINDED, "arguments": {"value": "sentinel"}},
         # Fields that request nothing for a call are dropped.
@@ -60,6 +63,29 @@ async def test_call_dialects_reach_the_exact_remote_tool(context_service, host, 
     assert result["data"]["content"] == "sentinel"
     assert "note" not in result["data"]
     assert calls == [("tools/call", {"name": "inspect", "arguments": {"value": "sentinel"}})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "describe", "target": "inspect"},
+        {"action": "describe", "targets": "inspect"},
+        {"action": "describe", "targets": '["inspect"]'},
+        {"tools": ["inspect"]},
+        # Two spellings of one tool describe it once.
+        {"action": "describe", "targets": ["inspect", TARGET]},
+    ],
+)
+async def test_describe_dialects_show_the_tool(context_service, host, arguments):
+    service, registry, runner, calls = context_service
+    arguments = _with_target(arguments, await tool_target(registry, host))
+
+    result = await dispatch(registry, host, arguments)
+
+    assert result["ok"], result
+    assert result["data"]["arguments_schema"] == runner.catalog["tools"][0]["inputSchema"]
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -135,12 +161,12 @@ async def test_read_field_list_may_be_comma_separated(context_service, host):
     [
         (
             {"target": TARGET},
-            'Describe it with {"action":"describe","target":"<target>"}, or call it with '
+            'Describe it with {"action":"describe","targets":["<target>"]}, or call it with '
             '{"action":"call","target":"<target>","arguments":{}} and its arguments.',
         ),
         (
             {"action": "describe", "target": TARGET, "arguments": {"value": "x"}},
-            'Describe the target with {"action":"describe","target":"<target>"}, or call it '
+            'Describe the target with {"action":"describe","targets":["<target>"]}, or call it '
             'with these arguments: {"action":"call","target":"<target>","arguments":'
             '{"value":"x"}}.',
         ),
@@ -156,14 +182,19 @@ async def test_read_field_list_may_be_comma_separated(context_service, host):
         ),
         (
             {"action": "search", "target": TARGET},
-            'Describe that target with {"action":"describe","target":"<target>"}',
+            'Describe that target with {"action":"describe","targets":["<target>"]}',
+        ),
+        (
+            {"action": "call", "targets": [TARGET, "other"], "arguments": {"value": "x"}},
+            'call runs one target, and targets names 2. Call each with "target", such as '
+            '{"action":"call","arguments":{"value":"x"},"target":"<target>"}.',
         ),
         (
             {"action": "explode"},
             'action must be one of search, describe, call, read. Start with {"action":"search"}',
         ),
         ({"action": "read"}, "read was not run: result_id is missing"),
-        ({"action": "describe"}, "target is missing. Use a target from search"),
+        ({"action": "describe"}, "targets is missing. Name the tools to describe"),
         ({"action": "call"}, "call was not run: target is missing"),
         (
             {"action": "search", "unknown": True},
@@ -249,7 +280,9 @@ async def test_a_target_whose_fingerprint_does_not_match_is_never_called(
     )
     describe = await dispatch(registry, host, {"action": "describe", "target": sent})
 
-    describe_current = json.dumps({"action": "describe", "target": current}, separators=(",", ":"))
+    describe_current = json.dumps(
+        {"action": "describe", "targets": [current]}, separators=(",", ":")
+    )
     assert model_text(call) == (
         "Error (mcp_target_mismatch): tool inspect was not called: the part after its name in "
         f"{sent} does not match its current definition. Its current target is {current}; check "
@@ -408,7 +441,7 @@ async def test_invalid_target_arguments_name_the_fields_and_the_describe_call(
     assert model_text(result) == (
         "Error (mcp_invalid_arguments): tool inspect was not called: /arguments has fields "
         "the target does not take: vlaue. It takes value (string, required). Correct the "
-        f'arguments and call again; {{"action":"describe","target":"{target}"}} shows the '
+        f'arguments and call again; {{"action":"describe","targets":["{target}"]}} shows the '
         "full schema."
     )
     assert calls == []

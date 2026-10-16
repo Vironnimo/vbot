@@ -50,9 +50,12 @@ from ._definitions import (
     TARGET_FINGERPRINT_LENGTH,
     TOOL_NAME_HASH_LENGTH,
     TOOL_NAME_LABEL_LENGTH,
+    describe_call,
 )
 from ._discovery import (
+    DescribeOutcome,
     catalog_entries,
+    describe_page,
     describe_payload,
     entry_operation,
     invalid_target_arguments,
@@ -376,7 +379,7 @@ class MCPService:
                     "mcp_tool_changed",
                     MCP_MESSAGES["tool_changed"].format(
                         tool=remote,
-                        describe=compact({"action": "describe", "target": f"tool:{remote}"}),
+                        describe=compact(describe_call(f"tool:{remote}")),
                         connection=connection,
                     ),
                 )
@@ -446,21 +449,72 @@ class MCPService:
         entries = catalog_entries(runner.id, runner.catalog, allowed)
         if action == "search":
             return self._search(runner, context, arguments, entries)
-        entry, note, failure = resolve(entries, arguments)
+        if action == "describe":
+            return await self._describe(runner, context, arguments["targets"], entries, allowed)
+        entry, note, failure = self._resolve(runner, entries, arguments, allowed)
         if failure is not None:
-            if failure["error"]["code"] == "mcp_unknown_target" and names_denied_tool(
-                runner.id, runner.catalog, arguments["target"], allowed
-            ):
-                return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
             return failure
         assert entry is not None
-        if action == "describe":
+        result = await self._call_target(runner, context, entry, arguments, allowed)
+        return result if note is None else noted(result, note)
+
+    def _resolve(
+        self,
+        runner: ConnectionRunner,
+        entries: list[dict[str, Any]],
+        arguments: dict[str, Any],
+        allowed: tuple[str, ...],
+    ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
+        entry, note, failure = resolve(entries, arguments)
+        if (
+            failure is not None
+            and failure["error"]["code"] == "mcp_unknown_target"
+            and names_denied_tool(runner.id, runner.catalog, arguments["target"], allowed)
+        ):
+            failure = tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
+        return entry, note, failure
+
+    async def _describe(
+        self,
+        runner: ConnectionRunner,
+        context: ToolContext,
+        targets: list[str],
+        entries: list[dict[str, Any]],
+        allowed: tuple[str, ...],
+    ) -> dict[str, Any]:
+        outcomes: list[DescribeOutcome] = []
+        shown: set[str] = set()
+        for target in targets:
+            arguments = {"action": "describe", "target": target}
+            entry, note, failure = self._resolve(runner, entries, arguments, allowed)
+            if entry is not None:
+                # Two spellings of one item show it once.
+                if entry["target"] in shown:
+                    continue
+                shown.add(entry["target"])
+            outcomes.append((target, entry, note, failure))
+        if len(outcomes) == 1:
+            _, entry, note, failure = outcomes[0]
+            if failure is not None:
+                return failure
+            assert entry is not None
             source = entry["name"] if entry["kind"] == "tool" else None
             return await self._present(
                 runner, context, describe_payload(entry, note), source=source
             )
-        result = await self._call_target(runner, context, entry, arguments, allowed)
-        return result if note is None else noted(result, note)
+        failures = [outcome[3] for outcome in outcomes if outcome[3] is not None]
+        if len(failures) == len(outcomes):
+            codes = {failure["error"]["code"] for failure in failures}
+            problems = "\n".join(
+                f"- {target}: {failure['error']['message']}"
+                for target, _, _, failure in outcomes
+                if failure is not None
+            )
+            return tool_failure(
+                codes.pop() if len(codes) == 1 else "mcp_unknown_target",
+                MCP_MESSAGES["describe_failed"].format(problems=problems),
+            )
+        return tool_success(describe_page(outcomes, complete=not context.result_payloads_available))
 
     async def _read(
         self,

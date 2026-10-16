@@ -96,7 +96,7 @@ _EXPLORE_PROPERTIES: dict[str, Any] = {
     "action": {
         **MCP_PARAMETERS["properties"]["action"],
         "enum": ["search", "describe", "call"],
-        "description": "Search available items, describe one target, or call it.",
+        "description": "Search available items, describe targets, or call one.",
     },
 }
 

@@ -29,7 +29,7 @@ from tests.resources.extensions.mcp.mcp_test_support import (
     start_service,
 )
 
-_USAGE = "Describe a tool for its arguments schema, then call it."
+_USAGE = "Describe tools for their arguments schemas, then call them."
 _NO_TOOLS = "No tools reported yet; search lists them."
 _CONNECTION = {"id": "example", "transport": "stdio", "command": "unused"}
 _CATALOG = {
@@ -52,7 +52,7 @@ def _description(registry) -> str:
 def _tools(registry) -> str:
     """What the connection Tool's ``target`` lists after its fixed text."""
     target = registry.get("mcp_example").parameters["properties"]["target"]["description"]
-    return str(target).split("describe and call. ", 1)[1]
+    return str(target).split("Required for call. ", 1)[1]
 
 
 _DISABLED = (

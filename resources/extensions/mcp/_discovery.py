@@ -29,6 +29,7 @@ from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import tool_failure
 
 from ._definitions import (
+    DESCRIBE_CHARACTERS,
     GUIDANCE_PREVIEW_CHARACTERS,
     MCP_MESSAGES,
     MCP_OPERATION_DESCRIPTIONS,
@@ -39,6 +40,7 @@ from ._definitions import (
     TARGET_FINGERPRINT_LENGTH,
     TOOL_NAME_HASH_LENGTH,
     TOOL_NAME_LABEL_LENGTH,
+    describe_call,
 )
 from ._views import argument_problem, compact, schema_summary, without_protocol_meta
 from .content import pointer_part
@@ -199,7 +201,7 @@ def summarize(entry: dict[str, Any]) -> dict[str, Any]:
         "kind": entry["kind"],
         "name": entry["name"],
         "description": entry["description"][:SEARCH_SUMMARY_CHARACTERS],
-        "describe": {"action": "describe", "target": entry["target"]},
+        "describe": describe_call(entry["target"]),
     }
 
 
@@ -376,7 +378,7 @@ def resolve(
                     item=f"{entry['kind']} {entry['name']}",
                     sent=target,
                     target=current,
-                    describe=compact({"action": "describe", "target": current}),
+                    describe=compact(describe_call(current)),
                 ),
             ),
         )
@@ -500,6 +502,56 @@ def describe_payload(entry: dict[str, Any], note: str | None) -> dict[str, Any]:
     return payload
 
 
+DescribeOutcome = tuple[str, dict[str, Any] | None, str | None, dict[str, Any] | None]
+"""One named target of a describe: as sent, its entry and note, or its failure."""
+
+
+def describe_page(outcomes: list[DescribeOutcome], *, complete: bool) -> dict[str, Any]:
+    """What describe shows of several targets, in the order they were named.
+
+    Each definition is shown whole or not at all, within ``DESCRIBE_CHARACTERS``
+    unless *complete*; the rest is named with the describe call that shows it.
+    A target that cannot be described shows its problem in its place.
+    """
+    shown: list[dict[str, Any]] = []
+    more: list[str] = []
+    alone: list[str] = []
+    used = 0
+    for target, entry, note, failure in outcomes:
+        if failure is not None:
+            item = {"target": target, "problem": failure["error"]["message"]}
+        else:
+            assert entry is not None
+            item = describe_payload(entry, note)
+        size = len(compact(item))
+        if not complete and failure is None and entry is not None:
+            if size > DESCRIBE_CHARACTERS:
+                alone.append(entry["target"])
+                continue
+            if used + size > DESCRIBE_CHARACTERS:
+                more.append(entry["target"])
+                continue
+        shown.append(item)
+        used += size
+    page: dict[str, Any] = {"targets": shown}
+    notes = []
+    if more:
+        notes.append(
+            MCP_MESSAGES["describe_more"].format(
+                targets=", ".join(more), call=compact(describe_call(*more))
+            )
+        )
+    if alone:
+        notes.append(
+            MCP_MESSAGES["describe_alone"].format(
+                targets=", ".join(alone), call=compact(describe_call(alone[0]))
+            )
+        )
+    if notes:
+        page["not_shown"] = " ".join(notes)
+    return page
+
+
 def target_arguments(
     entry: dict[str, Any], inputs: dict[str, Any]
 ) -> tuple[dict[str, Any], str | None]:
@@ -537,7 +589,7 @@ def invalid_target_arguments(entry: dict[str, Any], problem: str) -> dict[str, A
             item=f"{entry['kind']} {entry['name']}",
             problem=problem[:500],
             summary=schema_summary(arguments_schema(entry)),
-            describe=compact({"action": "describe", "target": entry["target"]}),
+            describe=compact(describe_call(entry["target"])),
         ),
     )
 

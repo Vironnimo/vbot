@@ -24,7 +24,7 @@ MCP_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
     "query": {"action": "search", "query": "scene material"},
     "offset": {"action": "search", "offset": 10},
     "limit": {"action": "search", "limit": 2},
-    "describe": {"action": "describe", "target": "tool:inspect:test-owned-target"},
+    "describe": {"action": "describe", "targets": ["tool:inspect:test-owned-target"]},
     "call_empty": {"action": "call", "target": "operation:ping:test-owned-target"},
     "call_arguments": {
         "action": "call",

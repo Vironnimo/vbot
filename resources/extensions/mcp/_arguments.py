@@ -18,17 +18,17 @@ from typing import Any
 from core.tools.call_syntax import normalize_call_arguments
 from core.tools.contracts import ToolContractError, compile_tool_contract
 
-from ._definitions import MCP_PARAMETERS
+from ._definitions import MCP_PARAMETERS, describe_call
 
 _FIELDS = tuple(MCP_PARAMETERS["properties"])
 
 APPLICABLE = {
     "search": ("query", "kind", "offset", "limit"),
-    "describe": ("target",),
+    "describe": ("targets",),
     "call": ("target", "arguments"),
     "read": ("result_id", "pointer", "offset", "limit", "fields"),
 }
-_REQUIRED = {"describe": "target", "call": "target", "read": "result_id"}
+_REQUIRED = {"describe": "targets", "call": "target", "read": "result_id"}
 # A corrected call longer than this is described in words rather than repeated.
 _CORRECTED_CHARACTERS = 1500
 
@@ -55,9 +55,16 @@ def _is_target(value: Any) -> bool:
     return _is_text(value) and not _is_result_id(value)
 
 
+def _is_targets(value: Any) -> bool:
+    return _is_target(value) or (
+        isinstance(value, list) and bool(value) and all(_is_target(item) for item in value)
+    )
+
+
 # Other spellings of a field, used only while the field itself is absent.
 _ALIASES: dict[str, tuple[str, Callable[[Any], bool]]] = {
     **dict.fromkeys(("tool", "toolname", "targetname", "name"), ("target", _is_target)),
+    **dict.fromkeys(("tools", "toolnames", "names", "targetnames"), ("targets", _is_targets)),
     **dict.fromkeys(
         (
             "args",
@@ -153,6 +160,23 @@ def _fields(value: Any) -> Any:
     return value
 
 
+def _targets(value: Any) -> Any:
+    """Read a list of targets: also one target, or several in text, each once."""
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                value = json.loads(text)
+            except ValueError:
+                value = [text]
+        else:
+            value = re.split(r"[,\n]", text)
+    if not isinstance(value, list):
+        return value
+    targets = [item.strip() if isinstance(item, str) else item for item in value]
+    return list(dict.fromkeys(item for item in targets if item != ""))
+
+
 def _is_empty(value: Any) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
@@ -179,9 +203,10 @@ class _Browse:
                 "pointer": _pointer,
                 "fields": _fields,
                 "target": lambda value: value.strip() if isinstance(value, str) else value,
+                "targets": _targets,
                 "arguments": self._arguments,
             },
-            empty_as_omitted=("query", "kind", "target", "result_id", "arguments"),
+            empty_as_omitted=("query", "kind", "target", "targets", "result_id", "arguments"),
         )
         return self._complete(repaired) if isinstance(repaired, dict) else repaired
 
@@ -221,6 +246,7 @@ class _Browse:
                 f"action must be one of {', '.join(APPLICABLE)}. Start with "
                 f"{_call({'action': 'search'})} to see what this connection offers.",
             )
+        arguments = self._one_or_many(action, arguments)
         applicable = APPLICABLE[action]
         for field in [key for key in arguments if key != "action" and key not in applicable]:
             value = arguments[field]
@@ -237,9 +263,34 @@ class _Browse:
             raise self.refuse(action, self._missing_reason(action, required))
         return arguments
 
+    def _one_or_many(self, action: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Read target for describe as one of its targets, and one target of call as target."""
+        if action == "describe" and _is_targets(arguments.get("target")):
+            target = arguments.pop("target")
+            named = [target] if isinstance(target, str) else target
+            listed = arguments.get("targets")
+            listed = listed if isinstance(listed, list) else []
+            arguments["targets"] = list(dict.fromkeys([*listed, *(n.strip() for n in named)]))
+        if action == "call" and "targets" in arguments and "target" not in arguments:
+            targets = arguments["targets"]
+            if isinstance(targets, list) and len(targets) > 1:
+                first = {key: value for key, value in arguments.items() if key != "targets"}
+                first["target"] = targets[0]
+                first.setdefault("arguments", {})
+                raise self.refuse(
+                    "call",
+                    f"call runs one target, and targets names {len(targets)}. Call each with "
+                    f'"target", such as {_call(first)}.',
+                )
+            arguments["target"] = targets[0] if isinstance(targets, list) else targets
+            del arguments["targets"]
+        return arguments
+
     def _infer_action(self, arguments: dict[str, Any]) -> str:
         if "result_id" in arguments:
             return "read"
+        if "targets" in arguments and not {"target", "arguments"} & set(arguments):
+            return "describe"
         if "target" not in arguments:
             return "search"
         if "arguments" in arguments:
@@ -248,7 +299,7 @@ class _Browse:
         raise self.refuse(
             None,
             "action is missing, and describing a target differs from calling it. Describe it "
-            f"with {_call({'action': 'describe', 'target': target})}, or call it with "
+            f"with {_call(describe_call(target))}, or call it with "
             f"{_call({'action': 'call', 'target': target, 'arguments': {}})} and its arguments.",
         )
 
@@ -281,24 +332,34 @@ class _Browse:
         reason = (
             f"{names} {verb} not apply to {action}, which takes {', '.join(APPLICABLE[action])}."
         )
-        if action == "describe" and "arguments" in extra and "target" in arguments:
+        targets = arguments.get("targets")
+        if (
+            action == "describe"
+            and "arguments" in extra
+            and isinstance(targets, list)
+            and len(targets) == 1
+        ):
             call = _call(
-                {
-                    "action": "call",
-                    "target": arguments["target"],
-                    "arguments": arguments["arguments"],
-                }
+                {"action": "call", "target": targets[0], "arguments": arguments["arguments"]}
             )
             if len(call) > _CORRECTED_CHARACTERS:
-                call = 'the same call with "action":"call"'
+                call = f'the same call with "action":"call" and "target":"{targets[0]}"'
             return (
                 f"{reason} Describe the target with {_call(corrected)}, or call it with "
                 f"these arguments: {call}."
             )
-        if action == "search" and "target" in extra:
-            describe = {"action": "describe", "target": arguments["target"]}
+        named: list[str] = (
+            [arguments["target"]]
+            if _is_target(arguments.get("target"))
+            else targets
+            if isinstance(targets, list) and _is_targets(targets)
+            else []
+        )
+        if action == "search" and {"target", "targets"} & set(extra) and named:
+            describe = describe_call(*named)
             return (
-                f"{reason} Describe that target with {_call(describe)}, or send {_call(corrected)}."
+                f"{reason} Describe {'that target' if len(named) == 1 else 'those targets'} "
+                f"with {_call(describe)}, or send {_call(corrected)}."
             )
         example = _call(corrected)
         if len(example) > _CORRECTED_CHARACTERS:
@@ -311,9 +372,10 @@ class _Browse:
                 "result_id is missing. Use the result_id of an earlier result from this "
                 "connection, as shown in its continue or read call."
             )
+        named = "the tools to describe" if required == "targets" else "the tool to call"
         return (
-            "target is missing. Use a target from search, such as tool:name:..., or a tool "
-            f"name; find them with {_call({'action': 'search'})}."
+            f"{required} is missing. Name {named} from the list in the description of "
+            f"target, or find targets with {_call({'action': 'search'})}."
         )
 
 
