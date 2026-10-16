@@ -172,6 +172,12 @@
   gap: 8px;
 }
 
+/* Invisible, but laid out: the scroll controller loads a Run's omitted steps
+   when this marker comes near the visible area. */
+.run-history-gap {
+  min-height: 1px;
+}
+
 .msg-timestamp,
 .msg-meta-extra {
   color: var(--text-lo);

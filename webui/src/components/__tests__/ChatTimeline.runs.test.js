@@ -47,26 +47,28 @@ const REPORTED_TEXTS = [
 describe('ChatTimeline Runs', () => {
   const timeline = setupChatTimelineSuite();
 
-  it('shows an earlier-steps action and forwards its exact Run cursor', () => {
-    const gap = {
-      id: 'history-gap',
-      type: 'history_gap',
-      run_id: 'one',
-      before: 'first-visible',
-      position: -1,
-    };
+  it('marks omitted Run steps for loading without a visible action', () => {
     const session = timelineSession('windowed');
     session.timelineItems = [
-      assistantRun('one', [gap, outputItem('Latest output')]),
+      assistantRun('one', [
+        {
+          id: 'history-gap',
+          type: 'history_gap',
+          run_id: 'one',
+          before: 'first-visible',
+          position: -1,
+        },
+        outputItem('Latest output'),
+      ]),
     ];
-    const onLoadRunHistory = vi.fn();
-    timeline.render(session, { onLoadRunHistory });
-    const button = [...document.querySelectorAll('button')].find((button) =>
-      button.textContent.includes(t('chat.historyEarlierSteps')),
-    );
-    expect(button).toBeDefined();
-    button.click();
-    expect(onLoadRunHistory).toHaveBeenCalledExactlyOnceWith(gap);
+    timeline.render(session);
+    const marker = document.querySelector('[data-history-gap]');
+    expect(marker.dataset).toMatchObject({
+      historyGap: 'one',
+      historyGapBefore: 'first-visible',
+    });
+    expect(marker.getAttribute('aria-hidden')).toBe('true');
+    expect(marker.textContent).toBe('');
   });
 
   it.each([

@@ -328,6 +328,63 @@ describe('createChatScrollController', () => {
     await Promise.resolve();
   });
 
+  it('loads a Run history gap near the viewport below the reading anchor', async () => {
+    const container = createFakeContainer();
+    container.clientHeight = 500;
+    container.getBoundingClientRect = () => ({ top: 0, bottom: 500 });
+    const gapRow = createElement('run:part:-1', 100, container);
+    const stepsRow = createElement('run:part:0', 140, container);
+    const gap = createElement('gap', 120, container);
+    gap.dataset = { historyGap: 'run', historyGapBefore: 'step-100' };
+    gapRow.querySelector = () => gap;
+    stepsRow.querySelector = () => null;
+    container.querySelectorAll = vi.fn((selector) =>
+      selector === '[data-history-gap]' ? [gap] : [gapRow, stepsRow],
+    );
+    const pages = [];
+    const requestLoadRunHistory = vi.fn(
+      () => new Promise((resolve, reject) => pages.push({ resolve, reject })),
+    );
+    const controller = createController(container, { requestLoadRunHistory });
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const scrollTo = (top) => {
+      container.scrollTop = top;
+      container.dispatchScroll();
+    };
+    controller.sessionChanged('session-a');
+    controller.contentChanged();
+    // Pinned far below: the gap is out of reach.
+    expect(requestLoadRunHistory).not.toHaveBeenCalled();
+
+    scrollTo(110);
+    scrollTo(105);
+    expect(requestLoadRunHistory).toHaveBeenCalledExactlyOnceWith({
+      runId: 'run',
+      before: 'step-100',
+    });
+
+    // The earlier steps arrive between the gap row and the steps being read,
+    // and the next gap is still within reach.
+    stepsRow.offsetTop += 300;
+    gap.dataset.historyGapBefore = 'step-0';
+    pages[0].resolve(true);
+    await settle();
+    expect(stepsRow.offsetTop - container.scrollTop).toBe(35);
+    expect(requestLoadRunHistory).toHaveBeenLastCalledWith({
+      runId: 'run',
+      before: 'step-0',
+    });
+
+    // A failed page waits for real user motion.
+    pages[1].reject(new Error('offline'));
+    await settle();
+    controller.rendered();
+    expect(requestLoadRunHistory).toHaveBeenCalledTimes(2);
+    scrollTo(container.scrollTop - 10);
+    expect(requestLoadRunHistory).toHaveBeenCalledTimes(3);
+    controller.destroy();
+  });
+
   it('restores a saved reading pixel position when returning to a session', () => {
     const container = createFakeContainer();
     const controller = createController(container);

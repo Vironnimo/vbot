@@ -21,7 +21,7 @@ import {
 } from './chatState.support.js';
 
 describe('History reads', () => {
-  it('ignores a child page from before a newer history snapshot', async () => {
+  it('ignores a child page once its Run gap is gone', async () => {
     const pending = deferred();
     const { chatState, controller } = setupController({
       operationOverrides: {
@@ -47,6 +47,7 @@ describe('History reads', () => {
     pending.resolve({
       run_id: 'one',
       history_generation: 'g',
+      before: 'fresh',
       items: [outputItem('Stale', { id: 'stale', position: 4 })],
     });
     expect(await reading).toBe(false);

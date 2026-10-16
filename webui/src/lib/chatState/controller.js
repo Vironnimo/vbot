@@ -171,6 +171,7 @@ export function createChatController({
   const historyLoadVersions = new Map();
   const queueSyncVersions = new Map();
   const historyCache = new Map();
+  const runHistoryLoads = new Map();
 
   function retainHistory(session) {
     historyCache.delete(session);
@@ -656,14 +657,24 @@ export function createChatController({
     }
   }
 
-  async function loadRunHistory(sessionState, gap) {
-    if (!sessionState || sessionState.loadingRunHistory) return false;
+  // Loads the steps before one Run's history gap. Concurrent requests for the
+  // same gap share one read; different Runs load independently.
+  function loadRunHistory(sessionState, gap) {
+    if (!sessionState) return Promise.resolve(false);
+    const key = `${sessionState.key}\n${gap.run_id}\n${gap.before}`;
+    if (!runHistoryLoads.has(key)) {
+      runHistoryLoads.set(
+        key,
+        readRunHistory(sessionState, gap).finally(() =>
+          runHistoryLoads.delete(key),
+        ),
+      );
+    }
+    return runHistoryLoads.get(key);
+  }
+
+  async function readRunHistory(sessionState, gap) {
     const generation = sessionState.historyGeneration;
-    const version = sessionState.historySnapshotVersion;
-    const isCurrentSnapshot = () =>
-      sessionState.historyGeneration === generation &&
-      sessionState.historySnapshotVersion === version;
-    sessionState.loadingRunHistory = true;
     try {
       const page = await operations.loadTimelineChildren({
         agent_id: sessionState.agentId,
@@ -673,15 +684,15 @@ export function createChatController({
         history_generation: generation,
         limit: 100,
       });
-      const merged =
-        isCurrentSnapshot() && mergeRunChildPage(sessionState, page);
+      // Newer snapshots may have arrived meanwhile; the page still applies
+      // while the Run shows the same gap.
+      const merged = mergeRunChildPage(sessionState, page);
       if (merged) retainHistory(sessionState);
       return merged;
     } catch (error) {
-      if (isCurrentSnapshot()) sessionState.actionError = errorMessage(error);
+      if (sessionState.historyGeneration === generation)
+        sessionState.actionError = errorMessage(error);
       return false;
-    } finally {
-      sessionState.loadingRunHistory = false;
     }
   }
 

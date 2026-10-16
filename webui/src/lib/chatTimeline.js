@@ -68,7 +68,10 @@ export function mergeRunChildPage(session, page) {
   const run = session.timelineItems.find(
     (item) => item.type === 'assistant_run' && runIdOf(item) === page.run_id,
   );
-  if (!run) return false;
+  // The page continues exactly the gap it was read for; once the Run was
+  // reset or extended past it, merging would leave a hole or duplicates.
+  const gap = run?.items.find((child) => child.type === 'history_gap');
+  if (!gap || gap.before !== page.before) return false;
   const children = new Map(
     run.items
       .filter((child) => child.type !== 'history_gap')

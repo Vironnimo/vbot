@@ -246,6 +246,8 @@
         },
         shouldLoadOlder: () => shouldLoadOlderHistory(),
         requestLoadOlder: () => onLoadOlder?.(),
+        requestLoadRunHistory: ({ runId, before }) =>
+          onLoadRunHistory?.({ run_id: runId, before }),
       });
       controllerReady = true;
       windowVersion += 1;
@@ -629,7 +631,6 @@
         {onNavigateToSubAgent}
         onSubAgentContextMenu={otherArea ? openSubAgentMenu : null}
         {onCancelToolCall}
-        {onLoadRunHistory}
         {onBackgroundToolCall}
         backgroundToolCallIds={currentRun?.runId === item.runId &&
         currentRun.status === 'running'

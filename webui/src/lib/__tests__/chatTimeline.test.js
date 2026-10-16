@@ -51,6 +51,7 @@ describe('server Timeline projection', () => {
       mergeRunChildPage(session, {
         run_id: 'one',
         history_generation: 'g',
+        before: 'step-8',
         items: [gap(6), child(6), child(7)],
       }),
     ).toBe(true);

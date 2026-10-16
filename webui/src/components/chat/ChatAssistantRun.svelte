@@ -66,7 +66,6 @@
     // on a Sub-Agent link; null keeps the native menu.
     onSubAgentContextMenu = null,
     onCancelToolCall = () => {},
-    onLoadRunHistory = async () => false,
     onBackgroundToolCall = () => {},
     backgroundToolCallIds = [],
     onCancelSubAgent = () => {},
@@ -284,17 +283,14 @@
   <div class="msg-content assistant-run-content">
     {#snippet runChild(child)}
       {#if child.type === 'history_gap'}
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={viewState.isPending(actionKey('history', child.run_id))}
-          onClick={() =>
-            viewState.runPending(actionKey('history', child.run_id), () =>
-              onLoadRunHistory(child),
-            )}
-        >
-          {t('chat.historyEarlierSteps')}
-        </Button>
+        <!-- The timeline's scroll controller loads the omitted steps once
+             this marker comes near the visible area. -->
+        <div
+          class="run-history-gap"
+          aria-hidden="true"
+          data-history-gap={child.run_id}
+          data-history-gap-before={child.before}
+        ></div>
       {:else if child.type === 'reasoning'}
         {@const working = isRunChildWorking(item, child)}
         <ChatReasoning

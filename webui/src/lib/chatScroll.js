@@ -21,6 +21,12 @@
 // `rendered()` after every update. Rows mounted above the reading position
 // correct it once through the same content anchor, before the browser paints.
 // Without layout (hidden, or a DOM without layout) every row stays mounted.
+//
+// A Run loaded only with its latest steps marks the omitted steps with a
+// history gap element (`data-history-gap` = Run id, `data-history-gap-before`
+// = cursor). The controller loads them, without any user action, once the gap
+// comes within one viewport height of the visible area; the loaded steps grow
+// above the reading position like older History.
 
 import { trackInteractionHolds } from './chatScroll/interactionHolds.js';
 import { createLayoutModel } from './chatScroll/layoutModel.js';
@@ -65,6 +71,9 @@ export function createChatScrollController(
     onWindowChanged = () => {},
     shouldLoadOlder = () => false,
     requestLoadOlder = async () => false,
+    // Loads the earlier steps of one Run: `{ runId, before }` from its history
+    // gap; resolves true once they were merged.
+    requestLoadRunHistory = async () => false,
   } = {},
 ) {
   // sessionId -> { pinned, anchorId, anchorDelta, fallbackTop,
@@ -81,6 +90,12 @@ export function createChatScrollController(
   // Each Session owns its pending page; a slow request must not block a
   // different Session after navigation.
   const loadingOlderSessions = new Set();
+  // Run history gaps of the current Session requested so far, by Run id and
+  // cursor: 'pending', 'loaded' until the merged steps rendered, or
+  // 'failed' until real user motion, so a failing load does not retry on
+  // every render. A gap that shows again after it loaded (a reset History)
+  // loads again.
+  let runGapLoads = new Map();
   let contentSyncQueued = false;
   let contentSyncFrame = null;
 
@@ -228,6 +243,8 @@ export function createChatScrollController(
       captureAnchor(viewport);
       maybeRequestLoadOlder();
     }
+    forgetRunGapLoads('failed');
+    maybeLoadRunGaps();
     onViewChanged();
   }
 
@@ -269,6 +286,57 @@ export function createChatScrollController(
       });
   }
 
+  function maybeLoadRunGaps() {
+    if (destroyed || restorePending || !hasLayout()) {
+      return;
+    }
+    const elements = Array.from(
+      container.querySelectorAll('[data-history-gap]') ?? [],
+    );
+    if (elements.length === 0) {
+      return;
+    }
+    const containerRect = container.getBoundingClientRect();
+    const reach = container.clientHeight;
+    const top = containerRect.top - reach;
+    const bottom =
+      (containerRect.bottom ?? containerRect.top + container.offsetHeight) +
+      reach;
+    for (const element of elements) {
+      const runId = element.dataset?.historyGap;
+      const before = element.dataset?.historyGapBefore ?? '';
+      const key = `${runId}\n${before}`;
+      if (!runId || runGapLoads.has(key) || !elementHasLayout(element)) {
+        continue;
+      }
+      const rect = element.getBoundingClientRect();
+      if (rect.bottom < top || rect.top > bottom) {
+        continue;
+      }
+      const loads = runGapLoads;
+      loads.set(key, 'pending');
+      Promise.resolve(requestLoadRunHistory({ runId, before }))
+        .catch(() => false)
+        .then((loaded) => {
+          if (destroyed || loads !== runGapLoads) {
+            return;
+          }
+          loads.set(key, loaded ? 'loaded' : 'failed');
+          // The merged steps render next; `rendered()` checks the gap they
+          // leave behind.
+          queueContentChanged();
+        });
+    }
+  }
+
+  function forgetRunGapLoads(outcome) {
+    for (const [key, state] of runGapLoads) {
+      if (state === outcome) {
+        runGapLoads.delete(key);
+      }
+    }
+  }
+
   function timelineItemElements() {
     return Array.from(
       container.querySelectorAll('[data-timeline-item-id]') ?? [],
@@ -290,13 +358,19 @@ export function createChatScrollController(
     const containerRect = container.getBoundingClientRect();
     const containerBottom =
       containerRect.bottom ?? containerRect.top + container.offsetHeight;
-    const anchor = timelineItemElements().find((element) => {
+    const visible = timelineItemElements().filter((element) => {
       if (!elementHasLayout(element)) {
         return false;
       }
       const rect = element.getBoundingClientRect();
       return rect.bottom > containerRect.top && rect.top < containerBottom;
     });
+    // A row holding a Run history gap is where that Run's earlier steps
+    // arrive; anchoring to it would push the content being read down.
+    const anchor =
+      visible.find(
+        (element) => !element.querySelector?.('[data-history-gap]'),
+      ) ?? visible[0];
     if (!anchor) {
       viewport.anchorId = '';
       viewport.anchorDelta = 0;
@@ -348,6 +422,7 @@ export function createChatScrollController(
   function contentChanged() {
     settlePosition();
     syncWindow();
+    maybeLoadRunGaps();
   }
 
   // Re-applies the viewport's mode to the current content: a pending restore,
@@ -416,6 +491,7 @@ export function createChatScrollController(
     layout = layoutFor(currentSessionId);
     interactionHolds?.releaseAll();
     const viewport = viewportFor(currentSessionId);
+    runGapLoads = new Map();
     restorePending = true;
     restoreToPinned = viewport.pinned;
     pendingUserScrollTop = null;
@@ -607,7 +683,14 @@ export function createChatScrollController(
   // The renderer applied the latest plan. Measures rows that just mounted,
   // corrects the position before the browser paints when mounted rows or
   // spacers changed, and extends the window if the viewport is not covered.
+  // Then loads Run history gaps that came near the settled position.
   function rendered() {
+    applyRenderedLayout();
+    forgetRunGapLoads('loaded');
+    maybeLoadRunGaps();
+  }
+
+  function applyRenderedLayout() {
     const layoutReady = hasLayout();
     observeRows(layoutReady);
     if (!virtualActive) {
@@ -811,6 +894,7 @@ export function createChatScrollController(
     interactionHolds?.destroy();
     observedRows.clear();
     loadingOlderSessions.clear();
+    runGapLoads.clear();
     viewports.clear();
     layouts.clear();
   }
