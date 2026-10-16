@@ -158,11 +158,12 @@ async def test_a_key_after_text_follows_at_the_latest_half_the_quiet_period_late
 
 
 @pytest.mark.asyncio
-async def test_a_program_asking_for_focus_reports_is_told_its_user_is_away(
+async def test_a_program_asking_for_focus_reports_has_it_only_while_the_agent_types(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
-    """Programs that report focus notify only a user who is away. The terminal
-    answers that it has no focus, and again after each submitted input."""
+    """Programs that report focus notify only a user who is away, and some drop
+    keys without it. The terminal answers that it has no focus, gives it before
+    the Agent's input and takes it once the Agent has the reply."""
     manager, factory = terminal_manager
     started = await spawn(manager, tmp_path)
     adapter = factory.adapters[0]
@@ -182,7 +183,21 @@ async def test_a_program_asking_for_focus_reports_is_told_its_user_is_away(
 
     await send("go", "enter")
     await send("draft")
-    assert adapter.writes == ["\x1b[O", "go", "\r", "\x1b[O", "draft"]
+    await manager.release_focus(started.terminal_id, owner())
+    await eventually(lambda: len(adapter.writes) == 6)
+    # Released once, the focus is not taken again.
+    await manager.release_focus(started.terminal_id, owner())
+    await send("more")
+    assert adapter.writes == [
+        "\x1b[O",
+        "\x1b[I",
+        "go",
+        "\r",
+        "draft",
+        "\x1b[O",
+        "\x1b[I",
+        "more",
+    ]
 
 
 @pytest.mark.asyncio

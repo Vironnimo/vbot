@@ -28,6 +28,8 @@ resumed on its own can pause again without being done. Output after a ``quiet``
 end, before that cycle's fallback was due, can resume the input/start-up work.
 Each resumption must show fresh work: sustained output, CPU use or a process
 the cycle started. Isolated redraw frames (a clock, ``top``) are not enough.
+Output that changes nothing the terminal shows, or that returns to the view
+shown before within a second (a blinking cursor), is no work.
 There is no limit on the number of evidenced resumptions. Only an idle
 boundary wakes the attached Agent, and only with a screen the Agent has not
 seen. Every output or input also starts a new generation of the quiet timer,
@@ -37,7 +39,7 @@ Phases (``state`` shows ``repainting`` as ``ready``)::
 
     ready --output/input--> working --idle--> ready
       |
-    resize, then output inside the repaint window
+    resize or focus loss, then output inside the repaint window
       v
     repainting --quiet--> ready
 
@@ -53,6 +55,7 @@ from typing import Literal, NamedTuple
 
 from ._terminal_state import TerminalState
 from .process_tree import IDLE_CPU_SECONDS
+from .terminal_emulator import ViewChange
 
 _Phase = Literal["ready", "repainting", "working", "exited", "error"]
 _Origin = Literal["start", "input", "output"]
@@ -73,6 +76,9 @@ _OUTPUT_BURST_SHARE = 0.5
 # over the samples of the last second.
 _BUSY_CPU_SHARE = 0.2
 _BUSY_WINDOW_SECONDS = 1.0
+# A view that returns to the one before within this period toggles, as a
+# blinking cursor (about 0.5 s per phase) does, instead of showing work.
+_TOGGLE_SECONDS = 1.0
 # Clock readings that differ by less than this are the same moment.
 _EPSILON = 1e-6
 
@@ -150,9 +156,11 @@ class TerminalActivity:
         self._quiet_seconds = quiet_seconds
         self._idle_seconds = idle_seconds
         self._continuity_gap = quiet_seconds * _CONTINUITY_SHARE
-        # Set when a quiet terminal is resized: output before this monotonic
-        # time redraws known content for the new size and is not activity.
+        # Set when a quiet terminal is resized or loses the focus: output
+        # before this monotonic time redraws known content and is not activity.
         self._repaint_deadline: float | None = None
+        # When output last changed what the terminal shows.
+        self._view_changed_at: float | None = None
         self._cycle: _Cycle | None = None
         # Origin of the next cycle that output opens: the program's start-up first.
         self._next_origin: _Origin = "start"
@@ -193,11 +201,27 @@ class TerminalActivity:
         attached: bool,
         delivery_pending: bool,
         signals: Iterable[str] = (),
+        view: ViewChange = "new",
     ) -> OutputEffect:
-        """Program output arrived, with the *signals* it declared."""
+        """Program output arrived, with the *signals* it declared and the
+        *view* change it made. Output that declared nothing shows no work when
+        it changed nothing the terminal shows, or when it returned to the view
+        shown before, at most the toggle period after it left it: a blinking
+        cursor or indicator."""
         signals = tuple(signals)
         if self.finished:
             return OutputEffect(False, None, False)
+        toggled = False
+        if view != "same":
+            toggled = (
+                view == "returned"
+                and self._view_changed_at is not None
+                and now - self._view_changed_at <= _TOGGLE_SECONDS + _EPSILON
+            )
+            self._view_changed_at = now
+        if not signals and (view == "same" or toggled):
+            # It can still show another screen than the one last seen.
+            return OutputEffect(True, None, False)
         if not signals and self._repaint_deadline is not None and now < self._repaint_deadline:
             self._phase = "repainting"
             return OutputEffect(False, self._restart(notify=False, supersede=False), False)
@@ -241,8 +265,9 @@ class TerminalActivity:
         self._open("input", now).baseline = running
         return self._restart(notify=notify, supersede=delivery_pending), changed
 
-    def resize(self, now: float) -> None:
-        """The PTY changed size. A quiet program answers by redrawing what it showed."""
+    def expect_redraw(self, now: float) -> None:
+        """The PTY changed size, or the program lost the focus. A quiet program
+        answers by redrawing what it showed."""
         if self._phase in {"ready", "repainting"}:
             self._repaint_deadline = now + self._repaint_window
 

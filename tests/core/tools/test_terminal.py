@@ -67,6 +67,8 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
         "text",
         "key",
         "data",
+        "columns",
+        "rows",
         "lines",
         "pattern",
         "timeout",
@@ -77,11 +79,8 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
         "start_line",
         "expected_screen_revision",
         "after_revision",
-        "columns",
-        "rows",
     }
     assert properties["action"]["enum"] == list(TERMINAL_ACTIONS)
-    assert "resize" not in TERMINAL_ACTIONS
     assert (properties["lines"]["default"], properties["timeout"]["default"]) == (30, 60)
     # The cap is stated in the description and applied with a note, not refused.
     assert "maximum" not in properties["timeout"]
@@ -99,7 +98,7 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
     )
     # No hidden form leaks into the advertised text.
     advertised = json.dumps(TERMINAL_TOOL_PARAMETERS) + TERMINAL_TOOL_DESCRIPTION
-    for hidden in ("project:", "timeout_ms", "start_line", "screen_revision", "resize"):
+    for hidden in ("project:", "timeout_ms", "start_line", "screen_revision"):
         assert hidden not in advertised
 
     registry = ToolRegistry()
@@ -110,6 +109,11 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
     assert tool.open_input_schema is True
     assert tool.display.summary({"action": "start", "command": "codex"}) == "start · codex"
     assert tool.display.summary({"action": "start"}) == "start · default shell"
+    assert tool.display.parts_builder is not None
+    resize_parts = tool.display.parts_builder(
+        {"action": "resize", "terminal_id": "terminal-a", "columns": 80, "rows": 24}
+    )
+    assert [part.value for part in resize_parts] == ["resize", "terminal-a", "80×24"]
     list_display = registry.display_for_call(
         TERMINAL_TOOL_NAME,
         {"action": "list"},
@@ -851,7 +855,7 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     taken = await run({"action": "wait", "timeout": 0}, other_context)
     assert taken["error"]["message"] == (
         f"{terminal_id} is attached to another Session; only that Session can wait for it, type "
-        f"into it or kill it. Nothing was done. To read its screen, call terminal "
+        f"into it, resize it or kill it. Nothing was done. To read its screen, call terminal "
         f"{call_text('status')}."
     )
 

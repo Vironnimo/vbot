@@ -14,7 +14,7 @@ import re
 import unicodedata
 from collections import deque
 from collections.abc import Callable, Generator, Mapping
-from typing import Any, NamedTuple, cast, override
+from typing import Any, Literal, NamedTuple, cast, override
 
 import pyte
 from pyte import charsets, graphics
@@ -25,7 +25,9 @@ _ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
 _BRACKETED_PASTE_MODE = 2004
 _FOCUS_REPORTING_MODE = 1004
 _REVERSE_SCREEN_MODE = 5
-# The report that the terminal lost the focus: vBot's terminals never have it.
+# Focus reports: a terminal has the focus only while Agent input is under way,
+# until the Agent has its reply.
+FOCUS_IN_REPORT = "\x1b[I"
 FOCUS_OUT_REPORT = "\x1b[O"
 # DECCKM: cursor keys send ESC O instead of CSI while it is set.
 _APPLICATION_CURSOR_MODE = 1
@@ -134,6 +136,9 @@ class _Cell(NamedTuple):
     conceal: bool = False
 
 
+ViewChange = Literal["same", "returned", "new"]
+
+
 class EmulatorUpdate(NamedTuple):
     """What one fed chunk changed that the Terminal Session acts on."""
 
@@ -158,6 +163,10 @@ class EmulatorUpdate(NamedTuple):
     skipped_error: str = ""
     # Cursor keys send their application form (DECCKM, CSI ? 1 h).
     application_cursor: bool = False
+    # How the chunk changed what the terminal shows (its cells, cursor,
+    # scrolled lines and title): not at all, back to the view shown right
+    # before the current one (as a blinking cursor does), or to a new view.
+    view_change: ViewChange = "new"
 
 
 class ScreenObservation(NamedTuple):
@@ -1232,6 +1241,8 @@ class TerminalEmulator:
         )
         self._responses: list[str] = []
         self._signals = SignalScanner()
+        # Keys of the view shown now and of the one shown before it.
+        self._shown_view: tuple[int | None, int | None] = (None, None)
 
     def feed(self, text: str) -> EmulatorUpdate:
         """Render program output and report what it changed.
@@ -1255,6 +1266,13 @@ class TerminalEmulator:
             self._responses.append(FOCUS_OUT_REPORT)
         responses = "".join(self._responses)
         self._responses.clear()
+        view = self._view_key()
+        shown, before = self._shown_view
+        view_change: ViewChange = (
+            "same" if view == shown else "returned" if view == before else "new"
+        )
+        if view != shown:
+            self._shown_view = (view, shown)
         return EmulatorUpdate(
             responses=responses,
             title=self.title,
@@ -1267,6 +1285,26 @@ class TerminalEmulator:
             skipped=self._guarded.skipped,
             skipped_error=self._guarded.skipped_error,
             application_cursor=_APPLICATION_CURSOR_MODE in self._screen.private_modes,
+            view_change=view_change,
+        )
+
+    def _view_key(self) -> int:
+        """Identify what the terminal shows; cheaper than ``_signature``, as
+        every chunk needs it. Equal views can differ in key (cells stored in
+        another order), never the other way round."""
+        screen = self._screen
+        buffer = screen.buffer
+        cursor = screen.cursor
+        return hash(
+            (
+                tuple(tuple(buffer[row].items()) for row in range(self.rows)),
+                cursor.x,
+                cursor.y,
+                cursor.hidden,
+                self._next_line,
+                screen.alternate_active,
+                self.title,
+            )
         )
 
     def resize(self, columns: int, rows: int) -> None:
