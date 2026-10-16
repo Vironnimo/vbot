@@ -677,7 +677,11 @@ def _period_bounds(value: Any, zone: _Zone) -> tuple[datetime | None, datetime |
 
 
 def _display_search_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
-    return (ToolDisplayPart("find", truncate="never", tooltip="none"),)
+    """Show the query the call searched for as the row's value."""
+    query = arguments.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return ()
+    return (ToolDisplayPart(query, truncate="never", tooltip="none"),)
 
 
 _HIT_KINDS = {"user": "User", "assistant": "Assistant"}

@@ -9,14 +9,14 @@ from textual.widgets import TextArea
 
 from cli.tui.dialogs import PathDialog, Picker, TextDialog
 from cli.tui.mentions import format_mention, open_quoted_mention
-from cli.tui.rendering import file_links, flatten, item_text
+from cli.tui.rendering import file_links, flatten, item_text, one_line
 
 if TYPE_CHECKING:
     from cli.tui.app import ConversationApp
 
 
 async def complete(app: ConversationApp, *, commands: bool = False) -> None:
-    view = app.conversation
+    view = app._require_conversation("Completion")
     if view is None:
         return
     key = view.key
@@ -58,7 +58,7 @@ async def complete(app: ConversationApp, *, commands: bool = False) -> None:
 
 
 async def files(app: ConversationApp) -> None:
-    view = app.conversation
+    view = app._require_conversation("Files")
     if view is None:
         return
     choices = [
@@ -181,9 +181,7 @@ async def find(app: ConversationApp) -> None:
     view = app.conversation
     if view:
         choices = [
-            (item_text(item).replace("\n", " "), item)
-            for item in flatten(view.items)
-            if item_text(item)
+            (one_line(item_text(item)), item) for item in flatten(view.items) if item_text(item)
         ]
         item = await app.push_screen_wait(
             Picker("Find in loaded history · Ctrl+O loads earlier pages", choices)
@@ -233,12 +231,17 @@ async def copy(app: ConversationApp) -> None:
 
 
 async def input_history(app: ConversationApp) -> None:
+    def where(value: dict[str, Any]) -> str:
+        """Name the conversation a draft belongs to; it need not be the current one."""
+        session = value.get("session") or "new conversation"
+        return f"{value.get('agent', '')} · {session}"
+
     choices: list[tuple[str, Any]] = [
-        ("Unsent draft · " + value["text"].replace("\n", " "), value)
+        (f"Unsent draft · {where(value)} · {one_line(value['text'], 60)}", value)
         for value in reversed(app.saved_drafts)
         if value.get("operation") != "chat.edit"
     ]
-    choices.extend((text.replace("\n", " "), text) for text in reversed(app.history))
+    choices.extend((one_line(text), text) for text in reversed(app.history))
     selected = await app.push_screen_wait(
         Picker(
             "Input history",
@@ -268,26 +271,27 @@ async def help(app: ConversationApp) -> None:
     await app.push_screen_wait(
         TextDialog(
             "vBot TUI · keyboard controls",
-            "Ctrl+S / Alt+Enter: send; Enter: new line\n"
-            "Ctrl+P / F2: Sessions; Ctrl+N / F3: new conversation\n"
-            "F4: Model, thinking effort, context and Usage\n"
-            "F5: Sub-Agents and background commands\n"
-            "F6: Queue, edit, remove and Steer\n"
-            "F7: Extension requests; F8: local uploads, server files and downloads\n"
-            "F9: Commands and Skills; Ctrl+Space: completion\n"
-            "Ctrl+X: stop current Run; F10: stop all background work\n"
-            "F11: Session actions, Tools and saved drafts; F12: latest output\n"
-            "Ctrl+B: previous / Parent conversation\n"
-            "Ctrl+O: load older history; Ctrl+F: find in loaded history\n"
-            "Ctrl+G: copy or save loaded conversation; Alt+Up: input history\n"
-            "Ctrl+R: refresh/reconnect; Ctrl+Q: detach\n"
+            "Ctrl+S / Alt+Enter: send · Enter: new line\n"
+            "F2: Sessions · F3: new conversation · F4: Model and effort\n"
+            "F8: local uploads, server files and downloads\n"
+            "Ctrl+X: stop the current Run · F10: stop all background work\n"
+            "Ctrl+K: command palette, every action by name\n"
+            "F1: this list\n"
             "\n"
-            "Tab moves focus. Tool and Reasoning rows expand with Enter/Space.\n"
-            "Closing this TUI leaves the server's Runs working.\n"
+            "F5: activity, Sub-Agents and background commands\n"
+            "F6: Queue, edit, remove and Steer · F7: Extension requests\n"
+            "F9: Commands and Skills · Ctrl+Space: completion\n"
+            "F11: Session actions, Tools and saved drafts · F12: latest output\n"
+            "Ctrl+B: parent conversation · Ctrl+O: older history\n"
+            "Ctrl+F: find in loaded history · Ctrl+G: copy or save the conversation\n"
+            "Alt+Up: input history · Ctrl+R: reconnect · Ctrl+Q: detach\n"
+            "\n"
+            "The header shows Model, thinking effort and context; the row under the\n"
+            "conversation shows the newest message, so nothing repeats as a button.\n"
+            "Tab moves focus. A Tool or Reasoning row expands with Enter or Space.\n"
             "@file paths are server paths. Local files are uploaded through F8.\n"
-            "Edit server mentions in the composer. Drafts are saved locally per server.\n"
-            "After a lost send response, the draft remains marked uncertain; "
-            "no resend is automatic.",
+            "Drafts are saved locally per server. After a lost send response the draft\n"
+            "stays marked uncertain, and no resend is automatic.",
             read_only=True,
         )
     )

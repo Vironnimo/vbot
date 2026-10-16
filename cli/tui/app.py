@@ -7,6 +7,7 @@ import copy
 import json
 import uuid
 from collections.abc import Callable, Coroutine
+from time import monotonic
 from typing import Any, override
 from urllib.parse import quote
 
@@ -16,10 +17,11 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Markdown, Static, TextArea
+from textual.widgets import Footer, Markdown, Static, TextArea
 from textual.worker import Worker
 
 from cli.tui import composer
+from cli.tui.commands import ConversationCommands
 from cli.tui.dialogs import ExtensionDialog, Picker, TextDialog
 from cli.tui.drafts import (
     DraftStore,
@@ -29,6 +31,7 @@ from cli.tui.drafts import (
     saved_input_record,
 )
 from cli.tui.mentions import resolve_mentions, retained_mentions
+from cli.tui.models import effective_value
 from cli.tui.rendering import (
     TimelineEntry,
     content_text,
@@ -37,45 +40,66 @@ from cli.tui.rendering import (
     terminal_text,
 )
 from cli.tui.state import Conversation, JsonObject, TimelineGapError
+from cli.tui.theme import DEFAULT_THEME, THEMES, VBOT_DARK, VBOT_LIGHT
 from cli.tui.transport import ClientError, TerminalClient
 from core.utils.ids import new_id
 
 _sleep = asyncio.sleep
 
 
+def short_model(reference: str) -> str:
+    """`provider/model::connection` reads as the Model alone in the header."""
+    base = reference.partition("::")[0]
+    return base.rpartition("/")[2] or base
+
+
+def compact_tokens(value: int) -> str:
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}".removesuffix(".0") + "M"
+    if value >= 1_000:
+        return f"{value // 1_000}k"
+    return str(value)
+
+
 class ConversationApp(App[int]):
     """Keep navigation and drafts local; all conversation decisions use server APIs."""
 
     TITLE = "vBot"
+    # One header row, the transcript, one status row, the composer and the footer.
+    # Buttons are not repeated here: every action the footer does not show stays
+    # reachable by name through Ctrl+K and is documented by F1.
     CSS = """
     Screen { background: $background; }
-    #identity { height: auto; min-height: 2; padding: 0 1; background: $panel; color: $text; }
-    #toolbar { height: 3; padding: 0 1; }
-    #toolbar Button { min-width: 9; width: auto; margin-right: 1; }
-    #timeline { height: 1fr; padding: 1; scrollbar-gutter: stable; }
-    #empty { color: $text-muted; margin: 2 4; }
-    #status, #draft-info { height: auto; min-height: 1; padding: 0 1; color: $text-muted; }
-    #draft-info { color: $warning; }
-    #composer { height: 6; max-height: 14; border: round $accent; margin: 0 1; }
-    #sendbar { height: 3; padding: 0 1; }
-    #sendbar Button { margin-right: 1; min-width: 10; }
-    #sendbar Static { width: 1fr; padding: 1 0; color: $text-muted; }
+    #header { height: 1; padding: 0 1; background: $panel; }
+    #header-title { width: 1fr; height: 1; color: $foreground; }
+    #header-context { width: auto; height: 1; color: $text-muted; }
+    #timeline { height: 1fr; padding: 0 1; scrollbar-gutter: stable; }
+    #empty { color: $text-muted; margin: 1 2; }
+    #status { min-height: 1; height: auto; max-height: 2; padding: 0 1; color: $text-muted; }
+    #status.alert { color: $warning; }
+    #status.error { color: $error; }
+    #draft-info { height: auto; padding: 0 1; color: $warning; }
+    #composer { height: 3; max-height: 10; margin: 0 1; border: round $panel; }
+    #composer:focus { border: round $accent; }
     """
     BINDINGS = [
         Binding("ctrl+s,alt+enter", "send", "Send", priority=True),
-        Binding("ctrl+p,f2", "sessions", "Sessions", priority=True),
-        Binding("ctrl+n,f3", "new", "New", priority=True),
+        Binding("f2", "sessions", "Sessions", priority=True),
+        Binding("ctrl+p", "sessions", "Sessions", show=False, priority=True),
+        Binding("f3", "new", "New", priority=True),
+        Binding("ctrl+n", "new", "New", show=False, priority=True),
         Binding("f4", "model", "Model", priority=True),
-        Binding("f5", "activity", "Activity", priority=True),
-        Binding("f6", "queue", "Queue", priority=True),
-        Binding("f7", "requests", "Requests", priority=True),
-        Binding("f8", "files", "Files", priority=True),
-        Binding("f9", "commands", "Commands", priority=True),
-        Binding("ctrl+x", "stop", "Stop Run", priority=True),
-        Binding("f10", "stop_all", "Stop all", priority=True),
-        Binding("f11", "conversation_actions", "Actions", priority=True),
+        Binding("f5", "activity", "Activity", show=False, priority=True),
+        Binding("f6", "queue", "Queue", show=False, priority=True),
+        Binding("f7", "requests", "Requests", show=False, priority=True),
+        Binding("f8", "files", "Files", show=False, priority=True),
+        Binding("f9", "commands", "Commands", show=False, priority=True),
+        Binding("ctrl+x", "stop", "Stop", priority=True),
+        Binding("f10", "stop_all", "Stop all", show=False, priority=True),
+        Binding("f11", "conversation_actions", "Actions", show=False, priority=True),
         Binding("f12", "latest", "Latest", show=False, priority=True),
         Binding("ctrl+q", "detach", "Detach", priority=True),
+        Binding("ctrl+k", "command_palette", "Commands", show=False, priority=True),
         Binding("ctrl+r", "refresh", "Reconnect", show=False, priority=True),
         Binding("ctrl+o", "older", "Older history", show=False, priority=True),
         Binding("ctrl+b", "previous_conversation", "Parent / back", show=False, priority=True),
@@ -83,8 +107,12 @@ class ConversationApp(App[int]):
         Binding("ctrl+g", "copy", "Copy / export", show=False, priority=True),
         Binding("ctrl+space", "complete", "Complete", show=False, priority=True),
         Binding("alt+up", "input_history", "Input history", show=False, priority=True),
-        Binding("f1", "help", "Help", show=False),
+        Binding("f1", "help", "Help"),
     ]
+    # The footer labels the docked palette key by this name, so it must match the
+    # binding above; Textual's default (ctrl+p) belongs to Sessions here.
+    COMMAND_PALETTE_BINDING = "ctrl+k"
+    COMMANDS = App.COMMANDS | {ConversationCommands}
 
     def __init__(
         self,
@@ -97,6 +125,9 @@ class ConversationApp(App[int]):
         restored_drafts: dict[str, JsonObject] | None = None,
     ) -> None:
         super().__init__()
+        for theme in THEMES:
+            self.register_theme(theme)
+        self.theme = DEFAULT_THEME
         self.client = client
         self.initial_agent = agent_id
         self.initial_session = session_id
@@ -120,7 +151,9 @@ class ConversationApp(App[int]):
         self.refresh_pending = False
         self.requests: list[JsonObject] = []
         self.queue_items: list[JsonObject] = []
-        self.last_notice = "Connecting…"
+        self.last_notice = ""
+        self.notice_level = "info"
+        self.notice_expires = 0.0
         self._render_lock = asyncio.Lock()
         self.draft_store = draft_store
         self._draft_lock = asyncio.Lock()
@@ -258,40 +291,24 @@ class ConversationApp(App[int]):
 
     @override
     def compose(self) -> ComposeResult:
-        yield Static(f"vBot · {self.client.url}", id="identity", markup=False)
-        with Horizontal(id="toolbar"):
-            for button_id, label in [
-                ("sessions", "Sessions"),
-                ("new", "New"),
-                ("model", "Model"),
-                ("activity", "Activity"),
-                ("queue", "Queue"),
-                ("requests", "Requests"),
-                ("files", "Files"),
-            ]:
-                yield Button(label, id=button_id)
+        with Horizontal(id="header"):
+            yield Static("", id="header-title", markup=False)
+            yield Static("", id="header-context", markup=False)
         with VerticalScroll(id="timeline"):
             yield Static(
                 "Choose an Agent or resume a Session.\nF1 shows the keyboard controls.",
                 id="empty",
                 markup=False,
             )
-        yield Static("Connecting…", id="status", markup=False)
+        yield Static("", id="status", markup=False)
         yield Static("", id="draft-info", markup=False)
-        yield TextArea(
-            placeholder="Write a message · Enter inserts a line · Ctrl+S sends", id="composer"
-        )
-        with Horizontal(id="sendbar"):
-            yield Button("Send", id="send", variant="primary")
-            yield Button("Stop Run", id="stop")
-            yield Button("Stop all", id="stop-all", variant="error")
-            yield Static(
-                "Ctrl+Space completes /commands, Skills and @server files · Ctrl+Q detaches",
-                markup=False,
-            )
-        yield Footer()
+        yield TextArea(placeholder="Write a message…", id="composer")
+        yield Footer(compact=True)
 
     def on_mount(self) -> None:
+        editor = self.query_one("#composer", TextArea)
+        editor.border_title = "Message"
+        editor.border_subtitle = "Enter: new line · Ctrl+S: send"
         self.set_interval(0.08, self._render_if_dirty)
         self._start(self._events, group="events", exclusive=True)
         self._start(self._bootstrap)
@@ -545,9 +562,7 @@ class ConversationApp(App[int]):
         view.sequence, view.stream_run = candidate.sequence, candidate.stream_run
         view.next_before = candidate.next_before
         session = summary.get("session") or {}
-        view.title = (
-            session.get("title") or session.get("auto_title") or view.session or "Conversation"
-        )
+        view.title = session.get("title") or session.get("auto_title") or ""
         view.project = session.get("working_project_id")
         view.overrides = session.get("agent_overrides") or {}
         view.parent = session.get("subagent_parent") or view.parent
@@ -633,8 +648,6 @@ class ConversationApp(App[int]):
             try:
                 async for event in self.client.events():
                     self.connected = True
-                    if self.last_notice == "Connecting…":
-                        self.last_notice = "Ready"
                     delay = 0.5
                     kind = event.get("type", "")
                     if kind == "resource_changed":
@@ -873,74 +886,113 @@ class ConversationApp(App[int]):
         view = self.conversation
         if view is None:
             return
-        status = "connected" if self.connected else "connecting"
-        self.query_one("#identity", Static).update(
-            terminal_text(
-                f"{view.title} · {view.agent} · {view.project or 'Workspace'}\n"
-                f"{self.client.url} · {status}"
-            )
-        )
-        active = view.facts.get("active_run") or {}
-        usage = view.facts.get("session_usage") or {}
-        context = view.facts.get("context_usage") or {}
-        details = [self.last_notice]
-        if view.unread_output:
-            details.append("New output · F12 latest")
-        if active:
-            details.append(f"Run {active.get('status', 'working')}")
-        if view.overrides.get("model"):
-            details.append(str(view.overrides["model"]))
-        if view.overrides.get("thinking_effort"):
-            details.append(str(view.overrides["thinking_effort"]))
-        if context:
-            used = context.get("input_tokens", context.get("total_tokens", context.get("tokens")))
-            details.append(
-                f"Context {used:,}" if isinstance(used, int) else "Context available (F4)"
-            )
-            if context.get("context_window"):
-                details[-1] += f" / {context['context_window']:,}"
-        if usage:
-            details.append(
-                f"Usage {usage.get('input_tokens', 0):,} in · {usage.get('output_tokens', 0):,} out"
-            )
-        self.query_one("#status", Static).update(" · ".join(details))
-        draft = []
-        if view.uncertain:
-            draft.append(
-                "Send outcome unknown. F6 / Ctrl+R inspect; Send offers explicit recovery."
-            )
-        if view.parent:
-            draft.append(
-                "Sub-Agent Session: sending here directs its following answers to you. "
-                "Ctrl+B returns."
-            )
+        title = view.title or "Untitled conversation"
+        if view.project:
+            title = f"{title} · {view.project}"
+        self.query_one("#header-title", Static).update(terminal_text(f"{title} · {view.agent}"))
+        self.query_one("#header-context", Static).update(terminal_text(self._context_text(view)))
+        self._update_status(view)
+        draft: list[str] = []
         if view.attachments:
             draft.append(
                 "Local uploads: " + ", ".join(item["filename"] for item in view.attachments)
             )
         if view.mentions:
             draft.append("Server files: " + ", ".join(view.mentions))
-        self.query_one("#draft-info", Static).update(" · ".join(draft))
-        self.query_one("#queue", Button).label = f"Queue ({len(self.queue_items)})"
-        self.query_one("#requests", Button).label = f"Requests ({len(self.requests)})"
+        self.query_one("#draft-info", Static).update(terminal_text(" · ".join(draft)))
+
+    def _context_text(self, view: Conversation) -> str:
+        """The lasting settings and context load, so the status row stays transient."""
+        parts: list[str] = []
+        model = effective_value(self, view, "model")
+        if isinstance(model, str) and model:
+            parts.append(short_model(model))
+        effort = effective_value(self, view, "thinking_effort")
+        if isinstance(effort, str) and effort:
+            parts.append(effort)
+        context = view.facts.get("context_usage") or {}
+        used = context.get("input_tokens", context.get("total_tokens", context.get("tokens")))
+        window = context.get("context_window")
+        if isinstance(used, int):
+            usage = compact_tokens(used)
+            if isinstance(window, int):
+                usage += f"/{compact_tokens(window)}"
+            parts.append(usage)
+        return " · ".join(parts)
+
+    def _update_status(self, view: Conversation) -> None:
+        """One row carries the single most urgent message instead of every fact."""
+        message, level = self._status_message(view)
+        status = self.query_one("#status", Static)
+        status.update(terminal_text(message))
+        status.set_class(level == "alert", "alert")
+        status.set_class(level == "error", "error")
+
+    def _status_message(self, view: Conversation) -> tuple[str, str]:
+        if self.last_notice and monotonic() < self.notice_expires:
+            return self.last_notice, self.notice_level
+        if not self.connected:
+            return f"Connecting to {self.client.url}…", "alert"
+        if view.uncertain:
+            return (
+                "Send outcome unknown · Ctrl+R reloads the Session; Send offers recovery",
+                "alert",
+            )
+        if view.parent:
+            return "Sub-Agent Session · replies go to you · Ctrl+B returns to the parent", "info"
+        active = view.facts.get("active_run") or {}
+        if active:
+            return f"Run {active.get('status', 'working')} · Ctrl+X stops it", "info"
+        if view.unread_output:
+            return "New output · F12 jumps to the latest", "info"
+        if self.queue_items:
+            return f"{len(self.queue_items)} queued message(s) · F6", "info"
+        if self.requests:
+            return f"{len(self.requests)} Extension request(s) · F7", "info"
+        return "", "info"
 
     def _notice(self, message: str, *, error: bool = False) -> None:
+        """Show one message in one place: the status row, plus a toast when it failed."""
         message = terminal_text(message)
         self.last_notice = message
-        self.notify(
-            escape(message), severity="error" if error else "information", timeout=8 if error else 4
-        )
+        self.notice_level = "error" if error else "info"
+        delay = 10 if error else 6
+        self.notice_expires = monotonic() + delay
+        if error:
+            self.notify(escape(message), severity="error", timeout=delay)
+        self._header()
+        self.set_timer(delay, self._expire_notice)
+
+    def _expire_notice(self) -> None:
+        self.notice_expires = 0.0
         self._header()
 
-    @on(Button.Pressed)
-    def button_pressed(self, event: Button.Pressed) -> None:
-        name = (event.button.id or "").replace("-", "_")
-        action = getattr(self, f"action_{name}", None)
-        if action is not None:
-            action()
+    def _require_conversation(self, action: str) -> Conversation | None:
+        """Explain a key that cannot act yet instead of returning silently."""
+        view = self.conversation
+        if view is None or not view.available:
+            self._notice(
+                f"{action} needs an open conversation. Start one with F3 or pick one with F2."
+            )
+            return None
+        return view
+
+    def _require_session(self, action: str) -> Conversation | None:
+        """Like `_require_conversation`, for keys that need the stored Session."""
+        view = self._require_conversation(action)
+        if view is None:
+            return None
+        if not view.session:
+            self._notice(
+                f"{action} needs the Session a first message creates. "
+                "Send the draft, or press Ctrl+R to reload."
+            )
+            return None
+        return view
 
     @on(TextArea.Changed, "#composer")
     def draft_changed(self, event: TextArea.Changed) -> None:
+        self._grow_composer(event.text_area)
         if self.conversation:
             self.conversation.draft = event.text_area.text
             mentions = retained_mentions(self.conversation.draft, self.conversation.mentions)
@@ -948,6 +1000,12 @@ class ConversationApp(App[int]):
                 self.conversation.mentions = mentions
                 self._header()
             self._view_changed(self.conversation)
+
+    def _grow_composer(self, editor: TextArea) -> None:
+        """Follow the draft instead of keeping a fixed block of empty rows."""
+        wanted = max(3, min(10, editor.text.count("\n") + 3))
+        if editor.styles.height != wanted:
+            editor.styles.height = wanted
 
     @on(Markdown.LinkClicked)
     def link_clicked(self, event: Markdown.LinkClicked) -> None:
@@ -1025,6 +1083,7 @@ class ConversationApp(App[int]):
             self._notice("Earlier draft restored. Later draft is in input history (Alt+Up).")
             return
         if not text.strip() and not view.attachments:
+            self._notice("Nothing to send yet · write a message, or attach a file with F8.")
             return
         request = view.submission(text)
         if view.session is None:
@@ -1059,6 +1118,9 @@ class ConversationApp(App[int]):
             except (OSError, ValueError) as exc:
                 view.uncertain = False
                 view.uncertain_submission = None
+                # The composer is the authority; its change message may still be
+                # queued, so mirror it here before persisting the view's draft.
+                view.draft = text
                 self._view_changed(view)
                 self._notice(
                     f"The pending submission could not be saved: {exc}. Your message was not sent.",
@@ -1170,11 +1232,15 @@ class ConversationApp(App[int]):
                 for row in response.get("sessions", []):
                     active = "● " if row.get("has_active_run") else ""
                     unread = "• " if row.get("has_unread_completion") is True else ""
-                    title = row.get("title") or row.get("auto_title") or row["id"]
-                    label = (
-                        f"{active}{unread}{title} · {row['agent_address']} · "
-                        f"{row.get('working_project_id') or 'Workspace'}"
+                    title = (
+                        row.get("title")
+                        or row.get("auto_title")
+                        or f"Untitled · {str(row['id'])[:8]}"
                     )
+                    label = f"{active}{unread}{title} · {row['agent_address']}"
+                    project = row.get("working_project_id")
+                    if project:
+                        label += f" · {project}"
                     collected.append((label, row))
                 cursors[index] = response.get("next_cursor")
             first_page = False
@@ -1258,15 +1324,25 @@ class ConversationApp(App[int]):
     async def _model(self) -> None:
         from cli.tui.models import menu
 
+        # Model and effort are also draft settings, so this works before a Session
+        # exists; only a missing conversation makes the key meaningless.
+        if self._require_conversation("Model settings") is None:
+            return
         await menu(self)
+
+    def action_theme_dark(self) -> None:
+        self.theme = VBOT_DARK.name
+
+    def action_theme_light(self) -> None:
+        self.theme = VBOT_LIGHT.name
 
     @work(group="queue", exclusive=True, exit_on_error=False)
     async def action_queue(self) -> None:
         await self._guard(self._queue())
 
     async def _queue(self) -> None:
-        view = self.conversation
-        if view is None or not view.session or not view.available:
+        view = self._require_session("The Queue")
+        if view is None:
             return
         key = view.key
         response = await self.client.rpc("chat.queue_list", view.params())
@@ -1323,8 +1399,8 @@ class ConversationApp(App[int]):
         await self._guard(self._stop(True))
 
     async def _stop(self, all_work: bool) -> None:
-        view = self.conversation
-        if view is None or not view.session or not view.available:
+        view = self._require_session("Stopping work")
+        if view is None:
             return
         key = view.key
         if all_work:
@@ -1448,8 +1524,8 @@ class ConversationApp(App[int]):
         await self._guard(self._activity())
 
     async def _activity(self) -> None:
-        view = self.conversation
-        if not view or not view.session or not view.available:
+        view = self._require_session("Activity")
+        if view is None:
             return
         key = view.key
         work_state = await self.client.rpc("chat.work", view.params())

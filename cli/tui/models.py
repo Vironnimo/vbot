@@ -18,7 +18,7 @@ def _current(app: ConversationApp, view: Conversation, key: tuple) -> bool:
     return app.conversation is view and view.key == key and view.available
 
 
-def _configured_value(app: ConversationApp, view: Conversation, field: str) -> Any:
+def configured_value(app: ConversationApp, view: Conversation, field: str) -> Any:
     """Read the Agent/Team Agent's effective value from the loaded roster."""
     if "@" in view.agent:
         agent_id, _separator, project_id = view.agent.partition("@")
@@ -32,22 +32,22 @@ def _configured_value(app: ConversationApp, view: Conversation, field: str) -> A
     return value.get("value")
 
 
-def _effective_value(app: ConversationApp, view: Conversation, field: str) -> Any:
+def effective_value(app: ConversationApp, view: Conversation, field: str) -> Any:
     """Resolve a Session capture or draft override before its Agent setting."""
     if field == "thinking_effort" and view.overrides.get("thinking_effort_default") is True:
         return None
     if field in view.overrides and view.overrides[field] is not None:
         return view.overrides[field]
-    return _configured_value(app, view, field)
+    return configured_value(app, view, field)
 
 
 def _model_reference(app: ConversationApp, view: Conversation) -> str | None:
-    value = _effective_value(app, view, "model")
+    value = effective_value(app, view, "model")
     return value if isinstance(value, str) and value else None
 
 
 def _current_effort_label(app: ConversationApp, view: Conversation) -> str:
-    value = _effective_value(app, view, "thinking_effort")
+    value = effective_value(app, view, "thinking_effort")
     return value if isinstance(value, str) and value else "Provider default"
 
 
@@ -192,7 +192,7 @@ async def menu(app: ConversationApp) -> None:
                     return
                 model = response.get("model")
                 if isinstance(model, dict):
-                    current_effort = _effective_value(app, view, "thinking_effort")
+                    current_effort = effective_value(app, view, "thinking_effort")
                     choices = _reasoning_choices(
                         model,
                         current_model,
