@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import textwrap
+from datetime import UTC, datetime
 from typing import Any
 
 from core.utils.ids import is_safe_id
@@ -151,7 +152,7 @@ def item_text(item: JsonObject) -> str:
             details.append(f"Context: {before:,} → {after:,} tokens")
         duration_ms = item.get("durationMs", usage.get("compaction_duration_ms"))
         if isinstance(duration_ms, (int, float)) and duration_ms >= 0:
-            details.append(f"Duration: {duration_ms / 1000:.1f}s")
+            details.append(f"Duration: {duration_text(duration_ms)}")
         return terminal_text("\n".join([descriptions[status], *details]))
     return content_text(item.get("content", item.get("text", "")))
 
@@ -188,6 +189,53 @@ def tool_title(item: JsonObject) -> str:
     if status not in {"success", "completed", ""}:
         title += f" · {status}"
     return textwrap.shorten(title, width=_TOOL_TITLE_WIDTH, placeholder="…")
+
+
+def duration_text(milliseconds: float) -> str:
+    """A duration as the WebUI writes it: 0.4s, 12s, 1m 5s, 1h 2m."""
+    seconds = max(0.0, milliseconds / 1000)
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    if seconds < 60:
+        return f"{round(seconds)}s"
+    hours, rest = divmod(round(seconds), 3600)
+    minutes, seconds_left = divmod(rest, 60)
+    return f"{hours}h {minutes}m" if hours else f"{minutes}m {seconds_left}s"
+
+
+def _instant(value: Any) -> datetime | None:
+    try:
+        instant = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return instant if instant.tzinfo else instant.replace(tzinfo=UTC)
+
+
+def tool_time(item: JsonObject, now: datetime | None = None) -> str:
+    """How long a Tool call ran, or has run so far; empty while it is prepared."""
+    status = str(item.get("status") or "")
+    timing = item.get("timing") or {}
+    if status == "running":
+        started = _instant(
+            timing.get("started_at")
+            or (item.get("startedEvent") or {}).get("timestamp")
+            or item.get("timestamp")
+        )
+        if started is None:
+            return ""
+        elapsed = ((now or datetime.now(UTC)) - started).total_seconds() * 1000
+        return duration_text(elapsed)
+    if status in {"preparing", "pending", "queued", "interrupted"}:
+        return ""
+    duration = item.get("durationMs")
+    if not isinstance(duration, (int, float)):
+        duration = timing.get("duration_ms")
+    if not isinstance(duration, (int, float)):
+        started, ended = _instant(timing.get("started_at")), _instant(timing.get("completed_at"))
+        if started is None or ended is None or ended < started:
+            return ""
+        duration = (ended - started).total_seconds() * 1000
+    return duration_text(duration) if duration >= 0 else ""
 
 
 def tool_detail(item: JsonObject) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from cli.tui.rendering import (
@@ -10,6 +11,7 @@ from cli.tui.rendering import (
     item_heading,
     item_text,
     tool_detail,
+    tool_time,
     tool_title,
     truncated,
 )
@@ -65,6 +67,16 @@ def test_tool_row_shows_what_ran_and_names_only_the_calls_that_went_wrong() -> N
 
     assert tool_title(item) == "session_search · telegram"
     assert tool_title(item | {"status": "failed"}) == "session_search · telegram · failed"
+
+    # Every call says how long it ran, as the WebUI writes durations; a running
+    # one counts up from its start and a call still being prepared has none.
+    started = "2026-10-16T18:00:00Z"
+    assert tool_time(item | {"durationMs": 420}) == "0.4s"
+    timing = {"started_at": started, "completed_at": "2026-10-16T18:01:15Z"}
+    assert tool_time(item | {"timing": timing}) == "1m 15s"
+    running = item | {"status": "running", "startedEvent": {"timestamp": started}}
+    assert tool_time(running, datetime(2026, 10, 16, 18, 0, 12, tzinfo=UTC)) == "12s"
+    assert tool_time(item | {"status": "preparing", "durationMs": 5}) == ""
 
 
 def test_tool_detail_reads_its_blocks_and_keeps_hidden_arguments_out() -> None:

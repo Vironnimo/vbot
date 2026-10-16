@@ -35,7 +35,14 @@ from textual.scroll_view import ScrollView
 from textual.selection import Selection
 from textual.strip import Strip
 
-from cli.tui.rendering import item_heading, item_text, tool_detail, tool_title
+from cli.tui.rendering import (
+    duration_text,
+    item_heading,
+    item_text,
+    tool_detail,
+    tool_time,
+    tool_title,
+)
 from cli.tui.state import Conversation, JsonObject
 
 # Rows within this many screens of the viewport are painted before they show,
@@ -73,17 +80,6 @@ def display_rows(items: list[JsonObject]) -> list[JsonObject]:
         elif status == "completed" and isinstance(item.get("durationMs"), (int, float)):
             rows.append({**item, "id": f"{item['id']}:footer", "type": "run_footer", "items": []})
     return rows
-
-
-def _duration(milliseconds: float) -> str:
-    seconds = max(0, round(milliseconds / 1000))
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, seconds = divmod(seconds, 60)
-    if minutes < 60:
-        return f"{minutes}m {seconds:02d}s"
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours}h {minutes:02d}m"
 
 
 @dataclass(eq=False)
@@ -622,9 +618,8 @@ class Transcript(ScrollView, can_focus=True):
             mark = "✗" if status == "failed" else "■"
             return [Strip([Segment(f"  {mark} Run {status}", style)])]
         if kind == "run_footer":
-            return [
-                Strip([Segment(f"  ─ Worked for {_duration(float(item['durationMs']))}", muted)])
-            ]
+            worked = duration_text(float(item["durationMs"]))
+            return [Strip([Segment(f"  ─ Worked for {worked}", muted)])]
         if kind == "model_fallback":
             text = " ".join((item_text(item) or "Model fallback").split())
             return [Strip([Segment(f"  ⚠ {text}", self._style("warning"))])]
@@ -652,7 +647,7 @@ class Transcript(ScrollView, can_focus=True):
             else:
                 duration = item.get("durationMs", item.get("durationEstimateMs"))
                 label = (
-                    f"Thought for {_duration(float(duration))}"
+                    f"Thought for {duration_text(float(duration))}"
                     if isinstance(duration, (int, float)) and duration >= 1000
                     else "Thought"
                 )
@@ -679,6 +674,10 @@ class Transcript(ScrollView, can_focus=True):
                 (name, self._style("tool")),
                 (f"  {summary}" if summary else "", muted),
             )
+            # The time stays whole; a long summary gives way to it.
+            if elapsed := tool_time(item):
+                text.truncate(max(1, width - len(elapsed) - 2), overflow="ellipsis")
+                text.append(f"  {elapsed}", muted)
         text.truncate(width, overflow="ellipsis")
         if row.key in {self._hover, self._cursor}:
             text.stylize(self._style("hover"))
