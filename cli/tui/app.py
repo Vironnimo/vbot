@@ -8,6 +8,7 @@ import json
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine
+from datetime import UTC, datetime
 from time import monotonic
 from typing import Any, override
 from urllib.parse import quote
@@ -15,11 +16,11 @@ from urllib.parse import quote
 from textual import on, work
 from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal
 from textual.css.query import NoMatches
 from textual.markup import escape
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Markdown, Static, TextArea
+from textual.widgets import Markdown, Static, TextArea
 from textual.worker import Worker
 
 from cli.tui import composer
@@ -46,7 +47,6 @@ from cli.tui.drafts import (
 from cli.tui.mentions import format_mention, resolve_mentions, retained_mentions
 from cli.tui.models import effective_value
 from cli.tui.rendering import (
-    TimelineEntry,
     content_text,
     flatten,
     pretty,
@@ -91,23 +91,28 @@ class ConversationApp(App[int]):
     """Keep navigation and drafts local; all conversation decisions use server APIs."""
 
     TITLE = "vBot"
-    # One header row, the transcript, one status row, the composer, the settings
-    # row the WebUI puts under its input and the footer. Buttons are not repeated
-    # here: every action the footer does not show stays reachable by name through
-    # Ctrl+K and is documented by F1.
+    # One header row, the transcript, a status row that shows only while it has
+    # something to say, the composer and the settings row the WebUI puts under its
+    # input. There is no key footer: the composer's placeholder names the entry
+    # points, every action is reachable by name through Ctrl+K and F1 lists the
+    # keys.
     CSS = """
     Screen { background: $background; }
-    #header { height: 1; padding: 0 1; background: $panel; }
-    #header-title { width: 1fr; height: 1; color: $foreground; }
-    #timeline { height: 1fr; padding: 0 1; scrollbar-gutter: stable; }
-    #empty { color: $text-muted; margin: 1 2; }
-    #status { min-height: 1; height: auto; max-height: 2; padding: 0 1; color: $text-muted; }
+    #header { height: 1; padding: 0 2; background: $background; }
+    #header-title { width: 1fr; height: 1; color: $foreground; text-style: bold; }
+    #header-agent { width: auto; height: 1; color: $text-muted; }
+    #timeline { height: 1fr; padding: 1 1 0 1; scrollbar-size-vertical: 1; }
+    #status { height: 1; padding: 0 2; color: $text-muted; }
+    #status.idle { display: none; }
     #status.alert { color: $warning; }
     #status.error { color: $error; }
-    #draft-info { height: auto; padding: 0 1; color: $warning; }
-    #composer { height: 3; max-height: 10; margin: 0 1; border: round $panel; }
+    #draft-info { height: auto; padding: 0 2; color: $warning; }
+    #draft-info.empty { display: none; }
+    #composer { height: auto; min-height: 3; max-height: 12; margin: 0 1; padding: 0 1;
+                border: round $panel-lighten-2; background: $background; }
     #composer:focus { border: round $accent; }
-    #settings { height: 1; padding: 0 1; }
+    #composer .text-area--cursor-line { background: $background; }
+    #settings { height: 1; padding: 0 2; }
     #settings-where { width: 1fr; height: 1; color: $text-muted; text-overflow: ellipsis; }
     #settings-model { width: auto; height: 1; color: $text-muted; }
     """
@@ -177,7 +182,6 @@ class ConversationApp(App[int]):
         self.roster: list[tuple[str, str]] = []
         self.agents: list[JsonObject] = []
         self.projects: list[JsonObject] = []
-        self.rows: dict[str, TimelineEntry] = {}
         self.stream: Worker[Any] | None = None
         self.stream_path: str | None = None
         self.pending: set[int] = set()
@@ -341,31 +345,28 @@ class ConversationApp(App[int]):
     def compose(self) -> ComposeResult:
         with Horizontal(id="header"):
             yield Static("", id="header-title", markup=False)
-        with Transcript(id="timeline"):
-            yield Static(
-                "Choose an Agent or resume a Session.\nF1 shows the keyboard controls.",
-                id="empty",
-                markup=False,
-            )
-        yield Static("", id="status", markup=False)
-        yield Static("", id="draft-info", markup=False)
+            yield Static("", id="header-agent", markup=False)
+        yield Transcript(id="timeline")
+        yield Static("", id="status", markup=False, classes="idle")
+        yield Static("", id="draft-info", markup=False, classes="empty")
         yield CompletionBar(id="completion")
-        yield TextArea(placeholder="Write a message…", id="composer")
+        yield TextArea(
+            placeholder="Message · / commands · @ files · Ctrl+K actions · F1 keys",
+            id="composer",
+            soft_wrap=True,
+            show_line_numbers=False,
+        )
         with Horizontal(id="settings"):
             yield Static("", id="settings-where", markup=False)
             yield Static("", id="settings-model", markup=False)
-        yield Footer(compact=True)
 
     def on_mount(self) -> None:
-        editor = self.query_one("#composer", TextArea)
-        editor.border_title = "Message"
-        editor.border_subtitle = "Enter: send · Shift+Enter: new line"
         # Cached once: the suggestion popup and the read receipt reach for these on
         # every keystroke and every frame, and a CSS query per frame over a long
         # transcript is not free.
         self.bar = self.query_one(CompletionBar)
         self.transcript = self.query_one("#timeline", Transcript)
-        self.rows = self.transcript.rows
+        self.transcript.placeholder("Choose an Agent or resume a Session.")
         self.set_interval(0.08, self._render_if_dirty)
         self._start(self._events, group="events", exclusive=True)
         self._start(self._bootstrap)
@@ -459,10 +460,8 @@ class ConversationApp(App[int]):
     def _save_view(self) -> None:
         if self.conversation is not None:
             self.conversation.draft = self.query_one("#composer", TextArea).text
-            timeline = self.query_one("#timeline", VerticalScroll)
-            self.conversation.scroll_y = timeline.scroll_y
-            self.conversation.follow_tail = timeline.is_vertical_scroll_end
-            self.transcript.remember_position()
+            if self.transcript.view is self.conversation:
+                self.transcript.remember_position()
             self._cache_history(self.conversation)
             self._view_changed(self.conversation)
 
@@ -476,7 +475,6 @@ class ConversationApp(App[int]):
         self.stream, self.stream_path = None, None
         view = self.views.setdefault(view.key, view)
         self._cache_history(view)
-        timeline = self.query_one("#timeline", VerticalScroll)
         async with self._render_lock:
             self.conversation = view
             self.queue_items = []
@@ -490,7 +488,7 @@ class ConversationApp(App[int]):
                 if view.items:
                     await self._render()
                 else:
-                    await timeline.mount(Static("Loading conversation…", markup=False))
+                    self.transcript.placeholder("Loading conversation…")
                 self._header()
                 await self._refresh(view)
                 if self.conversation is view:
@@ -499,13 +497,9 @@ class ConversationApp(App[int]):
                 self.loading_views.discard(id(view))
                 self._header()
         else:
-            await timeline.mount(
-                Static(
-                    "New conversation. The Session is created when you send its first message.",
-                    markup=False,
-                )
+            self.transcript.placeholder(
+                "New conversation. The Session is created when you send its first message."
             )
-            self._notice("Ready")
         self.query_one("#composer", TextArea).focus()
 
     def _cache_history(self, view: Conversation) -> None:
@@ -898,6 +892,10 @@ class ConversationApp(App[int]):
 
     def _render_if_dirty(self) -> None:
         self._completion_if_visible()
+        view = self.conversation
+        if view is not None and view.facts.get("active_run"):
+            # The status row's spinner and elapsed time.
+            self._update_status(view)
         if (
             self.render_dirty
             and not self.rendering
@@ -973,7 +971,7 @@ class ConversationApp(App[int]):
         if view.facts.get("has_newer") or completed_row is None or timeline.view is not view:
             return
         children = completed_row.get("items") or []
-        if children and children[-1]["id"] not in timeline.rows:
+        if children and not timeline.displays(str(children[-1]["id"])):
             return
         view.completion_read_pending = completed
         self._start(lambda: self._mark_completion_read(view, completed), group="read-receipt")
@@ -1002,20 +1000,21 @@ class ConversationApp(App[int]):
         # line tall whatever they say, so their update must not ask for a layout: a
         # reflow costs as much work as the transcript is long.
         title = view.title or "Untitled conversation"
-        self.query_one("#header-title", Static).update(
-            terminal_text(f"{title} · {view.agent}"), layout=False
-        )
+        width = self.size.width
+        agent = truncated(view.agent, max(8, width // 3))
+        self._show("#header-agent", agent)
+        self._show("#header-title", truncated(title, max(8, width - len(agent) - 6)), layout=False)
         # The Project and directory give way to the Model row and never wrap: the
         # row is one line tall, so a wrapped path would hide below it.
-        width = self.size.width
         context = truncated(self._context_text(view), max(12, width - 16))
-        self.query_one("#settings-where", Static).update(
-            terminal_text(truncated(self._where_text(view), max(12, width - len(context) - 4))),
+        self._show(
+            "#settings-where",
+            truncated(self._where_text(view), max(12, width - len(context) - 6)),
             layout=False,
         )
         # The Model row has an automatic width, so it needs its layout to become
         # visible at all: only the full-width rows can be updated without one.
-        self.query_one("#settings-model", Static).update(terminal_text(context))
+        self._show("#settings-model", context)
         self._update_status(view)
         draft: list[str] = []
         if view.attachments:
@@ -1024,7 +1023,17 @@ class ConversationApp(App[int]):
             )
         if view.mentions:
             draft.append("Server files: " + ", ".join(view.mentions))
-        self.query_one("#draft-info", Static).update(terminal_text(" · ".join(draft)))
+        info = self._show("#draft-info", " · ".join(draft))
+        info.set_class(not draft, "empty")
+
+    def _show(self, selector: str, text: str, *, layout: bool = True) -> Static:
+        """Update one chrome row only when its text changed."""
+        widget = self.query_one(selector, Static)
+        text = terminal_text(text)
+        if getattr(widget, "_shown_text", None) != text:
+            widget._shown_text = text  # type: ignore[attr-defined]
+            widget.update(text, layout=layout)
+        return widget
 
     def _where_text(self, view: Conversation) -> str:
         """The Project the conversation works in and its server-side directory.
@@ -1081,17 +1090,17 @@ class ConversationApp(App[int]):
         used = context.get("input_tokens", context.get("total_tokens", context.get("tokens")))
         window = context.get("context_window")
         if isinstance(used, int):
-            usage = compact_tokens(used)
-            if isinstance(window, int):
-                usage += f"/{compact_tokens(window)}"
+            usage = f"{compact_tokens(used)} context"
+            if isinstance(window, int) and window > 0:
+                usage = f"{compact_tokens(used)}/{compact_tokens(window)} ({used * 100 // window}%)"
             parts.append(usage)
         return " · ".join(parts)
 
     def _update_status(self, view: Conversation) -> None:
         """One row carries the single most urgent message instead of every fact."""
         message, level = self._status_message(view)
-        status = self.query_one("#status", Static)
-        status.update(terminal_text(message))
+        status = self._show("#status", message, layout=False)
+        status.set_class(not message, "idle")
         status.set_class(level == "alert", "alert")
         status.set_class(level == "error", "error")
 
@@ -1111,7 +1120,11 @@ class ConversationApp(App[int]):
             return "Sub-Agent Session · replies go to you · Ctrl+B returns to the parent", "info"
         active = view.facts.get("active_run") or {}
         if active:
-            return f"Run {active.get('status', 'working')} · Ctrl+X stops it", "info"
+            spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[int(monotonic() * 10) % 10]
+            elapsed = self._run_elapsed(view)
+            status = str(active.get("status") or "working")
+            label = "Working" if status in {"running", "working"} else status.capitalize()
+            return f"{spinner} {label}{elapsed} · Ctrl+X stops", "info"
         if view.unread_output:
             return "New output · F12 jumps to the latest", "info"
         if self.queue_items:
@@ -1119,6 +1132,21 @@ class ConversationApp(App[int]):
         if self.requests:
             return f"{len(self.requests)} Extension request(s) · F7", "info"
         return "", "info"
+
+    @staticmethod
+    def _run_elapsed(view: Conversation) -> str:
+        """` · 1m 05s` since the running Run started, from its timeline row."""
+        for item in reversed(view.items):
+            if item.get("type") == "assistant_run" and item.get("status") == "running":
+                started = item.get("startTimestamp") or item.get("timestamp")
+                try:
+                    begun = datetime.fromisoformat(str(started))
+                except ValueError:
+                    return ""
+                seconds = max(0, int((datetime.now(UTC) - begun).total_seconds()))
+                minutes, seconds = divmod(seconds, 60)
+                return f" · {minutes}m {seconds:02d}s" if minutes else f" · {seconds}s"
+        return ""
 
     def _notice(self, message: str, *, error: bool = False) -> None:
         """Show one message in one place: the status row, plus a toast when it failed."""
@@ -1344,7 +1372,8 @@ class ConversationApp(App[int]):
             editor.styles.height = wanted
 
     @on(Markdown.LinkClicked)
-    def link_clicked(self, event: Markdown.LinkClicked) -> None:
+    @on(Transcript.LinkClicked)
+    def link_clicked(self, event: Markdown.LinkClicked | Transcript.LinkClicked) -> None:
         self._start(
             lambda: self.push_screen_wait(
                 TextDialog("Link · copy and open on your own computer", event.href, read_only=True)
@@ -1781,14 +1810,20 @@ class ConversationApp(App[int]):
         if self.conversation and id(self.conversation) not in self.older_loading:
             self.action_older()
 
-    @on(TimelineEntry.LoadHistory)
-    def run_history_requested(self, event: TimelineEntry.LoadHistory) -> None:
+    @on(Transcript.LoadHistory)
+    def run_history_requested(self, event: Transcript.LoadHistory) -> None:
         view = self.conversation
         if view is not None:
             self._start(lambda: self._load_run_history(view, event.item), group="run-history")
 
+    @on(Transcript.Leave)
+    def transcript_left(self) -> None:
+        self.query_one("#composer", TextArea).focus()
+
     async def _load_run_history(self, view: Conversation, gap: JsonObject) -> None:
         if view is None or id(view) in self.older_loading:
+            # Busy with another page: the gap asks again when it next shows.
+            self.transcript.history_failed(gap)
             return
         key, revision = view.key, view.refresh_revision
         self.older_loading.add(id(view))
@@ -1803,9 +1838,15 @@ class ConversationApp(App[int]):
                     "history_generation": view.facts.get("history_generation"),
                 },
             )
-            if self.conversation is view and view.key == key and view.refresh_revision == revision:
-                view.child_page(page)
+            if (
+                self.conversation is view
+                and view.key == key
+                and view.refresh_revision == revision
+                and view.child_page(page)
+            ):
                 await self._render()
+            else:
+                self.transcript.history_failed(gap)
         except ClientError as exc:
             self._notice(str(exc), error=True)
         finally:
@@ -2055,7 +2096,7 @@ class ConversationApp(App[int]):
         if self.conversation:
             self.conversation.follow_tail = True
             self.conversation.unread_output = False
-            self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+            self.transcript.scroll_to_latest()
             self._header()
 
     @work(group="find", exclusive=True, exit_on_error=False)

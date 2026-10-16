@@ -223,11 +223,19 @@ class Conversation:
         self.row_heights.clear()
         self.cache_bytes = 0
 
-    def child_page(self, response: JsonObject) -> None:
+    def child_page(self, response: JsonObject) -> bool:
+        """Merge a page of earlier Run children; false when its gap is gone."""
         run_id = response["run_id"]
         for index, run in enumerate(self.items):
             if run.get("type") != "assistant_run" or _run_id(run) != run_id:
                 continue
+            # The page continues exactly the gap it was read for; once the Run
+            # was reset or extended past it, merging would leave a hole.
+            gap = next(
+                (child for child in run["items"] if child.get("type") == "history_gap"), None
+            )
+            if gap is None or gap.get("before") != response.get("before"):
+                return False
             children = {
                 child["id"]: child for child in run["items"] if child.get("type") != "history_gap"
             }
@@ -238,7 +246,8 @@ class Conversation:
                 "items": sorted(children.values(), key=lambda child: child.get("position", 0)),
             }
             self.items = [*self.items[:index], replacement, *self.items[index + 1 :]]
-            return
+            return True
+        return False
 
     def event(self, event: JsonObject) -> bool:
         """Apply only explicit wire edits; false means stale/duplicate delivery."""

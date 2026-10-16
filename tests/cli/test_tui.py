@@ -10,13 +10,13 @@ from typing import Any, override
 
 import httpx
 import pytest
-from textual.widgets import Collapsible, TextArea
+from textual.widgets import TextArea
 
 import cli.tui.app as app_module
 from cli.tui.app import ConversationApp
 from cli.tui.dialogs import Picker, TextDialog
 from cli.tui.drafts import draft_record
-from cli.tui.rendering import TimelineEntry, file_links, tool_detail
+from cli.tui.rendering import file_links, tool_detail
 from cli.tui.state import Conversation
 from cli.tui.transport import ClientError, TerminalClient
 
@@ -207,12 +207,15 @@ async def test_terminal_send_stream_navigation_and_detach() -> None:
         assert app.conversation is not None
         assert app.conversation.items[0]["items"][0]["content"] == "Hello **world**"
         await app._render()
-        assert len(app.query(Collapsible)) == 2
         editor.load_text("Retain this draft")
-        app.query(Collapsible).first().query_one("CollapsibleTitle").focus()
+        app.transcript.focus()
         await pilot.press("enter")
         await pilot.pause()
+        # Enter in the conversation opens a step; it never sends the draft.
+        assert app.conversation.expanded_rows
         assert editor.text == "Retain this draft"
+        await pilot.press("escape")
+        assert app.focused is editor
         assert len([method for method, _ in server.calls if method == "chat.stream"]) == 1
         editor.focus()
         await pilot.press("ctrl+p")
@@ -418,69 +421,6 @@ async def test_project_drafts_keep_distinct_text_and_working_directory() -> None
 
 
 @pytest.mark.asyncio
-async def test_render_and_stream_changes_during_an_awaited_mount(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    server = Server()
-    app = ConversationApp(server, agent_id="main")
-    original = TimelineEntry.update_item
-    changed = False
-    updated_rows: list[str] = []
-    render_blocked = asyncio.Event()
-    render_cancelled = asyncio.Event()
-
-    async def update(widget: TimelineEntry, item: JsonObject) -> None:
-        nonlocal changed
-        updated_rows.append(item["id"])
-        if item["id"] == "detach-during-mount":
-            render_blocked.set()
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                render_cancelled.set()
-                raise
-        await original(widget, item)
-        if not changed and app.conversation:
-            changed = True
-            app.conversation.items = [
-                *app.conversation.items,
-                {
-                    "id": "later",
-                    "type": "message",
-                    "message": {"role": "user", "content": "Arrived during rendering"},
-                },
-            ]
-            app.render_dirty = True
-
-    monkeypatch.setattr(TimelineEntry, "update_item", update)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await pilot.pause()
-        assert app.conversation is not None
-        app.conversation.event(snapshot())
-        await app._render()
-        await app._render()
-        assert {"output", "reason", "tool", "later"} == set(app.rows)
-        assert updated_rows.count("output") == 1
-        assert len(app.query(Collapsible)) == 2
-        app.conversation.event(
-            {
-                "type": "timeline_update",
-                "run_id": "run-one",
-                "sequence": 2,
-                "base_sequence": 1,
-                "children": [
-                    {"id": "detach-during-mount", "type": "reasoning", "content": "Still rendering"}
-                ],
-            }
-        )
-        app.render_dirty = True
-        app._render_if_dirty()
-        await render_blocked.wait()
-        await pilot.press("ctrl+q")
-    assert render_cancelled.is_set()
-
-
-@pytest.mark.asyncio
 async def test_stale_refresh_does_not_replace_stream_and_next_run_resets_sequence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -639,7 +579,7 @@ async def test_delayed_conversation_reads_cannot_change_a_new_selection(action: 
         assert app.conversation is not previous
         assert not previous.items
         assert not isinstance(app.screen, Picker)
-        assert "old-row" not in app.rows
+        assert "old-row" not in app.transcript.rows
 
 
 @pytest.mark.asyncio

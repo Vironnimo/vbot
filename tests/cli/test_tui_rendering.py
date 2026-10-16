@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any, override
-
-import pytest
-from textual.app import App, ComposeResult
+from typing import Any
 
 from cli.tui.rendering import (
-    TimelineEntry,
     file_links,
     item_heading,
     item_text,
@@ -191,40 +187,3 @@ def test_file_links_find_canonical_speech_artifacts_and_original_download_urls()
         ("archived.wav", "/api/speech/artifacts/speech-two"),
         ("Original report", "/api/files/file-token?version=2"),
     ]
-
-
-class _TimelineHost(App[None]):
-    @override
-    def compose(self) -> ComposeResult:
-        yield TimelineEntry()
-
-
-@pytest.mark.asyncio
-async def test_timeline_entry_retains_immutable_child_references_between_frames() -> None:
-    child = {"id": "output", "type": "assistant_output", "content": "Stable output"}
-    app = _TimelineHost()
-    async with app.run_test(size=(100, 30)):
-        entry = app.query_one(TimelineEntry)
-        first_frame = {
-            "id": "run",
-            "type": "assistant_run",
-            "status": "running",
-            "items": [child],
-        }
-        await entry.update_item(first_frame)
-        child_entry = entry.entries["output"]
-        body = child_entry.body
-
-        second_frame = {
-            "id": "run",
-            "type": "assistant_run",
-            "status": "completed",
-            "items": [child],
-        }
-        await entry.update_item(second_frame)
-
-        assert entry.item is second_frame
-        assert entry.entries["output"] is child_entry
-        assert child_entry.item is child
-        assert child_entry.body is body
-        assert entry.entry_order == ("output",)
