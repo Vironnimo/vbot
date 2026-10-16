@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from textual.widgets import TextArea
 
-from cli.tui.dialogs import PathDialog, Picker, TextDialog
+from cli.tui.dialogs import KeysDialog, PathDialog, Picker, TextDialog
 from cli.tui.mentions import format_mention, open_quoted_mention
 from cli.tui.rendering import file_links, flatten, item_text, one_line, tool_detail
 
@@ -278,36 +278,75 @@ async def input_history(app: ConversationApp) -> None:
 
 async def help(app: ConversationApp) -> None:
     await app.push_screen_wait(
-        TextDialog(
-            "vBot TUI · keyboard controls",
-            "Enter: send · Shift+Enter or Ctrl+Enter: new line · Ctrl+S: send\n"
-            "Typing / offers Commands and Skills, /model the chat Models and @ the\n"
-            "server files: ↑↓ choose, Enter takes it, Esc closes the list.\n"
-            "F2: Sessions · F3: new conversation · F4: Model and effort\n"
-            "F8: local uploads, server files and downloads\n"
-            "Ctrl+X: stop the current Run · F10: stop all background work\n"
-            "Ctrl+K: command palette, every action by name\n"
-            "F1: this list\n"
-            "\n"
-            "F5: activity, Sub-Agents and background commands\n"
-            "F6: Queue, edit, remove and Steer · F7: Extension requests\n"
-            "F9: Commands and Skills · Ctrl+Space: completion\n"
-            "F11: Session actions, Tools and saved drafts · F12: latest output\n"
-            "Ctrl+B: parent conversation · Ctrl+O: older history\n"
-            "Ctrl+F: find in loaded history · Ctrl+G: copy or save the conversation\n"
-            "Alt+Up: input history · Ctrl+R: reconnect · Ctrl+Q: detach\n"
-            "\n"
-            "The row under the composer names the Project this conversation works in\n"
-            "and its directory on the server, then the Model, its thinking effort and\n"
-            "the context load. A row above the composer appears while a Run works or\n"
-            "something needs attention.\n"
-            "Tab moves into the conversation: ↑↓ step through Tools and Reasoning,\n"
-            "Enter or Space opens and closes one, Esc returns to the composer.\n"
-            "A click opens and closes them too. Dragging, a double click (word) or\n"
-            "a triple click (paragraph) selects text and copies it.\n"
-            "@file paths are server paths. Local files are uploaded through F8.\n"
-            "Drafts are saved locally per server. After a lost send response the draft\n"
-            "stays marked uncertain, and no resend is automatic.",
-            read_only=True,
+        KeysDialog(
+            "Keyboard and mouse",
+            [
+                (
+                    "Write",
+                    [
+                        ("Enter", "send the draft"),
+                        ("Shift+Enter", "new line (Ctrl+Enter works too)"),
+                        ("/", "Commands and Skills; /model offers the chat Models"),
+                        ("@", "mention a server file"),
+                        ("↑↓ Enter Esc", "choose, take or close a suggestion"),
+                        ("Ctrl+Space", "complete at the cursor"),
+                        ("Alt+Up", "insert earlier input or a saved draft"),
+                        ("F8", "attach local files, mention or download server files"),
+                    ],
+                ),
+                (
+                    "Run",
+                    [
+                        ("F4", "Model and thinking effort"),
+                        ("F5", "activity, Sub-Agents and background commands"),
+                        ("F6", "Queue: edit, remove and Steer"),
+                        ("F7", "Extension requests"),
+                        ("Ctrl+X", "stop the current Run"),
+                        ("F10", "stop all background work"),
+                    ],
+                ),
+                (
+                    "Move around",
+                    [
+                        ("Ctrl+K", "command palette, every action by name"),
+                        ("F2", "Sessions"),
+                        ("F3", "new conversation"),
+                        ("Ctrl+B", "parent conversation"),
+                        ("F11", "Session actions, Tools and saved drafts"),
+                        ("F12", "latest output"),
+                        ("Ctrl+O", "older history"),
+                        ("Ctrl+F", "find in the loaded history"),
+                    ],
+                ),
+                (
+                    "Read the conversation",
+                    [
+                        ("Tab", "step into it; ↑↓ move through Tools and Reasoning"),
+                        ("Enter, Space", "open or close a step; Esc returns to the composer"),
+                        ("Click", "open or close a step"),
+                        ("Drag", "select text and copy it"),
+                        ("Double click", "select and copy a word"),
+                        ("Triple click", "select and copy a paragraph"),
+                        ("Ctrl+G", "copy or save the whole conversation"),
+                    ],
+                ),
+                (
+                    "Connection",
+                    [
+                        ("Ctrl+R", "reconnect and reload"),
+                        ("Ctrl+Q", "detach"),
+                        ("F1", "this list"),
+                    ],
+                ),
+            ],
+            [
+                "The row under the composer names the Project this conversation works in "
+                "and its directory on the server, then the Model, its thinking effort and "
+                "the context load. A row above the composer appears while a Run works or "
+                "something needs attention.",
+                "@file paths are server paths; local files are uploaded through F8. Drafts "
+                "are saved locally per server. After a lost send response the draft stays "
+                "marked uncertain, and nothing is resent on its own.",
+            ],
         )
     )

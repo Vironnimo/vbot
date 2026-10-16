@@ -1,4 +1,9 @@
-"""Keyboard-first search, text and Extension request dialogs."""
+"""Keyboard-first search, text and Extension request dialogs.
+
+Every dialog is one quiet box: its title sits in the frame, the keys that act
+on it in the frame's lower edge, and the fields inside carry no frames of
+their own, so the eye lands on the content rather than on nested borders.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ from typing import Any, override
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -32,20 +38,32 @@ from core.utils.file_status import exists_strict, is_dir_strict, is_file_strict
 
 type JsonObject = dict[str, Any]
 
+# The frame every dialog shares; a dialog adds only its size and contents.
+_BOX = """
+    border: round $border-blurred; background: $surface; padding: 1 2 0 2;
+    border-title-color: $accent; border-title-style: bold;
+    border-subtitle-color: $text-muted;
+"""
+_FIELDS = """
+    Input { background: $panel; padding: 0 1; margin-bottom: 1; }
+    Horizontal { height: 1; margin: 1 0; }
+    Button { margin-right: 2; min-width: 12; }
+"""
+
 
 class Picker(ModalScreen[Any]):
     """Filter user-visible labels, carrying exact server identities as values."""
 
     # The box fits its content: three choices do not need a full screen.
     BINDINGS = [("escape", "dismiss(None)", "Close")]
-    DEFAULT_CSS = """
-    Picker { align: center middle; }
-    Picker > Vertical {
-        width: 86%; max-width: 120; height: auto; max-height: 90%; border: round $accent;
-        background: $surface; padding: 0 2;
-    }
-    Picker Label { width: 1fr; height: auto; }
-    Picker OptionList { height: auto; max-height: 14; }
+    DEFAULT_CSS = f"""
+    Picker {{ align: center middle; }}
+    Picker > Vertical {{ width: 86%; max-width: 110; height: auto; max-height: 90%; {_BOX} }}
+    Picker {{ {_FIELDS} }}
+    Picker OptionList {{
+        height: auto; max-height: 16; border: none; padding: 0; margin-bottom: 1;
+        background: $surface;
+    }}
     """
 
     def __init__(
@@ -65,12 +83,11 @@ class Picker(ModalScreen[Any]):
 
     @override
     def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label(self.heading, markup=False)
+        with Vertical() as box:
+            box.border_title = self.heading
+            box.border_subtitle = "↑↓ choose · Enter open · Esc close"
             yield Input(
-                value=self.initial_query,
-                placeholder="Search · ↑↓ select · Enter open · Esc close",
-                id="search",
+                value=self.initial_query, placeholder="Type to filter", id="search", compact=True
             )
             yield OptionList(id="choices", markup=False)
 
@@ -92,6 +109,7 @@ class Picker(ModalScreen[Any]):
         options.clear_options()
         options.add_options(
             [Option(label, id=str(index)) for index, (label, _) in enumerate(self.filtered)]
+            or [Option("Nothing matches", disabled=True)]
         )
         if self.filtered:
             options.highlighted = 0
@@ -126,14 +144,12 @@ class Picker(ModalScreen[Any]):
 
 class TextDialog(ModalScreen[str | None]):
     BINDINGS = [("escape", "dismiss(None)", "Close"), ("ctrl+s", "save", "Save")]
-    DEFAULT_CSS = """
-    TextDialog { align: center middle; }
-    TextDialog > Vertical {
-        width: 86%; max-width: 120; height: 75%; border: round $accent;
-        background: $surface; padding: 0 2;
-    }
-    TextDialog TextArea { height: 1fr; }
-    TextDialog Horizontal { height: 3; margin-top: 1; }
+    DEFAULT_CSS = f"""
+    TextDialog {{ align: center middle; }}
+    TextDialog > Vertical {{ width: 86%; max-width: 120; height: 75%; {_BOX} }}
+    TextDialog {{ {_FIELDS} }}
+    TextDialog TextArea {{ height: 1fr; border: none; padding: 0 1; background: $panel; }}
+    TextDialog TextArea.-read-only {{ background: $surface; padding: 0; margin-bottom: 1; }}
     """
 
     def __init__(self, title: str, text: str = "", *, read_only: bool = False) -> None:
@@ -144,15 +160,16 @@ class TextDialog(ModalScreen[str | None]):
 
     @override
     def compose(self) -> ComposeResult:
-        with Vertical(id="text-dialog-body"):
+        with Vertical(id="text-dialog-body") as box:
+            box.border_title = self.heading
+            box.border_subtitle = "Esc close" if self.read_only else "Ctrl+S save · Esc close"
             yield TextArea(self.initial, read_only=self.read_only, id="text")
-            with Horizontal():
-                if not self.read_only:
-                    yield Button("Save", id="save", variant="primary")
-                yield Button("Close", id="close")
+            if not self.read_only:
+                with Horizontal():
+                    yield Button("Save", id="save", variant="primary", compact=True)
+                    yield Button("Close", id="close", compact=True)
 
     def on_mount(self) -> None:
-        self.query_one("#text-dialog-body", Vertical).border_title = self.heading
         self.query_one(TextArea).focus()
 
     @on(Button.Pressed)
@@ -167,20 +184,61 @@ class TextDialog(ModalScreen[str | None]):
             self.dismiss(self.query_one(TextArea).text)
 
 
+class KeysDialog(ModalScreen[None]):
+    """List keys beside what they do, grouped by task, with notes underneath."""
+
+    BINDINGS = [("escape", "dismiss(None)", "Close"), ("f1", "dismiss(None)", "Close")]
+    DEFAULT_CSS = f"""
+    KeysDialog {{ align: center middle; }}
+    KeysDialog > VerticalScroll {{
+        width: 86%; max-width: 96; height: auto; max-height: 90%; {_BOX}
+    }}
+    KeysDialog .section {{ color: $text-muted; text-style: bold; }}
+    KeysDialog .keys {{ margin-bottom: 1; }}
+    KeysDialog .note {{ color: $text-muted; margin-bottom: 1; }}
+    """
+    KEY_WIDTH = 14
+
+    def __init__(
+        self, title: str, sections: list[tuple[str, list[tuple[str, str]]]], notes: list[str]
+    ) -> None:
+        super().__init__()
+        self.heading = title
+        self.sections = sections
+        self.notes = notes
+
+    @override
+    def compose(self) -> ComposeResult:
+        with VerticalScroll() as box:
+            box.border_title = self.heading
+            box.border_subtitle = "↑↓ scroll · Esc close"
+            for name, keys in self.sections:
+                yield Static(name.upper(), classes="section", markup=False)
+                yield Static(
+                    Content("\n").join(
+                        Content.assemble((key.ljust(self.KEY_WIDTH), "bold $accent"), action)
+                        for key, action in keys
+                    ),
+                    classes="keys",
+                )
+            for note in self.notes:
+                yield Static(note, classes="note", markup=False)
+
+    def on_mount(self) -> None:
+        self.query_one(VerticalScroll).focus()
+
+
 class PathDialog(ModalScreen[str | None]):
     """Browse local paths or type one, with distinct open/save validation."""
 
     BINDINGS = [("escape", "dismiss(None)", "Close"), ("ctrl+s", "choose", "Choose")]
-    DEFAULT_CSS = """
-    PathDialog { align: center middle; }
-    PathDialog > Vertical {
-        width: 94%; max-width: 140; height: 80%; border: round $accent;
-        background: $surface; padding: 0 2;
-    }
-    PathDialog Input { margin-bottom: 1; }
-    PathDialog DirectoryTree { height: 1fr; border: round $panel; }
-    PathDialog #problem { color: $error; height: auto; }
-    PathDialog Horizontal { height: 3; margin-top: 1; }
+    DEFAULT_CSS = f"""
+    PathDialog {{ align: center middle; }}
+    PathDialog > Vertical {{ width: 94%; max-width: 140; height: 80%; {_BOX} }}
+    PathDialog {{ {_FIELDS} }}
+    PathDialog DirectoryTree {{ height: 1fr; background: $surface; padding: 0; }}
+    PathDialog #hint {{ color: $text-muted; height: auto; margin-top: 1; }}
+    PathDialog #problem {{ color: $error; height: auto; }}
     """
 
     def __init__(self, title: str, path: str = "", *, must_exist: bool) -> None:
@@ -208,8 +266,10 @@ class PathDialog(ModalScreen[str | None]):
 
     @override
     def compose(self) -> ComposeResult:
-        with Vertical(id="path-dialog-body"):
-            yield Input(value=self.initial, placeholder="Local path", id="path")
+        with Vertical(id="path-dialog-body") as box:
+            box.border_title = self.heading
+            box.border_subtitle = "Tab browse · Enter or Ctrl+S use path · Esc close"
+            yield Input(value=self.initial, placeholder="Local path", id="path", compact=True)
             yield DirectoryTree(self.root, id="path-tree")
             yield Static(
                 "Use arrows to browse; select or type an existing file."
@@ -218,15 +278,15 @@ class PathDialog(ModalScreen[str | None]):
                     "Use arrows to browse; select or type a new path. "
                     "Existing files are never replaced."
                 ),
+                id="hint",
                 markup=False,
             )
             yield Static(self.problem, id="problem", markup=False)
             with Horizontal():
-                yield Button("Use path", id="choose", variant="primary")
-                yield Button("Close", id="close")
+                yield Button("Use path", id="choose", variant="primary", compact=True)
+                yield Button("Close", id="close", compact=True)
 
     def on_mount(self) -> None:
-        self.query_one("#path-dialog-body", Vertical).border_title = self.heading
         self.query_one(Input).focus()
 
     @on(Input.Submitted)
@@ -293,17 +353,17 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
     """Render the Extension-owned form schema, preserving typed values."""
 
     BINDINGS = [("escape", "dismiss(None)", "Return without answering")]
-    DEFAULT_CSS = """
-    ExtensionDialog { align: center middle; }
-    ExtensionDialog > Vertical {
-        width: 88%; max-width: 120; height: 85%; border: round $warning;
-        background: $surface; padding: 0 2;
-    }
-    ExtensionDialog VerticalScroll { height: 1fr; }
-    ExtensionDialog Label { height: auto; margin-top: 1; }
-    ExtensionDialog Horizontal { height: 3; margin-top: 1; }
-    ExtensionDialog #problem { color: $error; height: auto; }
-    ExtensionDialog TextArea { min-height: 5; max-height: 12; }
+    DEFAULT_CSS = f"""
+    ExtensionDialog {{ align: center middle; }}
+    ExtensionDialog > Vertical {{
+        width: 88%; max-width: 120; height: 85%; {_BOX}
+        border: round $warning; border-title-color: $warning;
+    }}
+    ExtensionDialog {{ {_FIELDS} }}
+    ExtensionDialog VerticalScroll {{ height: 1fr; }}
+    ExtensionDialog Label {{ height: auto; margin-top: 1; text-style: bold; }}
+    ExtensionDialog #problem {{ color: $error; height: auto; }}
+    ExtensionDialog TextArea {{ min-height: 5; max-height: 12; }}
     """
 
     def __init__(
@@ -414,16 +474,17 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
                     "Respond again" if self.outcome_unknown else "Accept",
                     id="accept",
                     variant="primary",
+                    compact=True,
                 )
-                yield Button("Decline", id="decline")
-                yield Button("Cancel request", id="cancel", variant="error")
+                yield Button("Decline", id="decline", compact=True)
+                yield Button("Cancel request", id="cancel", variant="error", compact=True)
 
     def on_mount(self) -> None:
-        self.query_one(
-            "#extension-dialog-body", Vertical
-        ).border_title = (
+        box = self.query_one("#extension-dialog-body", Vertical)
+        box.border_title = (
             f"{self.request.get('extension', '')} · {self.request.get('kind', 'Request')}"
         )
+        box.border_subtitle = "Esc return without answering"
 
     @on(Button.Pressed)
     def respond(self, event: Button.Pressed) -> None:
