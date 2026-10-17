@@ -51,9 +51,7 @@ from core.settings.settings import (
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
     default_timezone_name,
 )
-
-DEFAULT_SERVER_PORT = 8420
-
+from core.utils.config import DEFAULT_PORT
 
 DEFAULT_ATTACHMENT_MAX_SIZE_BYTES = 20_971_520
 
@@ -105,7 +103,7 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         "integer",
         "TCP port used when the vBot server next starts.",
         application=APPLICATION_RESTART,
-        default=DEFAULT_SERVER_PORT,
+        default=DEFAULT_PORT,
         minimum=1,
         maximum=65535,
     ),

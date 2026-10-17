@@ -38,7 +38,7 @@ Other threads: `vbot-voice-start` / `vbot-voice-stop` (transitions), `vbot-voice
   "active_model_ids": ["builtin/hey_nabu", "builtin/hey_jarvis"],
   "model_sensitivities": { "builtin/hey_nabu": 0.55 },
   "server_profiles": {
-    "http://127.0.0.1:8421": {
+    "http://127.0.0.1:22332": {
       "target_agent_id": "main",
       "session_behavior": "active",
       "phrase_actions": {

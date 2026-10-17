@@ -13,6 +13,7 @@ from cli._parser_common import (
     _add_command_parser,
     _TargetArgument,
 )
+from core.utils.config import DEFAULT_PORT
 
 
 def _add_server_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -31,7 +32,8 @@ def _add_desktop_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         "desktop",
         help=AREA_HELP["desktop"],
         description=(
-            f"{AREA_HELP['desktop']}. Example: vbot desktop --host 192.168.1.50 --port 8420"
+            f"{AREA_HELP['desktop']}. "
+            f"Example: vbot desktop --host 192.168.1.50 --port {DEFAULT_PORT}"
         ),
     )
     desktop_parser.add_argument(

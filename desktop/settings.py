@@ -8,8 +8,8 @@ user-writable and is replaced on update) and never in the shared server
 The on-disk schema is::
 
     {
-      "servers": [{"host": "...", "port": 8420, "label": "...", "scheme": "https"}],
-      "last_used": {"host": "...", "port": 8420, "scheme": "https"},
+      "servers": [{"host": "...", "port": 22332, "label": "...", "scheme": "https"}],
+      "last_used": {"host": "...", "port": 22332, "scheme": "https"},
       "window": {"width": 1280, "height": 800},
       "microphone": {...},
       "wakeword": {...},

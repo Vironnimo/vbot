@@ -18,7 +18,7 @@ RELEASE_PUBLIC_KEY="8gLB0IOKj1jlmhDxtNq3tRS1HgYwIv+tntzyVMiUiuQ="
 INSTALL_DIR="${VBOT_DIR:-${HOME}/.local/share/vbot}"
 DATA_DIR="${HOME}/.vbot"
 HOST=""
-PORT="8420"
+PORT="22332"
 # Who may connect to the server; passed on only when given.
 ACCESS_ARGS=()
 CHANNEL="release"
@@ -36,7 +36,7 @@ Options:
   --version <tag>     Install a specific release (for example v0.2.0)
   --data-dir <path>   Server data directory (default: ~/.vbot)
   --host <host>       Server bind host (default: 127.0.0.1, or 0.0.0.0 for --access lan)
-  --port <port>       Server port (default: 8420)
+  --port <port>       Server port (default: 22332)
   --access <mode>     Who may connect: local (this computer only, default), lan (home
                       network without login) or authenticated (with login, internet)
   --allow-network <cidr>   lan: also admit this network, such as a VPN's (repeatable)

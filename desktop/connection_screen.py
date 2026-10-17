@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from desktop.main import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
     PROBE_ACCESS_DENIED,
     PROBE_INVALID_TARGET,
     PROBE_NOT_VBOT_SERVER,
@@ -36,8 +38,6 @@ from desktop.main import (
 if TYPE_CHECKING:
     from desktop.connection import ServerEntry
 
-_DEFAULT_HOST_PLACEHOLDER = "127.0.0.1"
-_DEFAULT_PORT_PLACEHOLDER = 8420
 _WAITING_BODY = (
     "vBot Desktop connects as soon as the server answers. You can also choose another server below."
 )
@@ -99,7 +99,7 @@ _ERROR_COPY = {
         "Sign-in needs https://",
         "This server requires sign-in, and vBot Desktop signs in over plain http:// only to "
         "the server of its own installation, at the address that server listens on (such as "
-        "127.0.0.1:8420, not localhost). Connect with the server's https:// address instead; "
+        "127.0.0.1:22332, not localhost). Connect with the server's https:// address instead; "
         "on the server's own computer, open vBot Desktop from its installation.",
     ),
     STATUS_SIGN_IN_FAILED: (
@@ -406,11 +406,11 @@ def build_connection_html(
       <form id="connect-form" onsubmit="return false;">
         <label>Host or https:// address
           <input id="host" name="host" type="text" autocomplete="off"
-                 value="{html.escape(prefill_host)}" placeholder="{_DEFAULT_HOST_PLACEHOLDER}">
+                 value="{html.escape(prefill_host)}" placeholder="{DEFAULT_HOST}">
         </label>
         <label class="field-port">Port
           <input id="port" name="port" type="number" min="1" max="65535"
-                 value="{html.escape(prefill_port)}" placeholder="{_DEFAULT_PORT_PLACEHOLDER}">
+                 value="{html.escape(prefill_port)}" placeholder="{DEFAULT_PORT}">
         </label>
         <p class="hint">A server on this computer or your network: its host and port.
           A server on the internet: its https:// address, such as https://vbot.example.com
@@ -698,7 +698,7 @@ def _resolve_prefill(
         return _form_values(waiting_for)
     if offered is not None:
         return _form_values(offered)
-    return (_DEFAULT_HOST_PLACEHOLDER, str(_DEFAULT_PORT_PLACEHOLDER))
+    return (DEFAULT_HOST, str(DEFAULT_PORT))
 
 
 def _form_values(target: DesktopTarget) -> tuple[str, str]:

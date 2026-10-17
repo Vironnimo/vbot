@@ -187,7 +187,7 @@ begin
   { An empty host or access option leaves the default to the application installer:
     the access mode local, and the bind address of the chosen mode. }
   ServerHost := ExpandConstant('{param:VBOTHOST|}');
-  ServerPort := ExpandConstant('{param:VBOTPORT|8420}');
+  ServerPort := ExpandConstant('{param:VBOTPORT|22332}');
   ServerData := ExpandConstant('{param:VBOTDATA|{%USERPROFILE}\.vbot}');
   ServerAccess := ExpandConstant('{param:VBOTACCESS|}');
   AllowNetworks := ExpandConstant('{param:VBOTALLOWNETWORK|}');

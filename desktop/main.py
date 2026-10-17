@@ -61,7 +61,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger("vbot.desktop")
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8420
+# Same as core.utils.config.DEFAULT_PORT; the Desktop imports nothing from the server side.
+DEFAULT_PORT = 22332
 WINDOW_TITLE = "vBot"
 APP_BACKGROUND_COLOR = "#15130F"
 DEFAULT_ICON_FILE_NAME = "icon.png"

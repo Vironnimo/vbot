@@ -88,6 +88,7 @@ from core.settings.settings import (
     validate_timezone_name,
     validate_top_p,
 )
+from core.utils.config import PORT_SETTING_KEYS
 from core.utils.errors import StorageError
 
 SETTINGS_FORMAT_VERSION = 1
@@ -127,7 +128,6 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "web_fetch",
     }
 )
-PORT_SETTING_KEYS = frozenset({"PORT", "SERVER_PORT", "port", "server_port"})
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_active_subagents",

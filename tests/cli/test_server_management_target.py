@@ -27,6 +27,7 @@ from cli.server_management import (
     probe_webui,
     resolve_instance,
 )
+from core.utils.config import DEFAULT_PORT
 from core.utils.logging import resolve_daily_log_path
 from tests.cli.cli_test_support import make_instance
 
@@ -117,7 +118,7 @@ def test_wildcard_listener_only_owns_locally_addressed_targets(
         pytest.param(8700, "8600", 8500, 8700, id="explicit-port"),
         pytest.param(None, "8600", 8500, 8600, id="environment"),
         pytest.param(None, None, 8500, 8500, id="settings"),
-        pytest.param(None, None, None, 8420, id="default"),
+        pytest.param(None, None, None, DEFAULT_PORT, id="default"),
     ],
 )
 def test_resolve_instance_uses_the_server_port_precedence_and_daily_log(

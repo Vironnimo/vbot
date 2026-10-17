@@ -26,6 +26,7 @@ from desktop.connection import (
 from desktop.credentials import DeviceTokenStore
 from desktop.main import (
     ACCESS_MODE_AUTHENTICATED,
+    DEFAULT_PORT,
     PROBE_INVALID_TARGET,
     PROBE_NOT_VBOT_SERVER,
     PROBE_SERVER_UNREACHABLE,
@@ -755,7 +756,7 @@ def test_first_run_auto_connect_shows_the_connection_screen_without_an_error(
     assert '<ul class="servers">' not in page
     assert "data-host=" not in page
     assert 'value="127.0.0.1"' in page
-    assert 'value="8420"' in page
+    assert f'value="{DEFAULT_PORT}"' in page
 
 
 # -- Controller: sign-in -------------------------------------------------------------

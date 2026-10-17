@@ -40,7 +40,7 @@ vbot performance history --metric gc.gen2 --metric rpc.chat.send --hours 48
 vbot performance history --at "2026-09-28 16:40"   # everything about the window of that log time
 ```
 
-Add the usual target options (`--port 8421` for the development instance, the worktree port for a worktree).
+Add the usual target options (`--port 22333` for the development instance, the worktree port for a worktree).
 
 **History windows** answer "what happened yesterday afternoon": every 10 minutes and at shutdown the server appends what changed in that window (metrics, counters, gauge maxima, stalls) to `<data-dir>/artifacts/performance/history/<date>.jsonl`, kept 14 days. `history` shows one health line per window; copy a time from a slow log line into `--at` to see that window in full, and use `--metric` to follow one metric over hours or days.
 

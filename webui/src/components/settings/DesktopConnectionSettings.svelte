@@ -27,6 +27,8 @@
 
   const noop = () => {};
   const URL_MARKER = '://';
+  // vBot's default server port (core/utils/config.py DEFAULT_PORT).
+  const DEFAULT_SERVER_PORT = '22332';
 
   let { onToast = noop, idPrefix = 'desktop-settings-server' } = $props();
 
@@ -39,7 +41,7 @@
   let connectingKey = $state('');
   let removingKey = $state('');
   let host = $state('');
-  let port = $state('8420');
+  let port = $state(DEFAULT_SERVER_PORT);
   let label = $state('');
   let formError = $state('');
   let loadGeneration = 0;
@@ -102,7 +104,7 @@
   async function closeAddForm() {
     addOpen = false;
     host = '';
-    port = '8420';
+    port = DEFAULT_SERVER_PORT;
     label = '';
     formError = '';
     await tick();
