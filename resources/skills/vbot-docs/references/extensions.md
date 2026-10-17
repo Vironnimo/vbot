@@ -8,7 +8,7 @@ Paths beginning with `core/`, `resources/` or `webui/` below are relative to the
 
 ## Build and verify
 
-1. Resolve the target instance on the server machine with `vbot home` and inspect `vbot extensions list`. Keep the same host/port target on subsequent management calls. The reported local `data_dir` does not describe a remote server.
+1. Resolve the target instance on the server machine with `vbot home` and inspect `vbot extensions list`. Keep the same server target (`--host`/`--port` or `--url`) on subsequent management calls. The reported local `data_dir` does not describe a remote server.
 2. Choose one template and inspect it before adapting it. Copy only that file or directory into `<data_dir>/extensions/`, preserving nested files. For a new Extension, use a distinct filesystem name; existing names can shadow another Extension. Keep the identity when updating an installed Extension.
 3. Declare only the needed capabilities in `register(api)`. Acquire resources in startup and release them in shutdown. Put workflow guidance in a bundled Skill, standing Model instructions in a prompt block, and callable behavior in a Tool.
 4. Load the declarations with `vbot extensions reload`, then configure declared fields through `vbot extensions set <name> <field> ...`; send secrets through `--stdin`. See [configuration.md](configuration.md#extensions) for settings behavior.
@@ -84,7 +84,7 @@ The `api` object (`ExtensionAPI`) offers:
 | `api.on_startup(handler)` / `api.on_shutdown(handler)` | a lifecycle callback (sync or async, no args) |
 | `api.config` | your config **snapshot** from `settings.extensions.config.<name>`, taken at register time (default `{}`) |
 | `api.get_config()` | your config read **live** per call — reflects a UI change without a restart |
-| `api.resolve_credential(key)` | resolve a credential **live** per call (process env, then the data-dir `.env`) |
+| `api.resolve_credential(key)` | resolve a credential **live** per call (process env, then the Secret Store) |
 | `api.logger` | a ready-made `vbot.extensions.<name>` logger |
 
 ## Hooks
@@ -328,9 +328,9 @@ Each field is one dict. The v1 types are `text`, `number`, `toggle`, and `secret
 
 Any violation raises `ValueError` inside `register()`, so the extension loads as `failed` with a message naming the bad field (the same policy as an invalid prompt block). Calling `api.register_settings` twice also raises — declare exactly one schema.
 
-**What the WebUI renders:** a `text` field is a text input (its `default` is shown as the placeholder), `number` a number input, `toggle` a checkbox, and `secret` a write-only password input with a Set/Not-set indicator and Save/Clear actions. Non-secret fields save together through a single "Save settings" button; a secret saves on its own (see [Secrets](#secrets-in-env)).
+**What the WebUI renders:** a `text` field is a text input (its `default` is shown as the placeholder), `number` a number input, `toggle` a checkbox, and `secret` a write-only password input with a Set/Not-set indicator and Save/Clear actions. Non-secret fields save together through a single "Save settings" button; a secret saves on its own (see [Secrets](#secrets)).
 
-**Server-side validation on save:** for a loaded extension with a schema, the `settings.update` RPC validates the submitted config against the schema before persisting — unknown keys are rejected, a key naming a `secret` field is rejected (secrets live in `.env`, never in config), types must match, and a `required` non-secret field must be present and non-empty. The generic backend config object remains part of the Extension API, but the WebUI exposes it only through a declared schema.
+**Server-side validation on save:** for a loaded extension with a schema, the `settings.update` RPC validates the submitted config against the schema before persisting — unknown keys are rejected, a key naming a `secret` field is rejected (secrets live in the Secret Store, never in config), types must match, and a `required` non-secret field must be present and non-empty. The generic backend config object remains part of the Extension API, but the WebUI exposes it only through a declared schema.
 
 **Live values.** A non-secret setting change (URL, a toggle, a number) is read **live** on the next tool call — no restart. Read your config through `api.get_config()` rather than the register-time `api.config` snapshot (see [Config and logging](#config-and-logging)). Enabling, disabling, or reloading a whole extension also applies live (see [Reloading extensions](#reloading-extensions)).
 
@@ -429,9 +429,9 @@ def register(api):
 
 `api.logger` is a `vbot.extensions.<name>` logger through the normal logging pipeline (no `print`). Never log a secret value.
 
-### Secrets in env
+### Secrets
 
-A `secret` field's value is stored in the data directory's `.env` (`~/.vbot/.env`) under the `env_key` you declared — **never** in `settings.json`. Read it live per call with `api.resolve_credential(env_key)`:
+A `secret` field's value is stored encrypted in the data directory's Secret Store (`secrets.json`) under the `env_key` you declared — **never** in `settings.json`. Read it live per call with `api.resolve_credential(env_key)`:
 
 ```python
 def register(api):
@@ -442,15 +442,15 @@ def register(api):
     )
 
     def call_home(context, arguments):
-        token = api.resolve_credential("HASS_TOKEN")  # process env, then .env
+        token = api.resolve_credential("HASS_TOKEN")  # process env, then the Secret Store
         if not token:
             return tool_failure("not_configured", "Set the token in Settings → Extensions.")
         ...
 ```
 
-- **Write-only in the UI.** The form shows only whether the secret is set; the stored value is never displayed. Saving or clearing it writes `.env` and refreshes the resolver immediately (no restart).
-- **You choose the `.env` key explicitly.** There is no derived naming — established keys keep their names (`HASS_TOKEN` stays `HASS_TOKEN`). To avoid clashing with another extension or an app credential, **prefix new keys** with your extension name (e.g. `MYEXT_API_KEY`).
-- **Process-env precedence.** A key present in the process environment **wins** over the `.env` value the UI writes. So if the same key is exported in the environment that launched vBot, that stale value overrides what a user sets in the form — worth knowing when a secret "won't change".
+- **Write-only in the UI.** The form shows only whether the secret is set; the stored value is never displayed. Saving or clearing it writes the Secret Store and refreshes the resolver immediately (no restart).
+- **You choose the credential name explicitly.** There is no derived naming — established keys keep their names (`HASS_TOKEN` stays `HASS_TOKEN`). To avoid clashing with another extension or an app credential, **prefix new keys** with your extension name (e.g. `MYEXT_API_KEY`).
+- **Process-env precedence.** A key present in the process environment **wins** over the stored value the UI writes. So if the same key is exported in the environment that launched vBot, that stale value overrides what a user sets in the form — worth knowing when a secret "won't change".
 
 ## Manifest (optional): `extension.json`
 

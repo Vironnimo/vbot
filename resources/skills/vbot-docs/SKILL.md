@@ -42,8 +42,8 @@ For a focused question about a past conversation, use `session_search` and answe
 | Install a Skill from a link, archive or folder; inspect, author, share, disable or pin Skills; review their history; restore deleted Skills; Librarian passes over an Agent's own Skills | `references/skills.md` |
 | Pinned Memory for an Identity Agent, its change history, restoring earlier entries | `references/memory.md` |
 | Logs, Provider traces, Session usage statistics and server performance | `references/diagnostics.md` |
-| Server start/stop/restart, update, uninstall, Autostart, Desktop, Doctor | `references/server.md` |
-| Database health, data snapshots and recovery | `references/data-store.md` |
+| Server start/stop/restart, update, uninstall, Autostart, Desktop, Doctor, access mode and paired devices, reaching another vBot server and signing in to it | `references/server.md` |
+| Named credentials and the Secret Store, database health, data snapshots, configuration backups and recovery | `references/data-store.md` |
 | Filesystem investigation, data location, backups or manual repair | `references/system-layout.md` |
 
 `vbot tool list` lists registered public Tools. An Agent's actual access also depends on its Tool policy, Project ceiling and runtime conditions; inspect its configuration before changing permissions.
@@ -56,7 +56,7 @@ Read a template with the `skill` Tool using `name: "vbot-docs"` and its relative
 
 ## Keep the target and path roles clear
 
-Management commands need a running server. Put `--host <host> --port <port>` before the area or after the action when selecting an explicit target, and repeat them on follow-up calls. `--data-dir <path>` selects the CLI's local instance configuration; it does not redirect RPC state on an already selected server. Read `references/server.md` for defaults and command-specific exceptions.
+Management commands need a running server. To select another server, put `--host <host> --port <port>`, or `--url <address>` with an address such as `https://vbot.example.com`, before the area or after the action, and repeat the same options on follow-up calls. `--data-dir <path>` selects the CLI's local instance configuration; it does not redirect RPC state on an already selected server. Read `references/server.md` for defaults, signing in to another server and command-specific exceptions.
 
 `home`, `server`, `desktop`, `update`, `uninstall`, `autostart`, and `doctor` operate locally; `data-store` commands have both local and RPC operations. Run lifecycle work on the server machine. Do not interpret local filesystem reports as evidence about a remote server.
 
@@ -65,7 +65,8 @@ Management commands need a running server. Put `--host <host> --port <port>` bef
 ## Inputs and recovery
 
 - Prefer validated CLI writes over editing runtime files. Use `--file` for multiline content; that path belongs to the machine running the CLI. Project and Workspace paths belong to the server machine. After an unavoidable manual JSON edit, run `vbot doctor config` against that local data directory.
-- Pass arrays and objects as one JSON argument. If the shell alters quoting, use a command's stdin input: `config set --stdin`, Provider key stdin, or Task Model/Extension stdin. Stdin JSON must be valid UTF-8. Never echo credentials into command arguments, logs or reports.
+- Pass arrays and objects as one JSON argument. If the shell alters quoting, use a command's stdin input: `config set --stdin`, Provider key stdin, or Task Model/Extension stdin. Stdin JSON must be valid UTF-8.
+- Set a credential only through vBot's commands, which keep it in the encrypted Secret Store; vBot ignores a `.env` file. Pass the value on the command's stdin, never as an argument or in a file, and never repeat it in output or reports.
 - On failure, use the suggested read commands to inspect the same target and reuse exact ids from results. `Next:` commands are suggestions, never automatically executed. Command, option, and allowed-value typos can get corrections; missing inputs point to command help. Recovery hints remain available on stderr with `--output plain`; stdout keeps the original result details.
 - A failed RPC with `request_state: unknown` may already have changed state. `not_sent` means only that RPC was not delivered; earlier steps in the command may still be saved. `responded` means the server returned an error, not that all changes were rolled back. Inspect the same target before retrying a mutation; do not repeat completed steps.
 - Use `session list` pagination and filtered `log read` for large histories. Explicit expansion is available; an omitted row in a bounded result is not evidence of absence.

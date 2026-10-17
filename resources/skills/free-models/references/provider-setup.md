@@ -14,12 +14,13 @@ stays unavailable, and finish the task normally.
    optional and permanent for the cap; it is the user's call.
 2. User creates an account at `https://openrouter.ai` and creates an API key under API
    keys in their account settings.
-3. Connect it (you run):
+3. Connect it (you run), piping the key the user gave you into the command's stdin;
+   never put the key in its arguments:
    ```bash
-   vbot provider set-key openrouter <key-from-user> --refresh-models
+   vbot provider key set openrouter --stdin --refresh-models
    ```
-   The key lands in the data-dir `.env` via server RPC; the command prints only the
-   connection and env-key name.
+   The key lands in the server's encrypted Secret Store; the command prints only the
+   connection and credential name.
 4. Optionally, point the user to the privacy settings in their OpenRouter account to
    review whether endpoints that may train on inputs are allowed — free endpoint
    policies differ per upstream.
@@ -35,9 +36,9 @@ Two connection types exist; let the user pick.
   and copies the API key. Tell the user plainly that Zen asks for billing details even
   for the free group and supports auto-reload below a low balance — anyone who wants a
   guaranteed zero spend should disable auto-reload in their Zen workspace settings.
-  Then run:
+  Then run, with the key on stdin as for OpenRouter:
   ```bash
-  vbot provider set-key opencode-zen <key-from-user> --refresh-models
+  vbot provider key set opencode-zen --stdin --refresh-models
   ```
 - **OAuth device flow:** run `vbot provider connect opencode-zen`, relay the printed
   user code and verification URL to the user, let them complete it in the browser, then

@@ -19,7 +19,7 @@ Pass the token to the CLI over UTF-8 stdin, never as a command-line argument:
 vbot channel add tg-main --platform telegram --agent assistant --token-stdin
 ```
 
-Supply the token through the caller's stdin mechanism. The server stores it atomically under a Channel-specific managed key in the data-dir `.env`, reloads Credentials live, and starts only this Channel adapter. Never echo the token, include it in a shell argument, or edit `.env` directly.
+Supply the token through the caller's stdin mechanism. The server stores it atomically under a Channel-specific managed key in the data directory's Secret Store, reloads Credentials live, and starts only this Channel adapter. Never echo the token, put it in a command argument, or write it to a file.
 
 The command result shows the saved Channel, credential source, and whether the managed value is effective. No server restart is needed. If an external process-environment value already owns the derived key, it remains authoritative and the result reports `effective_source=process_environment applied=no`.
 

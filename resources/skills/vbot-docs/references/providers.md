@@ -24,7 +24,7 @@ vbot provider custom delete <provider-id>
 
 - Custom Providers are secret-free Settings records with one implicit `default` Connection. The current Adapter is `openai_compatible`.
 - `custom save` replaces the complete record and reloads Provider/Model registries live. Repeated `--model` flags add conservative manual chat Models; use the WebUI when richer modality/task/capability facts are required.
-- `--api-key-stdin` reads the key from UTF-8 stdin and stores it under the generated data-dir `.env` key. Never echo it. Omission preserves the stored key; changing the Provider record still replaces its complete non-secret configuration.
+- `--api-key-stdin` reads the key from UTF-8 stdin and stores it in the data directory's Secret Store under the generated credential name. Never echo it. Omission preserves the stored key; changing the Provider record still replaces its complete non-secret configuration.
 - `custom delete` removes generated data-dir credentials but does not rewrite Agent/default/task Model references; tell the user those references become unavailable.
 
 ## Enable / disable a connection
@@ -46,10 +46,10 @@ vbot provider key set <provider-id> --stdin [--connection <provider:connection-i
 vbot provider key unset <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
 ```
 
-- Supply the key through UTF-8 stdin. `key set` writes the key to the target data-dir `.env` via server RPC, reloads provider credentials live (no restart), and prints only the connection and env-key name. Never echo the key back.
+- Supply the key through UTF-8 stdin, never as the `<api-key>` argument. `key set` writes the key to the target server's Secret Store, reloads provider credentials live (no restart), and prints only the connection and credential name. Never echo the key back.
 - `--connection` is required only when the provider has more than one API-key connection.
 - Add `--refresh-models` to discover Models after saving the key. If discovery fails, the command exits nonzero and reports both the saved key and failed refresh. Correct the connection, then retry `model refresh`; do not resend the key just to retry discovery.
-- `key unset` removes only data-dir `.env` keys; a credential set in the process environment is out of its reach and stays usable.
+- `key unset` removes only the stored key; a credential set in the server's process environment is out of its reach and stays usable.
 
 ## OAuth device flow
 
