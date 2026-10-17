@@ -75,7 +75,7 @@ export default Object.freeze({
     'How Agents search and read the web, create media, and delegate work.',
   'settings.pages.integrations': 'Integrations',
   'settings.pages.integrationsDescription':
-    'Messaging Channels, Extensions, and MCP connections.',
+    'Messaging Channels, Extensions, MCP connections, and saved credentials.',
   'settings.pages.archiveDescription':
     'Restore deleted Agents, Projects and Sessions or delete them for good, and choose how long vBot keeps them.',
   'settings.pages.system': 'System',
@@ -617,6 +617,56 @@ export default Object.freeze({
   'settings.serviceKey.inputLabel': 'New API key ({variable})',
   'settings.serviceKey.saveSuccess': 'API key saved.',
   'settings.serviceKey.removeSuccess': 'API key removed.',
+  'settings.credentials.title': 'Credentials',
+  'settings.credentials.count': '{count} saved',
+  'settings.credentials.help':
+    'Named values such as API keys and tokens that Skills, Channels, Extensions and MCP connections read by name, like environment variables. Provider keys, service keys and tokens saved elsewhere in Settings are listed here too.\n\nvBot keeps them encrypted in its Secret Store on the server and never shows a value again. A variable set in the server environment takes precedence over a saved value and can only be changed there.',
+  'settings.credentials.add': 'Add credential',
+  'settings.credentials.empty': 'No credentials saved yet.',
+  'settings.credentials.listLabel': 'Saved credentials',
+  'settings.credentials.loadError': 'Credentials could not be loaded.',
+  'settings.credentials.unavailable':
+    'vBot cannot open its Secret Store, so credentials cannot be added, replaced or removed.',
+  'settings.credentials.unavailableReason': 'The server reports: {reason}',
+  'settings.credentials.unavailableAction':
+    'Unavailable while vBot cannot open its Secret Store.',
+  'settings.credentials.stored': 'Saved in vBot',
+  'settings.credentials.environment':
+    'Set in the server environment, which takes precedence. Change it there.',
+  'settings.credentials.environmentEmpty':
+    'Empty in the server environment, which hides the saved value. Change it there.',
+  'settings.credentials.damaged': 'Cannot be decrypted. Replace or remove it.',
+  'settings.credentials.unreadable': 'Saved, but vBot cannot read it now.',
+  'settings.credentials.chipDamaged': 'Damaged',
+  'settings.credentials.chipMissing': 'Missing',
+  'settings.credentials.replace': 'Replace',
+  'settings.credentials.replaceAria': 'Replace {name}',
+  'settings.credentials.removeAria': 'Remove {name}',
+  'settings.credentials.addTitle': 'Add credential',
+  'settings.credentials.replaceTitle': 'Replace {name}',
+  'settings.credentials.name': 'Name',
+  'settings.credentials.nameHelp':
+    'Letters, digits and underscores, not starting with a digit, like an environment variable.',
+  'settings.credentials.value': 'Value',
+  'settings.credentials.valueHelp':
+    'vBot keeps it encrypted and never shows it again.',
+  'settings.credentials.valuePlaceholder': 'Paste the value…',
+  'settings.credentials.nameRequired': 'Enter a name.',
+  'settings.credentials.nameInvalid':
+    'Use only letters, digits and underscores, and do not start with a digit.',
+  'settings.credentials.nameTooLong': 'Use at most {max} characters.',
+  'settings.credentials.nameTaken':
+    'A credential with this name is already saved. Use Replace in its row.',
+  'settings.credentials.valueRequired': 'Enter a value.',
+  'settings.credentials.saveError': 'The credential could not be saved.',
+  'settings.credentials.saved': '{name} saved.',
+  'settings.credentials.savedShadowed':
+    '{name} saved, but the server environment also sets it and takes precedence.',
+  'settings.credentials.removeTitle': 'Remove {name}?',
+  'settings.credentials.removeBody':
+    'vBot deletes the saved value. Skills, Channels, Providers and connections that read {name} lose it until it is saved again.',
+  'settings.credentials.removeError': 'The credential could not be removed.',
+  'settings.credentials.removed': '{name} removed.',
   'settings.localSpeech.memoryTitle': 'Local speech memory',
   'settings.localSpeech.memoryLoaded': 'Loaded in memory',
   'settings.localSpeech.memoryEmpty': 'Not loaded',

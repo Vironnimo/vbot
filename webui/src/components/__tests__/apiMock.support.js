@@ -25,6 +25,11 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       call('task_model.local_setup_cancel', { target }),
     rebuildRecallIndex: () => call('recall.rebuild_index'),
     setServiceKey: (params) => call('settings.set_service_key', params),
+    // Named credentials: an available Secret Store without saved names.
+    listCredentials: () =>
+      Promise.resolve({ state: 'available', reason: null, credentials: [] }),
+    setCredential: (name, value) => call('secrets.set', { name, value }),
+    unsetCredential: (name) => call('secrets.unset', { name }),
     listAgents: () => call('agent.list'),
     reorderAgents: (agentIds, expectedRevision) =>
       call('agent.reorder', {

@@ -427,7 +427,7 @@ describe('App controller', () => {
   // refresh tokens its views watch or reloads the owning roster.
   it.each([
     ['models', ['models']],
-    ['providers', ['models']],
+    ['providers', ['models', 'credentials']],
     ['memories', ['memories']],
     ['projects', ['projects']],
     ['clients', ['clients']],
@@ -442,7 +442,7 @@ describe('App controller', () => {
     ['archive', ['archive']],
     ['agents', []],
     ['queue', []],
-    ['data_store', []],
+    ['data_store', ['credentials']],
     ['mystery', []],
   ])('routes resource_changed(%s) to the tokens %j', async (kind, bumped) => {
     const { actions, controller, state } = setup();

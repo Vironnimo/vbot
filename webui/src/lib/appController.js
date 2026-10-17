@@ -20,6 +20,7 @@ import {
   RESOURCE_TOKEN_CLIENTS,
   RESOURCE_TOKEN_CRON,
   RESOURCE_TOKEN_COMMANDS,
+  RESOURCE_TOKEN_CREDENTIALS,
   RESOURCE_TOKEN_DEBUG_TRACES,
   RESOURCE_TOKEN_DEVICES,
   RESOURCE_TOKEN_MODELS,
@@ -111,6 +112,8 @@ export function createAppControllerState() {
     dataStoreIncident: null,
     // The Secret Store projection of `data_store.status` (`secrets`).
     secretStore: null,
+    // Saved credentials changed (Settings -> Credentials).
+    credentialsRefreshToken: 0,
     // The server serves a newer WebUI build than this page runs.
     webuiOutdated: false,
     skillsRefreshToken: 0,
@@ -228,6 +231,7 @@ export function createAppController({
         state.clientsRefreshToken += 1;
         state.devicesRefreshToken += 1;
         state.channelsRefreshToken += 1;
+        state.credentialsRefreshToken += 1;
         state.cronRefreshToken += 1;
         state.calendarRefreshToken += 1;
         state.commandsRefreshToken += 1;
@@ -352,6 +356,9 @@ export function createAppController({
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_CHANNELS)) {
       state.channelsRefreshToken += 1;
+    }
+    if (tokenKeys.includes(RESOURCE_TOKEN_CREDENTIALS)) {
+      state.credentialsRefreshToken += 1;
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_CRON)) {
       state.cronRefreshToken += 1;
