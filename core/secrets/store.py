@@ -122,6 +122,10 @@ SecretStoreState = Literal["absent", "available", "unavailable"]
 
 #: Whether credential names ignore case, as environment-variable names do on Windows.
 CREDENTIAL_NAMES_IGNORE_CASE: Final = sys.platform == "win32"
+#: A credential name: an environment-variable name, since consumers resolve
+#: credentials by it and Storage, the RPCs and the CLI accept only such names.
+#: Stricter than ``ENTRY_NAME_PATTERN``, which also admits OAuth token ids.
+CREDENTIAL_NAME_PATTERN: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,199}$")
 
 
 def credential_name_key(name: str) -> str:

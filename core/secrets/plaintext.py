@@ -50,6 +50,7 @@ from typing import Any, Literal
 
 from core.config_validation import JsonDiagnostic, JsonValidationReport
 from core.secrets.store import (
+    CREDENTIAL_NAME_PATTERN,
     CREDENTIALS,
     ENTRY_NAME_PATTERN,
     OAUTH_TOKENS,
@@ -870,7 +871,7 @@ def _parse_env(content: bytes) -> tuple[dict[str, str], dict[int, str]] | None:
     values: dict[str, str] = {}
     skipped: dict[int, str] = {}
     for line, name, value in _parse_env_lines(text):
-        if ENTRY_NAME_PATTERN.fullmatch(name) is None:
+        if CREDENTIAL_NAME_PATTERN.fullmatch(name) is None:
             skipped[line] = "not a credential name"
         else:
             values[credential_name_key(name)] = value
