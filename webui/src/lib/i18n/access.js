@@ -6,6 +6,11 @@ export default Object.freeze({
     'This vBot server does not accept connections from this address or over this kind of connection.',
   'access.denied.hint':
     'Its access mode decides who may connect. This computer only accepts just the server’s own computer, Home network without login also the home network, and With login (internet) needs HTTPS for every other computer. On the server’s computer, vbot application access show prints the current setting.',
+  'access.unavailable.title': 'The server cannot check this sign-in right now',
+  'access.unavailable.body':
+    'The server cannot read its list of signed-in devices, so it lets no device in for now. This browser stays signed in, and vBot tries again on its own.',
+  'access.unavailable.hint':
+    'The cause is in the server’s log on the server’s computer. Once the server can read its device list again, vBot opens by itself.',
   'access.unreachable.title': 'vBot cannot reach the server',
   'access.unreachable.body':
     'vBot has to ask the server whether this browser may still use it, but the server does not answer. It keeps trying on its own.',

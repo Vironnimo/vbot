@@ -151,19 +151,25 @@ describe('access gate', () => {
     expect(api.startPairing).toHaveBeenCalledTimes(2);
   });
 
-  it('shows a refusal and lets the user try again', async () => {
-    api.getAuthStatus
-      .mockRejectedValueOnce(
-        Object.assign(new Error('refused'), { code: 'access_denied' }),
-      )
-      .mockResolvedValue(SIGNED_IN);
-    await render();
+  it.each([
+    ['access_denied', 'access.denied.title'],
+    // The server cannot check devices: the sign-in stays, nothing pairs again.
+    ['devices_unavailable', 'access.unavailable.title'],
+  ])(
+    'shows the %s refusal and lets the user try again',
+    async (code, title) => {
+      api.getAuthStatus
+        .mockRejectedValueOnce(Object.assign(new Error('refused'), { code }))
+        .mockResolvedValue(SIGNED_IN);
+      await render();
 
-    expect(heading().textContent.trim()).toBe(t('access.denied.title'));
-    expect(document.activeElement).toBe(heading());
+      expect(heading().textContent.trim()).toBe(t(title));
+      expect(document.activeElement).toBe(heading());
+      expect(api.startPairing).not.toHaveBeenCalled();
 
-    clickButton(t('common.retry'));
-    await settle();
-    expect(appShown()).toBeTruthy();
-  });
+      clickButton(t('common.retry'));
+      await settle();
+      expect(appShown()).toBeTruthy();
+    },
+  );
 });

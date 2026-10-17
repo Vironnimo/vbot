@@ -7,6 +7,9 @@ import { reconnectBackoffDelay } from './backoff.js';
 // - `app`: mount the app.
 // - `pairing`: `authenticated` mode without a principal; pair this browser.
 // - `denied`: the server refuses this client (403 `access_denied`).
+// - `unavailable`: the server cannot check signed-in Devices right now (503
+//   `devices_unavailable`); this browser's sign-in stays. It retries on its
+//   own, no sooner than the server's `Retry-After`, and offers Retry.
 // - `unreachable`: after an access loss the status check failed; it retries
 //   on its own with a backoff and offers Retry.
 // - `looping`: the app lost access again and again right after the status
@@ -21,6 +24,7 @@ export const GATE_CHECKING = 'checking';
 export const GATE_APP = 'app';
 export const GATE_PAIRING = 'pairing';
 export const GATE_DENIED = 'denied';
+export const GATE_UNAVAILABLE = 'unavailable';
 export const GATE_UNREACHABLE = 'unreachable';
 export const GATE_LOOPING = 'looping';
 
@@ -110,10 +114,12 @@ export function createAccessGate({
       }
       if (error?.code === 'access_denied') {
         show({ screen: GATE_DENIED });
+      } else if (error?.code === 'devices_unavailable') {
+        scheduleRetry(GATE_UNAVAILABLE, error.retryAfter);
       } else if (boot) {
         show({ screen: GATE_APP });
       } else {
-        scheduleRetry();
+        scheduleRetry(GATE_UNREACHABLE);
       }
       return;
     }
@@ -130,12 +136,15 @@ export function createAccessGate({
     });
   }
 
-  function scheduleRetry() {
-    show({ screen: GATE_UNREACHABLE });
-    const delay = reconnectBackoffDelay(retryAttempt, {
+  // Shows `screen` and checks again after a backoff, or after `retryAfter`
+  // seconds when the server asked for a longer wait.
+  function scheduleRetry(screen, retryAfter = null) {
+    show({ screen });
+    const backoff = reconnectBackoffDelay(retryAttempt, {
       initialDelayMs: RETRY_INITIAL_DELAY_MS,
       maxDelayMs: RETRY_MAX_DELAY_MS,
     });
+    const delay = Math.max(backoff, (retryAfter ?? 0) * 1000);
     retryAttempt += 1;
     retryTimer = setTimeoutFn(() => {
       retryTimer = null;
@@ -169,7 +178,7 @@ export function createAccessGate({
       stopListening ??= onAccessLoss(handleLoss);
       return check({ boot: true });
     },
-    // Retry from `unreachable`, `looping` or `denied`.
+    // Retry from `unavailable`, `unreachable`, `looping` or `denied`.
     retry() {
       losses = [];
       retryAttempt = 0;

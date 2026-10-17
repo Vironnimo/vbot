@@ -39,6 +39,12 @@ describe('access loss', () => {
       [],
     ],
     ['a route’s own rate limit', refusal(429, 'too_many_runs'), []],
+    [
+      'a server that cannot check devices',
+      refusal(503, 'devices_unavailable'),
+      ['devices_unavailable'],
+    ],
+    ['another unavailable service', refusal(503, 'service_unavailable'), []],
   ])('reports %s refusing an RPC', async (_label, response, expected) => {
     await expect(
       api.rpc('agent.list', {}, { fetch: vi.fn().mockResolvedValue(response) }),
@@ -103,6 +109,7 @@ describe('access loss', () => {
 
   it.each([
     [4403, ['access_denied']],
+    [4503, ['devices_unavailable']],
     [1006, []],
   ])('reports a socket close code %i as %j', (code, expected) => {
     const connection = api.subscribeServerEvents(

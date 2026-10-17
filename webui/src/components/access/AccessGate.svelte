@@ -14,6 +14,7 @@
     GATE_DENIED,
     GATE_LOOPING,
     GATE_PAIRING,
+    GATE_UNAVAILABLE,
     GATE_UNREACHABLE,
     createAccessGate,
   } from '$lib/accessGate.js';
@@ -78,6 +79,24 @@
         </h1>
         <p class="access-gate__text">{t('access.denied.body')}</p>
         <p class="access-gate__text">{t('access.denied.hint')}</p>
+        <div class="access-gate__actions">
+          <Button variant="primary" onClick={() => gate.retry()}>
+            {t('common.retry')}
+          </Button>
+        </div>
+      {:else if gateState.screen === GATE_UNAVAILABLE}
+        <h1
+          id="access-gate-title"
+          class="access-gate__title"
+          tabindex="-1"
+          use:focusOnMount
+        >
+          {t('access.unavailable.title')}
+        </h1>
+        <p class="access-gate__text" role="status">
+          {t('access.unavailable.body')}
+        </p>
+        <p class="access-gate__text">{t('access.unavailable.hint')}</p>
         <div class="access-gate__actions">
           <Button variant="primary" onClick={() => gate.retry()}>
             {t('common.retry')}
