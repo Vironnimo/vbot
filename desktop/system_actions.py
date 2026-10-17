@@ -3,19 +3,21 @@
 The WebUI may be served by a remote HTTP vBot server, where browser origin
 policy makes clipboard access unreliable. This module owns the narrow native
 boundary for clipboard text and opening safe web links in the user's default
-browser. It stays independent of pywebview and serializes process-global host
-state because bridge calls execute on separate threads.
+browser, including the new windows a page opens (:func:`guard_page_windows`).
+It stays independent of pywebview and serializes process-global host state
+because bridge calls execute on separate threads.
 """
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import sys
 import threading
 import time
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -24,6 +26,11 @@ _MAX_EXTERNAL_URL_CHARACTERS = 8192
 _CLIPBOARD_COMMAND_TIMEOUT_SECONDS = 5.0
 _WINDOWS_CLIPBOARD_RETRIES = 5
 _WINDOWS_CLIPBOARD_RETRY_DELAY_SECONDS = 0.01
+#: pywebview's backends open a page's new window (``target="_blank"``,
+#: ``window.open``) with ``webbrowser.open`` from their own module.
+_WEBVIEW_BACKEND_PREFIX = "webview.platforms."
+
+logger = logging.getLogger("vbot.desktop.system_actions")
 
 
 class DesktopSystemActions:
@@ -60,6 +67,52 @@ class DesktopSystemActions:
             opened = self._external_url_opener(url)
         if not opened:
             raise RuntimeError("The default browser could not open the link")
+
+
+class _PageWindowBrowser:
+    """Stands in for ``webbrowser`` in pywebview's backends: opens web links only."""
+
+    def __init__(self, actions: DesktopSystemActions) -> None:
+        self._actions = actions
+
+    def open(self, url: Any, *_args: Any, **_kwargs: Any) -> bool:
+        try:
+            self._actions.open_external_url(str(url))
+        except ValueError:
+            scheme = urlsplit(str(url)).scheme if isinstance(url, str) else ""
+            logger.warning("Desktop did not open a page's new window (scheme=%s)", scheme[:20])
+            return False
+        except RuntimeError:
+            logger.warning("The default browser could not open a page's new window")
+            return False
+        return True
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(webbrowser, name)
+
+
+def guard_page_windows(
+    actions: DesktopSystemActions, modules: Mapping[str, Any] | None = None
+) -> int:
+    """Open every new window a page asks for through ``actions``, and nothing but web links.
+
+    pywebview hands the URL of such a window to ``webbrowser.open``, which
+    would also start a ``file:``, ``ms-settings:`` or any other registered
+    handler. This replaces ``webbrowser`` in each pywebview backend module
+    imported so far (``modules``, by default ``sys.modules``); call it once the
+    window exists. Returns how many backend modules are guarded.
+    """
+    guarded = 0
+    for name, module in list((sys.modules if modules is None else modules).items()):
+        if not name.startswith(_WEBVIEW_BACKEND_PREFIX):
+            continue
+        current = getattr(module, "webbrowser", None)
+        if current is webbrowser:
+            module.webbrowser = _PageWindowBrowser(actions)  # type: ignore[attr-defined]
+            current = module.webbrowser
+        if isinstance(current, _PageWindowBrowser):
+            guarded += 1
+    return guarded
 
 
 def _validated_clipboard_text(value: Any) -> str:

@@ -623,6 +623,7 @@ def _run_desktop(
     from desktop.page_events import PageEventDispatcher
     from desktop.speech.cues import CuePlayer
     from desktop.speech.microphone import MicrophoneService
+    from desktop.system_actions import DesktopSystemActions, guard_page_windows
     from desktop.zoom import DesktopZoom
 
     _http.prewarm_outbound_http()
@@ -681,10 +682,12 @@ def _run_desktop(
         else None
     )
     zoom = DesktopZoom(settings_path=settings_file)
+    system_actions = DesktopSystemActions()
     bridge = DesktopBridge(
         voice=voice,
         microphone=microphone,
         connection=controller,
+        system_actions=system_actions,
         live_hotkey=live_hotkey,
         dictation=dictation,
         secure_origins=secure_origins,
@@ -767,7 +770,13 @@ def _run_desktop(
     # storage_path pins it beside the Desktop settings file instead of the
     # shared %APPDATA%\pywebview folder.
     start_kwargs["private_mode"] = False
-    start_kwargs["storage_path"] = str(desktop_config_directory / WEBVIEW_STORAGE_DIR_NAME)
+    storage_path = desktop_config_directory / WEBVIEW_STORAGE_DIR_NAME
+    _make_private_directory(storage_path)
+    start_kwargs["storage_path"] = str(storage_path)
+    # The other choice loads a page's new window in this window, bridge included.
+    settings = getattr(webview, "settings", None)
+    if isinstance(settings, dict):
+        settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
 
     connection_entry = _select_launch_entry(
         controller,
@@ -777,6 +786,10 @@ def _run_desktop(
     )
 
     def start_visible_services() -> None:
+        # The backend is loaded now; a page's new windows open as web links only,
+        # in the default browser, before the window shows any server's page.
+        if guard_page_windows(system_actions) == 0:
+            logger.warning("Desktop found no pywebview backend to guard new windows in")
         # The lightweight shell must become visible before any network probe or
         # optional ML/audio initialization. Connect first so Voice follows the
         # window's resolved target; Voice starts listening only when enabled.
@@ -813,6 +826,21 @@ def _run_desktop(
         voice.close()
         cues.close()
         page_events.close()
+
+
+def _make_private_directory(path: Path) -> None:
+    """Create the WebView profile directory for the user alone on POSIX.
+
+    It holds the WebUI's sign-in cookies. On Windows the per-user application
+    data folder it lives in is private already.
+    """
+    if sys.platform == "win32":
+        return
+    try:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.chmod(0o700)
+    except OSError:
+        logger.warning("The Desktop could not make %s private", path, exc_info=True)
 
 
 class _WindowState:
