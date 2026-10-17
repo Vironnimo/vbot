@@ -24,7 +24,7 @@ from core.providers.providers import (
 )
 from core.providers.reasoning import REASONING_INTENT_ON, ReasoningIntent
 from core.runtime.runtime import Runtime
-from core.secrets import CREDENTIALS
+from core.secrets import CREDENTIAL_NAMES_IGNORE_CASE, CREDENTIALS
 from core.storage.storage import StorageManager
 from core.utils.config import Config
 from server.events import ServerEventBus
@@ -361,6 +361,11 @@ async def test_provider_unset_key_removes_only_the_account_credential(
         "removed": True,
         "configured": False,
     }
+    if CREDENTIAL_NAMES_IGNORE_CASE:
+        # On Windows the alias spelling is the same credential; its later write won.
+        remaining = {
+            name: value for name, value in remaining.items() if name != "OPENROUTER_API_KEY__WORK"
+        }
     assert _stored_credentials(state) == remaining
     assert resource_changes(state) == [{"kind": "providers"}]
 

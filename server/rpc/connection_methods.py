@@ -410,7 +410,9 @@ async def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
             runtime.storage.set_data_dir_credential, credential_key, value
         )
         for key in environment:
-            if key != credential_key and (
+            # On Windows another spelling of the name is the same credential, which
+            # the write has just replaced; removing it would remove the new value.
+            if credential_name_key(key) != credential_name_key(credential_key) and (
                 account_id_from_credential_key(connection.auth.credential_key, key) == account_id
             ):
                 await _CONNECTION_WORKERS.run(runtime.storage.remove_data_dir_credential, key)
