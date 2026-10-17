@@ -326,7 +326,6 @@ class LiveToolExecutor:
             program=program,
             count=count if isinstance(count, int) and count >= 1 else 1,
             folder=text_field(arguments, "folder"),
-            name=text_field(arguments, "name"),
             task=text_field(arguments, "task"),
             catalog=catalog,
         )

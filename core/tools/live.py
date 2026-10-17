@@ -303,10 +303,6 @@ def live_tool_definitions() -> list[JsonObject]:
                         "selected Project's folder."
                     ),
                     "count": _count("How many Terminals to start with this task."),
-                    "name": _text(
-                        "A name for the new Terminals when the user gives one. Omit it otherwise.",
-                        maxLength=MAX_LIVE_NAME_CHARS,
-                    ),
                 },
                 required=["program"],
             ),

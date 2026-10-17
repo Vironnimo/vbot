@@ -96,10 +96,10 @@ async def test_reports_a_pending_codex_update_question(fx: Fixture) -> None:
 
 
 @pytest.mark.asyncio
-async def test_starts_several_terminals_with_one_name(fx: Fixture) -> None:
-    text = await fx.ok("start_coding_terminal", program="codex", task="Go", count=2, name="Pair")
+async def test_starts_several_terminals_with_one_task(fx: Fixture) -> None:
+    text = await fx.ok("start_coding_terminal", program="codex", task="Go", count=2)
     assert text.endswith("t1, t2. Typed the task into t1 and t2 and sent it.")
-    assert all(params["name"] == "Pair" for params in fx.app.params("terminal.start"))
+    assert len(fx.app.params("terminal.start")) == 2
     assert len(fx.app.inputs) == 4
 
 
@@ -184,10 +184,10 @@ async def test_reports_what_the_shell_shows_when_the_program_did_not_start(fx: F
 
 @pytest.mark.asyncio
 async def test_types_a_message_into_a_coding_terminal(fx: Fixture) -> None:
-    fx.app.add_terminal("term_a", name="Build", call_name="Anna")
-    text = await fx.ok("send_message", target="Build", text="line one\nline two")
+    fx.app.add_terminal("term_a", call_name="Anna")
+    text = await fx.ok("send_message", target="Anna", text="line one\nline two")
     assert text == "Sent to t1 (Codex)."
-    # The user calls a Terminal by its call name as well.
+    # The call name matches in any case.
     await fx.ok("send_message", target="anna", text="go")
     assert [data for _id, data, _revision in fx.app.inputs] == [
         "\x1b[200~line one\nline two\x1b[201~",

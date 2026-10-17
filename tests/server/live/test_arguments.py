@@ -98,8 +98,8 @@ def test_repairs_field_names_and_values_of_other_harnesses(
         ),
         (
             "start_coding_terminal",
-            {"program": "codex", "prompt": "???", "name": "None", "folder": "n/a"},
-            {"program": "codex", "task": "???", "name": "None"},
+            {"program": "codex", "prompt": "???", "folder": "n/a"},
+            {"program": "codex", "task": "???"},
         ),
         (
             "manage_terminals",

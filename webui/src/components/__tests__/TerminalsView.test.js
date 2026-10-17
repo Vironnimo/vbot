@@ -401,7 +401,7 @@ describe('TerminalsView launch and close', () => {
     ).toHaveLength(0);
     expect(
       document.querySelectorAll('#terminal-start-form .info-hint'),
-    ).toHaveLength(4);
+    ).toHaveLength(3);
 
     setField('#terminal-start-command', 'codex --profile "work space"');
     setField('#terminal-start-workdir', 'C:\\repo');

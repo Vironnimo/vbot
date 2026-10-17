@@ -129,12 +129,11 @@ def _terminal_group_order(state: Any, params: JsonObject) -> JsonObject:
 async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"command", "args", "workdir", "name", "group_id", "columns", "rows"},
+        {"command", "args", "workdir", "group_id", "columns", "rows"},
         "terminal.start",
     )
     command = _optional_string(params, "command")
     workdir = _optional_string(params, "workdir")
-    name = _optional_string(params, "name")
     group_id = _optional_string(params, "group_id")
     arguments = _optional_arguments(params)
     columns = (
@@ -156,16 +155,6 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
             RPC_ERROR_INVALID_REQUEST,
             "params.command must not be empty when provided",
         )
-    if name is not None and not name.strip():
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.name must not be empty when provided",
-        )
-    if name is not None and len(name.strip()) > 80:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.name must be at most 80 characters",
-        )
     if any(not argument.strip() for argument in arguments):
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -177,7 +166,6 @@ async def _terminal_start(state: Any, params: JsonObject) -> JsonObject:
             arguments=arguments,
             cwd=Path(workdir).expanduser() if workdir is not None else None,
             launch_workdir=workdir,
-            name=name.strip() if name else None,
             group_id=group_id.strip() if group_id else None,
             columns=columns,
             rows=rows,

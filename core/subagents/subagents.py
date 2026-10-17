@@ -551,11 +551,12 @@ class SubAgentCoordinator:
                     )
                     if owner is None:
                         continue
+                    command = " ".join((info.command, *info.arguments)).strip()
                     running.append(
                         {
                             "kind": "terminal",
                             "id": info.terminal_id,
-                            "label": info.name or " ".join((info.command, *info.arguments)).strip(),
+                            "label": f"{info.call_name}, {command}" if info.call_name else command,
                             "status": "running",
                             **owner_fields(owner),
                         }
