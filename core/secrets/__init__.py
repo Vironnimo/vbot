@@ -33,6 +33,7 @@ from core.secrets.plaintext import (
     settle_plaintext_credentials,
 )
 from core.secrets.store import (
+    CREDENTIAL_NAME_PATTERN,
     CREDENTIAL_NAMES_IGNORE_CASE,
     CREDENTIALS,
     ENTRY_NAME_PATTERN,
@@ -56,6 +57,7 @@ from core.secrets.store import (
 __all__ = [
     "CONVERT_COMMAND",
     "CREDENTIALS",
+    "CREDENTIAL_NAME_PATTERN",
     "CREDENTIAL_NAMES_IGNORE_CASE",
     "DPAPI_PROTECTION",
     "ENTRY_NAME_PATTERN",

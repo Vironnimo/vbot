@@ -13,7 +13,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import re
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -28,6 +27,7 @@ from core.json_documents import (
     write_json_document,
 )
 from core.secrets import (
+    CREDENTIAL_NAME_PATTERN,
     CREDENTIALS,
     SecretStore,
     SecretTransaction,
@@ -91,7 +91,7 @@ _SETTINGS_RACY_WINDOW_NS = 3_000_000_000
 _LOGGER = get_logger("storage")
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
-ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+ENV_KEY_PATTERN = CREDENTIAL_NAME_PATTERN
 
 
 class ConfigProtocol(Protocol):

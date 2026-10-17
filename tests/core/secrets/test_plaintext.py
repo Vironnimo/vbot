@@ -120,8 +120,15 @@ def test_an_import_mirrors_the_plaintext_files_and_changes_none_of_them(tmp_path
     [
         (
             ".env",
-            "OPENAI_API_KEY=sk-openai\nexport SHELL_STYLE=value\nc2VjcmV0/dG9rZW4=\n",
-            {".env:2": "not a credential name", ".env:3": "not a credential name"},
+            # The store would hold names such as MY-KEY, but nothing could remove them.
+            "OPENAI_API_KEY=sk-openai\nexport SHELL_STYLE=value\nc2VjcmV0/dG9rZW4=\n"
+            "MY-KEY=value\n1KEY=value\n",
+            {
+                ".env:2": "not a credential name",
+                ".env:3": "not a credential name",
+                ".env:4": "not a credential name",
+                ".env:5": "not a credential name",
+            },
             True,
         ),
         (".env", b"OPENAI_API_KEY=sk-\xff\n", {".env": "not valid UTF-8"}, False),
