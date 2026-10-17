@@ -18,10 +18,11 @@
 
    Both cap prose (paragraphs, lists, headings, quotes) at the reading measure
    `--prose-measure`, while code blocks, tables and images may use the whole
-   width. */
+   width. The Wide and Full Chat widths lift the cap in Chat
+   (`--chat-prose-measure`, entries.css). */
 .chat-view,
 .md-chat {
-  --md-measure: var(--prose-measure);
+  --md-measure: var(--chat-prose-measure, var(--prose-measure));
   --md-text: var(--text-body);
   --md-emphasis: var(--text-hi);
   --md-font-size: var(--fs-chat-prose);

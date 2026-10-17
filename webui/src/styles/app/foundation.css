@@ -166,10 +166,10 @@
   /* Content-width / reading-measure layer. Single source of truth for how wide
      the current measured content columns grow on large monitors.
      `--chat-measure` is the live chat column; it defaults to the comfortable
-     tier and is overridden per `[data-chat-width]` on `.chat-view`. Reading
-     prose (Chat and Markdown documents) never grows past `--prose-measure`
-     (the comfortable column's text width), so wider areas give room to
-     code, tables, images and Tool rows without lengthening lines. It is a
+     tier and is overridden per `[data-chat-width]` on `.chat-view`.
+     `--prose-measure` (the comfortable column's text width) caps reading
+     prose in Markdown documents and in the Comfortable Chat; the Wide and
+     Full Chat widths let prose fill their column (entries.css). It is a
      fixed length, not an em measure, so a reading context can change its
      type size without changing its column width; narrower areas still
      shrink it, since it is only a maximum.
@@ -181,7 +181,7 @@
      full width. Pages share one inset (`--page-inset-*`), so their titles
      sit at the same height. */
   --chat-measure-comfortable: 780px;
-  --chat-measure-wide: 1100px;
+  --chat-measure-wide: 960px;
   --chat-measure: var(--chat-measure-comfortable);
   --prose-measure: 690px;
   /* A Chat message's side gutter. The composer stack lines up with the

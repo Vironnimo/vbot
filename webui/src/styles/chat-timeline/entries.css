@@ -92,24 +92,31 @@
    only the inner content column is capped and centered. The live width comes
    from `--chat-measure`, which `.chat-view[data-chat-width]` overrides below.
    `full` caps at the whole width (100%, so `--chat-measure` stays usable in
-   `calc`). */
+   `calc`). The setting is the reading width: Comfortable keeps prose at
+   `--prose-measure` while code, tables, images and Tool rows take the whole
+   column; Wide and Full let prose fill the column too, so text and the
+   other rows share both edges (user decision 2026-10-17). Markdown follows
+   through `--md-measure` (markdown.css). */
+.chat-view {
+  --chat-prose-measure: var(--prose-measure);
+}
+
 .chat-view[data-chat-width='wide'] {
   --chat-measure: var(--chat-measure-wide);
+  --chat-prose-measure: 100%;
 }
 
 .chat-view[data-chat-width='full'] {
   --chat-measure: 100%;
+  --chat-prose-measure: 100%;
 }
 
-/* Prose keeps its reading measure at every Chat width (Markdown through
-   `--md-measure`, see markdown.css); code, tables, images and Tool rows take
-   the whole column. */
 .messages__content .msg.assistant > .msg-content > .msg-body-text {
-  max-width: var(--prose-measure);
+  max-width: var(--chat-prose-measure);
 }
 
 .messages__content .msg-user-text {
-  max-width: min(75%, var(--prose-measure));
+  max-width: min(75%, var(--chat-prose-measure));
 }
 
 .chat-timeline-empty {
