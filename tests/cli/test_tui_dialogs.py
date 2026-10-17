@@ -15,6 +15,7 @@ from textual.widgets import Button, Checkbox, DirectoryTree, Input, Select, Sele
 from cli.tui.app import ConversationApp
 from cli.tui.dialogs import ExtensionDialog, PathDialog, Picker
 from cli.tui.transport import ClientError, TerminalClient
+from tests.cli.cli_test_support import make_instance
 from tests.cli.test_tui import Server
 
 type JsonObject = dict[str, Any]
@@ -597,11 +598,8 @@ async def test_file_transport_uploads_bytes_and_preserves_existing_downloads(
         assert request.url.path == "/api/attachments/one"
         return httpx.Response(200, content=b"downloaded bytes")
 
-    async with TerminalClient("http://test.invalid") as client:
-        await client.http.aclose()
-        client.http = httpx.AsyncClient(
-            base_url=client.url, transport=httpx.MockTransport(respond), trust_env=False
-        )
+    target = make_instance(tmp_path, host="test.invalid")
+    async with TerminalClient(target, transport=httpx.MockTransport(respond)) as client:
         source = tmp_path / "source.txt"
         source.write_text("local bytes", encoding="utf-8")
         assert (await client.upload(source))["attachment_id"] == "one"

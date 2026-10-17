@@ -61,6 +61,8 @@ from cli.tui.transport import ClientError, TerminalClient
 from core.utils.ids import new_id
 
 _sleep = asyncio.sleep
+# Server refusals that reconnecting cannot fix (``access.md``).
+_ACCESS_REFUSALS = frozenset({"auth_required", "access_denied"})
 
 # Priority bindings that drive the suggestion popup; without it they belong to
 # the focused widget (see `ConversationApp.check_action`).
@@ -742,11 +744,13 @@ class ConversationApp(App[int]):
 
     async def _events(self) -> None:
         delay = 0.5
+        refused = False
         while True:
             try:
                 async for event in self.client.events():
                     self.connected = True
                     delay = 0.5
+                    refused = False
                     kind = event.get("type", "")
                     if kind == "resource_changed":
                         resource = event.get("payload") or {}
@@ -781,7 +785,19 @@ class ConversationApp(App[int]):
                         if self._event_targets_view(event.get("payload") or event):
                             self._schedule_refresh()
                     self._header()
-            except (OSError, ClientError) as exc:
+            except ClientError as exc:
+                if exc.code in _ACCESS_REFUSALS:
+                    if exc.code == "auth_required" and not refused:
+                        # A restarted server wrote a new local access token; the
+                        # next connection reads it. A second refusal is final.
+                        refused = True
+                        continue
+                    self.connected = False
+                    self._header()
+                    self._notice(f"Event connection closed. {exc}", error=True)
+                    return
+                self._notice(f"Reconnecting to {self.client.url} · {exc}")
+            except OSError as exc:
                 self._notice(f"Reconnecting to {self.client.url} · {exc}")
             except Exception:
                 self._notice(f"Event connection lost. Reconnecting to {self.client.url}.")

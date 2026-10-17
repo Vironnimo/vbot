@@ -72,7 +72,7 @@ class FakeRpc:
         timeout: Any,
         trust_env: bool,
         verify: Any,
-        headers: dict[str, str],
+        auth: httpx.Auth,
     ) -> httpx.Response:
         assert trust_env is False, "CLI RPC must ignore ambient proxy settings"
         method = json["method"]

@@ -385,6 +385,14 @@ def dispatch_devices_command(args: argparse.Namespace, instance: ServerInstance)
         return devices_rename(instance, args.id, args.name)
     if args.command == "revoke":
         return devices_revoke(instance, args.id)
+    if args.command == "pair":
+        from cli.device_pairing import devices_pair
+
+        return devices_pair(instance)
+    if args.command == "logout":
+        from cli.device_pairing import devices_logout
+
+        return devices_logout(instance)
     raise ValueError(f"Unsupported devices command: {args.command}")
 
 

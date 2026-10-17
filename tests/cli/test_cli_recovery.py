@@ -159,6 +159,28 @@ def test_connection_failure_never_proposes_remote_lifecycle(tmp_path, host, area
     assert guidance.commands[0][1] == area
 
 
+def test_a_refused_sign_in_points_to_pairing_and_keeps_the_url_target(tmp_path):
+    remote = ServerInstance(
+        "vbot.example.com", 443, tmp_path, "https://vbot.example.com", tmp_path / "test.log"
+    )
+    refused = CommandResult(
+        False,
+        "test sentinel",
+        remote,
+        failure=RpcFailure("agent.list", "responded", "auth_required", 401),
+    )
+    failed = CommandResult(
+        False, "test sentinel", remote, failure=RpcFailure("session.delete", "responded")
+    )
+
+    sign_in = recovery_guidance(parse_args(["agent", "list"]), refused)
+    inspection = recovery_guidance(parse_args(["session", "delete", "a@p", "s", "--yes"]), failed)
+
+    assert sign_in.commands[0] == ("vbot", "devices", "pair", "https://vbot.example.com")
+    assert "no sign-in" in sign_in.explanation
+    assert parse_args(inspection.commands[0][1:]).url == "https://vbot.example.com"
+
+
 @pytest.mark.parametrize(
     "code,area",
     [

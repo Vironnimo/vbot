@@ -18,10 +18,15 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 from websockets.asyncio.client import connect
+from websockets.exceptions import ConnectionClosed
 
-from core.utils.tls import ssl_context_for
+from cli._server_target import ServerInstance
+from cli.server_client import WEBSOCKET_REFUSALS, access_refusal, http_options, websocket_target
 
 type JsonObject = dict[str, Any]
+
+#: HTTP statuses of the server's access refusals.
+_REFUSAL_STATUSES = {401: "auth_required", 403: "access_denied"}
 
 
 class ClientError(Exception):
@@ -40,18 +45,31 @@ class ClientError(Exception):
 
 
 class TerminalClient:
-    def __init__(self, url: str) -> None:
-        self.url = url.rstrip("/")
+    """The TUI's connection to one server; requests carry the target's credential.
+
+    ``transport`` replaces the network, for tests.
+    """
+
+    def __init__(
+        self, target: ServerInstance, *, transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
+        self.target = target
+        self.url = target.url.rstrip("/")
         self.connection_id = str(uuid.uuid4())
         platform = "Windows" if sys.platform == "win32" else "Linux"
         self.user_agent = f"vBot-TUI/1 ({platform})"
         self.http = httpx.AsyncClient(
             base_url=self.url,
-            trust_env=False,
-            verify=ssl_context_for(self.url),
             timeout=httpx.Timeout(10, read=30),
             headers={"User-Agent": self.user_agent},
+            transport=transport,
+            **http_options(target),
         )
+
+    def refusal(self, code: str) -> ClientError:
+        """The error for an access refusal, saying what this target needs."""
+
+        return ClientError(access_refusal(self.target, code) or code, code=code)
 
     async def __aenter__(self) -> Self:
         return self
@@ -90,6 +108,8 @@ class TerminalClient:
             if body.get("ok") is False and isinstance(error, dict):
                 message, code = error.get("message"), error.get("code")
                 if isinstance(message, str) and isinstance(code, str):
+                    if response.status_code in _REFUSAL_STATUSES:
+                        raise self.refusal(code)
                     raise ClientError(message, code=code)
             if (
                 response.status_code == 200
@@ -117,6 +137,8 @@ class TerminalClient:
             async with self.http.stream(
                 "GET", self.server_path(path), timeout=httpx.Timeout(10, read=60)
             ) as response:
+                if response.status_code in _REFUSAL_STATUSES:
+                    raise self.refusal(_REFUSAL_STATUSES[response.status_code])
                 if response.status_code != 200:
                     raise ClientError(f"Timeline unavailable (HTTP {response.status_code}).")
                 data: list[str] = []
@@ -144,20 +166,25 @@ class TerminalClient:
             raise ClientError("Timeline connection lost; the Run can still be working.") from exc
 
     async def events(self) -> AsyncIterator[JsonObject]:
+        """Server events; an access refusal (close 4401/4403) raises its ``ClientError``."""
+
         query = urlencode({"accessor": "tui", "connection_id": self.connection_id})
-        url = self.url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
-        kwargs: dict[str, Any] = {"proxy": None, "user_agent_header": self.user_agent}
-        if url.startswith("wss://"):
-            kwargs["ssl"] = ssl_context_for(self.url)
-        async with connect(f"{url}/ws?{query}", **kwargs) as socket:
-            async for raw in socket:
-                if isinstance(raw, str):
-                    try:
-                        event = json.loads(raw)
-                    except ValueError as exc:
-                        raise ClientError("The event stream returned invalid data.") from exc
-                    if isinstance(event, dict):
-                        yield event
+        url, options = websocket_target(self.target, f"/ws?{query}")
+        async with connect(url, user_agent_header=self.user_agent, **options) as socket:
+            try:
+                async for raw in socket:
+                    if isinstance(raw, str):
+                        try:
+                            event = json.loads(raw)
+                        except ValueError as exc:
+                            raise ClientError("The event stream returned invalid data.") from exc
+                        if isinstance(event, dict):
+                            yield event
+            except ConnectionClosed as closed:
+                code = closed.rcvd.code if closed.rcvd is not None else None
+                if code in WEBSOCKET_REFUSALS:
+                    raise self.refusal(WEBSOCKET_REFUSALS[code]) from closed
+                raise
 
     async def upload(self, path: Path) -> JsonObject:
         """Upload a local file. The server owns type and size validation."""
@@ -167,6 +194,8 @@ class TerminalClient:
                 response = await self.http.post(
                     "/api/upload", files={"file": (path.name, source, media_type)}
                 )
+            if response.status_code in _REFUSAL_STATUSES:
+                raise self.refusal(_REFUSAL_STATUSES[response.status_code])
             response.raise_for_status()
             result = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -190,6 +219,8 @@ class TerminalClient:
         opened = False
         try:
             async with self.http.stream("GET", path) as response:
+                if response.status_code in _REFUSAL_STATUSES:
+                    raise self.refusal(_REFUSAL_STATUSES[response.status_code])
                 response.raise_for_status()
                 with destination.open("xb") as output:
                     opened = True

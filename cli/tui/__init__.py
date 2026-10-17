@@ -27,7 +27,7 @@ async def run_tui(
 
     store = DraftStore(target.url)
     restored = await asyncio.to_thread(store.load)
-    async with TerminalClient(target.url) as client:
+    async with TerminalClient(target) as client:
         app = ConversationApp(
             client,
             agent_id=agent_id,

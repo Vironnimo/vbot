@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from cli._server_target import CommandResult
+from cli._server_target import CommandResult, is_loopback_target, is_url_target
 
 
 @dataclass(frozen=True)
@@ -82,8 +82,9 @@ _CODE_GUIDANCE = {
     "to restore under a new id, or remove the conflicting resource first.",
     "archive_not_restorable": "Resolve the blockers above, then restore the entry again.",
     "archive_entry_busy": "Another operation is using this archive entry. Retry after it finished.",
-    "auth_required": "The server accepts only signed-in devices. Run the command on the "
-    "server's computer, where the CLI signs in with the running server's local access token.",
+    "auth_required": "The server admits only signed-in devices. On the server's computer the "
+    "CLI signs in with the server's local access token; on another computer, sign in with vbot "
+    "devices pair and the server's https:// address.",
     "access_denied": "The server's access mode refuses this connection. On the server's "
     "computer, inspect it with: vbot application access show",
     "auth_disabled": "Pairing and sign-in links exist only in the access mode 'With login "
@@ -169,6 +170,15 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
         if isinstance(data.get("entry_id"), str):
             inspection = ["archive", "show", data["entry_id"]]
 
+    sign_in: tuple[str, ...] | None = None
+    if code in {"auth_required", "access_denied"} and result is not None:
+        from cli.server_client import access_refusal
+
+        explanation = access_refusal(result.instance, code, command=False) or explanation
+        if code == "auth_required" and not is_loopback_target(result.instance):
+            sign_in = ("vbot", "devices", "pair", result.instance.url)
+            inspection = None
+
     if failure and failure.request_state in {"not_sent", "unknown"}:
         # The transport result already explains delivery and possible partial effects.
         explanation = ""
@@ -176,10 +186,14 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
             failure.request_state == "not_sent"
             and result
             and result.instance.host in {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
+            and not is_url_target(result.instance)
         ):
             inspection = ["server", "status"]
+    if area == "devices" and getattr(args, "command", None) in {"pair", "logout"}:
+        # Both explain their own outcome; listing needs the sign-in they handle.
+        explanation, inspection, sign_in = "", None, None
 
-    commands = []
+    commands = [sign_in] if sign_in else []
     if inspection:
         commands.append(("vbot", *inspection, *_target_options(args, result, inspection[0])))
     if code == "internal_error" and area != "log":
@@ -280,6 +294,13 @@ def _inspection(args: argparse.Namespace) -> list[str] | None:
 
 
 def _target_options(args: argparse.Namespace, result: CommandResult | None, area: str) -> list[str]:
+    url = getattr(args, "url", None) if result is None else None
+    if result is not None and is_url_target(result.instance):
+        url = result.instance.url
+    if url:
+        # Only --url names this target; the local data directory matters only when given.
+        data_dir = getattr(args, "data_dir", None)
+        return ["--url", url, *(["--data-dir", data_dir] if data_dir else [])]
     options = []
     for field in ("host", "port", "data_dir"):
         value = getattr(result.instance, field) if result else getattr(args, field, None)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from difflib import get_close_matches
 from typing import NoReturn, override
 
@@ -166,8 +166,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Start with vbot <area> --help, then vbot <area> <command> --help. "
             "Use vbot config list [prefix] to discover Settings and vbot config describe <path> "
-            "to inspect a setting before changing it. Put --host, --port and --data-dir before "
-            "the area or after the action, where that command accepts them; "
+            "to inspect a setting before changing it. Put --url (or --host and --port) and "
+            "--data-dir before the area or after the action, where that command accepts them; "
             "keep the same target on follow-up calls. Read mutation results for saved state "
             "and pending work; exit 0 alone does not prove runtime readiness."
         ),
@@ -259,6 +259,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             args.rest = [args.operation, *args.rest]
     if root_output is not None and not hasattr(args, "output"):
         args.output = root_output
+    explicit_target = getattr(args, "_target_arguments", {})
+    if hasattr(args, "address"):
+        _take_server_address(parser, args, explicit_target)
+    if getattr(args, "url", None) is not None and {"host", "port"} & explicit_target.keys():
+        parser.error("the server address already names the host and port; drop --host and --port")
     for clear, value in (
         ("clear_model", "model"),
         ("clear_fallback_models", "fallback_models"),
@@ -285,6 +290,34 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def _take_server_address(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, explicit: Mapping[str, object]
+) -> None:
+    """Make the ``<url>`` of ``devices pair`` and ``devices logout`` the command's target.
+
+    ``--url`` names the same target; both may be given when they agree. Without
+    either, ``VBOT_SERVER_URL`` or ``--host``/``--port`` must name the server.
+    """
+    from cli._server_target import parse_server_url, selected_server_url
+
+    address = args.address
+    del args.address
+    if address is None:
+        if selected_server_url(args) is None and not {"host", "port"} & explicit.keys():
+            parser.error(
+                "name the server's address, for example: "
+                f"vbot {args._command_path} https://vbot.example.com"
+            )
+        return
+    if (
+        args.url is not None
+        and parse_server_url(args.url).origin != parse_server_url(address).origin
+    ):
+        parser.error(f"<url> and --url name different servers; keep only {address}")
+    args.url = address
+    args._target_arguments = {**explicit, "url": address}
+
+
 def _take_root_options(
     parser: argparse.ArgumentParser, tokens: list[str]
 ) -> tuple[str | None, list[str]]:
@@ -292,7 +325,7 @@ def _take_root_options(
     target: list[str] = []
     while tokens:
         option, separator, value = tokens[0].partition("=")
-        if option not in {"--output", "--host", "--port", "--data-dir"}:
+        if option not in {"--output", "--host", "--port", "--url", "--data-dir"}:
             break
         tokens.pop(0)
         if not separator:
@@ -407,11 +440,11 @@ def _extension_operation_args(
     if len(remaining) == 1 or remaining[1] in {"set", "--help", "-h"}:
         action = "set" if len(remaining) > 1 and remaining[1] == "set" else "show"
         arguments = remaining[2:] if action == "set" else remaining[1:]
-        selection = ["--host", target.host]
-        if target.port is not None:
-            selection.extend(["--port", str(target.port)])
-        if target.data_dir is not None:
-            selection.extend(["--data-dir", target.data_dir])
+        selection = [
+            token
+            for name, value in getattr(target, "_target_arguments", {}).items()
+            for token in (f"--{name.replace('_', '-')}", str(value))
+        ]
         return parser.parse_args(["extensions", action, remaining[0], *arguments, *selection])
     return argparse.Namespace(
         area="extensions",
@@ -420,6 +453,8 @@ def _extension_operation_args(
         stdin=False,
         host=target.host,
         port=target.port,
+        url=target.url,
         data_dir=target.data_dir,
+        _target_arguments=getattr(target, "_target_arguments", {}),
         _command_path="extensions run",
     )
