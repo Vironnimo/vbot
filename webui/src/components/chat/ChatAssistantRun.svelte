@@ -18,6 +18,7 @@
     backgroundCommandToolStatusLabel,
     changeStatsLabel,
     formatTime,
+    groupRunChildren,
     isRowCancellable,
     isRunChildWorking,
     isSubAgentSendTool,
@@ -47,6 +48,8 @@
     toolStatusDetails,
     toolStatusLabel,
     visibleRunChildren,
+    workingGroupDetails,
+    workingGroupSummary,
   } from '$lib/chatTimelinePresentation.js';
 
   import ChatTimelineEntry from './ChatTimelineEntry.svelte';
@@ -177,72 +180,35 @@
     );
   }
 
-  function workingGroupToolName(group) {
-    for (let index = group.children.length - 1; index >= 0; index -= 1) {
-      const child = group.children[index];
-      if (child.type === 'tool_call') {
-        if (isSubAgentSpawnTool(child)) {
-          return t('chat.subagent.label');
-        }
-        return isSubAgentSendTool(child)
-          ? t('chat.subagent.sendLabel')
-          : toolNameForRunTool(child);
-      }
-    }
-    return '';
+  // The name a Tool row shows, also listed by the Working line.
+  function runToolName(tool) {
+    if (isSubAgentSpawnTool(tool)) return t('chat.subagent.label');
+    if (isSubAgentSendTool(tool)) return t('chat.subagent.sendLabel');
+    return toolNameForRunTool(tool);
   }
 
-  // What a collapsed working block holds, for the tooltip on its summary.
-  function workingGroupDetails(group) {
-    const toolCalls = group.children.filter(
-      (child) => child.type === 'tool_call',
-    ).length;
-    const reasoning = group.children.length - toolCalls;
-    return {
-      rows: [
-        { label: t('chat.working.toolCalls'), value: String(toolCalls) },
-        { label: t('chat.working.reasoning'), value: String(reasoning) },
-      ].filter((row) => row.value !== '0'),
-    };
+  // The dot state a Tool row shows, also summarized by the Working line.
+  function toolRowStatus(tool) {
+    if (isSubAgentSpawnTool(tool)) {
+      return subAgentDotStatus(tool, subAgentStatuses);
+    }
+    if (isSubAgentSendTool(tool)) return toolStatus(tool);
+    return (
+      backgroundCommandRowState(
+        tool,
+        backgroundCommandStatuses,
+        commandStatuses,
+      )?.dotStatus ?? toolStatus(tool)
+    );
   }
 
-  function groupRunChildren(children, workingMode) {
-    if (workingMode !== 'compact') {
-      return children.map((child) => ({
-        id: `child:${child.id}`,
-        type: 'child',
-        child,
-      }));
-    }
-
-    const groups = [];
-    let workingChildren = [];
-
-    function flushWorkingChildren() {
-      if (workingChildren.length === 1) {
-        const [child] = workingChildren;
-        groups.push({ id: `child:${child.id}`, type: 'child', child });
-      } else if (workingChildren.length > 1) {
-        groups.push({
-          id: `working:${workingChildren[0].id}`,
-          type: 'working',
-          children: workingChildren,
-        });
-      }
-      workingChildren = [];
-    }
-
-    for (const child of children) {
-      if (child.type === 'reasoning' || child.type === 'tool_call') {
-        workingChildren.push(child);
-        continue;
-      }
-
-      flushWorkingChildren();
-      groups.push({ id: `child:${child.id}`, type: 'child', child });
-    }
-    flushWorkingChildren();
-    return groups;
+  function summarizeWorkingGroup(group) {
+    return workingGroupSummary(group, {
+      active: workingGroupIsActive(group),
+      nowMs,
+      rowStatus: toolRowStatus,
+      toolName: runToolName,
+    });
   }
 </script>
 
@@ -730,9 +696,8 @@
     {/snippet}
     {#each runDisplayGroups as group (group.id)}
       {#if group.type === 'working'}
-        {@const groupActive = workingGroupIsActive(group)}
+        {@const summary = summarizeWorkingGroup(group)}
         {@const groupOpen = viewState.isOpen(group.id)}
-        {@const groupToolName = groupActive ? workingGroupToolName(group) : ''}
         <details
           class="working-block"
           open={groupOpen}
@@ -740,16 +705,82 @@
             setWorkingGroupOpen(group.id, event.currentTarget.open)}
         >
           <summary
-            class="working-block__summary"
-            use:tooltip={() => workingGroupDetails(group)}
+            class="working-block__summary tool-event-line"
+            use:tooltip={() => workingGroupDetails(summary)}
           >
-            <span class="working-block__label">
-              {groupActive ? t('chat.working.active') : t('chat.working.done')}
-            </span>
-            {#if groupToolName}
-              <span class="working-block__activity">
-                {groupToolName}
+            {#if summary.status}
+              <span
+                class="te-dot"
+                class:running={summary.status === 'running'}
+                class:done={summary.status === 'success'}
+                class:error={summary.status === 'failed'}
+                class:partial={summary.status === 'partial'}
+                class:interrupted={summary.status === 'interrupted'}
+                class:cancelled={summary.status === 'cancelled'}
+                class:ended={summary.status === 'ended'}
+                aria-hidden="true">●</span
+              >
+            {/if}
+            {#if summary.active || summary.toolCount === 1}
+              {#if summary.active}
+                <span class="te-fn working-block__label">
+                  {t('chat.working.active')}
+                </span>
+              {/if}
+              {#if summary.latestTool}
+                {@const presentation = toolRowPresentation(summary.latestTool)}
+                <span class="working-block__activity">
+                  <span class="te-fn">{runToolName(summary.latestTool)}</span>
+                  {#if presentation.primary.length > 0}
+                    <ToolPrimaryLine primary={presentation.primary} />
+                  {/if}
+                </span>
+              {:else}
+                <span class="te-fact">{t('chat.working.thinking')}</span>
+              {/if}
+            {:else}
+              {#if summary.toolNames.length > 0}
+                <span class="te-fn working-block__names">
+                  {summary.toolNames.join(', ')}{#if summary.moreToolNames}
+                    <span class="working-block__more"
+                      >{t('chat.working.moreTools', {
+                        count: summary.moreToolNames,
+                      })}</span
+                    >{/if}
+                </span>
+              {/if}
+              <span class="te-fact working-block__count">
+                {#if summary.toolCount > 0}
+                  {summary.toolCount === 1
+                    ? t('chat.working.toolCallOne')
+                    : t('chat.working.toolCallCount', {
+                        count: summary.toolCount,
+                      })}
+                {:else}
+                  {summary.thoughtCount === 1
+                    ? t('chat.working.thoughtOne')
+                    : t('chat.working.thoughtCount', {
+                        count: summary.thoughtCount,
+                      })}
+                {/if}
               </span>
+              {#if summary.failedCount > 0}
+                <span class="te-fact working-block__failed">
+                  {t('chat.working.failedCount', {
+                    count: summary.failedCount,
+                  })}
+                </span>
+              {/if}
+              {#if summary.runningCount > 0}
+                <span class="te-fact working-block__running">
+                  {t('chat.working.runningCount', {
+                    count: summary.runningCount,
+                  })}
+                </span>
+              {/if}
+            {/if}
+            {#if summary.durationLabel}
+              <span class="te-time">{summary.durationLabel}</span>
             {/if}
             <svg
               class="working-block__chevron"

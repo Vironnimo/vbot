@@ -43,6 +43,11 @@ export {
   runningSubAgentCommands,
 } from './chatTimelinePresentation/activity.js';
 export {
+  groupRunChildren,
+  workingGroupDetails,
+  workingGroupSummary,
+} from './chatTimelinePresentation/working.js';
+export {
   isReflectionRunKind,
   reflectionTaskRows,
   reflectionElapsedLabel,

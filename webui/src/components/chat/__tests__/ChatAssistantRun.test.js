@@ -400,14 +400,14 @@ describe('ChatAssistantRun', () => {
 
       const block = workingBlock();
       expect(block.open).toBe(false);
-      expect(block.querySelector('summary').textContent.trim()).toBe(
-        t('chat.working.done'),
-      );
-      expect(
-        block.querySelector(
-          '.working-block__activity, .working-block__dot, .working-block__time',
-        ),
-      ).toBeNull();
+      // A finished group with one Tool reads like that Tool's own row.
+      const summary = block.querySelector('summary');
+      const step = summary.querySelector('.working-block__activity');
+      expect(step.querySelector('.te-fn').textContent).toBe('read');
+      expect(step.textContent).toContain('README.md');
+      expect(summary.querySelector('.te-dot').classList).toContain('done');
+      expect(summary.querySelector('.working-block__label')).toBeNull();
+      expect(summary.querySelector('.working-block__count')).toBeNull();
       expect(
         block.querySelectorAll('.reasoning-block, .tool-event'),
       ).toHaveLength(0);
@@ -458,15 +458,89 @@ describe('ChatAssistantRun', () => {
         expect(
           block.querySelector('.working-block__label').textContent.trim(),
         ).toBe(t('chat.working.active'));
+        expect(block.querySelector('.te-dot').classList).toContain('running');
         expect(
-          block.querySelector('.working-block__activity')?.textContent.trim() ??
-            null,
+          block
+            .querySelector('.working-block__activity .te-fn')
+            ?.textContent.trim() ?? null,
         ).toBe(activity);
+        if (activity === 'bash') {
+          expect(
+            block.querySelector('.working-block__activity').textContent,
+          ).toContain('ls -la');
+        }
         expect(block.querySelector('summary').textContent).not.toContain(
           t('chat.event.thinking'),
         );
       },
     );
+
+    it.each([
+      [
+        'a failure in red beside the count',
+        [
+          readChild({ id: 'read-ok', status: 'success' }),
+          bashChild({ status: 'failed' }),
+        ],
+        { names: 'read, bash', dot: 'error', failed: '1 failed' },
+      ],
+      [
+        'at most three Tool names and how many more',
+        ['read', 'grep', 'glob', 'bash', 'write'].map((name) =>
+          toolChild(name, {}, { status: 'success' }),
+        ),
+        { names: 'read, grep, glob+2', dot: 'done', count: '5 Tool calls' },
+      ],
+      [
+        'the span from the first start to the last end',
+        [
+          readChild({
+            status: 'success',
+            timing: {
+              started_at: '2026-06-09T12:00:00Z',
+              completed_at: '2026-06-09T12:00:02Z',
+            },
+          }),
+          bashChild({
+            status: 'success',
+            timing: {
+              started_at: '2026-06-09T12:00:01Z',
+              completed_at: '2026-06-09T12:00:05Z',
+            },
+          }),
+        ],
+        { names: 'read, bash', dot: 'done', time: '5.0s' },
+      ],
+    ])('summarizes a finished group with %s', (_case, items, expected) => {
+      run.mount({ item: assistantRun({ items }), chatWorkingMode: 'compact' });
+
+      const summary = workingBlock().querySelector('summary');
+      expect(
+        summary
+          .querySelector('.working-block__names')
+          .textContent.replace(/\s+/g, ''),
+      ).toBe(expected.names.replace(/\s+/g, ''));
+      expect(summary.querySelector('.te-dot').classList).toContain(
+        expected.dot,
+      );
+      if (expected.failed) {
+        expect(
+          summary.querySelector('.working-block__failed').textContent.trim(),
+        ).toBe(expected.failed);
+      } else {
+        expect(summary.querySelector('.working-block__failed')).toBeNull();
+      }
+      if (expected.count) {
+        expect(
+          summary.querySelector('.working-block__count').textContent.trim(),
+        ).toBe(expected.count);
+      }
+      if (expected.time) {
+        expect(summary.querySelector('.te-time').textContent.trim()).toBe(
+          expected.time,
+        );
+      }
+    });
 
     it('ends a Working block at visible Assistant output and starts a new one', () => {
       run.mount({

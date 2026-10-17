@@ -1224,7 +1224,7 @@ export default Object.freeze({
   'settings.appearance.chatWorkingMode.description':
     'How Thinking and Tool activity appear in Chat.',
   'settings.appearance.chatWorkingMode.help':
-    'Normal shows each Thinking block and Tool call in the Chat as it happens.\n\nCompact groups consecutive Thinking and Tool activity into one collapsible Working block, so the Agent’s replies stand out.',
+    'Normal shows each Thinking block and Tool call in the Chat as it happens.\n\nCompact folds each stretch of Thinking and Tool calls between the Agent’s messages into one line: while the Agent works it shows the current step, afterwards which Tools ran, how many, any failures and how long it took. The Agent’s messages always stay visible, and the line opens to show every step.',
   'settings.appearance.chatWorkingMode.normal': 'Normal',
   'settings.appearance.chatWorkingMode.compact': 'Compact',
   'settings.language.en': 'English',

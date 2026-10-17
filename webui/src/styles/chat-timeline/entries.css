@@ -206,13 +206,12 @@
   display: none;
 }
 
+/* A Working line reads like the Tool rows it folds: dot, names, facts and
+   time. Finished, it lists the Tools used, their count and any failure;
+   while it holds a running Run's latest activity, it names that step. */
 .working-block__summary {
-  display: flex;
   min-width: 0;
   max-width: 100%;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 0;
 }
 
 .working-block__summary:focus-visible {
@@ -221,22 +220,32 @@
   box-shadow: var(--focus-ring);
 }
 
-/* The status label is UI text; the running Tool name beside it stays mono like
-   the Tool-call lines it summarizes. */
-.working-block__label {
-  flex: 0 0 auto;
-  color: var(--text-med);
-  font-size: var(--fs-label-sm);
-  font-weight: 500;
+.working-block__names {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.working-block__more {
+  margin-left: 5px;
+  color: var(--text-lo);
+}
+
+.working-block__failed {
+  color: var(--red);
+}
+
+.working-block__running {
+  color: var(--amber);
 }
 
 .working-block__activity {
+  display: inline-flex;
   min-width: 0;
+  align-items: center;
+  gap: 8px;
   overflow: hidden;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .working-block__chevron {
