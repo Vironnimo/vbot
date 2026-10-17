@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import functools
 import json
 import os
 import sys
@@ -144,16 +145,45 @@ class DpapiKeyProtection:
         return key
 
     def location(self, store_id: str) -> str | None:
-        return _DPAPI_LOCATION
+        return _dpapi_location()
 
     def locations(self, store_id: str) -> tuple[str, ...]:
-        return (_DPAPI_LOCATION,)
+        return (_dpapi_location(),)
 
     def new_key_location(self) -> str:
-        return _DPAPI_LOCATION
+        return _dpapi_location()
 
 
-_DPAPI_LOCATION = "Windows DPAPI (current user), wrapped in secrets.json"
+def _dpapi_location() -> str:
+    """The key location of this Windows account; another account cannot unwrap the key."""
+    account = _windows_account()
+    holder = "the current user" if account is None else f"the user {account}"
+    return f"Windows DPAPI of {holder}, wrapped in secrets.json"
+
+
+@functools.cache
+def _windows_account() -> str | None:
+    """This process's Windows account as ``DOMAIN\\user``, or ``None`` when unknown."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    from typing import cast
+
+    native = cast(Any, ctypes)
+    try:
+        secur32 = native.WinDLL("secur32", use_last_error=True)
+        function = secur32.GetUserNameExW
+        function.argtypes = [ctypes.c_int, wintypes.LPWSTR, ctypes.POINTER(wintypes.ULONG)]
+        function.restype = wintypes.BOOLEAN
+        size = wintypes.ULONG(256)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        # 2: NameSamCompatible.
+        if not function(2, buffer, ctypes.byref(size)):
+            return None
+    except OSError, AttributeError:
+        return None
+    return buffer.value or None
 
 
 def _dpapi_entropy(store_id: str, key_id: str) -> bytes:

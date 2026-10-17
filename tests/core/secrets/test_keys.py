@@ -95,6 +95,11 @@ def test_dpapi_wraps_the_key_inside_the_store_for_this_account(tmp_path: Path) -
     assert document["key"]["wrapped"]
     assert SecretStore(data_dir).entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai"
     assert not (Path.home() / ".config").exists()
+    # The location names the account, so a reset can tell a server of another one apart.
+    status = SecretStore(data_dir).status()
+    assert status.key_location == status.new_key_location
+    assert str(status.key_location).startswith("Windows DPAPI of the user ")
+    assert "\\" in str(status.key_location)
     # The wrapped key is bound to its store: under another store id it does not open.
     with pytest.raises(KeyUnavailableError, match="could not unwrap"):
         DpapiKeyProtection().load("another-store", document["key"]["id"], document["key"])

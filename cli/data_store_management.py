@@ -4,7 +4,7 @@ backups and Secret Store."""
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -485,7 +485,10 @@ def data_store_secrets_reset(instance: ServerInstance, confirm: bool) -> Command
 
     The old store moves to quarantine, never deleted: restoring its key file
     (Linux) or the Windows account it belongs to makes it readable again. Only
-    an unavailable store is replaced.
+    a store this command cannot open is replaced, and while a server runs on
+    the data directory only one that server cannot open either and whose new
+    key it would find: the key lookup depends on the environment and account
+    of the process.
     """
     if instance.host not in _LOOPBACK_HOSTS:
         return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
@@ -502,24 +505,58 @@ def data_store_secrets_reset(instance: ServerInstance, confirm: bool) -> Command
 
     store = SecretStore(instance.data_dir)
     status = store.status()
+    searched = _key_lookup(status.key_locations, status.new_key_location)
     if status.state != "unavailable":
         return CommandResult(
             ok=False,
             message=(
                 f"the Secret Store is {status.state}; reset only replaces a store whose key "
-                "is lost or wrong"
+                f"is lost or wrong (this command {searched})"
             ),
             instance=instance,
         )
+    server = _server_secret_store(instance)
+    if isinstance(server, CommandResult):
+        return server
+    if server is not None:
+        server_searched = _key_lookup(
+            server.get("key_locations") or (), server.get("new_key_location")
+        )
+        if server.get("state") != "unavailable":
+            return CommandResult(
+                ok=False,
+                message=(
+                    f"the running server reports the Secret Store {server.get('state')}, but "
+                    f"this command cannot open it ({status.reason}); nothing was changed. "
+                    f"The server {server_searched}; this command {searched}. Run the command "
+                    "with the server's environment and account (VBOT_SECRET_KEY_FILE, HOME)"
+                ),
+                instance=instance,
+            )
+        if server.get("new_key_location") != status.new_key_location:
+            return CommandResult(
+                ok=False,
+                message=(
+                    "the running server would not find the key this command creates; nothing "
+                    f"was changed. The server {server_searched}; this command {searched}. "
+                    "Run the command with the server's environment and account "
+                    "(VBOT_SECRET_KEY_FILE, HOME)"
+                ),
+                instance=instance,
+            )
 
     def reset() -> str:
         replaced = store.reset()
         kept = (
             "the old store was already gone"
             if replaced.quarantine is None
-            else f"the old store is kept at {replaced.quarantine.as_posix()}"
+            else f"the old store is kept at {replaced.quarantine.as_posix()} and opens "
+            f"again with its key (searched: {', '.join(status.key_locations)})"
         )
-        return f"{kept}; enter the credentials and OAuth logins again"
+        return (
+            f"{kept}; the new key is at {replaced.status.key_location}; enter the "
+            "credentials and OAuth logins again"
+        )
 
     return _change_while_stopped(
         instance,
@@ -528,6 +565,59 @@ def data_store_secrets_reset(instance: ServerInstance, confirm: bool) -> Command
         subject="Secret Store",
         done="started a new empty Secret Store",
     )
+
+
+def _key_lookup(locations: Iterable[str], new_location: object) -> str:
+    """Where a process searches a store's key and creates a new one, for refusals."""
+    searched = ", ".join(str(location) for location in locations) or "nothing"
+    return f"searches {searched} and creates a new key at {new_location}"
+
+
+def _server_secret_store(instance: ServerInstance) -> dict[str, Any] | CommandResult | None:
+    """The running server's Secret Store status, ``None`` when no server runs, or a refusal."""
+    payload = rpc_call(instance, "data_store.status", {})
+    if payload.ok:
+        data = payload.data if isinstance(payload.data, Mapping) else {}
+        secrets = data.get("secrets")
+        if isinstance(secrets, dict):
+            return secrets
+        return CommandResult(
+            ok=False,
+            message="the running server reports no Secret Store status; nothing was changed",
+            instance=instance,
+        )
+    health = probe_health(instance)
+    if health.reachable:
+        return CommandResult(
+            ok=False,
+            message=(
+                "the running server did not report its Secret Store status "
+                f"({payload.to_command_result().message}); a reset is refused while it runs"
+            ),
+            instance=instance,
+            health=health,
+        )
+    try:
+        ports = live_server_ports(instance.data_dir)
+    except OSError as exc:
+        return CommandResult(
+            ok=False,
+            message=f"the servers running on the data directory could not be checked ({exc})",
+            instance=instance,
+            health=health,
+        )
+    if ports:
+        return CommandResult(
+            ok=False,
+            message=(
+                "a vBot server is running on the data directory (port "
+                + ", ".join(str(port) for port in ports)
+                + "); run the command against that server"
+            ),
+            instance=instance,
+            health=health,
+        )
+    return None
 
 
 def _change_while_stopped(

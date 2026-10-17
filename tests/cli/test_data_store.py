@@ -25,7 +25,7 @@ from core.database import (
 )
 from core.database.marker import begin_maintenance, read_maintenance
 from core.database.recovery import incident_path
-from core.secrets import CREDENTIALS, SecretStore
+from core.secrets import CREDENTIALS, KeyFileProtection, SecretStore
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.cli.cli_test_support import FakeRpc, RunCli
 from tests.core.database.database_test_support import notes_spec
@@ -763,3 +763,93 @@ def test_secrets_convert_runs_while_the_server_is_stopped_and_reset_spares_an_op
     assert not reset.ok and "the Secret Store is available" in reset.message
     assert calls == ["stop", "start"]
     assert SecretStore(tmp_path).entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai"
+
+
+class _StatusPayload:
+    ok = True
+
+    def __init__(self, secrets: dict[str, object]) -> None:
+        self.data = {"state": "ok", "secrets": secrets}
+
+
+@pytest.mark.parametrize(
+    ("server", "refusal"),
+    [
+        ("opens it", "the running server reports the Secret Store available"),
+        ("searches elsewhere", "the running server would not find the key"),
+        ("on another port", "a vBot server is running on the data directory (port 8421)"),
+        ("cannot open it either", None),
+        ("stopped", None),
+    ],
+)
+def test_secrets_reset_replaces_only_a_store_the_server_cannot_open_either(
+    tmp_path: Path, monkeypatch, server: str, refusal: str | None
+) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    # The server's key lies where this command's environment does not look.
+    server_keys = tmp_path / "server-keys"
+    server_store = SecretStore(
+        tmp_path, protections=(KeyFileProtection(directories=(server_keys,)),)
+    )
+    server_store.set_entry(CREDENTIALS, "OPENAI_API_KEY", "sk-openai")
+    local = SecretStore(tmp_path).status()
+    assert local.state == "unavailable"
+    document = (tmp_path / "secrets.json").read_bytes()
+    server_status: dict[str, object] = {
+        "state": "available" if server == "opens it" else "unavailable",
+        "key_locations": [str(server_keys / f"{local.store_id}.key")],
+        "new_key_location": (
+            local.new_key_location if server == "cannot open it either" else str(server_keys)
+        ),
+    }
+    running = server in {"opens it", "searches elsewhere", "cannot open it either"}
+    calls: list[str] = []
+
+    def record(action: str) -> Callable[[ServerInstance], CommandResult]:
+        def run(resolved: ServerInstance) -> CommandResult:
+            calls.append(action)
+            return CommandResult(ok=True, message=action, instance=resolved)
+
+        return run
+
+    monkeypatch.setattr(
+        data_store_management,
+        "rpc_call",
+        lambda *_args: (
+            _StatusPayload(server_status) if running else _FailedPayload(instance, "refused")
+        ),
+    )
+    monkeypatch.setattr(
+        data_store_management,
+        "probe_health",
+        lambda _instance: HealthProbeResult(reachable=running, is_vbot=running),
+    )
+    monkeypatch.setattr(
+        data_store_management,
+        "live_server_ports",
+        lambda _data_dir: (8421,) if server == "on another port" else (),
+    )
+    _classified(monkeypatch, "running" if running else "absent", "absent")
+    monkeypatch.setattr(data_store_management, "stop_server", record("stop"))
+    monkeypatch.setattr(data_store_management, "start_server", record("start"))
+
+    result = data_store_management.data_store_secrets_reset(instance, True)
+
+    if refusal is not None:
+        assert not result.ok and refusal in result.message
+        if running:
+            # Both lookups are named, so the operator sees why the two differ.
+            assert local.key_locations[0] in result.message
+            assert str(server_keys) in result.message
+        assert calls == []
+        assert (tmp_path / "secrets.json").read_bytes() == document
+        return
+    assert result.ok, result.message
+    assert calls == (["stop", "start"] if running else ["stop"])
+    replaced = SecretStore(tmp_path).status()
+    assert replaced.state == "available" and replaced.credentials == 0
+    assert f"the new key is at {replaced.key_location}" in result.message
+    [kept] = (tmp_path / "quarantine" / "secret-store").iterdir()
+    old = SecretStore(kept, protections=(KeyFileProtection(directories=(server_keys,)),))
+    assert old.entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai"
