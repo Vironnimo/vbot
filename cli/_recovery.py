@@ -33,6 +33,7 @@ _INSPECTIONS = {
     "extensions": ("extensions", "list"),
     "cron": ("cron", "list"),
     "bootstrap": ("bootstrap", "list"),
+    "devices": ("devices", "list"),
     "config": ("config", "list"),
     "log": ("log", "list"),
     "debug": ("debug", "status"),
@@ -81,6 +82,15 @@ _CODE_GUIDANCE = {
     "to restore under a new id, or remove the conflicting resource first.",
     "archive_not_restorable": "Resolve the blockers above, then restore the entry again.",
     "archive_entry_busy": "Another operation is using this archive entry. Retry after it finished.",
+    "auth_required": "The server accepts only signed-in devices. Run the command on the "
+    "server's computer, where the CLI signs in with the running server's local access token.",
+    "access_denied": "The server's access mode refuses this connection. On the server's "
+    "computer, inspect it with: vbot application access show",
+    "auth_disabled": "Pairing and sign-in links exist only in the access mode 'With login "
+    "(internet)'. On the server's computer, inspect it with: vbot application access show",
+    "rate_limited": "Too many attempts in a short time. Wait a few minutes before retrying.",
+    "devices_unavailable": "The server's device store is unavailable. Inspect the server log "
+    "on the server's computer.",
 }
 
 _ARCHIVE_CODES = frozenset(

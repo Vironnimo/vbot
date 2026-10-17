@@ -12,6 +12,7 @@ from cli._parser_common import (
     CRON_HELP,
     CRON_STATUSES,
     DEBUG_HELP,
+    DEVICES_HELP,
     PERFORMANCE_HELP,
     STATISTICS_HELP,
     STATISTICS_SECTIONS,
@@ -159,6 +160,39 @@ def _add_cron_session_argument(parser: argparse.ArgumentParser) -> None:
         metavar="<session-id>",
         help="Run in this existing Session; creation defaults to a fresh Session per fire",
     )
+
+
+def _add_devices_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    devices_parser = subparsers.add_parser(
+        "devices",
+        help=AREA_HELP["devices"],
+        description=(
+            f"{AREA_HELP['devices']}. Devices sign in only in the access mode "
+            "'With login (internet)'; see vbot application access show."
+        ),
+    )
+    commands = devices_parser.add_subparsers(dest="command", required=True)
+    _add_command_parser(commands, "list", DEVICES_HELP["list"], example="devices list")
+    approve = _add_command_parser(
+        commands, "approve", DEVICES_HELP["approve"], example="devices approve K7QM-4XPA"
+    )
+    approve.add_argument("code", metavar="<code>", help="The code the new device shows")
+    approve.add_argument(
+        "--yes", action="store_true", help="Approve without showing the device and asking"
+    )
+    deny = _add_command_parser(
+        commands, "deny", DEVICES_HELP["deny"], example="devices deny K7QM-4XPA"
+    )
+    deny.add_argument("code", metavar="<code>", help="The code the device shows")
+    rename = _add_command_parser(
+        commands, "rename", DEVICES_HELP["rename"], example='devices rename <id> "Work laptop"'
+    )
+    rename.add_argument("id", metavar="<device-id>", help="Exact id from devices list")
+    rename.add_argument("name", metavar="<name>")
+    revoke = _add_command_parser(
+        commands, "revoke", DEVICES_HELP["revoke"], example="devices revoke <id>"
+    )
+    revoke.add_argument("id", metavar="<device-id>", help="Exact id from devices list")
 
 
 def _add_bootstrap_parsers(

@@ -38,6 +38,13 @@ from cli.debug_management import (
     debug_trace_list,
     debug_trace_show,
 )
+from cli.device_management import (
+    devices_approve,
+    devices_deny,
+    devices_list,
+    devices_rename,
+    devices_revoke,
+)
 from cli.librarian_management import librarian_overview, librarian_run, librarian_status
 from cli.log_management import log_read
 from cli.memory_management import (
@@ -365,6 +372,20 @@ def dispatch_cron_command(
     if args.command == "disable":
         return disable_cron_fn(instance, args.id)
     raise ValueError(f"Unsupported cron command: {args.command}")
+
+
+def dispatch_devices_command(args: argparse.Namespace, instance: ServerInstance) -> CommandResult:
+    if args.command == "list":
+        return devices_list(instance)
+    if args.command == "approve":
+        return devices_approve(instance, args.code, assume_yes=args.yes)
+    if args.command == "deny":
+        return devices_deny(instance, args.code)
+    if args.command == "rename":
+        return devices_rename(instance, args.id, args.name)
+    if args.command == "revoke":
+        return devices_revoke(instance, args.id)
+    raise ValueError(f"Unsupported devices command: {args.command}")
 
 
 def dispatch_bootstrap_command(

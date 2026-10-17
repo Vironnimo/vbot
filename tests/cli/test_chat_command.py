@@ -109,6 +109,7 @@ class FakeRunStream:
         timeout: Any,
         trust_env: bool,
         verify: Any,
+        headers: dict[str, str],
     ) -> Iterator[SimpleNamespace]:
         assert (method, trust_env) == ("GET", False)
         assert url.endswith(SSE_URL)

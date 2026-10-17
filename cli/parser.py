@@ -50,6 +50,7 @@ from cli._parser_operations import (
     _add_config_parsers,
     _add_cron_parsers,
     _add_debug_parsers,
+    _add_devices_parsers,
     _add_performance_parsers,
     _add_statistics_parsers,
 )
@@ -70,6 +71,7 @@ AREA_ALIASES = {
     "skills": "skill",
     "task-models": "task-model",
     "extension": "extensions",
+    "device": "devices",
     "perf": "performance",
 }
 
@@ -198,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_extensions_parsers(subparsers)
     _add_cron_parsers(subparsers)
     _add_bootstrap_parsers(subparsers)
+    _add_devices_parsers(subparsers)
     _add_statistics_parsers(subparsers)
     _add_config_parsers(subparsers)
     _add_debug_parsers(subparsers)

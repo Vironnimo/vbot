@@ -196,6 +196,7 @@ AREAS = [
     ("extensions", ["list"]),
     ("cron", ["list"]),
     ("bootstrap", ["list"]),
+    ("devices", ["list"]),
     ("statistics", ["overview"]),
     ("config", ["list"]),
     ("debug", ["status"]),
