@@ -159,6 +159,21 @@ async def test_start_takes_an_argument_list_as_command(
 
 
 @pytest.mark.asyncio
+async def test_start_with_a_group_starts_and_says_the_group_had_no_effect(
+    terminal: Terminal,
+) -> None:
+    started = await terminal({"action": "start", "command": "fake-tui", "group": "Codex"})
+
+    assert started["data"]["note"] == (
+        "group has no effect: the user sees each terminal under the conversation that "
+        "started it. To say what it works on, pass name."
+    )
+    # An empty placeholder requests nothing.
+    plain = await terminal({"action": "start", "command": "fake-tui", "group": ""})
+    assert "note" not in plain["data"]
+
+
+@pytest.mark.asyncio
 async def test_start_with_a_terminal_id_opens_a_new_terminal_or_refuses_an_existing_one(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
 ) -> None:
@@ -804,7 +819,10 @@ async def test_unknown_terminal_id_lists_attached_terminals(
     second = await terminal.start()
     await terminal({"action": "kill", "terminal_id": first})
     listed = await terminal({"action": "wait", "terminal_id": "term_missing", "timeout": 0.01})
-    assert f"{second} (running: fake-tui); {first} (stopped: build)" in _error(listed)["message"]
+    assert (
+        f"{second} (running: Ben, fake-tui); {first} (stopped: Anna, build)"
+        in _error(listed)["message"]
+    )
 
     # Another Session's terminals are not attached to it.
     other = make_context(tmp_path, session_id="session-b")
@@ -820,7 +838,8 @@ async def test_missing_terminal_id_names_the_attached_terminals(terminal: Termin
 
     assert _error(result)["message"] == (
         f"terminal was not run: status needs terminal_id. The terminal attached to this Session "
-        f'is {terminal_id} (running: fake-tui); repeat the call with terminal_id "{terminal_id}".'
+        f"is {terminal_id} (running: Anna, fake-tui); repeat the call with terminal_id "
+        f'"{terminal_id}".'
     )
 
 
@@ -830,7 +849,7 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
 ) -> None:
     started = await terminal({"action": "start", "command": "fake-tui", "args": ["-q"]})
     # An empty screen has no cursor, and the first screen is still to come.
-    assert list(started["data"]) == ["terminal_id", "state", "log", "screen", "next"]
+    assert list(started["data"]) == ["terminal_id", "call_name", "state", "log", "screen", "next"]
     assert started["data"]["next"].startswith("It has shown nothing yet.")
     terminal_id = started["data"]["terminal_id"]
     manager[1].adapters[0].emit("".join(f"line-{index}\r\n" for index in range(30)) + "ready> ")

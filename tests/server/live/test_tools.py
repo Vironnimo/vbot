@@ -523,7 +523,8 @@ async def test_known_refs_say_what_each_ref_names_most_recent_last(fx: Fixture) 
     assert fx.executor.known_refs().splitlines() == [
         '- t1: Codex Terminal "Build"',
         '- s1: Session at Coder "Fix login"',
-        '- t2: Claude Code Terminal "Docs"',
+        # A started Terminal carries its call name.
+        '- t2: Claude Code Terminal Ben "Docs"',
     ]
     # A name set in the app stays on its own short line.
     fx.app.add_terminal("term_long", name="Line one\nline two " + "x" * 80)

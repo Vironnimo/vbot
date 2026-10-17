@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from core.config_validation import (
     JsonDiagnostic,
@@ -46,11 +46,8 @@ TERMINAL_LAUNCH_HISTORY_FORMAT_VERSION = 1
 TERMINAL_LAUNCH_HISTORY_MAX_ENTRIES = 50
 TERMINAL_GROUPS_FORMAT_VERSION = 1
 TERMINAL_GROUP_NAME_MAX_CHARS = 80
-TERMINAL_FINISHED_GROUP_ID = "finished"
+# The operator's own terminals: started by the operator and held by no Agent.
 TERMINAL_MANUAL_GROUP_ID = "auto:manual"
-TERMINAL_AGENT_GROUP_ID_PREFIX = "auto:agent:"
-
-GroupKind = Literal["user", "agent", "automatic", "finished"]
 
 _LAUNCH_HISTORY_ENTRY_FIELDS = frozenset(("id", "command", "args", "workdir", "used_at"))
 _GROUP_FIELDS = frozenset(("id", "name", "order", "created_at"))
@@ -83,27 +80,15 @@ class TerminalLaunchHistoryEntry:
 
 @dataclass(slots=True)
 class TerminalGroup:
-    """One operator-visible collection of Terminal Sessions.
+    """One durable user view: a named place the operator pins Terminals to.
 
-    ``kind`` decides durability and lifecycle:
-    - ``user`` groups are persisted and stay when empty.
-    - ``agent`` groups are created by the terminal Tool and live in memory.
-    - ``automatic`` groups are synthesized per Agent and for manual terminals,
-      never durable, and removed when empty.
-    - ``finished`` is the single retention group for exited/error terminals.
+    It persists and stays when empty; the catalog synthesizes the other views.
     """
 
     group_id: str
     name: str
-    kind: GroupKind
     order: list[str]
     created_at: datetime
-    source: str | None = None
-
-
-def agent_group_id(agent_id: str) -> str:
-    """Return the automatic group id for one Agent owner."""
-    return f"{TERMINAL_AGENT_GROUP_ID_PREFIX}{agent_id}"
 
 
 def validate_group_name(name: str) -> str:
@@ -252,7 +237,6 @@ def _parse_group(raw_group: Any) -> TerminalGroup:
     return TerminalGroup(
         group_id=group_id,
         name=name.strip(),
-        kind="user",
         order=list(order),
         created_at=_parse_utc_timestamp(modeled["created_at"], what="group"),
     )
@@ -466,7 +450,6 @@ class TerminalOperatorStore:
                     "created_at": group.created_at.isoformat(),
                 }
                 for group in self.groups.values()
-                if group.kind == "user"
             ]
             + self._invalid_groups,
         }
@@ -482,20 +465,10 @@ class TerminalOperatorStore:
             for entry in self._invalid_groups
         )
 
-    def group_by_name(self, name: str) -> TerminalGroup | None:
-        """Return the user or agent group with this case-insensitive name."""
-        lowered = name.casefold()
-        for group in self.groups.values():
-            if group.kind in {"user", "agent"} and group.name.casefold() == lowered:
-                return group
-        return None
-
     def group_name_taken(self, name: str, *, exclude: str | None = None) -> bool:
         lowered = name.casefold()
         return any(
-            group.kind in {"user", "agent"}
-            and group.group_id != exclude
-            and group.name.casefold() == lowered
+            group.group_id != exclude and group.name.casefold() == lowered
             for group in self.groups.values()
         )
 

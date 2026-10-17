@@ -62,7 +62,6 @@ from server.live._targets import (
     terminal_title,
 )
 from server.live._terminal_layout import (
-    EDITABLE_GROUP_KINDS,
     FINISHED_STATES,
     LiveTerminalLayout,
     action_target,
@@ -220,26 +219,23 @@ class LiveTerminals:
             )
         workdir = await self._workdir(folder, catalog)
         self._ctx.ensure_active()
-        group_id = await self._program_group(program.label, await catalog.groups())
         started: list[str] = []
+        titles: dict[str, str] = {}
         try:
             for _ in range(count):
                 self._ctx.ensure_active()
-                params: JsonObject = {
-                    "command": program.command,
-                    "workdir": workdir,
-                    "group_id": group_id,
-                }
+                params: JsonObject = {"command": program.command, "workdir": workdir}
                 if name:
                     params["name"] = name
                 result = await self._ctx.call("terminal.start", params)
-                started.append(str(result["terminal"]["terminal_id"]))
+                terminal_id = str(result["terminal"]["terminal_id"])
+                started.append(terminal_id)
+                titles[terminal_id] = terminal_title(result["terminal"])
         except Exception as exc:
             catalog.forget_terminals()
             return self._start_failure(program, name, count, started, exc)
         catalog.forget_terminals()
-        title = terminal_title({"launch_command": program.command, "name": name})
-        refs = [self._refs.terminal(terminal_id, title) for terminal_id in started]
+        refs = [self._refs.terminal(terminal_id, titles[terminal_id]) for terminal_id in started]
         head = (
             f"Started {program.label} in {count_phrase(len(refs), 'Terminal')} in "
             f"{model_path(workdir)}: {', '.join(refs)}."
@@ -369,16 +365,6 @@ class LiveTerminals:
             "No folder was given and no Project is selected in the app. Ask the user which "
             "Project or folder to work in, then call start_coding_terminal again with folder.",
         )
-
-    async def _program_group(self, label: str, groups: list[JsonObject]) -> str:
-        for group in groups:
-            if (
-                str(group.get("name") or "").casefold() == label.casefold()
-                and group.get("kind") in EDITABLE_GROUP_KINDS
-            ):
-                return str(group["group_id"])
-        created = await self._ctx.call("terminal.group.create", {"name": label})
-        return str(created["group"]["group_id"])
 
     # -- send_message, read, stop ------------------------------------------
 

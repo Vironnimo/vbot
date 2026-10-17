@@ -15,6 +15,10 @@ export {
   createTerminalsViewState,
   defaultTerminalGroupId,
   visibleTerminals,
+  shownViews,
+  finishedTerminals,
+  pinTargetOf,
+  canMoveTo,
   terminalIsFinished,
 } from './terminalsView/state.js';
 export { createTerminalsController } from './terminalsView/controller.js';

@@ -1,4 +1,4 @@
-"""Terminal manager: the operator's stream, controls, groups, and launch history."""
+"""Terminal manager: the operator's stream, controls, views, call names, and launch history."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from typing import Any, override
 import pytest
 
 import core.tools._terminal_state as terminal_state
+from core.tools._terminal_catalog import resolve_root_view
+from core.tools._terminal_state import TerminalOwner, TerminalSessionView
 from core.tools.terminal_manager import (
     TerminalClosedError,
     TerminalManager,
@@ -456,62 +458,129 @@ async def test_user_groups_are_unique_persistent_and_renamable(
         await reloaded.aclose()
 
 
-@pytest.mark.asyncio
-async def test_agent_group_is_created_and_reused_by_name(tmp_path: Path) -> None:
-    manager = TerminalManager(sweep_interval_seconds=3600)
-    try:
-        first = manager.resolve_or_create_agent_group("codex")
-        second = manager.resolve_or_create_agent_group("codex")
-        assert first.group_id == second.group_id
-        assert first.kind == "agent"
+def _conversations(titles: dict[str, str], parents: dict[str, str]) -> Any:
+    """A Session view resolver: *parents* maps a Sub-Agent Session to its parent."""
 
-        # An operator user group with the same name wins the reuse lookup.
-        user = manager.create_group_for_operator("My Codex")
-        reused = manager.resolve_or_create_agent_group("my codex")
-        assert reused.group_id == user["group_id"]
+    def resolve(scope: TerminalOwner) -> TerminalSessionView:
+        return resolve_root_view(
+            scope,
+            lambda item: (
+                TerminalOwner(item.project_id, item.agent_id, parents[item.session_id])
+                if item.session_id in parents
+                else None
+            ),
+            lambda item: titles.get(item.session_id),
+        )
+
+    return resolve
+
+
+async def _spawn_agent(manager: TerminalManager, tmp_path: Path, session_id: str) -> str:
+    started = await manager.spawn(
+        owner(session_id),
+        ["fake-tui"],
+        cwd=tmp_path,
+        env=None,
+        columns=120,
+        rows=32,
+        origin_run_id="run-a",
+    )
+    return started.terminal_id
+
+
+@pytest.mark.asyncio
+async def test_terminals_show_under_their_conversation_or_the_operators_own(
+    tmp_path: Path,
+) -> None:
+    titles = {"root": "Fix login"}
+    manager = _manager(session_view=_conversations(titles, {"child": "root"}))
+    manager.start()
+    try:
+        group = manager.create_group_for_operator("Work")
+        in_root = await _spawn_agent(manager, tmp_path, "root")
+        in_child = await _spawn_agent(manager, tmp_path, "child")
+        manual = await _spawn_manual(manager, tmp_path)
+        grouped = await _spawn_manual(manager, tmp_path, group_id=group["group_id"])
+        await manager.kill_for_operator(in_child)
+
+        conversation = "session:project-a/agent-a/root"
+        by_id = {item["terminal_id"]: item for item in manager.list_for_operator()}
+        assert {terminal_id: by_id[terminal_id]["group_id"] for terminal_id in by_id} == {
+            in_root: conversation,
+            # A finished Terminal stays in its view.
+            in_child: conversation,
+            manual: "auto:manual",
+            grouped: group["group_id"],
+        }
+        views = [
+            (item["group_id"], item["kind"], item["name"], item["terminal_count"])
+            for item in manager.list_groups_for_operator()
+        ]
+        assert views == [
+            (conversation, "session", "Fix login", 2),
+            (group["group_id"], "user", "Work", 1),
+            ("auto:manual", "manual", None, 1),
+        ]
+        session_view = manager.list_groups_for_operator()[0]
+        assert (session_view["live_count"], session_view["session"]["session_id"]) == (1, "root")
+
+        titles["root"] = "Fix the login form"
+        manager.forget_session_views()
+        assert manager.list_groups_for_operator()[0]["name"] == "Fix the login form"
     finally:
         await manager.aclose()
 
 
 @pytest.mark.asyncio
-async def test_spawned_terminals_join_explicit_and_automatic_groups(
-    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
-) -> None:
-    manager, _factory = terminal_manager
-    group = manager.create_group_for_operator("Work")
-    agent_started = await spawn(manager, tmp_path)
-    manual_id = await _spawn_manual(manager, tmp_path)
-    grouped_id = await _spawn_manual(manager, tmp_path, group_id=group["group_id"])
+async def test_call_names_are_unique_first_names_that_avoid_agent_names(tmp_path: Path) -> None:
+    manager = _manager(reserved_call_names=lambda: ["anna", "Coder"])
+    manager.start()
+    try:
+        first = await _spawn_manual(manager, tmp_path)
+        second = await _spawn_manual(manager, tmp_path)
+        names = {item["terminal_id"]: item["call_name"] for item in manager.list_for_operator()}
+        assert (names[first], names[second]) == ("Ben", "Clara")
 
-    by_id = {summary["terminal_id"]: summary for summary in manager.list_for_operator()}
-    assert by_id[agent_started.terminal_id]["group_id"] == "auto:agent:agent-a"
-    assert by_id[manual_id]["group_id"] == "auto:manual"
-    assert by_id[grouped_id]["group_id"] == group["group_id"]
-
-    by_name = {item["name"]: item for item in manager.list_groups_for_operator()}
-    assert by_name["Work"]["terminal_count"] == 1
-    assert by_name["Manual"]["terminal_count"] == 1
-    assert by_name["Agent agent-a"]["terminal_count"] == 1
-    assert "finished" not in by_name
+        await manager.kill_for_operator(first)
+        # A finished Terminal keeps its name until it is forgotten.
+        third = await _spawn_manual(manager, tmp_path)
+        manager.forget_for_operator(first)
+        fourth = await _spawn_manual(manager, tmp_path)
+        names = {item["terminal_id"]: item["call_name"] for item in manager.list_for_operator()}
+        assert (names[third], names[fourth]) == ("David", "Ben")
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio
-async def test_killed_terminal_moves_to_finished_group_only_when_present(
-    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+async def test_a_pin_moves_a_terminal_to_another_view_until_it_is_lifted(
+    tmp_path: Path,
 ) -> None:
-    manager, _factory = terminal_manager
-    started = await spawn(manager, tmp_path)
-    await manager.kill_for_operator(started.terminal_id)
+    manager = _manager(session_view=_conversations({}, {}))
+    manager.start()
+    try:
+        group_id = manager.create_group_for_operator("Work")["group_id"]
+        terminal_id = await _spawn_agent(manager, tmp_path, "root")
+        home = "session:project-a/agent-a/root"
 
-    by_id = {summary["terminal_id"]: summary for summary in manager.list_for_operator()}
-    assert by_id[started.terminal_id]["group_id"] == "finished"
-    finished = [
-        group for group in manager.list_groups_for_operator() if group["kind"] == "finished"
-    ]
-    assert [group["terminal_count"] for group in finished] == [1]
+        moved = manager.move_for_operator(terminal_id, group_id)
+        assert (moved["group_id"], moved["home_group_id"], moved["pinned"]) == (
+            group_id,
+            home,
+            True,
+        )
+        assert manager.list_groups_for_operator()[0]["order"] == [terminal_id]
+        other = "session:project-a/agent-b/other"
+        assert manager.move_for_operator(terminal_id, other)["group_id"] == other
 
-    manager.forget_for_operator(started.terminal_id)
-    assert all(group["kind"] != "finished" for group in manager.list_groups_for_operator())
+        lifted = manager.move_for_operator(terminal_id, None)
+        assert (lifted["group_id"], lifted["pinned"]) == (home, False)
+        with pytest.raises(TerminalNotFoundError):
+            manager.move_for_operator(terminal_id, "grp_missing")
+        with pytest.raises(TerminalNotFoundError):
+            manager.move_for_operator(terminal_id, "auto:manual")
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio
@@ -539,11 +608,11 @@ async def test_group_order_is_persisted_and_new_terminals_append(tmp_path: Path)
     reloaded = TerminalManager(
         groups_path=groups_path, data_dir=tmp_path, sweep_interval_seconds=3600
     )
-    assert reloaded.list_groups_for_operator()[0]["order"] == [second, first]
+    assert reloaded.list_groups_for_operator()[0]["order"] == [second, first, third]
 
 
 @pytest.mark.asyncio
-async def test_deleting_a_group_kills_every_terminal_in_it(
+async def test_deleting_a_group_returns_its_terminals_to_their_views_and_stops_none(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     manager, _factory = terminal_manager
@@ -552,15 +621,15 @@ async def test_deleting_a_group_kills_every_terminal_in_it(
     second = await _spawn_manual(manager, tmp_path, group_id=group_id)
     outsider = await _spawn_manual(manager, tmp_path)
 
-    result = await manager.delete_group_for_operator(group_id)
-    assert result["terminals_killed"] == 2
+    result = manager.delete_group_for_operator(group_id)
+    assert result["terminals_moved"] == 2
     assert group_id not in {item["group_id"] for item in manager.list_groups_for_operator()}
 
     by_id = {summary["terminal_id"]: summary for summary in manager.list_for_operator()}
     assert [(by_id[item]["state"], by_id[item]["group_id"]) for item in (first, second)] == [
-        ("exited", "finished"),
-        ("exited", "finished"),
+        ("ready", "auto:manual"),
+        ("ready", "auto:manual"),
     ]
-    assert by_id[outsider]["state"] != "exited"
+    assert by_id[outsider]["group_id"] == "auto:manual"
     with pytest.raises(TerminalNotFoundError):
-        await manager.delete_group_for_operator(group_id)
+        manager.delete_group_for_operator(group_id)

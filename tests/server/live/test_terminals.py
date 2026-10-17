@@ -56,8 +56,9 @@ async def test_starts_codex_and_types_the_task_once_it_is_ready(fx: Fixture) -> 
     assert "Typed the task into t1 and sent it." in text
     start = fx.app.params("terminal.start")
     # The task never becomes part of the command line.
-    assert start == [{"command": "codex", "workdir": PROJECT_FOLDER, "group_id": "grp_new2"}]
-    assert fx.app.params("terminal.group.create") == [{"name": "Codex"}]
+    # It shows under the user's own terminals: Live creates no group for it.
+    assert start == [{"command": "codex", "workdir": PROJECT_FOLDER}]
+    assert fx.app.count("terminal.group.create") == 0
     assert [(data, revision) for _id, data, revision in fx.app.inputs] == [
         ('\x1b[200~Fix "a" & 100%\x1b[201~', 5),
         ("\r", 6),
@@ -95,13 +96,10 @@ async def test_reports_a_pending_codex_update_question(fx: Fixture) -> None:
 
 
 @pytest.mark.asyncio
-async def test_starts_several_terminals_in_the_existing_program_group(fx: Fixture) -> None:
-    fx.app.groups.append({"group_id": "grp_codex", "name": "codex", "kind": "user"})
+async def test_starts_several_terminals_with_one_name(fx: Fixture) -> None:
     text = await fx.ok("start_coding_terminal", program="codex", task="Go", count=2, name="Pair")
     assert text.endswith("t1, t2. Typed the task into t1 and t2 and sent it.")
-    assert [params["group_id"] for params in fx.app.params("terminal.start")] == ["grp_codex"] * 2
     assert all(params["name"] == "Pair" for params in fx.app.params("terminal.start"))
-    assert fx.app.count("terminal.group.create") == 0
     assert len(fx.app.inputs) == 4
 
 
@@ -186,11 +184,15 @@ async def test_reports_what_the_shell_shows_when_the_program_did_not_start(fx: F
 
 @pytest.mark.asyncio
 async def test_types_a_message_into_a_coding_terminal(fx: Fixture) -> None:
-    fx.app.add_terminal("term_a", name="Build")
+    fx.app.add_terminal("term_a", name="Build", call_name="Anna")
     text = await fx.ok("send_message", target="Build", text="line one\nline two")
     assert text == "Sent to t1 (Codex)."
+    # The user calls a Terminal by its call name as well.
+    await fx.ok("send_message", target="anna", text="go")
     assert [data for _id, data, _revision in fx.app.inputs] == [
         "\x1b[200~line one\nline two\x1b[201~",
+        "\r",
+        "\x1b[200~go\x1b[201~",
         "\r",
     ]
 
@@ -294,9 +296,6 @@ async def test_closes_working_terminals_only_after_the_user_agreed(fx: Fixture) 
     code, message = await fx.failed("manage_terminals", action="close", target="term_a")
     assert code == "terminal_working"
     assert message.endswith('{"action": "close", "target": "t1", "confirm": true}.')
-    code, message = await fx.failed("manage_terminals", action="delete_group", target="Mine")
-    assert code == "terminal_working"
-    assert '{"action": "delete_group", "target": "Mine", "confirm": true}' in message
     assert fx.app.effects() == []
 
     await fx.ok("manage_terminals", action="close", target="t1", confirm=True)
@@ -321,11 +320,17 @@ async def test_manages_editable_groups_only(fx: Fixture) -> None:
     assert text == 'Created the Terminal group "Review".'
     text = await fx.ok("manage_terminals", action="rename_group", target="mine", name="Ours")
     assert text == 'Renamed the group "Mine" to "Ours".'
+    fx.app.add_terminal("term_a", state="working")
+    # Deleting a group stops none of its Terminals, so it needs no confirmation.
     text = await fx.ok("manage_terminals", action="delete_group", target="Mine")
-    assert text == 'Deleted the group "Mine" and stopped 2 Terminals.'
-    code, message = await fx.failed("manage_terminals", action="delete_group", target="Finished")
-    assert code == "group_not_editable"
+    assert text == (
+        'Deleted the group "Mine"; its 2 Terminals keep running and show where they started.'
+    )
+    for name in ("Fix login", "Your terminals"):
+        code, message = await fx.failed("manage_terminals", action="delete_group", target=name)
+        assert code == "group_not_editable"
     assert fx.app.count("terminal.group.delete") == 1
+    assert fx.app.count("terminal.kill") == 0
 
 
 @pytest.mark.asyncio

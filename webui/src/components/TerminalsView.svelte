@@ -2,11 +2,14 @@
   import TerminalDialogs from './terminals/TerminalDialogs.svelte';
   import {
     groupCanEdit,
+    launchHistoryLabel,
+    launchHistoryWorkdir,
     terminalDetails,
     terminalError,
     terminalGroupDetails,
-    terminalTarget,
+    terminalLabel,
     terminalTitle,
+    viewLabel,
   } from './terminals/terminalLabels.js';
   import './terminals/terminals.css';
   import { onMount, tick, untrack } from 'svelte';
@@ -15,21 +18,27 @@
 
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import ContextMenu from './ui/ContextMenu.svelte';
+  import { contextMenuAnchor, isContextMenuKey } from './ui/contextMenu.js';
 
   import EmptyState from './ui/EmptyState.svelte';
 
   import { t } from '$lib/i18n.js';
+  import { formatAgentAddress } from '$lib/agentAddress.js';
   import {
     TERMINAL_STREAM_CONNECTED,
     TERMINAL_STREAM_IDLE,
+    canMoveTo,
     createTerminalsController,
     createTerminalsViewState,
     defaultTerminalGroupId,
+    finishedTerminals,
     layoutForCount,
+    pinTargetOf,
+    shownViews,
     terminalIsFinished,
     visibleTerminals,
   } from '$lib/terminalsView.js';
-  import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { tooltip } from '$lib/tooltip.js';
   import {
     createStandaloneNavigation,
@@ -37,11 +46,13 @@
   } from '$lib/navigation.svelte.js';
 
   let {
-    // The place is the shown group; an empty place shows the default group.
+    // The place is the shown view; an empty place shows the default view.
     navigation = createStandaloneNavigation(),
     terminalsRefreshToken = 0,
     serverUnavailable = false,
     onToast = () => {},
+    // Opens a conversation in Chat: (agent address, session id).
+    onOpenSession = null,
   } = $props();
 
   let dialogs = $state(null);
@@ -50,17 +61,20 @@
   let maximizedTerminalId = $state('');
   const shell = useNavigation();
 
-  // Single open "…" action menu per group, portaled to <body> like the
-  // session row menu. Only one group menu is open at a time.
-  let openGroupMenuId = $state(null);
-  let groupMenuTriggerElement = $state(null);
-  let groupMenuElement = $state(null);
-  let groupMenuStyle = $state('visibility: hidden;');
-  let groupMenuPlacement = $state('bottom');
-  const GROUP_ACTION_MENU_FALLBACK_WIDTH = 160;
+  // The one open context menu of the view: a pill's, the start options,
+  // the history, the "more views" list, or a tile's.
+  let menu = $state(null);
   let draggedTerminalId = $state('');
   let dragOverTerminalId = $state('');
+  let dragOverGroupId = $state('');
   let mounted = false;
+
+  // Pills that do not fit wrap onto a clipped second line and wait in the
+  // "more" menu; the shown view keeps its place behind the fitting ones.
+  let rosterElement = $state(null);
+  let viewsElement = $state(null);
+  let fittingCount = $state(Number.POSITIVE_INFINITY);
+  const ROSTER_INSET = 2;
 
   const groupTerminals = $derived(visibleTerminals(viewState));
   let hasTerminals = $derived(groupTerminals.length > 0);
@@ -74,17 +88,19 @@
       (group) => group.group_id === viewState.selectedGroupId,
     ) ?? null,
   );
-  const canStartInGroup = $derived(selectedGroup?.kind !== 'finished');
-  const lastTileSpan = $derived(layout.spans[groupTerminals.length - 1]);
-  const appendSharesCell = $derived(
-    !!lastTileSpan &&
-      lastTileSpan.column + lastTileSpan.columnSpan === layout.columns,
+  const views = $derived(shownViews(viewState));
+  const hiddenViews = $derived(views.slice(fittingCount));
+  const selectedHidden = $derived(
+    hiddenViews.some((group) => group.group_id === viewState.selectedGroupId),
   );
-  let groupReorderable = $derived(
-    !!selectedGroup &&
-      selectedGroup.kind !== 'finished' &&
-      selectedGroup.kind !== 'automatic',
+  const finished = $derived(finishedTerminals(viewState));
+  const historyTerminal = $derived(
+    viewState.historyTerminalId
+      ? findTerminal(viewState.historyTerminalId)
+      : null,
   );
+  // History shows one terminal; it keeps its place in its own view.
+  const reorderable = $derived(!historyTerminal && !maximizedTerminalId);
 
   const renderer = createTerminalRenderer({
     viewState,
@@ -136,6 +152,7 @@
       if (!viewState.groups.some((group) => group.group_id === args.group_id))
         throw new Error('group_not_found');
       showGroup(args.group_id);
+      controller.closeHistory();
       maximizedTerminalId = '';
       await tick();
       return getVoiceContext();
@@ -145,6 +162,13 @@
     );
     if (!target) throw new Error('terminal_not_found');
     showGroup(target.group_id);
+    if (
+      !visibleTerminals(viewState).some(
+        (item) => item.terminal_id === target.terminal_id,
+      )
+    ) {
+      controller.openHistory(target.terminal_id);
+    }
     controller.selectTerminal(target.terminal_id);
     if (action === 'maximize' && maximizedTerminalId !== target.terminal_id) {
       await toggleMaximize(target.terminal_id);
@@ -167,8 +191,8 @@
     controller.setServerUnavailable(serverUnavailable);
   });
 
-  // Place -> shown group. Before the first load the target waits in the
-  // selection, which the load keeps while that group exists; a group that no
+  // Place -> shown view. Before the first load the target waits in the
+  // selection, which the load keeps while that view exists; a view that no
   // longer exists leaves the shown one in place and corrects the entry.
   $effect(() => {
     const groupId = navigation.place[0] ?? '';
@@ -183,9 +207,9 @@
     });
   });
 
-  // Shown group -> place. A group that appears with this change (just created
+  // Shown view -> place. A view that appears with this change (just created
   // or started into) is a new step; any other change - a load, a removed
-  // group - corrects the current entry.
+  // view - corrects the current entry.
   let knownGroupIds = null;
   $effect(() => {
     const groupId = viewState.selectedGroupId;
@@ -205,10 +229,19 @@
     else navigation.replace(place);
   }
 
-  // Voice requests switch groups as a step, like a click on the group tab.
+  // Voice requests switch views as a step, like a click on a pill.
   function showGroup(groupId) {
     controller.selectGroup(groupId);
     showGroupInPlace(viewState.selectedGroupId, { step: true });
+  }
+
+  // A click on the shown pill also leaves the history.
+  function selectView(groupId) {
+    if (groupId === viewState.selectedGroupId) {
+      controller.closeHistory();
+      return;
+    }
+    navigation.navigate([groupId]);
   }
 
   // Back restores a maximized terminal before it navigates.
@@ -218,10 +251,10 @@
     return shell?.registerLayer({ close: () => toggleMaximize(terminalId) });
   });
 
-  // An open group menu closes first, like on Escape.
+  // Back leaves a terminal opened from the history.
   $effect(() => {
-    if (openGroupMenuId === null) return;
-    return shell?.registerLayer({ close: closeGroupMenu });
+    if (!viewState.historyTerminalId) return;
+    return shell?.registerLayer({ close: () => controller.closeHistory() });
   });
 
   $effect(() => {
@@ -244,6 +277,45 @@
   });
 
   $effect(() => renderer.updateInteractivity(groupTerminals));
+
+  function measureFittingViews() {
+    if (!rosterElement) {
+      return;
+    }
+    rosterElement.style.width = '';
+    const pills = Array.from(rosterElement.children);
+    const firstLine = pills[0]?.offsetTop ?? 0;
+    const wrapped = pills.findIndex((pill) => pill.offsetTop !== firstLine);
+    fittingCount = wrapped === -1 ? pills.length : wrapped;
+    if (wrapped > 0) {
+      const last = pills[wrapped - 1];
+      const end = last.offsetLeft + last.offsetWidth - rosterElement.offsetLeft;
+      rosterElement.style.width = `${end + ROSTER_INSET}px`;
+    }
+  }
+
+  $effect(() => {
+    if (!viewsElement || typeof ResizeObserver === 'undefined') {
+      return undefined;
+    }
+    void views;
+    const observer = new ResizeObserver(() => measureFittingViews());
+    observer.observe(viewsElement);
+    return () => observer.disconnect();
+  });
+
+  $effect(() => {
+    // Names, counts, dots and the extra pill change what fits.
+    void views
+      .map(
+        (group) =>
+          `${viewLabel(group)}:${group.live_count}:${group.working_count}`,
+      )
+      .join();
+    void selectedHidden;
+    void rosterElement;
+    tick().then(measureFittingViews);
+  });
 
   onMount(() => {
     mounted = true;
@@ -335,71 +407,184 @@
     );
   }
 
-  function toggleGroupMenu(groupId, triggerElement) {
-    if (openGroupMenuId === groupId) {
-      closeGroupMenu();
-      return;
-    }
-    openGroupMenuId = groupId;
-    groupMenuTriggerElement = triggerElement;
-    groupMenuStyle = 'visibility: hidden;';
-    void tick().then(() => updateGroupMenuPosition());
+  function findGroup(groupId) {
+    return viewState.groups.find((group) => group.group_id === groupId) ?? null;
   }
 
-  function closeGroupMenu() {
-    openGroupMenuId = null;
-    groupMenuTriggerElement = null;
-    groupMenuElement = null;
-    groupMenuStyle = 'visibility: hidden;';
-    groupMenuPlacement = 'bottom';
-  }
-
-  function updateGroupMenuPosition() {
-    if (
-      openGroupMenuId === null ||
-      !groupMenuTriggerElement ||
-      !groupMenuElement
-    ) {
-      return;
-    }
-    const menuRect = groupMenuElement.getBoundingClientRect();
-    const { placement, left, width, verticalRule, optionsMaxHeight } =
-      computePanelPosition(groupMenuTriggerElement, {
-        contentHeight: groupMenuElement.scrollHeight || menuRect.height,
-        panelWidth: menuRect.width || GROUP_ACTION_MENU_FALLBACK_WIDTH,
-        horizontalAlign: 'end',
+  // One click starts a terminal in the shown view: the default shell, or a
+  // recent setup from the start menu. Its tile appearing is the feedback.
+  async function quickStart(entry = null) {
+    const params = {};
+    if (entry?.command) params.command = entry.command;
+    if (entry?.args?.length) params.args = [...entry.args];
+    if (entry?.workdir) params.workdir = entry.workdir;
+    maximizedTerminalId = '';
+    const started = await controller.startManualTerminal(params, {
+      groupId: pinTargetOf(selectedGroup),
+    });
+    if (!started) {
+      onToast({
+        title: t('terminals.startFailedTitle'),
+        message: terminalError(viewState.startError),
+        variant: 'error',
       });
-    groupMenuPlacement = placement;
-    groupMenuStyle = [
-      `left: ${left}px`,
-      verticalRule,
-      `width: ${width}px`,
-      `max-height: ${optionsMaxHeight}px`,
-    ].join('; ');
-  }
-
-  function handleGroupMenuDocumentMouseDown(event) {
-    if (openGroupMenuId === null) {
       return;
     }
-    if (
-      event.target instanceof Element &&
-      (groupMenuTriggerElement?.contains(event.target) ||
-        groupMenuElement?.contains(event.target))
-    ) {
-      return;
-    }
-    closeGroupMenu();
+    await tick();
+    activateTerminal(started.terminal_id);
   }
 
-  function handleGroupMenuDocumentKeyDown(event) {
-    if (event.key === 'Escape') {
-      closeGroupMenu();
+  function openSession(group) {
+    const session = group?.session;
+    if (!onOpenSession || !session?.agent_id || !session.session_id) return;
+    onOpenSession(
+      formatAgentAddress(session.agent_id, session.project_id),
+      session.session_id,
+    );
+  }
+
+  function openMenu(event, label, items) {
+    event.preventDefault();
+    event.stopPropagation();
+    menu = { ...contextMenuAnchor(event), label, items };
+  }
+
+  function viewMenuItems(group) {
+    if (groupCanEdit(group)) {
+      return [
+        {
+          id: 'rename',
+          label: t('terminals.renameGroupAction'),
+          onSelect: () => dialogs.openRenameGroupDialog(group),
+        },
+        {
+          id: 'delete',
+          label: t('terminals.deleteGroupAction'),
+          danger: true,
+          onSelect: () => dialogs.openDeleteGroupDialog(group),
+        },
+      ];
     }
+    if (group?.kind === 'session' && onOpenSession) {
+      return [
+        {
+          id: 'open',
+          label: t('terminals.openConversation'),
+          onSelect: () => openSession(group),
+        },
+      ];
+    }
+    return [];
+  }
+
+  function openViewMenu(event, group) {
+    const items = viewMenuItems(group);
+    if (items.length === 0) return;
+    openMenu(event, viewLabel(group), items);
+  }
+
+  function openStartMenu(event) {
+    openMenu(event, t('terminals.startOptions'), [
+      ...viewState.launchHistory.map((entry) => ({
+        id: `history:${entry.id}`,
+        label: launchHistoryLabel(entry),
+        hint: launchHistoryWorkdir(entry),
+        group: 'history',
+        onSelect: () => void quickStart(entry),
+      })),
+      {
+        id: 'customize',
+        label: t('terminals.customize'),
+        group: 'more',
+        onSelect: () => dialogs.openStartDialog(),
+      },
+      {
+        id: 'group',
+        label: t('terminals.newGroup'),
+        group: 'more',
+        onSelect: () => dialogs.openCreateGroupDialog(),
+      },
+    ]);
+  }
+
+  function openHistoryMenu(event) {
+    openMenu(
+      event,
+      t('terminals.history'),
+      finished.map((item) => ({
+        id: item.terminal_id,
+        label: terminalTitle(item),
+        hint: viewLabel(findGroup(item.group_id)),
+        onSelect: () => {
+          maximizedTerminalId = '';
+          controller.openHistory(item.terminal_id);
+        },
+      })),
+    );
+  }
+
+  function openMoreViewsMenu(event) {
+    openMenu(
+      event,
+      t('terminals.moreViewsLabel'),
+      hiddenViews.map((group) => ({
+        id: group.group_id,
+        label: viewLabel(group),
+        hint: group.live_count ? String(group.live_count) : '',
+        onSelect: () => selectView(group.group_id),
+      })),
+    );
+  }
+
+  function openTileMenu(event, item) {
+    const moves = viewState.groups
+      .filter(
+        (group) =>
+          canMoveTo(item, group) && group.group_id !== item.home_group_id,
+      )
+      .map((group) => ({
+        id: `move:${group.group_id}`,
+        label: t('terminals.moveTo', { view: viewLabel(group) }),
+        group: 'move',
+        onSelect: () =>
+          void controller.moveTerminal(item.terminal_id, group.group_id),
+      }));
+    if (item.pinned) {
+      moves.push({
+        id: 'home',
+        label: t('terminals.moveHome'),
+        group: 'move',
+        onSelect: () => void controller.moveTerminal(item.terminal_id, null),
+      });
+    }
+    openMenu(
+      event,
+      t('terminals.terminalMenu', { name: terminalTitle(item) }),
+      [
+        ...moves,
+        {
+          id: 'maximize',
+          label:
+            maximizedTerminalId === item.terminal_id
+              ? t('terminals.restore')
+              : t('terminals.maximize'),
+          group: 'tile',
+          onSelect: () => void toggleMaximize(item.terminal_id),
+        },
+        {
+          id: 'close',
+          label: t('terminals.close'),
+          group: 'tile',
+          danger: true,
+          onSelect: () => closeTerminal(item.terminal_id),
+        },
+      ],
+    );
   }
 
   function onTileDragStart(event, terminalId) {
-    if (!groupReorderable) {
+    if (historyTerminal) {
+      event.preventDefault();
       return;
     }
     draggedTerminalId = terminalId;
@@ -409,7 +594,7 @@
 
   function onTileDragOver(event, terminalId) {
     if (
-      !groupReorderable ||
+      !reorderable ||
       !draggedTerminalId ||
       draggedTerminalId === terminalId
     ) {
@@ -423,15 +608,15 @@
   function onTileDragEnd() {
     draggedTerminalId = '';
     dragOverTerminalId = '';
+    dragOverGroupId = '';
   }
 
   function onTileDrop(event, targetTerminalId) {
     event.preventDefault();
     const sourceId =
       draggedTerminalId || event.dataTransfer.getData('text/plain');
-    draggedTerminalId = '';
-    dragOverTerminalId = '';
-    if (!sourceId || sourceId === targetTerminalId || !groupReorderable) {
+    onTileDragEnd();
+    if (!sourceId || sourceId === targetTerminalId || !reorderable) {
       return;
     }
     const ids = groupTerminals.map((terminal) => terminal.terminal_id);
@@ -445,143 +630,191 @@
     reordered.splice(toIndex, 0, sourceId);
     controller.reorderGroup(viewState.selectedGroupId, reordered);
   }
+
+  // A tile dropped on a pill shows in that view from now on; dropped on the
+  // view it started in, it returns there.
+  function onPillDragOver(event, group) {
+    const item = findTerminal(draggedTerminalId);
+    if (!canMoveTo(item, group)) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    dragOverGroupId = group.group_id;
+  }
+
+  function onPillDragLeave(group) {
+    if (dragOverGroupId === group.group_id) dragOverGroupId = '';
+  }
+
+  function onPillDrop(event, group) {
+    event.preventDefault();
+    const item = findTerminal(
+      draggedTerminalId || event.dataTransfer.getData('text/plain'),
+    );
+    onTileDragEnd();
+    if (!canMoveTo(item, group)) {
+      return;
+    }
+    const target =
+      group.group_id === item.home_group_id ? null : group.group_id;
+    void controller.moveTerminal(item.terminal_id, target);
+  }
 </script>
 
-<svelte:document
-  onmousedown={handleGroupMenuDocumentMouseDown}
-  onkeydown={handleGroupMenuDocumentKeyDown}
-/>
-<svelte:window onresize={closeGroupMenu} />
+{#snippet viewPill(group, extra = false, wrapped = false)}
+  <button
+    type="button"
+    class="terminals-view__pill"
+    class:terminals-view__pill--extra={extra}
+    class:terminals-view__pill--wrapped={wrapped}
+    class:terminals-view__pill--drop-target={dragOverGroupId === group.group_id}
+    aria-pressed={group.group_id === viewState.selectedGroupId}
+    aria-label={`${viewLabel(group)}: ${t('terminals.count', { count: group.live_count ?? 0 })}`}
+    use:tooltip={() => terminalGroupDetails(group, viewState.terminals)}
+    disabled={serverUnavailable}
+    onclick={() => selectView(group.group_id)}
+    oncontextmenu={(event) => openViewMenu(event, group)}
+    onkeydown={(event) => {
+      if (isContextMenuKey(event)) openViewMenu(event, group);
+    }}
+    ondragover={(event) => onPillDragOver(event, group)}
+    ondragleave={() => onPillDragLeave(group)}
+    ondrop={(event) => onPillDrop(event, group)}
+  >
+    {#if group.working_count > 0}
+      <span
+        class="terminals-view__pill-dot tab-indicator tab-indicator--running"
+        aria-hidden="true"
+      ></span>
+    {/if}
+    <span class="terminals-view__pill-name">{viewLabel(group)}</span>
+    {#if group.live_count > 0}
+      <span class="terminals-view__pill-count" aria-hidden="true">
+        {group.live_count}
+      </span>
+    {/if}
+  </button>
+{/snippet}
 
 <section class="terminals-view" aria-label={t('terminals.title')}>
   <header class="terminals-view__toolbar">
     <div
-      class="terminals-view__group-tabs"
+      bind:this={viewsElement}
+      class="terminals-view__views"
+      role="group"
       aria-label={t('terminals.groupsLabel')}
-      onscroll={closeGroupMenu}
     >
-      {#each viewState.groups as group (group.group_id)}
-        <div
-          class="terminals-view__group-tab-wrap"
-          class:terminals-view__group-tab-wrap--editable={groupCanEdit(group)}
-          class:terminals-view__group-tab-wrap--start={group.group_id ===
-            viewState.selectedGroupId && canStartInGroup}
+      <div bind:this={rosterElement} class="terminals-view__roster">
+        {#each views as group, index (group.group_id)}
+          {@render viewPill(group, false, index >= fittingCount)}
+        {/each}
+      </div>
+      {#if selectedHidden && selectedGroup}
+        {@render viewPill(selectedGroup, true)}
+      {/if}
+      {#if hiddenViews.length > 0}
+        <button
+          type="button"
+          class="terminals-view__pill terminals-view__pill--more"
+          aria-haspopup="menu"
+          aria-label={t('terminals.moreViewsLabel')}
+          use:tooltip={t('terminals.moreViewsLabel')}
+          onclick={openMoreViewsMenu}
         >
-          <button
-            type="button"
-            class="terminals-view__group-tab"
-            class:active={group.group_id === viewState.selectedGroupId}
-            aria-current={group.group_id === viewState.selectedGroupId
-              ? 'true'
-              : undefined}
-            aria-label={`${group.name}: ${t('terminals.count', { count: group.terminal_count })}`}
-            use:tooltip={() => terminalGroupDetails(group, viewState.terminals)}
-            onclick={() => navigation.navigate([group.group_id])}
-          >
-            <span class="terminals-view__group-tab-label">
-              <span class="terminals-view__group-tab-name">{group.name}</span>
-              <span class="terminals-view__group-tab-count">
-                {group.terminal_count}
-              </span>
-            </span>
-          </button>
-          {#if group.group_id === viewState.selectedGroupId && canStartInGroup}
-            <span class="terminals-view__group-start">
-              <Button
-                variant="tertiary"
-                icon
-                ariaLabel={t('terminals.new')}
-                tooltip={t('terminals.new')}
-                disabled={serverUnavailable}
-                onClick={() => dialogs.openStartDialog()}
-              >
-                <svg
-                  viewBox="0 0 20 20"
-                  width="18"
-                  height="18"
-                  aria-hidden="true"
-                >
-                  <path d="M11 16H3V4h14v5M6 8l3 2-3 2M15 11v8M11 15h8" />
-                </svg>
-              </Button>
-            </span>
-          {/if}
-          {#if groupCanEdit(group)}
-            <span class="terminals-view__group-actions">
-              <button
-                type="button"
-                class="terminals-view__group-action-menu-trigger"
-                class:terminals-view__group-action-menu-trigger--open={openGroupMenuId ===
-                  group.group_id}
-                aria-label={t('terminals.groupActions')}
-                aria-haspopup="menu"
-                aria-expanded={openGroupMenuId === group.group_id}
-                onclick={(event) =>
-                  toggleGroupMenu(group.group_id, event.currentTarget)}
-              >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <circle cx="8" cy="3" r="1.4" />
-                  <circle cx="8" cy="8" r="1.4" />
-                  <circle cx="8" cy="13" r="1.4" />
-                </svg>
-              </button>
-              {#if openGroupMenuId === group.group_id}
-                <div
-                  bind:this={groupMenuElement}
-                  use:portal
-                  class="terminals-view__group-menu"
-                  role="menu"
-                  data-placement={groupMenuPlacement}
-                  data-positioning="fixed"
-                  style={groupMenuStyle}
-                >
-                  <button
-                    type="button"
-                    class="terminals-view__group-menu-item"
-                    role="menuitem"
-                    onclick={() => {
-                      closeGroupMenu();
-                      dialogs.openRenameGroupDialog(group);
-                    }}
-                  >
-                    {t('terminals.renameGroupAction')}
-                  </button>
-                  <button
-                    type="button"
-                    class="terminals-view__group-menu-item terminals-view__group-menu-item--danger"
-                    role="menuitem"
-                    onclick={() => {
-                      closeGroupMenu();
-                      dialogs.openDeleteGroupDialog(group);
-                    }}
-                  >
-                    {t('terminals.deleteGroupAction')}
-                  </button>
-                </div>
-              {/if}
-            </span>
-          {/if}
-        </div>
-      {/each}
-      <span class="terminals-view__add-group">
-        <Button
-          variant="tertiary"
-          icon
-          ariaLabel={t('terminals.addGroup')}
-          tooltip={t('terminals.addGroup')}
-          disabled={serverUnavailable}
-          onClick={() => dialogs.openCreateGroupDialog()}
-        >
-          <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
-            <path d="M7 1v12M1 7h12" />
-          </svg>
-        </Button>
-      </span>
+          {t('terminals.moreViews', { count: hiddenViews.length })}
+        </button>
+      {/if}
       {#if viewState.loading && viewState.groups.length === 0}
         <span class="terminals-view__group-status">
           {t('terminals.loading')}
         </span>
       {/if}
+    </div>
+    <div class="terminals-view__actions">
+      {#if selectedGroup && groupCanEdit(selectedGroup)}
+        <Button
+          variant="tertiary"
+          icon
+          aria-haspopup="menu"
+          ariaLabel={t('terminals.groupActions')}
+          tooltip={t('terminals.groupActions')}
+          disabled={serverUnavailable}
+          onClick={(event) => openViewMenu(event, selectedGroup)}
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <circle cx="3.5" cy="8" r="1.3" />
+            <circle cx="8" cy="8" r="1.3" />
+            <circle cx="12.5" cy="8" r="1.3" />
+          </svg>
+        </Button>
+      {:else if selectedGroup?.kind === 'session' && onOpenSession}
+        <Button
+          variant="tertiary"
+          icon
+          ariaLabel={t('terminals.openConversation')}
+          tooltip={t('terminals.openConversation')}
+          onClick={() => openSession(selectedGroup)}
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <path
+              d="M3 3.5h10v7H7l-3 2.5v-2.5H3zM6 6.5h4M6 8.5h2.5"
+              class="terminals-view__stroke"
+            />
+          </svg>
+        </Button>
+      {/if}
+      <Button
+        variant="tertiary"
+        class="terminals-view__history-button"
+        aria-haspopup="menu"
+        ariaLabel={t('terminals.history')}
+        tooltip={finished.length
+          ? t('terminals.history')
+          : t('terminals.historyEmpty')}
+        disabled={finished.length === 0}
+        onClick={openHistoryMenu}
+      >
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path
+            d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.6h2.6M8 5v3.2l2 1.3"
+            class="terminals-view__stroke"
+          />
+        </svg>
+        {#if finished.length > 0}
+          <span class="terminals-view__history-count">{finished.length}</span>
+        {/if}
+      </Button>
+      <div class="terminals-view__start">
+        <Button
+          variant="secondary"
+          class="terminals-view__start-main"
+          ariaLabel={t('terminals.new')}
+          tooltip={t('terminals.new')}
+          loading={viewState.startingTerminal}
+          disabled={serverUnavailable}
+          onClick={() => void quickStart()}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="M8 3v10M3 8h10" class="terminals-view__stroke" />
+          </svg>
+          <span>{t('terminals.newShort')}</span>
+        </Button>
+        <Button
+          variant="secondary"
+          icon
+          class="terminals-view__start-more"
+          aria-haspopup="menu"
+          ariaLabel={t('terminals.startOptions')}
+          tooltip={t('terminals.startOptions')}
+          disabled={serverUnavailable}
+          onClick={openStartMenu}
+        >
+          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+            <path d="m4 6 4 4 4-4" class="terminals-view__stroke" />
+          </svg>
+        </Button>
+      </div>
     </div>
   </header>
 
@@ -593,6 +826,26 @@
           {t('common.retry')}
         </Button>
       </Banner>
+    {/if}
+    {#if historyTerminal}
+      <div class="terminals-view__history-bar" role="status">
+        <span class="terminals-view__history-kind">
+          {t('terminals.historyShowing')}
+        </span>
+        <span class="terminals-view__history-title">
+          {terminalTitle(historyTerminal)}
+        </span>
+        <span class="terminals-view__history-view">
+          {viewLabel(findGroup(historyTerminal.group_id))}
+        </span>
+        <Button
+          variant="tertiary"
+          class="terminals-view__history-back"
+          onClick={() => controller.closeHistory()}
+        >
+          {t('terminals.historyBack')}
+        </Button>
+      </div>
     {/if}
     {#if hasTerminals}
       {#if viewState.actionError && !serverUnavailable}
@@ -639,12 +892,9 @@
             class:terminals-view__tile--maximized={isMaximized}
             class:terminals-view__tile--focused={isFocused &&
               !maximizedTerminalId}
+            class:terminals-view__tile--finished={isFinished}
             class:terminals-view__tile--dragging={isDragged}
             class:terminals-view__tile--drop-target={isDropTarget}
-            class:terminals-view__tile--append-space={canStartInGroup &&
-              !maximizedTerminalId &&
-              appendSharesCell &&
-              itemIndex === groupTerminals.length - 1}
             data-terminal-id={item.terminal_id}
             style="grid-row: {span.row +
               1} / span {span.rowSpan}; grid-column: {span.column +
@@ -652,10 +902,11 @@
           >
             <div
               class="terminals-view__tile-bar"
+              class:terminals-view__tile-bar--busy={hasSpeech}
               role="button"
               tabindex="0"
               aria-label={terminalTitle(item)}
-              draggable={groupReorderable}
+              draggable={!historyTerminal}
               ondragstart={(event) => onTileDragStart(event, item.terminal_id)}
               ondragover={(event) => onTileDragOver(event, item.terminal_id)}
               use:tooltip={() => terminalDetails(item)}
@@ -663,8 +914,11 @@
               ondrop={(event) => onTileDrop(event, item.terminal_id)}
               onclick={() => activateTerminal(item.terminal_id)}
               ondblclick={() => toggleMaximize(item.terminal_id)}
+              oncontextmenu={(event) => openTileMenu(event, item)}
               onkeydown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
+                if (isContextMenuKey(event)) {
+                  openTileMenu(event, item);
+                } else if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
                   activateTerminal(item.terminal_id);
                 } else if (event.key === 'F2') {
@@ -673,145 +927,170 @@
                 }
               }}
             >
-              <div class="terminals-view__tile-bar-primary">
-                <span class="terminals-view__tile-title"
-                  >{terminalTitle(item)}</span
-                >
+              <span
+                class="terminals-view__tile-dot tab-indicator"
+                class:tab-indicator--running={item.state === 'working'}
+                aria-hidden="true"
+              ></span>
+              {#if item.call_name}
+                <span class="terminals-view__tile-call">{item.call_name}</span>
+              {/if}
+              <span class="terminals-view__tile-label"
+                >{terminalLabel(item)}</span
+              >
+              {#if item.pinned}
                 <span
-                  class="terminals-view__tile-target"
-                  use:tooltip={{
-                    text: terminalTarget(item),
-                    whenTruncated: true,
-                  }}>{terminalTarget(item)}</span
+                  class="terminals-view__tile-pin"
+                  use:tooltip={t('terminals.pinnedHint')}
                 >
-                {#if renderer.scrolledBack(item.terminal_id)}
-                  <button
-                    type="button"
-                    class="terminals-view__latest-action"
-                    onclick={(event) => {
-                      event.stopPropagation();
-                      scrollToLatest(item.terminal_id);
-                    }}
+                  <svg
+                    viewBox="0 0 16 16"
+                    width="12"
+                    height="12"
+                    aria-label={t('terminals.pinnedHint')}
                   >
-                    {t('terminals.scrollLatest')}
-                  </button>
-                {/if}
-                <span
-                  class="terminals-view__tile-actions"
-                  role="presentation"
-                  onclick={(event) => event.stopPropagation()}
-                  ondblclick={(event) => event.stopPropagation()}
-                  onkeydown={(event) => event.stopPropagation()}
+                    <path
+                      d="M6 2.5h4l-.6 4 2.1 2H4.5l2.1-2zM8 8.5v5"
+                      class="terminals-view__stroke"
+                    />
+                  </svg>
+                </span>
+              {/if}
+              {#if isFinished}
+                <span class="terminals-view__tile-state">
+                  {Number.isInteger(item.exit_code)
+                    ? t('terminals.state.exitedWithCode', {
+                        code: item.exit_code,
+                      })
+                    : t('terminals.state.exited')}
+                </span>
+              {/if}
+              {#if renderer.scrolledBack(item.terminal_id)}
+                <button
+                  type="button"
+                  class="terminals-view__latest-action"
+                  onclick={(event) => {
+                    event.stopPropagation();
+                    scrollToLatest(item.terminal_id);
+                  }}
                 >
-                  {#if !isFinished}
-                    {#if hasSpeech}
-                      <span class="terminals-view__speech-status" role="status">
-                        {viewState.speechState === 'requesting'
-                          ? t('terminals.voice.requesting')
-                          : isRecording
-                            ? t('voice.state.recording')
-                            : t('voice.state.transcribing')}
-                      </span>
-                    {/if}
-                    <Button
-                      variant="tertiary"
-                      icon
-                      class={`terminals-view__tile-action ${isRecording ? 'btn-icon--active' : ''}`}
-                      ariaLabel={speechLabel}
-                      tooltip={speechLabel}
-                      aria-pressed={isRecording}
-                      loading={speechBusy}
-                      disabled={serverUnavailable ||
-                        stream.status !== TERMINAL_STREAM_CONNECTED ||
-                        (!!viewState.speechTerminalId && !hasSpeech) ||
-                        !renderer.hasRenderer(item.terminal_id)}
-                      onClick={() =>
-                        void controller.toggleSpeech(item.terminal_id)}
-                    >
-                      <svg
-                        viewBox="0 0 16 16"
-                        width="14"
-                        height="14"
-                        aria-hidden="true"
-                      >
-                        <path
-                          d="M8 2a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0V4a2 2 0 0 1 2-2z"
-                        />
-                        <path d="M4 7v1a4 4 0 0 0 8 0V7M8 12v2M6 14h4" />
-                      </svg>
-                    </Button>
-                    {#if hasSpeech}
-                      <Button
-                        variant="tertiary"
-                        icon
-                        class="terminals-view__tile-action"
-                        ariaLabel={t('terminals.voice.cancel')}
-                        tooltip={t('terminals.voice.cancel')}
-                        onClick={() =>
-                          controller.cancelSpeech(item.terminal_id)}
-                      >
-                        <svg
-                          viewBox="0 0 14 14"
-                          width="14"
-                          height="14"
-                          aria-hidden="true"
-                        >
-                          <path d="m4 4 6 6m0-6-6 6" />
-                        </svg>
-                      </Button>
-                    {/if}
+                  {t('terminals.scrollLatest')}
+                </button>
+              {/if}
+              <span
+                class="terminals-view__tile-actions"
+                role="presentation"
+                onclick={(event) => event.stopPropagation()}
+                ondblclick={(event) => event.stopPropagation()}
+                onkeydown={(event) => event.stopPropagation()}
+              >
+                {#if !isFinished}
+                  {#if hasSpeech}
+                    <span class="terminals-view__speech-status" role="status">
+                      {viewState.speechState === 'requesting'
+                        ? t('terminals.voice.requesting')
+                        : isRecording
+                          ? t('voice.state.recording')
+                          : t('voice.state.transcribing')}
+                    </span>
                   {/if}
                   <Button
                     variant="tertiary"
                     icon
-                    class="terminals-view__tile-action"
-                    ariaLabel={isMaximized
-                      ? t('terminals.restore')
-                      : t('terminals.maximize')}
-                    tooltip={isMaximized
-                      ? t('terminals.restoreHint')
-                      : t('terminals.maximizeHint')}
-                    onClick={() => toggleMaximize(item.terminal_id)}
+                    class={`terminals-view__tile-action ${isRecording ? 'btn-icon--active' : ''}`}
+                    ariaLabel={speechLabel}
+                    tooltip={speechLabel}
+                    aria-pressed={isRecording}
+                    loading={speechBusy}
+                    disabled={serverUnavailable ||
+                      stream.status !== TERMINAL_STREAM_CONNECTED ||
+                      (!!viewState.speechTerminalId && !hasSpeech) ||
+                      !renderer.hasRenderer(item.terminal_id)}
+                    onClick={() =>
+                      void controller.toggleSpeech(item.terminal_id)}
                   >
-                    {#if isMaximized}
-                      <svg
-                        viewBox="0 0 14 14"
-                        width="14"
-                        height="14"
-                        aria-hidden="true"
-                      >
-                        <path d="M5.5 5.5V2.5h6v6h-3M2.5 5.5h6v6h-6z" />
-                      </svg>
-                    {:else}
-                      <svg
-                        viewBox="0 0 14 14"
-                        width="14"
-                        height="14"
-                        aria-hidden="true"
-                      >
-                        <path d="M3 3h8v8H3z" />
-                      </svg>
-                    {/if}
+                    <svg
+                      viewBox="0 0 16 16"
+                      width="14"
+                      height="14"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M8 2a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0V4a2 2 0 0 1 2-2z"
+                      />
+                      <path d="M4 7v1a4 4 0 0 0 8 0V7M8 12v2M6 14h4" />
+                    </svg>
                   </Button>
-                  <Button
-                    variant="danger"
-                    icon
-                    class="terminals-view__tile-action"
-                    ariaLabel={t('terminals.close')}
-                    tooltip={t('terminals.close')}
-                    onClick={() => void closeTerminal(item.terminal_id)}
-                  >
+                  {#if hasSpeech}
+                    <Button
+                      variant="tertiary"
+                      icon
+                      class="terminals-view__tile-action"
+                      ariaLabel={t('terminals.voice.cancel')}
+                      tooltip={t('terminals.voice.cancel')}
+                      onClick={() => controller.cancelSpeech(item.terminal_id)}
+                    >
+                      <svg
+                        viewBox="0 0 14 14"
+                        width="14"
+                        height="14"
+                        aria-hidden="true"
+                      >
+                        <path d="m4 4 6 6m0-6-6 6" />
+                      </svg>
+                    </Button>
+                  {/if}
+                {/if}
+                <Button
+                  variant="tertiary"
+                  icon
+                  class="terminals-view__tile-action"
+                  ariaLabel={isMaximized
+                    ? t('terminals.restore')
+                    : t('terminals.maximize')}
+                  tooltip={isMaximized
+                    ? t('terminals.restoreHint')
+                    : t('terminals.maximizeHint')}
+                  onClick={() => toggleMaximize(item.terminal_id)}
+                >
+                  {#if isMaximized}
                     <svg
                       viewBox="0 0 14 14"
                       width="14"
                       height="14"
                       aria-hidden="true"
                     >
-                      <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
+                      <path d="M5.5 5.5V2.5h6v6h-3M2.5 5.5h6v6h-6z" />
                     </svg>
-                  </Button>
-                </span>
-              </div>
+                  {:else}
+                    <svg
+                      viewBox="0 0 14 14"
+                      width="14"
+                      height="14"
+                      aria-hidden="true"
+                    >
+                      <path d="M3 3h8v8H3z" />
+                    </svg>
+                  {/if}
+                </Button>
+                <Button
+                  variant="danger"
+                  icon
+                  class="terminals-view__tile-action"
+                  ariaLabel={t('terminals.close')}
+                  tooltip={t('terminals.close')}
+                  onClick={() => void closeTerminal(item.terminal_id)}
+                >
+                  <svg
+                    viewBox="0 0 14 14"
+                    width="14"
+                    height="14"
+                    aria-hidden="true"
+                  >
+                    <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
+                  </svg>
+                </Button>
+              </span>
             </div>
             <div class="terminals-view__tile-chrome" role="presentation">
               {#if stream.errorCode === 'gap' && !serverUnavailable}
@@ -843,24 +1122,6 @@
             </div>
           </div>
         {/each}
-        {#if canStartInGroup && !maximizedTerminalId && lastTileSpan}
-          <Button
-            variant="tertiary"
-            class={`terminals-view__append-tile ${appendSharesCell ? 'terminals-view__append-tile--shared' : ''}`}
-            style="grid-row: {lastTileSpan.row +
-              1}; grid-column: {appendSharesCell
-              ? lastTileSpan.column + 1
-              : lastTileSpan.column + lastTileSpan.columnSpan + 1};"
-            ariaLabel={t('terminals.new')}
-            tooltip={t('terminals.new')}
-            disabled={serverUnavailable}
-            onClick={() => dialogs.openStartDialog()}
-          >
-            <svg viewBox="0 0 14 14" width="18" height="18" aria-hidden="true">
-              <path d="M7 1v12M1 7h12" />
-            </svg>
-          </Button>
-        {/if}
       </div>
     {:else if !viewState.listError || serverUnavailable}
       <EmptyState
@@ -868,26 +1129,34 @@
         title={selectedGroup
           ? t('terminals.groupEmptyTitle')
           : t('terminals.detailEmptyTitle')}
-        description={selectedGroup
+        description={selectedGroup?.kind === 'user'
           ? t('terminals.groupEmptyDescription')
           : t('terminals.detailEmptyDescription')}
       >
         {#snippet actions()}
-          {#if canStartInGroup}
-            <Button
-              variant="primary"
-              ariaLabel={t('terminals.new')}
-              disabled={serverUnavailable}
-              onClick={() => dialogs.openStartDialog()}
-            >
-              {t('terminals.new')}
-            </Button>
-          {/if}
+          <Button
+            variant="primary"
+            ariaLabel={t('terminals.new')}
+            loading={viewState.startingTerminal}
+            disabled={serverUnavailable}
+            onClick={() => void quickStart()}
+          >
+            {t('terminals.new')}
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={serverUnavailable}
+            onClick={() => dialogs.openStartDialog()}
+          >
+            {t('terminals.customize')}
+          </Button>
         {/snippet}
       </EmptyState>
     {/if}
   </div>
 </section>
+
+<ContextMenu {menu} onClose={() => (menu = null)} />
 
 <TerminalDialogs
   bind:this={dialogs}

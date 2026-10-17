@@ -122,7 +122,7 @@ async def test_attention_auto_delivers_and_manual_ack_cancels_exactly_once(
     assert kwargs["project_id"] == "project-a"
     terminal_id = started.terminal_id
     body = kwargs["body"]
-    assert body.startswith(f"Terminal {terminal_id} (fake-tui) went idle")
+    assert body.startswith(f"Terminal {terminal_id} (Anna, fake-tui) went idle")
     assert "\n```text\nworking...\nREADY>\n```\n" in body
     assert f'terminal_id "{terminal_id}"' in body
     attention = terminal_info(manager, started.terminal_id).attention

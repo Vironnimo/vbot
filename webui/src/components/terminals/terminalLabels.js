@@ -19,29 +19,52 @@ export function groupKindLabel(kind) {
   if (kind === 'user') {
     return t('terminals.kind.user');
   }
-  if (kind === 'agent') {
-    return t('terminals.kind.agent');
-  }
-  if (kind === 'finished') {
-    return t('terminals.kind.finished');
+  if (kind === 'session') {
+    return t('terminals.kind.session');
   }
   return t('terminals.kind.manual');
 }
 
+/** Only the user's own groups can be renamed or deleted. */
 export function groupCanEdit(group) {
-  return group?.kind === 'user' || group?.kind === 'agent';
+  return group?.kind === 'user';
 }
 
-export function terminalTarget(item) {
-  if (!item?.owner) {
-    return t('terminals.manualOwner');
+/**
+ * What a view is called: the user's name for a group, the title of a
+ * conversation, or the operator's own terminals.
+ */
+export function viewLabel(group) {
+  const name = typeof group?.name === 'string' ? group.name.trim() : '';
+  if (name) {
+    return name;
   }
-  const agentId = item?.owner?.agent_id || '—';
-  const projectId = item?.owner?.project_id;
-  return projectId ? `${agentId}@${projectId}` : agentId;
+  if (group?.kind === 'session') {
+    return t('terminals.view.untitled');
+  }
+  if (group?.kind === 'manual') {
+    return t('terminals.view.manual');
+  }
+  return group?.group_id ?? '';
 }
 
+function agentAddress(owner) {
+  if (!owner?.agent_id) return '';
+  return owner.project_id
+    ? `${owner.agent_id}@${owner.project_id}`
+    : owner.agent_id;
+}
+
+/** The call name and label of a terminal, as menus and its title name it. */
 export function terminalTitle(item) {
+  const callName =
+    typeof item?.call_name === 'string' ? item.call_name.trim() : '';
+  const label = terminalLabel(item);
+  return callName ? `${callName} · ${label}` : label;
+}
+
+/** What a terminal works on: its name, its title, or the program it runs. */
+export function terminalLabel(item) {
   const customName = typeof item?.name === 'string' ? item.name.trim() : '';
   if (customName) {
     return customName;
@@ -140,6 +163,10 @@ export function terminalDetails(item, { nowMs = Date.now() } = {}) {
     title: terminalTitle(item),
     rows: [
       {
+        label: t('terminals.details.attached'),
+        value: agentAddress(item?.attachment),
+      },
+      {
         label: t('terminals.details.command'),
         value: command || t('terminals.commandPlaceholder'),
         mono: Boolean(command),
@@ -173,22 +200,22 @@ export function terminalDetails(item, { nowMs = Date.now() } = {}) {
   };
 }
 
-function groupHint(kind) {
-  switch (kind) {
+function groupHint(group) {
+  switch (group?.kind) {
     case 'user':
       return t('terminals.groupHint.user');
-    case 'agent':
-      return t('terminals.groupHint.agent');
-    case 'finished':
-      return t('terminals.groupHint.finished');
+    case 'session':
+      return t('terminals.groupHint.session', {
+        agent: group.session?.agent_id ?? '',
+      });
     default:
-      return t('terminals.groupHint.automatic');
+      return t('terminals.groupHint.manual');
   }
 }
 
 /**
- * Details card of a group tab: what the group is and how its terminals
- * split into running and finished ones. `terminals` is the loaded list.
+ * Details card of a view: what the view is and how its terminals split into
+ * running and finished ones. `terminals` is the loaded list.
  */
 export function terminalGroupDetails(group, terminals = []) {
   const members = terminals.filter(
@@ -199,8 +226,8 @@ export function terminalGroupDetails(group, terminals = []) {
   ).length;
   const count = Math.max(Number(group?.terminal_count) || 0, members.length);
   return {
-    title: group?.name ?? '',
-    text: groupHint(group?.kind),
+    title: viewLabel(group),
+    text: groupHint(group),
     rows: [
       {
         label: t('terminals.details.terminals'),

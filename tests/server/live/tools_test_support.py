@@ -82,7 +82,8 @@ class FakeApp:
         self.terminals: list[JsonObject] = []
         self.groups: list[JsonObject] = [
             {"group_id": "grp_mine", "name": "Mine", "kind": "user"},
-            {"group_id": "grp_done", "name": "Finished", "kind": "finished"},
+            {"group_id": "session:/main/ses_fix", "name": "Fix login", "kind": "session"},
+            {"group_id": "auto:manual", "name": None, "kind": "manual"},
         ]
         self.screens: dict[str, list[str]] = {}
         # terminal.programs: whether each Terminal still runs its launch program.
@@ -205,7 +206,8 @@ class FakeApp:
         terminal = self.add_terminal(
             terminal_id,
             params["command"],
-            group_id=params["group_id"],
+            group_id=params.get("group_id") or "auto:manual",
+            call_name=CALL_NAMES[len(self.terminals) % len(CALL_NAMES)],
             workdir=params["workdir"],
             name=params.get("name"),
             state="starting",
@@ -252,7 +254,7 @@ class FakeApp:
         return {"group": {"group_id": params["group_id"], "name": params["name"]}}
 
     def _terminal_group_delete(self, params: JsonObject) -> JsonObject:
-        return {"group_id": params["group_id"], "terminals_killed": 2}
+        return {"group_id": params["group_id"], "terminals_moved": 2}
 
     def _terminal_group_order(self, params: JsonObject) -> JsonObject:
         return {"group_id": params["group_id"], "order": params["order"]}
@@ -262,6 +264,9 @@ class FakeApp:
             if terminal["terminal_id"] == terminal_id:
                 return terminal
         raise RpcError("invalid_request", f"Terminal Session not found: {terminal_id}")
+
+
+CALL_NAMES = ("Anna", "Ben", "Clara", "David")
 
 
 class FakeUi:

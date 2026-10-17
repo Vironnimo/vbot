@@ -10,6 +10,7 @@ import {
   killTerminalMock,
   forgetTerminalMock,
   setTerminalGroupOrderMock,
+  moveTerminalMock,
   subscribeTerminalEventsMock,
   createAudioRecorderMock,
   transcribeSpeechMock,
@@ -56,113 +57,185 @@ function clickMaximize(label = 'Maximize') {
   flushSync();
 }
 
+// A layout change reaches every observed element, the tile hosts included.
+function fireResize() {
+  for (const observer of resizeObservers) observer.fire();
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-describe('TerminalsView groups and layout', () => {
+describe('TerminalsView views and starting', () => {
   const view = setupTerminalsViewSuite();
 
-  it('uses the compact top group bar and keeps both terminal actions available', async () => {
-    await view.mountWith([terminal()]);
+  const conversation = (overrides = {}) =>
+    manualGroup({
+      group_id: 'session:vbot/main/ses-1',
+      name: 'Fix login',
+      kind: 'session',
+      session: { project_id: 'vbot', agent_id: 'main', session_id: 'ses-1' },
+      ...overrides,
+    });
 
-    const toolbar = document.querySelector('.terminals-view__toolbar');
-    const tabs = toolbar.querySelector('.terminals-view__group-tabs');
-    const item = tabs.querySelector('.terminals-view__group-tab');
-    expect(document.querySelector('.terminals-view__list-pane')).toBeNull();
-    expect(
-      tabs.lastElementChild.querySelector('button[aria-label="Add group"]'),
-    ).toBeTruthy();
-    expect(item.classList.contains('active')).toBe(true);
-    expect(item.getAttribute('aria-current')).toBe('true');
-    expect(
-      item.parentElement.querySelector('button[aria-label="New terminal"]'),
-    ).toBeTruthy();
-    expect(
-      toolbar.querySelector('.terminals-view__toolbar-actions'),
-    ).toBeNull();
+  function pills() {
+    return [...document.querySelectorAll('.terminals-view__pill')];
+  }
 
-    findButtonByAriaLabel('Add group').click();
+  function pill(name) {
+    return pills().find((button) => button.textContent.includes(name));
+  }
+
+  function menuItems() {
+    return [...document.querySelectorAll('.context-menu__item')];
+  }
+
+  function dragEvent(type, transfer) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: transfer });
+    return event;
+  }
+
+  function dataTransfer() {
+    let payload = '';
+    return {
+      effectAllowed: '',
+      dropEffect: '',
+      setData: (_kind, value) => {
+        payload = value;
+      },
+      getData: () => payload,
+    };
+  }
+
+  it('shows each conversation, group and the user’s own terminals as a pill', async () => {
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse(
+        [
+          terminal({ group_id: conversation().group_id, state: 'working' }),
+          terminal({ terminal_id: 'term-2', group_id: 'auto:manual' }),
+        ],
+        [
+          conversation({ terminal_count: 1, live_count: 1, working_count: 1 }),
+          userGroup('work', 'Work'),
+          manualGroup({ terminal_count: 1, live_count: 1 }),
+        ],
+      ),
+    );
+    view.mount();
+    // Only the shown view's terminals are on the canvas.
+    await waitFor(() => streams.length === 1);
+
+    expect(
+      pills().map((button) => [
+        button.querySelector('.terminals-view__pill-name').textContent,
+        button.querySelector('.terminals-view__pill-count')?.textContent.trim(),
+      ]),
+    ).toEqual([
+      ['Fix login', '1'],
+      ['Work', undefined],
+      ['Your terminals', '1'],
+    ]);
+    expect(pill('Fix login').getAttribute('aria-pressed')).toBe('true');
+    expect(pill('Fix login').querySelector('.tab-indicator--running')).toBe(
+      pill('Fix login').querySelector('.terminals-view__pill-dot'),
+    );
+    expect(pill('Work').querySelector('.terminals-view__pill-dot')).toBeNull();
+
+    pill('Work').click();
     flushSync();
-    expect(document.querySelector('#terminal-group-form')).toBeTruthy();
-    expect(document.querySelector('.terminals-view__header')).toBeNull();
+    expect(pill('Work').getAttribute('aria-pressed')).toBe('true');
+    expect(
+      document.querySelector('.terminals-view__detail > .empty-state'),
+    ).toBeTruthy();
   });
 
-  // The append tile shares the last tile's row: inside the last cell when
-  // that row is full, in the next free column otherwise.
   it.each([
-    [1, 1, true],
-    [3, 2, true],
-    [5, 2, false],
-    [8, 2, true],
-    [9, 3, false],
+    ['a group', 'work', { group_id: 'work' }],
+    [
+      'a conversation',
+      'session:vbot/main/ses-1',
+      { group_id: 'session:vbot/main/ses-1' },
+    ],
+    ['the user’s own terminals', 'auto:manual', {}],
   ])(
-    'places the narrow append tile after %i terminals in %i rows',
-    async (count, rows, sharesCell) => {
-      await view.mountWith(
-        Array.from({ length: count }, (_, index) =>
-          terminal({ terminal_id: `term-${index}` }),
+    'starts the default shell in %s with one click',
+    async (_kind, groupId, request) => {
+      listTerminalsMock.mockResolvedValue(
+        terminalListResponse(
+          [terminal({ group_id: groupId })],
+          [
+            conversation(
+              groupId === 'session:vbot/main/ses-1' ? { live_count: 1 } : {},
+            ),
+            userGroup('work', 'Work', groupId === 'work' ? 1 : 0),
+            manualGroup(groupId === 'auto:manual' ? { live_count: 1 } : {}),
+          ],
         ),
       );
-      const canvas = document.querySelector('.terminals-view__canvas');
-      const tiles = [...canvas.querySelectorAll('.terminals-view__tile')];
-      const append = canvas.querySelector('.terminals-view__append-tile');
-      expect(canvas.lastElementChild).toBe(append);
-      expect(append.style.gridRow).toBe(
-        tiles.at(-1).style.gridRow.split(' / ')[0],
-      );
-      expect(canvas.style.gridTemplateRows).toBe(
-        `repeat(${rows}, minmax(0, 1fr))`,
-      );
-      expect(
-        append.classList.contains('terminals-view__append-tile--shared'),
-      ).toBe(sharesCell);
-      expect(
-        tiles.map((tile) =>
-          tile.classList.contains('terminals-view__tile--append-space'),
-        ),
-      ).toEqual(tiles.map((_, index) => sharesCell && index === count - 1));
+      startTerminalMock.mockResolvedValue({
+        terminal: terminal({ terminal_id: 'new-1', group_id: groupId }),
+      });
+      view.mount();
+      await waitFor(() => streams.length === 1);
 
-      append.click();
-      flushSync();
-      expect(document.querySelector('#terminal-start-form')).toBeTruthy();
+      findButtonByAriaLabel('New terminal').click();
+
+      await waitFor(() => document.querySelector('[data-terminal-id="new-1"]'));
+      expect(startTerminalMock).toHaveBeenCalledWith(request);
+      expect(document.querySelector('#terminal-start-form')).toBeNull();
+      const tiles = document.querySelectorAll('.terminals-view__tile');
+      expect(tiles[tiles.length - 1].dataset.terminalId).toBe('new-1');
     },
   );
 
-  it.each([
-    '.terminals-view__group-start button',
-    '.terminals-view__append-tile',
-    '.empty-state__actions button',
-  ])('starts in the selected group from %s', async (selector) => {
-    const empty = selector.includes('empty-state');
-    listTerminalsMock.mockResolvedValue(
-      terminalListResponse(empty ? [] : [terminal({ group_id: 'work' })], [
-        userGroup('work', 'Work', empty ? 0 : 1),
-      ]),
-    );
-    startTerminalMock.mockResolvedValue({
-      terminal: terminal({ terminal_id: 'new-work', group_id: 'work' }),
+  it('offers recent setups, the start dialog and a new group beside the start button', async () => {
+    listTerminalsMock.mockResolvedValue({
+      ...terminalListResponse([]),
+      launch_history: [
+        launchHistory({
+          id: 'codex',
+          command: 'codex',
+          args: ['--profile', 'daily'],
+          workdir: 'C:\\repo',
+        }),
+      ],
     });
+    startTerminalMock.mockResolvedValue({ terminal: terminal() });
     view.mount();
-    await waitFor(() => document.querySelector(selector));
-
-    document.querySelector(selector).click();
-    flushSync();
-    submitStartForm();
-
-    await waitFor(() => startTerminalMock.mock.calls.length === 1);
-    expect(startTerminalMock).toHaveBeenCalledWith({ group_id: 'work' });
     await waitFor(() =>
-      document.querySelector('[data-terminal-id="new-work"]'),
+      document.querySelector('.terminals-view__detail > .empty-state'),
     );
-    const append = document.querySelector('.terminals-view__append-tile');
-    expect(append.previousElementSibling.dataset.terminalId).toBe('new-work');
+
+    findButtonByAriaLabel('More ways to start a terminal').click();
+    await waitFor(() => menuItems().length > 0);
+    expect(
+      menuItems().map(
+        (item) => item.querySelector('.context-menu__label').textContent,
+      ),
+    ).toEqual(['codex --profile daily', 'Customize…', 'New group…']);
+
+    menuItems()[0].click();
+    await waitFor(() => startTerminalMock.mock.calls.length === 1);
+    expect(startTerminalMock).toHaveBeenCalledWith({
+      command: 'codex',
+      args: ['--profile', 'daily'],
+      workdir: 'C:\\repo',
+    });
+
+    findButtonByAriaLabel('More ways to start a terminal').click();
+    await waitFor(() => menuItems().length > 0);
+    menuItems()[2].click();
+    flushSync();
+    expect(document.querySelector('#terminal-group-form')).toBeTruthy();
   });
 
-  it('disables both creation locations when the server is unavailable', () => {
+  it('disables starting when the server is unavailable', () => {
     view.mount({ serverUnavailable: true });
-    expect(findButtonByAriaLabel('Add group').disabled).toBe(true);
-    expect(findButton('New terminal').disabled).toBe(true);
+    expect(findButtonByAriaLabel('New terminal').disabled).toBe(true);
+    expect(
+      findButtonByAriaLabel('More ways to start a terminal').disabled,
+    ).toBe(true);
   });
 
   it('renders the shared empty state when no Terminal Session is active', async () => {
@@ -178,95 +251,60 @@ describe('TerminalsView groups and layout', () => {
       '.terminals-view__detail > .empty-state',
     );
     expect(
-      [...emptyState.querySelectorAll('button')].some(
-        (button) => button.textContent.trim() === 'New terminal',
+      [...emptyState.querySelectorAll('button')].map((button) =>
+        button.textContent.trim(),
       ),
-    ).toBe(true);
-    // The centred empty state is the only absence message: the toolbar keeps
-    // its icon-only add control without repeating it as text.
-    expect(
-      document.querySelector('.terminals-view__toolbar').textContent.trim(),
-    ).toBe('');
+    ).toEqual(['New terminal', 'Customize…']);
+    expect(pills()).toHaveLength(0);
     expect(subscribeTerminalEventsMock).not.toHaveBeenCalled();
   });
 
-  it('switches the visible terminal group from the top group bar', async () => {
-    await view.mountWith(
-      [terminal()],
-      [
-        manualGroup({ terminal_count: 1, live_count: 1 }),
-        userGroup('group-work', 'Work'),
-      ],
+  it('offers rename and delete for a group and opening the conversation for a conversation', async () => {
+    const onOpenSession = vi.fn();
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse(
+        [terminal({ group_id: 'work' })],
+        [userGroup('work', 'Work', 1), conversation({ live_count: 1 })],
+      ),
     );
-    const workTab = () =>
-      [...document.querySelectorAll('.terminals-view__group-tab')].find(
-        (button) => button.textContent.includes('Work'),
-      );
+    view.mount({ onOpenSession });
+    await waitFor(() => streams.length === 1);
 
-    workTab().dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    flushSync();
-
-    expect(workTab().getAttribute('aria-current')).toBe('true');
-    expect(
-      document.querySelector('.terminals-view__detail > .empty-state'),
-    ).toBeTruthy();
-  });
-
-  it('offers rename and delete for a user group through one action menu', async () => {
-    await view.mountWith(
-      [terminal({ group_id: 'group-work' })],
-      [userGroup('group-work', 'Work', 1)],
+    pill('Work').dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
     );
-    const trigger = document.querySelector(
-      '.terminals-view__group-action-menu-trigger',
-    );
-    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
-    expect(document.querySelector('.terminals-view__group-menu')).toBeNull();
-
-    trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await waitFor(() => document.querySelector('.terminals-view__group-menu'));
-
-    const items = [
-      ...document.querySelectorAll('.terminals-view__group-menu-item'),
-    ];
-    expect(items.map((item) => item.textContent.trim())).toEqual([
+    await waitFor(() => menuItems().length > 0);
+    expect(menuItems().map((item) => item.textContent.trim())).toEqual([
       'Rename group',
       'Delete group',
     ]);
-    expect(items[1].classList).toContain(
-      'terminals-view__group-menu-item--danger',
+    expect(menuItems()[1].classList).toContain('context-menu__item--danger');
+    menuItems()[1].click();
+    flushSync();
+    expect(document.body.textContent).toContain(
+      t('terminals.deleteGroupWarning'),
     );
+    findButton('Cancel').click();
+    flushSync();
+
+    pill('Fix login').click();
+    flushSync();
+    findButtonByAriaLabel('Open conversation').click();
+    expect(onOpenSession).toHaveBeenCalledWith('main@vbot', 'ses-1');
   });
 
-  it('reorders terminals in a user group by drag and drop on the tile bar', async () => {
-    await view.mountWith(
-      twoTerminals().map((item) => ({ ...item, group_id: 'group-1' })),
-      [userGroup('group-1', 'Work', 2)],
-    );
+  it('reorders the terminals of a view by drag and drop on the tile bar', async () => {
+    await view.mountWith(twoTerminals());
     const bars = document.querySelectorAll('.terminals-view__tile-bar');
     expect(bars[0].getAttribute('draggable')).toBe('true');
 
-    let payload = '';
-    function dragEvent(type) {
-      const event = new MouseEvent(type, { bubbles: true, cancelable: true });
-      Object.defineProperty(event, 'dataTransfer', {
-        value: {
-          effectAllowed: '',
-          dropEffect: '',
-          setData: (_kind, value) => {
-            payload = value;
-          },
-          getData: () => payload,
-        },
-      });
-      return event;
-    }
-    bars[0].dispatchEvent(dragEvent('dragstart'));
-    bars[1].dispatchEvent(dragEvent('dragover'));
-    bars[1].dispatchEvent(dragEvent('drop'));
+    const transfer = dataTransfer();
+    bars[0].dispatchEvent(dragEvent('dragstart', transfer));
+    bars[1].dispatchEvent(dragEvent('dragover', transfer));
+    bars[1].dispatchEvent(dragEvent('drop', transfer));
     flushSync();
 
-    expect(setTerminalGroupOrderMock).toHaveBeenCalledWith('group-1', [
+    expect(setTerminalGroupOrderMock).toHaveBeenCalledWith('auto:manual', [
       'term-2',
       'term-1',
     ]);
@@ -275,6 +313,63 @@ describe('TerminalsView groups and layout', () => {
         .querySelector('.terminals-view__tile')
         .getAttribute('data-terminal-id'),
     ).toBe('term-2');
+  });
+
+  it('moves a terminal to another view by dropping its tile on a pill or from its menu', async () => {
+    const groups = [
+      manualGroup({ terminal_count: 2, live_count: 2 }),
+      userGroup('work', 'Work'),
+    ];
+    await view.mountWith(twoTerminals(), groups);
+    moveTerminalMock.mockResolvedValue({
+      terminal: terminal({ group_id: 'work', pinned: true }),
+    });
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse(
+        [terminal({ group_id: 'work', pinned: true }), twoTerminals()[1]],
+        [
+          manualGroup({ terminal_count: 1, live_count: 1 }),
+          userGroup('work', 'Work', 1),
+        ],
+      ),
+    );
+
+    const transfer = dataTransfer();
+    document
+      .querySelector('.terminals-view__tile-bar')
+      .dispatchEvent(dragEvent('dragstart', transfer));
+    pill('Work').dispatchEvent(dragEvent('dragover', transfer));
+    flushSync();
+    expect(pill('Work').classList).toContain(
+      'terminals-view__pill--drop-target',
+    );
+    pill('Work').dispatchEvent(dragEvent('drop', transfer));
+    flushSync();
+
+    // The tile leaves the shown view at once.
+    expect(
+      [...document.querySelectorAll('.terminals-view__tile')].map(
+        (tile) => tile.dataset.terminalId,
+      ),
+    ).toEqual(['term-2']);
+    expect(moveTerminalMock).toHaveBeenCalledWith('term-1', 'work');
+
+    pill('Work').click();
+    await waitFor(() => document.querySelector('[data-terminal-id="term-1"]'));
+    expect(document.querySelector('.terminals-view__tile-pin')).toBeTruthy();
+    document
+      .querySelector('.terminals-view__tile-bar')
+      .dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
+      );
+    await waitFor(() => menuItems().length > 0);
+    expect(menuItems().map((item) => item.textContent.trim())).toEqual([
+      'Show where it started',
+      'Maximize',
+      'Close terminal',
+    ]);
+    menuItems()[0].click();
+    expect(moveTerminalMock).toHaveBeenLastCalledWith('term-1', null);
   });
 });
 
@@ -286,7 +381,7 @@ describe('TerminalsView launch and close', () => {
     await waitFor(() =>
       document.querySelector('.terminals-view__detail > .empty-state'),
     );
-    findButtonByAriaLabel('New terminal').click();
+    findButton('Customize…').click();
     flushSync();
   }
 
@@ -390,7 +485,8 @@ describe('TerminalsView launch and close', () => {
   ])(
     'closes a %s Terminal Session with one click and removes its tile at once',
     async (_kind, changes, stops) => {
-      await view.mountWith([terminal(changes)]);
+      // A terminal that finishes while shown stays until it is closed.
+      await view.mountWith([terminal()]);
       readyAll([terminal(changes)], '\u001b[2Jretained final answer');
       expect(document.querySelector('.terminals-view__exit-code')).toBeNull();
 
@@ -411,39 +507,45 @@ describe('TerminalsView launch and close', () => {
 
   it('keeps a finished Terminal Session available as read-only history', async () => {
     const finished = terminal({
-      group_id: 'finished',
       state: 'exited',
       exit_code: 1,
       finished_at: '2026-08-03T12:05:00+00:00',
       launch_command: 'npm',
       launch_args: ['run', 'build'],
     });
-    await view.mountWith(
-      [finished],
-      [
-        manualGroup(),
-        {
-          group_id: 'finished',
-          name: 'Finished',
-          kind: 'finished',
-          terminal_count: 1,
-          live_count: 0,
-          order: [],
-        },
-      ],
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse([finished], [manualGroup({ terminal_count: 1 })]),
     );
+    view.mount();
+    await waitFor(() =>
+      document.querySelector('.terminals-view__detail > .empty-state'),
+    );
+    // A terminal that was finished before it was shown waits in the history.
+    expect(document.querySelectorAll('.terminals-view__tile')).toHaveLength(0);
+    expect(
+      document.querySelector('.terminals-view__history-count').textContent,
+    ).toBe('1');
+
+    findButtonByAriaLabel('Finished terminals').click();
+    await waitFor(() => document.querySelector('.context-menu__item'));
+    const entry = document.querySelector('.context-menu__item');
+    expect(entry.querySelector('.context-menu__label').textContent).toBe(
+      'Anna · npm run build',
+    );
+    expect(entry.querySelector('.context-menu__hint').textContent).toBe(
+      'Your terminals',
+    );
+    entry.click();
+    await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
     readyAll([finished], '\u001b[2Jretained final answer');
 
     expect(
-      [...document.querySelectorAll('.terminals-view__group-tab')].some(
-        (element) => element.textContent.includes('Finished'),
-      ),
-    ).toBe(true);
+      document.querySelector('.terminals-view__history-bar').textContent,
+    ).toContain('Anna · npm run build');
     expect(findButtonByAriaLabel('Close terminal')).toBeTruthy();
     expect(terminalInstances[0].options.disableStdin).toBe(true);
-    expect(document.querySelector('.terminals-view__append-tile')).toBeNull();
 
-    // The existing keyboard-focusable title bar exposes the details card.
+    // The keyboard-focusable title bar exposes the details card.
     document.querySelector('.terminals-view__tile-bar').focus();
     await vi.waitFor(() =>
       expect(document.getElementById('app-tooltip')?.dataset.floatingOpen).toBe(
@@ -472,18 +574,20 @@ describe('TerminalsView launch and close', () => {
     // A finished process has no process id any more.
     expect(rows).not.toHaveProperty(t('terminals.details.pid'));
 
-    // A group tab names what the group is and counts only the kinds it holds.
-    const finishedTab = [
-      ...document.querySelectorAll('.terminals-view__group-tab'),
-    ].find((element) => element.textContent.includes('Finished'));
-    finishedTab.focus();
+    // A pill names what the view is and counts only the kinds it holds.
+    document.querySelector('.terminals-view__pill').focus();
     flushSync();
     expect(card.querySelector('.app-tooltip__text').textContent).toBe(
-      t('terminals.groupHint.finished'),
+      t('terminals.groupHint.manual'),
     );
     expect(card.querySelector('dd').textContent).toBe(
       t('terminals.details.terminalCountFinished', { count: 1 }),
     );
+
+    findButton('Back').click();
+    flushSync();
+    expect(document.querySelector('.terminals-view__history-bar')).toBeNull();
+    expect(document.querySelectorAll('.terminals-view__tile')).toHaveLength(0);
   });
 });
 
@@ -515,8 +619,8 @@ describe('TerminalsView rendering and input', () => {
 
     const bars = document.querySelectorAll('.terminals-view__tile-bar');
     expect(bars).toHaveLength(2);
+    expect(bars[0].textContent).toContain('Anna');
     expect(bars[0].textContent).toContain('Auth refactor · Codex');
-    expect(bars[0].textContent).toContain('main@vbot');
     // Before a program announces a title, the default shell is humanized.
     expect(bars[1].textContent).toContain('PowerShell');
     const text = document.body.textContent;
@@ -704,14 +808,14 @@ describe('TerminalsView rendering and input', () => {
 
     // 300 columns at the base font exceed the PTY limit: the font grows.
     fixtureState.mockHostWidth = 2400;
-    resizeObservers[0].fire();
+    fireResize();
     await wait(120);
     expect(xterm.options.fontSize).toBeGreaterThan(12);
     expect(terminalResizeMock).toHaveBeenLastCalledWith('term-1', 240, 25);
 
     // Shrinking again returns to the base font instead of keeping it large.
     fixtureState.mockHostWidth = 400;
-    resizeObservers[0].fire();
+    fireResize();
     await Promise.resolve();
     flushSync();
     expect(xterm.options.fontSize).toBe(12);
@@ -728,8 +832,6 @@ describe('TerminalsView rendering and input', () => {
     const fitsBefore = fitAddons[0].fit.mock.calls.length;
 
     findButtonByAriaLabel('New terminal').click();
-    flushSync();
-    submitStartForm();
     await waitFor(() => terminalInstances.length === 2);
     await Promise.resolve();
     flushSync();

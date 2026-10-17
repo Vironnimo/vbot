@@ -26,6 +26,8 @@ const deleteTerminalGroupMock = vi.fn();
 
 const setTerminalGroupOrderMock = vi.fn();
 
+const moveTerminalMock = vi.fn();
+
 const subscribeTerminalEventsMock = vi.fn();
 
 const createAudioRecorderMock = vi.fn();
@@ -62,6 +64,7 @@ vi.mock('$lib/api.js', () => ({
   renameTerminalGroup: (...args) => renameTerminalGroupMock(...args),
   deleteTerminalGroup: (...args) => deleteTerminalGroupMock(...args),
   setTerminalGroupOrder: (...args) => setTerminalGroupOrderMock(...args),
+  moveTerminal: (...args) => moveTerminalMock(...args),
   subscribeTerminalEvents: (...args) => subscribeTerminalEventsMock(...args),
 }));
 
@@ -191,6 +194,9 @@ function terminal(changes = {}) {
   return {
     terminal_id: 'term-1',
     group_id: 'auto:manual',
+    home_group_id: 'auto:manual',
+    pinned: false,
+    call_name: 'Anna',
     state: 'working',
     command: 'python',
     title: '',
@@ -223,8 +229,8 @@ function launchHistory(changes = {}) {
 function manualGroup(overrides = {}) {
   return {
     group_id: 'auto:manual',
-    name: 'Manual',
-    kind: 'automatic',
+    name: null,
+    kind: 'manual',
     terminal_count: 0,
     live_count: 0,
     order: [],
@@ -364,6 +370,7 @@ function setupTerminalsViewSuite() {
     renameTerminalGroupMock.mockReset().mockResolvedValue({});
     deleteTerminalGroupMock.mockReset().mockResolvedValue({});
     setTerminalGroupOrderMock.mockReset().mockResolvedValue({});
+    moveTerminalMock.mockReset().mockResolvedValue({});
     subscribeTerminalEventsMock
       .mockReset()
       .mockImplementation((terminalId, handlers) => {
@@ -440,6 +447,7 @@ export {
   killTerminalMock,
   forgetTerminalMock,
   setTerminalGroupOrderMock,
+  moveTerminalMock,
   subscribeTerminalEventsMock,
   createAudioRecorderMock,
   transcribeSpeechMock,

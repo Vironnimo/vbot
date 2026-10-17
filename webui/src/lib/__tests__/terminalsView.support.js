@@ -39,6 +39,7 @@ function fakeApi({
     renameTerminalGroup: vi.fn().mockResolvedValue({}),
     deleteTerminalGroup: vi.fn().mockResolvedValue({}),
     setTerminalGroupOrder: vi.fn().mockResolvedValue({}),
+    moveTerminal: vi.fn().mockResolvedValue({}),
     subscribeTerminalEvents: vi.fn((_terminalId, handlers) => {
       // The requests sent over this socket, in order.
       const sent = [];
@@ -99,8 +100,8 @@ function readyEvent(terminalId, sequence, ansi = '', changes = {}) {
 function manual(overrides = {}) {
   return {
     group_id: 'auto:manual',
-    name: 'Manual',
-    kind: 'automatic',
+    name: null,
+    kind: 'manual',
     terminal_count: 0,
     live_count: 0,
     order: [],
@@ -122,6 +123,9 @@ function terminal(terminalId, changes = {}) {
   return {
     terminal_id: terminalId,
     group_id: 'auto:manual',
+    home_group_id: 'auto:manual',
+    pinned: false,
+    call_name: '',
     state: 'working',
     command: 'python',
     title: '',

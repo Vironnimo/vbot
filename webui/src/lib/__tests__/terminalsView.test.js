@@ -4,6 +4,7 @@ import {
   layoutForCount,
   parseTerminalCommandLine,
   formatTerminalCommandLine,
+  visibleTerminals,
 } from '../terminalsView.js';
 import {
   startTerminals,
@@ -106,7 +107,7 @@ describe('terminal grid helpers', () => {
 });
 
 describe('terminal catalog', () => {
-  it('keeps a valid selection, including retained finished terminals, and closes streams of removed ones', async () => {
+  it('keeps a valid selection, leaves terminals listed as finished to the history, and closes streams of removed ones', async () => {
     const { state, streams, api, controller } = await startTerminals({
       terminals: [terminal('term-1'), terminal('term-2')],
     });
@@ -125,11 +126,22 @@ describe('terminal catalog', () => {
     expect(state.selectedGroupId).toBe('auto:manual');
     expect(state.selectedTerminalId).toBe('term-2');
     expect(terminalIds(state)).toEqual(['term-2', 'term-3']);
+    expect(visibleTerminals(state).map((item) => item.terminal_id)).toEqual([
+      'term-2',
+    ]);
     expect(streams[0].connection.close).toHaveBeenCalledWith(
       1000,
       'terminals-view-close',
     );
-    expect(Object.keys(state.streams)).toEqual(['term-2', 'term-3']);
+    expect(Object.keys(state.streams)).toEqual(['term-2']);
+
+    controller.openHistory('term-3');
+    expect(visibleTerminals(state).map((item) => item.terminal_id)).toEqual([
+      'term-3',
+    ]);
+    expect(Object.keys(state.streams)).toEqual(['term-3']);
+    controller.closeHistory();
+    expect(Object.keys(state.streams)).toEqual(['term-2']);
   });
 
   it('starts, selects, and connects one manual terminal alongside existing streams', async () => {
@@ -145,10 +157,6 @@ describe('terminal catalog', () => {
     expect(started).toMatchObject({ terminal_id: 'manual-1', owner: null });
     expect(state.selectedTerminalId).toBe('manual-1');
     expect(terminalIds(state)).toEqual(['term-1', 'manual-1']);
-    expect(api.setTerminalGroupOrder).toHaveBeenCalledWith('auto:manual', [
-      'term-1',
-      'manual-1',
-    ]);
     expect(state.startError).toBe('');
     expect(state.launchHistory).toEqual([
       launchHistory('codex', { command: 'codex' }),
@@ -678,9 +686,7 @@ describe('terminal resize', () => {
   });
 
   it('does not resize a finished terminal', async () => {
-    const { streams, controller } = await startTerminals({
-      terminals: [terminal('term-1', { state: 'exited' })],
-    });
+    const { streams, controller } = await startTerminals();
     streams[0].emit(readyEvent('term-1', 1, '', { state: 'exited' }));
 
     controller.resize(100, 30, 'term-1', true);

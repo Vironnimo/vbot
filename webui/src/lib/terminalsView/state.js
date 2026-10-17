@@ -91,15 +91,76 @@ export function createTerminalsViewState() {
     startError: '',
     speechTerminalId: '',
     speechState: 'idle',
+    // Finished terminals that stay on the canvas: they ended while their
+    // view was shown, so their last screen does not vanish under the user.
+    lingeringIds: [],
+    // A finished terminal opened from the history, shown alone.
+    historyTerminalId: '',
   };
 }
 
+/**
+ * The terminals on the canvas: the running ones of the shown view and those
+ * that finished while it was shown, or the one opened from the history.
+ */
 export function visibleTerminals(state) {
+  if (state.historyTerminalId) {
+    return state.terminals.filter(
+      (terminal) => terminal.terminal_id === state.historyTerminalId,
+    );
+  }
   if (!state.selectedGroupId) {
     return [];
   }
   return state.terminals.filter(
-    (terminal) => terminal?.group_id === state.selectedGroupId,
+    (terminal) =>
+      terminal?.group_id === state.selectedGroupId &&
+      (!terminalIsFinished(terminal) ||
+        state.lingeringIds.includes(terminal.terminal_id)),
+  );
+}
+
+/**
+ * The views on the bar: the user's groups, every view with a running
+ * terminal, and the shown one.
+ */
+export function shownViews(state) {
+  return state.groups.filter(
+    (group) =>
+      group.kind === 'user' ||
+      Number(group.live_count) > 0 ||
+      group.group_id === state.selectedGroupId,
+  );
+}
+
+/** Finished terminals of every view, the most recently finished first. */
+export function finishedTerminals(state) {
+  return state.terminals
+    .filter((terminal) => terminalIsFinished(terminal))
+    .sort((left, right) =>
+      String(right.finished_at ?? '').localeCompare(
+        String(left.finished_at ?? ''),
+      ),
+    );
+}
+
+/**
+ * The view a new terminal started in *group* is pinned to: a group or a
+ * conversation; the operator's own terminals need no pin.
+ */
+export function pinTargetOf(group) {
+  return group?.kind === 'user' || group?.kind === 'session'
+    ? group.group_id
+    : null;
+}
+
+/** Whether a terminal can be moved into *group* by a drop or a menu. */
+export function canMoveTo(terminal, group) {
+  if (!terminal || !group || terminal.group_id === group.group_id) {
+    return false;
+  }
+  return (
+    group.group_id === terminal.home_group_id || pinTargetOf(group) !== null
   );
 }
 
@@ -109,16 +170,30 @@ export function terminalIsFinished(terminal) {
 
 export function reconcileTerminalList(state, result) {
   const terminals = Array.isArray(result?.terminals) ? result.terminals : [];
+  const shownLive = new Set(
+    visibleTerminals(state)
+      .filter((terminal) => !terminalIsFinished(terminal))
+      .map((terminal) => terminal.terminal_id),
+  );
   state.terminals = terminals.filter(
     (terminal) => terminal && typeof terminal.terminal_id === 'string',
   );
+  keepLingering(state, shownLive);
   reconcileTerminalGroups(state, result);
   reconcileTerminalLaunchHistory(state, result);
   if (
     state.selectedGroupId &&
     !state.groups.some((group) => group.group_id === state.selectedGroupId)
   ) {
-    state.selectedGroupId = state.groups[0]?.group_id ?? '';
+    state.selectedGroupId = defaultTerminalGroupId(state);
+  }
+  if (
+    state.historyTerminalId &&
+    !state.terminals.some(
+      (terminal) => terminal.terminal_id === state.historyTerminalId,
+    )
+  ) {
+    state.historyTerminalId = '';
   }
   if (
     state.selectedTerminalId &&
@@ -133,6 +208,31 @@ export function reconcileTerminalList(state, result) {
   return state.selectedTerminalId;
 }
 
+// A terminal shown running that is now finished stays on the canvas; one no
+// longer listed leaves it.
+function keepLingering(state, shownLive) {
+  const listed = new Map(
+    state.terminals.map((terminal) => [terminal.terminal_id, terminal]),
+  );
+  const lingering = state.lingeringIds.filter((terminalId) =>
+    listed.has(terminalId),
+  );
+  for (const terminalId of shownLive) {
+    const terminal = listed.get(terminalId);
+    if (terminalIsFinished(terminal) && !lingering.includes(terminalId)) {
+      lingering.push(terminalId);
+    }
+  }
+  if (
+    lingering.length !== state.lingeringIds.length ||
+    lingering.some(
+      (terminalId, index) => state.lingeringIds[index] !== terminalId,
+    )
+  ) {
+    state.lingeringIds = lingering;
+  }
+}
+
 function reconcileTerminalGroups(state, result) {
   if (!Array.isArray(result?.groups)) {
     return state.groups;
@@ -142,7 +242,7 @@ function reconcileTerminalGroups(state, result) {
       group &&
       typeof group.group_id === 'string' &&
       group.group_id &&
-      typeof group.name === 'string',
+      (typeof group.name === 'string' || group.name === null),
   );
   if (!state.selectedGroupId) {
     state.selectedGroupId = defaultTerminalGroupId(state);
@@ -150,11 +250,13 @@ function reconcileTerminalGroups(state, result) {
   return state.groups;
 }
 
-// The group the Terminals view opens on: the first one with terminals.
+// The view the Terminals view opens on: the first one with a running
+// terminal, else the first group of the user, else the first view.
 export function defaultTerminalGroupId(state) {
-  const firstOccupied =
-    state.groups.find((group) => Number(group.terminal_count) > 0) ?? null;
-  return (firstOccupied ?? state.groups[0])?.group_id ?? '';
+  const firstRunning =
+    state.groups.find((group) => Number(group.live_count) > 0) ?? null;
+  const firstUser = state.groups.find((group) => group.kind === 'user') ?? null;
+  return (firstRunning ?? firstUser ?? state.groups[0])?.group_id ?? '';
 }
 
 export function reconcileTerminalLaunchHistory(state, result) {
@@ -182,10 +284,17 @@ export function mergeTerminalSummary(state, terminal) {
     (item) => item.terminal_id === terminal.terminal_id,
   );
   if (index < 0) {
-    state.terminals = [terminal, ...state.terminals];
-  } else {
-    state.terminals[index] = { ...state.terminals[index], ...terminal };
+    // The server places a new terminal last in its view.
+    state.terminals = [...state.terminals, terminal];
+    return terminal;
   }
+  const shownLive = new Set(
+    visibleTerminals(state)
+      .filter((item) => !terminalIsFinished(item))
+      .map((item) => item.terminal_id),
+  );
+  state.terminals[index] = { ...state.terminals[index], ...terminal };
+  keepLingering(state, shownLive);
   return terminal;
 }
 

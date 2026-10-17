@@ -6,7 +6,15 @@ import asyncio
 import contextlib
 import re
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Collection,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
@@ -25,15 +33,11 @@ from core.tools.terminal_backend import (
     spawn_terminal_adapter,
 )
 from core.tools.terminal_store import (
-    TERMINAL_AGENT_GROUP_ID_PREFIX,
-    TERMINAL_FINISHED_GROUP_ID,
     TERMINAL_GROUP_NAME_MAX_CHARS,
     TERMINAL_MANUAL_GROUP_ID,
-    GroupKind,
     TerminalGroup,
     TerminalLaunchHistoryEntry,
     TerminalOperatorStore,
-    agent_group_id,
 )
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
@@ -41,7 +45,13 @@ from core.utils.paths import model_path
 from core.utils.processes import process_tree_runs
 from core.utils.workers import settle_before_cancelling
 
-from ._terminal_catalog import TerminalCatalog
+from ._terminal_catalog import (
+    TERMINAL_CALL_NAMES,
+    SessionViewResolver,
+    TerminalCatalog,
+    resolve_root_view,
+    session_group_id,
+)
 from ._terminal_launch import ShellLaunch, interactive_shell, shell_launch
 from ._terminal_render_host import TerminalRenderHost, TerminalScreen
 from ._terminal_session import (
@@ -85,6 +95,7 @@ from ._terminal_state import (
     TerminalNotOwnedError,
     TerminalOwner,
     TerminalProgramNotRunningError,
+    TerminalSessionView,
     TerminalStaleScreenError,
     TerminalState,
     TerminalStreamEvent,
@@ -126,9 +137,14 @@ class TerminalManager:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         program_probe: Callable[[int, str], bool] = process_tree_runs,
         process_observer: ProcessTreeTracker | None = None,
+        session_view: SessionViewResolver | None = None,
+        reserved_call_names: Callable[[], Iterable[str]] | None = None,
     ) -> None:
         """*process_observer* watches a program's process tree for work its output
-        does not show; without it, only output and declared signals show work."""
+        does not show; without it, only output and declared signals show work.
+        *session_view* names the conversation (root Session and title) an Agent
+        Session belongs to, so its Terminals show together; *reserved_call_names*
+        are names a Terminal's call name must not take, such as Agent names."""
         if scrollback_lines < 1:
             raise ValueError("Terminal scrollback cap must be positive")
         if finished_session_ttl <= timedelta(0):
@@ -170,7 +186,9 @@ class TerminalManager:
         self._catalog = TerminalCatalog(
             self._operator_store,
             lambda: [session.info() for session in self._sessions.values()],
-            self._terminate_by_id,
+            self._pin,
+            session_view=session_view,
+            reserved_names=reserved_call_names,
         )
         self._services = TerminalSessionServices(
             trigger_service=trigger_service,
@@ -197,8 +215,8 @@ class TerminalManager:
         return self._catalog.list_for_operator()
 
     def list_groups_for_operator(self) -> list[dict[str, Any]]:
-        """Return operator-visible groups: user/agent groups, then the shared
-        manual automatic group, then one automatic group per active Agent."""
+        """Return the operator's views: conversations, user views, then the
+        operator's own terminals."""
         return self._catalog.list_groups_for_operator()
 
     def list_operator_launch_history(self) -> list[dict[str, Any]]:
@@ -206,24 +224,40 @@ class TerminalManager:
         return self._catalog.list_operator_launch_history()
 
     def create_group_for_operator(self, name: str) -> dict[str, Any]:
-        """Create one durable user group with a unique name."""
+        """Create one durable user view with a unique name."""
         return self._catalog.create_group_for_operator(name)
 
     def rename_group_for_operator(self, group_id: str, name: str) -> dict[str, Any]:
-        """Rename one user or agent group; automatic groups are fixed."""
+        """Rename one user view; the other views take their names from elsewhere."""
         return self._catalog.rename_group_for_operator(group_id, name)
 
     def set_group_order_for_operator(self, group_id: str, order: Sequence[str]) -> dict[str, Any]:
         """Persist one user-set Terminal order; missing ids are appended."""
         return self._catalog.set_group_order_for_operator(group_id, order)
 
-    async def delete_group_for_operator(self, group_id: str) -> dict[str, Any]:
-        """Remove a user or Agent group, retaining stopped terminals as finished."""
-        return await self._catalog.delete_group_for_operator(group_id)
+    def delete_group_for_operator(self, group_id: str) -> dict[str, Any]:
+        """Remove one user view; its Terminals keep running in their own views."""
+        return self._catalog.delete_group_for_operator(group_id)
 
-    def resolve_or_create_agent_group(self, name: str) -> TerminalGroup:
-        """Resolve an existing named group or create a non-durable Agent group."""
-        return self._catalog.resolve_or_create_agent_group(name)
+    def move_for_operator(self, terminal_id: str, group_id: str | None) -> dict[str, Any]:
+        """Pin one Terminal to a user view or a conversation's view, or unpin it
+        (*group_id* ``None``) so it shows where it belongs."""
+        session = self._get(terminal_id)
+        self._catalog.validate_pin(group_id)
+        self._pin(terminal_id, group_id)
+        return self._catalog.summary(session.info())
+
+    def forget_session_views(self) -> None:
+        """Re-read conversation titles: a Session title changed. Safe from any thread."""
+        self._catalog.forget_session_views()
+
+    def _pin(self, terminal_id: str, group_id: str | None) -> None:
+        session = self._get(terminal_id)
+        if session.group_id == group_id:
+            return
+        session.group_id = group_id
+        self._catalog.pinned(group_id, terminal_id)
+        self._catalog.notify_changed(terminal_id)
 
     async def running_programs_for_operator(self) -> dict[str, bool]:
         """Whether each live manual Terminal's launch program still runs in it.
@@ -485,8 +519,7 @@ class TerminalManager:
         cwd = launch.cwd
         if not cwd.is_dir():
             raise ValueError(f"Terminal workdir is not a directory: {model_path(cwd)}")
-        if group_id is not None:
-            self._catalog.require_group(group_id)
+        self._catalog.validate_pin(group_id)
 
         log_path: Path | None = None
         log_handle: BinaryIO | None = None
@@ -544,6 +577,7 @@ class TerminalManager:
             screen=screen,
             launch=launch,
             name=name,
+            call_name=self._catalog.allocate_call_name(),
             group_id=group_id,
             origin_run_id=origin_run_id,
             execution_owner=execution_owner,
@@ -567,8 +601,7 @@ class TerminalManager:
                 raise
             session.release()
             raise TerminalClosedError("Terminal Session is no longer running")
-        if group_id is not None:
-            self._catalog.add_to_group(group_id, terminal_id)
+        self._catalog.pinned(group_id, terminal_id)
         self._sessions[terminal_id] = session
         session.start()
         return session
@@ -1102,9 +1135,6 @@ class TerminalManager:
             )
         return session
 
-    async def _terminate_by_id(self, terminal_id: str) -> None:
-        await self._get(terminal_id).terminate(suppress_attention=True)
-
     def _enforce_capacity(self, owner: TerminalOwner | None) -> None:
         pending = [
             pending_owner for task, pending_owner in self._pending_spawns.items() if not task.done()
@@ -1165,11 +1195,9 @@ def _launch_program(command: str | None) -> str:
 
 __all__ = [
     "AttentionKind",
-    "GroupKind",
-    "TERMINAL_AGENT_GROUP_ID_PREFIX",
+    "TERMINAL_CALL_NAMES",
     "TERMINAL_DEFAULT_COLUMNS",
     "TERMINAL_DEFAULT_ROWS",
-    "TERMINAL_FINISHED_GROUP_ID",
     "TERMINAL_FINISHED_TTL",
     "TERMINAL_GROUP_NAME_MAX_CHARS",
     "TERMINAL_IDLE_SECONDS",
@@ -1200,11 +1228,13 @@ __all__ = [
     "TerminalOwner",
     "TerminalProgramNotRunningError",
     "TerminalRenderHost",
+    "TerminalSessionView",
     "TerminalStaleScreenError",
     "TerminalState",
     "WaitEnded",
-    "agent_group_id",
     "observe_process_tree",
+    "resolve_root_view",
+    "session_group_id",
     "screen_behind_note",
     "unseen_lines_note",
 ]

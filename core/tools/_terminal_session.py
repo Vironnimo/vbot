@@ -154,6 +154,7 @@ class TerminalSession:
         screen: TerminalScreen,
         launch: TerminalLaunch,
         name: str | None,
+        call_name: str,
         group_id: str | None,
         origin_run_id: str | None,
         execution_owner: RunExecutionOwner | None,
@@ -171,6 +172,7 @@ class TerminalSession:
         self.lifecycle_owner = owner
         self.attachment = owner
         self.name = name
+        self.call_name = call_name
         self.group_id = group_id
         self.origin_run_id = origin_run_id
         self.execution_owner = execution_owner
@@ -313,6 +315,7 @@ class TerminalSession:
             launch_command=self._launch.launch_command,
             launch_arguments=self._launch.launch_arguments,
             name=self.name,
+            call_name=self.call_name,
             group_id=self.group_id,
             cwd=self._launch.cwd,
             pid=self._adapter.pid,
@@ -1040,6 +1043,7 @@ class TerminalSession:
             }
         if include_name:
             data["name"] = info.name
+        data["call_name"] = info.call_name
         data["program"] = info.program
         data["stopped"] = info.stopped
         return data
@@ -1772,8 +1776,8 @@ class TerminalSession:
         info = self.info()
         label = " ".join((info.name or info.program).split())
         if len(label) > _NOTICE_LABEL_CHARS:
-            return label[: _NOTICE_LABEL_CHARS - 3] + "..."
-        return label
+            label = label[: _NOTICE_LABEL_CHARS - 3] + "..."
+        return f"{info.call_name}, {label}" if info.call_name else label
 
     def _schedule_delivery(
         self, attention: TerminalAttention, body: str, seen_line: int, clears: int
