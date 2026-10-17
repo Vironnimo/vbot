@@ -279,8 +279,10 @@ def test_atomic_write_owner_only_restricts_the_file_to_the_current_user(tmp_path
     assert target.read_text() == "secret\n"
     if sys.platform == "win32":
         # A protected list: the current user and SYSTEM, nothing inherited.
+        # SDDL abbreviates the built-in local administrator's SID as LA on CI.
         assert re.fullmatch(
-            r"D:P(AI)?\(A;;FA;;;S-1-5-[0-9-]+\)\(A;;FA;;;SY\)", _windows_dacl(target)
+            r"D:P(AI)?\(A;;FA;;;(?:S-1-5-[0-9-]+|LA)\)\(A;;FA;;;SY\)",
+            _windows_dacl(target),
         )
     else:
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
