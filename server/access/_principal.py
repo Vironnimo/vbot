@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import asyncio
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -34,15 +36,27 @@ class Principal:
 HOST = Principal("host")
 OPEN = Principal("open")
 
-_CURRENT: ContextVar[Principal | None] = ContextVar("vbot_access_principal", default=None)
+
+@dataclass(frozen=True)
+class _Binding:
+    principal: Principal | None
+    task: asyncio.Task[Any] | None
+
+
+_CURRENT: ContextVar[_Binding | None] = ContextVar("vbot_access_principal", default=None)
 
 
 def current_principal() -> Principal | None:
-    """The principal of the request being handled, for RPC handlers.
+    """The principal of the HTTP RPC request being dispatched, for RPC handlers.
 
-    ``None`` outside a request, for example for in-process RPC dispatch.
+    ``None`` everywhere else: in-process dispatch (Live calls) and every task a
+    request starts (Runs, background work). Such tasks inherit the request's
+    context, so the binding also names its task and counts only there.
     """
-    return _CURRENT.get()
+    binding = _CURRENT.get()
+    if binding is None or binding.task is not _current_task():
+        return None
+    return binding.principal
 
 
 def scope_principal(scope: Mapping[str, Any]) -> Principal | None:
@@ -50,10 +64,18 @@ def scope_principal(scope: Mapping[str, Any]) -> Principal | None:
     return principal if isinstance(principal, Principal) else None
 
 
-def bind_principal(principal: Principal | None) -> Any:
-    """Set the principal for the current context; returns the reset token."""
-    return _CURRENT.set(principal)
+@contextmanager
+def bound_principal(principal: Principal | None) -> Iterator[None]:
+    """Let RPC handlers in this task act for ``principal``; ``None`` for none."""
+    token = _CURRENT.set(_Binding(principal, _current_task()))
+    try:
+        yield
+    finally:
+        _CURRENT.reset(token)
 
 
-def unbind_principal(token: Any) -> None:
-    _CURRENT.reset(token)
+def _current_task() -> asyncio.Task[Any] | None:
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None

@@ -14,8 +14,10 @@ _MAX_KEYS = 4096
 class SlidingWindow:
     """At most ``limit`` events per ``window`` seconds for each key.
 
-    Keys are bounded: the least recently used key is forgotten first, which can
-    only make a limit more lenient for that key, never block anyone else.
+    Memory is bounded: each key keeps only its ``limit`` latest events, which
+    decide whether it is blocked, and the least recently used key is forgotten
+    first, which can only make a limit more lenient for that key, never block
+    anyone else.
     """
 
     def __init__(
@@ -42,7 +44,7 @@ class SlidingWindow:
     def record(self, key: Hashable) -> None:
         events = self._current(key)
         if events is None:
-            events = deque()
+            events = deque(maxlen=self._limit)
             self._events[key] = events
             while len(self._events) > self._max_keys:
                 self._events.popitem(last=False)
@@ -88,11 +90,25 @@ class RateLimit:
         self.overall.record(GLOBAL_KEY)
 
 
+#: How many distinct clients one summary line names.
+_SUMMARY_CLIENTS = 10
+
+
 @dataclass
 class _Burst:
     count: int = 0
     clients: set[str] = field(default_factory=set)
+    more_clients: bool = False
     flush_scheduled: bool = False
+
+    def add(self, client: str) -> None:
+        self.count += 1
+        if client in self.clients:
+            return
+        if len(self.clients) < _SUMMARY_CLIENTS:
+            self.clients.add(client)
+        else:
+            self.more_clients = True
 
 
 class RefusalLog:
@@ -126,8 +142,7 @@ class RefusalLog:
             burst.flush_scheduled = True
             self._schedule(self._interval, lambda: self._flush(reason))
             return
-        burst.count += 1
-        burst.clients.add(client or "unknown")
+        burst.add(client or "unknown")
 
     def _flush(self, reason: str) -> None:
         burst = self._bursts.get(reason)
@@ -140,7 +155,7 @@ class RefusalLog:
             "Access refused repeatedly (reason=%s count=%d clients=%s interval=%ds)",
             reason,
             burst.count,
-            ",".join(sorted(burst.clients)[:10]) + (",..." if len(burst.clients) > 10 else ""),
+            ",".join(sorted(burst.clients)) + (",..." if burst.more_clients else ""),
             round(self._interval),
         )
         # Keep summarizing while refusals continue; a quiet interval ends the burst.

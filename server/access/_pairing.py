@@ -16,7 +16,8 @@ LOGIN_TICKET_TTL_SECONDS = 60.0
 #: Unambiguous characters: no 0/O, 1/I/L or U/V look-alikes. 30^8 codes.
 PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"
 PAIRING_CODE_LENGTH = 8
-#: Bounds memory under a flood that the rate limits let through.
+#: Bounds memory under a flood that the rate limits let through. Requests of this
+#: computer's own clients are not counted; they are bounded by their rate limit.
 MAX_PENDING_PAIRINGS = 256
 MAX_LOGIN_TICKETS = 256
 
@@ -54,6 +55,9 @@ class PairingRequest:
     poll_secret_hash: bytes = field(repr=False)
     state: PairingState = "pending"
     approved_by: str | None = None
+    #: The rate limit key of the client that asked, and whether it is this computer.
+    client_key: str = ""
+    local: bool = False
 
 
 class PairingRegistry:
@@ -68,11 +72,24 @@ class PairingRegistry:
         self._wall_clock = wall_clock
         self._requests: OrderedDict[str, PairingRequest] = OrderedDict()
 
-    def start(self, *, name: str, kind: str, client: str | None) -> tuple[PairingRequest, str]:
-        """Create a request; returns it with the poll secret only the new device learns."""
+    def start(
+        self,
+        *,
+        name: str,
+        kind: str,
+        client: str | None,
+        client_key: str = "",
+        local: bool = False,
+    ) -> tuple[PairingRequest, str]:
+        """Create a request; returns it with the poll secret only the new device learns.
+
+        A full table makes room by dropping the oldest undecided request of the
+        client that holds the most, so one client cannot crowd out the others.
+        ``OverflowError`` only when every counted request is already approved.
+        """
         self.sweep()
-        if len(self._requests) >= MAX_PENDING_PAIRINGS:
-            raise OverflowError("too many pending pairing requests")
+        if not local:
+            self._make_room()
         codes = {request.code for request in self._requests.values()}
         code = ""
         while not code or code in codes:
@@ -89,9 +106,35 @@ class PairingRegistry:
             requested_at=self._wall_clock(),
             expires_at=self._clock() + PAIRING_TTL_SECONDS,
             poll_secret_hash=_digest(poll_secret),
+            client_key=client_key,
+            local=local,
         )
         self._requests[request.id] = request
         return request, poll_secret
+
+    def _make_room(self) -> None:
+        counted = [request for request in self._requests.values() if not request.local]
+        if len(counted) < MAX_PENDING_PAIRINGS:
+            return
+        held: dict[str, list[PairingRequest]] = {}
+        for request in counted:
+            if request.state != "approved":
+                held.setdefault(request.client_key, []).append(request)
+        if not held:
+            raise OverflowError("too many pending pairing requests")
+        # Oldest first within a client; the client holding the most gives way.
+        crowding = max(held.values(), key=len)
+        del self._requests[crowding[0].id]
+
+    def withdraw_approvals(self, approvers: set[str]) -> int:
+        """Deny the unclaimed requests these approvers approved; returns how many."""
+        withdrawn = 0
+        for request in self._requests.values():
+            if request.state == "approved" and request.approved_by in approvers:
+                request.state = "denied"
+                request.approved_by = None
+                withdrawn += 1
+        return withdrawn
 
     def pending(self, code: str) -> PairingRequest | None:
         """The pending request a typed code names, if it is still open."""
@@ -167,6 +210,13 @@ class LoginTickets:
         if len(ticket) > 128:
             return None
         return self._tickets.pop(_digest(ticket), None)
+
+    def drop_issued_by(self, issuers: set[str]) -> int:
+        """Forget the tickets these principals issued; returns how many."""
+        dropped = [key for key, item in self._tickets.items() if item.issued_by in issuers]
+        for key in dropped:
+            del self._tickets[key]
+        return len(dropped)
 
     def _sweep(self) -> None:
         now = self._clock()

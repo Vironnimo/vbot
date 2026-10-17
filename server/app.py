@@ -87,7 +87,13 @@ from server._streams import (
 )
 from server._terminal_socket import serve_terminal_socket
 from server._upload_routes import register_upload_routes
-from server.access import AccessGuard, AccessService, register_access_routes
+from server.access import (
+    AccessGuard,
+    AccessService,
+    bound_principal,
+    register_access_routes,
+    scope_principal,
+)
 from server.events import SERVER_STOPPING_EVENT
 from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
@@ -191,7 +197,11 @@ def create_app(
     access_settings = access or access_config(
         inferred_access_mode(resolved_server_bind["listen_host"])
     )
-    access_service = AccessService(access_settings, local_token=local_access_token)
+    access_service = AccessService(
+        access_settings,
+        local_token=local_access_token,
+        bind_host=resolved_server_bind["listen_host"],
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
@@ -334,7 +344,9 @@ def create_app(
                 },
             }
         try:
-            return await dispatch_rpc(request.app.state, payload)
+            # Only handlers of this request act for its principal, never tasks it starts.
+            with bound_principal(scope_principal(request.scope)):
+                return await dispatch_rpc(request.app.state, payload)
         except Exception:
             # The dispatcher logged the original failure; never expose its details.
             response.status_code = 500

@@ -268,11 +268,17 @@ class DeviceStore:
     # Writing (blocking) --------------------------------------------------------
 
     def add(self, device: Device) -> None:
-        """Persist a new device; it authenticates once the write succeeded."""
+        """Persist a new device; it authenticates once the write succeeded.
+
+        Raises :class:`DeviceNotFoundError` when the approver is a device that is
+        no longer paired: revoking a device withdraws what it approved.
+        """
         with self._write_lock:
             current = self._require_available()
             if device.id in current:
                 raise ValueError("device id already exists")
+            if device.approved_by != HOST_PRINCIPAL and device.approved_by not in current:
+                raise DeviceNotFoundError(device.approved_by)
             self._write({**current, device.id: device})
             with self._state_lock:
                 self._devices = MappingProxyType({**self._devices, device.id: device})

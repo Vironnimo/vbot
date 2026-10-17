@@ -13,6 +13,7 @@ from core.utils.log_viewer import LogViewer
 from core.utils.workers import cancel_and_wait
 from server._bind import ServerBindState
 from server._http_dependencies import FastAPIType
+from server.access import bound_principal
 from server.activity import ActivityMonitor
 from server.clients import ClientRegistry
 from server.events import (
@@ -104,10 +105,14 @@ def _initialize_app_state(
 
 
 def _build_live_call_registry(state: Any) -> LiveCallRegistry:
-    """Live calls run their Tools through the canonical RPC handlers."""
+    """Live calls run their Tools through the canonical RPC handlers.
+
+    They act for no principal, even when a request's own task runs them.
+    """
 
     async def dispatch(method: str, params: JsonObject) -> JsonObject:
-        return await dispatch_method(state, method, params, METHODS)
+        with bound_principal(None):
+            return await dispatch_method(state, method, params, METHODS)
 
     return LiveCallRegistry(events=state.event_bus, rpc=dispatch)
 

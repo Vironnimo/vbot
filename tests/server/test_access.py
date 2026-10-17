@@ -13,14 +13,23 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
-from starlette.responses import StreamingResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect
 
 import server.app as server_app
 from core.access.config import AccessConfig, access_config
-from server.access import AccessError, AccessGuard, AccessService, Principal
+from server.access import (
+    AccessError,
+    AccessGuard,
+    AccessService,
+    Principal,
+    _pairing,
+    current_principal,
+)
+from server.access._limits import RefusalLog, SlidingWindow
 from server.app import create_app
+from server.rpc import methods
 from server.rpc.methods import dispatch_rpc
 from tests.server.app_test_support import ServerStubRuntime
 
@@ -146,6 +155,13 @@ def _paired_token(client: TestClient, kind: str = "cli") -> tuple[str, str]:
             "/health",
             403,
         ),
+        (access_config("lan"), {"x-test-peer": "192.168.1.5", "Via": "1.1 proxy"}, "/health", 403),
+        (
+            access_config("lan"),
+            {"x-test-peer": "192.168.1.5", "CF-Connecting-IP": "203.0.113.7"},
+            "/health",
+            403,
+        ),
         # authenticated: HTTPS from everyone but this computer, a credential everywhere.
         (_authenticated(), {"x-test-peer": "127.0.0.1"}, _PROTECTED, 401),
         (_authenticated(), {"x-test-peer": "127.0.0.1"}, "/health", 200),
@@ -222,7 +238,8 @@ def test_every_route_but_the_exempt_ones_needs_a_principal_when_authenticated(
         for method in sorted(route.methods or ()):
             response = client.request(method, _concrete(route.path))
             answered[(method, route.path)] = response.status_code
-            if (method, route.path) in exempt or route.path.startswith(capability_prefixes):
+            capability = method in {"GET", "HEAD"} and route.path.startswith(capability_prefixes)
+            if (method, route.path) in exempt or capability:
                 assert response.status_code != 401, (method, route.path)
             elif (method, route.path) in shell:
                 assert response.status_code == 200, (method, route.path)
@@ -235,6 +252,10 @@ def test_every_route_but_the_exempt_ones_needs_a_principal_when_authenticated(
 
     assert answered[("GET", "/assets")] == 200
     assert answered[("POST", "/api/rpc")] == 401
+    # A capability URL exempts only reads of its exact route shapes.
+    assert client.post("/api/files/x").status_code == 401
+    assert client.get("/api/files/x/y").status_code == 401
+    assert client.get("/api/extension-runs/x/other").status_code == 401
     # No generated API documentation reveals the route table.
     assert client.get("/openapi.json").headers["content-type"].startswith("text/html")
     assert client.get("/docs").headers["content-type"].startswith("text/html")
@@ -252,6 +273,48 @@ def test_security_headers_and_the_public_origin(served: Any) -> None:
     assert https.headers["strict-transport-security"] == "max-age=31536000"
     assert "strict-transport-security" not in plain.headers
     assert (public.status_code, foreign.status_code) == (200, 403)
+
+
+def test_only_known_host_names_are_answered(served: Any, caplog: pytest.LogCaptureFixture) -> None:
+    _app, lan = served(access_config("lan", allow_hosts=["vbot.home.arpa"]))
+    _app, internet = served(_authenticated())
+    peer = {"x-test-peer": "192.168.1.5"}
+
+    def status(client: TestClient, host: str, headers: dict[str, str]) -> int:
+        return client.get("/health", headers={**headers, "Host": host}).status_code
+
+    known = [
+        status(lan, host, peer)
+        for host in (
+            "testserver",
+            "localhost:8765",
+            "127.0.0.1:8765",
+            "[::1]:8765",
+            "192.168.1.20",
+            "VBOT.home.arpa.:8765",
+        )
+    ]
+    # DNS rebinding: an attacker's name that resolves to this server.
+    rebound = lan.get("/health", headers={**peer, "Host": "rebind.attacker.example"})
+    doubled = lan.get(
+        "/health",
+        headers=[("x-test-peer", "192.168.1.5"), ("Host", "testserver"), ("Host", "evil.example")],
+    )
+    public = status(internet, "vbot.example.org", _INTERNET)
+    foreign = status(internet, "attacker.example", _INTERNET)
+
+    assert known == [200] * 6
+    assert rebound.status_code == 403
+    assert rebound.json()["error"] == {
+        "code": "access_denied",
+        "message": "Access denied: unknown host name",
+    }
+    assert doubled.status_code == 403
+    assert (public, foreign) == (200, 403)
+    assert (
+        "Access refused (reason=host_not_allowed client=192.168.1.5 path=/health "
+        "host=rebind.attacker.example)"
+    ) in caplog.text
 
 
 def test_the_local_access_token_counts_only_from_direct_loopback(served: Any) -> None:
@@ -318,9 +381,14 @@ def test_a_browser_pairs_once_by_code_and_signs_in_with_its_cookie(
     again = _poll(client, started).json()
     cookie = _cookie(claimed)
     signed_in = client.get(
-        "/api/auth/status", headers={**_INTERNET, "Cookie": f"vbot_device={cookie}"}
+        "/api/auth/status", headers={**_INTERNET, "Cookie": f"__Host-vbot_device={cookie}"}
     )
-    listed = _rpc(client, "devices.list", **_INTERNET, Cookie=f"vbot_device={cookie}")
+    listed = _rpc(client, "devices.list", **_INTERNET, Cookie=f"__Host-vbot_device={cookie}")
+    # A second cookie of the same name may be planted; which one is meant is unknown.
+    shadowed = client.get(
+        "/api/auth/status",
+        headers={**_INTERNET, "Cookie": f"__Host-vbot_device={cookie}; __Host-vbot_device=x"},
+    )
 
     assert re.fullmatch(r"[2-9A-HJKMNP-TV-Z]{4}-[2-9A-HJKMNP-TV-Z]{4}", started["code"])
     assert (started["expires_in"], started["poll_interval"]) == (600, 2)
@@ -345,6 +413,8 @@ def test_a_browser_pairs_once_by_code_and_signs_in_with_its_cookie(
     (device,) = listed["result"]["devices"]
     assert device["current"] is True and device["approved_by"] == "host"
     assert device["last_client"] == "203.0.113.7"
+    assert shadowed.json()["authenticated"] is False
+    assert "set-cookie" not in shadowed.headers
     stored = json.loads((tmp_path / "data-0" / "access" / "devices.json").read_text("utf-8"))
     assert cookie not in json.dumps(stored)
 
@@ -369,25 +439,37 @@ def test_a_denied_or_unknown_pairing_ends_without_a_device(served: Any) -> None:
     assert _rpc(client, "devices.list")["result"]["devices"] == []
 
 
-def test_native_devices_get_their_token_once_and_lose_it_when_revoked(served: Any) -> None:
+def test_native_devices_get_their_token_once_and_lose_it_with_their_approvals_when_revoked(
+    served: Any,
+) -> None:
     _app, client = served(_authenticated())
     device_id, token = _paired_token(client)
     bearer = {**_INTERNET, "Authorization": f"Bearer {token}"}
     other_id, _other = _paired_token(client, kind="desktop")
+    waiting = _pair(client, kind="cli")
 
     admitted = client.get(_PROTECTED, headers=bearer)
     renamed = _rpc(client, "devices.rename", {"id": device_id, "name": "Laptop"}, **bearer)
+    approved = _rpc(client, "devices.approve", {"code": waiting["code"]}, **bearer)
+    ticket = _rpc(client, "auth.login_ticket", **bearer)["result"]
     others = _rpc(client, "devices.revoke_others", **bearer)
     logged_out = _rpc(client, "devices.logout", **bearer)
     refused = client.get(_PROTECTED, headers=bearer)
     host_logout = _rpc(client, "devices.logout")
+    unclaimed = _poll(client, waiting).json()
+    redeemed = client.get(ticket["path"], headers=_INTERNET, follow_redirects=False)
 
     assert admitted.status_code == 404
     assert renamed["result"]["device"]["name"] == "Laptop"
+    assert approved["result"]["status"] == "approved"
     assert others["result"] == {"revoked": [other_id]}
     assert logged_out["result"] == {"revoked": [device_id]}
     assert refused.status_code == 401
     assert host_logout["error"]["code"] == "invalid_request"
+    # What the revoked device approved but nobody claimed yet goes with it.
+    assert unclaimed == {"status": "denied"}
+    assert redeemed.status_code == 400
+    assert _rpc(client, "devices.list")["result"]["devices"] == []
 
 
 def test_a_login_ticket_signs_in_one_browser_once(served: Any) -> None:
@@ -398,7 +480,7 @@ def test_a_login_ticket_signs_in_one_browser_once(served: Any) -> None:
     reused = client.get(issued["path"], headers=_INTERNET, follow_redirects=False)
     cookie = _cookie(redeemed)
     status = client.get(
-        "/api/auth/status", headers={**_INTERNET, "Cookie": f"vbot_device={cookie}"}
+        "/api/auth/status", headers={**_INTERNET, "Cookie": f"__Host-vbot_device={cookie}"}
     )
 
     assert issued["expires_in"] == 60 and issued["path"] == f"/auth/ticket/{issued['ticket']}"
@@ -413,7 +495,7 @@ def test_dead_device_cookies_are_cleared_and_repeated_failures_are_throttled(
     served: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
     _app, client = served(_authenticated())
-    dead = {**_INTERNET, "Cookie": "vbot_device=vbt_dev_AAAAAAAAAAAAAAAA_" + "x" * 43}
+    dead = {**_INTERNET, "Cookie": "__Host-vbot_device=vbt_dev_AAAAAAAAAAAAAAAA_" + "x" * 43}
 
     first = client.get(_PROTECTED, headers=dead)
     for _attempt in range(19):
@@ -422,7 +504,7 @@ def test_dead_device_cookies_are_cleared_and_repeated_failures_are_throttled(
     host = client.get(_PROTECTED, headers=_HOST)
 
     assert first.status_code == 401
-    assert "vbot_device=;" in first.headers["set-cookie"]
+    assert first.headers["set-cookie"].startswith("__Host-vbot_device=;")
     assert throttled.status_code == 429 and int(throttled.headers["retry-after"]) > 0
     assert host.status_code == 404
     refusals = [r.getMessage() for r in caplog.records if "Access refused" in r.getMessage()]
@@ -432,23 +514,90 @@ def test_dead_device_cookies_are_cleared_and_repeated_failures_are_throttled(
     assert "x" * 43 not in caplog.text
 
 
-def test_pairing_requests_are_rate_limited_per_client(served: Any) -> None:
-    _app, client = served(_authenticated())
+def test_pairing_requests_are_rate_limited_per_client(tmp_path: Path) -> None:
+    async def scenario() -> dict[str, list[int]]:
+        service = AccessService(_authenticated(), local_token=None)
+        await service.start(tmp_path)
 
-    answers = [
-        client.post(
-            "/api/auth/pair/start", json={"kind": "cli", "name": "x"}, headers=_INTERNET
-        ).status_code
-        for _attempt in range(11)
-    ]
-    elsewhere = client.post(
-        "/api/auth/pair/start",
-        json={"kind": "cli", "name": "x"},
-        headers={**_INTERNET, "X-Forwarded-For": "198.51.100.4"},
-    )
+        def starts(count: int, *clients: str) -> list[int]:
+            answers: list[int] = []
+            for attempt in range(count):
+                client = clients[attempt % len(clients)]
+                scope = _local_scope() if client == "local" else _internet_scope(client=client)
+                try:
+                    service.pair_start({"kind": "cli", "name": "x"}, service.inspect(scope))
+                    answers.append(200)
+                except AccessError as exc:
+                    answers.append(exc.status)
+            return answers
 
-    assert answers == [200] * 10 + [429]
-    assert elsewhere.status_code == 200
+        answers = {
+            "one_client": starts(11, "203.0.113.7"),
+            # An IPv6 client counts by its /64: its addresses share one budget.
+            "one_v6_network": starts(11, *(f"2001:db8:1:2::{n}" for n in range(1, 12))),
+            "next_v6_network": starts(1, "2001:db8:1:3::1"),
+            # The rest of the shared budget, then one more client.
+            "everyone": starts(80, *(f"198.51.100.{n}" for n in range(8))),
+            # This computer's own clients pair even when the shared budget is spent.
+            "this_computer": starts(11, "local"),
+        }
+        await service.close()
+        return answers
+
+    answers = asyncio.run(scenario())
+
+    assert answers["one_client"] == [200] * 10 + [429]
+    assert answers["one_v6_network"] == [200] * 10 + [429]
+    assert answers["next_v6_network"] == [200]
+    assert answers["everyone"] == [200] * 79 + [429]
+    assert answers["this_computer"] == [200] * 10 + [429]
+
+
+def test_a_full_pairing_table_makes_room_at_the_expense_of_the_crowding_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_pairing, "MAX_PENDING_PAIRINGS", 3)
+
+    async def scenario() -> dict[str, Any]:
+        service = AccessService(_authenticated(), local_token=None)
+        await service.start(tmp_path)
+
+        def start(client: str) -> dict[str, Any]:
+            scope = _local_scope() if client == "local" else _internet_scope(client=client)
+            return service.pair_start({"kind": "cli", "name": "x"}, service.inspect(scope))
+
+        async def status(started: dict[str, Any]) -> str:
+            payload, _cookie = await service.pair_poll(started, service.inspect(_local_scope()))
+            return str(payload["status"])
+
+        crowding = [start("203.0.113.7"), start("203.0.113.7")]
+        other = start("198.51.100.4")
+        newcomer = start("198.51.100.5")
+        local = [start("local") for _attempt in range(3)]
+        outcome: dict[str, Any] = {
+            "crowding": [await status(started) for started in crowding],
+            "other": await status(other),
+            "newcomer": await status(newcomer),
+            "local": [await status(started) for started in local],
+        }
+        for started in (crowding[1], other, newcomer):
+            service.decide_pairing(started["code"], Principal("host"), approved=True)
+        try:
+            start("198.51.100.6")
+        except AccessError as exc:
+            outcome["approved_table"] = exc.status
+        await service.close()
+        return outcome
+
+    assert asyncio.run(scenario()) == {
+        "crowding": ["expired", "pending"],
+        "other": "pending",
+        "newcomer": "pending",
+        # This computer's requests are not counted and never make room.
+        "local": ["pending"] * 3,
+        # Approved requests wait for their device; nothing gives way.
+        "approved_table": 429,
+    }
 
 
 def test_websockets_are_refused_with_close_codes_and_end_when_the_device_is_revoked(
@@ -468,8 +617,9 @@ def test_websockets_are_refused_with_close_codes_and_end_when_the_device_is_revo
         lan.websocket_connect("/ws", headers={"x-test-peer": "203.0.113.7"}) as websocket,
     ):
         websocket.receive_text()
+    # Some proxies forward a WebSocket upgrade as wss.
     with client.websocket_connect(
-        "/ws", headers={**_INTERNET, "Authorization": f"Bearer {token}"}
+        "/ws", headers={**_INTERNET, "X-Forwarded-Proto": "wss", "Authorization": f"Bearer {token}"}
     ) as websocket:
         hello = websocket.receive_json()
         revoked = _rpc(client, "devices.revoke", {"id": device_id})
@@ -483,18 +633,32 @@ def test_websockets_are_refused_with_close_codes_and_end_when_the_device_is_revo
     assert ended.value.code == 4401
 
 
-def test_rpc_handlers_without_a_request_principal_refuse_device_management(
-    served: Any,
+def test_only_the_rpc_request_itself_acts_for_its_principal(
+    served: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    app, _client = served(_authenticated())
+    app, client = served(_authenticated())
+    seen: dict[str, Principal | None] = {}
 
-    answer = asyncio.run(dispatch_rpc(app.state, {"method": "devices.list", "params": {}}))
+    async def later() -> Principal | None:
+        return current_principal()
 
-    assert answer["error"]["code"] == "access_denied"
+    async def probe(_state: Any, _params: Any) -> dict[str, Any]:
+        seen["request"] = current_principal()
+        # Runs and other work a request starts inherit its context, not its principal.
+        seen["spawned"] = await asyncio.get_running_loop().create_task(later())
+        return {}
+
+    monkeypatch.setitem(methods.METHODS, "test.principal", probe)
+    answered = _rpc(client, "test.principal")
+    direct = asyncio.run(dispatch_rpc(app.state, {"method": "devices.list", "params": {}}))
+
+    assert answered == {"ok": True, "result": {}}
+    assert seen == {"request": Principal("host"), "spawned": None}
+    assert direct["error"]["code"] == "access_denied"
 
 
 def _cookie(response: Any) -> str:
-    match = re.search(r"vbot_device=([^;]+)", response.headers["set-cookie"])
+    match = re.match(r"__Host-vbot_device=([^;]+)", response.headers["set-cookie"])
     assert match is not None
     return match.group(1)
 
@@ -511,7 +675,12 @@ def _write_webui_build(tmp_path: Path) -> Path:
     return dist_dir
 
 
-def _internet_scope(path: str, *headers: tuple[bytes, bytes], spec: str = "2.3") -> dict[str, Any]:
+def _internet_scope(
+    path: str = "/api/auth/pair/start",
+    *headers: tuple[bytes, bytes],
+    spec: str = "2.3",
+    client: str = "203.0.113.7",
+) -> dict[str, Any]:
     """An HTTP scope as uvicorn builds it for a browser behind the trusted proxy."""
     return {
         "type": "http",
@@ -524,12 +693,21 @@ def _internet_scope(path: str, *headers: tuple[bytes, bytes], spec: str = "2.3")
         "query_string": b"",
         "headers": [
             (b"host", b"vbot.example.org"),
-            (b"x-forwarded-for", b"203.0.113.7"),
+            (b"x-forwarded-for", client.encode()),
             (b"x-forwarded-proto", b"https"),
             *headers,
         ],
         "client": (_PROXY, 40000),
         "server": ("127.0.0.1", 8765),
+    }
+
+
+def _local_scope(path: str = "/api/auth/pair/start") -> dict[str, Any]:
+    """An HTTP scope of a client on this computer, connected directly."""
+    return {
+        **_internet_scope(path),
+        "headers": [(b"host", b"127.0.0.1:8765")],
+        "client": ("127.0.0.1", 40000),
     }
 
 
@@ -548,43 +726,62 @@ def test_a_device_event_stream_ends_when_the_device_is_revoked(tmp_path: Path, s
         yield "data: ready\n\n"
         await asyncio.Event().wait()
 
-    async def stream(scope: Any, receive: Any, send: Any) -> None:
-        await StreamingResponse(events(), media_type="text/event-stream")(scope, receive, send)
+    answering = asyncio.Event()
 
-    async def scenario() -> tuple[list[dict[str, Any]], asyncio.Task[None], int]:
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        if scope["path"].endswith("/events"):
+            await StreamingResponse(events(), media_type="text/event-stream")(scope, receive, send)
+            return
+        # A slow answer: it starts only after the revocation.
+        await answering.wait()
+        await JSONResponse({"ok": True})(scope, receive, send)
+
+    async def scenario() -> tuple[dict[str, list[dict[str, Any]]], asyncio.Task[None], int]:
         service = AccessService(_authenticated(), local_token=None)
         await service.start(tmp_path)
         device_id, token = await _service_device(service)
-        sent: list[dict[str, Any]] = []
+        sent: dict[str, list[dict[str, Any]]] = {"stream": [], "answer": []}
         streaming = asyncio.Event()
         never = asyncio.Event()
 
-        async def send(message: MutableMapping[str, Any]) -> None:
-            sent.append(dict(message))
-            streaming.set()
+        def sender(name: str) -> Any:
+            async def send(message: MutableMapping[str, Any]) -> None:
+                sent[name].append(dict(message))
+                streaming.set()
+
+            return send
 
         async def receive() -> dict[str, Any]:
             await never.wait()
             return {"type": "http.disconnect"}
 
-        scope = _internet_scope(
-            "/api/runs/run_1/events", (b"authorization", f"Bearer {token}".encode()), spec=spec
-        )
-        request = asyncio.create_task(AccessGuard(stream, service=service)(scope, receive, send))
+        def request(path: str, name: str) -> asyncio.Task[None]:
+            bearer = (b"authorization", f"Bearer {token}".encode())
+            scope = _internet_scope(path, bearer, spec=spec)
+            guard = AccessGuard(app, service=service)
+            return asyncio.create_task(guard(scope, receive, sender(name)))
+
+        stream = request("/api/runs/run_1/events", "stream")
+        answer = request("/api/runs/run_1", "answer")
         await streaming.wait()
-        open_streams = service.connections.count(device_id)
+        open_requests = service.connections.count(device_id)
         await service.revoke_devices([device_id], Principal("host"))
-        await asyncio.wait_for(request, 2)
+        answering.set()
+        await asyncio.wait_for(asyncio.gather(stream, answer), 2)
         await service.close()
-        return sent, request, open_streams
+        return sent, stream, open_requests
 
-    sent, request, open_streams = asyncio.run(scenario())
+    sent, stream, open_requests = asyncio.run(scenario())
 
-    assert open_streams == 1
-    # The response ends cleanly; the request task carries no leftover cancellation.
-    assert sent[0]["type"] == "http.response.start"
-    assert sent[-1] == {"type": "http.response.body", "body": b"", "more_body": False}
-    assert not request.cancelled() and request.cancelling() == 0
+    assert open_requests == 2
+    # The stream ends cleanly; the request task carries no leftover cancellation.
+    assert sent["stream"][0]["type"] == "http.response.start"
+    assert sent["stream"][-1] == {"type": "http.response.body", "body": b"", "more_body": False}
+    assert not stream.cancelled() and stream.cancelling() == 0
+    # An answer that starts after the revocation is refused instead.
+    start, body = sent["answer"]
+    assert start["status"] == 401
+    assert json.loads(body["body"])["error"]["code"] == "auth_required"
 
 
 def test_pairing_requests_and_login_tickets_expire(tmp_path: Path) -> None:
@@ -665,3 +862,35 @@ def test_devices_idle_for_ninety_days_are_removed_at_start(
     assert signed_in == used_id
     assert remaining == [used_id]
     assert f"Device expired (device={idle_id} idle_days=90)" in caplog.text
+
+
+def test_rate_limits_and_the_refusal_log_stay_bounded_under_a_flood(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    clock = [0.0]
+    window = SlidingWindow(3, 60, clock=lambda: clock[0], max_keys=2)
+    flushes: list[Any] = []
+    refusals = RefusalLog(
+        logging.getLogger("vbot.test.refusals"),
+        interval=60,
+        schedule=lambda _delay, flush: flushes.append(flush),
+    )
+
+    for _attempt in range(1000):
+        window.record("flood")
+    kept = len(window._events["flood"])
+    blocked = window.blocked("flood")
+    window.record("second")
+    window.record("third")
+    for n in range(50):
+        refusals.refused("invalid_token", client=f"203.0.113.{n}", detail="path=/api/rpc")
+    flushes.pop()()
+
+    # One key keeps only the events that decide its limit; the oldest key goes first.
+    assert kept == 3
+    assert blocked == 60 and window.blocked("flood") is None
+    # A summary names a bounded number of clients, however many there were.
+    summary = caplog.records[-1].getMessage()
+    assert summary.startswith("Access refused repeatedly (reason=invalid_token count=49 clients=")
+    assert summary.count("203.0.113.") == 10
+    assert summary.endswith(",... interval=60s)")
