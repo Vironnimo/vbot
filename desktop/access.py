@@ -33,6 +33,7 @@ import platform
 import re
 import threading
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,7 +73,8 @@ _LOCAL_TOKEN_MAX_BYTES = 256
 _TICKET_PATH_PATTERN = re.compile(r"/auth/ticket/[A-Za-z0-9_-]{16,256}")
 _PAIRING_CODE_PATTERN = re.compile(r"[0-9A-Z]{4}-[0-9A-Z]{4}")
 _SECRET_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}")
-_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+#: Characters a device name must not carry (the server refuses them).
+_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 _HOST_ACTOR = "host"
 
 PairingStatus = Literal["approved", "denied", "expired", "cancelled", "failed"]
@@ -574,6 +576,11 @@ def _computer_name() -> str:
 
 def _device_name(base: str, computer: str) -> str:
     """A device name within the server's rules: one line, at most 80 characters."""
-    computer = " ".join(_CONTROL_CHARACTERS.sub(" ", computer).split())
+    computer = " ".join(
+        "".join(
+            " " if unicodedata.category(character) in _HIDDEN_CATEGORIES else character
+            for character in computer
+        ).split()
+    )
     name = f"{base} on {computer}" if computer else base
     return name[:DEVICE_NAME_MAX_CHARS].rstrip()

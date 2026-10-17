@@ -25,6 +25,7 @@ import hashlib
 import re
 import secrets
 import threading
+import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -74,7 +75,12 @@ _DEVICE_ID_PATTERN = re.compile(_DEVICE_ID)
 _TOKEN_PATTERN = re.compile(rf"vbt_({_DEVICE_ID})_([A-Za-z0-9_-]{{43}})")
 _TOKEN_HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 _APPROVER_PATTERN = re.compile(rf"{HOST_PRINCIPAL}|{_DEVICE_ID}")
+#: What a stored name must not carry; names written before the stricter rule
+#: below keep loading.
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+#: What a new name must not carry: controls (escape sequences), format characters
+#: (bidirectional overrides, zero-width marks), line and paragraph separators.
+_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 _DEVICE_FIELDS = frozenset(
     (
@@ -168,7 +174,19 @@ def new_device(
 
 
 def normalize_device_name(value: Any) -> str:
-    """A display name: 1 to 80 characters without control characters."""
+    """A new display name: 1 to 80 characters, whitespace runs collapsed to one space.
+
+    Names reach terminals, approval dialogs and logs, so characters that are
+    invisible or steer the display (Unicode categories Cc, Cf, Zl, Zp) are refused.
+    """
+    name = _collapsed_name(value)
+    if any(unicodedata.category(character) in _HIDDEN_CATEGORIES for character in name):
+        raise ValueError("device name must not contain control or formatting characters")
+    return name
+
+
+def _collapsed_name(value: Any) -> str:
+    """A name with whitespace collapsed, 1 to 80 characters, without ASCII controls."""
     if not isinstance(value, str):
         raise ValueError("device name must be a string")
     name = " ".join(value.split())
@@ -427,7 +445,8 @@ def _parse_device(entry: Any) -> Device:
     if not is_device_id(entry["id"]):
         raise ValueError("id must be a device id")
     try:
-        name = normalize_device_name(entry["name"])
+        # The stored form keeps the rule it was written under (``_collapsed_name``).
+        name = _collapsed_name(entry["name"])
     except ValueError as error:
         raise ValueError(str(error)) from None
     if name != entry["name"]:
