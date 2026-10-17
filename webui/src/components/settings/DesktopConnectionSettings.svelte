@@ -1,4 +1,8 @@
 <script>
+  // The Desktop app's saved servers. A server is a host and port reached over
+  // HTTP, or an https:// address (its own port, 443 by default); the Desktop
+  // keys both by scheme, host and port and hands https servers over with the
+  // address as `host`.
   import { onMount, tick } from 'svelte';
 
   import Banner from '../ui/Banner.svelte';
@@ -10,6 +14,7 @@
   import TextField from '../ui/TextField.svelte';
   import {
     addDesktopServer,
+    cancelDesktopPairing,
     listDesktopServers,
     removeDesktopServer,
     selectDesktopServer,
@@ -17,6 +22,8 @@
   import { t } from '$lib/i18n.js';
 
   const noop = () => {};
+  const URL_MARKER = '://';
+  const PAIRING_REQUIRED = 'pairing_required';
 
   let { onToast = noop, idPrefix = 'desktop-settings-server' } = $props();
 
@@ -24,6 +31,8 @@
   let loading = $state(true);
   let loadError = $state('');
   let operationError = $state('');
+  // The server asked this Desktop to sign in: its pairing waits for approval.
+  let pairing = $state(null);
   let adding = $state(false);
   let addOpen = $state(false);
   let connectingKey = $state('');
@@ -37,13 +46,22 @@
   let portControlId = $derived(`${idPrefix}-port`);
   let labelControlId = $derived(`${idPrefix}-label`);
   let addButtonId = $derived(`${idPrefix}-add`);
+  // An address with a scheme carries its own port.
+  let hostIsAddress = $derived(host.includes(URL_MARKER));
 
   function serverKey(server) {
-    return `${server.host}:${server.port}`;
+    return `${server.scheme === 'https' ? 'https' : 'http'} ${server.host} ${server.port}`;
+  }
+
+  // How the user sees a saved server: `host:port`, or its https:// address.
+  function serverAddress(server) {
+    return String(server.host ?? '').includes(URL_MARKER)
+      ? server.host
+      : `${server.host}:${server.port}`;
   }
 
   function serverName(server) {
-    return server.label || serverKey(server);
+    return server.label || serverAddress(server);
   }
 
   function errorMessage(error, fallback) {
@@ -102,9 +120,8 @@
       return;
     }
     if (
-      !Number.isInteger(numericPort) ||
-      numericPort < 1 ||
-      numericPort > 65535
+      !hostIsAddress &&
+      (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535)
     ) {
       formError = t('settings.desktop.connection.portInvalid');
       return;
@@ -112,7 +129,12 @@
 
     adding = true;
     try {
-      await addDesktopServer(normalizedHost, numericPort, label.trim());
+      // The Desktop takes an address's port from the address itself.
+      await addDesktopServer(
+        normalizedHost,
+        hostIsAddress ? null : numericPort,
+        label.trim(),
+      );
       await loadServers();
       void closeAddForm();
       onToast({
@@ -132,10 +154,13 @@
   async function handleConnect(server) {
     const key = serverKey(server);
     operationError = '';
+    pairing = null;
     connectingKey = key;
     try {
       const result = await selectDesktopServer(server.host, server.port);
-      if (!result?.url) {
+      if (result?.status === PAIRING_REQUIRED && result.pairing) {
+        pairing = result.pairing;
+      } else if (!result?.url) {
         operationError = [result?.error_title, result?.error_body]
           .filter(Boolean)
           .join(' — ');
@@ -147,6 +172,18 @@
       );
     } finally {
       connectingKey = '';
+    }
+  }
+
+  async function handleCancelPairing() {
+    pairing = null;
+    try {
+      await cancelDesktopPairing();
+    } catch (error) {
+      operationError = errorMessage(
+        error,
+        t('settings.desktop.connection.cancelPairingError'),
+      );
     }
   }
 
@@ -188,6 +225,17 @@
   {#if operationError}
     <Banner variant="error" role="alert">{operationError}</Banner>
   {/if}
+  {#if pairing}
+    <Banner variant="info" role="status">
+      <span>
+        <strong>{pairing.title}</strong>
+        {pairing.body}
+      </span>
+      <Button variant="secondary" onClick={handleCancelPairing}>
+        {t('common.cancel')}
+      </Button>
+    </Banner>
+  {/if}
 
   <div class="s-group-toolbar s-list-toolbar">
     {#if !loading && !loadError && servers.length > 0}
@@ -218,7 +266,7 @@
           <TextField
             id={hostControlId}
             value={host}
-            placeholder="pi.lan"
+            placeholder={t('settings.desktop.connection.hostPlaceholder')}
             disabled={adding}
             onInput={(next) => (host = next)}
           />
@@ -226,13 +274,16 @@
         <FormField
           controlId={portControlId}
           label={t('settings.desktop.connection.port')}
-          required
+          help={hostIsAddress
+            ? t('settings.desktop.connection.portFromAddress')
+            : ''}
+          required={!hostIsAddress}
         >
           <TextField
             id={portControlId}
-            value={port}
+            value={hostIsAddress ? '' : port}
             inputmode="numeric"
-            disabled={adding}
+            disabled={adding || hostIsAddress}
             onInput={(next) => (port = next)}
           />
         </FormField>
@@ -304,7 +355,7 @@
               {/if}
             </div>
             <div class="s-row-desc desktop-server-row__address">
-              {key}
+              {serverAddress(server)}
             </div>
           </div>
           {#if !server.active}

@@ -117,6 +117,110 @@ describe('DesktopConnectionSettings', () => {
     await waitForText('pi.lan:9000');
     await waitForCondition(() => document.querySelector('form') === null);
   });
+
+  it('shows https servers by their address and saves one with its own port', async () => {
+    const cloud = {
+      host: 'https://vbot.example.com',
+      port: 443,
+      scheme: 'https',
+    };
+    // The same host over plain HTTP on port 443 is another server.
+    const plain = { host: 'vbot.example.com', port: 443, scheme: 'http' };
+    const added = {
+      host: 'https://office.example.com:8443',
+      port: 8443,
+      scheme: 'https',
+      label: 'Office',
+    };
+    const listServers = vi
+      .fn()
+      .mockResolvedValueOnce([{ ...cloud, active: true }, plain])
+      .mockResolvedValueOnce([{ ...cloud, active: true }, plain, added]);
+    const addServer = vi.fn().mockResolvedValue(added);
+    window.pywebview = { api: { listServers, addServer } };
+
+    mountedComponent = mount(DesktopConnectionSettings, {
+      target: document.body,
+    });
+    flushSync();
+    await waitForText('vbot.example.com:443');
+
+    const addresses = () =>
+      [...document.querySelectorAll('.desktop-server-row__address')].map(
+        (node) => node.textContent.trim(),
+      );
+    expect(addresses()).toEqual([
+      'https://vbot.example.com',
+      'vbot.example.com:443',
+    ]);
+
+    buttonsByText(t('settings.desktop.connection.addAction'))[0].click();
+    await waitForCondition(
+      () => document.activeElement?.id === 'desktop-settings-server-host',
+    );
+    setInput('desktop-settings-server-host', 'https://office.example.com:8443');
+    setInput('desktop-settings-server-label', 'Office');
+    flushSync();
+    expect(
+      document.getElementById('desktop-settings-server-port').disabled,
+    ).toBe(true);
+    document.querySelector('form button[type="submit"]').click();
+    flushSync();
+
+    await waitForCondition(() => addServer.mock.calls.length === 1);
+    expect(addServer).toHaveBeenCalledWith(
+      'https://office.example.com:8443',
+      null,
+      'Office',
+    );
+    await waitForText('https://office.example.com:8443');
+  });
+
+  it('shows the pairing a server asks for and cancels it', async () => {
+    const pairing = {
+      code: 'K7M2-Q001',
+      server: 'https://vbot.example.com',
+      title: 'Approve this Desktop',
+      body: 'Enter the code K7M2-Q001 on a signed-in device.',
+    };
+    const selectServer = vi.fn().mockResolvedValue({
+      status: 'pairing_required',
+      error_title: pairing.title,
+      error_body: pairing.body,
+      pairing,
+    });
+    const cancelPairing = vi.fn().mockResolvedValue({ cancelled: true });
+    window.pywebview = {
+      api: {
+        listServers: vi.fn().mockResolvedValue([
+          { host: 'home.lan', port: 8420, active: true },
+          { host: 'https://vbot.example.com', port: 443, scheme: 'https' },
+        ]),
+        selectServer,
+        cancelPairing,
+      },
+    };
+
+    mountedComponent = mount(DesktopConnectionSettings, {
+      target: document.body,
+    });
+    flushSync();
+    await waitForText('https://vbot.example.com');
+
+    buttonsByText(t('settings.desktop.connection.connect'))[0].click();
+    flushSync();
+    await waitForText('K7M2-Q001');
+    expect(selectServer).toHaveBeenCalledWith('https://vbot.example.com', 443);
+    // Waiting for approval is no failure.
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+
+    buttonsByText(t('common.cancel'))[0].click();
+    flushSync();
+    await waitForCondition(() => cancelPairing.mock.calls.length === 1);
+    await waitForCondition(
+      () => !document.body.textContent.includes('K7M2-Q001'),
+    );
+  });
 });
 
 function setInput(id, value) {

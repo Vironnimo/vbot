@@ -221,9 +221,15 @@ export default Object.freeze({
   'settings.desktop.connection.connecting': 'Connecting…',
   'settings.desktop.connection.connectError':
     'The Desktop app could not connect to that server.',
-  'settings.desktop.connection.host': 'Host',
+  'settings.desktop.connection.host': 'Host or https:// address',
+  'settings.desktop.connection.hostPlaceholder':
+    'pi.lan or https://vbot.example.com',
   'settings.desktop.connection.hostRequired': 'Enter a server host.',
   'settings.desktop.connection.port': 'Port',
+  'settings.desktop.connection.portFromAddress':
+    'An address uses its own port, 443 for https:// unless it names another.',
+  'settings.desktop.connection.cancelPairingError':
+    'The sign-in request could not be cancelled.',
   'settings.desktop.connection.portInvalid':
     'Enter a port between 1 and 65535.',
   'settings.desktop.connection.label': 'Label (optional)',

@@ -216,11 +216,20 @@ export async function removeDesktopServer(host, port) {
   return callBridge('removeServer', host, port);
 }
 
+/** End the Desktop's pairing that waits for approval; `{cancelled}`. */
+export async function cancelDesktopPairing() {
+  return callBridge('cancelPairing');
+}
+
 /**
  * Probe a remembered Desktop server and navigate only after the bridge Promise
  * resolves. Replacing the page inside the Python bridge call destroys
  * pywebview's callback, so JavaScript deliberately owns the final navigation.
  */
+//
+// A server that needs this Desktop signed in first answers `pairing_required`
+// with its `pairing` (`{code, server, title, body}`); the Desktop window opens
+// the server by itself once the pairing is approved.
 export async function selectDesktopServer(host, port) {
   const result = await callBridge('selectServer', host, port);
   if (result?.url) {
