@@ -154,9 +154,11 @@ def test_restart_hands_over_to_the_bootstrap_and_keeps_the_server_running(
 class _Monitor:
     instances: list[_Monitor] = []
 
-    def __init__(self, target, listener, *, local: bool, user_agent: str, classify=None) -> None:
+    def __init__(
+        self, target, listener, *, local: bool, user_agent: str, classify=None, device_sign_in=None
+    ) -> None:
         self.target, self.listener, self.local = target, listener, local
-        self.classify = classify
+        self.classify, self.device_sign_in = classify, device_sign_in
         self.status = MonitorStatus()
         self.reconnects = 0
         _Monitor.instances.append(self)
@@ -583,7 +585,11 @@ def test_open_session_shows_the_session_where_this_installation_can(
     monkeypatch.setattr(
         host.processes, "target", lambda _install: SimpleNamespace(url="http://127.0.0.1:8420")
     )
-    monkeypatch.setattr(host, "_desktop_target", lambda: ("192.0.2.8", 18420))
+    monkeypatch.setattr(
+        desktop,
+        "desktop_server",
+        lambda: desktop.DesktopServer("192.0.2.8", 18420, "http://192.0.2.8:18420"),
+    )
 
     host.ApplicationFacade(install).open_session("coder@site", "ses_1")
 
@@ -591,6 +597,53 @@ def test_open_session_shows_the_session_where_this_installation_can(
         data_dir = str((tmp_path / "data").resolve())
         opened = [data_dir if item == "<data-dir>" else item for item in opened]
     assert launches == [opened]
+
+
+def test_a_desktop_client_tray_follows_the_desktop_server_and_sign_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from cli.sign_ins import SignIn, SignInStore
+    from desktop.credentials import DEVICE_TOKENS_FILE_NAME, DeviceTokenStore
+    from desktop.settings import config_dir, write_last_used
+
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    install = _install(tmp_path, shape="desktop-client")
+    executable = _desktop_interpreter(install)
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(b"")
+    launches: list[object] = []
+    monkeypatch.setattr(host.subprocess, "Popen", lambda args, **_kwargs: launches.append(args[3:]))
+    facade, monitor, _sink = _watched(install, monkeypatch)
+    assert monitor.target() is None
+
+    write_last_used("vbot.example.com", 443, scheme="https")
+    facade.open_session("coder@site", "ses_1")
+
+    assert monitor.target().url == "https://vbot.example.com"
+    assert launches == [
+        ["--host", "https://vbot.example.com", "--port", "443", "--open-session", "coder@site"]
+        + ["ses_1"]
+    ]
+    # The tray signs in as the Desktop; the CLI's own sign-in is the fallback.
+    origin = "https://vbot.example.com"
+    sign_in = monitor.device_sign_in
+    assert sign_in is not None
+    assert sign_in(origin) is None
+    cli_token = "vbt_dev_00000000000000c1_" + "c" * 43
+    desktop_device = "dev_00000000000000d2"
+    desktop_token = f"vbt_{desktop_device}_" + "d" * 43
+    SignInStore().save_sign_in(
+        SignIn(origin, cli_token, "dev_00000000000000c1", "CLI", "2026-10-17T00:00:00Z")
+    )
+    assert sign_in(origin) == cli_token
+    DeviceTokenStore(config_dir() / DEVICE_TOKENS_FILE_NAME).save_device(
+        origin, desktop_token, desktop_device
+    )
+    assert sign_in(origin) == desktop_token
+
+    write_last_used("192.0.2.8", 18420)
+    assert monitor.target().url == "http://192.0.2.8:18420"
 
 
 def test_browser_and_logs_use_only_the_owned_local_target(
@@ -715,24 +768,46 @@ def test_main_keeps_tray_running_when_recovery_fails(
     assert start_server is False
 
 
+_TICKET = {"ticket": "T1", "path": "/auth/ticket/T1", "expires_in": 60}
+_BROWSER_TICKET = ("auth.login_ticket", {"name": "Browser on desk"})
+
+
 @pytest.mark.parametrize(
-    ("action", "reply", "opened"),
+    ("action", "reply", "opened", "calls_made"),
     [
         pytest.param(
             "browser",
-            {"ticket": "T1", "path": "/auth/ticket/T1", "expires_in": 60},
+            _TICKET,
             "https://vbot.example.com/auth/ticket/T1",
+            [_BROWSER_TICKET],
             id="browser-signed-in",
         ),
-        # The ticket lands on the start page; the server has no target for it.
+        # The ticket lands the browser on the Session.
         pytest.param(
             "session",
-            {"ticket": "T1", "path": "/auth/ticket/T1", "expires_in": 60},
+            _TICKET,
             "https://vbot.example.com/auth/ticket/T1",
+            [
+                (
+                    "auth.login_ticket",
+                    {
+                        "name": "Browser on desk",
+                        "next": "/?open_agent=coder%40site&open_session=ses_1",
+                    },
+                )
+            ],
             id="session-signed-in",
         ),
-        pytest.param("browser", "auth_disabled", "http://127.0.0.1:8420", id="login-turned-off"),
-        pytest.param("browser", "auth_required", ApplicationError, id="refused"),
+        pytest.param(
+            "browser",
+            "auth_disabled",
+            "http://127.0.0.1:8420",
+            [_BROWSER_TICKET],
+            id="login-turned-off",
+        ),
+        pytest.param("browser", "auth_required", ApplicationError, [_BROWSER_TICKET], id="refused"),
+        # An Agent's Run never mints a sign-in link.
+        pytest.param("run", _TICKET, ApplicationError, [], id="inside-a-run"),
     ],
 )
 def test_a_browser_opens_signed_in_when_the_server_requires_login(
@@ -741,6 +816,7 @@ def test_a_browser_opens_signed_in_when_the_server_requires_login(
     action: str,
     reply: dict[str, Any] | str,
     opened: str | type[ApplicationError],
+    calls_made: list[tuple[str, dict[str, Any]]],
 ):
     install = replace(
         _install(tmp_path),
@@ -764,13 +840,15 @@ def test_a_browser_opens_signed_in_when_the_server_requires_login(
     monkeypatch.setattr("cli.rpc_client.rpc_call", rpc_call)
     monkeypatch.setattr(host.webbrowser, "open", launches.append)
     monkeypatch.setattr(host.socket, "gethostname", lambda: "desk")
+    if action == "run":
+        monkeypatch.setenv("VBOT_RUN_AGENT_ID", "builder")
     facade = host.ApplicationFacade(install)
 
     def act() -> None:
-        if action == "browser":
-            facade.open_browser()
-        else:
+        if action == "session":
             facade.open_session("coder@site", "ses_1")
+        else:
+            facade.open_browser()
 
     if opened is ApplicationError:
         with pytest.raises(ApplicationError):
@@ -778,4 +856,4 @@ def test_a_browser_opens_signed_in_when_the_server_requires_login(
     else:
         act()
     assert launches == ([] if opened is ApplicationError else [opened])
-    assert calls == [("auth.login_ticket", {"name": "Browser on desk"})]
+    assert calls == calls_made

@@ -83,7 +83,7 @@ class ApplicationFacade:
         self._version_signature: tuple[int, int] | None = None
         self._observer = operations.OperationObserver(install)
         self._server_target_value: ServerInstance | None = None
-        self._desktop_server: tuple[tuple[str, int], ServerInstance] | None = None
+        self._desktop_server: tuple[str, ServerInstance] | None = None
         self._source_label: str | None = None
         self._monitor: ServerMonitor | None = None
         self._notifier: Notifier | None = None
@@ -163,12 +163,16 @@ class ApplicationFacade:
             owns_server=self._install.owns_server,
             update_active=self._update_running,
         )
+        from cli.application.desktop import desktop_sign_in
+
         monitor = ServerMonitor(
             self._monitor_target,
             _MonitorEvents(notifier, self._activity, sink),
             local=self._install.owns_server,
             user_agent=f"vBot-Tray/{self._version() or 'unknown'} (Windows)",
             classify=self._classify_server if self._install.owns_server else None,
+            # A Desktop Client's tray signs in as the Desktop's Device.
+            device_sign_in=None if self._install.owns_server else desktop_sign_in,
         )
         self._notifier, self._monitor = notifier, monitor
         monitor.start()
@@ -254,7 +258,7 @@ class ApplicationFacade:
     def open_session(self, agent: str, session: str) -> None:
         """Show one Session in the Desktop, or in the browser without a Desktop."""
 
-        from cli.application.desktop import open_desktop
+        from cli.application.desktop import desktop_server, open_desktop
 
         if self._install.install_shape == "server":
             query = urlencode({"open_agent": agent, "open_session": session})
@@ -262,11 +266,11 @@ class ApplicationFacade:
         elif self._install.owns_server:
             open_desktop(self._install, open_session=(agent, session))
         else:
-            target = _desktop_target()
-            if target is None:
+            server = desktop_server()
+            if server is None:
                 raise ApplicationError("The Desktop has no server to open this Session on")
             open_desktop(
-                self._install, host=target[0], port=target[1], open_session=(agent, session)
+                self._install, host=server.host, port=server.port, open_session=(agent, session)
             )
 
     def _browser_url(self, page: str) -> str:
@@ -274,13 +278,15 @@ class ApplicationFacade:
 
         In the access mode ``authenticated`` a browser needs a Device: the tray
         asks the server for a one-time login ticket with the server's local
-        access token and opens its sign-in link at the public URL. The server
-        sends every ticket to the WebUI's start page, so ``page`` is not opened
-        there. The installation record is read again: ``vbot application access``
-        changes it while the tray runs.
+        access token and opens its sign-in link at the public URL; the ticket
+        lands the browser on ``page``. A browser that is signed in already keeps
+        its Device. The installation record is read again: ``vbot application
+        access`` changes it while the tray runs. Inside an Agent's Run no ticket
+        is minted.
         """
 
         from cli.application.state import load_installation
+        from cli.device_management import run_refusal
         from cli.device_pairing import device_name
         from cli.rpc_client import rpc_call
 
@@ -292,7 +298,15 @@ class ApplicationFacade:
         access = install.access
         if access is None or access.mode != "authenticated" or access.public_url is None:
             return f"{target.url}{page}"
-        result = rpc_call(target, "auth.login_ticket", {"name": device_name("Browser", _host())})
+        refusal = run_refusal(
+            "Signing a browser in", "open vBot yourself from the tray or the Desktop"
+        )
+        if refusal is not None:
+            raise ApplicationError(refusal)
+        params = {"name": device_name("Browser", _host())}
+        if page:
+            params["next"] = page
+        result = rpc_call(target, "auth.login_ticket", params)
         if not result.ok:
             if result.failure is not None and result.failure.code == "auth_disabled":
                 return f"{target.url}{page}"
@@ -484,13 +498,15 @@ class ApplicationFacade:
     def _monitor_target(self) -> ServerInstance | None:
         if self._install.owns_server:
             return self._server_target()
-        target = _desktop_target()
-        if target is None:
+        from cli.application.desktop import desktop_server
+
+        server = desktop_server()
+        if server is None:
             return None
-        if self._desktop_server is None or self._desktop_server[0] != target:
+        if self._desktop_server is None or self._desktop_server[0] != server.origin:
             from cli._server_target import resolve_instance
 
-            self._desktop_server = (target, resolve_instance(host=target[0], port=target[1]))
+            self._desktop_server = (server.origin, resolve_instance(url=server.origin))
         return self._desktop_server[1]
 
     def _update_running(self) -> bool:
@@ -669,20 +685,6 @@ def _host() -> str:
         return socket.gethostname()
     except OSError:
         return ""
-
-
-def _desktop_target() -> tuple[str, int] | None:
-    """Return the server the Desktop last used, which a Desktop Client tray follows."""
-
-    try:
-        from desktop.settings import read_last_used
-    except ImportError:
-        return None
-    target = read_last_used()
-    if target is None:
-        return None
-    host, port = target.get("host"), target.get("port")
-    return (host, port) if isinstance(host, str) and isinstance(port, int) else None
 
 
 def _canonical_or_empty(value: str) -> str:
