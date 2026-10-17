@@ -25,7 +25,11 @@ from core.settings.normalizers import (
 from core.utils.errors import ConfigError
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.workers import BoundedWorkerPool
-from server.events import RESOURCE_KIND_MODELS, RESOURCE_KIND_PROVIDERS
+from server.events import (
+    RESOURCE_KIND_DATA_STORE,
+    RESOURCE_KIND_MODELS,
+    RESOURCE_KIND_PROVIDERS,
+)
 from server.rpc._mutations import serialized_mutation, serialized_read
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -229,6 +233,7 @@ async def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
             )
 
     previous = existing_custom.get(provider_id)
+    credentials_changed = False
     try:
         await _CONNECTION_WORKERS.run(
             runtime.storage.save_custom_provider_settings,
@@ -243,8 +248,13 @@ async def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
                 custom_provider_credential_key(provider_id),
                 api_key.strip(),
             )
+            credentials_changed = True
         elif previous is not None and previous["auth"] == "api_key" and provider["auth"] == "none":
-            await _CONNECTION_WORKERS.run(_remove_custom_provider_credentials, runtime, provider_id)
+            credentials_changed = bool(
+                await _CONNECTION_WORKERS.run(
+                    _remove_custom_provider_credentials, runtime, provider_id
+                )
+            )
         await runtime.reload_environment_credentials_async()
         item = next(
             item
@@ -256,6 +266,8 @@ async def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
 
     publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
     publish_resource_changed(state, RESOURCE_KIND_MODELS)
+    if credentials_changed:
+        publish_resource_changed(state, RESOURCE_KIND_DATA_STORE)
     _LOGGER.info(
         "Custom Provider saved (provider=%s auth=%s models=%s)",
         provider_id,
@@ -313,6 +325,8 @@ async def _delete_custom_provider(state: Any, params: JsonObject) -> JsonObject:
 
     publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
     publish_resource_changed(state, RESOURCE_KIND_MODELS)
+    if credentials_removed:
+        publish_resource_changed(state, RESOURCE_KIND_DATA_STORE)
     _LOGGER.info("Custom Provider deleted (provider=%s)", provider_id)
     return {
         "provider_id": provider_id,
@@ -424,8 +438,10 @@ async def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    # A credential change immediately alters which models are selectable.
+    # A credential change immediately alters which models are selectable, and the
+    # Secret Store's counts are part of the data-store status.
     publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
+    publish_resource_changed(state, RESOURCE_KIND_DATA_STORE)
     if previous_value != value:
         _LOGGER.info(
             "Provider credential saved (provider=%s connection=%s configured=true usable=%s)",
@@ -490,9 +506,11 @@ async def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    # A credential change immediately alters which models are selectable.
+    # A credential change immediately alters which models are selectable, and the
+    # Secret Store's counts are part of the data-store status.
     publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
     if removed:
+        publish_resource_changed(state, RESOURCE_KIND_DATA_STORE)
         _LOGGER.info(
             "Provider credential removed (provider=%s connection=%s configured=%s usable=%s)",
             provider_id,
