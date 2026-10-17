@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import sys
 import threading
@@ -288,6 +289,7 @@ class FakeWebview:
         self.start_calls: list[dict[str, Any]] = []
         self.start_func: Callable[[], Any] | None = None
         self.launch_events: list[str] | None = None
+        self.settings: dict[str, Any] = {"OPEN_EXTERNAL_LINKS_IN_BROWSER": False}
 
     def create_window(self, title: str, **kwargs: Any) -> FakeWindow:
         self.created_windows.append((title, kwargs))
@@ -875,7 +877,12 @@ def test_launch_creates_the_window_before_one_gui_loop(tmp_path: Path, icon_exis
     assert "menu" not in start
     assert start["private_mode"] is False
     assert start["storage_path"] == str(tmp_path / desktop_main.WEBVIEW_STORAGE_DIR_NAME)
+    if sys.platform != "win32":
+        # The profile holds the WebUI's sign-in cookies.
+        assert stat.S_IMODE(Path(start["storage_path"]).stat().st_mode) == 0o700
     assert start.get("icon") == (str(icon) if icon_exists else None)
+    # A page's new window opens in the default browser, never in this window.
+    assert fake_webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] is True
 
 
 def test_launch_restores_and_persists_the_window_size(tmp_path: Path) -> None:

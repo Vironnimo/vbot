@@ -20,7 +20,7 @@ from cli.server_management import (
     ServerInstance,
     WebUIProbeResult,
 )
-from core.utils.config import VBOT_ROOT
+from core.utils.config import VBOT_ROOT, Config
 from tests.cli.cli_test_support import make_instance
 
 TARGET_FLAGS = ("--host", "localhost", "--port", "8765", "--data-dir", "data")
@@ -142,7 +142,9 @@ def test_desktop_forwards_only_the_supplied_target_flags(
     exit_code = cli_main.run(argv, launch_desktop_fn=launch)
 
     assert exit_code == 0
-    assert launches == [list(flags)]
+    # The Desktop signs in to this computer's own server like the CLI does.
+    data_dir = str(Config().data_dir.expanduser().resolve())
+    assert launches == [[*flags, "--server-data-dir", data_dir]]
     assert capsys.readouterr().out.strip()
 
 

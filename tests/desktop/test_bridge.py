@@ -17,6 +17,7 @@ from desktop.bridge import BridgeError, DesktopBridge, configure_bridge_logging
 from desktop.connection import ConnectionController
 from desktop.main import DesktopProbeResult, DesktopTarget
 from desktop.page_events import PageEventDispatcher
+from desktop.page_permissions import PagePermissions
 from desktop.restart import RestartError
 from desktop.speech.microphone import MicrophoneService
 from desktop.system_actions import DesktopSystemActions
@@ -40,6 +41,7 @@ VOICE_METHODS = {
 
 
 MICROPHONE_METHODS = {"getMicrophone", "setMicrophone", "listMicrophones"}
+OWN_SERVER = "https://own.example.com"
 
 
 class FakeVoice:
@@ -72,9 +74,23 @@ class FakeHotkey:
         return {**self.status(), "enabled": True}
 
 
+def _page_permissions(
+    url: Callable[[], str | None] = lambda: OWN_SERVER,
+    confirm: Callable[[str, str], bool] = lambda _title, _message: False,
+) -> PagePermissions:
+    """Permissions for the loaded page at ``url``; the installation's own server is OWN_SERVER."""
+    permissions = PagePermissions(
+        page_url=url, own_server=lambda page: page == OWN_SERVER, confirm=confirm
+    )
+    permissions.page_loaded()
+    return permissions
+
+
 def _bridge(*, error: Exception | None = None, **kwargs: Any) -> tuple[DesktopBridge, FakeVoice]:
+    """A bridge whose page is the installation's own server's, unless ``permissions`` say."""
     voice = FakeVoice(error)
     kwargs.setdefault("microphone", cast(MicrophoneService, FakeVoice()))
+    kwargs.setdefault("permissions", _page_permissions())
     return DesktopBridge(voice=cast(VoiceController, voice), **kwargs), voice
 
 
@@ -102,6 +118,7 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
         "getZoom",
         "setZoom",
         "connect",
+        "startPairing",
         "listServers",
         "addServer",
         "removeServer",
@@ -122,6 +139,13 @@ def test_pywebview_reads_the_real_parameter_names() -> None:
         "content_base64",
     ]
     assert inspect.getfullargspec(bridge.addServer).args[1:] == ["host", "port", "label"]
+    assert inspect.getfullargspec(bridge.connect).args[1:] == ["host", "port", "screen"]
+    assert inspect.getfullargspec(bridge.startPairing).args[1:] == [
+        "host",
+        "port",
+        "name",
+        "screen",
+    ]
 
 
 # -- Error contract --------------------------------------------------------------------
@@ -422,8 +446,11 @@ def test_shortcut_methods_delegate(owner: str, get: str, set: str) -> None:
 
 
 def _server_bridge(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str = "webui_available"
-) -> tuple[DesktopBridge, list[tuple[str, int]]]:
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str = "webui_available",
+    **kwargs: Any,
+) -> tuple[DesktopBridge, list[tuple[str, int]], ConnectionController]:
     """A bridge over a real connection controller whose probe records its targets."""
 
     monkeypatch.setattr(desktop_connection, "uuid4", lambda: SimpleNamespace(hex="s1"))
@@ -436,25 +463,31 @@ def _server_bridge(
         return DesktopProbeResult(status=status, target=target)
 
     controller = ConnectionController(settings_file=tmp_path / "settings.json", probe=probe)
-    bridge, _ = _bridge(connection=controller)
-    return bridge, probed
+    bridge, _ = _bridge(connection=controller, **kwargs)
+    return bridge, probed, controller
 
 
 @pytest.mark.parametrize("method", ["connect", "selectServer"])
 def test_connecting_returns_the_prepared_result_for_javascript_navigation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
-    bridge, probed = _server_bridge(tmp_path, monkeypatch)
-    failing, failing_probed = _server_bridge(
+    bridge, probed, controller = _server_bridge(tmp_path, monkeypatch)
+    failing, failing_probed, failing_controller = _server_bridge(
         tmp_path / "failing", monkeypatch, "server_unreachable"
     )
 
-    assert getattr(bridge, method)("pi.lan", 9000) == {
+    def call(target: DesktopBridge, owner: ConnectionController) -> dict[str, Any]:
+        # The connection screen sends its key with connect.
+        screen = (owner.screen_key,) if method == "connect" else ()
+        result: dict[str, Any] = getattr(target, method)("pi.lan", 9000, *screen)
+        return result
+
+    assert call(bridge, controller) == {
         "status": "webui_available",
         "url": "http://pi.lan:9000/?accessor=desktop&desktop_session=s1",
     }
     assert probed == [("pi.lan", 9000)]
-    failure = getattr(failing, method)("pi.lan", 9000)
+    failure = call(failing, failing_controller)
     assert set(failure) == {"status", "error_title", "error_body"}
     assert failure["status"] == "server_unreachable"
     # A connect the user starts fails at once; only the launch connect waits.
@@ -468,7 +501,7 @@ def test_connecting_returns_the_prepared_result_for_javascript_navigation(
 def test_ports_are_coerced_where_possible(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, port: Any, probed_port: int | None
 ) -> None:
-    bridge, probed = _server_bridge(tmp_path, monkeypatch)
+    bridge, probed, _ = _server_bridge(tmp_path, monkeypatch)
 
     result = bridge.selectServer("pi.lan", port)
 
@@ -483,13 +516,27 @@ def test_ports_are_coerced_where_possible(
 class FakeSignInConnection:
     """The sign-in part of the connection delegate, recording what the bridge asks."""
 
+    SCREEN = "screen-key"
+
     def __init__(self) -> None:
         self.calls: list[tuple[Any, ...]] = []
+
+    def is_screen(self, key: Any) -> bool:
+        return isinstance(key, str) and key == self.SCREEN
+
+    def is_remembered(self, host: Any, port: Any) -> bool:
+        return True
 
     def prepare_connect(
         self, host: str, port: Any, label: str | None = None, *, on_screen: bool = False
     ) -> SimpleNamespace:
         self.calls.append(("prepare_connect", host, port, on_screen))
+        return SimpleNamespace(
+            to_bridge_payload=lambda: {"status": "pairing_required", "offer": {"name": "PC"}}
+        )
+
+    def start_pairing(self, host: str, port: Any, name: Any = None) -> SimpleNamespace:
+        self.calls.append(("start_pairing", host, port, name))
         return SimpleNamespace(
             to_bridge_payload=lambda: {"status": "pairing_required", "pairing": {"code": "K7M2"}}
         )
@@ -503,27 +550,130 @@ class FakeSignInConnection:
         return False
 
 
-def test_the_connection_screen_shows_a_pairing_and_can_end_it() -> None:
+def test_only_the_connection_screen_connects_pairs_and_forgets_a_sign_in() -> None:
     connection = FakeSignInConnection()
     bridge, _ = _bridge(connection=connection)
+    server, screen = "https://vbot.example.com", FakeSignInConnection.SCREEN
 
-    # The connection screen shows a pairing's outcome; a WebUI page knows only its start.
-    assert bridge.connect("https://vbot.example.com", None)["pairing"] == {"code": "K7M2"}
-    assert bridge.selectServer("https://vbot.example.com", None)["status"] == "pairing_required"
+    # The screen offers pairing and asks for the code; a WebUI page knows only the offer's start.
+    assert bridge.connect(server, None, screen)["offer"] == {"name": "PC"}
+    assert bridge.startPairing(server, "443", "Work laptop", screen)["pairing"] == {"code": "K7M2"}
+    assert bridge.selectServer(server, None)["status"] == "pairing_required"
     assert bridge.cancelPairing() == {"cancelled": True}
-    assert bridge.forgetSignIn("https://vbot.example.com", None) == {"forgotten": False}
+    assert bridge.forgetSignIn(server, None, screen) == {"forgotten": False}
+    # A page without the screen's key is refused before anything happens.
+    for refused in (
+        lambda: bridge.connect(server, None),
+        lambda: bridge.startPairing(server, 443, "Work laptop", "guessed"),
+        lambda: bridge.forgetSignIn(server, None, None),
+    ):
+        with pytest.raises(BridgeError, match="^connection_screen_only$"):
+            refused()
     assert connection.calls == [
-        ("prepare_connect", "https://vbot.example.com", None, True),
-        ("prepare_connect", "https://vbot.example.com", None, False),
+        ("prepare_connect", server, None, True),
+        ("start_pairing", server, 443, "Work laptop"),
+        ("prepare_connect", server, None, False),
         ("cancel_pairing",),
-        ("forget_sign_in", "https://vbot.example.com", None),
+        ("forget_sign_in", server, None),
     ]
+
+
+class ScriptedConfirm:
+    """The native yes/no dialog: records each question and answers from a script."""
+
+    def __init__(self, *answers: bool) -> None:
+        self.answers = list(answers)
+        self.questions: list[tuple[str, str]] = []
+
+    def __call__(self, title: str, message: str) -> bool:
+        self.questions.append((title, message))
+        return self.answers.pop(0)
+
+
+def test_another_servers_page_asks_the_user_before_it_acts_on_the_desktop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = ["https://other.example.com/chat"]
+    confirm = ScriptedConfirm(False, True, True, False, True, False)
+    permissions = _page_permissions(lambda: page[0], confirm)
+    bridge, probed, controller = _server_bridge(
+        tmp_path,
+        monkeypatch,
+        permissions=permissions,
+        system_actions=DesktopSystemActions(
+            clipboard_writer=lambda _text: None, clipboard_reader=lambda: "secret"
+        ),
+    )
+    model = base64.b64encode(b"tflite-model").decode("ascii")
+
+    # Selecting a server that is not remembered adds it: declined, nothing happens.
+    with pytest.raises(BridgeError, match="^declined$"):
+        bridge.selectServer("pi.lan", 9000)
+    assert (probed, controller.list_servers()) == ([], [])
+    # Allowed, it connects; a remembered server is selected without asking.
+    assert bridge.selectServer("pi.lan", 9000)["status"] == "webui_available"
+    bridge.selectServer("pi.lan", 9000)
+    # The clipboard is asked for once per origin while the Desktop runs.
+    assert bridge.getClipboardText() == "secret"
+    assert bridge.getClipboardText() == "secret"
+    # Removing a server and installing a wake word model are asked each time.
+    with pytest.raises(BridgeError, match="^declined$"):
+        bridge.removeServer("pi.lan", 9000)
+    assert [entry.host for entry in controller.list_servers()] == ["pi.lan"]
+    assert bridge.importWakewordModel("evil\u202e\nname.tflite", model) == {"from": "import_model"}
+    # Connecting belongs to the connection screen alone; no question is asked.
+    with pytest.raises(BridgeError, match="^connection_screen_only$"):
+        bridge.connect("pi.lan", 9000)
+
+    titles = [title for title, _ in confirm.questions]
+    assert titles == [
+        "Add a server",
+        "Add a server",
+        "Paste from the clipboard",
+        "Remove a server",
+        "Install a wake word model",
+    ]
+    # Each question names the asking page and what it asks for, in plain text.
+    assert confirm.questions[0][1].startswith(
+        "The page of https://other.example.com asks to add pi.lan:9000"
+    )
+    assert "model “evil name.tflite”" in confirm.questions[4][1]
+
+    # A page that sends the window to the own server right after its call is still asked.
+    page[0] = f"{OWN_SERVER}/"
+    with pytest.raises(BridgeError, match="^declined$"):
+        bridge.removeServer("pi.lan", 9000)
+    assert confirm.questions[5][1].startswith("A page asks to remove pi.lan:9000")
+    # The installation's own server's page, once loaded, is trusted like the Desktop.
+    permissions.page_loaded()
+    assert bridge.removeServer("pi.lan", 9000) == {"removed": True}
+    assert len(confirm.questions) == 6
+    assert probed == [("pi.lan", 9000), ("pi.lan", 9000)]
+
+
+def test_without_a_way_to_ask_another_servers_page_is_refused() -> None:
+    def failing_dialog(_title: str, _message: str) -> bool:
+        raise RuntimeError("no window")
+
+    asking, _ = _bridge(
+        permissions=_page_permissions(lambda: "https://other.example.com", failing_dialog),
+        system_actions=DesktopSystemActions(clipboard_reader=lambda: "secret"),
+    )
+    unasked = DesktopBridge(
+        voice=cast(VoiceController, FakeVoice()),
+        microphone=cast(MicrophoneService, FakeVoice()),
+        system_actions=DesktopSystemActions(clipboard_reader=lambda: "secret"),
+    )
+
+    for bridge in (asking, unasked):
+        with pytest.raises(BridgeError, match="^declined$"):
+            bridge.getClipboardText()
 
 
 def test_servers_are_remembered_listed_with_the_active_one_and_forgotten(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    bridge, probed = _server_bridge(tmp_path, monkeypatch)
+    bridge, probed, controller = _server_bridge(tmp_path, monkeypatch)
     assert bridge.getDesktopCapabilities()["signIn"] is True
     assert bridge.addServer("10.0.0.5", 8500, "") == {
         "host": "10.0.0.5",
@@ -534,7 +684,7 @@ def test_servers_are_remembered_listed_with_the_active_one_and_forgotten(
         {"host": "10.0.0.5", "port": 8500, "scheme": "http", "active": False, "signed_in": False}
     ]
 
-    bridge.connect("pi.lan", 9000)
+    bridge.connect("pi.lan", 9000, controller.screen_key)
     assert bridge.addServer("pi.lan", "9000", "Pi") == {
         "host": "pi.lan",
         "port": 9000,

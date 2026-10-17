@@ -30,7 +30,12 @@ from core.access.config import (
     default_host,
     inferred_access_mode,
 )
-from core.access.local_token import create_local_access_token, remove_local_access_token
+from core.access.local_token import (
+    LocalAccessToken,
+    create_local_access_token,
+    publish_local_access_token,
+    remove_local_access_token,
+)
 from core.access.server_record import (
     RecordedServerAccess,
     read_server_access,
@@ -313,6 +318,8 @@ def main(argv: list[str] | None = None) -> None:
                 await uvicorn_startup(sockets=sockets)
                 # Lifespan readiness precedes binding; only a bound server serves.
                 if server.started:
+                    # Local clients send the token only to the addresses bound now.
+                    _publish_local_token(local_token, server)
                     lifecycle.started(ready_runtime)
 
             def handle_exit(sig: int, frame: FrameType | None) -> None:
@@ -596,6 +603,21 @@ def _installed_version_id() -> str | None:
     if _APP_ROOT.name != "app" or _APP_ROOT.parent.parent.name != "versions":
         return None
     return _APP_ROOT.parent.name
+
+
+def _publish_local_token(token: LocalAccessToken, server: Any) -> None:
+    """Write the local access token file for the addresses the server's sockets hold."""
+    bound = [
+        str(sock.getsockname()[0])
+        for listener in getattr(server, "servers", ())
+        for sock in (listener.sockets or ())
+        if sock.family in (socket.AF_INET, socket.AF_INET6)
+    ]
+    try:
+        publish_local_access_token(token, bound)
+    except OSError as exc:
+        # Local tools then reach a server that requires login only after pairing.
+        _LOGGER.warning("Local access token could not be written (%s)", type(exc).__name__)
 
 
 def _server_listening(server_holder: dict[str, Any]) -> bool:

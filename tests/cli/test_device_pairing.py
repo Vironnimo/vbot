@@ -141,6 +141,7 @@ def test_pairing_stores_the_token_once_the_code_is_approved(
 
     assert code == 0
     assert "Code: K7QM-4XPA" in out and "vbot devices approve K7QM-4XPA" in out
+    assert f"Approve it only in vBot at {ORIGIN}" in out
     assert f"Signed in to {ORIGIN}" in out and f"--url {ORIGIN}" in out
     assert TOKEN not in out + err and POLL_SECRET not in out + err
     assert "Note: Read the server address vbot.example.com as https://vbot.example.com" in err
@@ -294,6 +295,21 @@ def test_pairing_without_a_need_changes_nothing(
         pytest.param(
             httpx.Response(404, text="Not Found"), None, "did not answer like a vBot", id="foreign"
         ),
+        pytest.param(
+            httpx.Response(
+                200,
+                json={
+                    "request_id": "pr_1",
+                    "code": "\x1b]0;owned\x07K7QM-4XPA",
+                    "poll_secret": POLL_SECRET,
+                    "expires_in": 600,
+                    "poll_interval": 2,
+                },
+            ),
+            None,
+            "did not answer like a vBot",
+            id="code-steering-the-terminal",
+        ),
     ],
 )
 def test_a_refused_start_stores_nothing(
@@ -313,16 +329,25 @@ def test_a_refused_start_stores_nothing(
     assert SignInStore().pending(ORIGIN) is None
 
 
-def test_pairing_over_plain_http_to_another_computer_sends_nothing(
-    tmp_path: Path, clock: FakeClock
+@pytest.mark.parametrize(
+    ("url", "requests"),
+    [
+        pytest.param("http://192.168.1.5:8420", [], id="another-computer-sends-nothing"),
+        # Only the status, which the server's local access token could answer.
+        pytest.param("http://127.0.0.1:8420", ["/api/auth/status"], id="loopback-tunnel"),
+    ],
+)
+def test_pairing_over_plain_http_starts_nothing(
+    tmp_path: Path, clock: FakeClock, url: str, requests: list[str]
 ) -> None:
     server = FakeServer()
-    instance = resolve_instance(url="http://192.168.1.5:8420", data_dir=tmp_path / "data")
+    instance = resolve_instance(url=url, data_dir=tmp_path / "data")
 
     result = _pair(instance, server, clock)
 
     assert not result.ok and "https://" in result.message
-    assert server.requests == []
+    assert server.paths == requests
+    assert SignInStore().pending(url) is None
 
 
 @pytest.mark.parametrize(

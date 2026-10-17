@@ -4,12 +4,18 @@
 sign-in; the connection controller decides what the window shows. Per server
 origin it resolves one credential, in this order:
 
-1. the local access token of the installation's own server: only for a
-   loopback address, when the Desktop was started with ``--server-data-dir``
-   (read from ``<data-dir>/runtime/local-access-<port>.token`` at each use);
-2. the device token stored when this Desktop was paired (:mod:`desktop.credentials`);
-3. none: the Desktop has to pair (:meth:`ServerAccess.start_pairing`,
-   :meth:`ServerAccess.await_pairing`).
+1. the local access token of the installation's own server, when the Desktop
+   was started with ``--server-data-dir``: read from
+   ``<data-dir>/runtime/local-access-<port>.token`` at each use and sent only
+   to ``http://`` and a loopback IP literal the server records there as one it
+   listens on (never ``localhost``: a name may resolve to an address another
+   program holds);
+2. for an ``https://`` server, the device token stored when this Desktop was
+   paired (:mod:`desktop.credentials`);
+3. none: an ``https://`` server needs pairing (:meth:`ServerAccess.start_pairing`,
+   :meth:`ServerAccess.await_pairing`); any other server refuses this Desktop
+   (``https_required``). Over plain ``http://`` a device token or a pairing
+   could reach whatever listens at that address, so neither is ever sent there.
 
 The window signs in through a login ticket (:meth:`ServerAccess.sign_in`) that
 lands it on the WebUI page the Desktop asks for. The ticket's redemption gives
@@ -28,11 +34,14 @@ Tokens, tickets, poll secrets and pairing codes never appear in logs.
 
 from __future__ import annotations
 
+import ipaddress
+import json
 import logging
 import platform
 import re
 import threading
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +65,8 @@ ERROR_RATE_LIMITED = "rate_limited"
 ERROR_DEVICES_UNAVAILABLE = "devices_unavailable"
 ERROR_SIGN_IN_FAILED = "sign_in_failed"
 ERROR_SERVER_UNREACHABLE = "server_unreachable"
+#: A server reached over plain ``http://`` that this Desktop cannot sign in to.
+ERROR_HTTPS_REQUIRED = "https_required"
 _PASSED_ON_ERRORS = frozenset({ERROR_ACCESS_DENIED, ERROR_RATE_LIMITED, ERROR_DEVICES_UNAVAILABLE})
 
 TICKET_PATH_PREFIX = "/auth/ticket/"
@@ -68,11 +79,12 @@ DEVICE_NAME_MAX_CHARS = 80
 REQUEST_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 MAX_POLL_WAIT_SECONDS = 60.0
 _LOCAL_TOKEN_PATTERN = re.compile(r"vbl_[A-Za-z0-9_-]{43}")
-_LOCAL_TOKEN_MAX_BYTES = 256
+_LOCAL_TOKEN_MAX_BYTES = 1024
 _TICKET_PATH_PATTERN = re.compile(r"/auth/ticket/[A-Za-z0-9_-]{16,256}")
 _PAIRING_CODE_PATTERN = re.compile(r"[0-9A-Z]{4}-[0-9A-Z]{4}")
 _SECRET_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}")
-_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+#: Characters a device name must not carry (the server refuses them).
+_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 _HOST_ACTOR = "host"
 
 PairingStatus = Literal["approved", "denied", "expired", "cancelled", "failed"]
@@ -172,12 +184,19 @@ class ServerAccess:
         self.window_name = _device_name("vBot Desktop window", computer)
         self._sign_in_lost: Callable[[ServerAddress], None] | None = None
 
+    def is_installation_server(self, server_url: str) -> bool:
+        """Whether ``server_url`` is the installation's own server, signed in to locally."""
+        address = _address(server_url)
+        return address is not None and self._local_token(address) is not None
+
     def set_sign_in_lost_listener(self, listener: Callable[[ServerAddress], None] | None) -> None:
         """Register who learns that a server refused this Desktop's stored sign-in."""
         self._sign_in_lost = listener
 
     def signed_in(self, address: ServerAddress) -> bool:
-        """Whether a device token is stored for the server (pairing done)."""
+        """Whether a device token is stored for the ``https://`` server (pairing done)."""
+        if address.scheme != "https":
+            return False
         stored = self._stored(address)
         return stored is not None and stored.token is not None
 
@@ -190,7 +209,8 @@ class ServerAccess:
         without it the server's start page. A refused local access token is
         read again once (the server writes a new one at each start); a refused
         device token is dropped. Without any valid credential the answer is
-        ``pairing_required``.
+        ``pairing_required`` for an ``https://`` server and ``https_required``
+        for any other.
         """
         params: dict[str, Any] = {"name": self.window_name}
         if landing is not None:
@@ -206,6 +226,8 @@ class ServerAccess:
                 if not isinstance(answer, _Refused):
                     return answer
             logger.warning("%s refused the local access token", address.origin)
+        if address.scheme != "https":
+            return SignIn(error_code=ERROR_HTTPS_REQUIRED)
         stored = self._stored(address)
         if stored is not None and stored.token is not None and stored.device_id is not None:
             answer = self._login_ticket(
@@ -218,12 +240,20 @@ class ServerAccess:
 
     # -- Pairing -----------------------------------------------------------------
 
-    def start_pairing(self, address: ServerAddress) -> PairingRequest:
-        """Ask the server for a pairing code; raises :class:`AccessFailure`."""
-        try:
-            response = self._post(
-                address, PAIR_START_PATH, {"kind": DEVICE_KIND, "name": self.device_name}
+    def start_pairing(self, address: ServerAddress, name: str | None = None) -> PairingRequest:
+        """Ask the server for a pairing code; raises :class:`AccessFailure`.
+
+        ``name`` is the device name the user confirmed (:meth:`pairing_name`);
+        without one, :attr:`device_name`. Only an ``https://`` server is asked
+        (``https_required`` otherwise).
+        """
+        if address.scheme != "https":
+            raise AccessFailure(
+                ERROR_HTTPS_REQUIRED, f"Pairing over plain http:// with {address.origin} refused"
             )
+        name = self.pairing_name(name)
+        try:
+            response = self._post(address, PAIR_START_PATH, {"kind": DEVICE_KIND, "name": name})
         except httpx.RequestError as exc:
             raise AccessFailure(
                 ERROR_SERVER_UNREACHABLE, f"Pairing could not reach {address.origin}"
@@ -263,6 +293,11 @@ class ServerAccess:
             poll_interval=max(1.0, min(poll_interval, MAX_POLL_WAIT_SECONDS)),
             expires_at=self._clock() + expires_in,
         )
+
+    def pairing_name(self, name: Any = None) -> str:
+        """The device name a pairing sends: ``name`` within the server's rules, else the default."""
+        cleaned = _device_name(name, "") if isinstance(name, str) else ""
+        return cleaned or self.device_name
 
     def await_pairing(self, request: PairingRequest, stop: threading.Event) -> PairingOutcome:
         """Poll until the pairing is decided, expires, fails, or ``stop`` is set.
@@ -349,11 +384,16 @@ class ServerAccess:
 
         The local copy goes at once. The server is then asked, in the
         background and best effort, to revoke this Desktop's Device; the
-        browser Device of the window it signed in goes with it.
+        browser Device of the window it signed in goes with it. A sign-in an
+        earlier version stored for a plain ``http://`` server is only deleted:
+        its token is never sent there.
         """
         stored = self._store.remove(address.origin)
         if stored is None or stored.token is None or stored.device_id is None:
             return False
+        if address.scheme != "https":
+            logger.info("Deleted the Desktop's plain-http sign-in for %s", address.origin)
+            return True
         logger.info("Forgot the Desktop sign-in for %s", address.origin)
         credential = _Credential(stored.token, stored.device_id)
         threading.Thread(
@@ -486,6 +526,8 @@ class ServerAccess:
         local = self._local_token(address)
         if local is not None:
             return _Credential(local, _HOST_ACTOR)
+        if address.scheme != "https":
+            return None
         stored = self._stored(address)
         if stored is None or stored.token is None or stored.device_id is None:
             return None
@@ -506,8 +548,17 @@ class ServerAccess:
         return dropped
 
     def _local_token(self, address: ServerAddress) -> str | None:
-        """The installation's local access token for a loopback address, read now."""
-        if self._server_data_dir is None or not address.is_loopback:
+        """The installation's local access token for ``address``, read now.
+
+        Mirrors ``core.access.local_token`` (the Desktop imports nothing of the
+        server): the file is ``{"token": ..., "loopback": [...]}``, and the
+        token goes only to ``http://`` and one of those loopback IP literals
+        on the file's port.
+        """
+        if self._server_data_dir is None or address.scheme != "http":
+            return None
+        literal = _loopback_literal(address.host)
+        if literal is None:
             return None
         path = self._server_data_dir / LOCAL_TOKEN_DIRECTORY / f"local-access-{address.port}.token"
         try:
@@ -518,10 +569,31 @@ class ServerAccess:
         if len(raw) > _LOCAL_TOKEN_MAX_BYTES:
             return None
         try:
-            value = raw.decode("ascii").strip()
-        except UnicodeError:
+            document = json.loads(raw.decode("ascii"))
+        except UnicodeError, ValueError:
             return None
-        return value if _LOCAL_TOKEN_PATTERN.fullmatch(value) else None
+        if not isinstance(document, dict):
+            return None
+        token, loopback = document.get("token"), document.get("loopback")
+        if not isinstance(token, str) or not _LOCAL_TOKEN_PATTERN.fullmatch(token):
+            return None
+        if not isinstance(loopback, list):
+            return None
+        listening = {_loopback_literal(item) for item in loopback if isinstance(item, str)}
+        return token if literal in listening else None
+
+
+def _loopback_literal(host: str) -> str | None:
+    """The compressed form of a loopback IP literal; ``None`` for names and other addresses."""
+    try:
+        address = ipaddress.ip_address(host.strip().removeprefix("[").removesuffix("]"))
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and (
+        address.scope_id is not None or address.ipv4_mapped is not None
+    ):
+        return None
+    return address.compressed if address.is_loopback else None
 
 
 def _address(server_url: str) -> ServerAddress | None:
@@ -574,6 +646,16 @@ def _computer_name() -> str:
 
 def _device_name(base: str, computer: str) -> str:
     """A device name within the server's rules: one line, at most 80 characters."""
-    computer = " ".join(_CONTROL_CHARACTERS.sub(" ", computer).split())
+    base, computer = _one_line(base), _one_line(computer)
     name = f"{base} on {computer}" if computer else base
     return name[:DEVICE_NAME_MAX_CHARS].rstrip()
+
+
+def _one_line(text: str) -> str:
+    """``text`` without control or formatting characters and with single spaces."""
+    return " ".join(
+        "".join(
+            " " if unicodedata.category(character) in _HIDDEN_CATEGORIES else character
+            for character in text
+        ).split()
+    )

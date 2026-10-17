@@ -20,9 +20,9 @@ from core.utils.processes import subprocess_creation_flags
 #: The relaunch contract of ``desktop.restart``: how the Desktop recognizes a
 #: newer active version and starts it.
 RELAUNCH_ENV = "VBOT_DESKTOP_RELAUNCH"
-#: Wildcard bind addresses: the Desktop reaches such a server over loopback.
-_WILDCARD_HOSTS = frozenset({"", "*", "0.0.0.0", "::"})
-_LOOPBACK_HOST = "127.0.0.1"
+#: Wildcard bind addresses and the loopback address the Desktop reaches them at:
+#: the address the server records for its local access token.
+_WILDCARD_LOOPBACK = {"": "127.0.0.1", "*": "127.0.0.1", "0.0.0.0": "127.0.0.1", "::": "::1"}
 
 
 def open_desktop(
@@ -58,9 +58,7 @@ def open_desktop(
                 arguments.extend(("--port", str(port)))
         elif install.owns_server:
             assert install.server_host is not None and install.server_port is not None
-            server_host = (
-                _LOOPBACK_HOST if install.server_host in _WILDCARD_HOSTS else install.server_host
-            )
+            server_host = _WILDCARD_LOOPBACK.get(install.server_host, install.server_host)
             arguments.extend(("--host", server_host, "--port", str(install.server_port)))
             if install.server_data_directory is not None:
                 arguments.extend(("--server-data-dir", install.server_data_directory))

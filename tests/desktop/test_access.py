@@ -14,6 +14,7 @@ import pytest
 from desktop.access import (
     ERROR_ACCESS_DENIED,
     ERROR_DEVICES_UNAVAILABLE,
+    ERROR_HTTPS_REQUIRED,
     ERROR_RATE_LIMITED,
     ERROR_SIGN_IN_FAILED,
     AccessFailure,
@@ -109,23 +110,47 @@ def test_a_refused_local_access_token_is_read_again_once(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
-    ("address", "data_dir"),
+    ("address", "data_dir", "outcome"),
     [
-        pytest.param(REMOTE, True, id="remote-server"),
-        pytest.param(ServerAddress("http", "127.0.0.1", 9999), True, id="other-port"),
-        pytest.param(LOOPBACK, False, id="no-data-dir"),
+        pytest.param(REMOTE, True, SignIn(pairing_required=True), id="remote-server"),
+        pytest.param(ServerAddress("http", "127.0.0.1", 9999), True, None, id="other-port"),
+        pytest.param(LOOPBACK, False, None, id="no-data-dir"),
+        # A name may resolve to an address another program holds.
+        pytest.param(ServerAddress("http", "localhost", 8420), True, None, id="name"),
+        # The server listens on 127.0.0.1 only; another program may hold ::1.
+        pytest.param(ServerAddress("http", "::1", 8420), True, None, id="unbound-loopback"),
     ],
 )
 def test_the_local_access_token_never_leaves_its_own_loopback_server(
-    tmp_path: Path, address: ServerAddress, data_dir: bool
+    tmp_path: Path, address: ServerAddress, data_dir: bool, outcome: SignIn | None
 ) -> None:
     server = FakeAccessServer()
     server.local_token = LOCAL_TOKEN
     write_local_token(tmp_path / "data", 8420)
     access = build_access(server, tmp_path, server_data_dir=tmp_path / "data" if data_dir else None)
 
-    assert access.sign_in(address) == SignIn(pairing_required=True)
+    # A plain-http server this Desktop cannot sign in to is no pairing either.
+    expected = SignIn(error_code=ERROR_HTTPS_REQUIRED) if outcome is None else outcome
+    assert access.sign_in(address) == expected
     assert access.header(address.url) is None
+    assert server.requests == []
+
+
+def test_a_device_token_and_a_pairing_never_go_over_plain_http(tmp_path: Path) -> None:
+    server = FakeAccessServer()
+    lan = ServerAddress("http", "192.168.1.5", 8420)
+    # An earlier version paired over plain http://.
+    access, store, _ = _paired(server, tmp_path, lan)
+
+    assert access.sign_in(lan) == SignIn(error_code=ERROR_HTTPS_REQUIRED)
+    assert access.header(lan.url) is None
+    assert access.signed_in(lan) is False
+    with pytest.raises(AccessFailure) as failure:
+        access.start_pairing(lan)
+    assert failure.value.error_code == ERROR_HTTPS_REQUIRED
+    # Forgetting it deletes the local copy without sending the token anywhere.
+    assert access.forget(lan) is True
+    assert store.get(lan.origin) is None
     assert server.requests == []
 
 

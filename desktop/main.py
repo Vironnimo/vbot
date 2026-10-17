@@ -616,13 +616,14 @@ def _run_desktop(
     from desktop.access import ServerAccess
     from desktop.bridge import DesktopBridge
     from desktop.connection import ConnectionController
-    from desktop.connection_screen import build_connection_html
     from desktop.credentials import DEVICE_TOKENS_FILE_NAME, DeviceTokenStore
     from desktop.dictation.controller import DictationController
     from desktop.hotkey import LIVE_VOICE_HOTKEY, HotkeyController, HotkeyHandlers
     from desktop.page_events import PageEventDispatcher
+    from desktop.page_permissions import PagePermissions
     from desktop.speech.cues import CuePlayer
     from desktop.speech.microphone import MicrophoneService
+    from desktop.system_actions import DesktopSystemActions, guard_page_windows
     from desktop.zoom import DesktopZoom
 
     _http.prewarm_outbound_http()
@@ -681,15 +682,30 @@ def _run_desktop(
         else None
     )
     zoom = DesktopZoom(settings_path=settings_file)
+    system_actions = DesktopSystemActions()
+
+    def confirm(title: str, message: str) -> bool:
+        # A native dialog the page cannot draw or answer; bridge calls run on their own thread.
+        return bool(window_holder) and bool(
+            window_holder[0].create_confirmation_dialog(title, message)
+        )
+
+    permissions = PagePermissions(
+        page_url=lambda: _current_page_url(window_holder),
+        own_server=access.is_installation_server,
+        confirm=confirm,
+    )
     bridge = DesktopBridge(
         voice=voice,
         microphone=microphone,
         connection=controller,
+        system_actions=system_actions,
         live_hotkey=live_hotkey,
         dictation=dictation,
         secure_origins=secure_origins,
         restart=desktop_restart,
         zoom=zoom,
+        permissions=permissions,
     )
 
     # Voice and dictation follow the window: every successful in-window connect
@@ -704,7 +720,7 @@ def _run_desktop(
     # The window must be created with initial content before the GUI loop; the
     # connection screen is a safe neutral page that the post-loop entry callable
     # replaces once the loop is live (navigating to the WebUI on connect).
-    initial_html = build_connection_html(servers=controller.list_servers())
+    initial_html = controller.connection_screen_html()
     placement = restart_request.placement if restart_request is not None else None
     window_layout = resolve_window_layout(
         (placement.width, placement.height)
@@ -746,6 +762,7 @@ def _run_desktop(
     controller.attach_window(window)
     # Continues a window sign-in: ticket first, then the WebUI.
     window.events.loaded += controller.page_loaded
+    window.events.loaded += permissions.page_loaded
     page_events.attach_window(window)
     instance.listen(
         _activation_handler(
@@ -767,7 +784,13 @@ def _run_desktop(
     # storage_path pins it beside the Desktop settings file instead of the
     # shared %APPDATA%\pywebview folder.
     start_kwargs["private_mode"] = False
-    start_kwargs["storage_path"] = str(desktop_config_directory / WEBVIEW_STORAGE_DIR_NAME)
+    storage_path = desktop_config_directory / WEBVIEW_STORAGE_DIR_NAME
+    _make_private_directory(storage_path)
+    start_kwargs["storage_path"] = str(storage_path)
+    # The other choice loads a page's new window in this window, bridge included.
+    settings = getattr(webview, "settings", None)
+    if isinstance(settings, dict):
+        settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
 
     connection_entry = _select_launch_entry(
         controller,
@@ -777,6 +800,10 @@ def _run_desktop(
     )
 
     def start_visible_services() -> None:
+        # The backend is loaded now; a page's new windows open as web links only,
+        # in the default browser, before the window shows any server's page.
+        if guard_page_windows(system_actions) == 0:
+            logger.warning("Desktop found no pywebview backend to guard new windows in")
         # The lightweight shell must become visible before any network probe or
         # optional ML/audio initialization. Connect first so Voice follows the
         # window's resolved target; Voice starts listening only when enabled.
@@ -813,6 +840,32 @@ def _run_desktop(
         voice.close()
         cues.close()
         page_events.close()
+
+
+def _current_page_url(window_holder: list[Any]) -> str | None:
+    """The window's top-level URL; ``None`` before the window exists or for inline HTML."""
+    if not window_holder:
+        return None
+    try:
+        url = window_holder[0].get_current_url()
+    except Exception:
+        return None
+    return url if isinstance(url, str) else None
+
+
+def _make_private_directory(path: Path) -> None:
+    """Create the WebView profile directory for the user alone on POSIX.
+
+    It holds the WebUI's sign-in cookies. On Windows the per-user application
+    data folder it lives in is private already.
+    """
+    if sys.platform == "win32":
+        return
+    try:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.chmod(0o700)
+    except OSError:
+        logger.warning("The Desktop could not make %s private", path, exc_info=True)
 
 
 class _WindowState:

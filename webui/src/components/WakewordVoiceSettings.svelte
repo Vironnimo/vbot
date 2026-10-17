@@ -23,6 +23,7 @@
     deleteWakewordModel,
     importWakewordModel,
     isDesktopAccessor,
+    isDesktopDeclined,
     listWakewordModels,
     retryVoice,
     setVoiceEnabled,
@@ -458,7 +459,8 @@
         variant: 'success',
       });
     } catch (error) {
-      errorToast(error);
+      // The user declined the install in the Desktop's own dialog.
+      if (!isDesktopDeclined(error)) errorToast(error);
     } finally {
       modelActionState = 'idle';
     }

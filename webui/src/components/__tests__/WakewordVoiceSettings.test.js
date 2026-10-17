@@ -13,6 +13,7 @@ vi.mock('svelte', async () => {
 
 vi.mock('$lib/desktopBridge.js', async (importOriginal) => ({
   desktopErrorCode: (await importOriginal()).desktopErrorCode,
+  isDesktopDeclined: (await importOriginal()).isDesktopDeclined,
   isDesktopAccessor: vi.fn(() => true),
   setVoiceEnabled: vi.fn(),
   updateVoiceConfig: vi.fn(),
@@ -852,6 +853,27 @@ describe('WakewordVoiceSettings', () => {
       expect(owner.refresh).toHaveBeenCalledOnce();
       expect(switchByLabel('Listen for Hey Computer')).not.toBeNull();
       expect(desktopBridge.updateVoiceConfig).not.toHaveBeenCalled();
+    });
+
+    it('stays quiet when the user declines the install in the Desktop', async () => {
+      const onToast = vi.fn();
+      desktopBridge.importWakewordModel.mockRejectedValueOnce(
+        new Error('declined'),
+      );
+      await mountPanel({ onToast });
+      const fileInput = document.body.querySelector('input[type="file"]');
+      Object.defineProperty(fileInput, 'files', {
+        configurable: true,
+        value: [new File(['model'], 'hey_computer.tflite')],
+      });
+
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      await waitForCondition(
+        () => desktopBridge.importWakewordModel.mock.calls.length === 1,
+      );
+      await settle();
+
+      expect(onToast).not.toHaveBeenCalled();
     });
 
     it('rejects oversized model files before reading or bridging them', async () => {

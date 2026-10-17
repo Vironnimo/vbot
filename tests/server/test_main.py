@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import socket
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ import pytest
 import uvicorn.server
 
 from core.access.config import access_config
-from core.access.local_token import local_token_path, read_local_access_token
+from core.access.local_token import LocalAccess, local_token_path, read_local_access
 from core.access.server_record import (
     RecordedServerAccess,
     read_server_access,
@@ -72,6 +73,7 @@ def _patch_serving(
     class FakeConfig:
         def __init__(self, app, **kwargs) -> None:
             self.app = app
+            self.host, self.port = kwargs.get("host"), kwargs.get("port")
             calls.append({"app": app, **kwargs})
 
     def start_lines(config: FakeConfig) -> int:
@@ -96,6 +98,10 @@ def _patch_serving(
                 self.config.app["on_stopped"](True)
                 raise SystemExit(uvicorn.server.STARTUP_FAILURE)
             self.started = True
+            bound = SimpleNamespace(
+                family=socket.AF_INET, getsockname=lambda: (self.config.host, self.config.port)
+            )
+            self.servers = [SimpleNamespace(sockets=(bound,))]
 
         def handle_exit(self, sig: int, frame: object) -> None:
             self.should_exit = True
@@ -142,12 +148,14 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
     monkeypatch.setattr(server_management, "schedule_server_restart", schedule)
     monkeypatch.setattr(server_main.asyncio, "get_running_loop", lambda: loop)
 
-    served_tokens: list[str | None] = []
+    served_tokens: list[LocalAccess | None] = []
 
     def run(server: Any) -> None:
         app = server.config.app
-        served_tokens.append(read_local_access_token(tmp_path / "data", 8765))
+        # Published once the server listens, for the addresses it is bound to.
+        served_tokens.append(read_local_access(tmp_path / "data", 8765))
         asyncio.run(server.startup())
+        served_tokens.append(read_local_access(tmp_path / "data", 8765))
         if action == "restart_failure":
             with pytest.raises(RuntimeError):
                 app["request_restart"]()
@@ -187,8 +195,11 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
     assert calls[0]["proxy_headers"] is False
     assert "http" not in calls[0]
     assert calls[0]["app"]["access"] == access_config("local")
-    # The local access token exists exactly while this server runs.
-    assert served_tokens == [calls[0]["app"]["local_access_token"]]
+    # The local access token exists exactly while this server listens.
+    assert served_tokens == [
+        None,
+        LocalAccess(calls[0]["app"]["local_access_token"], 8765, ("127.0.0.1",)),
+    ]
     assert not local_token_path(tmp_path / "data", 8765).exists()
     assert calls[0]["ws_per_message_deflate"] is False
     assert calls[0]["timeout_graceful_shutdown"] == 5

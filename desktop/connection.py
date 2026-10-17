@@ -24,11 +24,20 @@ Two pieces live here:
 A server in the access mode ``authenticated`` needs a sign-in
 (:mod:`desktop.access`): the window opens a login ticket, whose redemption gives
 the WebView its cookie and redirects to ``/``, and then loads the WebUI with the
-Desktop's parameters. Without a credential the connection screen shows a
-pairing code until the pairing is approved, denied or expires, or the user
-cancels it. A ticket never reaches page JavaScript: a connect the page starts
-returns :data:`SIGN_IN_PAGE`, and the controller opens the ticket once that
-page has loaded (:meth:`ConnectionController.page_loaded`).
+Desktop's parameters. Without a credential the connection screen offers
+pairing: it names the server's origin and the device name the server will see,
+which the user may edit, and only the user's "Get a code" asks the server for a
+code (:meth:`ConnectionController.start_pairing`). The code shows until the
+pairing is approved, denied or expires, or the user cancels it. A connect a
+server's page starts never pairs: the window goes to :data:`SIGN_IN_PAGE` and
+then shows the connection screen with the offer. A ticket never reaches page
+JavaScript either: such a connect returns :data:`SIGN_IN_PAGE`, and the
+controller opens the ticket once that page has loaded
+(:meth:`ConnectionController.page_loaded`).
+
+The connection screen carries a key that only it knows
+(:attr:`ConnectionController.screen_key`); the bridge methods that connect,
+pair or forget a sign-in require it, so a server's page cannot call them.
 
 pywebview is imported lazily (like the rest of ``desktop/``) so the backend test
 gate never requires the optional GUI package; tests inject a fake window.
@@ -37,6 +46,7 @@ gate never requires the optional GUI package; tests inject a fake window.
 from __future__ import annotations
 
 import logging
+import secrets
 import threading
 import time
 from collections.abc import Callable
@@ -53,6 +63,7 @@ from desktop.connection_screen import (
     STATUS_PAIRING_EXPIRED,
     STATUS_PAIRING_REQUIRED,
     STATUS_SIGN_IN_FAILED,
+    PairingOffer,
     PairingView,
     build_connection_html,
     connection_error_copy,
@@ -60,6 +71,7 @@ from desktop.connection_screen import (
 from desktop.main import (
     ACCESS_MODE_AUTHENTICATED,
     ACCESSOR_QUERY_PARAM,
+    PROBE_INVALID_TARGET,
     PROBE_SERVER_UNREACHABLE,
     PROBE_WEBUI_AVAILABLE,
     DesktopProbeResult,
@@ -208,9 +220,9 @@ class PreparedConnection:
     themselves.
 
     ``failure`` names a sign-in outcome beside the probe ``result`` (a pairing
-    waiting for approval included). ``ticket_url`` signs the window in and
-    never leaves the Desktop: a bridge caller gets :data:`SIGN_IN_PAGE` as
-    ``navigation_url``.
+    offered or waiting for approval included). ``ticket_url`` signs the window
+    in and never leaves the Desktop: a bridge caller gets :data:`SIGN_IN_PAGE`
+    as ``navigation_url``.
     """
 
     result: DesktopProbeResult
@@ -218,6 +230,7 @@ class PreparedConnection:
     error_title: str | None = None
     error_body: str | None = None
     failure: str | None = None
+    offer: PairingOffer | None = None
     pairing: PairingView | None = None
     ticket_url: str | None = field(default=None, repr=False)
 
@@ -237,6 +250,8 @@ class PreparedConnection:
             payload["error_title"] = self.error_title
         if self.error_body is not None:
             payload["error_body"] = self.error_body
+        if self.offer is not None:
+            payload["offer"] = self.offer.to_payload()
         if self.pairing is not None:
             payload["pairing"] = self.pairing.to_payload()
         return payload
@@ -244,11 +259,14 @@ class PreparedConnection:
 
 @dataclass(frozen=True)
 class _Attempt:
-    """One connect attempt: the probe, then the sign-in the server needs."""
+    """One connect attempt: the probe, then the sign-in the server needs.
+
+    ``pair`` means the server needs this Desktop paired; the user decides.
+    """
 
     result: DesktopProbeResult
     ticket_path: str | None = field(default=None, repr=False)
-    pairing: PairingRequest | None = None
+    pair: bool = False
     failure: str | None = None
 
 
@@ -278,6 +296,20 @@ class _PairingWait:
     # The connection screen shows the code; failures are shown there too.
     on_screen: bool
     stop: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass(eq=False)
+class _Offer:
+    """The server the connection screen offers to pair with, and where to go afterwards."""
+
+    view: PairingOffer
+    target: DesktopTarget
+    label: str | None
+    open_session: SessionLink | None
+    location: str | None
+    # Until when a page that started the connect may still reach SIGN_IN_PAGE,
+    # where the window then shows the connection screen with the offer.
+    screen_due: float | None = None
 
 
 @dataclass(eq=False)
@@ -454,6 +486,10 @@ class ConnectionController:
         self._window_lock = threading.Lock()
         self._active_address: ServerAddress | None = None
         self._landing: _Landing | None = None
+        self._offer: _Offer | None = None
+        # Only the connection screen carries it: bridge calls that connect,
+        # pair or forget a sign-in must come from that screen.
+        self._screen_key = secrets.token_urlsafe(32)
         # Set once a lost sign-in of the active server was handled; reset by the
         # next connect, so repeated refusals never loop the window.
         self._lost_handled = False
@@ -471,6 +507,22 @@ class ConnectionController:
         """Bind the live pywebview window the controller navigates."""
 
         self._window = window
+
+    @property
+    def screen_key(self) -> str:
+        """The key the connection screen sends with connect, pairing and forget calls."""
+
+        return self._screen_key
+
+    def is_screen(self, key: Any) -> bool:
+        """Whether a bridge call carries the connection screen's key."""
+
+        return isinstance(key, str) and secrets.compare_digest(key, self._screen_key)
+
+    def connection_screen_html(self) -> str:
+        """The connection screen with no inline error, for the window's first content."""
+
+        return self._connection_html(None)
 
     def set_active_server_listener(self, listener: Callable[[str], None] | None) -> None:
         """Register a callback invoked with the base URL on each successful connect."""
@@ -523,6 +575,15 @@ class ConnectionController:
         """Remember a server, keyed by scheme, host and port."""
 
         return add_server(host, port, label, settings_file=self._settings_file)
+
+    def is_remembered(self, host: Any, port: Any) -> bool:
+        """Whether ``host:port`` (or an ``https://`` address) is a remembered server."""
+
+        try:
+            key = ServerEntry.for_address(parse_server_address(host, port)).key
+        except ValueError:
+            return False
+        return any(entry.key == key for entry in self.list_servers())
 
     def remove_server(self, host: str, port: Any) -> bool:
         """Forget a remembered server and its stored sign-in."""
@@ -658,24 +719,70 @@ class ConnectionController:
         :meth:`launch_connect`, but navigation is returned as data. Failed
         attempts carry the inline error copy. This is the bridge-safe seam:
         pywebview can deliver the payload to JavaScript before that document
-        applies the outcome. A server that needs pairing returns its code
-        (``pairing``, also as error copy for callers that know no pairing); the
-        window connects once the pairing is approved. ``on_screen`` means the
-        connection screen shows the code, so a pairing that fails is shown
-        there. It ends the launch connect and a pending pairing first, so the
-        user's choice wins.
+        applies the outcome. A server that needs pairing returns the offer
+        (``offer``, also as error copy) when ``on_screen`` (the connection
+        screen calls); a server's page is sent to :data:`SIGN_IN_PAGE`
+        instead, where the window shows the connection screen with the offer.
+        It ends the launch connect and a pending pairing first, so the user's
+        choice wins.
         """
 
         self._end_pending("user_connect")
         target = self._build_target(host, port)
         attempt = self._attempt(target, self._app_path(None))
         prepared = self._settle(target, attempt, label)
-        if attempt.pairing is not None and prepared.pairing is not None:
-            with self._lock:
-                self._wait_for_pairing_locked(
-                    _PairingWait(attempt.pairing, target, label, None, None, on_screen)
-                )
-        return prepared
+        if prepared.offer is None or on_screen:
+            return prepared
+        with self._window_lock:
+            if self._offer is not None:
+                self._offer.screen_due = self._clock() + SIGN_IN_LANDING_SECONDS
+        return replace(prepared, offer=None, navigation_url=SIGN_IN_PAGE)
+
+    def start_pairing(self, host: str, port: Any, name: Any = None) -> PreparedConnection:
+        """Ask the server for a pairing code with the device ``name`` the user confirmed.
+
+        Only the connection screen calls this, after it offered the server. The
+        returned ``pairing`` holds the code; the window connects once the
+        pairing is approved (to the Session and place the offered connect was
+        for) and the screen shows a pairing that fails.
+        """
+
+        self._end_pending("user_connect")
+        target = self._build_target(host, port)
+        address = target.address
+        if address is None or self._access is None:
+            return _failed(DesktopProbeResult(PROBE_INVALID_TARGET, target), PROBE_INVALID_TARGET)
+        result = DesktopProbeResult(PROBE_WEBUI_AVAILABLE, target, ACCESS_MODE_AUTHENTICATED)
+        with self._window_lock:
+            offer = self._offer
+            if offer is None or offer.target.address != address:
+                offer = None
+        try:
+            request = self._access.start_pairing(address, name)
+        except AccessFailure as exc:
+            logger.warning("Desktop pairing with %s failed to start (%s)", address.display, exc)
+            return _failed(result, exc.error_code)
+        view = PairingView(
+            code=request.code, server=address.display, origin=address.origin, target=target
+        )
+        logger.info("Desktop waiting for %s to approve its pairing", address.display)
+        wait = _PairingWait(
+            request,
+            target,
+            offer.label if offer is not None else None,
+            offer.open_session if offer is not None else None,
+            offer.location if offer is not None else None,
+            on_screen=True,
+        )
+        with self._lock:
+            self._wait_for_pairing_locked(wait)
+        return PreparedConnection(
+            result=result,
+            failure=STATUS_PAIRING_REQUIRED,
+            error_title=view.title,
+            error_body=view.body,
+            pairing=view,
+        )
 
     def cancel_pairing(self) -> bool:
         """End a pairing waiting for approval; reports whether one was waiting.
@@ -709,6 +816,21 @@ class ConnectionController:
             url = window.get_current_url()
         except Exception:
             logger.debug("The Desktop window has no current URL", exc_info=True)
+            return
+        show_offer: PairingOffer | None = None
+        with self._window_lock:
+            offer = self._offer
+            if offer is not None and offer.screen_due is not None:
+                if self._clock() > offer.screen_due:
+                    offer.screen_due = None
+                elif url in (None, SIGN_IN_PAGE):
+                    # The page that started the connect left: offer pairing natively.
+                    offer.screen_due = None
+                    show_offer = offer.view
+                else:
+                    return
+        if show_offer is not None:
+            self._show_connection_screen(probe_result=None, offer=show_offer)
             return
         with self._window_lock:
             landing = self._landing
@@ -795,8 +917,8 @@ class ConnectionController:
         """Probe the target; sign in when its server is in the access mode ``authenticated``.
 
         The sign-in's ticket lands on ``landing`` (:meth:`_app_path`). Without a
-        credential a pairing is started, unless ``pair`` is false (a sign-in
-        right after an approved pairing must not pair again).
+        credential the attempt says the server needs pairing, unless ``pair`` is
+        false (a sign-in right after an approved pairing must not pair again).
         """
 
         result = self._probe(target)
@@ -817,11 +939,7 @@ class ConnectionController:
             return _Attempt(result)
         if not pair:
             return _Attempt(result, failure=STATUS_SIGN_IN_FAILED)
-        try:
-            return _Attempt(result, pairing=self._access.start_pairing(address))
-        except AccessFailure as exc:
-            logger.warning("Desktop pairing with %s failed to start (%s)", address.display, exc)
-            return _Attempt(result, failure=exc.error_code)
+        return _Attempt(result, pair=True)
 
     def _keep_trying(self, launch: _LaunchConnect) -> None:
         """Try the launch target again until it answers, the deadline passes or it ends."""
@@ -868,18 +986,8 @@ class ConnectionController:
             location=launch.location,
             waited=waited,
         )
-        if attempt.pairing is not None and prepared.pairing is not None:
-            self._wait_for_pairing_locked(
-                _PairingWait(
-                    attempt.pairing,
-                    launch.target,
-                    launch.label,
-                    launch.open_session,
-                    launch.location,
-                    on_screen=True,
-                )
-            )
-            self._show_connection_screen(probe_result=None, pairing=prepared.pairing)
+        if prepared.offer is not None:
+            self._show_connection_screen(probe_result=None, offer=prepared.offer)
             return
         self._apply(prepared)
 
@@ -969,15 +1077,22 @@ class ConnectionController:
                 "Desktop sign-in to %s failed (%s)%s", address.display, attempt.failure, waited_note
             )
             return _failed(result, attempt.failure)
-        if attempt.pairing is not None:
-            view = PairingView(code=attempt.pairing.code, server=address.display, target=target)
-            logger.info("Desktop waiting for %s to approve its pairing", address.display)
+        if attempt.pair:
+            offer = PairingOffer(
+                server=address.display,
+                origin=address.origin,
+                name=self._access.device_name if self._access is not None else "",
+                target=target,
+            )
+            with self._window_lock:
+                self._offer = _Offer(offer, target, label, open_session, location)
+            logger.info("Desktop offers to pair with %s", address.display)
             return PreparedConnection(
                 result=result,
                 failure=STATUS_PAIRING_REQUIRED,
-                error_title=view.title,
-                error_body=view.body,
-                pairing=view,
+                error_title=offer.title,
+                error_body=offer.body,
+                offer=offer,
             )
 
         base = address.url.rstrip("/")
@@ -1109,23 +1224,31 @@ class ConnectionController:
         probe_result: DesktopProbeResult | None,
         *,
         waiting_for: DesktopTarget | None = None,
-        pairing: PairingView | None = None,
+        offer: PairingOffer | None = None,
     ) -> None:
         window = self._require_window()
         with self._window_lock:
             # The screen replaces the page a sign-in was waiting for.
             self._landing = None
+            if self._offer is not None:
+                self._offer.screen_due = None
+        window.load_html(self._connection_html(probe_result, waiting_for=waiting_for, offer=offer))
+
+    def _connection_html(
+        self,
+        probe_result: DesktopProbeResult | None,
+        *,
+        waiting_for: DesktopTarget | None = None,
+        offer: PairingOffer | None = None,
+    ) -> str:
         servers = self.list_servers()
-        window.load_html(
-            build_connection_html(
-                servers=servers,
-                probe_result=probe_result,
-                waiting_for=waiting_for,
-                pairing=pairing,
-                signed_in=[
-                    entry.address.origin for entry in servers if self._signed_in(entry.address)
-                ],
-            )
+        return build_connection_html(
+            servers=servers,
+            probe_result=probe_result,
+            waiting_for=waiting_for,
+            offer=offer,
+            signed_in=[entry.address.origin for entry in servers if self._signed_in(entry.address)],
+            screen_key=self._screen_key,
         )
 
     def _signed_in(self, address: ServerAddress) -> bool:

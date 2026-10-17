@@ -7,10 +7,12 @@ import pytest
 from desktop.connection import ServerEntry
 from desktop.connection_screen import (
     STATUS_DEVICES_UNAVAILABLE,
+    STATUS_HTTPS_REQUIRED,
     STATUS_PAIRING_DENIED,
     STATUS_PAIRING_EXPIRED,
     STATUS_RATE_LIMITED,
     STATUS_SIGN_IN_FAILED,
+    PairingOffer,
     PairingView,
     build_connection_html,
     connection_error_copy,
@@ -50,7 +52,7 @@ def test_connection_html_lists_saved_servers_with_connect_hooks() -> None:
 def test_connection_html_awaits_bridge_result_before_navigation() -> None:
     page = build_connection_html([])
 
-    bridge_call = "await window.pywebview.api.connect(host, port)"
+    bridge_call = "await window.pywebview.api.connect(host, port, SCREEN_KEY)"
     navigation = "window.location.assign(result.url)"
     assert bridge_call in page
     assert navigation in page
@@ -60,6 +62,7 @@ def test_connection_html_awaits_bridge_result_before_navigation() -> None:
     assert page.index('getElementById("connection-pairing").hidden = true') < page.index(
         bridge_call
     )
+    assert page.index('getElementById("connection-offer").hidden = true') < page.index(bridge_call)
     assert ".textContent = title" in page
     assert ".textContent = body" in page
     assert ".textContent = pairing.code" in page
@@ -67,30 +70,63 @@ def test_connection_html_awaits_bridge_result_before_navigation() -> None:
     assert "innerHTML" not in page
 
 
-def test_a_pairing_shows_its_code_until_the_user_cancels_it() -> None:
-    view = PairingView(code="K7M2-Q9XA", server="https://vbot.example.com", target=CLOUD_TARGET)
+def test_pairing_is_offered_with_the_origin_and_an_editable_name_before_any_code() -> None:
+    offer = PairingOffer(
+        server="https://vbot.example.com",
+        origin="https://vbot.example.com",
+        name="Desk PC",
+        target=CLOUD_TARGET,
+    )
 
-    page = build_connection_html([CLOUD], pairing=view)
+    page = build_connection_html([CLOUD], offer=offer, screen_key="k3y")
 
-    assert '<div id="connection-pairing" class="pairing" role="status">' in page
-    assert '<p id="pairing-code" class="code">K7M2-Q9XA</p>' in page
-    assert "Approve this Desktop" in page
-    assert "Add device and enter the code K7M2-Q9XA" in page
-    assert "vbot devices approve K7M2-Q9XA" in page
-    assert 'id="pairing-cancel"' in page
+    # The offer names the origin and the name the server will see; no code exists yet.
+    assert (
+        '<div id="connection-offer" class="pairing" role="status" '
+        'data-host="https://vbot.example.com" data-port="443">'
+    ) in page
+    assert "Continue only if you meant to connect to https://vbot.example.com." in page
+    assert 'id="offer-name" type="text" maxlength="80" autocomplete="off" value="Desk PC"' in page
+    assert ">Get a code</button>" in page
+    assert "api.startPairing(host, port, name, SCREEN_KEY)" in page
+    assert 'var SCREEN_KEY = "k3y";' in page
+    # The code panel waits hidden for the script; the form keeps the offered server.
+    assert '<div id="connection-pairing" class="pairing" role="status" hidden>' in page
+    assert '<p id="pairing-code" class="code"></p>' in page
     assert "window.pywebview.api.cancelPairing()" in page
-    # The form keeps the server being paired.
     assert 'value="https://vbot.example.com"' in page
+    assert offer.to_payload() == {
+        "host": "https://vbot.example.com",
+        "port": 443,
+        "server": "https://vbot.example.com",
+        "origin": "https://vbot.example.com",
+        "name": "Desk PC",
+        "title": "Sign in this Desktop",
+        "body": offer.body,
+    }
+    idle = build_connection_html([CLOUD])
+    assert '<div id="connection-offer" class="pairing" role="status" hidden>' in idle
+
+
+def test_a_pairing_code_tells_where_alone_to_enter_it() -> None:
+    view = PairingView(
+        code="K7M2-Q9XA",
+        server="https://vbot.example.com",
+        origin="https://vbot.example.com",
+        target=CLOUD_TARGET,
+    )
+
+    assert view.title == "Approve this Desktop"
+    assert view.body.startswith("Enter the code K7M2-Q9XA only in vBot at https://vbot.example.com")
+    assert "Never enter it for another address" in view.body
+    assert "vbot devices approve K7M2-Q9XA" in view.body
     assert view.to_payload() == {
         "code": "K7M2-Q9XA",
         "server": "https://vbot.example.com",
+        "origin": "https://vbot.example.com",
         "title": view.title,
         "body": view.body,
     }
-
-    idle = build_connection_html([CLOUD])
-    assert '<div id="connection-pairing" class="pairing" role="status" hidden>' in idle
-    assert '<p id="pairing-code" class="code"></p>' in idle
 
 
 def test_forget_sign_in_is_offered_for_signed_in_servers_only() -> None:
@@ -101,6 +137,7 @@ def test_forget_sign_in_is_offered_for_signed_in_servers_only() -> None:
     assert page.count(">Forget sign-in</button>") == 1
     assert 'data-forget-host="https://vbot.example.com" data-forget-port="443"' in page
     assert "window.pywebview.api.forgetSignIn(" in page
+    assert "button.dataset.forgetPort, 10), SCREEN_KEY" in page
     assert ">Forget sign-in</button>" not in build_connection_html(servers)
 
 
@@ -117,6 +154,7 @@ def test_forget_sign_in_is_offered_for_signed_in_servers_only() -> None:
         (STATUS_RATE_LIMITED, "Too many attempts"),
         (STATUS_DEVICES_UNAVAILABLE, "Sign-in unavailable"),
         (STATUS_SIGN_IN_FAILED, "Sign-in failed"),
+        (STATUS_HTTPS_REQUIRED, "Sign-in needs https://"),
     ],
 )
 def test_each_failed_connect_shows_its_own_alert(status: str, title: str) -> None:
@@ -133,7 +171,7 @@ def test_an_unknown_status_has_no_copy() -> None:
         connection_error_copy("webui_available")
 
 
-@pytest.mark.parametrize("state", ["error", "waiting", "pairing"])
+@pytest.mark.parametrize("state", ["error", "waiting", "offer"])
 def test_connection_html_escapes_the_target_host_in_its_banner_and_prefill(state: str) -> None:
     malicious = '<script>alert("x")</script>'
     target = DesktopTarget(malicious, 9000, "")
@@ -144,9 +182,8 @@ def test_connection_html_escapes_the_target_host_in_its_banner_and_prefill(state
     elif state == "waiting":
         page = build_connection_html([], waiting_for=target)
     else:
-        page = build_connection_html(
-            [], pairing=PairingView(code=malicious, server=malicious, target=target)
-        )
+        offer = PairingOffer(server=malicious, origin=malicious, name=malicious, target=target)
+        page = build_connection_html([], offer=offer)
 
     assert malicious not in page
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in page

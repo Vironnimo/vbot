@@ -244,7 +244,10 @@ def test_every_route_but_the_exempt_ones_needs_a_principal_when_authenticated(
             elif (method, route.path) in shell:
                 assert response.status_code == 200, (method, route.path)
                 if method == "GET":
-                    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+                    policy = response.headers["content-security-policy"]
+                    assert "frame-ancestors 'none'" in policy
+                    # Remote images only over https: plain http would expose the reader.
+                    assert "img-src 'self' data: blob: https:;" in policy
                     assert response.headers["referrer-policy"] == "same-origin"
             else:
                 assert response.status_code == 401, (method, route.path)

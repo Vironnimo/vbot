@@ -14,8 +14,15 @@ continues.
 (``devices.logout``) and deletes the stored sign-in, also when the server
 cannot be reached.
 
+Pairing needs the server's ``https://`` address: a Device token is only ever
+sent there (``cli/server_client.py``). Over plain ``http://`` to another
+computer nothing is sent; on this computer's loopback the status is asked first,
+because the server's local access token may already sign this computer in.
+
 Both talk to the pairing endpoints without a credential: a refused token
-would count as a failed sign-in. Tokens and poll secrets are never printed.
+would count as a failed sign-in. Tokens and poll secrets are never printed, and
+server-supplied text reaches the terminal only escaped (``inline_text``); a
+code that is not ``XXXX-XXXX`` ends the command as a foreign answer.
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ import re
 import socket
 import sys
 import time
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
@@ -32,6 +40,7 @@ from urllib.parse import urlsplit
 
 from cli._progress import operation_progress
 from cli._server_target import CommandResult, RpcFailure, ServerInstance, is_loopback_target
+from cli.formatting import inline_text
 from cli.sign_ins import PendingPairing, SignIn, SignInStore, SignInStoreError
 from core.utils.timestamps import utc_now_timestamp
 
@@ -46,9 +55,15 @@ _STATUS_PATH = "/api/auth/status"
 _START_PATH = "/api/auth/pair/start"
 _POLL_PATH = "/api/auth/pair/poll"
 _RPC_PATH = "/api/rpc"
+#: The display form the server hands out; anything else is no vBot answer.
+_PAIRING_CODE = re.compile(r"[0-9A-Z]{4}-[0-9A-Z]{4}")
+#: Characters a device name must not carry (the server refuses them).
+_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 _APPROVE_WHERE = (
-    "Approve it in the vBot WebUI on a signed-in device (Settings > Access & devices > "
-    "Add device), or on the server's computer with: vbot devices approve {code}"
+    "Approve it only in vBot at {origin}: in its WebUI on a signed-in device (Settings > "
+    "Access & devices > Add device), or on that server's computer with: vbot devices approve "
+    "{code}. Never enter it for another address: whoever gets it approved there signs in as "
+    "this CLI."
 )
 
 
@@ -91,8 +106,14 @@ class _Pairing:
                 f"This computer signs in to {self.origin} with the server's local access "
                 "token; it needs no pairing. Nothing was changed."
             )
+        if urlsplit(self.origin).scheme != "https":
+            raise _StopError(self._done(self._plain_http_refusal(), ok=False))
         pending = self.store.pending(self.origin)
-        resumed = pending is not None and pending.expires_at - self.clock() > 1
+        resumed = (
+            pending is not None
+            and pending.expires_at - self.clock() > 1
+            and _PAIRING_CODE.fullmatch(pending.code) is not None
+        )
         if pending is None or not resumed:
             if self.store.sign_in(self.origin) is not None:
                 print(
@@ -137,6 +158,7 @@ class _Pairing:
         expires_in, interval = body.get("expires_in"), body.get("poll_interval")
         if not (
             all(isinstance(value, str) and value for value in (request_id, code, secret))
+            and _PAIRING_CODE.fullmatch(str(code))
             and isinstance(expires_in, (int, float))
             and isinstance(interval, (int, float))
         ):
@@ -162,7 +184,7 @@ class _Pairing:
         lines = [
             first,
             f"Code: {pending.code}",
-            _APPROVE_WHERE.format(code=pending.code),
+            _APPROVE_WHERE.format(origin=self.origin, code=pending.code),
             f"The code is valid for {_minutes(pending.expires_at - self.clock())}.",
         ]
         print("\n".join(lines), flush=True)
@@ -306,6 +328,17 @@ class _Pairing:
             failure=RpcFailure(request, "responded", code, response.status_code),
         )
 
+    def _plain_http_refusal(self) -> str:
+        from cli.server_client import AUTH_REQUIRED, access_refusal
+
+        reason = access_refusal(self.instance, AUTH_REQUIRED) or ""
+        return (
+            f"{reason} Pairing needs an https:// address: over plain http:// whatever listens at "
+            f"{self.origin} would receive the Device token. If this address is a tunnel to "
+            "another computer's server, pair with that server's https:// address or run vbot "
+            "on that computer. Nothing was changed."
+        ).strip()
+
     def _not_vbot(self, response: httpx.Response) -> str:
         return (
             f"The server at {self.origin} did not answer like a vBot server (HTTP "
@@ -403,9 +436,14 @@ def devices_logout(
 
 
 def device_name(label: str, computer: str) -> str:
-    """``<label> on <computer>`` without control characters, within the server's 80 characters."""
+    """``<label> on <computer>`` without hidden characters, within the server's 80 characters."""
 
-    computer = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", computer).split())
+    computer = " ".join(
+        "".join(
+            " " if unicodedata.category(character) in _HIDDEN_CATEGORIES else character
+            for character in computer
+        ).split()
+    )
     return f"{label} on {computer}"[:_NAME_LIMIT].rstrip() if computer else label
 
 
@@ -487,7 +525,6 @@ def _minutes(seconds: float) -> str:
 
 
 def _shown(value: object) -> str:
-    """Server-supplied text on one line, without control characters."""
+    """Server-supplied text on one line, its hidden characters escaped."""
 
-    text = "-" if value is None else str(value)
-    return " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", text).split()) or "-"
+    return inline_text(value).strip() or "-"

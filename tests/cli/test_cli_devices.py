@@ -39,6 +39,7 @@ def test_approve_shows_the_waiting_device_before_approving_it(
 
     assert code == 0
     assert "Requested from: 203.0.113.7" in prompts[0] and "Kind: browser" in prompts[0]
+    assert "full control of vBot" in prompts[0]
     assert rpc.methods == (
         ["devices.pending", "devices.approve"] if approved else ["devices.pending"]
     )
@@ -66,7 +67,8 @@ def test_approve_needs_a_terminal_or_yes_and_never_runs_inside_an_agent_run(
 def test_list_rename_and_revoke_address_devices_by_id(rpc: FakeRpc, run_cli: RunCli) -> None:
     device = {
         "id": "dev_ABCDEFGHJKMNPQRS",
-        "name": "Laptop",
+        # A name from an older server could still steer the terminal; it shows escaped.
+        "name": "Laptop\x1b]0;owned\x07\u202e",
         "kind": "cli",
         "created_at": "2026-10-01T10:00:00.000Z",
         "last_used_at": "2026-10-17T09:00:00.000Z",
@@ -84,6 +86,8 @@ def test_list_rename_and_revoke_address_devices_by_id(rpc: FakeRpc, run_cli: Run
 
     assert listed[0] == renamed[0] == revoked[0] == 0
     assert "dev_ABCDEFGHJKMNPQRS" in listed[1] and "kind=CLI" in listed[1]
+    assert "name=Laptop\\x1b]0;owned\\x07\\u202e" in listed[1]
+    assert "\x1b" not in listed[1] and "\u202e" not in listed[1]
     assert "name=Work laptop" in renamed[1]
     assert "Revoked dev_ABCDEFGHJKMNPQRS" in revoked[1]
     assert rpc.params("devices.rename") == {"id": device["id"], "name": "Work laptop"}

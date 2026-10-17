@@ -176,28 +176,20 @@ describe('DesktopConnectionSettings', () => {
     await waitForText('https://office.example.com:8443');
   });
 
-  it('shows the pairing a server asks for and cancels it', async () => {
-    const pairing = {
-      code: 'K7M2-Q001',
-      server: 'https://vbot.example.com',
-      title: 'Approve this Desktop',
-      body: 'Enter the code K7M2-Q001 on a signed-in device.',
-    };
-    const selectServer = vi.fn().mockResolvedValue({
-      status: 'pairing_required',
-      error_title: pairing.title,
-      error_body: pairing.body,
-      pairing,
-    });
-    const cancelPairing = vi.fn().mockResolvedValue({ cancelled: true });
+  it('changes nothing and reports nothing when the user declines in the Desktop', async () => {
+    const declined = () => Promise.reject(new Error('declined'));
+    const selectServer = vi.fn(declined);
+    const removeServer = vi.fn(declined);
+    const addServer = vi.fn(declined);
     window.pywebview = {
       api: {
         listServers: vi.fn().mockResolvedValue([
           { host: 'home.lan', port: 8420, active: true },
-          { host: 'https://vbot.example.com', port: 443, scheme: 'https' },
+          { host: 'office.lan', port: 9000, active: false },
         ]),
         selectServer,
-        cancelPairing,
+        removeServer,
+        addServer,
       },
     };
 
@@ -205,23 +197,40 @@ describe('DesktopConnectionSettings', () => {
       target: document.body,
     });
     flushSync();
-    await waitForText('https://vbot.example.com');
+    await waitForText('office.lan:9000');
 
     buttonsByText(t('settings.desktop.connection.connect'))[0].click();
     flushSync();
-    await waitForText('K7M2-Q001');
-    expect(selectServer).toHaveBeenCalledWith('https://vbot.example.com', 443);
-    // Waiting for approval is no failure.
-    expect(document.querySelector('[role="alert"]')).toBeNull();
-
-    buttonsByText(t('common.cancel'))[0].click();
+    await waitForCondition(() => selectServer.mock.calls.length === 1);
+    await settle();
+    buttonsByText(t('common.remove'))[0].click();
     flushSync();
-    await waitForCondition(() => cancelPairing.mock.calls.length === 1);
+    await waitForCondition(() => removeServer.mock.calls.length === 1);
+    await settle();
+    buttonsByText(t('settings.desktop.connection.addAction'))[0].click();
     await waitForCondition(
-      () => !document.body.textContent.includes('K7M2-Q001'),
+      () => document.activeElement?.id === 'desktop-settings-server-host',
+    );
+    setInput('desktop-settings-server-host', 'pi.lan');
+    document.querySelector('form button[type="submit"]').click();
+    flushSync();
+    await waitForCondition(() => addServer.mock.calls.length === 1);
+    await settle();
+
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.body.textContent).toContain('office.lan:9000');
+    // The add form stays open with what the user typed.
+    expect(document.getElementById('desktop-settings-server-host').value).toBe(
+      'pi.lan',
     );
   });
 });
+
+// Let a rejected bridge call reach its handler and the view update.
+async function settle() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  flushSync();
+}
 
 function setInput(id, value) {
   const input = document.getElementById(id);

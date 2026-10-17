@@ -320,8 +320,8 @@ async def test_provider_set_key_writes_the_account_credential_and_signals_provid
         )
         == "sk-or-test"
     )
-    # A credential change alters which Models are selectable.
-    assert resource_changes(state) == [{"kind": "providers"}]
+    # A credential change alters which Models are selectable and the Secret Store's counts.
+    assert resource_changes(state) == [{"kind": "providers"}, {"kind": "data_store"}]
 
 
 @pytest.mark.asyncio
@@ -367,7 +367,7 @@ async def test_provider_unset_key_removes_only_the_account_credential(
             name: value for name, value in remaining.items() if name != "OPENROUTER_API_KEY__WORK"
         }
     assert _stored_credentials(state) == remaining
-    assert resource_changes(state) == [{"kind": "providers"}]
+    assert resource_changes(state) == [{"kind": "providers"}, {"kind": "data_store"}]
 
 
 @pytest.mark.asyncio
@@ -382,6 +382,7 @@ async def test_provider_unset_key_reports_still_configured_from_process_env(
 
     assert result["removed"] is False
     assert result["configured"] is True
+    assert resource_changes(state, "data_store") == []
 
 
 @pytest.mark.asyncio
@@ -627,7 +628,11 @@ async def test_custom_provider_crud_is_live_and_keeps_key_out_of_settings(
         assert models.get("local-ai", "chat-model").context_window == 65_536
         assert runtime.storage.load_environment()["VBOT_CUSTOM_LOCAL_AI_API_KEY"] == "secret"
         assert "secret" not in runtime.storage.settings_path.read_text(encoding="utf-8")
-        assert resource_changes(state) == [{"kind": "providers"}, {"kind": "models"}]
+        assert resource_changes(state) == [
+            {"kind": "providers"},
+            {"kind": "models"},
+            {"kind": "data_store"},
+        ]
 
         updated = _custom_provider_payload("Renamed")
         updated["models"]["chat-model"]["name"] = "Renamed Model"
@@ -682,6 +687,7 @@ async def test_custom_provider_crud_is_live_and_keeps_key_out_of_settings(
         deleted = await rpc_result(state, "provider.custom_delete", provider_id="local-ai")
 
         assert deleted == {"provider_id": "local-ai", "deleted": True, "credentials_removed": 2}
+        assert resource_changes(state)[-1] == {"kind": "data_store"}
         assert runtime.storage.load_custom_providers_settings() == {}
         assert secrets.entry_names(CREDENTIALS) == ()
         with pytest.raises(KeyError):

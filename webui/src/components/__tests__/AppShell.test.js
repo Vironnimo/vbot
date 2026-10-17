@@ -16,6 +16,7 @@ const appStyles = readStyleSheet(
 
 const desktopBridge = vi.hoisted(() => ({
   getDesktopClipboardText: vi.fn(),
+  isDesktopDeclined: (error) => error?.message === 'declined',
   openDesktopExternalUrl: vi.fn(),
   setDesktopClipboardText: vi.fn(),
 }));
@@ -251,8 +252,8 @@ describe('AppShell sidebar', () => {
 });
 
 describe('AppShell Desktop context menu', () => {
-  function mountContent(desktopContextMenuEnabled) {
-    mountShell({ desktopContextMenuEnabled });
+  function mountContent(desktopContextMenuEnabled, props = {}) {
+    mountShell({ desktopContextMenuEnabled, ...props });
     return content();
   }
 
@@ -379,6 +380,25 @@ describe('AppShell Desktop context menu', () => {
     menuItem('desktop.contextMenu.paste').click();
     await vi.waitFor(() => expect(input.value).toBe('pasted world'));
     expect(desktopBridge.getDesktopClipboardText).toHaveBeenCalledOnce();
+  });
+
+  it('reports a failed paste but not one the user declined in the Desktop', async () => {
+    const onToast = vi.fn();
+    const input = appendInput(mountContent(true, { onToast }), 'text', 'kept');
+    desktopBridge.getDesktopClipboardText
+      .mockRejectedValueOnce(new Error('declined'))
+      .mockRejectedValueOnce(new Error('Clipboard unavailable'));
+
+    openContextMenu(input);
+    menuItem('desktop.contextMenu.paste').click();
+    openContextMenu(input);
+    menuItem('desktop.contextMenu.paste').click();
+
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledOnce());
+    expect(onToast.mock.calls[0][0].title).toBe(
+      t('desktop.contextMenu.actionFailedTitle'),
+    );
+    expect(input.value).toBe('kept');
   });
 
   it('allows paste into password fields without exposing their selected text', async () => {

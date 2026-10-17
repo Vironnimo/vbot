@@ -12,8 +12,15 @@ looks like a code, and is logged with its traceback.
 The same instance stays the window's ``js_api`` across navigation, so it
 serves both the shell connection screen (server selection) and the remote
 WebUI (capabilities, clipboard and browser, the microphone, the Live voice
-hotkey, Voice, Desktop dictation, the window zoom, the update restart). The
-facade holds no state of its own: microphone methods delegate to
+hotkey, Voice, Desktop dictation, the window zoom, the update restart). Any
+server's page can call it, so the methods a page could abuse are gated
+(:mod:`desktop.page_permissions`): ``connect``, ``startPairing`` and
+``forgetSignIn`` need the connection screen's key; another server's page needs
+the user's confirmation to add, select an unknown, or remove a server, to read
+the clipboard and to install a wake word model, and is rejected with
+``declined`` otherwise. ``restartDesktop`` stays open: it only starts the
+restart into a version already installed, which the Desktop also does by
+itself. The facade holds no state of its own: microphone methods delegate to
 :class:`desktop.speech.microphone.MicrophoneService`, Voice methods to
 :class:`desktop.wakeword.controller.VoiceController`, dictation methods to
 :class:`desktop.dictation.controller.DictationController`, zoom methods to
@@ -34,7 +41,9 @@ import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol, cast, override
 
+from desktop.page_permissions import CONNECTION_SCREEN_ONLY, PageActionDeclined, PagePermissions
 from desktop.restart import RestartError
+from desktop.server_address import parse_server_address
 from desktop.system_actions import DesktopSystemActions
 from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordModelError
 
@@ -144,6 +153,15 @@ class ConnectionDelegate(Protocol):
     def describe_servers(self) -> list[dict[str, Any]]:
         """Return the remembered servers with their ``active`` and ``signed_in`` marks."""
 
+    def is_remembered(self, host: Any, port: Any) -> bool:
+        """Whether the address is a remembered server."""
+
+    def is_screen(self, key: Any) -> bool:
+        """Whether a call carries the connection screen's key."""
+
+    def start_pairing(self, host: str, port: Any, name: Any = ...) -> PreparedConnection:
+        """Ask an offered server for a pairing code under the device name the user chose."""
+
     def cancel_pairing(self) -> bool:
         """End a pairing waiting for approval, reporting whether one was waiting."""
 
@@ -167,8 +185,13 @@ class DesktopBridge:
         secure_origins: tuple[str, ...] = (),
         restart: DesktopRestart | None = None,
         zoom: DesktopZoom | None = None,
+        permissions: PagePermissions | None = None,
     ) -> None:
         self._voice = voice
+        # Without a way to ask, another server's page is refused what needs asking.
+        self._permissions = permissions or PagePermissions(
+            page_url=lambda: None, own_server=lambda _origin: False, confirm=lambda *_: False
+        )
         self._microphone = microphone
         self._connection = connection
         self._system_actions = system_actions or DesktopSystemActions()
@@ -199,7 +222,8 @@ class DesktopBridge:
             "secureOrigins": list(self._secure_origins),
             "restart": self._restart is not None,
             # The Desktop signs its window in to servers in the access mode
-            # ``authenticated``: ``selectServer`` pairs or opens a login ticket.
+            # ``authenticated``: ``selectServer`` opens a login ticket or sends
+            # the window to the connection screen's pairing offer.
             "signIn": self._connection is not None,
         }
 
@@ -209,7 +233,12 @@ class DesktopBridge:
         return {"copied": True}
 
     def getClipboardText(self) -> str:  # noqa: N802
-        """Return plain text from the host clipboard for an explicit paste."""
+        """Return plain text from the host clipboard for an explicit paste.
+
+        Another server's page asks the user first, once per origin while the
+        Desktop runs (``declined`` otherwise).
+        """
+        self._permissions.read_clipboard()
         return self._system_actions.get_clipboard_text()
 
     def openExternalUrl(self, url: Any) -> dict[str, bool]:  # noqa: N802
@@ -250,7 +279,10 @@ class DesktopBridge:
         return self._voice.list_models()
 
     def importWakewordModel(self, filename: Any, content_base64: Any) -> dict[str, Any]:  # noqa: N802
-        """Install one base64-encoded TFLite model; returns its descriptor and ``activated``."""
+        """Install one base64-encoded TFLite model; returns its descriptor and ``activated``.
+
+        Another server's page asks the user first (``declined`` otherwise).
+        """
         if not isinstance(filename, str):
             raise WakewordModelError("Wakeword model file name must be text")
         if not isinstance(content_base64, str):
@@ -261,6 +293,7 @@ class DesktopBridge:
             content = base64.b64decode(content_base64, validate=True)
         except (binascii.Error, ValueError) as exc:
             raise WakewordModelError("Wakeword model content is not valid base64") from exc
+        self._permissions.import_model(filename)
         return self._voice.import_model(filename, content)
 
     def deleteWakewordModel(self, model_id: Any) -> dict[str, bool]:  # noqa: N802
@@ -336,16 +369,30 @@ class DesktopBridge:
 
     # -- Server selection ------------------------------------------------------
 
-    def connect(self, host: str, port: Any) -> dict[str, Any]:
+    def connect(self, host: str, port: Any, screen: Any = None) -> dict[str, Any]:
         """Probe, sign in and persist a server for the connection screen, which then navigates.
 
-        JavaScript navigates only after this call resolved: replacing the page
-        inside the call would destroy pywebview's result callback. A server
-        that needs pairing returns its code (``pairing``) for the screen to show.
+        Only the connection screen may call it (``screen`` is its key). JavaScript
+        navigates only after this call resolved: replacing the page inside the
+        call would destroy pywebview's result callback. A server that needs
+        pairing returns the offer (``offer``) for the screen to show.
         """
-        controller = self._require_connection()
+        controller = self._require_screen(screen)
         with self._connection_lock:
             prepared = controller.prepare_connect(host, _coerce_port(port), on_screen=True)
+        return prepared.to_bridge_payload()
+
+    def startPairing(  # noqa: N802
+        self, host: str, port: Any, name: Any = None, screen: Any = None
+    ) -> dict[str, Any]:
+        """Ask an offered server for a pairing code; only the connection screen calls it.
+
+        ``name`` is the device name the user confirmed. Returns ``pairing`` with
+        the code, or the failure's error copy.
+        """
+        controller = self._require_screen(screen)
+        with self._connection_lock:
+            prepared = controller.start_pairing(host, _coerce_port(port), name)
         return prepared.to_bridge_payload()
 
     def listServers(self) -> list[dict[str, Any]]:  # noqa: N802
@@ -357,28 +404,48 @@ class DesktopBridge:
     def addServer(  # noqa: N802
         self, host: str, port: Any, label: str | None = None
     ) -> dict[str, Any]:
-        """Remember a server without connecting, returning the stored entry."""
+        """Remember a server without connecting, returning the stored entry.
+
+        Another server's page asks the user first (``declined`` otherwise).
+        """
         controller = self._require_connection()
+        port = _coerce_port(port)
+        display = _display(host, port)
+        if display is not None and not controller.is_remembered(host, port):
+            self._permissions.add_server(display)
         with self._connection_lock:
-            entry = controller.add_server(host, _coerce_port(port), label or None)
+            entry = controller.add_server(host, port, label or None)
         return entry.to_bridge()
 
     def removeServer(self, host: str, port: Any) -> dict[str, bool]:  # noqa: N802
-        """Forget a remembered server and its sign-in, reporting whether one was removed."""
+        """Forget a remembered server and its sign-in, reporting whether one was removed.
+
+        Another server's page asks the user first (``declined`` otherwise).
+        """
         controller = self._require_connection()
+        port = _coerce_port(port)
+        display = _display(host, port)
+        if display is not None and controller.is_remembered(host, port):
+            self._permissions.remove_server(display)
         with self._connection_lock:
-            removed = controller.remove_server(host, _coerce_port(port))
+            removed = controller.remove_server(host, port)
         return {"removed": removed}
 
     def selectServer(self, host: str, port: Any) -> dict[str, Any]:  # noqa: N802
         """Prepare a remembered server connection for navigation from JavaScript.
 
-        A server that needs pairing returns its code as ``pairing`` and as
-        ``error_title`` / ``error_body``; the window connects once it is approved.
+        A server that needs pairing returns :data:`SIGN_IN_PAGE` as ``url``: the
+        window then shows the connection screen, where the user decides about
+        pairing. A server that is not remembered is added first, which another
+        server's page asks the user for (``declined`` otherwise).
         """
         controller = self._require_connection()
+        port = _coerce_port(port)
+        display = _display(host, port)
+        if display is not None and not controller.is_remembered(host, port):
+            self._permissions.add_server(display)
         with self._connection_lock:
-            prepared = controller.prepare_connect(host, _coerce_port(port))
+            prepared = controller.prepare_connect(host, port)
         return prepared.to_bridge_payload()
 
     def cancelPairing(self) -> dict[str, bool]:  # noqa: N802
@@ -387,9 +454,9 @@ class DesktopBridge:
         with self._connection_lock:
             return {"cancelled": controller.cancel_pairing()}
 
-    def forgetSignIn(self, host: str, port: Any) -> dict[str, bool]:  # noqa: N802
-        """Forget a server's stored sign-in; reports whether one was stored."""
-        controller = self._require_connection()
+    def forgetSignIn(self, host: str, port: Any, screen: Any = None) -> dict[str, bool]:  # noqa: N802
+        """Forget a server's stored sign-in; only the connection screen calls it."""
+        controller = self._require_screen(screen)
         with self._connection_lock:
             return {"forgotten": controller.forget_sign_in(host, _coerce_port(port))}
 
@@ -414,6 +481,23 @@ class DesktopBridge:
         if self._connection is None:
             raise RuntimeError("Server selection is not available in this Desktop")
         return self._connection
+
+    def _require_screen(self, key: Any) -> ConnectionDelegate:
+        controller = self._require_connection()
+        if not controller.is_screen(key):
+            raise PageActionDeclined(
+                "Only the Desktop's connection screen may do this",
+                error_code=CONNECTION_SCREEN_ONLY,
+            )
+        return controller
+
+
+def _display(host: Any, port: Any) -> str | None:
+    """How a dialog names the server; ``None`` for an address the controller will refuse."""
+    try:
+        return parse_server_address(host, port).display
+    except ValueError:
+        return None
 
 
 def _coerce_port(value: Any) -> int | str:

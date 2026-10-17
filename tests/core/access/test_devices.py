@@ -138,3 +138,35 @@ def test_the_store_keeps_fields_a_newer_vbot_added(tmp_path: Path) -> None:
     assert written["devices"][0]["passkey"] == "abc"
     assert written["devices"][0]["name"] == "Renamed"
     assert validate_device_store_file(path).ok
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Phone\x1b]0;owned\x07", id="escape-sequence"),
+        pytest.param("Phone\x9b2J", id="c1-control"),
+        pytest.param("Phone‮exe.gnp", id="bidi-override"),
+        pytest.param("Ph​one", id="zero-width"),
+    ],
+)
+def test_new_names_refuse_hidden_characters_while_stored_ones_still_load(
+    tmp_path: Path, name: str
+) -> None:
+    store = _loaded(tmp_path)
+    with pytest.raises(ValueError, match="control"):
+        new_device(name=name, kind="browser", approved_by="host", client=None, now=_NOW)
+    device, _token = new_device(
+        name="Phone  two", kind="browser", approved_by="host", client=None, now=_NOW
+    )
+    store.add(device)
+    with pytest.raises(ValueError, match="control"):
+        store.rename(device.id, name)
+
+    # A name an earlier vBot accepted keeps its device signed in.
+    path = tmp_path / "access" / "devices.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["devices"][0]["name"] = "Ph​one"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    assert device.name == "Phone two"
+    assert [stored.name for stored in _loaded(tmp_path).devices()] == ["Ph​one"]
