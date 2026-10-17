@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -463,10 +464,12 @@ def test_lifecycle_actions_hold_operation_lock_and_raise_for_failed_result(
     assert facade._status_error == ""
 
 
+@pytest.mark.parametrize("server_host", ["127.0.0.1", "0.0.0.0"])
 def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_host: str
 ):
-    install = _install(tmp_path, shape="server-desktop")
+    # A wildcard bind is reached over loopback, where the local access token works.
+    install = replace(_install(tmp_path, shape="server-desktop"), server_host=server_host)
     executable = _desktop_interpreter(install)
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.write_bytes(b"")
@@ -495,6 +498,8 @@ def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
         "127.0.0.1",
         "--port",
         "8420",
+        "--server-data-dir",
+        str((tmp_path / "data").resolve()),
     ]
     assert options["cwd"] == install.version() / "app"
     assert options["creationflags"] == 7
@@ -549,7 +554,10 @@ def test_open_desktop_targets_only_an_explicit_or_owned_server(
         ),
         pytest.param(
             "server-desktop",
-            ["--host", "127.0.0.1", "--port", "8420", "--open-session", "coder@site", "ses_1"],
+            [
+                *("--host", "127.0.0.1", "--port", "8420", "--server-data-dir", "<data-dir>"),
+                *("--open-session", "coder@site", "ses_1"),
+            ],
             id="owned-desktop",
         ),
         pytest.param(
@@ -576,6 +584,9 @@ def test_open_session_shows_the_session_where_this_installation_can(
 
     host.ApplicationFacade(install).open_session("coder@site", "ses_1")
 
+    if isinstance(opened, list):
+        data_dir = str((tmp_path / "data").resolve())
+        opened = [data_dir if item == "<data-dir>" else item for item in opened]
     assert launches == [opened]
 
 

@@ -13,6 +13,9 @@ from core.utils.processes import subprocess_creation_flags
 #: The relaunch contract of ``desktop.restart``: how the Desktop recognizes a
 #: newer active version and starts it.
 RELAUNCH_ENV = "VBOT_DESKTOP_RELAUNCH"
+#: Wildcard bind addresses: the Desktop reaches such a server over loopback.
+_WILDCARD_HOSTS = frozenset({"", "*", "0.0.0.0", "::"})
+_LOOPBACK_HOST = "127.0.0.1"
 
 
 def open_desktop(
@@ -24,10 +27,13 @@ def open_desktop(
 ) -> None:
     """Resolve the active version and launch under the removal-admission lock.
 
-    ``open_session`` names an Agent address and Session id for the Desktop to
-    show; an already running Desktop receives it through its own handoff.
-    The Desktop also receives :data:`RELAUNCH_ENV`, so it can restart into a
-    version activated while it runs.
+    Without ``host`` and ``port`` the Desktop of an installation with a server
+    opens that server: over loopback when it binds a wildcard address, and with
+    ``--server-data-dir``, so it signs in with the server's local access token
+    instead of pairing. ``open_session`` names an Agent address and Session id
+    for the Desktop to show; an already running Desktop receives it through its
+    own handoff. The Desktop also receives :data:`RELAUNCH_ENV`, so it can
+    restart into a version activated while it runs.
     """
     from cli.application.state import ensure_not_removing
 
@@ -45,7 +51,12 @@ def open_desktop(
                 arguments.extend(("--port", str(port)))
         elif install.owns_server:
             assert install.server_host is not None and install.server_port is not None
-            arguments.extend(("--host", install.server_host, "--port", str(install.server_port)))
+            server_host = (
+                _LOOPBACK_HOST if install.server_host in _WILDCARD_HOSTS else install.server_host
+            )
+            arguments.extend(("--host", server_host, "--port", str(install.server_port)))
+            if install.server_data_directory is not None:
+                arguments.extend(("--server-data-dir", install.server_data_directory))
         if open_session is not None:
             arguments.extend(("--open-session", *open_session))
         subprocess.Popen(
