@@ -16,6 +16,7 @@ from core.providers.accounts import (
 )
 from core.providers.providers import custom_provider_credential_key
 from core.providers.wire_profiles import custom_provider_wire_file
+from core.secrets import CREDENTIALS, SecretStoreUnavailableError, credential_name_key
 from core.settings.normalizers import (
     custom_provider_revision,
     normalize_custom_provider_id,
@@ -321,14 +322,28 @@ async def _delete_custom_provider(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _remove_custom_provider_credentials(runtime: Any, provider_id: str) -> int:
-    base_key = custom_provider_credential_key(provider_id)
+    """Remove every stored credential of the Provider, damaged ones included.
+
+    Returns how many were removed. An unavailable Secret Store cannot be
+    written: its entries stay, unusable until its key returns, and a warning
+    names the Provider.
+    """
+    base_key = credential_name_key(custom_provider_credential_key(provider_id))
     account_prefix = f"{base_key}{CREDENTIAL_KEY_ACCOUNT_SEPARATOR}"
-    credential_keys = [
-        key
-        for key in runtime.storage.load_environment()
-        if key == base_key or key.startswith(account_prefix)
-    ]
-    return sum(bool(runtime.storage.remove_data_dir_credential(key)) for key in credential_keys)
+    try:
+        names = [
+            name
+            for name in runtime.storage.secrets.entry_names(CREDENTIALS)
+            if credential_name_key(name) == base_key
+            or credential_name_key(name).startswith(account_prefix)
+        ]
+        return sum(bool(runtime.storage.remove_data_dir_credential(name)) for name in names)
+    except SecretStoreUnavailableError:
+        _LOGGER.warning(
+            "Custom Provider credentials stay in the unavailable Secret Store (provider=%s)",
+            provider_id,
+        )
+        return 0
 
 
 def _account_param(params: JsonObject) -> str | None:
@@ -395,7 +410,9 @@ async def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
             runtime.storage.set_data_dir_credential, credential_key, value
         )
         for key in environment:
-            if key != credential_key and (
+            # On Windows another spelling of the name is the same credential, which
+            # the write has just replaced; removing it would remove the new value.
+            if credential_name_key(key) != credential_name_key(credential_key) and (
                 account_id_from_credential_key(connection.auth.credential_key, key) == account_id
             ):
                 await _CONNECTION_WORKERS.run(runtime.storage.remove_data_dir_credential, key)

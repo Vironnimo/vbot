@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,7 +26,7 @@ from core.database import (
 )
 from core.database.marker import begin_maintenance, read_maintenance
 from core.database.recovery import incident_path
-from core.secrets import CREDENTIALS, SecretStore
+from core.secrets import CREDENTIALS, KeyFileProtection, SecretStore
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.cli.cli_test_support import FakeRpc, RunCli
 from tests.core.database.database_test_support import notes_spec
@@ -202,10 +203,19 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
             config_backup_show_fn=config_show,
             config_backup_restore_fn=config_restore,
         ).ok
+    prompts: list[str] = []
+
+    def read_secret(prompt: str) -> str:
+        prompts.append(prompt)
+        return "piped-value"
+
     for args in (
         parse_args(["data-store", "secrets", "status"]),
         parse_args(["data-store", "secrets", "convert", "--yes"]),
         parse_args(["data-store", "secrets", "reset"]),
+        parse_args(["data-store", "secrets", "list"]),
+        parse_args(["data-store", "secrets", "set", "GITHUB_TOKEN"]),
+        parse_args(["data-store", "secrets", "unset", "GITHUB_TOKEN"]),
     ):
         assert dispatch_data_store_command(
             args,
@@ -217,7 +227,19 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
             secrets_reset_fn=lambda resolved, confirm: _recorded(
                 calls, "secrets reset", confirm, resolved
             ),
+            secrets_list_fn=lambda resolved: _recorded(calls, "secrets list", None, resolved),
+            secrets_set_fn=lambda resolved, name, value: _recorded(
+                calls, "secrets set", (name, value), resolved
+            ),
+            secrets_unset_fn=lambda resolved, name: _recorded(
+                calls, "secrets unset", name, resolved
+            ),
+            read_secret_fn=read_secret,
         ).ok
+    # The value is never an argument: only a prompt or stdin supplies it.
+    with pytest.raises(SystemExit):
+        parse_args(["data-store", "secrets", "set", "GITHUB_TOKEN", "ghp-secret"])
+    assert prompts == ["Value of GITHUB_TOKEN (not shown): "]
     assert calls == [
         ("status", (instance, False)),
         ("create", "update"),
@@ -232,6 +254,9 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
         ("secrets status", None),
         ("secrets convert", True),
         ("secrets reset", False),
+        ("secrets list", None),
+        ("secrets set", ("GITHUB_TOKEN", "piped-value")),
+        ("secrets unset", "GITHUB_TOKEN"),
     ]
 
 
@@ -763,3 +788,179 @@ def test_secrets_convert_runs_while_the_server_is_stopped_and_reset_spares_an_op
     assert not reset.ok and "the Secret Store is available" in reset.message
     assert calls == ["stop", "start"]
     assert SecretStore(tmp_path).entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai"
+
+
+class _StatusPayload:
+    ok = True
+
+    def __init__(self, secrets: dict[str, object]) -> None:
+        self.data = {"state": "ok", "secrets": secrets}
+
+
+@pytest.mark.parametrize(
+    ("server", "refusal"),
+    [
+        ("opens it", "the running server reports the Secret Store available"),
+        ("searches elsewhere", "the running server would not find the key"),
+        ("on another port", "a vBot server is running on the data directory (port 8421)"),
+        ("cannot open it either", None),
+        ("stopped", None),
+    ],
+)
+def test_secrets_reset_replaces_only_a_store_the_server_cannot_open_either(
+    tmp_path: Path, monkeypatch, server: str, refusal: str | None
+) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    # The server's key lies where this command's environment does not look.
+    server_keys = tmp_path / "server-keys"
+    server_store = SecretStore(
+        tmp_path, protections=(KeyFileProtection(directories=(server_keys,)),)
+    )
+    server_store.set_entry(CREDENTIALS, "OPENAI_API_KEY", "sk-openai")
+    local = SecretStore(tmp_path).status()
+    assert local.state == "unavailable"
+    document = (tmp_path / "secrets.json").read_bytes()
+    server_status: dict[str, object] = {
+        "state": "available" if server == "opens it" else "unavailable",
+        "key_locations": [str(server_keys / f"{local.store_id}.key")],
+        "new_key_location": (
+            local.new_key_location if server == "cannot open it either" else str(server_keys)
+        ),
+    }
+    running = server in {"opens it", "searches elsewhere", "cannot open it either"}
+    calls: list[str] = []
+
+    def record(action: str) -> Callable[[ServerInstance], CommandResult]:
+        def run(resolved: ServerInstance) -> CommandResult:
+            calls.append(action)
+            return CommandResult(ok=True, message=action, instance=resolved)
+
+        return run
+
+    monkeypatch.setattr(
+        data_store_management,
+        "rpc_call",
+        lambda *_args: (
+            _StatusPayload(server_status) if running else _FailedPayload(instance, "refused")
+        ),
+    )
+    monkeypatch.setattr(
+        data_store_management,
+        "probe_health",
+        lambda _instance: HealthProbeResult(reachable=running, is_vbot=running),
+    )
+    monkeypatch.setattr(
+        data_store_management,
+        "live_server_ports",
+        lambda _data_dir: (8421,) if server == "on another port" else (),
+    )
+    _classified(monkeypatch, "running" if running else "absent", "absent")
+    monkeypatch.setattr(data_store_management, "stop_server", record("stop"))
+    monkeypatch.setattr(data_store_management, "start_server", record("start"))
+
+    result = data_store_management.data_store_secrets_reset(instance, True)
+
+    if refusal is not None:
+        assert not result.ok and refusal in result.message
+        if running:
+            # Both lookups are named, so the operator sees why the two differ.
+            assert local.key_locations[0] in result.message
+            assert str(server_keys) in result.message
+        assert calls == []
+        assert (tmp_path / "secrets.json").read_bytes() == document
+        return
+    assert result.ok, result.message
+    assert calls == (["stop", "start"] if running else ["stop"])
+    replaced = SecretStore(tmp_path).status()
+    assert replaced.state == "available" and replaced.credentials == 0
+    assert f"the new key is at {replaced.key_location}" in result.message
+    [kept] = (tmp_path / "quarantine" / "secret-store").iterdir()
+    old = SecretStore(kept, protections=(KeyFileProtection(directories=(server_keys,)),))
+    assert old.entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai"
+
+
+@pytest.mark.parametrize("terminal", [True, False])
+def test_a_secret_value_comes_from_a_hidden_prompt_or_from_piped_stdin(
+    monkeypatch, terminal: bool
+) -> None:
+    import getpass
+    import io
+    import sys
+
+    from cli._input import _read_secret
+
+    stdin = SimpleNamespace(isatty=lambda: terminal, buffer=io.BytesIO(b"ghp-piped\r\n"))
+    monkeypatch.setattr(sys, "stdin", stdin)
+    prompts: list[str] = []
+
+    def hidden(prompt: str) -> str:
+        prompts.append(prompt)
+        return "ghp-typed"
+
+    monkeypatch.setattr(getpass, "getpass", hidden)
+
+    value = _read_secret("Value: ")
+
+    assert value == ("ghp-typed" if terminal else "ghp-piped")
+    assert prompts == (["Value: "] if terminal else [])
+
+
+class _Answered:
+    ok = True
+
+    def __init__(self, data: dict[str, object]) -> None:
+        self.data = data
+
+
+def test_secrets_set_and_unset_go_through_the_server_or_write_locally_while_none_runs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    requests: list[tuple[str, dict]] = []
+
+    def answered(_instance, method: str, params: dict) -> _Answered:
+        requests.append((method, params))
+        return _Answered({"name": params["name"], "changed": True, "source": "data_dir"})
+
+    monkeypatch.setattr(data_store_management, "rpc_call", answered)
+    through_server = data_store_management.data_store_secrets_set(instance, "GH_TOKEN", "ghp-x")
+
+    assert through_server.ok and "ghp-x" not in through_server.message
+    assert requests == [("secrets.set", {"name": "GH_TOKEN", "value": "ghp-x"})]
+    assert not (tmp_path / "secrets.json").exists()
+    # Refused before anything is sent; a mistyped name is never repeated.
+    for name, value, problem in (
+        ("ghp-pasted-into-the-name", "x", "environment variable name"),
+        ("GH_TOKEN", "", "no value was given"),
+        ("GH_TOKEN", "ghp-a\nghp-b", "single line"),
+    ):
+        refused = data_store_management.data_store_secrets_set(instance, name, value)
+        assert not refused.ok and problem in refused.message
+        assert "ghp-" not in refused.message
+    assert len(requests) == 1
+
+    _stopped_server(monkeypatch, instance)
+    monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: ())
+    saved = data_store_management.data_store_secrets_set(instance, "GH_TOKEN", "ghp-x")
+    listed = data_store_management.data_store_secrets_list(instance)
+
+    assert saved.ok, saved.message
+    assert json.loads(saved.message) == {"name": "GH_TOKEN", "changed": True, "local": True}
+    assert SecretStore(tmp_path).entry(CREDENTIALS, "GH_TOKEN") == "ghp-x"
+    assert json.loads(listed.message)["credentials"] == [
+        {"name": "GH_TOKEN", "configured": True, "source": "data_dir", "damaged": False}
+    ]
+    assert "ghp-x" not in listed.message
+
+    # Another server runs on the data directory: nothing changes locally.
+    monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: (8421,))
+    refused = data_store_management.data_store_secrets_unset(instance, "GH_TOKEN")
+    assert not refused.ok and "port 8421" in refused.message
+    assert SecretStore(tmp_path).entry(CREDENTIALS, "GH_TOKEN") == "ghp-x"
+
+    monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: ())
+    removed = data_store_management.data_store_secrets_unset(instance, "GH_TOKEN")
+    assert json.loads(removed.message) == {"name": "GH_TOKEN", "removed": True, "local": True}
+    assert SecretStore(tmp_path).entry_names(CREDENTIALS) == ()

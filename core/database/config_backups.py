@@ -110,6 +110,11 @@ _MANIFEST_KEYS = frozenset(
 )
 _FILE_KEYS = frozenset({"sha256", "file_size", "mode"})
 _UNREADABLE_MANIFESTS = LoggedConditions()
+# ``core.json_documents.DOCUMENTS_KEPT_BY_RESTORES``: restored only when named.
+_KEPT_BY_FULL_RESTORE = (
+    "restoring every file keeps the Secret Store, which holds the credentials and OAuth "
+    "tokens changed since the backup; name this file to restore it"
+)
 
 
 @dataclass(frozen=True)
@@ -739,7 +744,8 @@ def restore_config_backup(
 ) -> ConfigRestore:
     """Restore files of one configuration backup while no server runs on ``data_dir``.
 
-    ``paths`` names the files to restore (``None``: every file of the backup).
+    ``paths`` names the files to restore (``None``: every file of the backup
+    except the Secret Store, which is restored only when named).
     A named file that is not in the backup, is damaged there, whose folder
     no longer exists (a deleted or renamed Agent, Project or Channel), or that
     is a link or lies below a linked folder (symbolic link or junction, which
@@ -787,6 +793,13 @@ def _restore_config_backup_locked(
         if item is None:
             raise ValueError(f"{path} is not in configuration backup {backup_id}")
         problem = _restore_problem(data_dir, item)
+        if (
+            problem is None
+            and not explicit
+            and current.get(path) != item.sha256
+            and json_documents.is_kept_by_restores(path)
+        ):
+            problem = _KEPT_BY_FULL_RESTORE
         if problem is not None:
             if explicit:
                 raise ValueError(f"{path} cannot be restored: {problem}")

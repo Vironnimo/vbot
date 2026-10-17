@@ -97,12 +97,13 @@ def test_a_document_keeps_its_permissions_through_snapshots_and_restores(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, mode: int
 ) -> None:
     original = '{"format_version": 1}\n'
-    token = write_document(data_dir, "secrets.json", original)
+    token = write_document(data_dir, "cron/jobs.json", original)
     token.chmod(mode)
     permissions = stat.S_IMODE(token.stat().st_mode)
 
     first = snapshot_with_notes(data_dir, "saved")
-    assert stat.S_IMODE((first / "documents" / "secrets.json").stat().st_mode) == (permissions)
+    copy = first / "documents" / "cron" / "jobs.json"
+    assert stat.S_IMODE(copy.stat().st_mode) == permissions
     # A failed attempt and retention remove copies whatever their bits.
     with monkeypatch.context() as patched:
         patched.setattr(snapshots_module, "verify_database_file", _corrupt)
@@ -222,6 +223,9 @@ def test_the_document_set_is_restored_as_one_unit(data_dir: Path) -> None:
     write_document(data_dir, "settings.json", '{"format_version": 1, "theme": "light"}\n')
     (data_dir / "agents" / "main" / "agent.json").unlink()
     extra = write_document(data_dir, "channels/new/channel.json", '{"format_version": 1}\n')
+    # A credential set after the snapshot: the Secret Store is never rolled back.
+    secrets = '{"format_version": 1, "credentials": {"KEY": "newer"}}\n'
+    write_document(data_dir, "secrets.json", secrets)
 
     plan = restore_data_snapshot(data_dir, snapshot, names=(), documents=True, check_only=True)
     assert plan.databases == ()
@@ -232,7 +236,9 @@ def test_the_document_set_is_restored_as_one_unit(data_dir: Path) -> None:
     result = restore_data_snapshot(data_dir, snapshot, names=(), documents=True)
 
     for relative, text in _DOCUMENTS.items():
-        assert data_dir.joinpath(*relative.split("/")).read_text(encoding="utf-8") == text
+        if relative != "secrets.json":
+            assert data_dir.joinpath(*relative.split("/")).read_text(encoding="utf-8") == text
+    assert (data_dir / "secrets.json").read_text(encoding="utf-8") == secrets
     assert not extra.exists()
     assert result.documents is not None
     assert result.documents.quarantine is not None
@@ -244,6 +250,22 @@ def test_the_document_set_is_restored_as_one_unit(data_dir: Path) -> None:
     # Databases were not selected.
     assert stored_bodies(notes_spec(data_dir)) == ["saved", "later"]
     assert read_maintenance(data_dir) is None
+
+    # A snapshot taken before the plaintext conversion holds no Secret Store:
+    # restoring it keeps the one that now holds the credentials.
+    def before_conversion(payload: dict[str, Any]) -> None:
+        del payload["documents"]["secrets.json"]
+
+    rewrite_manifest(snapshot, before_conversion)
+    (snapshot / "documents" / "secrets.json").unlink()
+    write_document(data_dir, "settings.json", '{"format_version": 1, "theme": "light"}\n')
+
+    result = restore_data_snapshot(data_dir, snapshot, names=(), documents=True)
+
+    assert result.documents is not None
+    assert result.documents.restored == ("settings.json",)
+    assert result.documents.removed == ()
+    assert (data_dir / "secrets.json").read_text(encoding="utf-8") == secrets
 
 
 def test_an_unchanged_document_set_moves_nothing(data_dir: Path) -> None:
@@ -262,7 +284,7 @@ def test_a_failed_document_quarantine_rolls_back_and_keeps_the_guard(
     snapshot = _with_documents(data_dir)
     changed = '{"format_version": 1, "theme": "light"}\n'
     write_document(data_dir, "settings.json", changed)
-    write_document(data_dir, "secrets.json", '{"format_version": 1, "credentials": "new"}\n')
+    write_document(data_dir, "agents/main/agent.json", '{"format_version": 1, "id": "new"}\n')
     real_replace = os.replace
     moves: list[Path] = []
 
@@ -278,7 +300,7 @@ def test_a_failed_document_quarantine_rolls_back_and_keeps_the_guard(
         restore_data_snapshot(data_dir, snapshot, names=(), documents=True)
 
     assert (data_dir / "settings.json").read_text(encoding="utf-8") == changed
-    assert "new" in (data_dir / "secrets.json").read_text(encoding="utf-8")
+    assert "new" in (data_dir / "agents" / "main" / "agent.json").read_text(encoding="utf-8")
     assert read_maintenance(data_dir) is not None
     assert not [path for path in data_dir.rglob("*.tmp") if ".restore." in path.name], (
         "staged copies are removed"
@@ -317,5 +339,9 @@ def test_retired_document_copies_leave_every_snapshot_usable(data_dir: Path) -> 
     assert remove_retired_document_copies(data_dir, ("oauth/*.json",)) == 1
 
     assert not (snapshot / "documents" / "oauth").exists()
+    # The manifest still names the purged copy; this vBot never reads it, so the
+    # snapshot still verifies and restores.
     assert list_data_snapshots(data_dir) == [snapshot]
+    plan = restore_data_snapshot(data_dir, snapshot, names=(), documents=True, check_only=True)
+    assert plan.documents is not None and not plan.documents.changed
     assert remove_retired_document_copies(data_dir, ("oauth/*.json",)) == 0

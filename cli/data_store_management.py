@@ -4,13 +4,14 @@ backups and Secret Store."""
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from cli.rpc_client import rpc_call
+from cli.rpc_client import RpcPayload, rpc_call
 from cli.server_management import (
     CommandResult,
+    HealthProbeResult,
     ServerInstance,
     classify_server,
     probe_health,
@@ -40,6 +41,7 @@ from core.utils.server_control import live_server_ports
 
 if TYPE_CHECKING:
     from core.database import DatabaseSpec
+    from core.storage import StorageManager
 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", "::"})
 _LOCAL_ONLY_MESSAGE = (
@@ -104,6 +106,30 @@ def data_store_unregister(instance: ServerInstance, name: str, confirm: bool) ->
     payload = rpc_call(instance, "data_store.unregister", {"name": name})
     if payload.ok:
         return _json_result(instance, payload.data)
+    health = _stopped_server_health(instance, payload)
+    if isinstance(health, CommandResult):
+        return health
+    try:
+        released = unregister_database(instance.data_dir, name)
+    except (OSError, ValueError, DatabaseError) as exc:
+        return CommandResult(ok=False, message=str(exc), instance=instance, health=health)
+    return CommandResult(
+        ok=True,
+        message=_dump({"unregistered": _released_projection(released), "source": "local"}),
+        instance=instance,
+        health=health,
+    )
+
+
+def _stopped_server_health(
+    instance: ServerInstance, payload: RpcPayload
+) -> HealthProbeResult | CommandResult:
+    """After ``payload`` failed: the health of a stopped loopback target, or why not local.
+
+    A local change is allowed only when the target is a loopback address that
+    does not answer and no other server runs on its data directory; otherwise
+    the result is the server's error or a refusal.
+    """
     health = probe_health(instance)
     if health.reachable or instance.host not in _LOOPBACK_HOSTS:
         return payload.to_command_result()
@@ -127,16 +153,7 @@ def data_store_unregister(instance: ServerInstance, name: str, confirm: bool) ->
             instance=instance,
             health=health,
         )
-    try:
-        released = unregister_database(instance.data_dir, name)
-    except (OSError, ValueError, DatabaseError) as exc:
-        return CommandResult(ok=False, message=str(exc), instance=instance, health=health)
-    return CommandResult(
-        ok=True,
-        message=_dump({"unregistered": _released_projection(released), "source": "local"}),
-        instance=instance,
-        health=health,
-    )
+    return health
 
 
 def _released_projection(released: UnregisteredDatabase) -> dict[str, Any]:
@@ -384,6 +401,137 @@ def data_store_secrets_status(instance: ServerInstance) -> CommandResult:
     )
 
 
+def data_store_secrets_list(instance: ServerInstance) -> CommandResult:
+    """List the stored credential names with their state and source; never a value.
+
+    The running server answers with the source its Runtime resolves (its process
+    environment first). When a loopback target is stopped and no server runs on
+    the data directory, the store is read directly: ``source`` then names only
+    the store (``data_dir`` or ``null``), since the server's environment is unknown.
+    """
+    payload = rpc_call(instance, "secrets.list", {})
+    if payload.ok:
+        return _json_result(instance, payload.data)
+    health = _stopped_server_health(instance, payload)
+    if isinstance(health, CommandResult):
+        return health
+    from core.secrets import CREDENTIALS, SecretStore
+
+    store = SecretStore(instance.data_dir)
+    status = store.status()
+    values = store.entries(CREDENTIALS)
+    damaged = {
+        entry.partition("/")[2] for entry in status.damaged if entry.startswith(f"{CREDENTIALS}/")
+    }
+    projection = {
+        "state": status.state,
+        "reason": status.reason,
+        "credentials": [
+            {
+                "name": name,
+                "configured": bool(values.get(name, "").strip()),
+                "source": "data_dir" if name in values else None,
+                "damaged": name in damaged,
+            }
+            for name in store.entry_names(CREDENTIALS)
+        ],
+        "local": True,
+    }
+    return CommandResult(
+        ok=status.state != "unavailable",
+        message=_dump(projection),
+        instance=instance,
+        health=health,
+    )
+
+
+def data_store_secrets_set(instance: ServerInstance, name: str, value: str) -> CommandResult:
+    """Store ``value`` as the credential ``name``; the value never appears in output.
+
+    The running server stores it and reloads its credentials. When a loopback
+    target is stopped and no server runs on the data directory, the Secret
+    Store is written directly and the next start loads it.
+    """
+    problem = _credential_name_problem(name) or _credential_value_problem(value)
+    if problem is not None:
+        return CommandResult(ok=False, message=f"{problem}; nothing was changed", instance=instance)
+    payload = rpc_call(instance, "secrets.set", {"name": name, "value": value})
+    if payload.ok:
+        return _json_result(instance, payload.data)
+    health = _stopped_server_health(instance, payload)
+    if isinstance(health, CommandResult):
+        return health
+
+    def write(storage: StorageManager) -> dict[str, Any]:
+        return {"name": name, "changed": storage.set_data_dir_credential(name, value)}
+
+    return _change_credential_locally(instance, health, write)
+
+
+def data_store_secrets_unset(instance: ServerInstance, name: str) -> CommandResult:
+    """Remove the stored credential ``name``; a process-environment value stays.
+
+    Like ``set``, through the running server or, while none runs, directly.
+    """
+    problem = _credential_name_problem(name)
+    if problem is not None:
+        return CommandResult(ok=False, message=f"{problem}; nothing was changed", instance=instance)
+    payload = rpc_call(instance, "secrets.unset", {"name": name})
+    if payload.ok:
+        return _json_result(instance, payload.data)
+    health = _stopped_server_health(instance, payload)
+    if isinstance(health, CommandResult):
+        return health
+
+    def remove(storage: StorageManager) -> dict[str, Any]:
+        return {"name": name, "removed": storage.remove_data_dir_credential(name)}
+
+    return _change_credential_locally(instance, health, remove)
+
+
+def _change_credential_locally(
+    instance: ServerInstance,
+    health: HealthProbeResult,
+    change: Callable[[StorageManager], dict[str, Any]],
+) -> CommandResult:
+    from core.storage import StorageManager
+
+    if not instance.data_dir.is_dir():
+        return CommandResult(
+            ok=False,
+            message=f"the data directory {instance.data_dir.as_posix()} does not exist",
+            instance=instance,
+            health=health,
+        )
+    try:
+        result = change(StorageManager(instance.data_dir))
+    except (OSError, StorageError) as exc:
+        return CommandResult(ok=False, message=str(exc), instance=instance, health=health)
+    return CommandResult(
+        ok=True, message=_dump({**result, "local": True}), instance=instance, health=health
+    )
+
+
+def _credential_name_problem(name: str) -> str | None:
+    """Why ``name`` is no credential name; never repeats it (it may be a pasted value)."""
+    from core.storage.storage import ENV_KEY_PATTERN
+
+    if len(name) > 200 or ENV_KEY_PATTERN.fullmatch(name) is None:
+        return (
+            "a credential name is an environment variable name: letters, digits and "
+            "underscores, not starting with a digit, at most 200 characters"
+        )
+    return None
+
+
+def _credential_value_problem(value: str) -> str | None:
+    if not value:
+        return "no value was given"
+    if "\n" in value or "\r" in value:
+        return "the value must be a single line"
+    return None
+
+
 def data_store_secrets_convert(instance: ServerInstance, confirm: bool) -> CommandResult:
     """Import the plaintext credential files into the Secret Store, then delete them.
 
@@ -436,7 +584,8 @@ def data_store_secrets_convert(instance: ServerInstance, confirm: bool) -> Comma
         )
 
     def convert() -> str:
-        imported = import_plaintext_credentials(store)
+        # An explicit import never removes an entry; only a pending update's does.
+        imported = import_plaintext_credentials(store, remove_missing=False)
         retired = retire_plaintext_credentials(store)
         parts: list[str] = []
         if imported is not None:
@@ -444,17 +593,25 @@ def data_store_secrets_convert(instance: ServerInstance, confirm: bool) -> Comma
                 f"imported {len(imported.credentials)} credentials and "
                 f"{len(imported.oauth_tokens)} OAuth logins"
             )
+            # Line numbers only: the text of such a line may be a pasted secret.
             parts.extend(
                 f"{item} left out: {reason}" for item, reason in sorted(imported.skipped.items())
             )
+            if imported.conflicts:
+                parts.append(
+                    "kept the Secret Store's own values of "
+                    + ", ".join(imported.conflicts)
+                    + " (the files hold others)"
+                )
         if retired is not None:
             if retired.deleted:
                 parts.append("deleted " + ", ".join(retired.deleted))
             parts.extend(f"{path} kept: {reason}" for path, reason in sorted(retired.kept.items()))
-            if retired.backup_entries or retired.snapshot_copies:
+            if retired.backup_entries or retired.snapshot_copies or retired.quarantine_copies:
                 parts.append(
-                    f"purged {retired.backup_entries} configuration-backup entries and "
-                    f"{retired.snapshot_copies} data-snapshot copies"
+                    f"purged {retired.backup_entries} configuration-backup entries, "
+                    f"{retired.snapshot_copies} data-snapshot copies and "
+                    f"{retired.quarantine_copies} quarantined copies"
                 )
             if not retired.backups_complete:
                 parts.append(
@@ -476,7 +633,10 @@ def data_store_secrets_reset(instance: ServerInstance, confirm: bool) -> Command
 
     The old store moves to quarantine, never deleted: restoring its key file
     (Linux) or the Windows account it belongs to makes it readable again. Only
-    an unavailable store is replaced.
+    a store this command cannot open is replaced, and while a server runs on
+    the data directory only one that server cannot open either and whose new
+    key it would find: the key lookup depends on the environment and account
+    of the process.
     """
     if instance.host not in _LOOPBACK_HOSTS:
         return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
@@ -493,24 +653,58 @@ def data_store_secrets_reset(instance: ServerInstance, confirm: bool) -> Command
 
     store = SecretStore(instance.data_dir)
     status = store.status()
+    searched = _key_lookup(status.key_locations, status.new_key_location)
     if status.state != "unavailable":
         return CommandResult(
             ok=False,
             message=(
                 f"the Secret Store is {status.state}; reset only replaces a store whose key "
-                "is lost or wrong"
+                f"is lost or wrong (this command {searched})"
             ),
             instance=instance,
         )
+    server = _server_secret_store(instance)
+    if isinstance(server, CommandResult):
+        return server
+    if server is not None:
+        server_searched = _key_lookup(
+            server.get("key_locations") or (), server.get("new_key_location")
+        )
+        if server.get("state") != "unavailable":
+            return CommandResult(
+                ok=False,
+                message=(
+                    f"the running server reports the Secret Store {server.get('state')}, but "
+                    f"this command cannot open it ({status.reason}); nothing was changed. "
+                    f"The server {server_searched}; this command {searched}. Run the command "
+                    "with the server's environment and account (VBOT_SECRET_KEY_FILE, HOME)"
+                ),
+                instance=instance,
+            )
+        if server.get("new_key_location") != status.new_key_location:
+            return CommandResult(
+                ok=False,
+                message=(
+                    "the running server would not find the key this command creates; nothing "
+                    f"was changed. The server {server_searched}; this command {searched}. "
+                    "Run the command with the server's environment and account "
+                    "(VBOT_SECRET_KEY_FILE, HOME)"
+                ),
+                instance=instance,
+            )
 
     def reset() -> str:
         replaced = store.reset()
         kept = (
             "the old store was already gone"
             if replaced.quarantine is None
-            else f"the old store is kept at {replaced.quarantine.as_posix()}"
+            else f"the old store is kept at {replaced.quarantine.as_posix()} and opens "
+            f"again with its key (searched: {', '.join(status.key_locations)})"
         )
-        return f"{kept}; enter the credentials and OAuth logins again"
+        return (
+            f"{kept}; the new key is at {replaced.status.key_location}; enter the "
+            "credentials and OAuth logins again"
+        )
 
     return _change_while_stopped(
         instance,
@@ -519,6 +713,59 @@ def data_store_secrets_reset(instance: ServerInstance, confirm: bool) -> Command
         subject="Secret Store",
         done="started a new empty Secret Store",
     )
+
+
+def _key_lookup(locations: Iterable[str], new_location: object) -> str:
+    """Where a process searches a store's key and creates a new one, for refusals."""
+    searched = ", ".join(str(location) for location in locations) or "nothing"
+    return f"searches {searched} and creates a new key at {new_location}"
+
+
+def _server_secret_store(instance: ServerInstance) -> dict[str, Any] | CommandResult | None:
+    """The running server's Secret Store status, ``None`` when no server runs, or a refusal."""
+    payload = rpc_call(instance, "data_store.status", {})
+    if payload.ok:
+        data = payload.data if isinstance(payload.data, Mapping) else {}
+        secrets = data.get("secrets")
+        if isinstance(secrets, dict):
+            return secrets
+        return CommandResult(
+            ok=False,
+            message="the running server reports no Secret Store status; nothing was changed",
+            instance=instance,
+        )
+    health = probe_health(instance)
+    if health.reachable:
+        return CommandResult(
+            ok=False,
+            message=(
+                "the running server did not report its Secret Store status "
+                f"({payload.to_command_result().message}); a reset is refused while it runs"
+            ),
+            instance=instance,
+            health=health,
+        )
+    try:
+        ports = live_server_ports(instance.data_dir)
+    except OSError as exc:
+        return CommandResult(
+            ok=False,
+            message=f"the servers running on the data directory could not be checked ({exc})",
+            instance=instance,
+            health=health,
+        )
+    if ports:
+        return CommandResult(
+            ok=False,
+            message=(
+                "a vBot server is running on the data directory (port "
+                + ", ".join(str(port) for port in ports)
+                + "); run the command against that server"
+            ),
+            instance=instance,
+            health=health,
+        )
+    return None
 
 
 def _change_while_stopped(

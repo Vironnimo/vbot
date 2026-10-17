@@ -198,11 +198,23 @@ DATA_STORE_HELP = {
     ),
     "incident": "Manage durable database recovery incidents",
     "unregister": "Release the database of a removed Extension (files move to quarantine)",
-    "secrets": "Inspect, convert or replace the encrypted Secret Store of the credentials",
+    "secrets": (
+        "List, set and unset the credentials in the encrypted Secret Store, or inspect, "
+        "convert or replace the store"
+    ),
 }
 
 
 DATA_STORE_SECRETS_HELP = {
+    "list": (
+        "List the stored credential names with their state and where each value comes "
+        "from; never a value"
+    ),
+    "set": (
+        "Store a credential under <NAME>; the value is read from a hidden prompt or from "
+        "stdin, never from the command line"
+    ),
+    "unset": "Remove the stored credential <NAME>; a process-environment value stays",
     "status": "Show the Secret Store's state and ignored plaintext credential files",
     "convert": (
         "Import the plaintext .env and OAuth token files into the Secret Store, then delete them"

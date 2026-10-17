@@ -217,7 +217,11 @@ def test_restoring_a_whole_backup_leaves_newer_files_and_vanished_or_linked_fold
     _write(data_dir, "agents/nova/agent.json", '{"format_version": 1, "id": "nova"}\n')
     _write(data_dir, "agents/gone/agent.json", '{"format_version": 1, "id": "gone"}\n')
     _write(data_dir, "agents/linked/agent.json", '{"format_version": 1, "id": "linked"}\n')
+    _write(data_dir, "secrets.json", '{"format_version": 1, "credentials": {"KEY": "old"}}\n')
     backup_id = _backup(data_dir)
+    # Credentials changed after the backup: only a restore naming the store replaces it.
+    newer_secrets = '{"format_version": 1, "credentials": {"KEY": "newer"}}\n'
+    _write(data_dir, "secrets.json", newer_secrets)
     # A folder replaced by a link: backups never read through it, so a restore
     # must not write through it either.
     linked = data_dir / "agents" / "linked"
@@ -236,7 +240,13 @@ def test_restoring_a_whole_backup_leaves_newer_files_and_vanished_or_linked_fold
     restored = restore_config_backup(data_dir, backup_id)
 
     assert restored.restored == ("agents/nova/agent.json",)
-    assert set(restored.skipped) == {"agents/gone/agent.json", "agents/linked/agent.json"}
+    assert set(restored.skipped) == {
+        "agents/gone/agent.json",
+        "agents/linked/agent.json",
+        "secrets.json",
+    }
+    assert "name this file" in restored.skipped["secrets.json"]
+    assert _read(data_dir, "secrets.json") == newer_secrets
     assert restored.created_after == ("agents/new/agent.json",)
     assert not data_dir.joinpath("agents", "gone").exists()
     assert data_dir.joinpath("agents", "new", "agent.json").exists()
@@ -245,6 +255,9 @@ def test_restoring_a_whole_backup_leaves_newer_files_and_vanished_or_linked_fold
         restore_config_backup(data_dir, backup_id, paths=["agents/gone/agent.json"])
     with pytest.raises(ValueError, match="is a link"):
         restore_config_backup(data_dir, backup_id, paths=["agents/linked/agent.json"])
+    named = restore_config_backup(data_dir, backup_id, paths=["secrets.json"])
+    assert named.restored == ("secrets.json",)
+    assert "old" in _read(data_dir, "secrets.json")
 
 
 def test_a_restore_verifies_every_copy_before_it_changes_anything(data_dir: Path) -> None:

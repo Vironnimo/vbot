@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from core.secrets import SECRET_STORE_FILE_NAME
+from core.secrets import CREDENTIALS, SECRET_STORE_FILE_NAME
 from core.storage import DataDirectoryLayout, StorageError, StorageManager
 
 
@@ -118,3 +118,40 @@ def test_set_data_dir_credential_rejects_invalid_value(tmp_path: Path, value: st
 
     with pytest.raises(StorageError):
         storage.set_data_dir_credential("OPENROUTER_API_KEY", value)
+
+
+@pytest.mark.parametrize("ignore_case", [True, False], ids=["windows", "posix"])
+def test_credential_names_follow_the_platform_case_rules(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ignore_case: bool
+) -> None:
+    monkeypatch.setattr("core.secrets.store.CREDENTIAL_NAMES_IGNORE_CASE", ignore_case)
+    storage = StorageManager(tmp_path)
+    storage.set_data_dir_credential("UNRELATED", "kept")
+    # Spellings an earlier build stored side by side.
+    storage.secrets.set_entry(CREDENTIALS, "github_token", "old-lower")
+    storage.secrets.set_entry(CREDENTIALS, "GitHub_Token", "old-mixed")
+
+    if not ignore_case:
+        storage.set_data_dir_credential("GITHUB_TOKEN", "new")
+        assert storage.load_data_dir_credentials() == {
+            "GITHUB_TOKEN": "new",
+            "GitHub_Token": "old-mixed",
+            "UNRELATED": "kept",
+            "github_token": "old-lower",
+        }
+        assert storage.remove_data_dir_credential("github_token") is True
+        assert "GitHub_Token" in storage.load_data_dir_credentials()
+        return
+
+    # One credential, resolved the same way on every load: the first spelling
+    # in sorted order while no all-uppercase one exists.
+    assert storage.load_data_dir_credentials() == {"GitHub_Token": "old-mixed", "UNRELATED": "kept"}
+    # A write replaces every spelling, so an old one can never shadow it.
+    storage.set_data_dir_credential("GITHUB_TOKEN", "new")
+    assert storage.secrets.entry_names(CREDENTIALS) == ("GITHUB_TOKEN", "UNRELATED")
+    # The all-uppercase spelling wins over one stored after it.
+    storage.secrets.set_entry(CREDENTIALS, "github_token", "old-lower")
+    assert storage.load_data_dir_credentials() == {"GITHUB_TOKEN": "new", "UNRELATED": "kept"}
+    # Removing any spelling removes them all.
+    assert storage.remove_data_dir_credential("GitHub_Token") is True
+    assert storage.secrets.entry_names(CREDENTIALS) == ("UNRELATED",)

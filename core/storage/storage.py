@@ -27,7 +27,13 @@ from core.json_documents import (
     strip_unknown_fields,
     write_json_document,
 )
-from core.secrets import CREDENTIALS, SecretStore
+from core.secrets import (
+    CREDENTIALS,
+    SecretStore,
+    SecretTransaction,
+    credential_name_key,
+    fold_credential_names,
+)
 from core.settings import (
     SETTINGS_FORMAT,
     SettingsValidationError,
@@ -162,12 +168,21 @@ class StorageManager:
         return self.load_data_dir_credentials()
 
     def load_data_dir_credentials(self) -> dict[str, str]:
-        """Every data-directory credential that decrypts, by environment-variable name."""
+        """Every data-directory credential that decrypts, by environment-variable name.
 
-        return self.secrets.entries(CREDENTIALS)
+        On Windows, where names ignore case, stored names that differ only in
+        case are one credential, resolved the same way on every call
+        (``core.secrets.fold_credential_names``).
+        """
 
-    def set_data_dir_credential(self, key: str, value: str) -> None:
-        """Write or replace one data-directory credential in the Secret Store."""
+        return fold_credential_names(self.secrets.entries(CREDENTIALS))
+
+    def set_data_dir_credential(self, key: str, value: str) -> bool:
+        """Write or replace one data-directory credential in the Secret Store.
+
+        On Windows the write replaces every stored spelling of the name.
+        Returns whether the store changed.
+        """
 
         if not ENV_KEY_PATTERN.fullmatch(key):
             raise StorageError(f"Invalid environment key: {key}")
@@ -177,11 +192,19 @@ class StorageManager:
             raise StorageError("Credential value must be a single line")
 
         self.ensure_directories()
+
+        def change(transaction: SecretTransaction) -> bool:
+            for name in _spellings(transaction, key):
+                if name != key:
+                    transaction.remove(CREDENTIALS, name)
+            transaction.set(CREDENTIALS, key, value)
+            return transaction.changed
+
         # SecretStoreError is a StorageError: an unavailable store is never written.
-        self.secrets.set_entry(CREDENTIALS, key, value)
+        return self.secrets.update(change)
 
     def remove_data_dir_credential(self, key: str) -> bool:
-        """Remove one data-directory credential.
+        """Remove one data-directory credential, on Windows every spelling of it.
 
         Returns whether a matching entry existed. Process-environment values
         are never touched; removing a key that is also set in the process
@@ -190,7 +213,14 @@ class StorageManager:
 
         if not ENV_KEY_PATTERN.fullmatch(key):
             raise StorageError(f"Invalid environment key: {key}")
-        return self.secrets.remove_entry(CREDENTIALS, key)
+
+        def change(transaction: SecretTransaction) -> bool:
+            names = _spellings(transaction, key)
+            for name in names:
+                transaction.remove(CREDENTIALS, name)
+            return bool(names)
+
+        return self.secrets.update(change)
 
     def build_environment_snapshot(self) -> dict[str, str]:
         """Return process-env-over-data-dir merged credentials without mutation."""
@@ -806,3 +836,12 @@ class StorageManager:
         if resources_dir is not None:
             return Path(resources_dir)
         return Path(__file__).resolve().parents[2] / "resources"
+
+
+def _spellings(transaction: SecretTransaction, key: str) -> tuple[str, ...]:
+    """Every stored credential name that is ``key`` on this system, damaged ones included."""
+
+    wanted = credential_name_key(key)
+    return tuple(
+        name for name in transaction.names(CREDENTIALS) if credential_name_key(name) == wanted
+    )

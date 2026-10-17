@@ -9,7 +9,10 @@ The set is restored as a unit and only on request (an operator restore that
 selects it, or the updater's rollback); corruption auto-restore never touches
 it. Restoring makes the in-scope documents exactly the snapshot's: a document
 whose content differs or that is missing is installed from the snapshot, and
-a document the snapshot does not hold is removed. Every current document that
+a document the snapshot does not hold is removed. The Secret Store
+(``secrets.json``) is the exception: the snapshot holds a copy, but a restore
+keeps the current document, present or absent
+(``core.json_documents.DOCUMENTS_KEPT_BY_RESTORES``). Every current document that
 is replaced or removed first moves to a quarantine batch and is never deleted
 automatically. The caller holds the maintenance guard, so an interrupted
 restore keeps Runtime from starting until it is repeated.
@@ -285,13 +288,29 @@ def live_documents(data_dir: Path) -> dict[str, str]:
 
 
 def plan_document_restore(data_dir: Path, members: Mapping[str, DocumentMember]) -> DocumentRestore:
-    """What restoring ``members`` would install or remove, without changing anything."""
+    """What restoring ``members`` would install or remove, without changing anything.
+
+    Documents that whole-set restores keep (the Secret Store,
+    ``core.json_documents.DOCUMENTS_KEPT_BY_RESTORES``) are neither installed
+    nor removed.
+    """
     current = live_documents(data_dir)
     return DocumentRestore(
         restored=tuple(
-            sorted(path for path, member in members.items() if current.get(path) != member.sha256)
+            sorted(
+                path
+                for path, member in members.items()
+                if current.get(path) != member.sha256
+                and not json_documents.is_kept_by_restores(path)
+            )
         ),
-        removed=tuple(sorted(path for path in current if path not in members)),
+        removed=tuple(
+            sorted(
+                path
+                for path in current
+                if path not in members and not json_documents.is_kept_by_restores(path)
+            )
+        ),
     )
 
 

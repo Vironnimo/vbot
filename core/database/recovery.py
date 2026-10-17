@@ -32,6 +32,7 @@ import logging
 import os
 import shutil
 import sqlite3
+import stat
 import uuid
 from collections.abc import Iterable, Mapping
 from contextlib import closing, suppress
@@ -90,7 +91,7 @@ from core.database.spec import (
     is_extension_database_name,
     validate_database_name,
 )
-from core.utils.file_status import exists_strict
+from core.utils.file_status import exists_strict, is_link_status
 from core.utils.timestamps import is_canonical_timestamp, utc_now_timestamp
 from core.utils.tree_move import remove_tree
 
@@ -177,6 +178,27 @@ class _Probe:
 
 def quarantine_root(data_dir: Path) -> Path:
     return Path(data_dir) / QUARANTINE_ROOT_NAME
+
+
+def quarantine_batches(data_dir: Path, name: str) -> tuple[Path, ...]:
+    """Every batch of the quarantine child ``name``, by batch name (oldest first).
+
+    ``DOCUMENT_QUARANTINE_NAME`` holds the JSON documents set restores replaced.
+    Only real directories count, never a link. Raises ``OSError`` when the
+    quarantine cannot be listed; a missing one holds no batch.
+    """
+    root = quarantine_root(data_dir) / name
+    try:
+        with os.scandir(root) as entries:
+            found = [
+                Path(entry.path)
+                for entry in entries
+                if not is_link_status(status := entry.stat(follow_symlinks=False))
+                and stat.S_ISDIR(status.st_mode)
+            ]
+    except FileNotFoundError, NotADirectoryError:
+        return ()
+    return tuple(sorted(found, key=lambda path: path.name))
 
 
 def _new_quarantine_path(data_dir: Path, name: str) -> Path:
