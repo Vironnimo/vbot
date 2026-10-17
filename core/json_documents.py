@@ -81,14 +81,17 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "mcp_connections": "extension-data/mcp/connections.json",
         "attachment_metadata": "artifacts/attachments/*.json",
         "speech_artifact_metadata": "artifacts/speech/*.json",
+        "access_devices": "access/devices.json",
     }
 )
 
-#: Kinds that data snapshots leave out. Each is the sidecar of a blob stored beside
-#: it: a snapshot holds no blobs, and restoring its document set would delete every
-#: sidecar created after the snapshot while its blob stays.
+#: Kinds that data snapshots, and with them configuration backups, leave out. The
+#: metadata kinds are the sidecar of a blob stored beside it: a snapshot holds no
+#: blobs, and restoring its document set would delete every sidecar created after
+#: the snapshot while its blob stays. The device store must never return through a
+#: restore: that would revive revoked devices.
 DOCUMENTS_OUTSIDE_SNAPSHOTS: frozenset[str] = frozenset(
-    {"attachment_metadata", "speech_artifact_metadata"}
+    {"attachment_metadata", "speech_artifact_metadata", "access_devices"}
 )
 
 #: The JSON document set of a data snapshot: every other durable document.
@@ -395,13 +398,15 @@ def write_json_document(
     data_dir: Path | None = None,
     reset: bool = False,
     mode: int | None = None,
+    owner_only: bool = False,
 ) -> None:
     """Atomically write one document, preserving the unknown fields on disk.
 
     ``body`` holds the owner's modeled fields; ``format_version`` is set here.
     Entries of ``drop_empty`` maps that are still empty objects after the merge
     are left out. ``reset=True`` replaces the file without the load guard or preservation, for
-    an explicit user reset. The write is one :func:`document_change`. Raises
+    an explicit user reset. ``owner_only=True`` restricts the file to the current OS user
+    (``core.utils.atomic``). The write is one :func:`document_change`. Raises
     :class:`JsonDocumentWriteError` when the file on disk failed to load,
     ``TypeError``/``ValueError`` for an unserializable body, and ``OSError`` for
     write failures.
@@ -417,7 +422,7 @@ def write_json_document(
         payload = _drop_empty_entries(payload, fmt.shape)
         text = render_json_document(payload, version=fmt.version, sort_keys=fmt.sort_keys)
         path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(path, text, data_dir=data_dir, mode=mode)
+        atomic_write_text(path, text, data_dir=data_dir, mode=mode, owner_only=owner_only)
 
 
 @contextmanager

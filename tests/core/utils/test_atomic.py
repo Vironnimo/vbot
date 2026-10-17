@@ -2,7 +2,9 @@
 
 import errno
 import os
+import re
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -265,6 +267,68 @@ def test_atomic_write_applies_requested_mode_to_target(
     assert target.read_bytes() == b"{}"
     if os.name == "posix":
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_atomic_write_owner_only_restricts_the_file_to_the_current_user(tmp_path: Path) -> None:
+    target = tmp_path / "secret.token"
+    target.write_text("readable by others\n")
+    os.chmod(target, 0o644)
+
+    atomic_write_text(target, "secret\n", owner_only=True)
+
+    assert target.read_text() == "secret\n"
+    if sys.platform == "win32":
+        # A protected list: the current user and SYSTEM, nothing inherited.
+        assert re.fullmatch(
+            r"D:P(AI)?\(A;;FA;;;S-1-5-[0-9-]+\)\(A;;FA;;;SY\)", _windows_dacl(target)
+        )
+    else:
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+if sys.platform == "win32":
+
+    def _windows_dacl(path: Path) -> str:
+        """The SDDL form of a file's access list."""
+        import ctypes
+        from ctypes import wintypes
+
+        advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        advapi.GetNamedSecurityInfoW.argtypes = (
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        )
+        advapi.GetNamedSecurityInfoW.restype = wintypes.DWORD
+        advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = (
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.LPWSTR),
+            ctypes.c_void_p,
+        )
+        advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW.restype = wintypes.BOOL
+        kernel.LocalFree.argtypes = (ctypes.c_void_p,)
+        dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p()
+        error = advapi.GetNamedSecurityInfoW(
+            str(path), 1, 4, None, None, ctypes.byref(dacl), None, ctypes.byref(descriptor)
+        )
+        assert error == 0
+        text = wintypes.LPWSTR()
+        try:
+            assert advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                descriptor, 1, 4, ctypes.byref(text), None
+            )
+            return str(text.value)
+        finally:
+            kernel.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+            kernel.LocalFree(descriptor)
 
 
 def test_atomic_write_stream_replaces_target_with_streamed_chunks(tmp_path: Path) -> None:

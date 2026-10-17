@@ -229,7 +229,7 @@ def create_server_control(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    atomic_write_bytes(path, payload, mode=CONTROL_RECORD_MODE)
+    atomic_write_bytes(path, payload, mode=CONTROL_RECORD_MODE, owner_only=True)
     return ServerControlRecord(
         pid=resolved_pid,
         process_create_time=float(resolved_create_time),
