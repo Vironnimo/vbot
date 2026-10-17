@@ -66,6 +66,15 @@ export {
   describeDownloadProgress,
 } from './settingsView/localModels.js';
 export { describeBackgroundActivity } from './settingsView/activity.js';
+export { describeSecretStoreProblem } from './settingsView/secretStore.js';
+export {
+  ACCESS_MODE_AUTHENTICATED,
+  accessModeDescription,
+  describeDeviceUse,
+  deviceErrorMessage,
+  deviceKindLabel,
+  pairingErrorMessage,
+} from './settingsView/access.js';
 export {
   getWebSearchSettings,
   getWebServiceKeys,

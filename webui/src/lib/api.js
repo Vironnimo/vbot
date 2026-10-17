@@ -229,6 +229,30 @@ export {
   sendLiveUiResult,
   openLiveCallSocket,
 } from './api/live.js';
+export {
+  ACCESS_LOSS_ACCESS_DENIED,
+  ACCESS_LOSS_AUTH_REQUIRED,
+  WEBSOCKET_CLOSE_ACCESS_DENIED,
+  WEBSOCKET_CLOSE_AUTH_REQUIRED,
+  accessLossFromClose,
+  onAccessLoss,
+  signalAccessLoss,
+} from './api/accessLoss.js';
+export {
+  DEVICE_KIND_BROWSER,
+  getAuthStatus,
+  startPairing,
+  pollPairing,
+  verifyAccess,
+  listDevices,
+  renameDevice,
+  revokeDevice,
+  revokeOtherDevices,
+  logOutDevice,
+  getPendingPairing,
+  approvePairing,
+  denyPairing,
+} from './api/access.js';
 export { reportClientMetrics } from './api/performance.js';
 export {
   createServerDirectory,

@@ -56,7 +56,7 @@ function fakeApi({
         connection,
         sent,
         emit: (event) => handlers.onEvent(event),
-        close: () => handlers.onClose(),
+        close: (event = {}) => handlers.onClose(event),
       });
       return connection;
     }),

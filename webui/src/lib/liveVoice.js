@@ -440,8 +440,8 @@ export function createLiveVoice({
   }
 
   // Only a lagging or dropped socket may reattach. The server closes it for
-  // good once the call ended, when it no longer knows the call, and when a
-  // newer owner socket replaced this one.
+  // good once the call ended, when it no longer knows the call, when a newer
+  // owner socket replaced this one, and when this page lost its access.
   function socketLost(call, outcome = 'lost') {
     call.socket = null;
     call.relay?.setEnabled(false);
@@ -449,7 +449,11 @@ export function createLiveVoice({
       applyClosed(call, {});
       return;
     }
-    if (outcome === 'unknown_call' || outcome === 'replaced') {
+    if (
+      outcome === 'unknown_call' ||
+      outcome === 'replaced' ||
+      outcome === 'signed_out'
+    ) {
       fail(call, call.reachedLive ? 'connection_lost' : 'connection_failed');
       return;
     }

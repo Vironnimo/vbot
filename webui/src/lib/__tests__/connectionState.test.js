@@ -9,6 +9,7 @@ import {
   disconnect,
   handleVisibilityChange,
 } from '../connectionState.js';
+import { onAccessLoss } from '../api.js';
 import { MockWebSocket } from './api.support.js';
 
 // With Math.random() at 0.5 the reconnect jitter is zero: the delay starts at
@@ -90,6 +91,27 @@ describe('connect()', () => {
     vi.advanceTimersByTime(FIRST_RECONNECT_MS);
     expect(sockets).toHaveLength(4);
   });
+
+  it.each([
+    [4401, 'auth_required'],
+    [4403, 'access_denied'],
+  ])(
+    'reports an access loss and stops reconnecting on close code %i',
+    (code, reason) => {
+      const losses = [];
+      const stopListening = onAccessLoss((loss) => losses.push(loss));
+      const state = start();
+      latestSocket().emit('open', {});
+
+      latestSocket().emit('close', { code });
+      vi.advanceTimersByTime(60 * FIRST_RECONNECT_MS);
+
+      expect(state.status).toBe(CONNECTION_STATUS_DISCONNECTED);
+      expect(sockets).toHaveLength(1);
+      expect(losses).toEqual([reason]);
+      stopListening();
+    },
+  );
 
   it('keeps reconnecting when the WebSocket constructor throws', () => {
     let attempts = 0;

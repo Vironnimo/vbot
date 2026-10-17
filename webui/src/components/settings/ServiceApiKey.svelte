@@ -1,8 +1,9 @@
 <script>
   // API key of the chosen keyed web service (Web search, Web page reading).
-  // The key is write-only: the server reports only whether it is set and
-  // where the lookup finds it, and a typed value stays in this component until
-  // it is saved. It is never part of a panel's autosave draft or dirty state.
+  // The key is write-only: the server keeps it encrypted in its Secret Store
+  // and reports only whether it is set and where the lookup finds it. A typed
+  // value stays in this component until it is saved; it is never part of a
+  // panel's autosave draft or dirty state.
   import Button from '../ui/Button.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
@@ -15,7 +16,6 @@
   let {
     id,
     service,
-    dataDirectory = '',
     onCommit = noop,
     onToast = noop,
     onError = noop,
@@ -30,7 +30,7 @@
   const variable = $derived(service.api_key_env);
   const typed = $derived(entry.variable === variable ? entry.value : '');
   // A variable in the server's process environment takes precedence over the
-  // .env file, so a key saved here could not take effect while it exists.
+  // Secret Store, so a key saved here could not take effect while it exists.
   const fromEnvironment = $derived(service.source === 'process_environment');
   const replacing = $derived(
     service.configured && replacingVariable === variable,
@@ -51,9 +51,6 @@
   const help = $derived(
     [
       t('settings.serviceKey.help'),
-      dataDirectory
-        ? t('settings.serviceKey.helpFile', { path: dataDirectory })
-        : '',
       service.shared ? t('settings.serviceKey.helpShared', { variable }) : '',
     ]
       .filter(Boolean)

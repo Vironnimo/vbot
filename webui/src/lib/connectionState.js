@@ -1,4 +1,4 @@
-import { subscribeServerEvents } from './api.js';
+import { accessLossFromClose, subscribeServerEvents } from './api.js';
 import { reconnectBackoffDelay } from './backoff.js';
 
 export const CONNECTION_STATUS_CONNECTED = 'connected';
@@ -54,12 +54,14 @@ export function connect(state, handlers = {}) {
           handlers.onStatusChange?.();
           _armHeartbeatWatchdog(state);
         },
-        onClose: () => {
+        onClose: (event) => {
           _clearHeartbeatWatchdog(state);
           _cleanup(state);
           state.status = CONNECTION_STATUS_DISCONNECTED;
           handlers.onStatusChange?.();
-          _scheduleReconnect(state, handlers);
+          // A refused credential or client stays refused: the access gate
+          // takes over instead of a reconnect.
+          if (!accessLossFromClose(event)) _scheduleReconnect(state, handlers);
         },
         onEvent: (event) => {
           if (event.type === 'heartbeat') {

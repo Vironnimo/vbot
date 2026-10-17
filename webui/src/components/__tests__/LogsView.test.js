@@ -16,7 +16,9 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => ({
+vi.mock('$lib/api.js', async () => ({
+  accessLossFromClose: (await import('$lib/api/accessLoss.js'))
+    .accessLossFromClose,
   listLogs: (...args) => listLogsMock(...args),
   readLogFile: (...args) => readLogFileMock(...args),
   readOlderLogEntries: (...args) => readOlderLogEntriesMock(...args),
@@ -741,6 +743,15 @@ describe('LogsView', () => {
       expect.any(Object),
       { cursor: 'cursor-after-restart' },
     );
+
+    // A refused credential stays refused: the access gate takes over, the
+    // stream does not reconnect.
+    streamConnections[1].emitClose({ code: 4401 });
+    flushSync();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(streamConnections).toHaveLength(2);
+    expect(listLogsMock).toHaveBeenCalledTimes(3);
+    expect(document.body.textContent).not.toContain(reconnecting);
   });
 });
 
@@ -781,8 +792,8 @@ function createStreamConnection(file, handlers) {
     emitError(error) {
       handlers.onError?.(error);
     },
-    emitClose() {
-      handlers.onClose?.();
+    emitClose(event = {}) {
+      handlers.onClose?.(event);
     },
   };
 }

@@ -15,6 +15,7 @@
   import SettingsArchivePanel from './settings/SettingsArchivePanel.svelte';
   import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
+  import SettingsAccessPanel from './settings/SettingsAccessPanel.svelte';
   import SettingsLibrarianPanel from './settings/SettingsLibrarianPanel.svelte';
   import SettingsLiveVoicePanel from './settings/SettingsLiveVoicePanel.svelte';
   import SettingsNotificationsPanel from './settings/SettingsNotificationsPanel.svelte';
@@ -46,9 +47,15 @@
     searchTerms,
     settingsEntryAnchor,
   } from '$lib/settingsSearch.js';
-  import { SETTINGS_LAYOUT_CLASS } from '$lib/settingsView.js';
+  import {
+    SETTINGS_LAYOUT_CLASS,
+    describeSecretStoreProblem,
+  } from '$lib/settingsView.js';
 
   const noop = () => {};
+  // The pages where credentials are entered (Provider keys and sign-ins, web
+  // service keys, Channel tokens and Extension secrets).
+  const CREDENTIAL_PAGES = new Set(['providers', 'tools', 'integrations']);
   // Shared Agent defaults live in Agents; these words lead there.
   const AGENT_DEFAULTS_TERMS = normalizeSearchText(
     'Agent defaults global shared Model Thinking effort advanced sampling temperature top_p fallback compaction',
@@ -83,6 +90,9 @@
     // The server's running downloads, installations and indexing passes,
     // kept current by its pushes; General shows them at the top.
     backgroundActivity = [],
+    // The `secrets` projection of `data_store.status`; the pages that manage
+    // credentials warn while the Secret Store cannot be read.
+    secretStore = null,
     clientsRefreshToken = 0,
     channelsRefreshToken = 0,
     archiveRefreshToken = 0,
@@ -98,6 +108,8 @@
     // The App's Extension invalidations (see app/extensions.svelte.js).
     subscribeExtensionInvalidations = null,
   } = $props();
+
+  const secretStoreProblem = $derived(describeSecretStoreProblem(secretStore));
 
   export function handleProviderAuthCompleted(event) {
     providersPanel?.handleProviderAuthCompleted(event);
@@ -192,6 +204,7 @@
       label: () => t('settings.extensions.title'),
     },
     { id: 'server', label: () => t('settings.sections.server') },
+    { id: 'access', label: () => t('settings.sections.access') },
     {
       id: 'desktop_connection',
       label: () => t('settings.desktop.connection.title'),
@@ -290,6 +303,7 @@
       description: () => t('settings.pages.systemDescription'),
       sections: [
         'server',
+        'access',
         ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
         'debug',
       ],
@@ -1080,6 +1094,8 @@
       onCommit={commitGeneralSettings}
       onError={(message) => reportSettingsError(message)}
     />
+  {:else if panelId === 'access'}
+    <SettingsAccessPanel {clientsRefreshToken} {onToast} />
   {:else if panelId === 'desktop_connection'}
     <DesktopConnectionSettings {onToast} />
   {:else if panelId === 'live_voice_shortcut'}
@@ -1234,6 +1250,11 @@
               {/if}
               <!-- Only while something runs or needs attention; not a section,
                    so search and navigation never lead to it. -->
+              {#if secretStoreProblem && CREDENTIAL_PAGES.has(page.id)}
+                <Banner variant="error" data-secret-store-problem>
+                  {secretStoreProblem}
+                </Banner>
+              {/if}
               {#if page.id === 'general' && backgroundActivity.length > 0}
                 <SettingsActivityPanel
                   activities={backgroundActivity}

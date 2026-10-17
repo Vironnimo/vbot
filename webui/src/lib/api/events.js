@@ -11,6 +11,8 @@ import {
   resolveAccessorType,
   resolveClientConnectionId,
 } from '../clientIdentity.js';
+import { verifyAccess } from './access.js';
+import { reportClosedSocket } from './accessLoss.js';
 
 const WEBSOCKET_ENDPOINT = '/ws';
 
@@ -107,6 +109,19 @@ export function subscribeRunEvents(sseUrl, handlers = {}, options = {}) {
   };
 
   addListener(source, 'open', handlers.onOpen, cleanupCallbacks);
+  // An EventSource reports no status code. A stream the browser gave up on
+  // may have been refused for access (or ended by a Device's sign-out), so
+  // the server is asked whether this page still has access.
+  addListener(
+    source,
+    'error',
+    () => {
+      if (source.readyState === EVENT_SOURCE_CLOSED) {
+        void verifyAccess({ baseUrl: options.baseUrl });
+      }
+    },
+    cleanupCallbacks,
+  );
   addListener(source, 'error', handlers.onError, cleanupCallbacks);
 
   const heartbeatListener = (event) => handlers.onHeartbeat?.(event);
@@ -166,6 +181,7 @@ export function subscribeServerEvents(handlers = {}, options = {}) {
 
   addListener(socket, 'open', handlers.onOpen, cleanupCallbacks);
   addListener(socket, 'error', handlers.onError, cleanupCallbacks);
+  addListener(socket, 'close', reportClosedSocket, cleanupCallbacks);
   addListener(socket, 'close', handlers.onClose, cleanupCallbacks);
   addListener(
     socket,
@@ -222,6 +238,7 @@ export function subscribeLogEvents(file, handlers = {}, options = {}) {
 
   addListener(socket, 'open', handlers.onOpen, cleanupCallbacks);
   addListener(socket, 'error', handlers.onError, cleanupCallbacks);
+  addListener(socket, 'close', reportClosedSocket, cleanupCallbacks);
   addListener(socket, 'close', handlers.onClose, cleanupCallbacks);
   addListener(
     socket,
@@ -276,6 +293,7 @@ export function subscribeTerminalEvents(
 
   addListener(socket, 'open', handlers.onOpen, cleanupCallbacks);
   addListener(socket, 'error', handlers.onError, cleanupCallbacks);
+  addListener(socket, 'close', reportClosedSocket, cleanupCallbacks);
   addListener(socket, 'close', handlers.onClose, cleanupCallbacks);
   addListener(
     socket,
@@ -320,6 +338,8 @@ export function subscribeTerminalEvents(
 }
 
 const WEBSOCKET_OPEN = 1;
+
+const EVENT_SOURCE_CLOSED = 2;
 
 function parseJsonEventData(data, code, message) {
   try {

@@ -1,5 +1,6 @@
 import { trackRpc } from '../clientMetrics.js';
 import { isPlainObject } from '../values.js';
+import { reportRefusedResponse } from './accessLoss.js';
 
 const RPC_ENDPOINT = '/api/rpc';
 
@@ -93,6 +94,7 @@ async function sendRpc(envelope, options) {
 
   const payload = await readRpcPayload(response, method);
   if (!response.ok) {
+    reportRefusedResponse(response.status, payload);
     throw normalizeRpcError(payload.error, {
       method,
       status: response.status,

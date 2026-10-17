@@ -66,7 +66,6 @@
     settings?.web_fetch?.services?.find((item) => item.id === draft.provider)
       ?.pricing_url ?? '',
   );
-  const dataDirectory = $derived(settings?.general?.data_directory ?? '');
   // The installed browser the server found, or null; a server fact.
   const localBrowser = $derived(settings?.web_fetch?.local_browser ?? null);
   const modes = $derived([
@@ -176,7 +175,6 @@
       <ServiceApiKey
         id="settings-web-fetch-api-key"
         {service}
-        {dataDirectory}
         {onCommit}
         {onToast}
         {onError}
