@@ -408,17 +408,18 @@ class Runtime(RuntimeServiceGraph):
     def _fallback_credential(self, key: str) -> str | None:
         """Return the data-directory credential for *key* under host naming rules.
 
-        On Windows, names differing only in case match; the later entry in the
-        credential snapshot wins, as in the Skill requirement environment.
+        On Windows, names differing only in case match, and every spelling of
+        *key* resolves the same entry: the all-uppercase one, otherwise the
+        first in sorted order (``core.secrets.fold_credential_names``, which
+        already folds the snapshot Storage loads).
         """
         if not _ENVIRONMENT_NAMES_IGNORE_CASE:
             return self._fallback_environment.get(key)
         folded = key.upper()
-        match: str | None = None
-        for name, value in self._fallback_environment.items():
-            if name.upper() == folded:
-                match = value
-        return match
+        matches = sorted(name for name in self._fallback_environment if name.upper() == folded)
+        if not matches:
+            return None
+        return self._fallback_environment[folded if folded in matches else matches[0]]
 
     def _skill_operations(self) -> SkillRuntime:
         self._ensure_started()

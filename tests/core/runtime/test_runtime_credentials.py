@@ -81,11 +81,16 @@ def test_environment_credentials_prefer_the_process_and_reload_into_live_resolve
         assert runtime.resolve_environment_credential("CHANNEL_TOKEN_TEST") == "process-token"
 
         # The fallback follows the host's name case rules: a Skill granting
-        # ``GitHub_Token`` resolves a data-directory ``GITHUB_TOKEN`` on Windows.
+        # ``GitHub_Token`` resolves a data-directory ``GITHUB_TOKEN`` on Windows,
+        # and every spelling resolves the uppercase entry, never an older
+        # lowercase one an earlier build stored beside it.
+        runtime.storage.secrets.set_entry(CREDENTIALS, "github_token", "older-spelling")
+        runtime.reload_environment_credentials()
         for ignore_case in (True, False):
             monkeypatch.setattr("core.runtime.runtime._ENVIRONMENT_NAMES_IGNORE_CASE", ignore_case)
             if ignore_case:
-                assert runtime.resolve_environment_credential("GitHub_Token") == "fallback-token"
+                for spelling in ("GitHub_Token", "github_token"):
+                    assert runtime.resolve_environment_credential(spelling) == "fallback-token"
                 assert runtime.environment_credential_source("GitHub_Token") == "data_dir"
             else:
                 assert runtime.resolve_environment_credential("GitHub_Token") == ""
