@@ -305,7 +305,9 @@ class ActivityRecorder:
         if crashed:
             return "server_crashed", "Server stopped unexpectedly", "warning", ""
         if connection == "denied":
-            text = "The server refused the tray's connection; the tray tries again in 5 minutes"
+            # 5 minutes after a refused credential, 30 s while the server cannot
+            # check devices (``monitor._refusal_pause``).
+            text = "The server refused the tray's connection; the tray tries again later"
             return "tray_refused", text, "warning", ""
         if not self._owns_server:
             return None

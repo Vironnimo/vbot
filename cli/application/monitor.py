@@ -77,7 +77,8 @@ class MonitorStatus:
     when nothing listens but the target's own server process lives (it is still
     starting or already shutting down), ``rejected`` when a listener answered but
     refused the stream, ``denied`` when a vBot server refused the stream's
-    credential or this connection in its access mode (close code 4401 or 4403),
+    credential or this connection in its access mode (close code 4401 or 4403)
+    or could not check the credential (4503),
     ``unresponsive`` when the target's own server process lives but answered
     neither the stream nor ``/health`` (a busy Event Loop), ``unreachable`` when
     the target could not be reached otherwise, and ``no_target`` without a target.
