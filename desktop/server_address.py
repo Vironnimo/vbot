@@ -9,7 +9,10 @@ connection screen, the bridge, ``--host``/``--port``, a restart request) passes
 such a URL as the host; its own port wins and the port argument is ignored.
 
 :attr:`ServerAddress.bridge_host` gives the host form those surfaces round-trip:
-the plain host for HTTP, the URL for HTTPS.
+the plain host for HTTP, the URL for HTTPS. An IPv6 literal is accepted with or
+without brackets (``::1``, ``[::1]``) and kept in its compressed form without
+them; URLs, origins and the display bracket it. A zone (``fe80::1%eth0``) is
+refused.
 """
 
 from __future__ import annotations
@@ -49,17 +52,23 @@ class ServerAddress:
         HTTP always names the port, as earlier Desktop versions did; HTTPS
         omits its default port.
         """
+        host = self.url_host
         if self.scheme == "http":
-            return f"http://{self.host}:{self.port}/"
+            return f"http://{host}:{self.port}/"
         if self.port == HTTPS_DEFAULT_PORT:
-            return f"https://{self.host}/"
-        return f"https://{self.host}:{self.port}/"
+            return f"https://{host}/"
+        return f"https://{host}:{self.port}/"
+
+    @property
+    def url_host(self) -> str:
+        """The host as a URL names it: an IPv6 literal in brackets."""
+        return f"[{self.host}]" if ":" in self.host else self.host
 
     @property
     def origin(self) -> str:
         """The serialized web origin: lower-case host, default port omitted."""
         default = HTTP_DEFAULT_PORT if self.scheme == "http" else HTTPS_DEFAULT_PORT
-        host = self.host.lower()
+        host = self.url_host.lower()
         if self.port == default:
             return f"{self.scheme}://{host}"
         return f"{self.scheme}://{host}:{self.port}"
@@ -72,7 +81,7 @@ class ServerAddress:
     @property
     def display(self) -> str:
         """How the user sees the server: ``host:port`` or the HTTPS URL."""
-        return f"{self.host}:{self.port}" if self.scheme == "http" else self.bridge_host
+        return f"{self.url_host}:{self.port}" if self.scheme == "http" else self.bridge_host
 
     @property
     def is_loopback(self) -> bool:
@@ -86,7 +95,7 @@ def parse_server_address(host: Any, port: Any) -> ServerAddress:
     A ``host`` that contains ``://`` is read as an ``http://`` or ``https://``
     URL without credentials, path, query or fragment; its port (or the scheme's
     default) is used and ``port`` is ignored. Any other host must be a plain
-    host name or IPv4 address and ``port`` a valid TCP port.
+    host name or IP address and ``port`` a valid TCP port.
     """
     if isinstance(host, str) and _URL_MARKER in host:
         return _parse_url(host.strip())
@@ -115,7 +124,10 @@ def validate_port(value: Any, *, source: str = "port") -> int:
 
 
 def validate_host(value: Any, *, source: str = "host") -> str:
-    """Validate a plain host name or IPv4 address (no scheme, port or path)."""
+    """Validate a plain host name or IP address (no scheme, port or path).
+
+    An IPv6 literal comes back compressed and without brackets.
+    """
     if not isinstance(value, str):
         raise ValueError(f"{source} must be a host name or IP address")
     host = value.strip()
@@ -123,9 +135,22 @@ def validate_host(value: Any, *, source: str = "host") -> str:
         raise ValueError(f"{source} must not be empty")
     if any(character.isspace() for character in host):
         raise ValueError(f"{source} must not contain whitespace")
+    if ":" in host:
+        return _ipv6_literal(host, source)
     if any(character in INVALID_HOST_CHARACTERS for character in host):
         raise ValueError(f"{source} must be a host name or IP address, not a URL")
     return host
+
+
+def _ipv6_literal(host: str, source: str) -> str:
+    inner = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        address = ipaddress.IPv6Address(inner)
+    except ValueError:
+        raise ValueError(f"{source} must be a host name or IP address, not a URL") from None
+    if address.scope_id is not None:
+        raise ValueError(f"{source} must not name an IPv6 zone")
+    return address.compressed
 
 
 def _parse_url(value: str) -> ServerAddress:

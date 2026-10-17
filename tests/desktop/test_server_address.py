@@ -77,6 +77,27 @@ from desktop.server_address import (
             "pi.lan:80",
             id="http-url-default-port",
         ),
+        # An IPv6 literal is kept compressed without brackets and bracketed in URLs.
+        pytest.param(
+            "[0:0::1]",
+            8420,
+            ServerAddress("http", "::1", 8420),
+            "http://[::1]:8420/",
+            "http://[::1]:8420",
+            "::1",
+            "[::1]:8420",
+            id="ipv6-loopback",
+        ),
+        pytest.param(
+            "https://[2001:DB8::5]:8443",
+            None,
+            ServerAddress("https", "2001:db8::5", 8443),
+            "https://[2001:db8::5]:8443/",
+            "https://[2001:db8::5]:8443",
+            "https://[2001:db8::5]:8443",
+            "https://[2001:db8::5]:8443",
+            id="https-ipv6",
+        ),
     ],
 )
 def test_a_server_address_is_a_host_and_port_or_a_url(
@@ -112,7 +133,8 @@ def test_a_server_address_is_a_host_and_port_or_a_url(
         "https://vbot.example.com:99999",
         "https://vbot.example.com:0",
         "https://",
-        "https://[::1]",
+        "https://[::1",
+        "http://[fe80::1%25eth0]:8420",
         "https://vbot example.com",
         "https://<script>",
     ],
@@ -128,6 +150,7 @@ def test_a_url_with_more_than_scheme_host_and_port_is_rejected(host: str) -> Non
         ("127.0.0.1", True),
         ("127.8.0.1", True),
         ("LOCALHOST", True),
+        ("::1", True),
         ("192.168.1.44", False),
         ("vbot.example.com", False),
     ],
@@ -136,7 +159,9 @@ def test_loopback_hosts_are_recognized(host: str, loopback: bool) -> None:
     assert parse_server_address(host, 8420).is_loopback is loopback
 
 
-@pytest.mark.parametrize("host", ["", "   ", "bad host", "host/path", "a<b", "pi.lan:8420", None])
+@pytest.mark.parametrize(
+    "host", ["", "   ", "bad host", "host/path", "a<b", "pi.lan:8420", "fe80::1%eth0", None]
+)
 def test_validate_host_rejects_non_host_values_naming_their_source(host: object) -> None:
     with pytest.raises(ValueError, match="^settings.host "):
         validate_host(host, source="settings.host")

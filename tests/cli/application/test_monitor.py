@@ -18,8 +18,7 @@ from cli._server_target import HealthProbeResult
 from cli.application import monitor as monitor_module
 from cli.application.monitor import MonitorStatus, ServerMonitor
 from cli.server_management import ServerInstance, ServerState
-from core.access.local_token import create_local_access_token
-from tests.cli.cli_test_support import make_instance
+from tests.cli.cli_test_support import make_instance, start_local_token
 
 _STARTED_AT = "2026-10-05T12:58:10.000000Z"
 _RUN_EVENT = {
@@ -221,14 +220,14 @@ def test_monitor_signs_in_and_does_not_hammer_a_refusing_server(
             await connection.wait_closed()
             return
         if restarted:
-            tokens.append(create_local_access_token(target.data_dir, target.port).value)
+            tokens.append(start_local_token(target.data_dir, target.port))
         await connection.close(close_code, "refused")
 
     async def scenario() -> list[MonitorStatus]:
         nonlocal target
         async with serve(handler, "127.0.0.1", 0) as server:
             target = _target(tmp_path, server)
-            tokens.append(create_local_access_token(target.data_dir, target.port).value)
+            tokens.append(start_local_token(target.data_dir, target.port))
             recorder = _Recorder()
             monitor = ServerMonitor(lambda: target, recorder, local=True, user_agent="test")
             await asyncio.to_thread(monitor.start)

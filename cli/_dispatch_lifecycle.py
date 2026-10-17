@@ -12,6 +12,7 @@ from cli._output import (
     SUCCESS_EXIT_CODE,
 )
 from cli.server_management import CommandResult, ServerInstance
+from core.utils.config import Config
 
 
 def _launch_desktop(argv: Sequence[str]) -> None:
@@ -66,9 +67,12 @@ def dispatch_desktop_command(
 
     This is a local GUI-launch action, not an RPC management command: it
     branches before the shared ``resolve(...)`` and never builds a
-    ``ServerInstance``. Only the flags the user actually supplied are forwarded,
-    so a bare ``vbot desktop`` reaches the launcher's last-used auto-connect path
-    instead of a silent localhost target. The call blocks until the window
+    ``ServerInstance``. Only the target flags the user actually supplied are
+    forwarded, so a bare ``vbot desktop`` reaches the launcher's last-used
+    auto-connect path instead of a silent localhost target. The Desktop also gets
+    the data directory every ``vbot`` command uses by default as
+    ``--server-data-dir``: it signs in to that server on this computer with its
+    local access token, as the CLI does. The call blocks until the window
     closes; a missing ``[desktop]`` group raises ``RuntimeError`` (the launcher's
     own install hint), which maps to a failure exit.
     """
@@ -84,13 +88,15 @@ def dispatch_desktop_command(
 
 
 def _desktop_launch_argv(args: argparse.Namespace) -> list[str]:
-    """Build the Desktop launcher argv from only the supplied target flags."""
+    """Build the Desktop launcher argv from the supplied target flags."""
 
     launch_argv: list[str] = []
     if args.host is not None:
         launch_argv.extend(["--host", args.host])
     if args.port is not None:
         launch_argv.extend(["--port", str(args.port)])
+    data_dir = Config().data_dir.expanduser().resolve()
+    launch_argv.extend(["--server-data-dir", str(data_dir)])
     return launch_argv
 
 

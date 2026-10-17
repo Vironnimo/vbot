@@ -7,15 +7,19 @@ WebSocket. Callers build their clients from :func:`http_options` and
 
 Which credential a request carries:
 
-- A loopback target gets the local access token of the server on that port in
-  the target's data directory (``core.access.local_token``). It is read at the
-  first request and again after a 401, because every server start writes a new
-  one. Without a token file, the stored Device sign-in of the origin is used
-  (a tunnel to another computer's server).
-- Any other target gets the stored Device sign-in of its exact origin
+- A plain ``http://`` target on a loopback address the server on that port
+  listens on, named by its IP literal (``http://127.0.0.1:8420``, never
+  ``localhost``), gets that server's local access token from the target's data
+  directory (``core.access.local_token``). It is read at the first request and
+  again after a 401, because every server start writes a new one.
+- An ``https://`` target gets the stored Device sign-in of its exact origin
   (``cli/sign_ins.py``), which ``vbot devices pair`` creates. A caller can name
   another place that keeps Device sign-ins (``device_sign_in``): the tray of a
   Desktop Client signs in with the Desktop's own Device.
+- Any other target carries no credential: over plain ``http://`` a token could
+  reach whatever listens at that address, on this computer another user's
+  program included. A tunnel to another computer's server needs that server's
+  ``https://`` address.
 - A request to another origin never carries either; clients built here do not
   follow redirects.
 
@@ -36,7 +40,7 @@ import httpx
 
 from cli._server_target import ServerInstance, is_loopback_target, server_origin
 from cli.sign_ins import SignInStore, SignInStoreError
-from core.access.local_token import local_token_path, read_local_access_token
+from core.access.local_token import local_token_path, read_local_access
 from core.utils.tls import ssl_context_for
 
 #: The access refusals a server sends before routing (``access.md``).
@@ -76,11 +80,11 @@ def credential_for(
     """
 
     if is_loopback_target(instance):
-        token = read_local_access_token(instance.data_dir, instance.port)
-        if token is not None:
-            return Credential("local", token)
+        local = read_local_access(instance.data_dir, instance.port)
+        if local is not None and local.admits(instance.url):
+            return Credential("local", local.token)
     origin = server_origin(instance.url)
-    if origin is None:
+    if origin is None or urlsplit(origin).scheme != "https":
         return None
     token = (device_sign_in or cli_sign_in)(origin)
     return None if token is None else Credential("device", token)
@@ -209,11 +213,21 @@ def access_refusal(instance: ServerInstance, code: str, *, command: bool = True)
     if code == AUTH_REQUIRED:
         if is_loopback_target(instance):
             path = local_token_path(instance.data_dir, instance.port)
-            if read_local_access_token(instance.data_dir, instance.port) is None:
+            local = read_local_access(instance.data_dir, instance.port)
+            if local is None:
                 return (
                     f"The server on port {instance.port} admits only signed-in devices, and "
                     f"{path} does not exist: that server keeps its data in another directory. "
                     "Repeat the command with that server's --data-dir."
+                )
+            if not local.admits(instance.url):
+                address = next(iter(local.loopback), "127.0.0.1")
+                url = f"http://{f'[{address}]' if ':' in address else address}:{instance.port}"
+                return (
+                    f"The server on port {instance.port} admits only signed-in devices. This "
+                    "computer signs in with the server's local access token only at an address "
+                    f"the server listens on, never by a host name: repeat the command with "
+                    f"--url {url}."
                 )
             return (
                 f"The server on port {instance.port} refused the local access token in {path}: "

@@ -14,6 +14,11 @@ continues.
 (``devices.logout``) and deletes the stored sign-in, also when the server
 cannot be reached.
 
+Pairing needs the server's ``https://`` address: a Device token is only ever
+sent there (``cli/server_client.py``). Over plain ``http://`` to another
+computer nothing is sent; on this computer's loopback the status is asked first,
+because the server's local access token may already sign this computer in.
+
 Both talk to the pairing endpoints without a credential: a refused token
 would count as a failed sign-in. Tokens and poll secrets are never printed, and
 server-supplied text reaches the terminal only escaped (``inline_text``); a
@@ -101,6 +106,8 @@ class _Pairing:
                 f"This computer signs in to {self.origin} with the server's local access "
                 "token; it needs no pairing. Nothing was changed."
             )
+        if urlsplit(self.origin).scheme != "https":
+            raise _StopError(self._done(self._plain_http_refusal(), ok=False))
         pending = self.store.pending(self.origin)
         resumed = (
             pending is not None
@@ -320,6 +327,17 @@ class _Pairing:
             ok=False,
             failure=RpcFailure(request, "responded", code, response.status_code),
         )
+
+    def _plain_http_refusal(self) -> str:
+        from cli.server_client import AUTH_REQUIRED, access_refusal
+
+        reason = access_refusal(self.instance, AUTH_REQUIRED) or ""
+        return (
+            f"{reason} Pairing needs an https:// address: over plain http:// whatever listens at "
+            f"{self.origin} would receive the Device token. If this address is a tunnel to "
+            "another computer's server, pair with that server's https:// address or run vbot "
+            "on that computer. Nothing was changed."
+        ).strip()
 
     def _not_vbot(self, response: httpx.Response) -> str:
         return (

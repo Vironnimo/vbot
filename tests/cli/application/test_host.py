@@ -469,9 +469,12 @@ def test_lifecycle_actions_hold_operation_lock_and_raise_for_failed_result(
     assert facade._status_error == ""
 
 
-@pytest.mark.parametrize("server_host", ["127.0.0.1", "0.0.0.0"])
+@pytest.mark.parametrize(
+    ("server_host", "loopback"),
+    [("127.0.0.1", "127.0.0.1"), ("0.0.0.0", "127.0.0.1"), ("::", "::1")],
+)
 def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_host: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_host: str, loopback: str
 ):
     # A wildcard bind is reached over loopback, where the local access token works.
     install = replace(_install(tmp_path, shape="server-desktop"), server_host=server_host)
@@ -500,7 +503,7 @@ def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
         "-m",
         "desktop.main",
         "--host",
-        "127.0.0.1",
+        loopback,
         "--port",
         "8420",
         "--server-data-dir",

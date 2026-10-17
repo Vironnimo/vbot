@@ -1100,3 +1100,13 @@ def test_removing_a_server_forgets_its_sign_in(rig: SignInRig) -> None:
 
     assert rig.store.get(CLOUD.origin) is None
     assert rig.controller.list_servers() == []
+
+
+def test_a_plain_http_server_that_requires_sign_in_is_never_paired(rig: SignInRig) -> None:
+    # Without the installation's local access token for this address (a tunnel, say).
+    rig.controller.launch_connect("127.0.0.1", 8420)
+
+    [page] = rig.window.loaded_html
+    assert '<h2 id="connection-error-title">Sign-in needs https://</h2>' in page
+    assert rig.server.requests == []
+    assert rig.window.loaded_urls == []

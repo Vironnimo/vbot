@@ -285,7 +285,11 @@ def build_access(
     )
 
 
-def write_local_token(data_dir: Path, port: int, token: str = LOCAL_TOKEN) -> None:
+def write_local_token(
+    data_dir: Path, port: int, token: str = LOCAL_TOKEN, loopback: tuple[str, ...] = ("127.0.0.1",)
+) -> None:
+    """Publish a local access token as the server listening on ``loopback`` does."""
     runtime = data_dir / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
-    (runtime / f"local-access-{port}.token").write_text(token, encoding="ascii")
+    document = {"token": token, "loopback": list(loopback)}
+    (runtime / f"local-access-{port}.token").write_text(json.dumps(document), encoding="ascii")

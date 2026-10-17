@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from cli.server_management import ServerInstance, build_server_base_url
+from core.access.local_token import create_local_access_token, publish_local_access_token
 from core.utils.logging import resolve_daily_log_path
 
 # Runs one ``vbot`` command line against the test target: (exit code, stdout, stderr).
@@ -24,6 +25,15 @@ def make_instance(tmp_path: Path, *, host: str = "127.0.0.1", port: int = 8420) 
         url=build_server_base_url(host, port),
         log_path=resolve_daily_log_path(data_dir),
     )
+
+
+def start_local_token(
+    data_dir: Path, port: int, *, listening: Iterable[str] = ("127.0.0.1",)
+) -> str:
+    """Publish a fresh local access token the way a server listening there does."""
+    token = create_local_access_token(data_dir, port)
+    publish_local_access_token(token, listening)
+    return token.value
 
 
 class FakeRpc:

@@ -7,6 +7,7 @@ import pytest
 from desktop.connection import ServerEntry
 from desktop.connection_screen import (
     STATUS_DEVICES_UNAVAILABLE,
+    STATUS_HTTPS_REQUIRED,
     STATUS_PAIRING_DENIED,
     STATUS_PAIRING_EXPIRED,
     STATUS_RATE_LIMITED,
@@ -117,6 +118,7 @@ def test_forget_sign_in_is_offered_for_signed_in_servers_only() -> None:
         (STATUS_RATE_LIMITED, "Too many attempts"),
         (STATUS_DEVICES_UNAVAILABLE, "Sign-in unavailable"),
         (STATUS_SIGN_IN_FAILED, "Sign-in failed"),
+        (STATUS_HTTPS_REQUIRED, "Sign-in needs https://"),
     ],
 )
 def test_each_failed_connect_shows_its_own_alert(status: str, title: str) -> None:

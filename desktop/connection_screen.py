@@ -40,6 +40,7 @@ STATUS_PAIRING_EXPIRED = "pairing_expired"
 STATUS_RATE_LIMITED = "rate_limited"
 STATUS_DEVICES_UNAVAILABLE = "devices_unavailable"
 STATUS_SIGN_IN_FAILED = "sign_in_failed"
+STATUS_HTTPS_REQUIRED = "https_required"
 
 _ERROR_COPY = {
     PROBE_SERVER_UNREACHABLE: (
@@ -85,6 +86,13 @@ _ERROR_COPY = {
         "Sign-in unavailable",
         "The server cannot read its list of signed-in devices. Its owner has to fix this "
         "on the server's computer; then try again.",
+    ),
+    STATUS_HTTPS_REQUIRED: (
+        "Sign-in needs https://",
+        "This server requires sign-in, and vBot Desktop signs in over plain http:// only to "
+        "the server of its own installation, at the address that server listens on (such as "
+        "127.0.0.1:8420, not localhost). Connect with the server's https:// address instead; "
+        "on the server's own computer, open vBot Desktop from its installation.",
     ),
     STATUS_SIGN_IN_FAILED: (
         "Sign-in failed",
