@@ -14,6 +14,8 @@ from unittest.mock import MagicMock
 import pytest
 import uvicorn.server
 
+from core.access.config import access_config
+from core.access.local_token import local_token_path, read_local_access_token
 from core.database import DataStoreMarker, read_marker
 from core.utils.log_viewer import LOG_LINE_PATTERN
 from core.utils.logging import resolve_daily_log_path
@@ -129,8 +131,11 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
     monkeypatch.setattr(server_management, "schedule_server_restart", schedule)
     monkeypatch.setattr(server_main.asyncio, "get_running_loop", lambda: loop)
 
+    served_tokens: list[str | None] = []
+
     def run(server: Any) -> None:
         app = server.config.app
+        served_tokens.append(read_local_access_token(tmp_path / "data", 8765))
         asyncio.run(server.startup())
         if action == "restart_failure":
             with pytest.raises(RuntimeError):
@@ -167,6 +172,13 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
 
     assert calls[0]["host"] == "127.0.0.1"
     assert calls[0]["port"] == 8765
+    # Only the access guard reads forwarding headers, and only from trusted proxies.
+    assert calls[0]["proxy_headers"] is False
+    assert "http" not in calls[0]
+    assert calls[0]["app"]["access"] == access_config("local")
+    # The local access token exists exactly while this server runs.
+    assert served_tokens == [calls[0]["app"]["local_access_token"]]
+    assert not local_token_path(tmp_path / "data", 8765).exists()
     assert calls[0]["ws_per_message_deflate"] is False
     assert calls[0]["timeout_graceful_shutdown"] == 5
     assert calls[0]["log_level"] == "info"
@@ -330,7 +342,8 @@ def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
         # The start line names the build, the mode and the Runtime's startup summary.
         assert len(started) == 1
         assert "(version=1.2.3 revision=aaaaaaaa branch=main " in started[0]
-        assert " mode=verification " in started[0] and started[0].endswith(" tools=3)")
+        assert " mode=verification access=local pid=" in started[0]
+        assert started[0].endswith(" tools=3)")
         # Readiness includes the heap preparation; the phases account for the
         # whole startup, distinguishing interpreter/import cost from app work.
         assert " startup=11.0s pre_main=5.000s setup=2.000s app=4.000s " in started[0]
@@ -416,3 +429,164 @@ def test_main_starts_without_a_crash_log_it_cannot_open(
         "[WARN] vbot.server - " in line and server_main.CRASH_LOG_NAME in line for line in lines
     )
     assert any(" - Server started (" in line for line in lines)
+
+
+@pytest.mark.parametrize(
+    ("argv", "host", "mode"),
+    [
+        pytest.param([], "127.0.0.1", "local", id="default"),
+        # Launchers that predate access modes pass only a host.
+        pytest.param(["--host", "0.0.0.0"], "0.0.0.0", "lan", id="network-host"),
+        pytest.param(["--access", "lan"], "0.0.0.0", "lan", id="lan"),
+        pytest.param(
+            [
+                "--access",
+                "authenticated",
+                "--public-url",
+                "https://vbot.example.org",
+                "--trusted-proxy",
+                "127.0.0.1",
+            ],
+            "127.0.0.1",
+            "authenticated",
+            id="behind-proxy",
+        ),
+    ],
+)
+def test_main_serves_the_access_mode_its_flags_or_bind_host_select(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv: list[str], host: str, mode: str
+) -> None:
+    calls = _patch_serving(monkeypatch, _serve_until("control"))
+
+    main(["--data-dir", str(tmp_path / "data"), "--port", "8765", *argv])
+
+    assert calls[0]["host"] == host
+    assert calls[0]["app"]["server_bind"]["listen_host"] == host
+    assert calls[0]["app"]["access"].mode == mode
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        pytest.param(
+            ["--access", "local", "--host", "0.0.0.0"],
+            "must bind a loopback address",
+            id="local-on-the-network",
+        ),
+        pytest.param(
+            ["--access", "authenticated", "--trusted-proxy", "127.0.0.1"],
+            "needs --public-url",
+            id="no-public-url",
+        ),
+        pytest.param(
+            ["--access", "authenticated", "--public-url", "http://vbot.example.org"],
+            "must start with https://",
+            id="plain-public-url",
+        ),
+        pytest.param(
+            ["--access", "authenticated", "--public-url", "https://vbot.example.org"],
+            "needs HTTPS",
+            id="no-tls-and-no-proxy",
+        ),
+        pytest.param(
+            ["--access", "lan", "--public-url", "https://vbot.example.org"],
+            "applies only to --access authenticated",
+            id="login-option-without-login",
+        ),
+        pytest.param(
+            ["--access", "lan", "--allow-network", "0.0.0.0/0"],
+            "every address",
+            id="whole-internet-without-login",
+        ),
+        pytest.param(
+            [
+                "--access",
+                "authenticated",
+                "--public-url",
+                "https://vbot.example.org",
+                "--tls-cert",
+                "missing-cert.pem",
+                "--tls-key",
+                "missing-key.pem",
+            ],
+            "does not exist",
+            id="missing-certificate",
+        ),
+    ],
+)
+def test_main_refuses_to_start_with_an_unsafe_or_incomplete_access_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    message: str,
+) -> None:
+    calls = _patch_serving(monkeypatch, _serve_until("control"))
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data"
+
+    with pytest.raises(SystemExit) as exited:
+        main(["--data-dir", str(data_dir), "--port", "8765", *argv])
+
+    # Supervisors do not restart a server that cannot start this way.
+    assert exited.value.code == STARTUP_FAILED_EXIT_CODE
+    err = capsys.readouterr().err
+    assert err.startswith("vBot server cannot start: ") and message in err
+    assert calls == [] and not data_dir.exists()
+
+
+def test_a_packaged_server_serves_the_access_mode_its_installation_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from cli.application import state as application_state
+
+    recorded = access_config("lan", allow_networks=["100.64.0.0/10"])
+    install = SimpleNamespace(
+        owns_server=True, server_port=8765, server_host="0.0.0.0", access=recorded
+    )
+    monkeypatch.setattr(application_state, "discover", lambda: install)
+    calls = _patch_serving(monkeypatch, _serve_until("control"))
+
+    def serve(name: str, *argv: str, port: int = 8765) -> Path:
+        data_dir = tmp_path / name
+        install.server_data_directory = str(data_dir)
+        main(["--data-dir", str(data_dir), "--port", str(port), *argv])
+        return data_dir
+
+    # Its launcher may predate access modes and pass the host it knew.
+    old_launcher = serve("old-launcher", "--host", "127.0.0.1")
+    # Flags that repeat the record are fine; contradicting ones are refused.
+    serve("same-flags", "--access", "lan", "--allow-network", "100.64.0.0/10")
+    with pytest.raises(SystemExit) as refused:
+        serve("other-flags", "--access", "local")
+    # Another port of the recorded data directory is not the recorded server.
+    serve("other-port", port=9000)
+
+    assert [(call["host"], call["app"]["access"]) for call in calls] == [
+        ("0.0.0.0", recorded),
+        ("0.0.0.0", recorded),
+        ("127.0.0.1", access_config("local")),
+    ]
+    assert refused.value.code == STARTUP_FAILED_EXIT_CODE
+    assert "vbot application access set" in capsys.readouterr().err
+    log = resolve_daily_log_path(old_launcher).read_text(encoding="utf-8")
+    assert "[WARN] vbot.server - Server binds the installation's recorded address" in log
+
+
+def test_a_packaged_server_with_an_unreadable_installation_record_does_not_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from cli.application import state as application_state
+
+    def discover() -> None:
+        raise application_state.ApplicationError("Installation record is damaged")
+
+    monkeypatch.setattr(application_state, "discover", discover)
+    calls = _patch_serving(monkeypatch, _serve_until("control"))
+
+    with pytest.raises(SystemExit) as exited:
+        main(["--data-dir", str(tmp_path / "data"), "--port", "8765"])
+
+    # Without the record the server cannot know which access mode it must enforce.
+    assert exited.value.code == STARTUP_FAILED_EXIT_CODE and calls == []
+    assert "holds the access mode, cannot be read" in capsys.readouterr().err

@@ -356,6 +356,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     # Settings owns bundle orchestration, while each persisted format is validated
     # by its domain. Imports stay local so those domains may reuse Settings-owned
     # scalar/Policy rules without creating package initialization cycles.
+    from core.access.devices import validate_device_store_file
     from core.agents import (
         validate_agent_file,
         validate_agent_order_file,
@@ -402,6 +403,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         "secrets": validate_secret_store_file,
         "attachment_metadata": validate_attachment_metadata_file,
         "speech_artifact_metadata": validate_task_artifact_metadata_file,
+        "access_devices": validate_device_store_file,
     }
     core_documents = {
         kind: pattern

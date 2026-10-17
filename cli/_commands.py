@@ -39,6 +39,7 @@ from cli._dispatch_operations import (
     dispatch_config_command,
     dispatch_cron_command,
     dispatch_debug_command,
+    dispatch_devices_command,
     dispatch_librarian_command,
     dispatch_log_command,
     dispatch_memory_command,
@@ -421,6 +422,10 @@ def run(
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
     if args.area == "bootstrap":
         result = dispatch_bootstrap_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+    if args.area == "devices":
+        result = dispatch_devices_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 

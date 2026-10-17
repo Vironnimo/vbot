@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from cli import rpc_client
+from core.access.local_token import create_local_access_token
 from core.utils import tls
 from tests.cli.cli_test_support import make_instance
 
@@ -18,9 +19,17 @@ def _capture_request(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
     def fake_post(
-        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool, verify: ssl.SSLContext
+        url: str,
+        *,
+        json: dict[str, Any],
+        timeout: Any,
+        trust_env: bool,
+        verify: ssl.SSLContext,
+        headers: dict[str, str],
     ) -> httpx.Response:
-        captured.update(url=url, json=json, timeout=timeout, trust_env=trust_env, verify=verify)
+        captured.update(
+            url=url, json=json, timeout=timeout, trust_env=trust_env, verify=verify, headers=headers
+        )
         return httpx.Response(200, json={"ok": True, "result": {}})
 
     monkeypatch.setattr(httpx, "post", fake_post)
@@ -51,6 +60,24 @@ def test_rpc_call_posts_to_an_ipv6_safe_url_with_a_bounded_timeout_and_no_proxie
     # A plain-http call gets the fail-closed context that skips parsing the CA bundle.
     assert captured["verify"] is tls.ssl_context_for(captured["url"])
     assert captured["verify"].get_ca_certs() == []
+
+
+@pytest.mark.parametrize(
+    ("host", "signs_in"),
+    [("127.0.0.1", True), ("::1", True), ("0.0.0.0", True), ("192.168.1.5", False)],
+)
+def test_rpc_call_signs_in_with_the_local_access_token_only_on_this_computer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str, signs_in: bool
+) -> None:
+    captured = _capture_request(monkeypatch)
+    without_token = rpc_client.rpc_call(make_instance(tmp_path, host=host), "devices.list", {})
+    headers_without_token = captured["headers"]
+    token = create_local_access_token(tmp_path / "data", 8420)
+
+    rpc_client.rpc_call(make_instance(tmp_path, host=host), "devices.list", {})
+
+    assert without_token.ok and headers_without_token == {}
+    assert captured["headers"] == ({"Authorization": f"Bearer {token.value}"} if signs_in else {})
 
 
 @pytest.mark.parametrize(

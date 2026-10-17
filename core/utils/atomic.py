@@ -10,7 +10,10 @@ to stage it under the data directory's canonical atomic-temporary area instead.
 platform instead of turning into ``\r\n`` on Windows.
 Pass ``mode`` (e.g. ``0o600`` for secret control records) to create the temp
 file with those exact permissions and re-assert them on the target after the
-replace. On Windows a replace that fails because another program briefly holds
+replace. ``owner_only=True`` makes the file accessible to the current user
+alone (``core.utils.owner_only``: mode ``0600``, or a protected access list on
+Windows) before any content is written; the replace keeps that protection.
+On Windows a replace that fails because another program briefly holds
 the target or the temp file open (antivirus scanners, search indexers) is
 retried for at most about 0.4 s in total. On failure the temp file is removed
 and the error (normally an ``OSError``) re-raised for the caller to translate
@@ -35,6 +38,7 @@ from typing import BinaryIO
 from uuid import uuid4
 
 from core.storage.layout import DataDirectoryLayout
+from core.utils.owner_only import OWNER_ONLY_MODE, restrict_to_owner
 
 # Tests patch this seam instead of the process-wide ``time.sleep``.
 _sleep = time.sleep
@@ -64,7 +68,12 @@ def remove_temporary_file(temp_path: Path) -> None:
 
 
 def atomic_write_bytes(
-    target_path: Path, data: bytes, *, data_dir: Path | None = None, mode: int | None = None
+    target_path: Path,
+    data: bytes,
+    *,
+    data_dir: Path | None = None,
+    mode: int | None = None,
+    owner_only: bool = False,
 ) -> None:
     """Atomically write ``data`` to ``target_path`` (see module docstring)."""
 
@@ -74,7 +83,7 @@ def atomic_write_bytes(
             handle.flush()
             os.fsync(handle.fileno())
 
-    _atomic_write(target_path, write, data_dir=data_dir, mode=mode)
+    _atomic_write(target_path, write, data_dir=data_dir, mode=mode, owner_only=owner_only)
 
 
 def atomic_write_text(
@@ -84,6 +93,7 @@ def atomic_write_text(
     data_dir: Path | None = None,
     encoding: str = "utf-8",
     mode: int | None = None,
+    owner_only: bool = False,
 ) -> None:
     """Atomically write ``text`` to ``target_path`` (see module docstring)."""
 
@@ -93,7 +103,7 @@ def atomic_write_text(
             handle.flush()
             os.fsync(handle.fileno())
 
-    _atomic_write(target_path, write, data_dir=data_dir, mode=mode)
+    _atomic_write(target_path, write, data_dir=data_dir, mode=mode, owner_only=owner_only)
 
 
 def atomic_write_stream(
@@ -150,7 +160,10 @@ def _atomic_write(
     *,
     data_dir: Path | None,
     mode: int | None = None,
+    owner_only: bool = False,
 ) -> None:
+    if owner_only and mode is None:
+        mode = OWNER_ONLY_MODE
     target_path.parent.mkdir(parents=True, exist_ok=True)
     if data_dir is not None:
         temp_path = temporary_path(data_dir, target_path)
@@ -163,6 +176,9 @@ def _atomic_write(
             # replaced result never momentarily carries a wider umask-derived mode.
             descriptor = os.open(temp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
             os.close(descriptor)
+        if owner_only:
+            # Before any content: the secret never sits in a file others can read.
+            restrict_to_owner(temp_path)
         write(temp_path)
         replace_path(temp_path, target_path)
         _fsync_replace_directories(temp_path, target_path)

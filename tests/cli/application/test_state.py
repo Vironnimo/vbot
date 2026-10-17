@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from cli.application.state import (
     load_installation,
     load_operation,
 )
+from core.access.config import access_config
 
 
 def _server_install(root: Path) -> Installation:
@@ -247,3 +249,52 @@ def test_temporary_native_payload_accepts_explicit_install_root(
 
     assert discovered is not None
     assert discovered.root == install_root
+
+
+def test_the_server_access_mode_round_trips_and_older_records_infer_it(tmp_path: Path):
+    _server_install(tmp_path).save()
+    older = load_installation(tmp_path)
+    path = tmp_path / "application.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["added_by_a_newer_version"] = {"kept": True}
+    path.write_text(json.dumps(record), encoding="utf-8")
+    selected = access_config(
+        "authenticated", public_url="https://vbot.example.org", trusted_proxies=["127.0.0.1"]
+    )
+
+    replace(load_installation(tmp_path), server_access=selected).save()
+    loaded = load_installation(tmp_path)
+
+    # A record written before access modes keeps the mode its bind address implies.
+    assert older.server_access is None and older.access == access_config("local")
+    assert replace(older, server_host="0.0.0.0").access == access_config("lan")
+    assert loaded.access == selected
+    assert json.loads(path.read_text(encoding="utf-8"))["added_by_a_newer_version"] == {
+        "kept": True
+    }
+
+
+@pytest.mark.parametrize(
+    ("shape", "host", "recorded"),
+    [
+        pytest.param("desktop-client", None, {"mode": "local"}, id="client-with-access"),
+        pytest.param("server", "0.0.0.0", {"mode": "local"}, id="local-on-the-network"),
+        pytest.param("server", "127.0.0.1", {"mode": "authenticated"}, id="no-public-url"),
+        pytest.param("server", "127.0.0.1", {"mode": "lan", "allow_networks": "x"}, id="shape"),
+    ],
+)
+def test_installation_rejects_an_invalid_recorded_access_mode(
+    tmp_path: Path, shape: str, host: str | None, recorded: dict[str, object]
+):
+    if shape == "server":
+        replace(_server_install(tmp_path), server_host=host).save()
+    else:
+        Installation(tmp_path, shape, None, None, None).save()
+    path = tmp_path / "application.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["server_access"] = recorded
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+    # The server would otherwise run with less protection than recorded.
+    with pytest.raises(ApplicationError):
+        load_installation(tmp_path)

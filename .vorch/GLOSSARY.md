@@ -38,6 +38,12 @@ Moving the current Session, with its id and full history, to another Agent via `
 ## Accessor
 A client-facing interface to vBot (WebUI, Desktop, CLI including its TUI, or Channels), communicating with the server, not directly with Providers. Not a Provider or Adapter.
 
+## Access Mode
+Which clients a vBot server admits and whether they must sign in: `local` ("This computer only"), `lan` ("Home network without login") or `authenticated` ("With login (internet)"). The host chooses it when the server starts; no RPC changes it (`access.md`). Not an Agent's Tool access, a Project's capability ceiling, or the server's startup mode (`normal`/`verification`/`test`, the start line's `mode=`).
+
+## Device
+A paired client installation, such as a browser profile, a Desktop app or a CLI, that the host or another Device approved to sign in to a server in the Access Mode `authenticated`; it holds its own revocable token and expires after 90 days without use (`access.md`). Not an Accessor kind, a Client in the server's presence registry, a Channel, or the computer itself: one computer can hold several Devices.
+
 ## Streaming
 Incremental output from an executing Run as the server delivers it to Accessors. Same Run and semantics as a normal send, delivered while it happens; not a separate chat system.
 

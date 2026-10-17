@@ -17,8 +17,10 @@ RELEASE_PUBLIC_KEY="8gLB0IOKj1jlmhDxtNq3tRS1HgYwIv+tntzyVMiUiuQ="
 
 INSTALL_DIR="${VBOT_DIR:-${HOME}/.local/share/vbot}"
 DATA_DIR="${HOME}/.vbot"
-HOST="127.0.0.1"
+HOST=""
 PORT="8420"
+# Who may connect to the server; passed on only when given.
+ACCESS_ARGS=()
 CHANNEL="release"
 VERSION=""
 NO_AUTOSTART=0
@@ -33,8 +35,15 @@ Options:
   --main              Install the newest main build; updates then follow main
   --version <tag>     Install a specific release (for example v0.2.0)
   --data-dir <path>   Server data directory (default: ~/.vbot)
-  --host <host>       Server bind host (default: 127.0.0.1)
+  --host <host>       Server bind host (default: 127.0.0.1, or 0.0.0.0 for --access lan)
   --port <port>       Server port (default: 8420)
+  --access <mode>     Who may connect: local (this computer only, default), lan (home
+                      network without login) or authenticated (with login, internet)
+  --allow-network <cidr>   lan: also admit this network, such as a VPN's (repeatable)
+  --public-url <url>       authenticated: the https:// address browsers use
+  --trusted-proxy <ip>     authenticated: the reverse proxy that terminates HTTPS (repeatable)
+  --tls-cert <path>        authenticated: certificate chain file for direct HTTPS
+  --tls-key <path>         authenticated: private key file for direct HTTPS
   --no-autostart      Do not register the systemd user unit or start the server
   -h, --help          Show this help
 USAGE
@@ -71,6 +80,8 @@ while [ "$#" -gt 0 ]; do
         --data-dir) require_value "$@"; DATA_DIR="$2"; shift 2 ;;
         --host) require_value "$@"; HOST="$2"; shift 2 ;;
         --port) require_value "$@"; PORT="$2"; shift 2 ;;
+        --access | --allow-network | --public-url | --trusted-proxy | --tls-cert | --tls-key)
+            require_value "$@"; ACCESS_ARGS+=("$1" "$2"); shift 2 ;;
         --no-autostart) NO_AUTOSTART=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown option: $1" ;;
@@ -175,8 +186,9 @@ PY
 status_line WORK "Installing vBot into $INSTALL_DIR"
 "$WORK/payload/runtime/bin/python3" -I -B -X utf8 -m cli.application.install \
     --root "$INSTALL_DIR" --payload "$WORK/payload" --shape server \
-    --host "$HOST" --port "$PORT" --data-dir "$DATA_DIR" \
+    ${HOST:+--host "$HOST"} --port "$PORT" --data-dir "$DATA_DIR" \
     --public-key "$RELEASE_PUBLIC_KEY" --channel "$CHANNEL" \
+    ${ACCESS_ARGS[@]+"${ACCESS_ARGS[@]}"} \
     || fail "The installation failed"
 VBOT="$INSTALL_DIR/vbot"
 status_line OK "vBot installed at $INSTALL_DIR"
@@ -201,12 +213,16 @@ if [ "$NO_AUTOSTART" -eq 0 ]; then
         fi
     fi
     "$VBOT" server start >/dev/null || fail "The server did not start; inspect: $VBOT server status"
-    status_line OK "The server is running at http://$HOST:$PORT"
+    case "$HOST" in
+        "" | 0.0.0.0 | "::") LOCAL_HOST="127.0.0.1" ;;
+        *) LOCAL_HOST="$HOST" ;;
+    esac
+    status_line OK "The server is running at http://$LOCAL_HOST:$PORT"
 fi
 
 echo
 echo "Data: $DATA_DIR"
-echo "Commands: vbot server status | vbot update | vbot uninstall"
+echo "Commands: vbot server status | vbot application access show | vbot update | vbot uninstall"
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "Open a new login shell so that $BIN_DIR is on your PATH, or run $VBOT directly." ;;

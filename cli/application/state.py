@@ -16,6 +16,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from core.access.config import (
+    AccessConfig,
+    AccessConfigError,
+    access_config,
+    access_config_from_record,
+    check_bind_host,
+    inferred_access_mode,
+)
 from core.utils.atomic import atomic_write_text
 from core.utils.ids import is_safe_id, new_id
 
@@ -147,6 +155,9 @@ class Installation:
     server_data_directory: str | None
     release_url: str = CHANNEL_URLS["release"]
     release_public_key: str = ""
+    #: The server's access mode and its options; ``None`` in a record written
+    #: before access modes, whose mode follows ``server_host``.
+    server_access: AccessConfig | None = None
 
     def __post_init__(self) -> None:
         if self.release_url not in CHANNEL_URLS.values():
@@ -155,6 +166,15 @@ class Installation:
     @property
     def owns_server(self) -> bool:
         return self.install_shape != "desktop-client"
+
+    @property
+    def access(self) -> AccessConfig | None:
+        """The access configuration the installed server runs with; ``None`` without one."""
+        if not self.owns_server:
+            return None
+        if self.server_access is not None:
+            return self.server_access
+        return access_config(inferred_access_mode(self.server_host or "127.0.0.1"))
 
     @property
     def bootstrap(self) -> Path:
@@ -212,10 +232,21 @@ class Installation:
         atomic_write_text(contained(self.root, "active-version"), safe_id(version_id) + "\n")
 
     def save(self) -> None:
-        value = asdict(self)
-        value.pop("root")
+        """Write the record; fields a newer version added and this one does not know stay."""
+        path = self.root / "application.json"
+        try:
+            value = read_json(path)
+        except ApplicationError:
+            value = {}
+        known = asdict(self)
+        known.pop("root")
+        known.pop("server_access")
+        value.update(known)
+        value.pop("server_access", None)
+        if self.server_access is not None:
+            value["server_access"] = self.server_access.to_record()
         value["schema_version"] = 1
-        write_json(self.root / "application.json", value)
+        write_json(path, value)
 
 
 def load_installation(root: Path) -> Installation:
@@ -242,7 +273,21 @@ def load_installation(root: Path) -> Installation:
     url, key = value.get("release_url"), value.get("release_public_key")
     if not isinstance(url, str) or url not in CHANNEL_URLS.values() or not isinstance(key, str):
         raise ApplicationError("Invalid application release configuration")
-    return Installation(root, shape, host, port, data, url, key)
+    access = _recorded_access(value.get("server_access"), shape, host)
+    return Installation(root, shape, host, port, data, url, key, access)
+
+
+def _recorded_access(value: Any, shape: str, host: Any) -> AccessConfig | None:
+    if value is None:
+        return None
+    if shape == "desktop-client":
+        raise ApplicationError("A Desktop Client must not record a server access mode")
+    try:
+        access = access_config_from_record(value)
+        check_bind_host(access, str(host))
+    except AccessConfigError as exc:
+        raise ApplicationError(f"Invalid recorded server access configuration: {exc}") from exc
+    return access
 
 
 def _module_install_root(source: Path) -> Path | None:

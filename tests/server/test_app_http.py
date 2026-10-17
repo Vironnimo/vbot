@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 import server.app as server_app
+from core.access.config import AccessConfig, access_config
 from server._request_bodies import JSON_REQUEST_BODY_MAX_BYTES
 from server.app import WEBUI_DOCUMENT_CACHE_HEADERS, create_app
 from server.rpc.dispatcher import dispatch_rpc
@@ -89,20 +90,31 @@ class _Redirects:
 
 
 @pytest.mark.parametrize(
-    ("listen_host", "callback_url"),
+    ("listen_host", "access", "callback_url"),
     [
-        ("0.0.0.0", "http://127.0.0.1:8421/api/oauth/callback"),
-        ("::", "http://[::1]:8421/api/oauth/callback"),
-        ("192.168.1.5", None),
+        ("0.0.0.0", None, "http://127.0.0.1:8421/api/oauth/callback"),
+        ("::", None, "http://[::1]:8421/api/oauth/callback"),
+        ("192.168.1.5", None, None),
+        # With login, every browser comes back through the public URL.
+        (
+            "127.0.0.1",
+            access_config(
+                "authenticated",
+                public_url="https://vbot.example.org",
+                trusted_proxies=["10.0.0.2"],
+            ),
+            "https://vbot.example.org/api/oauth/callback",
+        ),
     ],
 )
 def test_oauth_callback_completes_only_the_awaited_sign_in(
-    tmp_path: Path, listen_host: str, callback_url: str | None
+    tmp_path: Path, listen_host: str, access: AccessConfig | None, callback_url: str | None
 ) -> None:
     redirects = _Redirects()
     app = create_app(
         runtime=ServerStubRuntime(tmp_path, oauth_redirects=redirects),
         server_bind={"listen_host": listen_host, "listen_port": 8421, "port_source": "cli"},
+        access=access,
     )
 
     with TestClient(app) as client:
@@ -215,7 +227,15 @@ def test_webui_build_serves_the_app_shell_without_shadowing_server_routes(
         unknown_method = client.post("/api/rpc", json={"method": "unknown.method"})
         # Unmatched server paths are never answered with the WebUI document.
         reserved = [
-            client.get(path) for path in ("/api/unknown", "/ws", "/ws/logs", "/ws/terminals/term-1")
+            client.get(path)
+            for path in (
+                "/api/unknown",
+                "/ws",
+                "/ws/logs",
+                "/ws/terminals/term-1",
+                "/auth/unknown",
+                "/_vbot/unknown",
+            )
         ]
 
     document_cache = WEBUI_DOCUMENT_CACHE_HEADERS["Cache-Control"]
@@ -228,7 +248,7 @@ def test_webui_build_serves_the_app_shell_without_shadowing_server_routes(
     assert unknown_method.json()["error"]["code"] == "method_not_found"
     assert [(response.status_code, response.json()) for response in reserved] == [
         (404, {"detail": "Not Found"})
-    ] * 4
+    ] * 6
 
     monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", tmp_path / "missing-dist")
     with TestClient(create_app(runtime=ServerStubRuntime(tmp_path / "data"))) as client:

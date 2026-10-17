@@ -108,7 +108,8 @@ Windows options are passed through the ScriptBlock form:
 | `-Main` | Install the newest main build; updates then follow main |
 | `-Version <tag>` | Install a specific release, such as `v0.2.0` or `0.2.0`; cannot be combined with `-Main` |
 | `-DataDir <path>` | Server data directory; default `~\.vbot` |
-| `-HostName <host>` | Server bind host; default `127.0.0.1` |
+| `-HostName <host>` | Server bind host; default from the access mode, `127.0.0.1` for `local` |
+| `-Access <mode>` | Server access mode: `local` (default), `lan` or `authenticated`; its options `-AllowNetwork`, `-PublicUrl`, `-TrustedProxy`, `-TlsCert`, `-TlsKey` are described in [Server access](#server-access) |
 | `-Port <port>` | Server port; default `8420` |
 | `-Desktop` | Install Server + Desktop |
 | `-DesktopClient` | Install only the Desktop Client for an existing remote server |
@@ -135,7 +136,8 @@ Linux options are passed after `bash -s --`:
 | `--main` | Install the newest main build; updates then follow main |
 | `--version <tag>` | Install a specific release tag, such as `v0.2.0`; cannot be combined with `--main` |
 | `--data-dir <path>` | Server data directory; default `~/.vbot` |
-| `--host <host>` | Server bind host; default `127.0.0.1` |
+| `--host <host>` | Server bind host; default from the access mode, `127.0.0.1` for `local` |
+| `--access <mode>` | Server access mode: `local` (default), `lan` or `authenticated`; its options `--allow-network`, `--public-url`, `--trusted-proxy`, `--tls-cert`, `--tls-key` are described in [Server access](#server-access) |
 | `--port <port>` | Server port; default `8420` |
 | `--no-autostart` | Do not register the systemd user unit or start the server |
 | `-h`, `--help` | Show Installer help |
@@ -152,6 +154,20 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install
 </details>
 
 Both Installers report each step with a status label; `NO_COLOR=1` disables color. When the Windows Installer fails, it prints the path of its technical log. With `-NoAutostart` or `--no-autostart`, start the server yourself with `vbot server start`.
+
+### Server access
+
+The server's access mode decides who may connect:
+
+| Mode | Who may connect | Default bind address |
+|---|---|---|
+| `local` (default), This computer only | This computer | `127.0.0.1` |
+| `lan`, Home network without login | This computer, private networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, link-local, IPv6 ULA) and each network added with `-AllowNetwork`/`--allow-network`, such as a VPN's `100.64.0.0/10` | `0.0.0.0` |
+| `authenticated`, With login (internet) | Anyone who presents the credential of a paired device | `127.0.0.1` behind a reverse proxy, `0.0.0.0` with direct TLS |
+
+Choose the mode at installation with `-Access`/`--access`. `authenticated` also needs `-PublicUrl`/`--public-url` (the `https://` address browsers use) and HTTPS: either `-TrustedProxy`/`--trusted-proxy` with the address of the reverse proxy that terminates HTTPS, or `-TlsCert`/`--tls-cert` with `-TlsKey`/`--tls-key` for the server's own certificate, which it reloads when the files change. `vbot application access show` prints the current setting; `vbot application access set <mode> [options]` changes it for the next `vbot server restart`. The server refuses to start with options that do not fit its mode.
+
+`local` and `lan` have no login: everyone they admit can use vBot with your account's permissions. Both refuse requests forwarded by a reverse proxy, so a proxy in front of vBot needs `authenticated`. Signing in to an `authenticated` server from the WebUI, the Desktop app or a CLI on another computer is not available yet; on the server's own computer the CLI, tray and Desktop keep working through a local access token. `vbot devices list|approve|deny|rename|revoke` manages the paired devices.
 
 ### Development checkout
 
@@ -1210,7 +1226,7 @@ Run `vbot <area> --help` and `vbot <area> <command> --help` for every flag and p
 
 ## Server API
 
-The server exposes one JSON RPC endpoint, per-Run SSE, app-wide WebSocket events, Log streaming, attachments, speech, images, and health. The server has no built-in authentication; treat access as host-level code-execution authority.
+The server exposes one JSON RPC endpoint, per-Run SSE, app-wide WebSocket events, Log streaming, attachments, speech, images, and health. Who may call it depends on the server's access mode ([Server access](#server-access)); `local` and `lan` have no authentication. Treat access as host-level code-execution authority.
 
 Data-store operations exposed through RPC are `data_store.status`, `data_store.snapshot_create`, `data_store.incident_acknowledge`, and `data_store.unregister`. They return safe health and recovery metadata, publish `resource_changed` with kind `data_store` after successful snapshot, acknowledgement, or unregister mutations, and never include Session content. Offline snapshot listing, verification, and restore stay in the CLI because they must inspect and control the exact local target.
 
@@ -1387,7 +1403,7 @@ not publish them; CI builds and signs the published packages.
 
 - vBot is alpha software. Back up the data directory before upgrades or manual config surgery.
 - Agents and trusted Extensions run with the OS permissions of the account that starts vBot. Keep the server on localhost unless a deliberately secured remote topology is required.
-- A remote Desktop Client should reach the server only through a trusted LAN or VPN plus restrictive firewalling, or through an authenticated TLS reverse proxy. Never expose the unauthenticated vBot port to the public internet.
+- A remote Desktop Client reaches a server in the access mode `lan` over a trusted LAN or VPN plus restrictive firewalling ([Server access](#server-access)). Never forward the port of a `local` or `lan` server to the public internet: neither has a login.
 - Bind conflicts normally mean another process already owns the selected port. Use `vbot server status` and stop the conflicting process. A development checkout can also choose another `--port`; an installation keeps the port chosen at installation.
 - Process environment credentials override values in the data directory's Secret Store; removing a data-directory key may therefore leave a Connection configured through the process environment.
 - Attachment, speech, and image artifacts are durable. Attachments currently have no garbage collector or reference counting, including attachments promoted from images read from disk.

@@ -25,7 +25,7 @@ Bare map references resolve under `.vorch/domain-maps/`. Each `core/<module>/` f
 
 Split oversized source files into focused internal units behind the owning module and its public contract: a large file costs context and tokens on every inspection and edit, and cohesion alone does not justify keeping a multi-thousand-line file. Avoid arbitrary chunks, method-binding tables, or compressed formatting that merely obscure the same context.
 
-**Transport:** Commands use `POST /api/rpc`, never WebSockets, with one exception: a Terminal's live operator input and resize travel over its own terminal socket, ordered with its output (`tools/terminal.md`). `/ws` carries persistent app-wide server-push events; SSE streams each Run; logs and terminals use dedicated sockets. Binary transfers use dedicated HTTP endpoints. No auth (single-user-local). See `server.md`.
+**Transport:** Commands use `POST /api/rpc`, never WebSockets, with one exception: a Terminal's live operator input and resize travel over its own terminal socket, ordered with its output (`tools/terminal.md`). `/ws` carries persistent app-wide server-push events; SSE streams each Run; logs and terminals use dedicated sockets. Binary transfers use dedicated HTTP endpoints. See `server.md`. The server runs in one Access Mode chosen by the host at start: `local` (this computer only, the default), `lan` (home network without login) or `authenticated` (login from the internet through paired Devices). One access guard in front of every route enforces it; see `access.md`.
 
 **Flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (Providers, Models, Tools, Agents) -> external APIs. Agentic-only; one Chat loop, and every Model request streams (Chat, Compaction, Session titles, image analysis, Extension sampling). A completed `ProviderAdapter.send()` response is the emergency path, allowed only after the Provider refuses to stream (`providers.md` -> Interfaces).
 
@@ -75,6 +75,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | channels.md | `core/channels/` | Channel adapters, conversation engine, outbound send |
 | model-communication.md | cross-cutting | Sanctioned kernel-to-Model channels; never invent one |
 | server.md | `server/` | Transport/RPC boundary, events, source routing |
+| access.md | `core/access/`, `server/access/` | Access Modes, the access guard, paired Devices, pairing and login tickets, local access token, direct TLS |
 | cli.md | `cli/` | Server lifecycle commands, targeting, output contract |
 | desktop.md | `desktop/` | pywebview shell contract, bridge, Desktop Voice, Desktop dictation, Live voice support |
 | webui.md | `webui/` | Frontend accessor boundary, shared invariants |

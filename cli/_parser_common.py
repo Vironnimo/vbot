@@ -126,6 +126,7 @@ AREA_HELP = {
     "extensions": "Inspect and toggle loaded extensions",
     "cron": "Inspect and manage scheduled cron jobs",
     "bootstrap": "Inspect and manage startup-triggered Agent Runs",
+    "devices": "List, approve, rename and revoke the devices that may sign in to the server",
     "statistics": "Inspect usage statistics computed from persisted sessions",
     "config": "Inspect and update public Settings paths",
     "debug": "Inspect debug mode state and stored traces",
@@ -321,6 +322,15 @@ BOOTSTRAP_HELP = {
     "delete": "Delete a Bootstrap job",
     "enable": "Enable and rearm a Bootstrap job",
     "disable": "Pause a Bootstrap job",
+}
+
+
+DEVICES_HELP = {
+    "list": "List the paired devices with their last use",
+    "approve": "Approve the device that shows this pairing code",
+    "deny": "Refuse the device that shows this pairing code",
+    "rename": "Rename a paired device",
+    "revoke": "Revoke a device: it is signed out at once",
 }
 
 

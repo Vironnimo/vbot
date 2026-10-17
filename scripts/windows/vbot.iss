@@ -123,6 +123,45 @@ begin
   );
 end;
 
+function UnsafeParameter(const Value: String): Boolean;
+begin
+  Result := (Pos('"', Value) > 0) or (Pos(#13, Value) > 0) or (Pos(#10, Value) > 0);
+end;
+
+{ ' --name "value"', or nothing for an empty value. }
+function OptionalOption(const Name, Value: String): String;
+begin
+  Result := '';
+  if Value <> '' then
+    Result := ' ' + Name + ' "' + Value + '"';
+end;
+
+{ One option per comma-separated value: /VBOTTRUSTEDPROXY=a,b passes two proxies. }
+function RepeatedOption(const Name, Values: String): String;
+var
+  Rest: String;
+  Item: String;
+  Separator: Integer;
+begin
+  Result := '';
+  Rest := Values;
+  while Rest <> '' do
+  begin
+    Separator := Pos(',', Rest);
+    if Separator = 0 then
+    begin
+      Item := Rest;
+      Rest := '';
+    end
+    else
+    begin
+      Item := Copy(Rest, 1, Separator - 1);
+      Rest := Copy(Rest, Separator + 1, Length(Rest));
+    end;
+    Result := Result + OptionalOption(Name, Trim(Item));
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ExitCode: Integer;
@@ -130,6 +169,12 @@ var
   ServerHost: String;
   ServerPort: String;
   ServerData: String;
+  ServerAccess: String;
+  AllowNetworks: String;
+  PublicUrl: String;
+  TrustedProxies: String;
+  TlsCert: String;
+  TlsKey: String;
 begin
   if CurStep <> ssPostInstall then
     exit;
@@ -138,19 +183,31 @@ begin
     '" --payload "' + ExpandConstant('{tmp}\vbot-payload') +
     '" --shape {#InstallShape} --public-key "{#ReleasePublicKey}" --channel {#UpdateChannel}';
 #else
-  ServerHost := ExpandConstant('{param:VBOTHOST|127.0.0.1}');
+  { An empty host or access option leaves the default to the application installer:
+    the access mode local, and the bind address of the chosen mode. }
+  ServerHost := ExpandConstant('{param:VBOTHOST|}');
   ServerPort := ExpandConstant('{param:VBOTPORT|8420}');
   ServerData := ExpandConstant('{param:VBOTDATA|{%USERPROFILE}\.vbot}');
-  if (Pos('"', ServerHost) > 0) or (Pos(#13, ServerHost) > 0) or
-    (Pos(#10, ServerHost) > 0) or (Pos('"', ServerPort) > 0) or
-    (Pos(#13, ServerPort) > 0) or (Pos(#10, ServerPort) > 0) or
-    (Pos('"', ServerData) > 0) or (Pos(#13, ServerData) > 0) or
-    (Pos(#10, ServerData) > 0) then
+  ServerAccess := ExpandConstant('{param:VBOTACCESS|}');
+  AllowNetworks := ExpandConstant('{param:VBOTALLOWNETWORK|}');
+  PublicUrl := ExpandConstant('{param:VBOTPUBLICURL|}');
+  TrustedProxies := ExpandConstant('{param:VBOTTRUSTEDPROXY|}');
+  TlsCert := ExpandConstant('{param:VBOTTLSCERT|}');
+  TlsKey := ExpandConstant('{param:VBOTTLSKEY|}');
+  if UnsafeParameter(ServerHost) or UnsafeParameter(ServerPort) or
+    UnsafeParameter(ServerData) or UnsafeParameter(ServerAccess) or
+    UnsafeParameter(AllowNetworks) or UnsafeParameter(PublicUrl) or
+    UnsafeParameter(TrustedProxies) or UnsafeParameter(TlsCert) or
+    UnsafeParameter(TlsKey) then
     RaiseException('vBot installer parameters contain unsupported characters.');
   Parameters := 'application install --root "' + ExpandConstant('{app}') +
     '" --payload "' + ExpandConstant('{tmp}\vbot-payload') +
-    '" --shape {#InstallShape} --host "' + ServerHost + '" --port "' + ServerPort +
-    '" --data-dir "' + ServerData + '" --public-key "{#ReleasePublicKey}" --channel {#UpdateChannel}';
+    '" --shape {#InstallShape} --port "' + ServerPort +
+    '" --data-dir "' + ServerData + '" --public-key "{#ReleasePublicKey}" --channel {#UpdateChannel}' +
+    OptionalOption('--host', ServerHost) + OptionalOption('--access', ServerAccess) +
+    RepeatedOption('--allow-network', AllowNetworks) + OptionalOption('--public-url', PublicUrl) +
+    RepeatedOption('--trusted-proxy', TrustedProxies) + OptionalOption('--tls-cert', TlsCert) +
+    OptionalOption('--tls-key', TlsKey);
 #endif
   if not ExecAndLogOutput(ExpandConstant('{app}\vBot.exe'), Parameters, '', SW_HIDE,
     ewWaitUntilTerminated, ExitCode, nil) or (ExitCode <> 0) then

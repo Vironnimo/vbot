@@ -114,6 +114,7 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
             trust_env=False,
             # A plain-http target needs no CA bundle (parsing it costs 150 ms or more).
             verify=ssl_context_for(url),
+            headers=local_access_headers(instance),
         )
     except httpx.RequestError as exc:
         not_sent = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
@@ -167,6 +168,25 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
         return _transport_failure(instance, method, "RPC response missing a valid error")
 
     return _transport_failure(instance, method, "RPC response missing boolean ok flag")
+
+
+def local_access_headers(instance: ServerInstance) -> dict[str, str]:
+    """The host's local access token for a server on this computer, if it wrote one.
+
+    A server in the access mode ``authenticated`` requires it from local tools;
+    in the other modes it is accepted and not needed. It is never sent to a
+    server on another computer.
+    """
+    from urllib.parse import urlsplit
+
+    from core.access.config import is_loopback_host
+    from core.access.local_token import read_local_access_token
+
+    host = urlsplit(instance.url).hostname
+    if host is None or not is_loopback_host(host):
+        return {}
+    token = read_local_access_token(instance.data_dir, instance.port)
+    return {} if token is None else {"Authorization": f"Bearer {token}"}
 
 
 def _transport_failure(
@@ -228,6 +248,7 @@ def stream_run_events(
             # Same hardening as rpc_call: never route through ambient proxies.
             trust_env=False,
             verify=ssl_context_for(url),
+            headers=local_access_headers(instance),
         ) as response:
             if response.status_code != httpx.codes.OK:
                 raise RunEventStreamError(

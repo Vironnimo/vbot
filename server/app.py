@@ -10,6 +10,7 @@ from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from core.access.config import AccessConfig, access_config, inferred_access_mode
 from core.extensions.extensions import ExtensionUnavailableError
 from core.extensions.oauth_redirects import CALLBACK_PATH as OAUTH_CALLBACK_PATH
 from core.runs import RunNotFoundError
@@ -86,6 +87,7 @@ from server._streams import (
 )
 from server._terminal_socket import serve_terminal_socket
 from server._upload_routes import register_upload_routes
+from server.access import AccessGuard, AccessService, register_access_routes
 from server.events import SERVER_STOPPING_EVENT
 from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
@@ -152,8 +154,15 @@ def create_app(
     safe_startup_mode: Literal["verification", "test"] | None = None,
     on_ready: Callable[[Any], None] | None = None,
     on_stopped: Callable[[bool], None] | None = None,
+    access: AccessConfig | None = None,
+    local_access_token: str | None = None,
 ) -> FastAPIType:
     """Create the FastAPI app and wire runtime services into app state.
+
+    ``access`` is the server's access configuration; without one the access
+    mode follows the bind host (loopback: ``local``, otherwise ``lan``).
+    ``local_access_token`` is this start's local access token, which the
+    access guard accepts only from direct loopback peers.
 
     ``request_shutdown`` receives who asked for the shutdown (a
     ``STOP_INITIATORS`` value or ``unknown``). ``on_ready`` receives the
@@ -179,6 +188,10 @@ def create_app(
         config=config or _runtime_config(app_runtime),
         server_bind=server_bind,
     )
+    access_settings = access or access_config(
+        inferred_access_mode(resolved_server_bind["listen_host"])
+    )
+    access_service = AccessService(access_settings, local_token=local_access_token)
 
     @asynccontextmanager
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
@@ -192,9 +205,11 @@ def create_app(
             log_viewer=await build_log_viewer(app_runtime.storage.data_dir),
         )
         app.state.shutdown_event = shutdown_event if shutdown_event is not None else asyncio.Event()
+        app.state.access = access_service
+        await access_service.start(app_runtime.storage.data_dir)
         oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
         if oauth_redirects is not None:
-            oauth_redirects.bind(oauth_callback_url(resolved_server_bind))
+            oauth_redirects.bind(_oauth_callback_url(access_settings, resolved_server_bind))
         app.state.control_token = shutdown_token
         app.state.server_identity = _server_identity(app_runtime)
         app.state.request_restart = request_restart
@@ -258,23 +273,30 @@ def create_app(
                     server_logger,
                 )
                 await _shutdown_model_list_refreshes(app_runtime)
+                await access_service.close()
                 runtime_stopped_cleanly = await _shutdown_runtime(app_runtime)
             finally:
                 if on_stopped is not None:
                     on_stopped(runtime_stopped_cleanly)
 
-    app = FastAPI(lifespan=lifespan)
+    # No generated API docs: the access guard serves every GET outside the server
+    # namespaces as the public WebUI shell.
+    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     if effective_safe_mode == "verification":
         app.add_middleware(_VerificationOnlyGuardMiddleware)
     app.add_middleware(
         _BrowserOriginGuardMiddleware,
-        allowed_origins=_configured_browser_origins(resolved_server_bind),
+        allowed_origins=_configured_browser_origins(resolved_server_bind)
+        | _public_browser_origins(access_settings),
         same_origin_ip_port=(
             resolved_server_bind["listen_port"]
             if resolved_server_bind["listen_host"] in {"0.0.0.0", "::"}
             else None
         ),
     )
+    # Added last, so it runs first: before the Origin guard and routing.
+    app.add_middleware(AccessGuard, service=access_service)
+    register_access_routes(app, access_service)
 
     @app.get("/health")
     async def health() -> JsonObject:
@@ -709,7 +731,23 @@ def _mount_webui(app: FastAPIType) -> None:
 
 
 def _is_reserved_server_path(path: str) -> bool:
-    return path == "health" or path == "ws" or path.startswith("ws/") or path.startswith("api/")
+    return path == "health" or any(
+        path == namespace or path.startswith(f"{namespace}/")
+        for namespace in ("ws", "api", "auth", "_vbot")
+    )
+
+
+def _public_browser_origins(access: AccessConfig) -> frozenset[tuple[str, str, int]]:
+    """The configured public origin of ``authenticated`` mode, if any."""
+    origin = access.public_origin()
+    return frozenset() if origin is None else frozenset({origin})
+
+
+def _oauth_callback_url(access: AccessConfig, server_bind: ServerBindState) -> str | None:
+    """Behind a public URL the browser comes back there; otherwise to loopback."""
+    if access.public_url is not None:
+        return f"{access.public_url}{OAUTH_CALLBACK_PATH}"
+    return oauth_callback_url(server_bind)
 
 
 def _current_extension_page(registry: Any, claims: JsonObject) -> tuple[Any | None, Any | None]:

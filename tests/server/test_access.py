@@ -1,0 +1,667 @@
+"""The access guard at the server edge: modes, peers, credentials, pairing and devices."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+from collections.abc import AsyncIterator, Iterator, MutableMapping
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient  # type: ignore[import-not-found]
+from starlette.responses import StreamingResponse
+from starlette.routing import Mount, Route, WebSocketRoute
+from starlette.websockets import WebSocketDisconnect
+
+import server.app as server_app
+from core.access.config import AccessConfig, access_config
+from server.access import AccessError, AccessGuard, AccessService, Principal
+from server.app import create_app
+from server.rpc.methods import dispatch_rpc
+from tests.server.app_test_support import ServerStubRuntime
+
+_PUBLIC_URL = "https://vbot.example.org"
+_PROXY = "10.0.0.2"
+_LOCAL_TOKEN = "vbl_" + "L" * 43
+_HOST = {"Authorization": f"Bearer {_LOCAL_TOKEN}"}
+#: A browser on the internet as the trusted reverse proxy forwards it.
+_INTERNET = {"x-test-peer": _PROXY, "X-Forwarded-For": "203.0.113.7", "X-Forwarded-Proto": "https"}
+#: A route that needs a principal and answers 404 once admitted.
+_PROTECTED = "/api/runs/missing/events"
+
+
+class _Network:
+    """Stands in for the network: a test-only header names each request's peer address."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] in {"http", "websocket"}:
+            headers = list(scope["headers"])
+            peer = next((value for name, value in headers if name == b"x-test-peer"), None)
+            if peer is not None:
+                scope = {
+                    **scope,
+                    "client": (peer.decode(), 40000),
+                    "headers": [(name, value) for name, value in headers if name != b"x-test-peer"],
+                }
+        await self.app(scope, receive, send)
+
+
+def _authenticated(**options: Any) -> AccessConfig:
+    return access_config(
+        "authenticated", public_url=_PUBLIC_URL, trusted_proxies=[_PROXY], **options
+    )
+
+
+@pytest.fixture
+def served(tmp_path: Path) -> Iterator[Any]:
+    """Serve an app in the given access mode; yields a factory of (app, client)."""
+    clients: list[TestClient] = []
+
+    def serve(access: AccessConfig | None = None) -> tuple[Any, TestClient]:
+        app = create_app(
+            runtime=ServerStubRuntime(tmp_path / f"data-{len(clients)}"),
+            access=access,
+            local_access_token=_LOCAL_TOKEN,
+        )
+        client = TestClient(_Network(app))
+        client.__enter__()
+        clients.append(client)
+        return app, client
+
+    yield serve
+    for client in clients:
+        client.__exit__(None, None, None)
+
+
+def _rpc(
+    client: TestClient, method: str, params: dict[str, Any] | None = None, /, **headers: str
+) -> Any:
+    response = client.post(
+        "/api/rpc", json={"method": method, "params": params or {}}, headers=headers or _HOST
+    )
+    return response.json()
+
+
+def _pair(
+    client: TestClient, kind: str = "browser", name: str = "Phone", **headers: str
+) -> dict[str, Any]:
+    response = client.post(
+        "/api/auth/pair/start", json={"kind": kind, "name": name}, headers=headers or _INTERNET
+    )
+    assert response.status_code == 200, response.text
+    started: dict[str, Any] = response.json()
+    return started
+
+
+def _poll(client: TestClient, started: dict[str, Any], **headers: str):
+    return client.post(
+        "/api/auth/pair/poll",
+        json={"request_id": started["request_id"], "poll_secret": started["poll_secret"]},
+        headers=headers or _INTERNET,
+    )
+
+
+def _paired_token(client: TestClient, kind: str = "cli") -> tuple[str, str]:
+    """Pair a native device approved by the host; returns its id and token."""
+    started = _pair(client, kind=kind)
+    assert _rpc(client, "devices.approve", {"code": started["code"]})["ok"]
+    approved = _poll(client, started).json()
+    return approved["device"]["id"], approved["token"]
+
+
+@pytest.mark.parametrize(
+    ("access", "headers", "url", "status"),
+    [
+        # local: this computer only, never through a proxy.
+        (None, {"x-test-peer": "127.0.0.1"}, _PROTECTED, 404),
+        (None, {"x-test-peer": "::1"}, _PROTECTED, 404),
+        (None, {"x-test-peer": "192.168.1.5"}, _PROTECTED, 403),
+        (None, {"x-test-peer": "127.0.0.1", "X-Forwarded-For": "192.168.1.5"}, _PROTECTED, 403),
+        # lan: private networks and added ones; peer rules hold on exempt routes too.
+        (access_config("lan"), {"x-test-peer": "192.168.1.5"}, _PROTECTED, 404),
+        (access_config("lan"), {"x-test-peer": "10.1.2.3"}, _PROTECTED, 404),
+        (access_config("lan"), {"x-test-peer": "fd00::5"}, _PROTECTED, 404),
+        (access_config("lan"), {"x-test-peer": "fe80::1"}, _PROTECTED, 404),
+        (access_config("lan"), {"x-test-peer": "::ffff:192.168.1.5"}, _PROTECTED, 404),
+        (access_config("lan"), {"x-test-peer": "203.0.113.7"}, _PROTECTED, 403),
+        (access_config("lan"), {"x-test-peer": "::ffff:203.0.113.7"}, _PROTECTED, 403),
+        (access_config("lan"), {"x-test-peer": "203.0.113.7"}, "/health", 403),
+        (access_config("lan"), {"x-test-peer": "100.64.1.2"}, _PROTECTED, 403),
+        (
+            access_config("lan", allow_networks=["100.64.0.0/10"]),
+            {"x-test-peer": "100.64.1.2"},
+            _PROTECTED,
+            404,
+        ),
+        (
+            access_config("lan"),
+            {"x-test-peer": "192.168.1.5", "Forwarded": "for=192.168.1.9"},
+            "/health",
+            403,
+        ),
+        # authenticated: HTTPS from everyone but this computer, a credential everywhere.
+        (_authenticated(), {"x-test-peer": "127.0.0.1"}, _PROTECTED, 401),
+        (_authenticated(), {"x-test-peer": "127.0.0.1"}, "/health", 200),
+        (_authenticated(), {"x-test-peer": "203.0.113.7"}, "/health", 403),
+        (_authenticated(), {"x-test-peer": "203.0.113.7"}, f"https://testserver{_PROTECTED}", 401),
+        (_authenticated(), _INTERNET, _PROTECTED, 401),
+        (_authenticated(), _INTERNET, "/health", 200),
+        (_authenticated(), {**_INTERNET, "X-Forwarded-Proto": "http"}, "/health", 403),
+        (_authenticated(), {**_INTERNET, "X-Forwarded-Proto": "https, http"}, "/health", 403),
+        (_authenticated(), {**_INTERNET, "X-Forwarded-For": "not-an-address"}, "/health", 403),
+        (
+            _authenticated(),
+            {"x-test-peer": "10.0.0.3", "X-Forwarded-For": "203.0.113.7"},
+            "/health",
+            403,
+        ),
+    ],
+)
+def test_each_mode_admits_only_its_peers_and_transports(
+    served: Any, access: AccessConfig | None, headers: dict[str, str], url: str, status: int
+) -> None:
+    _app, client = served(access)
+
+    response = client.get(url, headers=headers)
+
+    assert response.status_code == status
+    if status in {401, 403}:
+        code = "auth_required" if status == 401 else "access_denied"
+        assert response.json() == {
+            "ok": False,
+            "error": {"code": code, "message": response.json()["error"]["message"]},
+        }
+        assert response.headers["cache-control"] == "no-store"
+
+
+def test_every_route_but_the_exempt_ones_needs_a_principal_when_authenticated(
+    served: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", _write_webui_build(tmp_path))
+    app, client = served(_authenticated())
+    exempt = {
+        ("GET", "/health"),
+        ("HEAD", "/health"),
+        ("GET", "/api/auth/status"),
+        ("POST", "/api/auth/pair/start"),
+        ("POST", "/api/auth/pair/poll"),
+        ("GET", "/api/oauth/callback"),
+        ("POST", "/_vbot/control/shutdown"),
+        ("GET", "/auth/ticket/{ticket}"),
+        ("HEAD", "/auth/ticket/{ticket}"),
+    }
+    capability_prefixes = (
+        "/api/files/",
+        "/api/preview-assets/",
+        "/api/extension-assets/",
+        "/api/extension-runs/",
+    )
+    shell = {("GET", "/"), ("HEAD", "/"), ("GET", "/{path:path}"), ("HEAD", "/{path:path}")}
+
+    answered: dict[tuple[str, str], int] = {}
+    for route in app.routes:
+        if isinstance(route, WebSocketRoute):
+            with (
+                pytest.raises(WebSocketDisconnect) as closed,
+                client.websocket_connect(_concrete(route.path)) as websocket,
+            ):
+                websocket.receive_text()
+            assert closed.value.code == 4401, route.path
+            continue
+        if isinstance(route, Mount):
+            answered[("GET", route.path)] = client.get(f"{route.path}/app.js").status_code
+            continue
+        assert isinstance(route, Route)
+        for method in sorted(route.methods or ()):
+            response = client.request(method, _concrete(route.path))
+            answered[(method, route.path)] = response.status_code
+            if (method, route.path) in exempt or route.path.startswith(capability_prefixes):
+                assert response.status_code != 401, (method, route.path)
+            elif (method, route.path) in shell:
+                assert response.status_code == 200, (method, route.path)
+                if method == "GET":
+                    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+                    assert response.headers["referrer-policy"] == "same-origin"
+            else:
+                assert response.status_code == 401, (method, route.path)
+                assert response.headers["www-authenticate"] == "Bearer"
+
+    assert answered[("GET", "/assets")] == 200
+    assert answered[("POST", "/api/rpc")] == 401
+    # No generated API documentation reveals the route table.
+    assert client.get("/openapi.json").headers["content-type"].startswith("text/html")
+    assert client.get("/docs").headers["content-type"].startswith("text/html")
+
+
+def test_security_headers_and_the_public_origin(served: Any) -> None:
+    _app, client = served(_authenticated())
+
+    https = client.get("https://testserver/health", headers={"x-test-peer": "203.0.113.7"})
+    plain = client.get("/health")
+    public = client.get("/health", headers={**_INTERNET, "Origin": _PUBLIC_URL})
+    foreign = client.get("/health", headers={**_INTERNET, "Origin": "https://attacker.example"})
+
+    assert https.headers["x-content-type-options"] == "nosniff"
+    assert https.headers["strict-transport-security"] == "max-age=31536000"
+    assert "strict-transport-security" not in plain.headers
+    assert (public.status_code, foreign.status_code) == (200, 403)
+
+
+def test_the_local_access_token_counts_only_from_direct_loopback(served: Any) -> None:
+    _app, client = served(_authenticated())
+    same_host_proxy = served(
+        access_config("authenticated", public_url=_PUBLIC_URL, trusted_proxies=["127.0.0.1"])
+    )[1]
+    wrong = {"Authorization": "Bearer vbl_" + "W" * 43}
+
+    direct = client.get(_PROTECTED, headers=_HOST)
+    forwarded = client.get(_PROTECTED, headers={**_HOST, "X-Forwarded-For": "127.0.0.1"})
+    proxied = client.get(_PROTECTED, headers={**_HOST, **_INTERNET})
+    remote_tls = client.get(
+        f"https://testserver{_PROTECTED}", headers={**_HOST, "x-test-peer": "192.168.1.5"}
+    )
+    through_same_host_proxy = same_host_proxy.get(
+        _PROTECTED,
+        headers={**_HOST, "X-Forwarded-For": "203.0.113.7", "X-Forwarded-Proto": "https"},
+    )
+    mistyped = client.get(_PROTECTED, headers=wrong)
+    status = client.get("/api/auth/status", headers=_HOST).json()
+
+    assert direct.status_code == 404
+    assert [
+        response.status_code
+        for response in (forwarded, proxied, remote_tls, through_same_host_proxy, mistyped)
+    ] == [401] * 5
+    assert status == {
+        "mode": "authenticated",
+        "mode_label": "With login (internet)",
+        "authenticated": True,
+        "principal": "host",
+        "device": None,
+    }
+
+
+def test_modes_without_login_ignore_credentials(served: Any) -> None:
+    _app, client = served(access_config("lan"))
+    lan = {"x-test-peer": "192.168.1.5"}
+
+    bad_token = client.get(_PROTECTED, headers={**lan, "Authorization": "Bearer vbt_bad"})
+    status = client.get("/api/auth/status", headers=lan).json()
+    pairing = client.post("/api/auth/pair/start", json={"kind": "cli", "name": "x"}, headers=lan)
+    ticket = _rpc(client, "auth.login_ticket", **lan)
+
+    assert bad_token.status_code == 404
+    assert status["mode"] == "lan" and status["principal"] == "open"
+    assert pairing.status_code == 409 and pairing.json()["error"]["code"] == "auth_disabled"
+    assert ticket["error"]["code"] == "auth_disabled"
+    # Devices of an earlier authenticated period stay manageable from the home network.
+    assert _rpc(client, "devices.list", **lan) == {"ok": True, "result": {"devices": []}}
+
+
+def test_a_browser_pairs_once_by_code_and_signs_in_with_its_cookie(
+    served: Any, tmp_path: Path
+) -> None:
+    _app, client = served(_authenticated())
+
+    started = _pair(client, name="  Anna's   phone ")
+    pending = _poll(client, started).json()
+    shown = _rpc(client, "devices.pending", {"code": started["code"].replace("-", "").lower()})
+    approved = _rpc(client, "devices.approve", {"code": started["code"]})
+    claimed = _poll(client, started)
+    again = _poll(client, started).json()
+    cookie = _cookie(claimed)
+    signed_in = client.get(
+        "/api/auth/status", headers={**_INTERNET, "Cookie": f"vbot_device={cookie}"}
+    )
+    listed = _rpc(client, "devices.list", **_INTERNET, Cookie=f"vbot_device={cookie}")
+
+    assert re.fullmatch(r"[2-9A-HJKMNP-TV-Z]{4}-[2-9A-HJKMNP-TV-Z]{4}", started["code"])
+    assert (started["expires_in"], started["poll_interval"]) == (600, 2)
+    assert pending["status"] == "pending"
+    assert shown["result"] | {"requested_at": None, "expires_in": None} == {
+        "code": started["code"],
+        "name": "Anna's phone",
+        "kind": "browser",
+        "client": "203.0.113.7",
+        "requested_at": None,
+        "expires_in": None,
+    }
+    assert approved["result"] == {"status": "approved", "name": "Anna's phone"}
+    body = claimed.json()
+    assert body["status"] == "approved" and "token" not in body
+    set_cookie = claimed.headers["set-cookie"]
+    for attribute in ("HttpOnly", "Secure", "SameSite=strict", "Path=/", "Max-Age=34560000"):
+        assert attribute.lower() in set_cookie.lower()
+    assert again == {"status": "expired"}
+    assert signed_in.json()["device"] == body["device"]
+    assert signed_in.json()["principal"] == "device"
+    (device,) = listed["result"]["devices"]
+    assert device["current"] is True and device["approved_by"] == "host"
+    assert device["last_client"] == "203.0.113.7"
+    stored = json.loads((tmp_path / "data-0" / "access" / "devices.json").read_text("utf-8"))
+    assert cookie not in json.dumps(stored)
+
+
+def test_a_denied_or_unknown_pairing_ends_without_a_device(served: Any) -> None:
+    _app, client = served(_authenticated())
+    started = _pair(client, kind="desktop")
+
+    unknown = _rpc(client, "devices.approve", {"code": "2222-2222"})
+    denied = _rpc(client, "devices.deny", {"code": started["code"]})
+    polled = _poll(client, started).json()
+    forged = client.post(
+        "/api/auth/pair/poll",
+        json={"request_id": started["request_id"], "poll_secret": "guess"},
+        headers=_INTERNET,
+    ).json()
+
+    assert unknown["error"]["code"] == "pairing_not_found"
+    assert denied["result"]["status"] == "denied"
+    assert polled == {"status": "denied"}
+    assert forged == {"status": "expired"}
+    assert _rpc(client, "devices.list")["result"]["devices"] == []
+
+
+def test_native_devices_get_their_token_once_and_lose_it_when_revoked(served: Any) -> None:
+    _app, client = served(_authenticated())
+    device_id, token = _paired_token(client)
+    bearer = {**_INTERNET, "Authorization": f"Bearer {token}"}
+    other_id, _other = _paired_token(client, kind="desktop")
+
+    admitted = client.get(_PROTECTED, headers=bearer)
+    renamed = _rpc(client, "devices.rename", {"id": device_id, "name": "Laptop"}, **bearer)
+    others = _rpc(client, "devices.revoke_others", **bearer)
+    logged_out = _rpc(client, "devices.logout", **bearer)
+    refused = client.get(_PROTECTED, headers=bearer)
+    host_logout = _rpc(client, "devices.logout")
+
+    assert admitted.status_code == 404
+    assert renamed["result"]["device"]["name"] == "Laptop"
+    assert others["result"] == {"revoked": [other_id]}
+    assert logged_out["result"] == {"revoked": [device_id]}
+    assert refused.status_code == 401
+    assert host_logout["error"]["code"] == "invalid_request"
+
+
+def test_a_login_ticket_signs_in_one_browser_once(served: Any) -> None:
+    _app, client = served(_authenticated())
+
+    issued = _rpc(client, "auth.login_ticket", {"name": "Desktop browser"})["result"]
+    redeemed = client.get(issued["path"], headers=_INTERNET, follow_redirects=False)
+    reused = client.get(issued["path"], headers=_INTERNET, follow_redirects=False)
+    cookie = _cookie(redeemed)
+    status = client.get(
+        "/api/auth/status", headers={**_INTERNET, "Cookie": f"vbot_device={cookie}"}
+    )
+
+    assert issued["expires_in"] == 60 and issued["path"] == f"/auth/ticket/{issued['ticket']}"
+    assert redeemed.status_code == 303 and redeemed.headers["location"] == "/"
+    assert redeemed.headers["cache-control"] == "no-store"
+    assert redeemed.headers["referrer-policy"] == "no-referrer"
+    assert reused.status_code == 400 and "not valid" in reused.text
+    assert status.json()["device"]["name"] == "Desktop browser"
+
+
+def test_dead_device_cookies_are_cleared_and_repeated_failures_are_throttled(
+    served: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    _app, client = served(_authenticated())
+    dead = {**_INTERNET, "Cookie": "vbot_device=vbt_dev_AAAAAAAAAAAAAAAA_" + "x" * 43}
+
+    first = client.get(_PROTECTED, headers=dead)
+    for _attempt in range(19):
+        client.get(_PROTECTED, headers=dead)
+    throttled = client.get(_PROTECTED, headers=dead)
+    host = client.get(_PROTECTED, headers=_HOST)
+
+    assert first.status_code == 401
+    assert "vbot_device=;" in first.headers["set-cookie"]
+    assert throttled.status_code == 429 and int(throttled.headers["retry-after"]) > 0
+    assert host.status_code == 404
+    refusals = [r.getMessage() for r in caplog.records if "Access refused" in r.getMessage()]
+    assert refusals == [
+        "Access refused (reason=invalid_token client=203.0.113.7 path=/api/runs/...)"
+    ]
+    assert "x" * 43 not in caplog.text
+
+
+def test_pairing_requests_are_rate_limited_per_client(served: Any) -> None:
+    _app, client = served(_authenticated())
+
+    answers = [
+        client.post(
+            "/api/auth/pair/start", json={"kind": "cli", "name": "x"}, headers=_INTERNET
+        ).status_code
+        for _attempt in range(11)
+    ]
+    elsewhere = client.post(
+        "/api/auth/pair/start",
+        json={"kind": "cli", "name": "x"},
+        headers={**_INTERNET, "X-Forwarded-For": "198.51.100.4"},
+    )
+
+    assert answers == [200] * 10 + [429]
+    assert elsewhere.status_code == 200
+
+
+def test_websockets_are_refused_with_close_codes_and_end_when_the_device_is_revoked(
+    served: Any,
+) -> None:
+    _app, client = served(_authenticated())
+    _lan_app, lan = served(access_config("lan"))
+    device_id, token = _paired_token(client)
+
+    with (
+        pytest.raises(WebSocketDisconnect) as unauthenticated,
+        client.websocket_connect("/ws", headers=_INTERNET) as websocket,
+    ):
+        websocket.receive_text()
+    with (
+        pytest.raises(WebSocketDisconnect) as foreign,
+        lan.websocket_connect("/ws", headers={"x-test-peer": "203.0.113.7"}) as websocket,
+    ):
+        websocket.receive_text()
+    with client.websocket_connect(
+        "/ws", headers={**_INTERNET, "Authorization": f"Bearer {token}"}
+    ) as websocket:
+        hello = websocket.receive_json()
+        revoked = _rpc(client, "devices.revoke", {"id": device_id})
+        with pytest.raises(WebSocketDisconnect) as ended:
+            while True:
+                websocket.receive_text()
+
+    assert (unauthenticated.value.code, foreign.value.code) == (4401, 4403)
+    assert hello["type"] == "connection_ready"
+    assert revoked["result"] == {"revoked": [device_id]}
+    assert ended.value.code == 4401
+
+
+def test_rpc_handlers_without_a_request_principal_refuse_device_management(
+    served: Any,
+) -> None:
+    app, _client = served(_authenticated())
+
+    answer = asyncio.run(dispatch_rpc(app.state, {"method": "devices.list", "params": {}}))
+
+    assert answer["error"]["code"] == "access_denied"
+
+
+def _cookie(response: Any) -> str:
+    match = re.search(r"vbot_device=([^;]+)", response.headers["set-cookie"])
+    assert match is not None
+    return match.group(1)
+
+
+def _concrete(path: str) -> str:
+    return re.sub(r"\{[^}]+\}", "x", path)
+
+
+def _write_webui_build(tmp_path: Path) -> Path:
+    dist_dir = tmp_path / "webui" / "dist"
+    (dist_dir / "assets").mkdir(parents=True)
+    (dist_dir / "index.html").write_text('<div id="app"></div>', encoding="utf-8")
+    (dist_dir / "assets" / "app.js").write_text("console.log('webui');", encoding="utf-8")
+    return dist_dir
+
+
+def _internet_scope(path: str, *headers: tuple[bytes, bytes], spec: str = "2.3") -> dict[str, Any]:
+    """An HTTP scope as uvicorn builds it for a browser behind the trusted proxy."""
+    return {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": spec},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [
+            (b"host", b"vbot.example.org"),
+            (b"x-forwarded-for", b"203.0.113.7"),
+            (b"x-forwarded-proto", b"https"),
+            *headers,
+        ],
+        "client": (_PROXY, 40000),
+        "server": ("127.0.0.1", 8765),
+    }
+
+
+async def _service_device(service: AccessService, kind: str = "cli") -> tuple[str, str]:
+    """Pair a device through the service as the host approves it; returns id and token."""
+    facts = service.inspect(_internet_scope("/api/auth/pair/start"))
+    started = service.pair_start({"kind": kind, "name": "Laptop"}, facts)
+    service.decide_pairing(started["code"], Principal("host"), approved=True)
+    approved, _cookie_token = await service.pair_poll(started, facts)
+    return approved["device"]["id"], approved["token"]
+
+
+@pytest.mark.parametrize("spec", ["2.3", "2.4"])
+def test_a_device_event_stream_ends_when_the_device_is_revoked(tmp_path: Path, spec: str) -> None:
+    async def events() -> AsyncIterator[str]:
+        yield "data: ready\n\n"
+        await asyncio.Event().wait()
+
+    async def stream(scope: Any, receive: Any, send: Any) -> None:
+        await StreamingResponse(events(), media_type="text/event-stream")(scope, receive, send)
+
+    async def scenario() -> tuple[list[dict[str, Any]], asyncio.Task[None], int]:
+        service = AccessService(_authenticated(), local_token=None)
+        await service.start(tmp_path)
+        device_id, token = await _service_device(service)
+        sent: list[dict[str, Any]] = []
+        streaming = asyncio.Event()
+        never = asyncio.Event()
+
+        async def send(message: MutableMapping[str, Any]) -> None:
+            sent.append(dict(message))
+            streaming.set()
+
+        async def receive() -> dict[str, Any]:
+            await never.wait()
+            return {"type": "http.disconnect"}
+
+        scope = _internet_scope(
+            "/api/runs/run_1/events", (b"authorization", f"Bearer {token}".encode()), spec=spec
+        )
+        request = asyncio.create_task(AccessGuard(stream, service=service)(scope, receive, send))
+        await streaming.wait()
+        open_streams = service.connections.count(device_id)
+        await service.revoke_devices([device_id], Principal("host"))
+        await asyncio.wait_for(request, 2)
+        await service.close()
+        return sent, request, open_streams
+
+    sent, request, open_streams = asyncio.run(scenario())
+
+    assert open_streams == 1
+    # The response ends cleanly; the request task carries no leftover cancellation.
+    assert sent[0]["type"] == "http.response.start"
+    assert sent[-1] == {"type": "http.response.body", "body": b"", "more_body": False}
+    assert not request.cancelled() and request.cancelling() == 0
+
+
+def test_pairing_requests_and_login_tickets_expire(tmp_path: Path) -> None:
+    clock = [1_000.0]
+    host = Principal("host")
+
+    async def scenario() -> dict[str, Any]:
+        service = AccessService(_authenticated(), local_token=None, clock=lambda: clock[0])
+        await service.start(tmp_path)
+        facts = service.inspect(_internet_scope("/api/auth/pair/start"))
+        started = service.pair_start({"kind": "browser", "name": "Phone"}, facts)
+        ticket = service.issue_ticket(host, "Desktop browser")["ticket"]
+        kept = service.issue_ticket(host, None)["ticket"]
+        clock[0] += 59
+        outcomes: dict[str, Any] = {
+            "ticket_in_time": await service.redeem_ticket(kept, facts) is not None,
+            "ticket_reused": await service.redeem_ticket(kept, facts),
+            "pending_in_time": (await service.pair_poll(started, facts))[0]["status"],
+        }
+        clock[0] += 2
+        outcomes["ticket_late"] = await service.redeem_ticket(ticket, facts)
+        clock[0] += 540
+        outcomes["pairing_late"] = (await service.pair_poll(started, facts))[0]
+        with pytest.raises(AccessError) as late_code:
+            service.pending_pairing(started["code"], host)
+        outcomes["approve_late"] = late_code.value.code
+        outcomes["devices"] = len(service.list_devices(host)["devices"])
+        await service.close()
+        return outcomes
+
+    assert asyncio.run(scenario()) == {
+        "ticket_in_time": True,
+        "ticket_reused": None,
+        "pending_in_time": "pending",
+        "ticket_late": None,
+        "pairing_late": {"status": "expired"},
+        "approve_late": "pairing_not_found",
+        "devices": 1,
+    }
+
+
+def test_devices_idle_for_ninety_days_are_removed_at_start(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="vbot.server.access")
+    paired_at = datetime(2026, 1, 1, tzinfo=UTC)
+    now = [paired_at]
+    host = Principal("host")
+
+    def service() -> AccessService:
+        return AccessService(_authenticated(), local_token=None, utc_now=lambda: now[0])
+
+    async def scenario() -> tuple[str | None, list[str], str, str]:
+        first = service()
+        await first.start(tmp_path)
+        idle_id, _idle_token = await _service_device(first)
+        used_id, used_token = await _service_device(first)
+        await first.close()
+        now[0] = paired_at + timedelta(days=89)
+        second = service()
+        await second.start(tmp_path)
+        facts = second.inspect(_internet_scope("/api/runs"))
+        signed_in = second.authenticate(
+            [(b"authorization", f"Bearer {used_token}".encode())], facts
+        )
+        await second.close()
+        now[0] = paired_at + timedelta(days=91)
+        third = service()
+        await third.start(tmp_path)
+        remaining = [device["id"] for device in third.list_devices(host)["devices"]]
+        await third.close()
+        actor = signed_in.principal.actor if signed_in.principal else None
+        return actor, remaining, idle_id, used_id
+
+    signed_in, remaining, idle_id, used_id = asyncio.run(scenario())
+
+    # Use moves the expiry on; the device left idle is gone after a restart.
+    assert signed_in == used_id
+    assert remaining == [used_id]
+    assert f"Device expired (device={idle_id} idle_days=90)" in caplog.text
