@@ -17,6 +17,7 @@ Keep these properties in mind when judging whether something is a vulnerability:
 - **Agents act with the operating-system permissions of the account that runs the server.** They can read and write files, run commands and contact external services when their Tools allow it. An Agent doing what its enabled Tools permit is expected behavior.
 - **Only the access mode `authenticated` requires a login.** The default mode `local` admits this computer only and binds to `127.0.0.1`; `lan` admits private networks by source address without login. Network access to a server without login amounts to code execution on the host; remote use belongs in `authenticated` mode, behind HTTPS (see the Server access section of `USAGE.md`).
 - **Trusted Extensions run inside the server process** with the same permissions.
-- **`~/.vbot` holds credentials, Sessions and Agent state** and must stay private to that account.
+- **`~/.vbot` holds Sessions, Agent state and the Secret Store** and must stay private to that account. The Secret Store encrypts credentials so that a copy of the data directory or a backup does not reveal them; it does not protect them from processes running under the same account, including Agents.
+- **A paired device has full control of vBot.** Approve a pairing code only when you started the pairing yourself.
 
 Reports we especially want to hear about: ways to reach the server or its data from outside the configured network boundary, ways around a Tool Access Policy or a Tool permission, credentials leaking into logs, Model requests or other places they should not reach, and flaws in the installer or update verification.
