@@ -46,7 +46,7 @@ def _add_extensions_parsers(
         ("enable", "Enable an Extension and verify that it loads"),
         ("disable", "Disable an Extension"),
         ("show", "Show an Extension's settings and schema"),
-        ("set", "Set an Extension setting; secret fields are stored in .env"),
+        ("set", "Set an Extension setting; secret fields go to the Secret Store"),
         ("operations", "List an Extension's managed operations"),
         ("run", "Run an Extension operation; put vBot options before the operation"),
     ):

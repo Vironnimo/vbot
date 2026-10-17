@@ -731,8 +731,8 @@ def _settings_response_payload(state: Any) -> JsonObject:
 def _service_key_items(runtime: Any, credentials: Mapping[str, str]) -> list[JsonObject]:
     """Project whether each web service's API key is usable and where it comes from.
 
-    ``configured`` trims the value like the web Tools do, so a blank entry (such
-    as the empty lines of the seeded ``.env``) counts as missing. ``source`` names
+    ``configured`` trims the value like the web Tools do, so a blank value (such
+    as an empty process-environment variable) counts as missing. ``source`` names
     where the lookup finds the variable (``process_environment``, ``data_dir``,
     or ``None``), even when its value is blank. Values never leave the server.
     """
@@ -748,7 +748,7 @@ def _service_key_items(runtime: Any, credentials: Mapping[str, str]) -> list[Jso
 
 
 async def _set_service_key(state: Any, params: JsonObject) -> JsonObject:
-    """Save (or, with an empty value, remove) one web service API key in the data-dir .env."""
+    """Save (or, with an empty value, remove) one web service API key in the Secret Store."""
     _reject_unsupported(params, {"api_key_env", "value"}, "settings.set_service_key")
     variable = _required_string(params, "api_key_env")
     if variable not in _SERVICE_KEY_VARIABLES:
@@ -790,7 +790,7 @@ async def _set_service_key(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _restore_service_key(runtime: Any, variable: str, previous_value: str | None) -> None:
-    """Put back the .env entry a failed key write replaced; a blank one is left out."""
+    """Put back the credential a failed key write replaced; a blank one is left out."""
     try:
         if previous_value:
             await _SETTINGS_READS.run(

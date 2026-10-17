@@ -205,7 +205,8 @@ def test_start_prepares_the_canonical_data_directory(shared_runtime: Runtime) ->
     data_dir = shared_runtime.storage.data_dir
     for directory_name in DATA_DIRECTORY_RELATIVE_PATHS:
         assert (data_dir / directory_name).is_dir()
-    assert (data_dir / ".env").is_file()
+    # Credentials are never seeded: the Secret Store is created by its first write.
+    assert not (data_dir / ".env").exists()
     assert (data_dir / "settings.json").is_file()
     assert shared_runtime.storage.layout.sessions_db_path.is_file()
     for legacy_name in (

@@ -32,6 +32,7 @@ from core.providers.token_getter import (
     GITHUB_OAUTH_TOKEN_EXTRA_KEY,
 )
 from core.providers.token_store import OAuthToken, TokenStore
+from core.secrets import KeyFileProtection, SecretStore
 from core.storage.storage import StorageManager
 from scripts._wire_snapshot.transport import COPILOT_API_ENDPOINT, COPILOT_API_TOKEN
 
@@ -115,15 +116,20 @@ async def build_environment(data_dir: Path) -> SnapshotEnvironment:
     """Build the offline Provider Runtime in the empty directory *data_dir*."""
 
     data_dir.mkdir(parents=True, exist_ok=True)
-    storage = StorageManager(data_dir=data_dir, resources_dir=RESOURCES_DIR)
+    # The fake tokens' key lives beside the throwaway data directory, never in the
+    # user's key directory or DPAPI.
+    secret_store = SecretStore(
+        data_dir, protections=(KeyFileProtection(path=data_dir.parent / "secret.key"),)
+    )
+    storage = StorageManager(data_dir=data_dir, resources_dir=RESOURCES_DIR, secrets=secret_store)
     storage.save_settings(SETTINGS)
     custom_providers = storage.load_custom_providers_settings()
     providers = ProviderRegistry.load(RESOURCES_DIR, custom_providers=custom_providers)
     bundled_models = ModelRegistry.load(RESOURCES_DIR, custom_providers=custom_providers)
     models = await _with_discovered_ollama_models(bundled_models, providers)
 
-    token_store = TokenStore(data_dir)
-    secrets: dict[str, str] = {}
+    token_store = TokenStore(storage.secrets)
+    secret_values: dict[str, str] = {}
     process_env: dict[str, str] = {}
     enabled: dict[str, bool] = {}
     for provider_id in providers.list_ids():
@@ -133,11 +139,11 @@ async def build_environment(data_dir: Path) -> SnapshotEnvironment:
             if connection.type == "oauth" and connection.oauth is not None:
                 token, token_secrets = _fake_oauth_token(config, connection.id)
                 token_store.save(provider_id, connection.id, token)
-                secrets.update(token_secrets)
+                secret_values.update(token_secrets)
             elif connection.type in {"api_key", "oauth"} and connection.auth.credential_key:
                 key = connection.auth.credential_key
                 process_env[key] = f"snapshot-key-{key.lower().replace('_', '-')}"
-                secrets[process_env[key]] = key
+                secret_values[process_env[key]] = key
 
     credentials = ProviderCredentialResolver(
         providers,
@@ -160,7 +166,7 @@ async def build_environment(data_dir: Path) -> SnapshotEnvironment:
         providers=providers,
         models=models,
         runtime=runtime,
-        secrets=secrets,
+        secrets=secret_values,
     )
 
 

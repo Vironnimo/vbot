@@ -359,7 +359,8 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         example="provider key set openai --stdin --refresh-models",
     )
     set_key_parser.description = (
-        "Write an API key to the target data-dir .env through the server RPC contract. "
+        "Write an API key to the target data directory's Secret Store through the server "
+        "RPC contract. "
         "Example: vbot provider key set openai --stdin --refresh-models"
     )
     set_key_parser.add_argument(
@@ -400,7 +401,8 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         example="provider key unset openai",
     )
     unset_key_parser.description = (
-        "Remove an API key from the target data-dir .env through the server RPC contract. "
+        "Remove an API key from the target data directory's Secret Store through the "
+        "server RPC contract. "
         "Process-environment credentials are not touched. Example: vbot provider key unset openai"
     )
     unset_key_parser.add_argument(

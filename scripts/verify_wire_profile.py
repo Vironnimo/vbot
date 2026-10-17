@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Verify one Model's wire profile live and propose its verified profile entry.
 
-Builds the production Provider Runtime of a data directory (its Settings,
-``.env`` credentials and OAuth logins), resolves the Model's wire profile
-WITHOUT any previously learned facts, and drives real requests through the
+Builds the production Provider Runtime of a data directory (its Settings and
+the credentials and OAuth logins of its Secret Store), resolves the Model's
+wire profile WITHOUT any previously learned facts, and drives real requests through the
 Adapter: a plain send and stream, one stream per reasoning rung plus ``none``,
 optional sampling values, a Tool Call turn replayed into its continuation, the
 input-token measurement of reasoning replay inside a Run and across Runs, and
@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Data directory with Settings, .env and OAuth logins (default: this "
+            "Data directory with Settings and a Secret Store (default: this "
             "checkout's instance, ~/.vbot-dev in the main checkout)."
         ),
     )

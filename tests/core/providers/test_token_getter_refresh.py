@@ -28,6 +28,7 @@ from core.providers.token_getter import (
     OAuthTokenGetter,
 )
 from core.providers.token_store import OAuthToken, TokenStore
+from core.secrets import SecretStore
 from core.utils import retry
 from core.utils.tls import shared_ssl_context
 
@@ -57,7 +58,7 @@ _LEAKED_FRAGMENTS = ("refresh-secret", "user@example.com", "revoked", "error_des
 
 @pytest.fixture
 def store(tmp_path) -> TokenStore:
-    return TokenStore(tmp_path)
+    return TokenStore(SecretStore(tmp_path))
 
 
 def _getter_logs(caplog: pytest.LogCaptureFixture, level: int = logging.INFO) -> list[str]:

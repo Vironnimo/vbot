@@ -70,10 +70,14 @@ class PreparedAttempt:
     run_kind: str = "user"
 
 
-def _activation_hook(activated: dict[str, str]) -> Callable[[str, str], bool]:
-    """Track Skill activations per attempt like a Session does (same content: not new)."""
+def _activation_hook(activated: dict[str, str]) -> Callable[[str, str, str, object], bool]:
+    """Track Skill activations per attempt like a Session does (same content: not new).
 
-    def activate(name: str, content: str) -> bool:
+    The executor calls it with the Tool call id, the Skill name, its content and
+    its package, like ``ToolExecutionConfig.skill_activation_hook``.
+    """
+
+    def activate(_tool_call_id: str, name: str, content: str, _package: object) -> bool:
         if activated.get(name) == content:
             return False
         activated[name] = content
@@ -122,9 +126,7 @@ class EvalWorker:
             prefix="vbot-learning-eval-", ignore_cleanup_errors=True
         )
         root = Path(self._temporary.name)
-        env = root / ".env"
-        env.write_text("LOG_LEVEL=WARNING\n", encoding="utf-8")
-        self._runtime = Runtime(Config(data_dir=root / "data", env_path=env))
+        self._runtime = Runtime(Config(data_dir=root / "data", overrides={"LOG_LEVEL": "WARNING"}))
         _start_probe_runtime(self._runtime)
         runtime = self._runtime
         # The System Prompt names the Agent's Model and thinking effort.

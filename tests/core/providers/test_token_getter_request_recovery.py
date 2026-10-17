@@ -33,6 +33,7 @@ from core.providers.runtime import ADAPTER_TYPES
 from core.providers.token_getter import OAuthRequestRecovery, OAuthTokenGetter, TokenGetter
 from core.providers.token_store import OAuthToken, TokenStore
 from core.providers.xai import XAIAdapter
+from core.secrets import SecretStore
 from core.utils.tls import shared_ssl_context
 
 from .adapter_test_support import bind_connection
@@ -82,7 +83,7 @@ async def test_unrecognized_403_is_not_a_token_rejection(
 ) -> None:
     """Only xAI's exact bad-credentials 403 renews; others do not even load the token."""
 
-    getter = OAuthTokenGetter(TokenStore(tmp_path), "provider", "oauth", config)
+    getter = OAuthTokenGetter(TokenStore(SecretStore(tmp_path)), "provider", "oauth", config)
     # No token exists, so reading one would raise instead of returning None.
     assert (
         await getter.refresh_after_rejection("token", status_code=403, response_body=body) is None
@@ -109,7 +110,7 @@ async def test_concurrent_rejected_requests_share_one_account_refresh(
 ) -> None:
     """Four requests rejected together, each with its own getter, cause one token request."""
 
-    store = TokenStore(tmp_path)
+    store = TokenStore(SecretStore(tmp_path))
     store.save(
         "provider",
         "oauth",
@@ -538,7 +539,7 @@ async def test_adapter_asks_its_oauth_getter_for_each_request(
     wire = WIRES["chat-completions"]
     connection = _oauth_connection(bundled.get(wire.provider_id))
     assert connection.oauth is not None
-    store = TokenStore(tmp_path)
+    store = TokenStore(SecretStore(tmp_path))
     store.save(wire.provider_id, connection.id, expired_token())
     respx.post(connection.oauth.token_url).mock(
         return_value=httpx.Response(

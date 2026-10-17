@@ -31,6 +31,7 @@ from core.providers.auth_flow import (
 )
 from core.providers.providers import OAuthConfig
 from core.providers.token_store import TokenStore
+from core.secrets import SecretStore
 
 from .oauth_test_support import (
     COPILOT_TOKEN_EXCHANGE_URL,
@@ -89,7 +90,7 @@ class Completion:
 
 @pytest.fixture
 def store(tmp_path) -> TokenStore:
-    return TokenStore(tmp_path)
+    return TokenStore(SecretStore(tmp_path))
 
 
 @pytest_asyncio.fixture

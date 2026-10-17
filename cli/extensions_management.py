@@ -220,7 +220,7 @@ def extensions_show(instance: ServerInstance, name: str) -> CommandResult:
 def extensions_set(instance: ServerInstance, name: str, field: str, value: str) -> CommandResult:
     """Write one extension setting, routed by the field's declared schema type.
 
-    A ``secret`` field goes to ``.env`` via ``extensions.set_secret`` (the server maps
+    A ``secret`` field goes to the Secret Store via ``extensions.set_secret`` (the server maps
     the field key to its declared env key — the caller never names the env key). Every
     other field type is coerced to its declared type and written as that one config
     field via ``settings.patch``. Both take effect without a restart.
@@ -276,7 +276,7 @@ def _set_secret(instance: ServerInstance, name: str, field: str, value: str) -> 
     if not result.ok:
         return result.to_command_result()
     if result.data.get("set"):
-        message = f"secret '{field}' set for '{name}' (stored in .env, applied live)"
+        message = f"secret '{field}' set for '{name}' (stored in the Secret Store, applied live)"
     else:
         message = f"secret '{field}' cleared for '{name}'"
     return CommandResult(ok=True, message=message, instance=instance)

@@ -849,7 +849,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--api-key-env",
-        help="Credential name in the data-dir .env for an API-key Connection.",
+        help="Credential name in the data-dir Secret Store for an API-key Connection.",
     )
     parser.add_argument(
         "--connection",

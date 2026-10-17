@@ -330,9 +330,9 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
     result = module.cmd_create(argparse.Namespace(name=name, from_branch="main"))
 
     assert result == 0
-    assert (data_dir / ".env").read_bytes() == (
-        PROJECT_ROOT / "resources" / "data-dir" / ".env.example"
-    ).read_bytes()
+    # A worktree's data directory starts without credentials.
+    assert not (data_dir / ".env").exists()
+    assert not (data_dir / "secrets.json").exists()
     expected_settings = json.loads(
         (PROJECT_ROOT / "scripts" / "fake-provider-settings.json").read_text(encoding="utf-8")
     )

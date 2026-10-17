@@ -76,8 +76,9 @@ from core.tools import (
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
 
-# Windows environment variable names are case-insensitive. The data-dir `.env`
-# fallback follows the same rule there, matching Skill `env` requirements.
+# Windows environment variable names are case-insensitive. The data-directory
+# credential fallback (the Secret Store) follows the same rule there, matching
+# Skill `env` requirements.
 _ENVIRONMENT_NAMES_IGNORE_CASE = os.name == "nt"
 
 
@@ -405,10 +406,10 @@ class Runtime(RuntimeServiceGraph):
         return None
 
     def _fallback_credential(self, key: str) -> str | None:
-        """Return the data-dir `.env` value for *key* under host naming rules.
+        """Return the data-directory credential for *key* under host naming rules.
 
-        On Windows, names differing only in case match; the later `.env` entry
-        wins, as in the Skill requirement environment.
+        On Windows, names differing only in case match; the later entry in the
+        credential snapshot wins, as in the Skill requirement environment.
         """
         if not _ENVIRONMENT_NAMES_IGNORE_CASE:
             return self._fallback_environment.get(key)
@@ -861,7 +862,7 @@ class Runtime(RuntimeServiceGraph):
         refresh_prompt_blocks(self._system_prompts, self._tool_prompt_blocks, self._extensions)
 
     def reload_environment_credentials(self) -> None:
-        """Reload shared credential fallback values from the data-dir `.env`."""
+        """Reload shared credential fallback values from the Secret Store."""
         self._ensure_started()
         generation = self._credential_reload_generation = object()
         self._apply_environment_credentials(self.storage.load_environment(), generation=generation)

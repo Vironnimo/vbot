@@ -14,6 +14,7 @@ from typing import Any
 from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderConfig
 from core.providers.token_store import TokenStore
 from core.providers.wire_profiles import bundled_wire_profile_files
+from core.secrets import SecretStore
 from core.storage.layout import DataDirectoryLayout
 from server.events import ServerEventBus
 
@@ -124,11 +125,12 @@ def oauth_provider_state(tmp_path: Path, provider: ProviderConfig) -> SimpleName
     """Return an RPC state serving only *provider*, with a real Token Store."""
 
     refresh_lock = asyncio.Lock()
+    secrets = SecretStore(tmp_path)
     return SimpleNamespace(
         runtime=SimpleNamespace(
             model_database_refresh=lambda: refresh_lock,
             providers=_ProviderRegistry(provider),
-            token_store=TokenStore(tmp_path),
+            token_store=TokenStore(secrets),
             provider_credentials=_ProviderCredentials(
                 {f"{provider.id}:{connection.id}" for connection in provider.connections}
             ),
@@ -136,6 +138,7 @@ def oauth_provider_state(tmp_path: Path, provider: ProviderConfig) -> SimpleName
                 data_dir=tmp_path,
                 resources_dir=tmp_path / "resources",
                 layout=DataDirectoryLayout(tmp_path),
+                secrets=secrets,
                 load_custom_providers_settings=dict,
             ),
             models=_ModelRegistry(),

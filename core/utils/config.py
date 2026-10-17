@@ -1,14 +1,15 @@
 """Configuration loader for vBot.
 
-Loads settings from ``.env`` files and ``settings.json``, merges them
-together, and exposes a simple ``get()`` accessor.  Operating-system
-environment variables take highest priority and are always available.
+Loads ``settings.json`` and the process environment, merges them, and exposes
+a simple ``get()`` accessor. Operating-system environment variables take
+highest priority. Credentials are not configuration: they live in the
+data directory's Secret Store (``core.secrets``), which Storage reads.
 """
 
 import json
 import logging
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -88,75 +89,6 @@ def _resolve_default_data_dir() -> Path:
     return Path.home() / ".vbot"
 
 
-def split_env_lines(text: str) -> list[str]:
-    """Split newline-normalized dotenv text without treating Unicode as a delimiter."""
-    lines = text.split("\n")
-    if lines[-1] == "":
-        lines.pop()
-    return lines
-
-
-def parse_env_lines(lines: Iterable[str]) -> dict[str, str]:
-    """Parse conservative ``KEY=VALUE`` pairs from dotenv-style lines.
-
-    Blank lines, comments, and lines without ``=`` are ignored. Values may
-    contain additional ``=`` characters and may be wrapped in matching single
-    or double quotes. The parser intentionally does not perform expansion or
-    command substitution.
-    """
-
-    values: dict[str, str] = {}
-    for line in lines:
-        stripped = line.strip()
-
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        if "=" not in stripped:
-            continue
-
-        key, _, value = stripped.partition("=")
-        key = key.strip()
-        value = value.strip()
-
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-            value = value[1:-1]
-
-        if key:
-            values[key] = value
-    return values
-
-
-def format_env_value(value: str) -> str:
-    """Keep a single-line value literal under :func:`parse_env_lines`.
-
-    Matching outer quotes delimit the entire value; inner quotes and
-    backslashes stay literal, with no escape decoding or interpolation.
-    """
-    if value != value.strip() or (
-        len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'")
-    ):
-        return f'"{value}"'
-    return value
-
-
-def read_env_file(env_path: str | Path) -> dict[str, str]:
-    """Read and parse a dotenv-style file, returning raw string values."""
-
-    path = Path(env_path)
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    except (OSError, UnicodeError) as exc:
-        _LOGGER.warning("Ignoring unreadable environment file %s: %s", path, exc)
-        return {}
-
-    # read_text normalizes CR/LF physical lines. Unicode separators are part
-    # of a credential value, never another environment assignment.
-    return parse_env_lines(split_env_lines(raw))
-
-
 def build_environment_snapshot(
     *,
     process_env: Mapping[str, str] | None = None,
@@ -164,8 +96,8 @@ def build_environment_snapshot(
 ) -> dict[str, str]:
     """Build a merged environment snapshot without mutating ``os.environ``.
 
-    ``process_env`` wins over ``fallback_env`` so callers can layer data-dir
-    dotenv values under the live process environment.
+    ``process_env`` wins over ``fallback_env`` so callers can layer the
+    data-directory credentials under the live process environment.
     """
 
     snapshot: dict[str, str] = {}
@@ -182,11 +114,13 @@ class Config:
     Sources are loaded in this order (later sources override earlier ones):
 
     1. ``settings.json`` — base configuration (may contain nested objects).
-    2. ``.env``  — environment-specific ``KEY=VALUE`` overrides.
+    2. ``overrides`` — ``KEY=VALUE`` values a program passes in, such as a
+       developer tool quieting ``LOG_LEVEL``.
     3. ``os.environ`` — actual process environment (highest priority).
 
     All three sources are optional. Invalid Settings are logged and isolated so
-    environment loading and application startup remain available.
+    environment loading and application startup remain available. No file in
+    the data directory other than ``settings.json`` is read.
 
     Usage::
 
@@ -198,21 +132,22 @@ class Config:
     def __init__(
         self,
         data_dir: str | Path | None = None,
-        env_path: str | Path | None = None,
         settings_path: str | Path | None = None,
+        *,
+        overrides: Mapping[str, str] | None = None,
     ) -> None:
         """Initialise the configuration.
 
         Args:
             data_dir: vBot data directory.  Defaults to ``~/.vbot``.
-            env_path: Path to a ``.env`` file.  Defaults to
-                      ``<data_dir>/.env``.
             settings_path: Path to a ``settings.json`` file.  Defaults
                            to ``<data_dir>/settings.json``.
+            overrides: String values layered over ``settings.json`` and
+                       under the process environment.
         """
         self._data: dict[str, Any] = {}
         self._data_dir = Path(data_dir) if data_dir is not None else _resolve_default_data_dir()
-        self._env_path = Path(env_path) if env_path else self._data_dir / ".env"
+        self._overrides = dict(overrides or {})
         self._settings_path = (
             Path(settings_path) if settings_path else self._data_dir / "settings.json"
         )
@@ -231,8 +166,8 @@ class Config:
             default: Fallback value when the key is absent.
 
         Returns:
-            The stored value (any JSON-compatible type, or a string for
-            ``.env`` / environment-variable values).
+            The stored value (any JSON-compatible type, or the coerced
+            value of an override or environment variable).
         """
         return self._data.get(key, default)
 
@@ -254,7 +189,8 @@ class Config:
     def _load(self) -> None:
         """Load all sources in priority order."""
         self._load_settings_json()
-        self._load_env_file()
+        for key, value in self._overrides.items():
+            self._data[key] = self._coerce_value(value)
         self._load_os_environ()
 
     def _load_settings_json(self) -> None:
@@ -281,24 +217,18 @@ class Config:
             )
         self._data.update(data)
 
-    def _load_env_file(self) -> None:
-        """Parse ``KEY=VALUE`` pairs from a ``.env`` file."""
-        for key, value in read_env_file(self._env_path).items():
-            self._data[key] = self._coerce_value(value)
-
     def _load_os_environ(self) -> None:
         """Overlay process environment variables (highest priority).
 
-        Values are coerced through :meth:`_coerce_value` for consistency
-        with ``.env``-file handling — e.g. ``LOG_LEVEL=20`` becomes
-        ``int(20)`` from either source.
+        Values are coerced through :meth:`_coerce_value` like overrides,
+        e.g. ``LOG_LEVEL=20`` becomes ``int(20)`` from either source.
         """
         for key, value in os.environ.items():
             self._data[key] = self._coerce_value(value)
 
     @staticmethod
     def _coerce_value(value: str) -> Any:
-        """Convert a ``.env`` string value to the most specific Python type.
+        """Convert a string value to the most specific Python type.
 
         Coercion rules (tried in order):
         1. ``"true"`` / ``"yes"`` / ``"1"`` → ``True``

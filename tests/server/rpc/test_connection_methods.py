@@ -46,13 +46,10 @@ _CONNECTION_LOGGER = "vbot.server.rpc.connection_methods"
 
 
 def _stored_credentials(state: Any) -> dict[str, str]:
-    """Return the configured data-directory credentials, without empty placeholders.
+    """Return the configured data-directory credentials."""
 
-    The first credential write seeds ``<data_dir>/.env`` from the bundled template,
-    whose keys start empty.
-    """
-
-    return {key: value for key, value in state.runtime.storage.load_environment().items() if value}
+    storage: StorageManager = state.runtime.storage
+    return storage.load_environment()
 
 
 def _openrouter_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
@@ -78,7 +75,7 @@ async def test_connection_list_returns_connections_with_usability_and_accounts(
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     state = _openrouter_state(tmp_path, monkeypatch)
-    (tmp_path / ".env").write_text("OPENROUTER_API_KEY__WORK=sk-or-work\n", encoding="utf-8")
+    state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY__WORK", "sk-or-work")
 
     result = await rpc_result(state, "connection.list")
 

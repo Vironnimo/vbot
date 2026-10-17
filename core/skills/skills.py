@@ -68,7 +68,7 @@ def _requirement_environment(environment: Mapping[str, str]) -> dict[str, str]:
 
     On a case-insensitive platform, names differing only in case collapse to one
     entry; the later mapping entry wins, so a process value merged after the
-    ``.env`` fallback keeps precedence.
+    data-directory credential fallback keeps precedence.
     """
     return {_environment_key(name): value for name, value in environment.items()}
 

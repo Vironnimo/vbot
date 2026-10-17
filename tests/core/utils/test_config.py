@@ -1,4 +1,4 @@
-"""Tests for configuration and dotenv helpers."""
+"""Tests for configuration loading."""
 
 import json
 import os
@@ -12,8 +12,6 @@ from core.utils.config import (
     Config,
     _find_worktree_file_from_cwd,
     _resolve_default_data_dir,
-    parse_env_lines,
-    read_env_file,
     resolve_port,
     resolve_server_bind,
 )
@@ -22,75 +20,22 @@ from core.utils.errors import ConfigError
 _PORT_SETTINGS = {"format_version": 1, "server_port": 8500}
 
 
-def test_parse_env_lines_keeps_values_conservative() -> None:
-    """Dotenv parsing keeps only simple key-value behavior."""
-    lines = [
-        "# comment",
-        "",
-        "IGNORED",
-        "OPENROUTER_API_KEY=sk-or-test=value",
-        "QUOTED='quoted value'",
-    ]
-
-    values = parse_env_lines(lines)
-
-    assert values == {
-        "OPENROUTER_API_KEY": "sk-or-test=value",
-        "QUOTED": "quoted value",
-    }
-
-
-def test_read_env_file_keeps_existing_quoting_backslashes_and_physical_lines(
-    tmp_path: Path,
-) -> None:
-    env_path = tmp_path / ".env"
-    env_path.write_bytes(
-        (
-            "SINGLE='old value'\r\n"
-            'DOUBLE="old value"\r'
-            r"BACKSLASH=literal\n\t\path"
-            '\nLEADING="literal\nTRAILING=literal"\n'
-            "UNICODE=first\u2028SECOND_KEY=second\n"
-        ).encode("utf-8")
-    )
-
-    assert read_env_file(env_path) == {
-        "SINGLE": "old value",
-        "DOUBLE": "old value",
-        "BACKSLASH": r"literal\n\t\path",
-        "LEADING": '"literal',
-        "TRAILING": 'literal"',
-        "UNICODE": "first\u2028SECOND_KEY=second",
-    }
-
-
-def test_unreadable_utf8_env_file_is_ignored(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    env_path = tmp_path / ".env"
-    env_path.write_bytes(b"VALID=value\n\xff")
-
-    with caplog.at_level("WARNING", logger="vbot.config"):
-        values = read_env_file(env_path)
-
-    assert values == {}
-    assert str(env_path) in caplog.text
-
-
-def test_config_reads_the_data_directory_env_file_below_the_process_environment(
+def test_config_layers_overrides_below_the_process_environment_and_ignores_env_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / ".env").write_text(
-        "VBOT_TEST_FROM_FILE=20\nVBOT_TEST_OVERRIDDEN=file\n", encoding="utf-8"
-    )
+    # A plaintext .env is no configuration source: credentials live in the Secret Store.
+    (tmp_path / ".env").write_text("VBOT_TEST_FROM_FILE=file\n", encoding="utf-8")
     monkeypatch.setenv("VBOT_TEST_OVERRIDDEN", "environment")
 
-    config = Config(data_dir=tmp_path)
+    config = Config(
+        data_dir=tmp_path,
+        overrides={"VBOT_TEST_FROM_OVERRIDE": "20", "VBOT_TEST_OVERRIDDEN": "override"},
+    )
 
     # Values from either source are coerced alike.
-    assert config.get("VBOT_TEST_FROM_FILE") == 20
+    assert config.get("VBOT_TEST_FROM_OVERRIDE") == 20
     assert config.get("VBOT_TEST_OVERRIDDEN") == "environment"
+    assert config.get("VBOT_TEST_FROM_FILE") is None
 
 
 def test_default_data_dir_is_home_vbot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderR
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
 from core.providers.token_store import TokenStore
 from core.providers.xai import XAIAdapter
-from core.utils.config import read_env_file
+from core.secrets import CREDENTIALS, SecretStore, SecretStoreError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,14 +28,22 @@ PROBE_ADAPTERS = {
 }
 
 
+@cache
+def _secret_store(data_dir: Path) -> SecretStore:
+    """One Secret Store per data directory, shared by every token reader and writer."""
+    return SecretStore(data_dir)
+
+
 def _load_api_key(env_name: str, data_dir: Path) -> str:
-    env_path = data_dir / ".env"
-    if not env_path.is_file():
-        raise SystemExit(f"no .env found at {env_path}")
-    value = read_env_file(env_path).get(env_name)
+    try:
+        value = _secret_store(data_dir).entry(CREDENTIALS, env_name)
+    except SecretStoreError as error:
+        raise SystemExit(
+            f"cannot read {env_name} from the Secret Store of {data_dir}: {error}"
+        ) from error
     if value:
         return value
-    raise SystemExit(f"no {env_name} entry in {env_path}")
+    raise SystemExit(f"no {env_name} credential in the Secret Store of {data_dir}")
 
 
 @dataclass(frozen=True)
@@ -71,7 +80,7 @@ def _select_probe_connection(
         if len(matching) == 1:
             return matching[0]
 
-    token_store = TokenStore(data_dir)
+    token_store = TokenStore(_secret_store(data_dir))
     usable_oauth = [
         connection
         for connection in provider_config.connections
@@ -107,7 +116,7 @@ def _probe_token_getter(
             )
         return StaticTokenGetter(_load_api_key(env_name, data_dir)), f"api_key:{env_name}"
     if connection.type == "oauth" and connection.oauth is not None:
-        token_store = TokenStore(data_dir)
+        token_store = TokenStore(_secret_store(data_dir))
         if not token_store.has_valid_token(provider_config.id, connection.id):
             raise SystemExit(
                 f"no usable OAuth token for {provider_config.id}:{connection.id} under {data_dir}"
