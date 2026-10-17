@@ -17,7 +17,9 @@ from cli._parser_common import (
     STATISTICS_HELP,
     STATISTICS_SECTIONS,
     _add_command_parser,
+    server_url_argument,
 )
+from cli.device_pairing import PAIR_WAIT_SECONDS
 from core.performance import (
     DEFAULT_HEAP_TOP,
     DEFAULT_RECORDING_SECONDS,
@@ -193,6 +195,48 @@ def _add_devices_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         commands, "revoke", DEVICES_HELP["revoke"], example="devices revoke <id>"
     )
     revoke.add_argument("id", metavar="<device-id>", help="Exact id from devices list")
+    pair = _add_command_parser(
+        commands, "pair", DEVICES_HELP["pair"], example="devices pair https://vbot.example.com"
+    )
+    pair.epilog = (
+        "Shows a code that the user approves in the WebUI of a signed-in device (Settings > "
+        "Access & devices > Add device) or on the server's computer with vbot devices approve "
+        "<code>. In a terminal the command waits until the code is approved, denied or expired; "
+        f"otherwise it waits {int(PAIR_WAIT_SECONDS)} seconds and then reports that the code "
+        "still waits: run the same command again to keep waiting for that code. Afterwards, "
+        "commands reach the server with --url and its address. Exit 0 when signed in, already "
+        "signed in, no sign-in needed or still waiting; 1 when denied, expired or refused."
+    )
+    _add_server_address(pair, "The server's https:// address, as the browser opens it")
+    logout = _add_command_parser(
+        commands,
+        "logout",
+        DEVICES_HELP["logout"],
+        example="devices logout https://vbot.example.com",
+    )
+    logout.epilog = (
+        "Deletes the stored sign-in also when the server cannot be reached; the Device then "
+        "stays listed there until it is revoked in the WebUI or unused for 90 days."
+    )
+    _add_server_address(logout, "The server's address, as vbot devices pair got it")
+
+
+def _add_server_address(parser: argparse.ArgumentParser, help_text: str) -> None:
+    """The positional server address of ``devices pair`` and ``devices logout``.
+
+    The address is their whole target: the target options stay accepted (``--url``
+    names the same server) but leave the help, so that it shows one way.
+    """
+    for action in parser._actions:
+        if action.dest in {"host", "port", "url", "data_dir"}:
+            action.help = argparse.SUPPRESS
+    parser.add_argument(
+        "address",
+        nargs="?",
+        type=server_url_argument,
+        metavar="<url>",
+        help=f"{help_text}. Omit to use VBOT_SERVER_URL",
+    )
 
 
 def _add_bootstrap_parsers(

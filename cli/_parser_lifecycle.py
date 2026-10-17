@@ -23,7 +23,7 @@ def _add_server_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     )
     server_subparsers = server_parser.add_subparsers(dest="command", required=True)
     for command in SERVER_COMMANDS:
-        _add_command_parser(server_subparsers, command, SERVER_HELP[command])
+        _add_command_parser(server_subparsers, command, SERVER_HELP[command], remote=False)
 
 
 def _add_desktop_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -139,7 +139,11 @@ def _add_autostart_parsers(subparsers: argparse._SubParsersAction[argparse.Argum
     autostart_subparsers = autostart_parser.add_subparsers(dest="command", required=True)
     for command in ("enable", "disable", "status"):
         _add_command_parser(
-            autostart_subparsers, command, AUTOSTART_HELP[command], example=f"autostart {command}"
+            autostart_subparsers,
+            command,
+            AUTOSTART_HELP[command],
+            example=f"autostart {command}",
+            remote=False,
         )
 
 

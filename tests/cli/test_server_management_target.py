@@ -165,6 +165,129 @@ def test_resolve_instance_builds_connectable_ipv6_safe_url(
     assert instance.url == expected_url
 
 
+@pytest.mark.parametrize(
+    ("text", "origin", "host", "port", "noted"),
+    [
+        pytest.param(
+            "https://vbot.example.com",
+            "https://vbot.example.com",
+            "vbot.example.com",
+            443,
+            False,
+            id="https",
+        ),
+        pytest.param(
+            "vbot.example.com",
+            "https://vbot.example.com",
+            "vbot.example.com",
+            443,
+            True,
+            id="no-scheme",
+        ),
+        pytest.param(
+            "localhost:9000",
+            "http://localhost:9000",
+            "localhost",
+            9000,
+            True,
+            id="loopback-no-scheme",
+        ),
+        pytest.param(
+            "HTTPS://VBot.Example.com:443/app/?x=1#y",
+            "https://vbot.example.com",
+            "vbot.example.com",
+            443,
+            True,
+            id="path-dropped",
+        ),
+        pytest.param("https://[::1]:8443", "https://[::1]:8443", "::1", 8443, False, id="ipv6"),
+        pytest.param(
+            "https://bücher.example",
+            "https://xn--bcher-kva.example",
+            "xn--bcher-kva.example",
+            443,
+            False,
+            id="idn",
+        ),
+    ],
+)
+def test_a_server_address_names_the_target_by_its_origin(
+    tmp_path: Path, text: str, origin: str, host: str, port: int, noted: bool
+) -> None:
+    address = _server_target.parse_server_url(text)
+    instance = resolve_instance(url=text, data_dir=tmp_path)
+
+    assert (address.origin, bool(address.notes)) == (origin, noted)
+    assert (instance.url, instance.host, instance.port) == (origin, host, port)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "ftp://vbot.example.com",
+        "https://user:secret@vbot.example.com",
+        "https://x:0",
+        "https://",
+    ],
+)
+def test_an_unreadable_server_address_is_refused(text: str) -> None:
+    with pytest.raises(ValueError) as refused:
+        _server_target.parse_server_url(text)
+
+    assert "secret" not in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("argv", "environment", "expected"),
+    [
+        pytest.param(
+            ["--url", "https://a.example"],
+            {"VBOT_SERVER_URL": "https://b.example"},
+            "https://a.example",
+            id="flag-wins",
+        ),
+        pytest.param(
+            [], {"VBOT_SERVER_URL": "https://b.example"}, "https://b.example", id="environment"
+        ),
+        pytest.param(
+            ["--port", "8421"], {"VBOT_SERVER_URL": "https://b.example"}, None, id="explicit-port"
+        ),
+        pytest.param(
+            [],
+            {"VBOT_SERVER_URL": "https://b.example", "VBOT_RUN_AGENT_ID": "coder"},
+            None,
+            id="agent-run",
+        ),
+    ],
+)
+def test_the_server_address_comes_from_url_then_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    environment: dict[str, str],
+    expected: str | None,
+) -> None:
+    from cli.parser import parse_args
+
+    monkeypatch.delenv("VBOT_RUN_AGENT_ID", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    assert _server_target.selected_server_url(parse_args(["agent", "list", *argv])) == expected
+
+
+def test_a_server_address_and_a_port_cannot_both_name_the_target(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from cli.parser import parse_args
+
+    with pytest.raises(SystemExit) as refused:
+        parse_args(["--url", "https://vbot.example.com", "agent", "list", "--port", "8421"])
+
+    assert refused.value.code == 2
+    assert "drop --host and --port" in capsys.readouterr().err
+
+
 def connect_error(url: str, **_kwargs: Any) -> httpx.Response:
     raise httpx.ConnectError("offline", request=httpx.Request("GET", url))
 

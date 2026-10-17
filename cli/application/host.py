@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import subprocess
 import sys
 import webbrowser
@@ -82,6 +83,7 @@ class ApplicationFacade:
         self._version_signature: tuple[int, int] | None = None
         self._observer = operations.OperationObserver(install)
         self._server_target_value: ServerInstance | None = None
+        self._desktop_server: tuple[tuple[str, int], ServerInstance] | None = None
         self._source_label: str | None = None
         self._monitor: ServerMonitor | None = None
         self._notifier: Notifier | None = None
@@ -247,7 +249,7 @@ class ApplicationFacade:
 
     def open_browser(self) -> None:
         self._require_server()
-        webbrowser.open(processes.target(self._install).url)
+        webbrowser.open(self._browser_url(""))
 
     def open_session(self, agent: str, session: str) -> None:
         """Show one Session in the Desktop, or in the browser without a Desktop."""
@@ -256,7 +258,7 @@ class ApplicationFacade:
 
         if self._install.install_shape == "server":
             query = urlencode({"open_agent": agent, "open_session": session})
-            webbrowser.open(f"{processes.target(self._install).url}/?{query}")
+            webbrowser.open(self._browser_url(f"/?{query}"))
         elif self._install.owns_server:
             open_desktop(self._install, open_session=(agent, session))
         else:
@@ -266,6 +268,39 @@ class ApplicationFacade:
             open_desktop(
                 self._install, host=target[0], port=target[1], open_session=(agent, session)
             )
+
+    def _browser_url(self, page: str) -> str:
+        """Where a browser opens ``page`` of the owned server, signed in when the mode needs it.
+
+        In the access mode ``authenticated`` a browser needs a Device: the tray
+        asks the server for a one-time login ticket with the server's local
+        access token and opens its sign-in link at the public URL. The server
+        sends every ticket to the WebUI's start page, so ``page`` is not opened
+        there. The installation record is read again: ``vbot application access``
+        changes it while the tray runs.
+        """
+
+        from cli.application.state import load_installation
+        from cli.device_pairing import device_name
+        from cli.rpc_client import rpc_call
+
+        try:
+            install = load_installation(self._install.root)
+        except ApplicationError:
+            install = self._install
+        target = processes.target(install)
+        access = install.access
+        if access is None or access.mode != "authenticated" or access.public_url is None:
+            return f"{target.url}{page}"
+        result = rpc_call(target, "auth.login_ticket", {"name": device_name("Browser", _host())})
+        if not result.ok:
+            if result.failure is not None and result.failure.code == "auth_disabled":
+                return f"{target.url}{page}"
+            raise ApplicationError(f"Could not sign the browser in: {result.message}")
+        path = result.data.get("path")
+        if not isinstance(path, str) or not path.startswith("/auth/ticket/"):
+            raise ApplicationError("Could not sign the browser in: the server sent no sign-in link")
+        return f"{access.public_url}{path}"
 
     def start_update(self) -> None:
         with self._recording("Could not start an update"):
@@ -420,6 +455,8 @@ class ApplicationFacade:
         else:
             server_state = {
                 "connected": "running",
+                # The server runs; it refused only the tray's stream (activity says why).
+                "denied": "running",
                 "unresponsive": "unresponsive",
                 "refused": "stopped",
                 "unreachable": "stopped",
@@ -444,15 +481,17 @@ class ApplicationFacade:
 
         return classify_server(self._server_target(), health=health)
 
-    def _monitor_target(self) -> str | None:
+    def _monitor_target(self) -> ServerInstance | None:
         if self._install.owns_server:
-            return self._server_url()
+            return self._server_target()
         target = _desktop_target()
         if target is None:
             return None
-        from cli._server_target import build_server_base_url
+        if self._desktop_server is None or self._desktop_server[0] != target:
+            from cli._server_target import resolve_instance
 
-        return build_server_base_url(*target)
+            self._desktop_server = (target, resolve_instance(host=target[0], port=target[1]))
+        return self._desktop_server[1]
 
     def _update_running(self) -> bool:
         try:
@@ -623,6 +662,13 @@ def main() -> int:
         if str(error) != "Another application operation is running":
             raise
     return 0
+
+
+def _host() -> str:
+    try:
+        return socket.gethostname()
+    except OSError:
+        return ""
 
 
 def _desktop_target() -> tuple[str, int] | None:

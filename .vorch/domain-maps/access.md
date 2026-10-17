@@ -20,11 +20,11 @@ Owners:
 - `core/utils/owner_only.py`: owner-only file permissions (POSIX `0600`; on Windows a protected DACL for the current user and `SYSTEM`), applied by the atomic writers' `owner_only=True` before any content is written. Used for the local access token, the device store and the server control record.
 - `server/access/`: `AccessGuard` (`_guard.py`, ASGI), `AccessService` (`_service.py`, the access state of one app), pure peer/transport/route rules (`_rules.py`), in-memory pairing requests and login tickets (`_pairing.py`), rate limits and aggregated refusal logging (`_limits.py`), live connections for revocation (`_connections.py`), the principal (`_principal.py`), the unauthenticated endpoints (`_routes.py`) and direct TLS (`tls.py`).
 - `server/rpc/access_methods.py`: `auth.login_ticket` and the `devices.*` RPCs.
-- CLI: `vbot devices ...` (`cli/device_management.py`, `cli.md`), `vbot application access show|set` and the installer options (`cli/application.md`), and `cli/rpc_client.py::local_access_headers`.
+- CLI: `vbot devices ...` (`cli/device_management.py`, pairing and logout in `cli/device_pairing.py`, `cli.md`), `vbot application access show|set` and the installer options (`cli/application.md`), and `cli/server_client.py`, which attaches the credential for the CLI, the TUI and the tray.
 
 Not owned here: the browser-origin guard (`server/_origins.py`, `server.md`), which still runs after the access guard; capability URL verification (`server/file_delivery.py`); Extension OAuth (`extensions.md`); credential storage.
 
-Accessor status: the WebUI signs in by pairing as a browser Device and manages Devices and pairing approvals in Settings -> System -> Access & devices (`webui/app-shell.md` -> Access gate, `webui/settings.md` -> Access and devices). The Desktop has no pairing yet, and the CLI/TUI reach an `authenticated` server only on its own computer through the local access token.
+Accessor status: the WebUI signs in by pairing as a browser Device and manages Devices and pairing approvals in Settings -> System -> Access & devices (`webui/app-shell.md` -> Access gate, `webui/settings.md` -> Access and devices). The CLI and the TUI sign in on the server's computer with the local access token and elsewhere with a Device from `vbot devices pair <url>` (`cli.md`); the Windows tray uses the local access token and opens the browser through a login ticket (`cli/application/tray.md`). The Desktop has no pairing yet.
 
 ## Terms
 
@@ -72,12 +72,12 @@ The browser-origin guard additionally accepts the configured public origin (`Acc
 - `server/main.py` resolves the configuration before touching the data directory; an invalid one prints `vBot server cannot start: <reason>` to stderr and exits `STARTUP_FAILED_EXIT_CODE` (3). Without `--access` the mode is inferred from `--host` the same way, never `authenticated`. A packaged installation's own server (the record's port and data directory) runs with the recorded mode and host: explicit access flags that differ from the record refuse the start, a different `--host` logs a WARN and the record wins, an unreadable record refuses the start (`cli/application.md`). The start line carries `access=<mode>` (`server.md`).
 - `current_principal()` is `None` outside a request, so in-process RPC dispatch (Agents, Live) cannot use the access RPCs: they refuse with `access_denied`.
 - Device store: Generation 1 document `access/devices.json` (kind `access_devices`, `settings.md` -> JSON Document Contract), entries `{id, name, kind, token_hash, created_at, last_used_at, last_client, approved_by}` keyed by `id` (`dev_<16>`). Only the SHA-256 of a token's secret part is stored; the token is returned once.
-- `cli/rpc_client.py::local_access_headers` sends the local access token to loopback targets only, for `rpc_call` and `stream_run_events`.
+- `cli/server_client.py` (`http_options`, `websocket_target`) sends the local access token to loopback targets only and a stored Device token only to its own origin, for every CLI, TUI and tray request.
 
 ## Invariants
 
 - Fail closed: an unknown route is `protected`, every WebSocket is `protected`, a device store that does not load completely makes the store unavailable (no Device signs in, management answers `devices_unavailable`, nothing is written over the file), an unreadable installation record refuses the packaged server's start.
-- The local access token never authenticates through a proxy or from another computer, and `rpc_client` never sends it to a non-loopback target.
+- The local access token never authenticates through a proxy or from another computer, and `cli/server_client.py` never sends it to a non-loopback target.
 - Never log or return tokens, token hashes, poll secrets, tickets or pairing codes. Refusal logs cut the path to two segments (`/api/files/...`), because deeper segments can carry capabilities or tickets.
 - `access/devices.json` is outside data snapshots and configuration backups (`DOCUMENTS_OUTSIDE_SNAPSHOTS`): a restore must never revive a revoked Device. Deleting the file revokes every Device.
 - Pairing requests, login tickets and rate-limit windows live in memory only; a restart drops them.

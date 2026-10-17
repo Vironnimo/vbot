@@ -18,7 +18,7 @@ What an accessor (WebUI, Desktop, CLI/TUI, tray) relies on to reach a server in 
 
 - Device token `vbt_<device id>_<43 base64url>`: Desktop and CLI Devices send `Authorization: Bearer <token>`. It is shown once, in the approved poll answer; keep it in the accessor's secret storage.
 - Browser Devices get the cookie `vbot_device` instead: `HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=34560000` (400 days). Page code never sees the token. `Authorization` wins when both are present. A refused cookie comes back cleared (`Max-Age=0`).
-- Local access token `vbl_<43 base64url>` in `<data-dir>/runtime/local-access-<port>.token`, owner-only, rewritten at every server start: tools on the server's computer send it as `Authorization: Bearer` to a loopback URL (`http://127.0.0.1:<port>` works in every mode, also with direct TLS). Read it at each connection and again after a 401; never send it to another computer. `cli/rpc_client.py::local_access_headers` is the reference.
+- Local access token `vbl_<43 base64url>` in `<data-dir>/runtime/local-access-<port>.token`, owner-only, rewritten at every server start: tools on the server's computer send it as `Authorization: Bearer` to a loopback URL (`http://127.0.0.1:<port>` works in every mode, also with direct TLS). Read it at each connection and again after a 401; never send it to another computer. `cli/server_client.py` is the reference (`ServerAuth` re-reads it after a 401 and repeats the request once when it changed).
 - In `local` and `lan` no credential is needed and a wrong one is ignored.
 - A Device unused for 90 days expires and must pair again.
 

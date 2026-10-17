@@ -166,6 +166,18 @@ class _ServerExit:
             id="port-occupied",
         ),
         pytest.param(
+            True,
+            [
+                ("status", _connected(_EARLIER)),
+                # A refused credential ends the stream; it is no crash.
+                ("lost", 4401),
+                ("status", MonitorStatus(connection="denied", vbot=True)),
+                ("status", MonitorStatus(connection="refused")),
+            ],
+            [("server_running", "info"), ("tray_refused", "warning")],
+            id="access-refused",
+        ),
+        pytest.param(
             False,
             [("status", _connected(_EARLIER)), ("lost", 1012), ("status", _connected(_EARLIER))],
             [("connected", "info"), ("disconnected", "warning"), ("connected", "info")],

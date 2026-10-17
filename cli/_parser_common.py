@@ -331,6 +331,11 @@ DEVICES_HELP = {
     "deny": "Refuse the device that shows this pairing code",
     "rename": "Rename a paired device",
     "revoke": "Revoke a device: it is signed out at once",
+    "pair": (
+        "Sign this computer's CLI in to a server that requires login: show a code to "
+        "approve, then store the Device token"
+    ),
+    "logout": "Sign this computer's CLI out of a server: revoke its Device and delete the token",
 }
 
 
@@ -466,10 +471,25 @@ class _TargetArgument(argparse.Action):
         setattr(namespace, self.dest, values)
 
 
+def server_url_argument(raw: str) -> str:
+    """Accept a server address :func:`parse_server_url` can read; keep its spelling.
+
+    The command reports how it read the address (``Note:``) when it resolves it.
+    """
+    from cli._server_target import parse_server_url
+
+    try:
+        parse_server_url(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+    return raw.strip()
+
+
 def _add_target_arguments(
     parser: argparse.ArgumentParser,
     *,
     default_host: str | None = DEFAULT_HOST,
+    url: bool = True,
 ) -> None:
     parser.add_argument(
         "--host",
@@ -487,6 +507,18 @@ def _add_target_arguments(
         type=int,
         help="Server port; normally --port > VBOT_SERVER_PORT > local Settings > 8420",
     )
+    if url:
+        parser.add_argument(
+            "--url",
+            action=_TargetArgument,
+            type=server_url_argument,
+            metavar="<url>",
+            help=(
+                "Server address, such as https://vbot.example.com, instead of --host and --port. "
+                "A server that requires login needs a sign-in from vbot devices pair. "
+                "Omit to use VBOT_SERVER_URL when it is set, else the local server"
+            ),
+        )
     parser.add_argument(
         "--data-dir",
         action=_TargetArgument,
@@ -520,7 +552,9 @@ def _add_command_parser(
     help_text: str,
     *,
     example: str | None = None,
+    remote: bool = True,
 ) -> argparse.ArgumentParser:
+    """Add one command with the target options; ``remote=False`` leaves out ``--url``."""
     original_subparsers = subparsers
     area = subparsers._prog_prefix.removeprefix("vbot ")
     path = COMMAND_PATHS.get(area, {}).get(command, (command,))
@@ -540,5 +574,5 @@ def _add_command_parser(
     if path != (command,):
         command_parser.set_defaults(command=command)
         original_subparsers.choices[command] = command_parser
-    _add_target_arguments(command_parser)
+    _add_target_arguments(command_parser, url=remote)
     return command_parser

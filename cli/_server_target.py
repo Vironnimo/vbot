@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import socket
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from ipaddress import ip_address
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlsplit
 
 import psutil  # type: ignore[import-untyped]
 
@@ -37,12 +39,24 @@ PATIENT_PROBE_TIMEOUT_SECONDS = 5.0
 HEALTH_PATH = "/health"
 
 
+#: The server address the CLI connects to when no target option names one.
+SERVER_URL_ENVIRONMENT_VARIABLE = "VBOT_SERVER_URL"
+_RUN_AGENT_ENVIRONMENT_VARIABLE = "VBOT_RUN_AGENT_ID"
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
 WEBUI_PATH = "/"
 
 
 @dataclass(frozen=True)
 class ServerInstance:
-    """Resolved local server instance configuration."""
+    """One resolved server target.
+
+    ``url`` is the origin every request goes to: ``http://<host>:<port>`` for a
+    host and port target, or the normalized ``--url`` origin, possibly
+    ``https://``. ``data_dir`` is this computer's instance directory, where the
+    local access token of a server on this computer is found.
+    """
 
     host: str
     port: int
@@ -114,19 +128,156 @@ def resolve_instance(
     host: str = DEFAULT_HOST,
     port: int | None = None,
     data_dir: str | Path | None = None,
+    url: str | None = None,
 ) -> ServerInstance:
-    """Resolve a CLI target using the same port rules as the server."""
+    """Resolve a CLI target using the same port rules as the server.
+
+    ``url`` (a server address such as ``https://vbot.example.com``) replaces
+    ``host`` and ``port``; ``data_dir`` still names this computer's instance
+    directory. Raises ``ValueError`` for an address :func:`parse_server_url`
+    refuses.
+    """
 
     config = Config(data_dir=Path(data_dir) if data_dir is not None else None)
     resolved_data_dir = config.data_dir.expanduser().resolve()
+    log_path = resolve_daily_log_path(resolved_data_dir)
+    if url is not None:
+        address = parse_server_url(url)
+        return ServerInstance(
+            host=address.host,
+            port=address.port,
+            data_dir=resolved_data_dir,
+            url=address.origin,
+            log_path=log_path,
+        )
     resolved_port = resolve_port(config, port)
     return ServerInstance(
         host=host,
         port=resolved_port,
         data_dir=resolved_data_dir,
         url=build_server_base_url(host, resolved_port),
-        log_path=resolve_daily_log_path(resolved_data_dir),
+        log_path=log_path,
     )
+
+
+@dataclass(frozen=True)
+class ServerAddress:
+    """A normalized server address: its origin, host (without brackets) and port.
+
+    ``notes`` name each reading the normalization needed, one ``Note:`` line each.
+    """
+
+    origin: str
+    host: str
+    port: int
+    notes: tuple[str, ...] = ()
+
+
+def parse_server_url(text: str) -> ServerAddress:
+    """Normalize a server address to its ``scheme://host[:port]`` origin.
+
+    An address without a scheme is read as ``https://``, or as ``http://`` for a
+    loopback host, and a path, query or fragment is dropped: vBot serves at the
+    root of its origin. Both readings are reported in ``notes``. Raises
+    ``ValueError`` for another scheme, a user name or password, or a missing or
+    malformed host or port.
+    """
+
+    from core.access.config import is_loopback_host
+
+    raw = text.strip()
+    if not raw:
+        raise ValueError("The server address is empty; pass one like https://vbot.example.com")
+    if any(ord(char) < 33 or ord(char) == 127 for char in raw):
+        raise ValueError(f"The server address {raw!r} contains spaces or control characters")
+    notes: list[str] = []
+    try:
+        if "://" not in raw:
+            bare_host = urlsplit(f"//{raw}").hostname or ""
+            scheme = "http" if is_loopback_host(bare_host) else "https"
+            notes.append(f"Read the server address {raw} as {scheme}://{raw}.")
+            raw = f"{scheme}://{raw}"
+        parts = urlsplit(raw)
+        explicit_port = parts.port
+    except ValueError:
+        raise ValueError(f"The server address {text.strip()} has an invalid host or port") from None
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS:
+        raise ValueError(
+            f"The server address {text.strip()} must start with https://, or http:// for a "
+            "server on this computer or a trusted network"
+        )
+    host = parts.hostname
+    if parts.username is not None or parts.password is not None:
+        raise ValueError(
+            "The server address must not contain a user name or password; pass "
+            f"{scheme}://{host or 'host'} without them"
+        )
+    if not host:
+        raise ValueError(f"The server address {text.strip()} names no host")
+    if not host.isascii():
+        try:
+            host = host.encode("idna").decode("ascii")
+        except UnicodeError:
+            raise ValueError(f"The server address {text.strip()} has an invalid host") from None
+    if explicit_port == 0:
+        raise ValueError(f"The server address {text.strip()} has an invalid host or port")
+    port = explicit_port or _DEFAULT_PORTS[scheme]
+    origin = f"{scheme}://{f'[{host}]' if ':' in host else host}"
+    if port != _DEFAULT_PORTS[scheme]:
+        origin += f":{port}"
+    rest = parts.path.removeprefix("/")
+    rest += f"?{parts.query}" if parts.query else ""
+    rest += f"#{parts.fragment}" if parts.fragment else ""
+    if rest:
+        notes.append(f"Ignored /{rest} in the server address; the CLI connects to {origin}.")
+    return ServerAddress(origin=origin, host=host, port=port, notes=tuple(notes))
+
+
+def server_origin(url: str) -> str | None:
+    """The normalized origin of an absolute ``http(s)`` URL; ``None`` for anything else."""
+
+    if "://" not in url:
+        return None
+    try:
+        return parse_server_url(url).origin
+    except ValueError:
+        return None
+
+
+def selected_server_url(arguments: object) -> str | None:
+    """The server address a command targets: ``--url``, else ``VBOT_SERVER_URL``.
+
+    An explicit ``--host`` or ``--port`` overrides the environment variable, and
+    so does an Agent's Run (``VBOT_RUN_AGENT_ID``): its commands reach the server
+    that runs it, which the instance variables of its shell name.
+    """
+
+    url = getattr(arguments, "url", None)
+    if url:
+        return str(url)
+    explicit = getattr(arguments, "_target_arguments", {})
+    if "host" in explicit or "port" in explicit:
+        return None
+    if os.environ.get(_RUN_AGENT_ENVIRONMENT_VARIABLE, "").strip():
+        return None
+    return os.environ.get(SERVER_URL_ENVIRONMENT_VARIABLE, "").strip() or None
+
+
+def is_loopback_target(instance: ServerInstance) -> bool:
+    """Whether requests to ``instance`` go to this computer's loopback interface."""
+
+    from core.access.config import is_loopback_host
+
+    host = urlsplit(instance.url).hostname
+    return host is not None and is_loopback_host(host)
+
+
+def is_url_target(instance: ServerInstance) -> bool:
+    """Whether only ``--url`` names ``instance``: ``--host`` and ``--port`` reach only ``http``."""
+
+    url = urlsplit(instance.url)
+    return url.scheme != "http" or url.port != instance.port
 
 
 def build_server_base_url(host: str, port: int) -> str:
@@ -251,8 +402,10 @@ def probe_webui(
 
 
 def _probe_url(instance: ServerInstance, path: str) -> str:
-    """Return a direct local probe URL for health and WebUI checks."""
+    """Return the probe URL for health and WebUI checks; a wildcard host is probed on loopback."""
 
+    if is_url_target(instance):
+        return f"{instance.url}{path}"
     return f"{build_server_base_url(instance.host, instance.port)}{path}"
 
 

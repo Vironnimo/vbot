@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -61,6 +63,11 @@ from cli._output import (
     print_management_command_result,
     print_server_command_start,
     with_command_output,
+)
+from cli._server_target import (
+    SERVER_URL_ENVIRONMENT_VARIABLE,
+    parse_server_url,
+    selected_server_url,
 )
 from cli.agent_management import (
     agent_create,
@@ -267,7 +274,9 @@ def run(
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
-    instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+    instance = resolve(
+        host=args.host, port=args.port, data_dir=args.data_dir, url=_server_url(args)
+    )
     if args.area == "tui":
         from cli._dispatch_tui import dispatch_tui_command
 
@@ -463,3 +472,24 @@ def run(
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     raise ValueError(f"Unsupported command area: {args.area}")
+
+
+def _server_url(args: argparse.Namespace) -> str | None:
+    """The normalized server address the command targets, after its ``Note:`` lines.
+
+    ``--url`` (or ``devices pair <url>``) wins, then ``VBOT_SERVER_URL`` unless
+    ``--host``/``--port`` or an Agent's Run select the target
+    (``selected_server_url``). Raises ``ValueError`` for an unreadable
+    ``VBOT_SERVER_URL``; argparse already checked ``--url``.
+    """
+
+    selected = selected_server_url(args)
+    if selected is None:
+        return None
+    try:
+        address = parse_server_url(selected)
+    except ValueError as exc:
+        raise ValueError(f"{SERVER_URL_ENVIRONMENT_VARIABLE}: {exc}") from None
+    for note in address.notes:
+        print(f"Note: {note}", file=sys.stderr)
+    return address.origin

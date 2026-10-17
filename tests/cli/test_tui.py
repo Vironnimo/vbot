@@ -11,14 +11,19 @@ from typing import Any, override
 import httpx
 import pytest
 from textual.widgets import TextArea
+from websockets.exceptions import ConnectionClosedError
+from websockets.frames import Close
 
 import cli.tui.app as app_module
+import cli.tui.transport as transport_module
+from cli._server_target import resolve_instance
 from cli.tui.app import ConversationApp
 from cli.tui.dialogs import Picker, TextDialog
 from cli.tui.drafts import draft_record
 from cli.tui.rendering import file_links, tool_detail
 from cli.tui.state import Conversation
 from cli.tui.transport import ClientError, TerminalClient
+from tests.cli.cli_test_support import make_instance
 
 type JsonObject = dict[str, Any]
 
@@ -592,11 +597,8 @@ async def test_transport_preserves_send_uncertainty_and_local_files(tmp_path: Pa
             raise httpx.ReadError("lost", request=request)
         return httpx.Response(200, content=b"file contents")
 
-    async with TerminalClient("http://example.invalid:8420") as client:
-        await client.http.aclose()
-        client.http = httpx.AsyncClient(
-            base_url=client.url, transport=httpx.MockTransport(respond), trust_env=False
-        )
+    target = make_instance(tmp_path, host="example.invalid")
+    async with TerminalClient(target, transport=httpx.MockTransport(respond)) as client:
         with pytest.raises(ClientError) as failure:
             await client.rpc("chat.stream", {"content": "once"})
         assert failure.value.state == "unknown"
@@ -611,6 +613,67 @@ async def test_transport_preserves_send_uncertainty_and_local_files(tmp_path: Pa
                 "https://elsewhere.invalid/api/files/capability", tmp_path / "other.txt"
             )
         assert destination.read_bytes() == b"file contents"
+
+
+@pytest.mark.asyncio
+async def test_transport_explains_access_refusals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def respond(request: httpx.Request) -> httpx.Response:
+        error = {"code": "auth_required", "message": "Authentication required"}
+        return httpx.Response(401, json={"ok": False, "error": error})
+
+    class RefusedSocket:
+        async def __aenter__(self) -> RefusedSocket:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        def __aiter__(self) -> RefusedSocket:
+            return self
+
+        async def __anext__(self) -> str:
+            raise ConnectionClosedError(Close(4403, "Access denied"), None)
+
+    monkeypatch.setattr(transport_module, "connect", lambda *_args, **_kwargs: RefusedSocket())
+    target = resolve_instance(data_dir=tmp_path / "data", url="https://vbot.example.com")
+    async with TerminalClient(target, transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(ClientError) as rpc_refusal:
+            await client.rpc("agent.list")
+        with pytest.raises(ClientError) as stream_refusal:
+            async for _event in client.events():
+                pass
+
+    assert rpc_refusal.value.code == "auth_required"
+    assert "vbot devices pair https://vbot.example.com" in str(rpc_refusal.value)
+    assert stream_refusal.value.code == "access_denied"
+
+
+@pytest.mark.asyncio
+async def test_events_stop_after_a_repeated_access_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+    class RefusingServer(Server):
+        attempts = 0
+
+        @override
+        async def events(self) -> AsyncIterator[JsonObject]:
+            RefusingServer.attempts += 1
+            raise ClientError("Sign in with: vbot devices pair", code="auth_required")
+            yield {}
+
+    async def no_delay(_seconds: float) -> None:
+        return
+
+    monkeypatch.setattr(app_module, "_sleep", no_delay)
+    app = ConversationApp(RefusingServer(), agent_id="main")
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+
+        # One immediate retry reads the credential again; then the stream stays closed.
+        assert RefusingServer.attempts == 2
+        assert not app.connected
+        assert "vbot devices pair" in app.last_notice
 
 
 def test_tool_details_preserve_diffs_and_offer_media_downloads() -> None:

@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -16,12 +17,14 @@ from typing import Any, cast
 import psutil  # type: ignore[import-untyped]
 import pytest
 
-from cli._server_target import HealthProbeResult
+from cli._server_target import HealthProbeResult, RpcFailure
 from cli.application import desktop, host
 from cli.application.activity import JOURNAL_NAME, ActivityJournal
 from cli.application.monitor import MonitorStatus
 from cli.application.notifications import Toast
 from cli.application.state import ApplicationError, Installation, Operation
+from cli.rpc_client import RpcPayload
+from core.access.config import access_config
 from core.utils.logging import resolve_daily_log_path
 from core.utils.server_control import create_server_control, process_started
 
@@ -217,13 +220,14 @@ def _on_monitor_loop(callback) -> None:
         pytest.param(MonitorStatus("u", "unreachable"), "stopped", id="unreachable"),
         pytest.param(MonitorStatus("u", "rejected", True), "running", id="safe-mode"),
         pytest.param(MonitorStatus("u", "rejected", False), "conflict", id="foreign-listener"),
+        pytest.param(MonitorStatus("u", "denied", True), "running", id="stream-refused"),
     ],
 )
 def test_server_state_follows_the_event_stream_monitor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: MonitorStatus, server_state: str
 ):
     facade, monitor, sink = _watched(_install(tmp_path), monkeypatch)
-    assert monitor.target() == "http://127.0.0.1:8420"
+    assert monitor.target().url == "http://127.0.0.1:8420"
     assert monitor.local is True
     # The monitor classifies a silent owned target from its own unanswered request.
     classified: list[tuple[str, HealthProbeResult]] = []
@@ -699,3 +703,69 @@ def test_main_keeps_tray_running_when_recovery_fails(
     facade, start_server = received[0]
     assert facade.state().error == "Startup failed: record unreadable"
     assert start_server is False
+
+
+@pytest.mark.parametrize(
+    ("action", "reply", "opened"),
+    [
+        pytest.param(
+            "browser",
+            {"ticket": "T1", "path": "/auth/ticket/T1", "expires_in": 60},
+            "https://vbot.example.com/auth/ticket/T1",
+            id="browser-signed-in",
+        ),
+        # The ticket lands on the start page; the server has no target for it.
+        pytest.param(
+            "session",
+            {"ticket": "T1", "path": "/auth/ticket/T1", "expires_in": 60},
+            "https://vbot.example.com/auth/ticket/T1",
+            id="session-signed-in",
+        ),
+        pytest.param("browser", "auth_disabled", "http://127.0.0.1:8420", id="login-turned-off"),
+        pytest.param("browser", "auth_required", ApplicationError, id="refused"),
+    ],
+)
+def test_a_browser_opens_signed_in_when_the_server_requires_login(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    reply: dict[str, Any] | str,
+    opened: str | type[ApplicationError],
+):
+    install = replace(
+        _install(tmp_path),
+        server_access=access_config(
+            "authenticated", public_url="https://vbot.example.com", trusted_proxies=["127.0.0.1"]
+        ),
+    )
+    target = SimpleNamespace(url="http://127.0.0.1:8420")
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def rpc_call(instance: Any, method: str, params: dict[str, Any]) -> RpcPayload:
+        assert instance is target
+        calls.append((method, params))
+        if isinstance(reply, dict):
+            return RpcPayload(ok=True, instance=cast(Any, instance), data=reply)
+        failure = RpcFailure(method, "responded", reply, 401)
+        return RpcPayload(ok=False, instance=cast(Any, instance), message=reply, failure=failure)
+
+    launches: list[str] = []
+    monkeypatch.setattr(host.processes, "target", lambda _install: target)
+    monkeypatch.setattr("cli.rpc_client.rpc_call", rpc_call)
+    monkeypatch.setattr(host.webbrowser, "open", launches.append)
+    monkeypatch.setattr(host.socket, "gethostname", lambda: "desk")
+    facade = host.ApplicationFacade(install)
+
+    def act() -> None:
+        if action == "browser":
+            facade.open_browser()
+        else:
+            facade.open_session("coder@site", "ses_1")
+
+    if opened is ApplicationError:
+        with pytest.raises(ApplicationError):
+            act()
+    else:
+        act()
+    assert launches == ([] if opened is ApplicationError else [opened])
+    assert calls == [("auth.login_ticket", {"name": "Browser on desk"})]
