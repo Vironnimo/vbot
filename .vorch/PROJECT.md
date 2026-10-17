@@ -37,7 +37,7 @@ Live voice (`live_voice` Task Model) keeps the provider call, the handed-on requ
 
 **Extensions:** API 15 (`core/extensions/_declarations.API_VERSION`; what each version added: `extensions.md`). Canonical Sessions own binding, receipt and Run identity; Extension databases own domain state. The app provides a generic page bridge; Extensions own domain UI (`extensions.md`).
 
-**Configuration:** Data directory `~/.vbot` owns `settings.json` and `.env`, a user-owned fallback credential snapshot. Process environment takes precedence; vBot never rewrites `os.environ`. Owning domains validate every user-editable JSON file before runtime use; public accessors configure Settings only through cataloged paths. See `settings.md`, `storage.md`, and `providers/connections.md` (Custom Provider credentials).
+**Configuration:** Data directory `~/.vbot` owns `settings.json` and `secrets.json`, the Secret Store that keeps data-directory credentials and OAuth tokens encrypted at rest (`secrets.md`; its key lives outside the data directory or, on Windows, is DPAPI-wrapped). Process environment takes precedence; vBot never rewrites `os.environ`. vBot no longer reads the plaintext `.env` and `oauth/*.json` it replaced, except through their one-time conversion. Owning domains validate every user-editable JSON file before runtime use; public accessors configure Settings only through cataloged paths. See `settings.md`, `storage.md`, and `providers/connections.md` (Custom Provider credentials).
 
 ## Domain Maps
 
@@ -68,6 +68,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | subagents.md | `core/subagents/` | Sub-Agent tree, answer forwarding, tree control, takeover |
 | tools.md | `core/tools/` | Tool contracts and policy; index to per-tool maps |
 | storage.md | `core/storage/` | Data-directory layout, temp-file lifecycle, persistence |
+| secrets.md | `core/secrets/` | Secret Store: encrypted credentials and OAuth tokens, key protection, plaintext conversion |
 | skills.md | `core/skills/` | Skill loading/validation, scopes, authoring, history and archive, Prompt-Epoch Catalog |
 | automation.md | `core/automation/` | Cron/Bootstrap triggering, queue semantics, Reflection, Librarian passes |
 | calendar.md | `core/calendar/` | Local events, recurrence, occurrence changes, event deletion with its Cron jobs, cron projection, calendar tool |

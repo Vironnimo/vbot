@@ -268,11 +268,11 @@ A key passed to `provider key set` may be retained by shell history. Prefer the 
 
 A Provider describes an external model service and Adapter behavior. A Connection describes one authentication and endpoint mode under that Provider. An Account is a credential slot on a Connection; the default slot is named `default`, and additional named Accounts can coexist.
 
-API keys resolve from the process environment first and `<data-dir>/.env` second. OAuth tokens live under `<data-dir>/oauth/`. A keyless local Connection such as Ollama still has enabled and reachability state even though it has no credential.
+API keys resolve from the process environment first and the data directory's Secret Store second; OAuth tokens live in the Secret Store as well (see Credentials and the Secret Store below). A keyless local Connection such as Ollama still has enabled and reachability state even though it has no credential.
 
 ### Custom Providers
 
-Settings can add a user-owned OpenAI-compatible endpoint without adding files under `resources/`. Use **Settings → Providers → Add custom** to set its stable id, display name, endpoint URL, authentication, optional Model discovery path, and manual Models. The initial Adapter choice is `openai_compatible`; each Custom Provider has one implicit `default` Connection. API keys are write-only and are stored as `VBOT_CUSTOM_<ID>_API_KEY` in the selected data directory's `.env`, never in `settings.json`.
+Settings can add a user-owned OpenAI-compatible endpoint without adding files under `resources/`. Use **Settings → Providers → Add custom** to set its stable id, display name, endpoint URL, authentication, optional Model discovery path, and manual Models. The initial Adapter choice is `openai_compatible`; each Custom Provider has one implicit `default` Connection. API keys are write-only and are stored as `VBOT_CUSTOM_<ID>_API_KEY` in the selected data directory's Secret Store, never in `settings.json`.
 
 The equivalent secret-free `settings.json` shape is:
 
@@ -376,36 +376,58 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 ├── cron/
 ├── extensions/
 ├── logs/
-├── oauth/
 ├── processes/
 ├── projects/
 ├── prompts/
 ├── recall/
 ├── skills/
 ├── terminals/
-├── .env
 ├── data-store.json
 └── settings.json
 ```
 
 `artifacts/attachments/`, `artifacts/speech/`, `artifacts/models/`, `artifacts/debug/`, and `artifacts/performance/` contain durable domain-owned artifacts; the performance folder keeps the newest 20 Recordings. The `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash output, Terminal output and Web Fetch snapshots, and 24-hour retained Sub-Agent activity. `statistics/` holds only the disposable local Statistics index, which is derived from Sessions; the automatic Provider usage history is the canonical `provider-usage.db` at the data root (see Data-store maintenance below). The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
 
-Independent roots keep their established ownership: `agents/` contains Identity Agent configs, default Workspaces, and private Skills; `projects/` contains Project metadata; `skills/` contains global user Skills; `bootstrap/`, `calendar/`, `channels/`, `cron/`, `extensions/`, `prompts/`, `recall/`, `terminals/`, `logs/`, `oauth/`, and `archive/` retain their existing records. Sessions of every Agent and Project live in `sessions.db`. Custom absolute Workspaces remain outside the data directory. `processes/` is reserved for future persistent process records and is not the Bash-output location.
+Independent roots keep their established ownership: `agents/` contains Identity Agent configs, default Workspaces, and private Skills; `projects/` contains Project metadata; `skills/` contains global user Skills; `bootstrap/`, `calendar/`, `channels/`, `cron/`, `extensions/`, `prompts/`, `recall/`, `terminals/`, `logs/`, and `archive/` retain their existing records. Sessions of every Agent and Project live in `sessions.db`. Custom absolute Workspaces remain outside the data directory. `processes/` is reserved for future persistent process records and is not the Bash-output location.
 
 Other entries appear at the data root when first needed:
 
 - the canonical databases `sessions.db`, `channels.db`, and `provider-usage.db`, and Extension databases next to other Extension state under `extension-data/<extension>/`; every database is registered in `data-store.json` (see Data-store maintenance below);
 - `snapshots/`, `config-backups/`, `incidents/` and `quarantine/` for data snapshots, configuration backups and recovery, `data-store.lock`, and `data-maintenance.json` while an offline data operation is incomplete;
+- `secrets.json`, the encrypted Secret Store, when the first credential or OAuth token is saved (see Credentials and the Secret Store below);
 - `runtime/` with the control records of a running server, `speech-engines/` after local speech setup, and `embedding-engines/` after a local embedding Model is installed;
 - `pre-generation-1/` only in a data directory converted from vBot 0.4.4 or earlier (see below).
 
-The initializer copies `resources/data-dir/.env.example` only when `.env` is absent and creates a `settings.json` holding only `format_version` 1 when Settings is absent. It never rewrites either existing file; The installer adds the fresh-install Agent defaults to that new `settings.json` only when it creates the data directory; the server port stays in the installation record. The initializer writes `data-store.json` only into a data directory it has just created; an existing directory without it is refused (see Data directories from older versions).
+The initializer creates a `settings.json` holding only `format_version` 1 when Settings is absent and never rewrites an existing one; it seeds no credentials. The installer adds the fresh-install Agent defaults to that new `settings.json` only when it creates the data directory; the server port stays in the installation record. The initializer writes `data-store.json` only into a data directory it has just created; an existing directory without it is refused (see Data directories from older versions).
 
 ### Data directories from older versions
 
 vBot reads only its current data format: the canonical paths, databases registered in `data-store.json`, and JSON documents with a `format_version`. Setup and Runtime never convert or dual-read older data. vBot 0.4.4 and earlier wrote data directories in an older format, which this version cannot use: it refuses such a directory at startup, as it refuses every existing directory without `data-store.json`. To start fresh, move the old directory aside or choose a data directory path that does not exist yet; vBot creates a new data directory there. To keep old data, open it with the vBot version that wrote it and copy out what you still need.
 
 A data directory converted from such a version can still hold `pre-generation-1/`: the files the conversion replaced, including old copies of credential files such as OAuth tokens. vBot never reads it. Treat it like the data directory, and delete it once the converted data has worked for a while and a data snapshot exists.
+
+### Credentials and the Secret Store
+
+API keys, bot tokens and other credentials saved through Settings, the CLI or an Extension, and every OAuth login, live in the data directory's Secret Store, `<data-dir>/secrets.json`. Each entry is encrypted with AES-256-GCM; the file names the stored credentials (environment-variable names such as `OPENAI_API_KEY`) but holds no readable value. A credential set in the process environment that starts the server still takes precedence over a stored one with the same name.
+
+The store's key never lies in the data directory as plain data:
+
+- On Windows, Windows DPAPI protects the key for the Windows account that created the store. A copy of the data directory opens only under that account on the same computer; on another computer or account, enter the credentials again.
+- On Linux, the key is a separate file, `$XDG_CONFIG_HOME/vbot/keys/<store id>.key` or `~/.config/vbot/keys/<store id>.key`, readable only by its owner. `VBOT_SECRET_KEY_FILE` names another location; an existing file there is used as the key of a new store. **Back the key file up separately**: a data-directory backup alone cannot decrypt the credentials, which is the point of keeping it apart.
+
+Snapshots and configuration backups copy `secrets.json` like any other configuration document; they too stay readable only with the key.
+
+When the key is missing or wrong, vBot never replaces the store: the server still starts, every stored credential reports as not configured, the log warns once, `vbot data-store status` and `vbot doctor config` report the problem, and `secrets.json` stays untouched. Restore the key (or start the server under the Windows account that created the store) and restart. Only when the key is lost for good, `vbot data-store secrets reset --yes` moves the old store to `quarantine/secret-store/` and starts a new empty one; every credential and OAuth login must then be entered again.
+
+Earlier versions kept credentials in plaintext, in `<data-dir>/.env` and `<data-dir>/oauth/*.json`. The application updater converts them: the updated version imports and verifies them at its verification start, and its first regular start deletes the plaintext files and their copies in configuration backups and data snapshots. A failed or rolled-back update keeps the plaintext files for the previous version. vBot no longer reads these files otherwise: a `.env` or OAuth token file created later, or one in a data directory that was not updated through the application updater, is ignored with a warning in the log, in `vbot data-store status` and in `vbot doctor config` until it is converted:
+
+```bash
+vbot data-store secrets status
+vbot data-store secrets convert --yes
+vbot data-store secrets reset --yes
+```
+
+`status` shows the store's state, how many credentials and OAuth logins it holds, damaged entries, the expected key location and ignored plaintext files, never a value. `convert` stops the target server, imports the plaintext files, deletes those it fully imported, and starts the server again. A file it cannot import completely, for example one with an invalid name or one that is not UTF-8, stays in place and is reported. These commands work only with a local target and its matching `--data-dir`. `LOG_LEVEL` is no longer read from `.env`; set it in the server's process environment.
 
 ### Data-store maintenance
 
@@ -430,11 +452,11 @@ vbot data-store config-backup restore <backup-id> --file settings.json --yes
 vbot data-store config-backup restore <backup-id> --all --yes
 ```
 
-`status` reports safe operational metadata per database, including the Session search index state, registered data snapshots, and every unacknowledged recovery incident without returning Session content; for a stopped local server it reads the data directory directly. Ordinary status uses the Session search lifecycle markers and includes the latest coverage check from the current server process, when available, with its time. `vbot data-store status --verify-search` checks index coverage against stored entries now; it can take longer on large histories and also works read-only when the local server is stopped. Snapshot creation is an explicit backup, through the running server, of every canonical database and of the JSON configuration documents (settings, Agents, Projects, Channels, prompt layouts, Cron and Bootstrap jobs, Calendar events, the Skill policy, Terminal state, MCP connections and OAuth tokens; attachment and speech metadata stay out, like the files they describe). A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence.
+`status` reports safe operational metadata per database, including the Session search index state, registered data snapshots, and every unacknowledged recovery incident without returning Session content; for a stopped local server it reads the data directory directly. Ordinary status uses the Session search lifecycle markers and includes the latest coverage check from the current server process, when available, with its time. `vbot data-store status --verify-search` checks index coverage against stored entries now; it can take longer on large histories and also works read-only when the local server is stopped. Snapshot creation is an explicit backup, through the running server, of every canonical database and of the JSON configuration documents (settings, Agents, Projects, Channels, prompt layouts, Cron and Bootstrap jobs, Calendar events, the Skill policy, Terminal state, MCP connections and the encrypted Secret Store with credentials and OAuth tokens; attachment and speech metadata stay out, like the files they describe). A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence.
 
 Restore is offline maintenance: it requires `--yes`, checks the snapshot first, stops the exact target server when it runs and starts it again afterwards, and must be rehearsed on a copied data directory first. Without a selector it restores every database in the snapshot; `--database` restores only the named ones; `--documents` restores the JSON documents as one set, alone or together with `--database`; `--all` restores the complete snapshot, moves databases registered after the snapshot to quarantine, and takes no other selector. Restored documents become exactly the snapshot's: documents created after it are removed, and every replaced or removed document is kept under `quarantine/json-documents/`. An interrupted restore keeps the server from starting until a restore is repeated and completes.
 
-Configuration backups protect the configuration files, which change far more often than data snapshots are taken: the JSON configuration documents listed above, the data directory's `.env`, `SOUL.md`, `USER.md` and `MEMORY.md` of each Agent Workspace in its default location (`agents/<id>/workspace/`), and System Prompt overrides under `prompts/` and `agents/<id>/prompts/`. A running server backs them up when it starts, checks every 5 minutes and backs up what changed, and backs up once more when it stops. Each distinct file content is stored once under `config-backups/`, so an unchanged file costs nothing. vBot keeps the newest 10 backups, plus the newest one of every hour for 48 hours, of every day for 30 days and of every week for 52 weeks. A JSON document that could not be read as such when it was backed up is marked as damaged and is never restored from that backup. Workspaces at a custom path, other Workspace files and Skills (which keep their own history) are not covered.
+Configuration backups protect the configuration files, which change far more often than data snapshots are taken: the JSON configuration documents listed above, `SOUL.md`, `USER.md` and `MEMORY.md` of each Agent Workspace in its default location (`agents/<id>/workspace/`), and System Prompt overrides under `prompts/` and `agents/<id>/prompts/`. A running server backs them up when it starts, checks every 5 minutes and backs up what changed, and backs up once more when it stops. Each distinct file content is stored once under `config-backups/`, so an unchanged file costs nothing. vBot keeps the newest 10 backups, plus the newest one of every hour for 48 hours, of every day for 30 days and of every week for 52 weeks. A JSON document that could not be read as such when it was backed up is marked as damaged and is never restored from that backup. Workspaces at a custom path, other Workspace files and Skills (which keep their own history) are not covered.
 
 `config-backup list` shows the backups, newest first, with the files each one changed; `show` compares one backup's files with the current ones (`same`, `differs`, `missing`). `restore` requires `--yes` and either `--file <path>` (repeatable, as `show` names it) or `--all`. It stops the target server when it runs, restores, and starts it again; when every selected file already matches, it changes nothing and leaves the server running. An interrupted restore keeps the server from starting until the same restore is repeated; other restores are refused until then. Before it changes anything it backs up the current state as `before restore <backup-id>`, so restoring that backup takes the restore back. A restore never deletes files: files created after the backup stay, and files whose folder no longer exists (a deleted or renamed Agent, Project or Channel), that are damaged in the backup, or that are reached through a symbolic link or junction (which backups never read) are refused when named and left alone by `--all`.
 
@@ -456,7 +478,7 @@ vbot doctor settings
 vbot doctor config
 ```
 
-Bare `vbot config` is equivalent to `config list`; `config get`, `set`, `unset`, and atomic multi-operation `patch` use public paths rather than internal `settings.json` keys. `config effective` shows the normalized public document, while `config raw` is diagnostic only. `doctor settings` strictly validates the target `settings.json`; `doctor config` checks every JSON document vBot keeps in the data directory, from Agent, Project and Channel files to OAuth tokens and attachment metadata. At runtime, malformed root Settings fall back safely, invalid top-level Settings sections are omitted while valid siblings remain active, and invalid individual Agent or Project records are skipped. The source file is not silently rewritten, and mutations that could overwrite invalid source state are blocked until it is repaired.
+Bare `vbot config` is equivalent to `config list`; `config get`, `set`, `unset`, and atomic multi-operation `patch` use public paths rather than internal `settings.json` keys. `config effective` shows the normalized public document, while `config raw` is diagnostic only. `doctor settings` strictly validates the target `settings.json`; `doctor config` checks every JSON document vBot keeps in the data directory, from Agent, Project and Channel files to the Secret Store and attachment metadata, and warns about plaintext credential files it ignores. At runtime, malformed root Settings fall back safely, invalid top-level Settings sections are omitted while valid siblings remain active, and invalid individual Agent or Project records are skipped. The source file is not silently rewritten, and mutations that could overwrite invalid source state are blocked until it is repaired.
 
 ## Running the server
 
@@ -936,7 +958,7 @@ Under **Settings → Tools → Web page reading**, choose **Direct (no service)*
 
 - **Only when direct fetch fails** sends failed, blocked or unreadable pages to the selected service.
 - **Prefer this service** uses it first for page URLs and tries direct fetching if it fails.
-- Set the displayed API-key variable in the `.env` file in the vBot data directory. Firecrawl, Tavily and Exa share their keys with Web Search; Parallel uses `PARALLEL_API_KEY`. Key presence alone does not enable a service.
+- Enter the service's API key in the same panel; it is saved under the displayed variable name in the data directory's Secret Store, and a variable of that name in the server's process environment takes precedence. Firecrawl, Tavily and Exa share their keys with Web Search; Parallel uses `PARALLEL_API_KEY`. Key presence alone does not enable a service.
 
 The selected service receives requested URLs and may charge for extraction. Free allowances, paid rates and rendering capabilities vary; check [Firecrawl pricing](https://www.firecrawl.dev/pricing), [Tavily credits](https://docs.tavily.com/documentation/api-credits), [Exa pricing](https://exa.ai/pricing), or [Parallel pricing](https://docs.parallel.ai/getting-started/pricing). Saved-page reading and searching do not incur another service request. Pages requiring authentication or interactive challenges can still fail; the Tool reports missing content instead of claiming a complete extraction.
 
@@ -953,12 +975,7 @@ Background work such as Subagents, Channel replies and reflections never notifie
 
 ## Channels
 
-Telegram, Discord, Slack, Mattermost and WhatsApp Channels route inbound messages to one Identity Agent. Project Agents cannot own a Channel. Add bot credentials to the process environment or `<data-dir>/.env`, then configure the token variable name rather than the token itself:
-
-```dotenv
-TELEGRAM_BOT_TOKEN_MAIN=...
-DISCORD_BOT_TOKEN_MAIN=...
-```
+Telegram, Discord, Slack, Mattermost and WhatsApp Channels route inbound messages to one Identity Agent. Project Agents cannot own a Channel. A Channel names its bot credentials by variable name rather than holding the token itself, for example `TELEGRAM_BOT_TOKEN_MAIN` or `DISCORD_BOT_TOKEN_MAIN`. The value comes from the server's process environment or from the data directory's Secret Store, where `vbot channel token set <channel-id> --stdin` saves it.
 
 Create and manage a Channel in Settings or with positional Channel ids in the CLI:
 
@@ -1023,7 +1040,7 @@ Configure these bot scopes before installation (reinstall the app after changing
 
 Under Event Subscriptions, subscribe to bot events `message.channels`, `message.groups`, `message.im` and `message.mpim`. Enable the App Home Messages tab and allow users to send messages. Invite the bot to each channel it should use, including private channels. An `app_mention` subscription alone does not supply the message events this adapter consumes.
 
-In vBot Settings choose Slack and enter the bot-token and app-token variable names. Both must already resolve in the server's environment or data-dir `.env`. Alternatively, save the Channel disabled, then supply each secret separately through UTF-8 stdin:
+In vBot Settings choose Slack and enter the bot-token and app-token variable names. Both must already resolve in the server's process environment or the data directory's Secret Store. Alternatively, save the Channel disabled, then supply each secret separately through UTF-8 stdin:
 
 ```bash
 vbot channel add slack-main --platform slack --agent assistant --token-env SLACK_BOT_TOKEN --app-token-env SLACK_APP_TOKEN --disabled
@@ -1116,7 +1133,7 @@ For the Extension API, hook contracts, capabilities, and examples, use the [vbot
 
 ### Home Assistant
 
-Home Assistant ships as a bundled Extension. In Settings → Extensions → Home Assistant, enter the server URL and a Long-Lived Access Token created from the Home Assistant profile Security page. The secret is stored under `HASS_TOKEN` in the data-directory `.env` and is never returned by the read API. Changes take effect without a restart; until a token exists, the Tools remain hidden and the Extension reports that it is waiting for configuration.
+Home Assistant ships as a bundled Extension. In Settings → Extensions → Home Assistant, enter the server URL and a Long-Lived Access Token created from the Home Assistant profile Security page. The secret is stored under `HASS_TOKEN` in the data directory's Secret Store and is never returned by the read API. Changes take effect without a restart; until a token exists, the Tools remain hidden and the Extension reports that it is waiting for configuration.
 
 | Tool | Behavior |
 |---|---|
@@ -1372,7 +1389,7 @@ not publish them; CI builds and signs the published packages.
 - Agents and trusted Extensions run with the OS permissions of the account that starts vBot. Keep the server on localhost unless a deliberately secured remote topology is required.
 - A remote Desktop Client should reach the server only through a trusted LAN or VPN plus restrictive firewalling, or through an authenticated TLS reverse proxy. Never expose the unauthenticated vBot port to the public internet.
 - Bind conflicts normally mean another process already owns the selected port. Use `vbot server status` and stop the conflicting process. A development checkout can also choose another `--port`; an installation keeps the port chosen at installation.
-- Process environment credentials override values in `<data-dir>/.env`; removing a data-directory key may therefore leave a Connection configured through the process environment.
+- Process environment credentials override values in the data directory's Secret Store; removing a data-directory key may therefore leave a Connection configured through the process environment.
 - Attachment, speech, and image artifacts are durable. Attachments currently have no garbage collector or reference counting, including attachments promoted from images read from disk.
 - Complete Bash process output under `temp/bash/` is retained for 72 hours after completion; Sub-Agent activity files under `temp/subagents/` are retained for 24 hours. These temporary files supplement canonical Session history.
 - Recall indexes are derived and disposable; deleting `<data-dir>/recall/` does not delete canonical Sessions.

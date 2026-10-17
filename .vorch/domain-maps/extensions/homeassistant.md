@@ -53,7 +53,7 @@ Results are compact text: `count` or `service`/`changed` fields plus a `content`
 Declared in `register(api)` via `api.register_settings` (see `.vorch/domain-maps/extensions/management.md` -> Settings schemas and live values):
 
 - `url` - `text`, label "Server URL", default `http://homeassistant.local:8123`. Stored in extension config.
-- `token` - `secret`, label "Access token", `env_key: HASS_TOKEN`. Stored in the data-dir `.env`, written via `extensions.set_secret`, never in `settings.json`.
+- `token` - `secret`, label "Access token", `env_key: HASS_TOKEN`. Stored among the data-directory credentials (Secret Store, `secrets.md`), written via `extensions.set_secret`, never in `settings.json`.
 
 Both are read **live on every call** - nothing is captured at register time:
 
@@ -70,7 +70,7 @@ All four tools share `ready=lambda: bool(api.resolve_credential("HASS_TOKEN").st
 
 - Home Assistant REST API at `{url}/api/` via `httpx.AsyncClient` with `Authorization: Bearer {token}`.
 - Home Assistant WebSocket API at `/api/websocket` via the bundled Skill's `websockets` script. The script accepts only allowlisted raw reads; dashboard mutation goes through purpose-built commands with local validation, expected-content hashing, backup-before-save, and post-save verification.
-- Credential key `HASS_TOKEN` (Long-Lived Access Token). `HASS_URL` is **retired** - no env fallback of any kind (Generation 1: app code reads only the current format). Existing `HASS_TOKEN` `.env` entries keep working.
+- Credential key `HASS_TOKEN` (Long-Lived Access Token). `HASS_URL` is **retired** - no env fallback of any kind (Generation 1: app code reads only the current format). An existing `HASS_TOKEN` entry of an earlier `.env` keeps working once converted into the Secret Store.
 - Timeout: 15s connect, 30s total. Retry: max 2 with exponential backoff + jitter. GET reads retry transport errors and the shared idempotent statuses (`core/utils/http_status.py`). A POST service call repeats only when Home Assistant cannot have run it: connect/pool errors before sending, or 429/503. A 500/502/504 or a transport error after sending is never repeated; the message says the call may have run and names the read that checks it. `_ha_request` takes the extension's logger (`api.logger`) as a parameter; it is the only helper that logs.
 
 ## Error Envelopes
