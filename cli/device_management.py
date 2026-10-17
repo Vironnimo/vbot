@@ -110,11 +110,18 @@ def devices_revoke(instance: ServerInstance, device_id: str) -> CommandResult:
     revoked = _rpc_call(instance, "devices.revoke", {"id": device_id})
     if not revoked.ok:
         return revoked.to_command_result()
-    return CommandResult(
-        ok=True,
-        message=f"Revoked {device_id}; its open connections are closed.",
-        instance=instance,
-    )
+    # The server also revokes the browsers this device signed in with a login
+    # ticket; name them, since they disappear from the list as well.
+    ids = revoked.data.get("revoked")
+    with_it = [
+        inline_text(other)
+        for other in (ids if isinstance(ids, list) else [])
+        if isinstance(other, str) and other != device_id
+    ]
+    message = f"Revoked {device_id}; its open connections are closed."
+    if with_it:
+        message += f" Also revoked the browsers it signed in by link: {', '.join(with_it)}."
+    return CommandResult(ok=True, message=message, instance=instance)
 
 
 def _device_row(device: Mapping[str, Any]) -> str:

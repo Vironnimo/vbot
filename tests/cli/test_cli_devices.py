@@ -78,7 +78,8 @@ def test_list_rename_and_revoke_address_devices_by_id(rpc: FakeRpc, run_cli: Run
     }
     rpc.reply("devices.list", {"devices": [device]})
     rpc.reply("devices.rename", {"device": {**device, "name": "Work laptop"}})
-    rpc.reply("devices.revoke", {"revoked": [device["id"]]})
+    # The browser it signed in with a login ticket goes with it.
+    rpc.reply("devices.revoke", {"revoked": [device["id"], "dev_TICKETBROWSER234"]})
 
     listed = run_cli("devices", "list")
     renamed = run_cli("devices", "rename", device["id"], "Work laptop")
@@ -90,6 +91,7 @@ def test_list_rename_and_revoke_address_devices_by_id(rpc: FakeRpc, run_cli: Run
     assert "\x1b" not in listed[1] and "\u202e" not in listed[1]
     assert "name=Work laptop" in renamed[1]
     assert "Revoked dev_ABCDEFGHJKMNPQRS" in revoked[1]
+    assert "dev_TICKETBROWSER234" in revoked[1]
     assert rpc.params("devices.rename") == {"id": device["id"], "name": "Work laptop"}
 
 
