@@ -168,7 +168,10 @@ SHELL_TOOL_DESCRIPTION = (
 _COMMAND_PARAMETER: JsonObject = {"type": "string", "minLength": 1}
 _DESCRIPTION_PARAMETER: JsonObject = {
     "type": "string",
-    "description": "Title of what the command does, in 3–5 words, shown to the user.",
+    "description": (
+        "Title of what the command does, in 3–5 words, shown to the user instead of the "
+        "command. Send one with every call."
+    ),
 }
 _WORKDIR_PARAMETER: JsonObject = {
     "type": "string",
