@@ -12,7 +12,7 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from cli.formatting import record_fields, value_text
+from cli.formatting import inline_text, record_fields
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
@@ -80,7 +80,7 @@ def devices_approve(
         return approved.to_command_result()
     return CommandResult(
         ok=True,
-        message=f"Approved {value_text(approved.data.get('name'))}; the device signs in now.",
+        message=f"Approved {inline_text(approved.data.get('name'))}; the device signs in now.",
         instance=instance,
     )
 
@@ -90,7 +90,7 @@ def devices_deny(instance: ServerInstance, code: str) -> CommandResult:
     if not denied.ok:
         return denied.to_command_result()
     return CommandResult(
-        ok=True, message=f"Denied {value_text(denied.data.get('name'))}.", instance=instance
+        ok=True, message=f"Denied {inline_text(denied.data.get('name'))}.", instance=instance
     )
 
 
@@ -121,12 +121,12 @@ def _device_row(device: Mapping[str, Any]) -> str:
     kind = device.get("kind")
     return record_fields(
         [
-            value_text(device.get("id")),
-            f"name={value_text(device.get('name'))}",
-            f"kind={_KIND_LABELS.get(kind, value_text(kind)) if isinstance(kind, str) else '-'}",
-            f"last_used={value_text(device.get('last_used_at'))}",
-            f"last_client={value_text(device.get('last_client'))}",
-            f"created={value_text(device.get('created_at'))}",
+            inline_text(device.get("id")),
+            f"name={inline_text(device.get('name'))}",
+            f"kind={_KIND_LABELS.get(kind, inline_text(kind)) if isinstance(kind, str) else '-'}",
+            f"last_used={inline_text(device.get('last_used_at'))}",
+            f"last_client={inline_text(device.get('last_client'))}",
+            f"created={inline_text(device.get('created_at'))}",
             *(["current"] if device.get("current") else []),
         ]
     )
@@ -136,11 +136,13 @@ def _pending_text(pending: Mapping[str, Any]) -> str:
     kind = pending.get("kind")
     return "\n".join(
         [
-            f"Device: {value_text(pending.get('name'))}",
-            f"Kind: {_KIND_LABELS.get(kind, value_text(kind)) if isinstance(kind, str) else '-'}",
-            f"Requested from: {value_text(pending.get('client'))}",
-            f"Requested at: {value_text(pending.get('requested_at'))}",
-            f"Code: {value_text(pending.get('code'))}",
+            f"Device: {inline_text(pending.get('name'))}",
+            f"Kind: {_KIND_LABELS.get(kind, inline_text(kind)) if isinstance(kind, str) else '-'}",
+            f"Requested from: {inline_text(pending.get('client'))}",
+            f"Requested at: {inline_text(pending.get('requested_at'))}",
+            f"Code: {inline_text(pending.get('code'))}",
+            "Approving gives this device full control of vBot on this server. Approve only a "
+            "pairing you started yourself, from the address above.",
         ]
     )
 

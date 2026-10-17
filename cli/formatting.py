@@ -8,10 +8,15 @@ their one home. Modules import them under their local ``_name`` convention.
 from __future__ import annotations
 
 import sys
+import unicodedata
 from collections.abc import Sequence
 from contextvars import ContextVar
 
 output_mode: ContextVar[str] = ContextVar("cli_output_mode", default="auto")
+#: Characters that are invisible or steer the terminal: controls (escape sequences,
+#: line breaks), format characters (bidirectional overrides, zero-width marks) and
+#: line and paragraph separators.
+_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 
 def human_output() -> bool:
@@ -46,6 +51,24 @@ def value_text(value: object) -> str:
     if value is None:
         return "-"
     return str(value)
+
+
+def inline_text(value: object) -> str:
+    """Render text another party chose on one line, its hidden characters escaped.
+
+    Device names, client addresses and other server-supplied values may carry
+    escape sequences or bidirectional overrides; each such character shows as
+    a Python-style escape (``\\x1b``, ``\\u202e``) instead of reaching the
+    terminal. ``None`` shows ``-``.
+    """
+    if value is None:
+        return "-"
+    return "".join(
+        ascii(character)[1:-1]
+        if unicodedata.category(character) in _HIDDEN_CATEGORIES
+        else character
+        for character in str(value)
+    )
 
 
 def string_or_default(value: object, default: str) -> str:

@@ -141,6 +141,7 @@ def test_pairing_stores_the_token_once_the_code_is_approved(
 
     assert code == 0
     assert "Code: K7QM-4XPA" in out and "vbot devices approve K7QM-4XPA" in out
+    assert f"Approve it only in vBot at {ORIGIN}" in out
     assert f"Signed in to {ORIGIN}" in out and f"--url {ORIGIN}" in out
     assert TOKEN not in out + err and POLL_SECRET not in out + err
     assert "Note: Read the server address vbot.example.com as https://vbot.example.com" in err
@@ -293,6 +294,21 @@ def test_pairing_without_a_need_changes_nothing(
         ),
         pytest.param(
             httpx.Response(404, text="Not Found"), None, "did not answer like a vBot", id="foreign"
+        ),
+        pytest.param(
+            httpx.Response(
+                200,
+                json={
+                    "request_id": "pr_1",
+                    "code": "\x1b]0;owned\x07K7QM-4XPA",
+                    "poll_secret": POLL_SECRET,
+                    "expires_in": 600,
+                    "poll_interval": 2,
+                },
+            ),
+            None,
+            "did not answer like a vBot",
+            id="code-steering-the-terminal",
         ),
     ],
 )
