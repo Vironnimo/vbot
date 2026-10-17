@@ -616,11 +616,11 @@ def _run_desktop(
     from desktop.access import ServerAccess
     from desktop.bridge import DesktopBridge
     from desktop.connection import ConnectionController
-    from desktop.connection_screen import build_connection_html
     from desktop.credentials import DEVICE_TOKENS_FILE_NAME, DeviceTokenStore
     from desktop.dictation.controller import DictationController
     from desktop.hotkey import LIVE_VOICE_HOTKEY, HotkeyController, HotkeyHandlers
     from desktop.page_events import PageEventDispatcher
+    from desktop.page_permissions import PagePermissions
     from desktop.speech.cues import CuePlayer
     from desktop.speech.microphone import MicrophoneService
     from desktop.system_actions import DesktopSystemActions, guard_page_windows
@@ -683,6 +683,18 @@ def _run_desktop(
     )
     zoom = DesktopZoom(settings_path=settings_file)
     system_actions = DesktopSystemActions()
+
+    def confirm(title: str, message: str) -> bool:
+        # A native dialog the page cannot draw or answer; bridge calls run on their own thread.
+        return bool(window_holder) and bool(
+            window_holder[0].create_confirmation_dialog(title, message)
+        )
+
+    permissions = PagePermissions(
+        page_url=lambda: _current_page_url(window_holder),
+        own_server=access.is_installation_server,
+        confirm=confirm,
+    )
     bridge = DesktopBridge(
         voice=voice,
         microphone=microphone,
@@ -693,6 +705,7 @@ def _run_desktop(
         secure_origins=secure_origins,
         restart=desktop_restart,
         zoom=zoom,
+        permissions=permissions,
     )
 
     # Voice and dictation follow the window: every successful in-window connect
@@ -707,7 +720,7 @@ def _run_desktop(
     # The window must be created with initial content before the GUI loop; the
     # connection screen is a safe neutral page that the post-loop entry callable
     # replaces once the loop is live (navigating to the WebUI on connect).
-    initial_html = build_connection_html(servers=controller.list_servers())
+    initial_html = controller.connection_screen_html()
     placement = restart_request.placement if restart_request is not None else None
     window_layout = resolve_window_layout(
         (placement.width, placement.height)
@@ -749,6 +762,7 @@ def _run_desktop(
     controller.attach_window(window)
     # Continues a window sign-in: ticket first, then the WebUI.
     window.events.loaded += controller.page_loaded
+    window.events.loaded += permissions.page_loaded
     page_events.attach_window(window)
     instance.listen(
         _activation_handler(
@@ -826,6 +840,17 @@ def _run_desktop(
         voice.close()
         cues.close()
         page_events.close()
+
+
+def _current_page_url(window_holder: list[Any]) -> str | None:
+    """The window's top-level URL; ``None`` before the window exists or for inline HTML."""
+    if not window_holder:
+        return None
+    try:
+        url = window_holder[0].get_current_url()
+    except Exception:
+        return None
+    return url if isinstance(url, str) else None
 
 
 def _make_private_directory(path: Path) -> None:

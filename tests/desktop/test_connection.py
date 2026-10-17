@@ -37,6 +37,7 @@ from desktop.main import (
 )
 from desktop.server_address import ServerAddress
 from tests.desktop.access_test_support import (
+    DEVICE_NAME,
     WINDOW_NAME,
     FakeAccessServer,
     build_access,
@@ -764,6 +765,11 @@ CLOUD_HOST = CLOUD.bridge_host
 CLOUD_APP_PATH = f"/?accessor=desktop&desktop_session={_TEST_DESKTOP_SESSION_ID}"
 CLOUD_APP_URL = f"https://vbot.example.com{CLOUD_APP_PATH}"
 TICKET_URL = re.compile(r"https://vbot\.example\.com/auth/ticket/[A-Za-z0-9_-]+(#.*)?")
+# The connection screen offering to pair with the cloud server.
+CLOUD_OFFER = (
+    '<div id="connection-offer" class="pairing" role="status" '
+    'data-host="https://vbot.example.com" data-port="443">'
+)
 
 
 class Clock:
@@ -965,26 +971,33 @@ def test_a_sign_in_the_server_refuses_shows_why(
     assert rig.controller.active_server_url() is None
 
 
-def test_a_launch_connect_without_a_sign_in_pairs_and_connects_once_approved(
+def test_a_launch_connect_without_a_sign_in_offers_pairing_and_connects_once_approved(
     rig: SignInRig,
 ) -> None:
-    rig.controller.launch_connect(CLOUD_HOST, None)
+    rig.controller.launch_connect(CLOUD_HOST, None, "Cloud", location="#settings")
 
+    # The screen offers pairing under the default name; the server hears nothing yet.
     [page] = rig.window.loaded_html
-    code = rig.pairing_code()
-    assert f'<p id="pairing-code" class="code">{code}</p>' in page
+    assert CLOUD_OFFER in page
+    assert f'value="{DEVICE_NAME}"' in page
+    assert rig.server.pairings == {}
     assert rig.window.loaded_urls == []
-    assert rig.server.pairings[next(iter(rig.server.pairings))].kind == "desktop"
 
-    rig.server.decide(code, "approved")
+    # The user asks for a code; the approval connects to where the launch was going.
+    rig.controller.start_pairing(CLOUD_HOST, 443)
+    [pairing] = rig.server.pairings.values()
+    assert (pairing.kind, pairing.name) == ("desktop", DEVICE_NAME)
+    rig.server.decide(pairing.code, "approved")
     rig.window.wait_for_loads(2)
     rig.controller.close()
 
     assert rig.access.signed_in(CLOUD)
     [ticket_url] = rig.window.loaded_urls
     assert TICKET_URL.fullmatch(ticket_url)
+    assert ticket_url.endswith("#settings")
+    assert _stored(rig.settings_file)["servers"] == [{**CLOUD_ENTRY, "label": "Cloud"}]
     rig.ticket_redirected()
-    assert rig.window.current_url == CLOUD_APP_URL
+    assert rig.window.current_url == f"{CLOUD_APP_URL}#settings"
 
 
 @pytest.mark.parametrize(
@@ -996,38 +1009,68 @@ def test_a_pairing_that_is_not_approved_shows_why(
     rig.server.pairing_outcome = decision
 
     rig.controller.launch_connect(CLOUD_HOST, None)
+    rig.controller.start_pairing(CLOUD_HOST, 443)
     rig.window.wait_for_loads(2)
     rig.controller.close()
 
-    pairing_page, failure_page = rig.window.loaded_html
-    assert 'role="alert"' not in pairing_page
+    offer_page, failure_page = rig.window.loaded_html
+    assert 'role="alert"' not in offer_page
     assert f'<h2 id="connection-error-title">{title}</h2>' in failure_page
     assert rig.window.loaded_urls == []
     assert not rig.access.signed_in(CLOUD)
 
 
-def test_a_pairing_the_page_starts_returns_its_code_and_connects_once_approved(
-    rig: SignInRig,
-) -> None:
+def test_the_connection_screen_pairs_under_the_name_the_user_chose(rig: SignInRig) -> None:
     payload = rig.controller.prepare_connect(CLOUD_HOST, 443, on_screen=True).to_bridge_payload()
 
-    code = rig.pairing_code()
     assert payload["status"] == "pairing_required"
-    assert payload["pairing"]["code"] == code
-    assert payload["pairing"]["server"] == "https://vbot.example.com"
-    assert code in payload["error_body"]
-    assert "url" not in payload
+    assert payload["offer"]["origin"] == "https://vbot.example.com"
+    assert payload["offer"]["name"] == DEVICE_NAME
+    assert "https://vbot.example.com" in payload["error_body"]
+    assert "url" not in payload and "pairing" not in payload
+    assert rig.server.pairings == {}
+
+    payload = rig.controller.start_pairing(CLOUD_HOST, 443, " Work laptop ").to_bridge_payload()
+
+    [pairing] = rig.server.pairings.values()
+    assert pairing.name == "Work laptop"
+    assert payload["pairing"]["code"] == pairing.code
+    assert payload["pairing"]["origin"] == "https://vbot.example.com"
+    assert "only in vBot at https://vbot.example.com" in payload["error_body"]
     assert rig.window.loaded_urls == rig.window.loaded_html == []
 
-    rig.server.decide(code, "approved")
+    rig.server.decide(pairing.code, "approved")
     rig.window.wait_for_loads(1)
     rig.controller.close()
 
     assert TICKET_URL.fullmatch(rig.window.loaded_urls[0])
 
 
+def test_a_connect_a_page_starts_offers_pairing_only_on_the_connection_screen(
+    rig: SignInRig,
+) -> None:
+    rig.window.current_url = "https://other.example.com/"
+
+    payload = rig.controller.prepare_connect(CLOUD_HOST, 443).to_bridge_payload()
+
+    # The page is sent to the sign-in page; it never sees an offer, a code or a ticket.
+    assert (payload["status"], payload["url"]) == ("pairing_required", SIGN_IN_PAGE)
+    assert "offer" not in payload and "pairing" not in payload
+    rig.controller.page_loaded()
+    assert rig.window.loaded_html == []
+    # Once there, the window shows the connection screen's offer; no pairing started.
+    rig.window.current_url = SIGN_IN_PAGE
+    rig.controller.page_loaded()
+    [page] = rig.window.loaded_html
+    assert CLOUD_OFFER in page
+    assert rig.server.pairings == {}
+    rig.controller.page_loaded()
+    assert len(rig.window.loaded_html) == 1
+
+
 def test_a_cancelled_pairing_leaves_the_window_alone(rig: SignInRig) -> None:
     rig.controller.launch_connect(CLOUD_HOST, None)
+    rig.controller.start_pairing(CLOUD_HOST, 443)
 
     assert rig.controller.cancel_pairing() is True
     assert rig.controller.cancel_pairing() is False
@@ -1041,7 +1084,7 @@ def test_a_cancelled_pairing_leaves_the_window_alone(rig: SignInRig) -> None:
     assert rig.window.loaded_urls == []
 
 
-def test_a_lost_sign_in_pairs_the_window_again_once(
+def test_a_lost_sign_in_offers_pairing_in_the_window_once(
     rig: SignInRig, caplog: pytest.LogCaptureFixture
 ) -> None:
     rig.pair_earlier()
@@ -1059,7 +1102,8 @@ def test_a_lost_sign_in_pairs_the_window_again_once(
     rig.controller.close()
 
     [page] = rig.window.loaded_html
-    assert f'<p id="pairing-code" class="code">{rig.pairing_code()}</p>' in page
+    assert CLOUD_OFFER in page
+    assert rig.server.pairings == {}
     reconnects = [
         record for record in caplog.records if "connecting the window again" in record.message
     ]
@@ -1108,5 +1152,6 @@ def test_a_plain_http_server_that_requires_sign_in_is_never_paired(rig: SignInRi
 
     [page] = rig.window.loaded_html
     assert '<h2 id="connection-error-title">Sign-in needs https://</h2>' in page
+    assert rig.controller.start_pairing("127.0.0.1", 8420).status == "https_required"
     assert rig.server.requests == []
     assert rig.window.loaded_urls == []

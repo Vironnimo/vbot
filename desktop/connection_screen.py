@@ -1,18 +1,26 @@
 """The Desktop's native connection screen: saved servers, add/connect, waiting and pairing.
 
 :func:`build_connection_html` renders the escaped page the connection
-controller loads into the window; :func:`connection_error_copy` and
-:class:`PairingView` hold the user-facing copy the controller also hands to
-WebUI callers. Every interpolated value is HTML-escaped, and the page's script
-fills in bridge results with ``textContent`` only.
+controller loads into the window; :func:`connection_error_copy`,
+:class:`PairingOffer` and :class:`PairingView` hold the user-facing copy the
+controller also hands to bridge callers. Every interpolated value is
+HTML-escaped, and the page's script fills in bridge results with
+``textContent`` only.
+
+Pairing is the user's step on this screen: a server that needs this Desktop
+signed in is offered with the device name it will receive, which the user can
+edit; only "Get a code" asks the server for a code. The bridge methods that
+connect, pair or forget a sign-in take the screen's key (``screen_key``), which
+only this page carries, so a server's page cannot call them.
 """
 
 from __future__ import annotations
 
 import html
+import json
 from collections.abc import Collection
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from desktop.main import (
     PROBE_ACCESS_DENIED,
@@ -103,11 +111,51 @@ _ERROR_COPY = {
 
 
 @dataclass(frozen=True)
+class PairingOffer:
+    """A server that needs this Desktop signed in, before any code is requested.
+
+    ``name`` is the device name the server will show the approver; the user
+    may change it before asking for a code.
+    """
+
+    server: str
+    origin: str
+    name: str
+    target: DesktopTarget
+
+    @property
+    def title(self) -> str:
+        return "Sign in this Desktop"
+
+    @property
+    def body(self) -> str:
+        return (
+            f"{self.origin} admits only signed-in devices. To sign in, vBot Desktop sends it "
+            "the name below and gets a code that you approve there. Continue only if you "
+            f"meant to connect to {self.origin}."
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        """The bridge payload the connection screen's script renders."""
+        address = self.target.address
+        return {
+            "host": address.bridge_host if address is not None else self.target.host,
+            "port": self.target.port,
+            "server": self.server,
+            "origin": self.origin,
+            "name": self.name,
+            "title": self.title,
+            "body": self.body,
+        }
+
+
+@dataclass(frozen=True)
 class PairingView:
-    """A pairing waiting for approval, as the connection screen and the WebUI show it."""
+    """A pairing waiting for approval, as the connection screen shows it."""
 
     code: str
     server: str
+    origin: str
     target: DesktopTarget
 
     @property
@@ -117,15 +165,22 @@ class PairingView:
     @property
     def body(self) -> str:
         return (
-            f"{self.server} asks this Desktop to sign in. On a device that is already "
-            "signed in to it, open Settings → Access & devices → Add device and enter "
-            f"the code {self.code}, or run “vbot devices approve {self.code}” on the "
-            "server's computer. vBot Desktop connects as soon as it is approved."
+            f"Enter the code {self.code} only in vBot at {self.origin}: on a device already "
+            "signed in there, under Settings → Access & devices → Add device, or with "
+            f"“vbot devices approve {self.code}” on the server's computer. Never enter it for "
+            "another address: whoever gets it approved signs in as this Desktop. vBot Desktop "
+            "connects as soon as it is approved."
         )
 
     def to_payload(self) -> dict[str, str]:
         """The bridge payload the connection screen's script renders."""
-        return {"code": self.code, "server": self.server, "title": self.title, "body": self.body}
+        return {
+            "code": self.code,
+            "server": self.server,
+            "origin": self.origin,
+            "title": self.title,
+            "body": self.body,
+        }
 
 
 def connection_error_copy(status: str) -> tuple[str, str]:
@@ -145,26 +200,36 @@ def build_connection_html(
     probe_result: DesktopProbeResult | None = None,
     *,
     waiting_for: DesktopTarget | None = None,
-    pairing: PairingView | None = None,
+    offer: PairingOffer | None = None,
     signed_in: Collection[str] = (),
+    screen_key: str = "",
 ) -> str:
     """Build the escaped interactive connection screen.
 
     A failed ``probe_result`` (a probe or sign-in status) drives an inline error
     banner and its target prefills the connect form, so the user fixes the
     target in place. ``waiting_for`` shows the launch connect's waiting state
-    for that target, ``pairing`` the code waiting for approval; both hide once
-    the user connects to a server themselves. With none of them (first run) no
-    banner shows and the form prefills with the default suggestion. The
-    saved-server list offers one-click reconnect to any remembered target, and
-    "Forget sign-in" for those whose origin is in ``signed_in``.
+    for that target, ``offer`` a server that needs this Desktop paired (with the
+    editable device name and "Get a code"); the script then shows the code
+    waiting for approval. They hide once the user connects to a server
+    themselves. With
+    none of them (first run) no banner shows and the form prefills with the
+    default suggestion. The saved-server list offers one-click reconnect to any
+    remembered target, and "Forget sign-in" for those whose origin is in
+    ``signed_in``. ``screen_key`` goes with every bridge call that connects,
+    pairs or forgets a sign-in.
     """
 
     error_section = _render_error_section(probe_result)
     waiting_section = _render_waiting_section(waiting_for)
-    pairing_section = _render_pairing_section(pairing)
+    offer_section = _render_offer_section(offer)
+    pairing_section = _render_pairing_section()
     servers_section = _render_servers_section(servers, signed_in)
-    prefill_host, prefill_port = _resolve_prefill(probe_result, waiting_for, pairing)
+    prefill_host, prefill_port = _resolve_prefill(
+        probe_result, waiting_for, offer.target if offer is not None else None
+    )
+    # A JSON string literal is safe inside the script element: the key is base64url.
+    key_literal = json.dumps(screen_key)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -252,6 +317,7 @@ def build_connection_html(
         user-select: all;
       }}
       .pairing button {{ margin-top: 0.85rem; }}
+      .pairing label {{ margin-top: 0.85rem; }}
       h2.section {{
         margin: 1.75rem 0 0.75rem;
         font-size: 0.8rem;
@@ -333,7 +399,7 @@ def build_connection_html(
       <p class="eyebrow">vBot Desktop</p>
       <h1>Connect to a server</h1>
       <p>Pick a saved server, or enter the address of a running vBot server.</p>
-{waiting_section}{pairing_section}
+{waiting_section}{offer_section}{pairing_section}
 {error_section}
 {servers_section}
       <h2 class="section">Add a server</h2>
@@ -355,6 +421,7 @@ def build_connection_html(
       </form>
     </main>
     <script>
+      var SCREEN_KEY = {key_literal};
       function bridgeReady(method) {{
         return Boolean(window.pywebview && window.pywebview.api && window.pywebview.api[method]);
       }}
@@ -371,8 +438,18 @@ def build_connection_html(
           // The user's own connect ends the launch wait and a pending pairing.
           waiting.hidden = true;
         }}
+        document.getElementById("connection-offer").hidden = true;
         document.getElementById("connection-pairing").hidden = true;
         document.getElementById("connection-error").hidden = true;
+      }}
+      function showOffer(offer) {{
+        var panel = document.getElementById("connection-offer");
+        document.getElementById("offer-title").textContent = offer.title;
+        document.getElementById("offer-body").textContent = offer.body;
+        document.getElementById("offer-name").value = offer.name;
+        panel.dataset.host = offer.host;
+        panel.dataset.port = String(offer.port);
+        panel.hidden = false;
       }}
       function showPairing(pairing) {{
         document.getElementById("pairing-title").textContent = pairing.title;
@@ -394,12 +471,16 @@ def build_connection_html(
         }}
         hideNotices();
         try {{
-          var result = await window.pywebview.api.connect(host, port);
+          var result = await window.pywebview.api.connect(host, port, SCREEN_KEY);
           if (result.url) {{
             window.location.assign(result.url);
             return;
           }}
           prefillConnectionTarget(host, port);
+          if (result.offer) {{
+            showOffer(result.offer);
+            return;
+          }}
           if (result.pairing) {{
             showPairing(result.pairing);
             return;
@@ -414,6 +495,32 @@ def build_connection_html(
               : "The Desktop bridge could not connect to that server."
           );
         }}
+      }}
+      async function requestCode() {{
+        var panel = document.getElementById("connection-offer");
+        var host = panel.dataset.host;
+        var port = parseInt(panel.dataset.port, 10);
+        var name = document.getElementById("offer-name").value;
+        if (!bridgeReady("startPairing")) {{
+          return;
+        }}
+        hideNotices();
+        try {{
+          var result = await window.pywebview.api.startPairing(host, port, name, SCREEN_KEY);
+          if (result.pairing) {{
+            showPairing(result.pairing);
+            return;
+          }}
+          showConnectionError(result.error_title, result.error_body);
+        }} catch (error) {{
+          showConnectionError(
+            "Pairing not started",
+            error && error.message ? error.message : "The Desktop could not ask for a code."
+          );
+        }}
+      }}
+      function cancelOffer() {{
+        document.getElementById("connection-offer").hidden = true;
       }}
       async function cancelPairing() {{
         document.getElementById("connection-pairing").hidden = true;
@@ -431,7 +538,7 @@ def build_connection_html(
         }}
         try {{
           await window.pywebview.api.forgetSignIn(
-            button.dataset.forgetHost, parseInt(button.dataset.forgetPort, 10)
+            button.dataset.forgetHost, parseInt(button.dataset.forgetPort, 10), SCREEN_KEY
           );
           button.remove();
         }} catch (error) {{
@@ -460,6 +567,8 @@ def build_connection_html(
         }});
       }});
       document.getElementById("pairing-cancel").addEventListener("click", cancelPairing);
+      document.getElementById("offer-start").addEventListener("click", requestCode);
+      document.getElementById("offer-cancel").addEventListener("click", cancelOffer);
     </script>
   </body>
 </html>
@@ -499,18 +608,40 @@ def _render_waiting_section(waiting_for: DesktopTarget | None) -> str:
     )
 
 
-def _render_pairing_section(pairing: PairingView | None) -> str:
-    """Return the pairing panel: filled when a pairing waits, else hidden for the script."""
+def _render_offer_section(offer: PairingOffer | None) -> str:
+    """Return the pairing offer: filled for a server that needs pairing, else hidden."""
 
-    title, body, code = (
-        (pairing.title, pairing.body, pairing.code) if pairing is not None else ("", "", "")
+    payload = offer.to_payload() if offer is not None else {}
+    title, body, name = (str(payload.get(key, "")) for key in ("title", "body", "name"))
+    # The offered server rides data-* attributes for the script, like a saved server.
+    attributes = (
+        f' data-host="{html.escape(str(payload["host"]))}" '
+        f'data-port="{html.escape(str(payload["port"]))}"'
+        if offer is not None
+        else " hidden"
     )
-    hidden = "" if pairing is not None else " hidden"
     return (
-        f'      <div id="connection-pairing" class="pairing" role="status"{hidden}>\n'
-        f'        <h2 id="pairing-title">{html.escape(title)}</h2>\n'
-        f'        <p id="pairing-body">{html.escape(body)}</p>\n'
-        f'        <p id="pairing-code" class="code">{html.escape(code)}</p>\n'
+        f'      <div id="connection-offer" class="pairing" role="status"{attributes}>\n'
+        f'        <h2 id="offer-title">{html.escape(title)}</h2>\n'
+        f'        <p id="offer-body">{html.escape(body)}</p>\n'
+        "        <label>Name for this Desktop\n"
+        f'          <input id="offer-name" type="text" maxlength="80" autocomplete="off" '
+        f'value="{html.escape(name)}">\n'
+        "        </label>\n"
+        '        <button id="offer-start" class="primary" type="button">Get a code</button>\n'
+        '        <button id="offer-cancel" class="secondary" type="button">Cancel</button>\n'
+        "      </div>\n"
+    )
+
+
+def _render_pairing_section() -> str:
+    """Return the hidden pairing panel the script fills once the user asked for a code."""
+
+    return (
+        '      <div id="connection-pairing" class="pairing" role="status" hidden>\n'
+        '        <h2 id="pairing-title"></h2>\n'
+        '        <p id="pairing-body"></p>\n'
+        '        <p id="pairing-code" class="code"></p>\n'
         "        <p>Waiting for approval …</p>\n"
         '        <button id="pairing-cancel" class="secondary" type="button">Cancel</button>\n'
         "      </div>"
@@ -552,12 +683,12 @@ def _render_servers_section(servers: list[ServerEntry], signed_in: Collection[st
 def _resolve_prefill(
     probe_result: DesktopProbeResult | None,
     waiting_for: DesktopTarget | None = None,
-    pairing: PairingView | None = None,
+    offered: DesktopTarget | None = None,
 ) -> tuple[str, str]:
     """Return the (host, port) strings to prefill the connect form.
 
     A failed connection prefills the offending target so the user can correct
-    it in place, a waiting launch connect or a pairing its target; otherwise
+    it in place, a waiting launch connect or a pairing offer its target; otherwise
     the default suggestion is offered (never an auto-connect target — just a hint).
     """
 
@@ -565,8 +696,8 @@ def _resolve_prefill(
         return _form_values(probe_result.target)
     if waiting_for is not None:
         return _form_values(waiting_for)
-    if pairing is not None:
-        return _form_values(pairing.target)
+    if offered is not None:
+        return _form_values(offered)
     return (_DEFAULT_HOST_PLACEHOLDER, str(_DEFAULT_PORT_PLACEHOLDER))
 
 

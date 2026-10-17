@@ -184,6 +184,11 @@ class ServerAccess:
         self.window_name = _device_name("vBot Desktop window", computer)
         self._sign_in_lost: Callable[[ServerAddress], None] | None = None
 
+    def is_installation_server(self, server_url: str) -> bool:
+        """Whether ``server_url`` is the installation's own server, signed in to locally."""
+        address = _address(server_url)
+        return address is not None and self._local_token(address) is not None
+
     def set_sign_in_lost_listener(self, listener: Callable[[ServerAddress], None] | None) -> None:
         """Register who learns that a server refused this Desktop's stored sign-in."""
         self._sign_in_lost = listener
