@@ -32,15 +32,19 @@ WEBSOCKET_DEVICES_UNAVAILABLE = 4503
 _WEBSOCKET_CLOSE_CODES = {403: WEBSOCKET_ACCESS_DENIED, 503: WEBSOCKET_DEVICES_UNAVAILABLE}
 
 #: The WebUI shell's Content-Security-Policy. Styles stay inline-capable: Svelte
-#: templates and xterm.js set style attributes. Images allow remote http(s) URLs
-#: because Markdown shows remote images; everything active is same-origin.
-WEBUI_CONTENT_SECURITY_POLICY = (
+#: templates and xterm.js set style attributes. Images allow remote URLs because
+#: Markdown shows remote images; everything active is same-origin. In
+#: ``authenticated`` mode remote images must be https: a plain-http image would
+#: tell everyone on the way which page of the WebUI the user is reading.
+_WEBUI_CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data: blob: https: http:; media-src 'self' data: blob:; "
+    "img-src 'self' data: blob: https:{http}; media-src 'self' data: blob:; "
     "font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; "
     "frame-src 'self'; manifest-src 'self'; form-action 'self'; "
     "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
 )
+WEBUI_CONTENT_SECURITY_POLICY = _WEBUI_CONTENT_SECURITY_POLICY.format(http=" http:")
+AUTHENTICATED_WEBUI_CONTENT_SECURITY_POLICY = _WEBUI_CONTENT_SECURITY_POLICY.format(http="")
 HSTS_VALUE = b"max-age=31536000"
 CLEAR_DEVICE_COOKIE = (
     f"{DEVICE_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict".encode("latin-1")
@@ -75,7 +79,12 @@ class AccessGuard:
         route = classify_route(str(scope_type), str(scope.get("method") or ""), path)
         facts = service.inspect(scope)
         if scope_type == "http":
-            send = _with_security_headers(send, route=route, secure=facts.secure)
+            policy = (
+                AUTHENTICATED_WEBUI_CONTENT_SECURITY_POLICY
+                if service.config.mode == "authenticated"
+                else WEBUI_CONTENT_SECURITY_POLICY
+            )
+            send = _with_security_headers(send, route=route, secure=facts.secure, policy=policy)
         if facts.refusal == "host_not_allowed":
             # Answering only to known names defeats DNS rebinding.
             service.refused(facts.refusal, facts, path, detail=f"host={request_host(scope)}")
@@ -240,7 +249,7 @@ async def _refuse(
     await send({"type": "http.response.body", "body": body})
 
 
-def _with_security_headers(send: Send, *, route: RouteClass, secure: bool) -> Send:
+def _with_security_headers(send: Send, *, route: RouteClass, secure: bool, policy: str) -> Send:
     async def secured(message: Message) -> None:
         if message.get("type") == "http.response.start":
             headers = list(message.get("headers") or ())
@@ -250,9 +259,7 @@ def _with_security_headers(send: Send, *, route: RouteClass, secure: bool) -> Se
                 additions.append((b"strict-transport-security", HSTS_VALUE))
             if route == "shell":
                 additions.append((b"referrer-policy", b"same-origin"))
-                additions.append(
-                    (b"content-security-policy", WEBUI_CONTENT_SECURITY_POLICY.encode("ascii"))
-                )
+                additions.append((b"content-security-policy", policy.encode("ascii")))
             headers.extend(item for item in additions if item[0] not in names)
             message = {**message, "headers": headers}
         await send(message)
