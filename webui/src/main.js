@@ -1,4 +1,6 @@
 import { mount } from 'svelte';
 import App from './App.svelte';
+import AccessGate from './components/access/AccessGate.svelte';
 
-mount(App, { target: document.getElementById('app') });
+// The access gate mounts the app once the server lets this page in.
+mount(AccessGate, { target: document.getElementById('app'), props: { App } });

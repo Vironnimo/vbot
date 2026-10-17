@@ -1,3 +1,4 @@
+import { accessLossFromClose } from '../api.js';
 import { reconnectBackoffDelay } from '../backoff.js';
 import { createPtyFrameSanitizer } from './protocol.js';
 import { clampTerminalGrid } from './state.js';
@@ -159,13 +160,19 @@ export function createTerminalConnection({
     }
   }
 
-  function handleClose() {
+  function handleClose(event) {
     if (closed) {
       return;
     }
     connection = null;
     ready = false;
     requeueResizeInFlight();
+    if (accessLossFromClose(event)) {
+      // The server refused this page's access; the access gate takes over.
+      clearReconnectTimer();
+      onStatus('error');
+      return;
+    }
     if (ended || !canConnect() || reconnectTimer !== null) {
       return;
     }

@@ -11,6 +11,10 @@ import {
   requireNonEmptyString,
   readJsonHttpPayload,
 } from './transport.js';
+import {
+  reportRefusedHttpResponse,
+  reportRefusedResponse,
+} from './accessLoss.js';
 import { isPlainObject } from '../values.js';
 
 export const openFilePreview = (source, options = {}) =>
@@ -56,6 +60,7 @@ export async function installSkillArchive(file, params = {}, options = {}) {
   }
   const payload = await readJsonHttpPayload(response, method);
   if (!response.ok) {
+    reportRefusedResponse(response.status, payload);
     throw new ApiClientError(
       RPC_ERROR_HTTP,
       isNonEmptyString(payload?.detail)
@@ -136,6 +141,7 @@ export async function uploadAttachment(file, options = {}) {
   }
 
   if (!response.ok) {
+    reportRefusedResponse(response.status, payload);
     throw new ApiClientError(
       RPC_ERROR_HTTP,
       isNonEmptyString(payload?.detail)
@@ -280,6 +286,7 @@ export async function previewSpeech(text, options = {}) {
   );
   if (!response.ok) {
     const payload = await response.json();
+    reportRefusedResponse(response.status, payload);
     throw new ApiClientError(RPC_ERROR_HTTP, payload.detail, {
       method: 'speech.synthesize',
       status: response.status,
@@ -385,6 +392,7 @@ export async function transcribeSpeech(audioBlob, options = {}) {
       ? await readSpeechProgress(response, options.onProgress)
       : await readJsonHttpPayload(response, 'speech.transcribe');
   if (!response.ok) {
+    reportRefusedResponse(response.status, payload);
     throw new ApiClientError(
       RPC_ERROR_HTTP,
       isNonEmptyString(payload?.detail)
@@ -490,10 +498,12 @@ export async function* readSpeechPlayback(url, options = {}) {
     buildHttpUrl(url, options.baseUrl),
     { signal: options.signal },
   );
-  if (!response.ok || !response.body)
+  if (!response.ok || !response.body) {
+    if (!response.ok) await reportRefusedHttpResponse(response);
     throw new ApiClientError(RPC_ERROR_HTTP, 'Speech playback is unavailable', {
       status: response.status,
     });
+  }
   const reader = response.body.getReader();
   let chunk = new Uint8Array();
   let offset = 0;

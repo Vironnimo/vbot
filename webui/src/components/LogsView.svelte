@@ -9,6 +9,7 @@
   import StatusChip from './ui/StatusChip.svelte';
   import LogsEntry from './logs/LogsEntry.svelte';
   import {
+    accessLossFromClose,
     listLogs,
     readLogFile,
     readOlderLogEntries,
@@ -313,12 +314,18 @@
           viewState.streamError = `${t('logs.streamError')} ${errorMessageText(error, t('logs.streamErrorUnknown'))}`;
           viewState.streamStatus = LOGS_STREAM_STATUS_ERROR;
         },
-        onClose: () => {
+        onClose: (event) => {
           if (currentStream !== stream) {
             return;
           }
 
           currentStream = null;
+          // A refused credential or client stays refused: the access gate
+          // takes over instead of a reconnect.
+          if (accessLossFromClose(event)) {
+            viewState.streamStatus = LOGS_STREAM_STATUS_ERROR;
+            return;
+          }
           if (
             !stream.shouldReconnect ||
             destroyed ||

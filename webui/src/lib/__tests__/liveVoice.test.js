@@ -906,6 +906,7 @@ describe('Live voice media and connection failures', () => {
     ['ended', { code: 'ended', severity: 'info' }, false],
     ['unknown_call', { code: 'connection_lost', severity: 'error' }, true],
     ['replaced', { code: 'connection_lost', severity: 'error' }, true],
+    ['signed_out', { code: 'connection_lost', severity: 'error' }, true],
   ])(
     'ends the call without reattaching when the socket closes as %s',
     async (outcome, notice, stopsCall) => {

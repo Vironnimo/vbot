@@ -749,6 +749,30 @@ describe('RPC wrappers', () => {
       (o) => api.prepareSpeechTranscription(o),
       {},
     ],
+    ['devices.list', (o) => api.listDevices(o), {}],
+    [
+      'devices.rename',
+      (o) => api.renameDevice('dev-1', 'Laptop', o),
+      { id: 'dev-1', name: 'Laptop' },
+    ],
+    ['devices.revoke', (o) => api.revokeDevice('dev-1', o), { id: 'dev-1' }],
+    ['devices.revoke_others', (o) => api.revokeOtherDevices(o), {}],
+    ['devices.logout', (o) => api.logOutDevice(o), {}],
+    [
+      'devices.pending',
+      (o) => api.getPendingPairing('K7QM-4XPA', o),
+      { code: 'K7QM-4XPA' },
+    ],
+    [
+      'devices.approve',
+      (o) => api.approvePairing('K7QM-4XPA', o),
+      { code: 'K7QM-4XPA' },
+    ],
+    [
+      'devices.deny',
+      (o) => api.denyPairing('K7QM-4XPA', o),
+      { code: 'K7QM-4XPA' },
+    ],
   ])('sends %s', async (label, call, params) => {
     const fetchFunction = rpcFetch();
 

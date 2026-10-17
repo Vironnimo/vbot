@@ -7,6 +7,11 @@ import {
   requireNonEmptyString,
   rpc,
 } from './transport.js';
+import {
+  WEBSOCKET_CLOSE_ACCESS_DENIED,
+  WEBSOCKET_CLOSE_AUTH_REQUIRED,
+  reportClosedSocket,
+} from './accessLoss.js';
 import { isPlainObject } from '../values.js';
 
 // Live voice call transport. The server owns the provider call; the page
@@ -23,11 +28,14 @@ const LIVE_AUDIO_HEADER_BYTES = 8;
 const LIVE_WAKE_PHRASES_MAX = 8;
 // Server close codes of the owner socket, named by what the caller should do:
 // `lagged` and any other close (`lost`) may reattach; the rest end the call.
+// `signed_out`: the server no longer accepts this page's access.
 const LIVE_SOCKET_CLOSE_OUTCOMES = new Map([
   [1000, 'ended'],
   [1008, 'unknown_call'],
   [1013, 'lagged'],
   [4000, 'replaced'],
+  [WEBSOCKET_CLOSE_AUTH_REQUIRED, 'signed_out'],
+  [WEBSOCKET_CLOSE_ACCESS_DENIED, 'signed_out'],
 ]);
 
 export const LIVE_SOCKET_ERROR_RESPONSE = 'invalid_live_event';
@@ -127,7 +135,8 @@ export function sendLiveUiResult(callId, requestId, outcome, options = {}) {
 // open, `sendAudio` sends microphone audio and `sendJson` one JSON report. `onClose` receives the
 // close event and its outcome: `ended` (after the `closed` frame),
 // `unknown_call`, `replaced` (a newer owner socket took over; do not reattach),
-// `lagged` (the socket fell behind; reattach) or `lost`.
+// `signed_out` (access lost; do not reattach), `lagged` (the socket fell
+// behind; reattach) or `lost`.
 export function openLiveCallSocket(callId, handlers = {}, options = {}) {
   requireNonEmptyString(callId, 'Live call id must be a non-empty string');
 
@@ -155,6 +164,7 @@ export function openLiveCallSocket(callId, handlers = {}, options = {}) {
 
   listen('open', handlers.onOpen);
   listen('error', handlers.onError);
+  listen('close', reportClosedSocket);
   if (typeof handlers.onClose === 'function') {
     listen('close', (event) =>
       handlers.onClose(

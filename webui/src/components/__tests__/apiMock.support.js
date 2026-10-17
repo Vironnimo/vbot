@@ -1,3 +1,5 @@
+import { accessLossFromClose } from '../../lib/api/accessLoss.js';
+
 export function rpcBackedApiMock(rpcMock, overrides = {}) {
   const call = (method, params) =>
     params === undefined ? rpcMock(method) : rpcMock(method, params);
@@ -277,6 +279,17 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         ...(targetId ? { target_id: targetId } : {}),
       }),
     purgeArchiveEntries: (params = {}) => call('archive.purge', params),
+    // Access: a local server, where nobody signs in, without paired Devices.
+    accessLossFromClose,
+    getAuthStatus: () =>
+      Promise.resolve({
+        mode: 'local',
+        mode_label: 'This computer only',
+        authenticated: true,
+        principal: 'open',
+        device: null,
+      }),
+    listDevices: () => Promise.resolve({ devices: [] }),
     ...overrides,
   };
 }

@@ -395,6 +395,18 @@ describe('terminal streams', () => {
     });
   });
 
+  it('stops reconnecting when the server closes the socket for lost access', async () => {
+    vi.useFakeTimers();
+    const { state, streams } = await startTerminals();
+    streams[0].emit(readyEvent('term-1', 4));
+
+    streams[0].close({ code: 4401 });
+    await vi.runAllTimersAsync();
+
+    expect(streams).toHaveLength(1);
+    expect(state.streams['term-1'].status).toBe('error');
+  });
+
   it('keeps a finished terminal selected as a snapshot without reconnecting it', async () => {
     vi.useFakeTimers();
     const { state, streams, api } = await startTerminals();
