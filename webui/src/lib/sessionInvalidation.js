@@ -19,9 +19,11 @@ export function appendSessionInvalidation(entries, id, scope) {
 // - `{ all: true }`: no exact Session (an unscoped or Agent-wide signal);
 // - `{ renamedAgent: { oldAgentId, newAgentId } }`: an Identity Agent rename;
 // - `{ agentAddress, sessionId, deleted: true }`: a Session was deleted;
-// - `{ agentAddress, sessionId, runId, readRunId }`: one Session changed. A
-//   `runId` names the terminal Run whose lifecycle event already carried the
-//   completion; a `readRunId` names the completion acknowledged as read.
+// - `{ agentAddress, sessionId, runId, readRunId, historyAppended }`: one
+//   Session changed. A `runId` names the terminal Run whose lifecycle event
+//   already carried the completion; a `readRunId` names the completion
+//   acknowledged as read; `historyAppended` means records were appended to
+//   its History outside any Run (a goal row), which no Run event carries.
 export function sessionInvalidationTarget(scope) {
   if (!isRecord(scope)) {
     return { all: true };
@@ -49,6 +51,7 @@ export function sessionInvalidationTarget(scope) {
     sessionId,
     runId: text(scope.run_id),
     readRunId: text(scope.read_run_id),
+    historyAppended: scope.history === 'appended',
   };
 }
 

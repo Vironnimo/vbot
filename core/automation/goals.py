@@ -15,11 +15,11 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat import ReplySurface, reply_surface_from_note
 from core.chat.commands import CommandExecutionContext, CommandFeedback, CommandOutcome, CommandRun
-from core.chat.messages import REPLY_SURFACE_NOTE_PREFIX
+from core.chat.messages import REPLY_SURFACE_NOTE_PREFIX, ChatMessage, GoalEvent, MessageSender
 from core.chat.wire_shaping import quote_external_value
 from core.runs import ActiveRunError, ChatRunManager, Run, RunKind, RunStatus
 from core.sessions import (
@@ -36,6 +36,10 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("automation.goals")
 
 GoalStatus = Literal["active", "paused", "blocked", "complete"]
+# What a goal row in the conversation reports (``GoalEvent.event``).
+GoalEventKind = Literal[
+    "set", "resumed", "reactivated", "turn", "blocked", "complete", "paused", "cleared"
+]
 AgentGoalStatus = Literal["complete", "blocked", "paused"]
 PauseReason = Literal["user", "stop", "limit", "run_failed", "restart", "takeover", "agent"]
 
@@ -128,7 +132,7 @@ class GoalService:
         self._chat_loop = chat_loop
         self._work_pending = work_pending
         self._run_relay: Callable[[Run, ReplySurface], Awaitable[None]] | None = None
-        self._changed_callbacks: list[Callable[[SessionAddress], None]] = []
+        self._changed_callbacks: list[Callable[[SessionAddress, bool], None]] = []
         # Automatic Runs: only they count against the limit and must make progress.
         self._deferred: dict[SessionAddress, asyncio.Task[None]] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -146,9 +150,13 @@ class GoalService:
         self._run_relay = relay
 
     def add_changed_callback(
-        self, callback: Callable[[SessionAddress], None]
+        self, callback: Callable[[SessionAddress, bool], None]
     ) -> Callable[[], None]:
-        """Call *callback* with the Session whenever its goal changes."""
+        """Call *callback* with the Session whenever its goal changes.
+
+        The flag is True when the change also appended a goal row to the
+        Session's History outside a Run, which a reader of the History lacks.
+        """
         self._changed_callbacks.append(callback)
 
         def remove() -> None:
@@ -239,21 +247,10 @@ class GoalService:
         previous = await self._sessions.run_async(self._pause_metadata, address, reason)
         if previous is None:
             return False
-        text = _pause_note(reason, previous)
-        if text is not None:
-            try:
-                async with self._sessions.write_lock(address):
-                    session = await self._sessions.get_async(address)
-                    await session.add_note_async(text)
-            except Exception:
-                _LOGGER.warning(
-                    "Could not record a goal pause (agent=%s session=%s reason=%s)",
-                    address.agent_id,
-                    address.session_id,
-                    reason,
-                    exc_info=True,
-                )
-        self._paused(address, reason)
+        recorded = await self._record(
+            address, _pause_event(reason, previous), _pause_note(reason, previous) or ""
+        )
+        self._paused(address, reason, recorded=recorded)
         return True
 
     def _pause_sync(self, address: SessionAddress, reason: PauseReason) -> bool:
@@ -261,10 +258,31 @@ class GoalService:
         previous = self._pause_metadata(address, reason)
         if previous is None:
             return False
-        text = _pause_note(reason, previous)
-        if text is not None:
-            self._sessions.get(address).add_note(text)
-        self._paused(address, reason)
+        self._sessions.get(address).add_note(
+            _pause_note(reason, previous) or "", goal_event=_pause_event(reason, previous)
+        )
+        self._paused(address, reason, recorded=True)
+        return True
+
+    async def _record(self, address: SessionAddress, event: GoalEvent, text: str = "") -> bool:
+        """Append a goal row to the History; *text*, if any, is what the Model reads.
+
+        Returns whether the row was written; a failure is logged, since the goal
+        change itself already happened.
+        """
+        try:
+            async with self._sessions.write_lock(address):
+                session = await self._sessions.get_async(address)
+                await session.add_note_async(text, goal_event=event)
+        except Exception:
+            _LOGGER.warning(
+                "Could not record a goal change (agent=%s session=%s event=%s)",
+                address.agent_id,
+                address.session_id,
+                event.event,
+                exc_info=True,
+            )
+            return False
         return True
 
     def _pause_metadata(
@@ -290,7 +308,7 @@ class GoalService:
         self._sessions.mutate_metadata(address, mutate)
         return previous or None
 
-    def _paused(self, address: SessionAddress, reason: PauseReason) -> None:
+    def _paused(self, address: SessionAddress, reason: PauseReason, *, recorded: bool) -> None:
         self._cancel_deferred(address)
         _LOGGER.info(
             "Goal paused (agent=%s session=%s reason=%s)",
@@ -298,7 +316,7 @@ class GoalService:
             address.session_id,
             reason,
         )
-        self._notify(address)
+        self._notify(address, history=recorded)
 
     # -- /goal -------------------------------------------------------------------
 
@@ -352,18 +370,24 @@ class GoalService:
 
         await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
         self._cancel_deferred(address)
-        self._notify(address)
         _LOGGER.info(
             "Goal set (agent=%s session=%s max_turns=%d)",
             address.agent_id,
             address.session_id,
             max_turns,
         )
-        message = GOAL_SET_TEXT.format(objective=quote_external_value(objective))
+        note = GOAL_SET_TEXT.format(objective=quote_external_value(objective))
+        event = GoalEvent("set", objective=objective, max_turns=max_turns)
         try:
-            run = await self._start_user_run(address, context.reply_surface, message)
+            run = await self._start_user_run(
+                address, context, ChatMessage.note(note, goal_event=event)
+            )
         except ActiveRunError:
+            # The Run that won the Session continues the goal when it ends.
+            recorded = await self._record(address, event, note)
+            self._notify(address, history=recorded)
             return _notice("Goal set. It starts after the current turn.")
+        self._notify(address)
         return CommandOutcome(command="goal", runs=(CommandRun(role="primary", run=run),))
 
     async def _command_pause(self, address: SessionAddress) -> CommandOutcome:
@@ -386,7 +410,8 @@ class GoalService:
 
         await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
         self._cancel_deferred(address)
-        self._notify(address)
+        recorded = await self._record(address, GoalEvent("paused", reason="user"))
+        self._notify(address, history=recorded)
         return _notice("Goal paused. Resume it with /goal resume.")
 
     async def _command_resume(
@@ -408,13 +433,19 @@ class GoalService:
             metadata[SESSION_GOAL_META_KEY] = resumed
 
         await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
+        event = GoalEvent("resumed")
+        run = None
+        if not self._busy(address):
+            with contextlib.suppress(ActiveRunError):
+                run = await self._start_user_run(
+                    address, context, ChatMessage.note(GOAL_RESUMED_TEXT, goal_event=event)
+                )
+        if run is None:
+            # The current Run continues the goal when it ends.
+            recorded = await self._record(address, event)
+            self._notify(address, history=recorded)
+            return _notice("Goal resumed. It continues after the current turn.")
         self._notify(address)
-        if self._busy(address):
-            return _notice("Goal resumed. It continues after the current turn.")
-        try:
-            run = await self._start_user_run(address, context.reply_surface, GOAL_RESUMED_TEXT)
-        except ActiveRunError:
-            return _notice("Goal resumed. It continues after the current turn.")
         return CommandOutcome(command="goal", runs=(CommandRun(role="primary", run=run),))
 
     async def _command_clear(self, address: SessionAddress) -> CommandOutcome:
@@ -427,7 +458,8 @@ class GoalService:
         if not removed.get("goal"):
             return _notice(_status_text(None))
         self._cancel_deferred(address)
-        self._notify(address)
+        recorded = await self._record(address, GoalEvent("cleared"))
+        self._notify(address, history=recorded)
         return _notice("Goal cleared.")
 
     # -- Run observation -----------------------------------------------------------
@@ -450,6 +482,11 @@ class GoalService:
         goal = await self.goal(address)
         if goal is None or self._closed:
             return
+        if _set_by_agent(run, goal):
+            # The Agent's update_goal in this Run; its row follows the Run.
+            reason = "agent" if goal["status"] == "paused" else None
+            event = GoalEvent(cast(GoalEventKind, goal["status"]), reason=reason)
+            self._notify(address, history=await self._record(address, event))
         if status == RunStatus.CANCELLED:
             if run.cancel_reason != "shutdown":
                 await self._pause(address, "stop")
@@ -485,7 +522,8 @@ class GoalService:
 
         await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
         if changed:
-            self._notify(address)
+            recorded = await self._record(address, GoalEvent("reactivated"))
+            self._notify(address, history=recorded)
         return bool(changed)
 
     async def _continue(
@@ -513,12 +551,20 @@ class GoalService:
         if not turn:
             return
         message = GOAL_LAST_TURN_TEXT if turn["turns"] >= turn["max_turns"] else GOAL_CONTINUE_TEXT
+        row = ChatMessage.note(
+            "", goal_event=GoalEvent("turn", turn=turn["turns"], max_turns=turn["max_turns"])
+        )
         reply_surface = await self._latest_reply_surface(address)
         run = None
         while run is None:
             try:
                 run = await self._start_run(
-                    address, message, reply_surface, run_kind=RunKind.SYSTEM
+                    address,
+                    message,
+                    reply_surface,
+                    run_kind=RunKind.SYSTEM,
+                    internal=True,
+                    context_note=row,
                 )
             except ActiveRunError:
                 active = self._run_manager.active_run(
@@ -601,27 +647,44 @@ class GoalService:
     # -- Run starts ----------------------------------------------------------------
 
     async def _start_user_run(
-        self, address: SessionAddress, reply_surface: ReplySurface, message: str
+        self, address: SessionAddress, context: CommandExecutionContext, note: ChatMessage
     ) -> Run:
-        """A Run the user started with /goal; it does not count as an automatic turn."""
-        return await self._start_run(address, message, reply_surface, run_kind=RunKind.USER)
+        """A Run the user started with /goal; it does not count as an automatic turn.
+
+        Its input is the command as the user wrote it, which the conversation
+        shows as theirs; *note* tells the Model what the command did.
+        """
+        return await self._start_run(
+            address,
+            context.command_text,
+            context.reply_surface,
+            run_kind=RunKind.USER,
+            internal=False,
+            context_note=note,
+            sender=context.sender,
+        )
 
     async def _start_run(
         self,
         address: SessionAddress,
-        message: str,
+        content: str,
         reply_surface: ReplySurface | None,
         *,
         run_kind: RunKind,
+        internal: bool,
+        context_note: ChatMessage,
+        sender: MessageSender | None = None,
     ) -> Run:
         return await self._chat_loop.start_run(
             address.agent_id,
-            message,
+            content,
             session_id=address.session_id,
-            internal=True,
+            internal=internal,
+            sender=sender,
             reply_surface=reply_surface,
             project_id=address.project_id,
             run_kind=run_kind,
+            context_note=context_note,
         )
 
     async def _latest_reply_surface(self, address: SessionAddress) -> ReplySurface | None:
@@ -652,10 +715,10 @@ class GoalService:
             )
         )
 
-    def _notify(self, address: SessionAddress) -> None:
+    def _notify(self, address: SessionAddress, *, history: bool = False) -> None:
         for callback in list(self._changed_callbacks):
             try:
-                callback(address)
+                callback(address, history)
             except Exception:
                 _LOGGER.warning("Goal change callback failed", exc_info=True)
 
@@ -678,12 +741,29 @@ class GoalService:
         task.add_done_callback(self._tasks.discard)
 
 
+def _set_by_agent(run: Run, goal: dict[str, Any]) -> bool:
+    """The goal still has the status the Agent's update_goal in *run* gave it."""
+    if goal.get("status_run_id") != run.id:
+        return False
+    return goal["status"] in ("complete", "blocked") or (
+        goal["status"] == "paused" and goal.get("pause_reason") == "agent"
+    )
+
+
 def _reactivates(run: Run, goal: dict[str, Any]) -> bool:
     """A user or Channel message answered the blocked goal, not the Run that blocked it."""
     return (
         run.run_kind in (RunKind.USER, RunKind.CHANNEL)
         and not run.internal
         and goal.get("status_run_id") != run.id
+    )
+
+
+def _pause_event(reason: PauseReason, goal: dict[str, Any]) -> GoalEvent:
+    """The conversation row of a pause; a limit names the number of turns."""
+    limit = goal.get("max_turns") if reason == "limit" else None
+    return GoalEvent(
+        "paused", reason=reason, max_turns=limit if isinstance(limit, int) and limit > 0 else None
     )
 
 

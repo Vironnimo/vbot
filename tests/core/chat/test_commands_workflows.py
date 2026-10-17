@@ -248,18 +248,21 @@ async def test_handoff_starts_the_target_on_the_written_handoff_in_a_new_session
     result = await handoff.run(message, project_id=source_project)
 
     writer, receiver = handoff.trigger.runs
-    # The source Agent writes the handoff in an internal Run on the source Session.
+    # The source Agent writes the handoff on the source Session in a visible Run:
+    # the user's command is its message, the brief the note before it.
     assert (writer["agent_id"], writer["session_id"], writer["project_id"]) == (
         "builder",
         "s1",
         source_project,
     )
-    assert writer["internal"] is True
+    assert writer.get("internal", False) is False
+    assert writer["message"] == message
     if instruction is None:
-        assert writer["message"] == "Write a handoff for the next agent."
+        assert writer["context_note"] == "Write a handoff for the next agent."
     else:
-        assert writer["message"].startswith("Write a handoff for the next agent.\n\n")
-        assert writer["message"].endswith(instruction)
+        assert writer["context_note"].startswith("Write a handoff for the next agent.\n\n")
+        assert "/handoff message" in writer["context_note"]
+        assert instruction not in writer["context_note"]
     # Another Agent is resolved before any Run starts; the source Agent is not.
     if (target, target_project) != ("builder", source_project):
         assert handoff.resolver.resolved == [(target_project, target)]
@@ -364,7 +367,7 @@ def _learn_dispatcher(trigger: _Trigger, *, workspace: str, active: bool) -> Com
 
 
 @pytest.mark.parametrize("argument", ["the deploy steps", None])
-async def test_learn_starts_an_internal_skill_authoring_run(argument: str | None) -> None:
+async def test_learn_starts_a_visible_skill_authoring_run(argument: str | None) -> None:
     trigger = _Trigger(answer="Created the deploy skill.")
     dispatcher = _learn_dispatcher(trigger, workspace="/home/agent", active=False)
     message = "/learn" if argument is None else f"/learn {argument}"
@@ -373,9 +376,11 @@ async def test_learn_starts_an_internal_skill_authoring_run(argument: str | None
 
     [run] = trigger.runs
     assert (run["agent_id"], run["session_id"], run["project_id"]) == ("builder", "s1", None)
-    assert run["internal"] is True
+    # The user's command is the Run's visible message; the brief is the note before it.
+    assert run.get("internal", False) is False
     assert run["reply_surface"] == WEBUI
-    assert run["message"] == learn_brief(_fragment_storage(), argument)
+    assert run["message"] == message
+    assert run["context_note"] == learn_brief(_fragment_storage(), argument)
     # The feedback is the authoring Run's final answer.
     assert result.feedback is not None
     assert (result.feedback.kind, result.feedback.text) == ("notice", "Created the deploy skill.")

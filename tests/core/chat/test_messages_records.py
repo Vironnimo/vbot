@@ -21,6 +21,7 @@ from core.chat.messages import (
     ERROR_KIND_RATE_LIMIT,
     ERROR_KIND_TIMEOUT,
     ERROR_KIND_TOOL_ITERATIONS,
+    GoalEvent,
     ModelFallback,
     ToolCallRejection,
     error_kind_llm_visible,
@@ -442,6 +443,10 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
             {"model_fallback": {"from_model": "a", "to_model": "b"}},
         ),
         (
+            ChatMessage.note("", goal_event=GoalEvent("turn", turn=2, max_turns=30)),
+            {"goal_event": {"event": "turn", "turn": 2, "max_turns": 30}},
+        ),
+        (
             replace(
                 ChatMessage.note("Skill activated"),
                 skill_package=SkillPackageRef("agent", "debugging", "owner"),
@@ -458,6 +463,7 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
         "run-id",
         "tool",
         "model-fallback",
+        "goal-event",
         "skill-package",
     ],
 )
@@ -591,6 +597,8 @@ _CHECKPOINT = {
             "model_fallback",
         ),
         (_payload("note", content="Switched.", model_fallback={"from_model": "a"}), "to_model"),
+        (_payload("user", content="Hi", goal_event={"event": "set"}), "goal_event"),
+        (_payload("note", content="", goal_event={"event": "turn", "turn": 0}), "turn"),
     ],
     ids=[
         "unknown-role",
@@ -637,6 +645,8 @@ _CHECKPOINT = {
         "assistant-without-output",
         "fallback-on-assistant",
         "fallback-without-target",
+        "goal-event-on-user",
+        "goal-turn-not-positive",
     ],
 )
 def test_invalid_persisted_payloads_are_rejected(data: dict[str, Any], match: str | None) -> None:

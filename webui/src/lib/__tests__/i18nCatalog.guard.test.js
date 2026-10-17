@@ -66,6 +66,23 @@ const COMPOSED_KEYS = {
     'takeover',
     'agent',
   ],
+  // chatTimelinePresentation/messages.js GOAL_ROW_PAUSE_REASONS and GOAL_ROW_EVENTS
+  'chat.goalRow.paused.*': [
+    'user',
+    'agent',
+    'stop',
+    'run_failed',
+    'limit',
+    'restart',
+    'takeover',
+  ],
+  'chat.goalRow.event.*': [
+    'resumed',
+    'reactivated',
+    'blocked',
+    'complete',
+    'cleared',
+  ],
   // settingsView/appearance.js CHAT_WIDTH_OPTIONS
   'settings.appearance.chatWidth.*': ['comfortable', 'wide', 'full'],
   // settingsView/appearance.js CHAT_WORKING_MODE_OPTIONS

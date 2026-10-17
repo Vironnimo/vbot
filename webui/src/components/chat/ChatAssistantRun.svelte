@@ -48,6 +48,7 @@
     toolStatusDetails,
     toolStatusLabel,
     visibleRunChildren,
+    goalEventLabel,
     workingGroupDetails,
     workingGroupSummary,
   } from '$lib/chatTimelinePresentation.js';
@@ -692,6 +693,10 @@
         </Banner>
       {:else if child.type === 'compaction_separator'}
         <ChatCompactionSeparator item={child} inRun />
+      {:else if child.type === 'goal_event'}
+        <div class="date-sep goal-sep run-goal-sep">
+          {goalEventLabel(child)}
+        </div>
       {/if}
     {/snippet}
     {#each runDisplayGroups as group (group.id)}

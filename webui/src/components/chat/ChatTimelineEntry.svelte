@@ -40,6 +40,7 @@
     shouldRenderMessage,
     speechArtifactFromResult,
     takeoverSeparatorLabel,
+    goalEventLabel,
     textFromEvent,
     textFromMessage,
     toolCallFromEvent,
@@ -477,6 +478,10 @@
 {:else if item.type === 'takeover_separator'}
   <div class="date-sep takeover-sep">
     {takeoverSeparatorLabel(item.message)}
+  </div>
+{:else if item.type === 'goal_event'}
+  <div class="date-sep goal-sep">
+    {goalEventLabel(item.message)}
   </div>
 {:else if item.type === 'event'}
   {#if isToolEvent(item.event)}

@@ -24,6 +24,9 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
     """Project complete Run segments from public Session History records."""
     items: list[JsonObject] = []
     run: RunTimeline | None = None
+    # Goal changes outside a Run that land between its records, such as a
+    # `/goal pause` while it works, follow that Run instead of splitting it.
+    held: list[JsonObject] = []
 
     def flush() -> None:
         nonlocal run
@@ -36,6 +39,8 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
                 or item.get("status") in {"cancelled", "interrupted", "failed"}
             )
             run = None
+        items.extend(held)
+        held.clear()
 
     for message in messages:
         role = message.get("role")
@@ -43,6 +48,18 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
         run_id = message.get("history_run_id") or message.get("run_id")
         if not run_id and run is not None and role in {"assistant", "tool", "run_summary"}:
             run_id = run.run_id
+        if role == "goal_event" and not run_id:
+            row = {
+                "id": f"goal-{message['id']}",
+                "type": "goal_event",
+                "timestamp": message.get("timestamp"),
+                "message": copy.deepcopy(message),
+            }
+            if run is None:
+                items.append(row)
+            else:
+                held.append(row)
+            continue
         if run is not None and run.run_id != run_id:
             flush()
         if role in {"note", "history_edit", "system"}:
@@ -113,6 +130,8 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
             event["type"] = "error_message_persisted"
         elif role == "model_fallback":
             event.update(type="model_fallback_activated", payload=message)
+        elif role == "goal_event":
+            event.update(type="goal_event_recorded", payload=message)
         elif role == "compaction_checkpoint":
             event["type"] = "compaction_completed"
         elif role == "run_summary":

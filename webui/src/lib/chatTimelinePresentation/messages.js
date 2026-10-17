@@ -405,7 +405,8 @@ export function timestampForItem(item) {
   }
   if (
     item.type === 'compaction_separator' ||
-    item.type === 'takeover_separator'
+    item.type === 'takeover_separator' ||
+    item.type === 'goal_event'
   ) {
     return item.timestamp;
   }
@@ -484,6 +485,58 @@ export const takeoverSeparatorLabel = (message) => {
     return t('chat.takenOver', { from, to });
   }
   return t('chat.takenOverGeneric');
+};
+
+// Goal changes and pause reasons whose row needs no facts. A change or reason
+// missing here, such as one a newer server sends, reads as a plain row.
+const GOAL_ROW_EVENTS = [
+  'resumed',
+  'reactivated',
+  'blocked',
+  'complete',
+  'cleared',
+];
+const GOAL_ROW_PAUSE_REASONS = [
+  'user',
+  'agent',
+  'stop',
+  'run_failed',
+  'limit',
+  'restart',
+  'takeover',
+];
+
+// Compose the status row of one Session goal change: a Run child or a History
+// `goal_event` record, both carrying `event` and its optional facts.
+export const goalEventLabel = (goal) => {
+  const max = Number.isInteger(goal?.max_turns) ? goal.max_turns : null;
+  switch (goal?.event) {
+    case 'set':
+      if (goal.objective && max) {
+        return t('chat.goalRow.setWithLimit', {
+          objective: goal.objective,
+          max,
+        });
+      }
+      return goal.objective
+        ? t('chat.goalRow.set', { objective: goal.objective })
+        : t('chat.goalRow.setGeneric');
+    case 'turn':
+      return Number.isInteger(goal.turn) && max
+        ? t('chat.goalRow.turn', { turn: goal.turn, max })
+        : t('chat.goalRow.turnGeneric');
+    case 'paused':
+      if (goal.reason === 'limit' && max) {
+        return t('chat.goalRow.pausedAtLimit', { max });
+      }
+      return GOAL_ROW_PAUSE_REASONS.includes(goal.reason)
+        ? t(`chat.goalRow.paused.${goal.reason}`)
+        : t('chat.goalRow.paused');
+    default:
+      return GOAL_ROW_EVENTS.includes(goal?.event)
+        ? t(`chat.goalRow.event.${goal.event}`)
+        : t('chat.goalRow.updated');
+  }
 };
 
 // Compact Context token display: 254224 -> "254k", 1500000 -> "1.5m". The

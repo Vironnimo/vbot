@@ -94,6 +94,14 @@ def has_unconsumed_skill_activation(
     )
 
 
+def _add_context_note(session: ChatSession, note: str | _records.ChatMessage | None) -> None:
+    """Store a Run's context note before its input; a prepared note keeps its record."""
+    if isinstance(note, _records.ChatMessage):
+        session.add_note_message(note)
+    elif note:
+        session.add_note(note)
+
+
 def _append_input_origin_note(
     session: ChatSession, input_origin: _records.InputOrigin | None
 ) -> None:

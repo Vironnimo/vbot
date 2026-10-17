@@ -446,6 +446,46 @@ describe('ChatTimeline Runs', () => {
     },
   );
 
+  it('renders goal changes as status rows inside a Run and between Runs', () => {
+    const sessionState = timelineSession();
+    sessionState.timelineItems = [
+      assistantRun(
+        'goal-turn',
+        [
+          {
+            id: 'goal-n1',
+            type: 'goal_event',
+            event: 'turn',
+            turn: 2,
+            max_turns: 30,
+          },
+          outputItem('Next step done'),
+        ],
+        { source: 'history', status: 'completed' },
+      ),
+      {
+        id: 'goal-n2',
+        type: 'goal_event',
+        timestamp: '2026-10-17T10:00:00Z',
+        message: {
+          id: 'n2',
+          role: 'goal_event',
+          event: 'paused',
+          reason: 'stop',
+        },
+      },
+    ];
+    timeline.render(sessionState);
+
+    const rows = [...document.querySelectorAll('.goal-sep')];
+    expect(rows.map((row) => row.textContent.trim())).toEqual([
+      t('chat.goalRow.turn', { turn: 2, max: 30 }),
+      t('chat.goalRow.paused.stop'),
+    ]);
+    expect(rows[0].closest('.assistant-run')).not.toBeNull();
+    expect(rows[1].closest('.assistant-run')).toBeNull();
+  });
+
   it('shows the live output in place of an Output detail block', () => {
     const sessionState = timelineSession();
     const display = {

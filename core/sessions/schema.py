@@ -429,6 +429,18 @@ CREATE TABLE note_model_fallbacks (
   to_model TEXT NOT NULL
 ) STRICT;
 
+-- The Session goal change a note records (set, a pause and its reason, an
+-- automatic turn, ...). Chat History shows it in place of the hidden note,
+-- whose text, empty when the Model needs none, is all the Model reads.
+CREATE TABLE note_goal_events (
+  entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
+  event TEXT NOT NULL,
+  reason TEXT,
+  objective TEXT,
+  turn INTEGER,
+  max_turns INTEGER
+) STRICT;
+
 CREATE TABLE checkpoint_entries (
   entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
   policy TEXT NOT NULL,

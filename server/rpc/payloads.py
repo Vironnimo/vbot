@@ -116,8 +116,9 @@ def history_message(message: ChatMessage, *, file_delivery: Any | None = None) -
     """Project one History record for clients, or ``None`` for an internal record.
 
     Notes are internal. A note that records a Model fallback switch appears as
-    its display notice, role ``model_fallback`` with both Models, and never
-    with the note's Model-facing text.
+    its display notice, role ``model_fallback`` with both Models; one that
+    records a goal change appears as role ``goal_event`` with its fields. Neither
+    carries the note's Model-facing text.
     """
     if message.role == "note" and message.model_fallback is not None:
         return {
@@ -126,6 +127,14 @@ def history_message(message: ChatMessage, *, file_delivery: Any | None = None) -
             "role": "model_fallback",
             **({"run_id": message.run_id} if message.run_id is not None else {}),
             **message.model_fallback.to_dict(),
+        }
+    if message.role == "note" and message.goal_event is not None:
+        return {
+            "id": message.id,
+            "timestamp": message.timestamp,
+            "role": "goal_event",
+            **({"run_id": message.run_id} if message.run_id is not None else {}),
+            **message.goal_event.to_dict(),
         }
     if message.role in _INTERNAL_HISTORY_ROLES:
         return None

@@ -148,6 +148,17 @@ def test_semantic_timeline_rows_name_user_steer_takeover_and_compaction_states()
     assert item_text(completed) == (
         "Context compaction completed.\nContext: 8,000 → 2,000 tokens\nDuration: 1.5s"
     )
+    # A goal change reads the same as a Run child and as a History row.
+    turn = {"id": "goal-n1", "type": "goal_event", "event": "turn", "turn": 2, "max_turns": 30}
+    paused = {
+        "id": "goal-n2",
+        "type": "goal_event",
+        "message": {"role": "goal_event", "event": "paused", "reason": "limit", "max_turns": 30},
+    }
+    unknown = {"id": "goal-n3", "type": "goal_event", "event": "renamed"}
+    assert item_text(turn) == "Goal · automatic turn 2 of 30"
+    assert item_text(paused) == "Goal paused at its limit of 30 automatic turns"
+    assert item_text(unknown) == "Goal updated"
 
 
 def test_file_links_find_canonical_speech_artifacts_and_original_download_urls() -> None:

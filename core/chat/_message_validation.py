@@ -148,6 +148,8 @@ def _validate_core_fields(message: _records.ChatMessage) -> None:
         )
     if message.role != "note" and message.model_fallback is not None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include model_fallback")
+    if message.role != "note" and message.goal_event is not None:
+        raise ChatMessageValidationError(f"{message.role} messages cannot include goal_event")
     if message.role != "compaction_checkpoint":
         _reject_fields(
             message,

@@ -341,6 +341,41 @@ def test_checkpoint_and_fallback_stay_between_their_surrounding_phases() -> None
     assert (items[2]["from_model"], items[2]["to_model"]) == ("first/model", "second/model")
 
 
+def test_goal_rows_stay_in_order_without_splitting_a_run() -> None:
+    # A Run's goal row is one of its items; a change outside any Run is its own row.
+    messages = [
+        message("set", "goal_event", event="set", objective="Ship it", max_turns=30),
+        message("ask", "user", content="/goal Ship it"),
+        message("before", "assistant", content="Working"),
+        # The user pauses the goal while the Run works.
+        message("pause", "goal_event", history_run_id=None, event="paused", reason="user"),
+        message("after", "assistant", content="Done"),
+        message("summary", "run_summary", status="completed"),
+        message("cleared", "goal_event", history_run_id=None, event="cleared"),
+    ]
+    items = history_timeline(messages)
+    # The user's command stays the Run's input message, ahead of its goal row.
+    assert [item["type"] for item in items] == [
+        "message",
+        "assistant_run",
+        "goal_event",
+        "goal_event",
+    ]
+    assert items[0]["message"]["content"] == "/goal Ship it"
+    assert [item["message"]["event"] for item in items[2:]] == ["paused", "cleared"]
+    children = run_block(items)["items"]
+    assert [child["type"] for child in children] == [
+        "goal_event",
+        "assistant_output",
+        "assistant_output",
+    ]
+    assert {key: children[0][key] for key in ("event", "objective", "max_turns")} == {
+        "event": "set",
+        "objective": "Ship it",
+        "max_turns": 30,
+    }
+
+
 @pytest.mark.parametrize("abandoned", ["tool", "compaction"])
 def test_abandoned_provisional_rows_do_not_change_successor_identity_after_reload(
     abandoned: str,

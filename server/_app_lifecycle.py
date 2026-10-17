@@ -166,13 +166,21 @@ def _register_session_title_bridge(state: Any) -> Any:
     def publish(address: Any) -> None:
         publish_session_changed(state, address.project_id, address.agent_id, address.session_id)
 
+    def publish_goal(address: Any, history: bool) -> None:
+        # ``history``: the change appended a goal row outside a Run, which an
+        # accessor showing the conversation reads from the History.
+        extra = {"history": "appended"} if history else {}
+        publish_session_changed(
+            state, address.project_id, address.agent_id, address.session_id, **extra
+        )
+
     unsubscribers = [state.runtime.chat_sessions.add_title_changed_callback(publish)]
     try:
         goals = state.runtime.goals
     except AttributeError, RuntimeError:
         goals = None  # A Runtime without goals, such as a test double.
     if goals is not None:
-        unsubscribers.append(goals.add_changed_callback(publish))
+        unsubscribers.append(goals.add_changed_callback(publish_goal))
 
     def unsubscribe() -> None:
         for remove in unsubscribers:

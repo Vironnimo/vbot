@@ -37,7 +37,11 @@ export const visibleRunChildren = (assistantRun) =>
     if (child.type === 'tool_call') {
       return shouldRenderToolCall(child);
     }
-    if (child.type === 'compaction_separator' || child.type === 'history_gap') {
+    if (
+      child.type === 'compaction_separator' ||
+      child.type === 'history_gap' ||
+      child.type === 'goal_event'
+    ) {
       return true;
     }
     return Boolean(child.content);

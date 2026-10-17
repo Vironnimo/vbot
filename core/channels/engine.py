@@ -1359,6 +1359,7 @@ class ChannelConversationEngine:
             session_id=route.session_id,
             project_id=None,
             reply_surface=self._reply_surface(conversation.kind, reply_plan),
+            sender=self._access._sender_for(conversation),
         )
         try:
             if prepared.execution_mode == "serialized":

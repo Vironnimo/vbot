@@ -36,6 +36,18 @@
   padding: 0;
 }
 
+/* A goal change is a deliberate decision about the Session's work, so like a
+   takeover it reads one text level brighter than the muted date and
+   compaction separators. */
+.goal-sep {
+  color: var(--text-med);
+}
+
+.run-goal-sep {
+  margin: 14px 0;
+  padding: 0;
+}
+
 .compaction-sep--running {
   color: var(--amber);
 }

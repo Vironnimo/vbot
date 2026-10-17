@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -35,6 +36,7 @@ from core.providers.errors import (
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
+    GOAL_EVENT_RECORDED_EVENT,
     REASONING_EVENT,
     Run,
 )
@@ -80,6 +82,21 @@ def _emit_message_event(
         {"message": _visible_message_payload(message)},
         allow_after_cancel=allow_after_cancel,
     )
+
+
+def _emit_goal_events(run: Run, messages: Sequence[ChatMessage]) -> None:
+    """Announce the goal changes a Run's persisted input records."""
+    for message in messages:
+        if message.role == "note" and message.goal_event is not None:
+            run.emit(
+                GOAL_EVENT_RECORDED_EVENT,
+                {
+                    "id": message.id,
+                    "timestamp": message.timestamp,
+                    **message.goal_event.to_dict(),
+                },
+                allow_after_cancel=True,
+            )
 
 
 def _visible_message_payload(message: ChatMessage) -> JsonObject:

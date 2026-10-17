@@ -10,7 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat.content_blocks import ContentBlock, TextBlock
-from core.chat.messages import ReplySurface
+from core.chat.messages import MessageSender, ReplySurface
 from core.chat.status_report import (
     ReasoningRenderDescriber,
     WireProfileDescriber,
@@ -119,6 +119,9 @@ class PreparedCommand:
     argument: str | None
     execution_mode: CommandExecutionMode
     registration_id: int | None = None
+    # The command as the user wrote it, which a command-started Run shows as the
+    # user's message; empty means ``/<name> [argument]``.
+    text: str = ""
 
 
 @dataclass(frozen=True)
@@ -188,6 +191,10 @@ class CommandExecutionContext:
     project_id: str | None
     reply_surface: ReplySurface
     on_change: CommandChangeObserver | None = None
+    # Who wrote the command in a Channel conversation.
+    sender: MessageSender | None = None
+    # The command as the user wrote it; ``execute`` supplies it from the prepared command.
+    command_text: str = ""
 
     def report_change(self, change: CommandResourceChange) -> None:
         if self.on_change is not None:
@@ -743,6 +750,7 @@ class CommandDispatcher:
             argument=argument,
             execution_mode=execution_mode,
             registration_id=registration_id,
+            text=command_text.strip(),
         )
 
     def unavailability(
@@ -779,7 +787,10 @@ class CommandDispatcher:
             handler = self._execution_commands.get(prepared.name)
             if handler is None:
                 raise ValueError(f"unknown Built-in Command: {prepared.name}")
-            return await handler(context, prepared.argument)
+            command_text = prepared.text or " ".join(
+                part for part in (f"/{prepared.name}", prepared.argument) if part
+            )
+            return await handler(replace(context, command_text=command_text), prepared.argument)
         registered = self._extension_commands[prepared.name]
         return await self._execute_extension_command(registered, context, prepared.argument)
 

@@ -23,21 +23,23 @@ if TYPE_CHECKING:
     from core.sessions._types import SessionAddress
 
 
-# A Note that records a Model fallback switch is also the Run's display notice.
-_MODEL_FALLBACK_NOTE = (
-    "(e.role = 'note' AND EXISTS "
-    "(SELECT 1 FROM note_model_fallbacks AS f WHERE f.entry_key = e.entry_key))"
+# A Note that records a Model fallback switch or a goal change is also a
+# display notice.
+_DISPLAY_NOTE = (
+    "(e.role = 'note' AND (EXISTS "
+    "(SELECT 1 FROM note_model_fallbacks AS f WHERE f.entry_key = e.entry_key) OR EXISTS "
+    "(SELECT 1 FROM note_goal_events AS g WHERE g.entry_key = e.entry_key)))"
 )
 
 
 def _role_filter(excluded_roles: Sequence[str]) -> tuple[str, list[Any]]:
-    """Exclude *excluded_roles*; excluded Notes keep their Model fallback notices."""
+    """Exclude *excluded_roles*; excluded Notes keep their display notices."""
     excluded = tuple(dict.fromkeys(excluded_roles))
     if not excluded:
         return "", []
     clause = f"e.role NOT IN ({', '.join('?' for _ in excluded)})"
     if "note" in excluded:
-        clause = f"({clause} OR {_MODEL_FALLBACK_NOTE})"
+        clause = f"({clause} OR {_DISPLAY_NOTE})"
     return clause, list(excluded)
 
 
@@ -260,7 +262,7 @@ def _page_runs(
                         ranges,
                         where=(
                             "e.run_key = ? AND (e.role NOT IN ('system', 'note', 'history_edit') "
-                            f"OR {_MODEL_FALLBACK_NOTE})"
+                            f"OR {_DISPLAY_NOTE})"
                         ),
                         params=(run["run_key"],),
                         upper=floor,

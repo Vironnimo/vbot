@@ -126,7 +126,7 @@ _LIBRARIAN_ORIGIN_TEXTS = {
 }
 
 REFLECTION_FOCUS_TEMPLATE = "The user asked you to focus this reflection on:\n{focus}"
-LEARN_REQUEST_TEMPLATE = "The request to learn from:\n{request}"
+LEARN_REQUEST_TEXT = "The request to learn from is the user's /learn message after this note."
 LEARN_WITHOUT_REQUEST = (
     "No request was given. If the recent conversation clearly establishes reusable "
     "learning, apply the instructions above to it. Otherwise, ask the user what "
@@ -183,7 +183,7 @@ def learn_brief(fragments: BriefFragmentReader, request: str | None) -> str:
     cleaned = (request or "").strip()
     if not cleaned:
         return f"{brief}\n\n{LEARN_WITHOUT_REQUEST}"
-    return f"{brief}\n\n{LEARN_REQUEST_TEMPLATE.format(request=cleaned)}"
+    return f"{brief}\n\n{LEARN_REQUEST_TEXT}"
 
 
 def librarian_brief(

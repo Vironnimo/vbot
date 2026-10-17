@@ -47,6 +47,7 @@ export const RUN_EVENT_TYPES = [
   'run_started',
   'user_message_persisted',
   'model_fallback_activated',
+  'goal_event_recorded',
   'error_message_persisted',
   'compaction_started',
   'run_controls_changed',

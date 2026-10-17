@@ -15,7 +15,7 @@ import pytest
 
 from core.automation import LearningChanges
 from core.chat import ChatMessage, ChatSessionManager, ToolCall
-from core.chat.messages import ModelFallback
+from core.chat.messages import GoalEvent, ModelFallback
 from core.database import write_bootstrap_marker
 from core.memory import MemoryService, MemoryWriter
 from core.projects import AgentResolutionError
@@ -206,6 +206,7 @@ async def test_history_hides_notes(history: _History) -> None:
         model_fallback=ModelFallback(from_model="openai/gpt-5.2", to_model="anthropic/claude"),
     )
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Visible response"))
+    session.add_note("Goal note for the Model", goal_event=GoalEvent("paused", reason="stop"))
 
     result = await history.read(session_id="session-one")
 
@@ -213,7 +214,12 @@ async def test_history_hides_notes(history: _History) -> None:
         "user",
         "model_fallback",
         "assistant",
+        "goal_event",
     ]
+    # A goal note appears only as its display row.
+    goal = result["messages"][3]
+    assert {key: goal[key] for key in ("event", "reason")} == {"event": "paused", "reason": "stop"}
+    assert "Goal note" not in str(result["messages"])
     # A Model fallback note appears only as its display notice, inside its Run.
     fallback = result["messages"][1]
     assert {key: fallback[key] for key in ("from_model", "to_model", "history_run_id")} == {

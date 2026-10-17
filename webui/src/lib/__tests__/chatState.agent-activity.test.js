@@ -1017,3 +1017,37 @@ describe('Agent activity projection', () => {
     },
   );
 });
+
+describe('Session History invalidations', () => {
+  it('re-reads a displayed Session once when records were appended outside a Run', async () => {
+    const loadChatHistory = vi
+      .fn()
+      .mockResolvedValue({ messages: [], active_run: null });
+    const { controller } = setupController({
+      operationOverrides: { loadChatHistory },
+      isDisplayedSession: (agentId, sessionId) =>
+        agentId === 'alpha' && sessionId === 'one',
+    });
+    await controller.loadHistoryForSession('alpha', 'one');
+    controller.applySessionInvalidations([]);
+    loadChatHistory.mockClear();
+
+    const appended = {
+      agent_id: 'alpha',
+      session_id: 'one',
+      history: 'appended',
+    };
+    controller.applySessionInvalidations([
+      { id: 1, scope: appended },
+      { id: 2, scope: appended },
+      // Not displayed, or no appended records: nothing to read.
+      { id: 3, scope: { ...appended, session_id: 'two' } },
+      { id: 4, scope: { agent_id: 'alpha', session_id: 'one' } },
+    ]);
+
+    await vi.waitFor(() => expect(loadChatHistory).toHaveBeenCalledOnce());
+    expect(loadChatHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ agent_id: 'alpha', session_id: 'one' }),
+    );
+  });
+});

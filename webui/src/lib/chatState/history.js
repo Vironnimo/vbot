@@ -254,5 +254,6 @@ function isVisibleHistoryMessage(message) {
     'agent_takeover',
     'run_summary',
     'model_fallback',
+    'goal_event',
   ].includes(message?.role);
 }

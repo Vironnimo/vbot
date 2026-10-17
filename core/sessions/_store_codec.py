@@ -234,6 +234,13 @@ def insert_entry(
                 "VALUES (?, ?, ?)",
                 (entry_key, message.model_fallback.from_model, message.model_fallback.to_model),
             )
+        case "note" if message.goal_event is not None:
+            goal = message.goal_event
+            connection.execute(
+                "INSERT INTO note_goal_events "
+                "(entry_key, event, reason, objective, turn, max_turns) VALUES (?, ?, ?, ?, ?, ?)",
+                (entry_key, goal.event, goal.reason, goal.objective, goal.turn, goal.max_turns),
+            )
         case "compaction_checkpoint":
             _insert_checkpoint(connection, entry_key, message)
     _store_attachments.record(connection, entry_key, message.to_dict())
@@ -463,6 +470,7 @@ class EntryBatch:
     errors: dict[int, sqlite3.Row] = field(default_factory=dict)
     edits: dict[int, sqlite3.Row] = field(default_factory=dict)
     model_fallbacks: dict[int, sqlite3.Row] = field(default_factory=dict)
+    goal_events: dict[int, sqlite3.Row] = field(default_factory=dict)
     checkpoints: dict[int, sqlite3.Row] = field(default_factory=dict)
     run_ids: dict[int, str] = field(default_factory=dict)
     run_summaries: dict[int, sqlite3.Row] = field(default_factory=dict)
@@ -531,6 +539,13 @@ class EntryBatch:
                     data["model_fallback"] = {
                         "from_model": str(fallback["from_model"]),
                         "to_model": str(fallback["to_model"]),
+                    }
+                case "note" if key in self.goal_events:
+                    goal = self.goal_events[key]
+                    data["goal_event"] = {
+                        field_name: goal[field_name]
+                        for field_name in ("event", "reason", "objective", "turn", "max_turns")
+                        if goal[field_name] is not None
                     }
                 case "compaction_checkpoint":
                     self._decode_checkpoint(key, data)
@@ -815,6 +830,12 @@ def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) ->
         f"SELECT entry_key, from_model, to_model FROM note_model_fallbacks WHERE entry_key {_KEYS}",
         by_role.get("note", []),
     )
+    batch.goal_events = _rows_by_key(
+        connection,
+        "SELECT entry_key, event, reason, objective, turn, max_turns FROM note_goal_events "
+        f"WHERE entry_key {_KEYS}",
+        by_role.get("note", []),
+    )
     batch.checkpoints = _rows_by_key(
         connection,
         f"SELECT {_CHECKPOINT_COLUMNS}, p.projection_json FROM checkpoint_entries AS c "
@@ -883,6 +904,7 @@ _ENTRY_SIDE_TABLES = (
     "error_entries",
     "history_edit_entries",
     "note_model_fallbacks",
+    "note_goal_events",
     "checkpoint_entries",
     "checkpoint_projections",
 )

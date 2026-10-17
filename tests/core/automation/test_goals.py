@@ -18,6 +18,7 @@ from core.automation.goals import (
 )
 from core.chat import ChatSessionManager, ReplySurface
 from core.chat.commands import CommandExecutionContext
+from core.chat.messages import ChatMessage
 from core.runs import ChatRunManager, Run, RunAdmission, RunKind
 from core.sessions import SESSION_GOAL_META_KEY, SessionAddress
 
@@ -32,12 +33,18 @@ async def _works(_run: Run) -> None:
 
 
 class _GoalChatLoop:
-    """Start each Run with the next scripted turn; unscripted turns do work."""
+    """Start each Run with the next scripted turn; unscripted turns do work.
 
-    def __init__(self, manager: ChatRunManager) -> None:
+    Like Chat, a Run stores its context note in the History before it works.
+    """
+
+    def __init__(self, manager: ChatRunManager, sessions: ChatSessionManager) -> None:
         self._manager = manager
+        self._sessions = sessions
         self.turns: list[Turn] = []
         self.started: list[tuple[str, RunKind]] = []
+        # (internal, context note) of each started Run.
+        self.inputs: list[tuple[bool, ChatMessage | None]] = []
 
     async def start_run(
         self,
@@ -49,19 +56,23 @@ class _GoalChatLoop:
         reply_surface: ReplySurface | None,
         project_id: str | None,
         run_kind: RunKind,
+        sender: Any = None,
+        context_note: ChatMessage | None = None,
     ) -> Run:
         turn = self.turns.pop(0) if self.turns else _works
+        address = SessionAddress(project_id, agent_id, session_id)
 
         async def executor(run: Run) -> str:
             run.internal = internal
             self.started.append((content, run_kind))
+            self.inputs.append((internal, context_note))
+            if context_note is not None:
+                self._sessions.get(address).add_note_message(context_note)
             await turn(run)
             return "done"
 
         return await self._manager.start(
-            SessionAddress(project_id, agent_id, session_id),
-            executor,
-            admission=RunAdmission(run_kind=run_kind),
+            address, executor, admission=RunAdmission(run_kind=run_kind)
         )
 
 
@@ -70,9 +81,10 @@ class _Harness:
         self.runs = ChatRunManager()
         self.sessions = ChatSessionManager(tmp_path)
         self.sessions.create("coder", session_id="session-one")
-        self.loop = _GoalChatLoop(self.runs)
+        self.loop = _GoalChatLoop(self.runs, self.sessions)
         self.work_pending = False
-        self.changes: list[SessionAddress] = []
+        # (Session, whether the change appended a goal row outside a Run)
+        self.changes: list[tuple[SessionAddress, bool]] = []
 
         async def pending(_address: SessionAddress) -> bool:
             return self.work_pending
@@ -84,7 +96,9 @@ class _Harness:
             work_pending=pending,
         )
         self.goals.install()
-        self.goals.add_changed_callback(self.changes.append)
+        self.goals.add_changed_callback(
+            lambda address, history: self.changes.append((address, history))
+        )
 
     async def command(self, argument: str | None) -> str:
         outcome = await self.goals.execute_command(
@@ -93,6 +107,7 @@ class _Harness:
                 session_id="session-one",
                 project_id=None,
                 reply_surface=ReplySurface.webui(),
+                command_text=f"/goal {argument}" if argument else "/goal",
             ),
             argument,
         )
@@ -105,7 +120,15 @@ class _Harness:
         return [
             cast(str, message.content)
             for message in self.sessions.get(_ADDRESS).load()
-            if message.role == "note"
+            if message.role == "note" and message.content
+        ]
+
+    def rows(self) -> list[dict[str, Any]]:
+        """The goal rows of the History, in order."""
+        return [
+            message.goal_event.to_dict()
+            for message in self.sessions.get(_ADDRESS).load()
+            if message.goal_event is not None
         ]
 
     async def settle(self) -> None:
@@ -173,17 +196,29 @@ async def test_goal_runs_automatically_until_the_agent_marks_it_complete(
             release_read.set()
 
     first, *automatic = harness.loop.started
-    # The user's command starts the first Run; the objective stays quoted user text.
-    assert first[1] is RunKind.USER
-    assert first[0].startswith("The user set a goal for this session with /goal:\n")
-    assert '"Ship \\u003cthe\\u003e release"' in first[0]
+    # The user's command is the first Run's visible input; its note tells the
+    # Model, the objective quoted as user text.
+    assert first == ("/goal Ship <the> release", RunKind.USER)
+    internal, set_note = harness.loop.inputs[0]
+    assert not internal and set_note is not None
+    assert cast(str, set_note.content).startswith(
+        "The user set a goal for this session with /goal:\n"
+    )
+    assert '"Ship \\u003cthe\\u003e release"' in cast(str, set_note.content)
     assert automatic == [(GOAL_CONTINUE_TEXT, RunKind.SYSTEM)] * 2
     assert harness.goal()["status"] == "complete"
     assert harness.goal()["turns"] == 2
     assert await harness.command(None) == (
         "Goal (complete): Ship <the> release\nAutomatic turns: 2 of 30."
     )
-    assert harness.changes
+    # Each change is a row of the conversation; the Agent's completion follows its Run.
+    assert harness.rows() == [
+        {"event": "set", "objective": "Ship <the> release", "max_turns": 30},
+        {"event": "turn", "turn": 1, "max_turns": 30},
+        {"event": "turn", "turn": 2, "max_turns": 30},
+        {"event": "complete"},
+    ]
+    assert (_ADDRESS, True) in harness.changes
 
 
 async def test_the_last_automatic_turn_says_so_and_the_limit_pauses_the_goal(
@@ -203,6 +238,7 @@ async def test_the_last_automatic_turn_says_so_and_the_limit_pauses_the_goal(
         "The goal was paused because it reached its limit of 2 automatic turns. "
         "The user can resume it with /goal resume."
     )
+    assert harness.rows()[-1] == {"event": "paused", "reason": "limit", "max_turns": 2}
 
 
 @pytest.mark.parametrize(
@@ -266,6 +302,13 @@ async def test_a_user_reply_reactivates_a_blocked_goal_but_background_results_do
     assert harness.loop.started[-1] == (GOAL_CONTINUE_TEXT, RunKind.SYSTEM)
     assert harness.goal()["status"] == "complete"
     assert harness.goal()["turns"] == 1
+    assert [row["event"] for row in harness.rows()] == [
+        "set",
+        "blocked",
+        "reactivated",
+        "turn",
+        "complete",
+    ]
 
 
 async def test_running_background_work_holds_the_next_automatic_turn(harness: _Harness) -> None:
@@ -302,16 +345,24 @@ async def test_goal_commands_pause_resume_and_clear(harness: _Harness) -> None:
     assert await harness.command("--max 0") == "Use --max with a number from 1 to 200."
     assert await harness.command("pause") == "Goal paused. Resume it with /goal resume."
     assert harness.goal()["pause_reason"] == "user"
-    # The user paused it and knows; the Agent gets no pause note.
+    # The user paused it and knows; the Agent gets no pause note, only the row shows it.
     assert not any(note.startswith("The goal was paused") for note in harness.notes())
+    assert harness.rows()[-1] == {"event": "paused", "reason": "user"}
 
     harness.loop.turns = [_marks(harness.goals, "complete")]
     await harness.command("resume")
     await harness.settle()
-    assert harness.loop.started[-1] == (GOAL_RESUMED_TEXT, RunKind.USER)
+    assert harness.loop.started[-1] == ("/goal resume", RunKind.USER)
+    resume_note = harness.loop.inputs[-1][1]
+    assert resume_note is not None and resume_note.content == GOAL_RESUMED_TEXT
     assert harness.goal()["status"] == "complete"
 
     assert await harness.command("clear") == "Goal cleared."
+    assert harness.rows()[-3:] == [
+        {"event": "resumed"},
+        {"event": "complete"},
+        {"event": "cleared"},
+    ]
     assert harness.sessions.metadata_value(_ADDRESS, SESSION_GOAL_META_KEY) is None
     assert await harness.command(None) == (
         "This session has no goal. Set one with /goal <objective>."
