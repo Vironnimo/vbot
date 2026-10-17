@@ -82,16 +82,18 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "attachment_metadata": "artifacts/attachments/*.json",
         "speech_artifact_metadata": "artifacts/speech/*.json",
         "access_devices": "access/devices.json",
+        "access_server": "access/server.json",
     }
 )
 
 #: Kinds that data snapshots, and with them configuration backups, leave out. The
 #: metadata kinds are the sidecar of a blob stored beside it: a snapshot holds no
 #: blobs, and restoring its document set would delete every sidecar created after
-#: the snapshot while its blob stays. The device store must never return through a
-#: restore: that would revive revoked devices.
+#: the snapshot while its blob stays. The device store and the server's recorded
+#: access configuration must never return through a restore: that would revive
+#: revoked devices or a weaker access mode the host replaced.
 DOCUMENTS_OUTSIDE_SNAPSHOTS: frozenset[str] = frozenset(
-    {"attachment_metadata", "speech_artifact_metadata", "access_devices"}
+    {"attachment_metadata", "speech_artifact_metadata", "access_devices", "access_server"}
 )
 
 #: The JSON document set of a data snapshot: every other durable document.

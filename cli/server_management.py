@@ -34,7 +34,10 @@ from cli._server_target import (
     probe_webui,
     resolve_instance,
 )
+from core.access.config import AccessConfigError
+from core.access.server_record import read_server_access
 from core.storage.layout import initialize_data_directory
+from core.utils.config import DEFAULT_HOST
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, LogManager
 from core.utils.outside_job import Confinement, start_outside_foreign_job
 from core.utils.processes import outside_service_unit, subprocess_creation_flags
@@ -174,11 +177,22 @@ def start_server(
     startup_timeout_seconds: float = DEFAULT_STARTUP_TIMEOUT_SECONDS,
     probe_interval_seconds: float = 0.1,
 ) -> CommandResult:
-    """Start the server and wait until vBot health is reachable."""
+    """Start the server and wait until vBot health is reachable.
+
+    The server binds the address its data directory records, so the start targets
+    that address; a requested address other than the default is reported as ignored.
+    """
 
     manager = _create_cli_log_manager(instance)
     logger = manager.get_logger(CLI_SERVER_LOGGER_NAME)
     try:
+        try:
+            instance, recorded_note = _recorded_target(instance)
+        except AccessConfigError as exc:
+            logger.error("Refusing CLI-managed background server start: %s", exc)
+            return CommandResult(
+                ok=False, message=str(exc), instance=instance, log_path=instance.log_path
+            )
         initial_health = probe_health_patiently(instance)
         # Never spawn next to a server: a duplicate cannot claim the target, and the
         # readiness probe would then report the existing server as started.
@@ -192,6 +206,7 @@ def start_server(
                 health=initial_health,
                 webui=probe_webui(instance),
                 log_path=instance.log_path,
+                attention=recorded_note,
             )
         if state != "absent":
             message = _start_refusal_message(state, initial_health)
@@ -235,9 +250,12 @@ def start_server(
                     log_path=instance.log_path,
                     process_id=process.pid,
                     attention=(
-                        (confined_server_warning(confinement, remedy=_OUTSIDE_JOB_REMEDY),)
-                        if confinement is not None
-                        else ()
+                        *recorded_note,
+                        *(
+                            (confined_server_warning(confinement, remedy=_OUTSIDE_JOB_REMEDY),)
+                            if confinement is not None
+                            else ()
+                        ),
                     ),
                 )
             if health.reachable:
@@ -290,6 +308,29 @@ def start_server(
         return result
     finally:
         manager.close()
+
+
+def _recorded_target(instance: ServerInstance) -> tuple[ServerInstance, tuple[str, ...]]:
+    """The target a start reaches, and a note when it is not the requested one.
+
+    A server started without access options binds the address its data directory
+    records (``core.access.server_record``), whatever ``--host`` says. The default
+    host counts as no choice; another requested host is reported as ignored.
+    Raises ``AccessConfigError`` for a record the server would refuse to start with.
+    """
+
+    recorded = read_server_access(instance.data_dir)
+    if recorded is None or recorded.host == instance.host:
+        return instance, ()
+    target = resolve_instance(host=recorded.host, port=instance.port, data_dir=instance.data_dir)
+    if instance.host == DEFAULT_HOST:
+        return target, ()
+    return target, (
+        f"the data directory records access mode {recorded.access.mode} on {recorded.host}, "
+        f"so the server binds that address, not {instance.host}. To change it, start the "
+        "server once with: python -m server.main --access <mode> --host <address> "
+        f"--port {instance.port} --data-dir {instance.data_dir}",
+    )
 
 
 def _start_refusal_message(state: ServerState, health: HealthProbeResult) -> str:

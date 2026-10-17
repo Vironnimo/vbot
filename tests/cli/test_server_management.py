@@ -27,6 +27,12 @@ from cli.server_management import (
     start_server_process,
     stop_server,
 )
+from core.access.config import access_config
+from core.access.server_record import (
+    RecordedServerAccess,
+    server_access_path,
+    write_server_access,
+)
 from core.database import DataStoreMarker, read_marker
 from core.utils import outside_job
 from core.utils import processes as process_utils
@@ -301,6 +307,47 @@ def test_start_server_waits_for_health_and_logs_its_lifecycle(
     assert re.match(MANAGED_CLI_LOG_PATTERN, log_line)
     assert "[INFO]" in log_line
     assert "pid=4321" in log_line and "url=http://127.0.0.1:8420" in log_line
+
+
+@pytest.mark.parametrize(
+    ("requested", "note"), [("127.0.0.1", False), ("192.0.2.5", True)], ids=["default", "other"]
+)
+def test_start_server_targets_the_bind_address_its_data_directory_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requested: str, note: bool
+) -> None:
+    # Without access options the server binds what its data directory records, so
+    # `vbot server start|restart` must probe and pass that address.
+    instance = make_instance(tmp_path, host=requested)
+    write_server_access(instance.data_dir, RecordedServerAccess(access_config("lan"), "0.0.0.0"))
+    spawned: list[ServerInstance] = []
+
+    def spawn(target: ServerInstance) -> FakeProcess:
+        spawned.append(target)
+        return FakeProcess(pid=4321)
+
+    answer_health(monkeypatch, UNREACHABLE, VBOT)
+    monkeypatch.setattr(
+        server_management, "probe_webui", lambda _instance: WebUIProbeResult(True, 200)
+    )
+    monkeypatch.setattr(server_management, "start_server_process", spawn)
+
+    result = start_server(instance, startup_timeout_seconds=1.0, probe_interval_seconds=0.0)
+
+    assert result.ok
+    [target] = spawned
+    assert (target.host, target.port, target.url) == ("0.0.0.0", 8420, "http://127.0.0.1:8420")
+    assert server_management._server_command(target)[0][3:5] == ["--host", "0.0.0.0"]
+    if note:
+        [attention] = result.attention
+        assert "records access mode lan on 0.0.0.0" in attention and requested in attention
+    else:
+        assert result.attention == ()
+
+    # A record the server would refuse stops the start before anything spawns.
+    server_access_path(instance.data_dir).write_text("{}", encoding="utf-8")
+    refused = start_server(instance)
+    assert (refused.ok, len(spawned)) == (False, 1)
+    assert "records cannot be read" in refused.message
 
 
 @pytest.mark.parametrize("broker", ["starts", "refuses"])
