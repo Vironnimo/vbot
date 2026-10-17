@@ -77,7 +77,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | server.md | `server/` | Transport/RPC boundary, events, source routing |
 | access.md | `core/access/`, `server/access/` | Access Modes, the access guard, paired Devices, pairing and login tickets, local access token, direct TLS |
 | cli.md | `cli/` | Server lifecycle commands, targeting, output contract |
-| desktop.md | `desktop/` | pywebview shell contract, bridge, Desktop Voice, Desktop dictation, Live voice support |
+| desktop.md | `desktop/` | pywebview shell contract, bridge, server sign-in, Desktop Voice, Desktop dictation, Live voice support |
 | webui.md | `webui/` | Frontend accessor boundary, shared invariants |
 | logging.md | cross-cutting | What to log at which level, line format, never-log rules, writing pipeline |
 | logs.md | log viewer subsystem | Log parsing, RPC/socket contract, Logs tab |

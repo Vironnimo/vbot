@@ -1,19 +1,31 @@
-"""Tests for the Desktop in-window server selection (connection module)."""
+"""Tests for the Desktop in-window server selection and sign-in (connection module)."""
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from desktop import connection as desktop_connection
-from desktop.connection import LAUNCH_WAIT_SECONDS, ConnectionController, ServerEntry
+from desktop.access import ServerAccess
+from desktop.connection import (
+    LAUNCH_WAIT_SECONDS,
+    SIGN_IN_LANDING_SECONDS,
+    SIGN_IN_PAGE,
+    ConnectionController,
+    ServerEntry,
+)
+from desktop.credentials import DeviceTokenStore
 from desktop.main import (
+    ACCESS_MODE_AUTHENTICATED,
     PROBE_INVALID_TARGET,
     PROBE_NOT_VBOT_SERVER,
     PROBE_SERVER_UNREACHABLE,
@@ -22,8 +34,9 @@ from desktop.main import (
     DesktopProbeResult,
     DesktopTarget,
     SessionLink,
-    validate_host,
 )
+from desktop.server_address import ServerAddress
+from tests.desktop.access_test_support import FakeAccessServer, build_access, token_store
 
 _TEST_DESKTOP_SESSION_ID = "desktop-test-session"
 PI_URL = f"http://pi.lan:9000/?accessor=desktop&desktop_session={_TEST_DESKTOP_SESSION_ID}"
@@ -41,25 +54,35 @@ def _use_stable_desktop_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeWindow:
-    """Records the navigation calls the controller makes on the live window."""
+    """Records the navigation calls the controller makes on the live window.
+
+    ``current_url`` follows the loads like a browser; a test sets it to where a
+    redirect or the page's own script took the window.
+    """
 
     def __init__(self) -> None:
         self.loaded_urls: list[str] = []
         self.loaded_html: list[str] = []
+        self.current_url: str | None = None
         self._loaded = threading.Condition()
 
     def load_url(self, url: str) -> None:
         with self._loaded:
             self.loaded_urls.append(url)
+            self.current_url = url
             self._loaded.notify_all()
 
     def load_html(self, content: str) -> None:
         with self._loaded:
             self.loaded_html.append(content)
+            self.current_url = None
             self._loaded.notify_all()
 
+    def get_current_url(self) -> str | None:
+        return self.current_url
+
     def wait_for_loads(self, count: int) -> None:
-        """Wait until the controller (or its launch wait thread) loaded ``count`` documents."""
+        """Wait until the controller (or its background thread) loaded ``count`` documents."""
 
         with self._loaded:
             assert self._loaded.wait_for(
@@ -67,11 +90,13 @@ class FakeWindow:
             )
 
 
-def probe_returning(status: str) -> Callable[[DesktopTarget], DesktopProbeResult]:
+def probe_returning(
+    status: str, access_mode: str | None = None
+) -> Callable[[DesktopTarget], DesktopProbeResult]:
     """Build a probe stub that classifies every target with a fixed status."""
 
     def _probe(target: DesktopTarget) -> DesktopProbeResult:
-        return DesktopProbeResult(status=status, target=target)
+        return DesktopProbeResult(status=status, target=target, access_mode=access_mode)
 
     return _probe
 
@@ -172,12 +197,29 @@ def _scripted_controller(
 def test_server_entry_storage_and_display_name() -> None:
     labelled = ServerEntry("pi.lan", 9000, "Living room")
     plain = ServerEntry("pi.lan", 9000)
+    https = ServerEntry("vbot.example.com", 443, "Cloud", "https")
 
     assert labelled.to_storage() == {"host": "pi.lan", "port": 9000, "label": "Living room"}
     assert ServerEntry.from_storage(labelled.to_storage()) == labelled
     assert plain.to_storage() == {"host": "pi.lan", "port": 9000}
     assert labelled.display_name() == "Living room (pi.lan:9000)"
     assert plain.display_name() == "pi.lan:9000"
+    # An HTTPS server is stored with its scheme and shown and passed by its address.
+    assert https.to_storage() == {
+        "host": "vbot.example.com",
+        "port": 443,
+        "scheme": "https",
+        "label": "Cloud",
+    }
+    assert ServerEntry.from_storage(https.to_storage()) == https
+    assert https.display_name() == "Cloud (https://vbot.example.com)"
+    assert https.to_bridge() == {
+        "host": "https://vbot.example.com",
+        "port": 443,
+        "scheme": "https",
+        "label": "Cloud",
+    }
+    assert plain.to_bridge() == {"host": "pi.lan", "port": 9000, "scheme": "http"}
 
 
 def test_add_server_appends_and_replaces_the_same_target_in_place(tmp_path: Path) -> None:
@@ -185,22 +227,32 @@ def test_add_server_appends_and_replaces_the_same_target_in_place(tmp_path: Path
 
     desktop_connection.add_server("pi.lan", 9000, "Old", settings_file=settings_file)
     desktop_connection.add_server("other.lan", 8420, settings_file=settings_file)
+    desktop_connection.add_server("https://VBOT.example.com", None, settings_file=settings_file)
     desktop_connection.add_server("pi.lan", 9000, "New", settings_file=settings_file)
+    # The same HTTPS server spelled differently; the same host over HTTPS is another server.
+    desktop_connection.add_server(
+        "https://vbot.example.com:443/", 8420, "Cloud", settings_file=settings_file
+    )
+    desktop_connection.add_server("https://pi.lan:9000", None, settings_file=settings_file)
 
     assert _stored(settings_file)["servers"] == [
         {"host": "pi.lan", "port": 9000, "label": "New"},
         {"host": "other.lan", "port": 8420},
+        {"host": "vbot.example.com", "port": 443, "scheme": "https", "label": "Cloud"},
+        {"host": "pi.lan", "port": 9000, "scheme": "https"},
     ]
     assert desktop_connection.list_servers(settings_file) == [
         ServerEntry("pi.lan", 9000, "New"),
         ServerEntry("other.lan", 8420),
+        ServerEntry("vbot.example.com", 443, "Cloud", "https"),
+        ServerEntry("pi.lan", 9000, None, "https"),
     ]
 
 
 @pytest.mark.parametrize(
     ("host", "port"),
-    [("http://pi.lan", 9000), ("a');document.title='x';('", 9000), ("pi.lan", 0)],
-    ids=["url-host", "quote-bearing-host", "invalid-port"],
+    [("https://pi.lan/app", 9000), ("a');document.title='x';('", 9000), ("pi.lan", 0)],
+    ids=["url-with-path", "quote-bearing-host", "invalid-port"],
 )
 def test_add_server_validates_the_target_before_persisting(
     tmp_path: Path, host: str, port: int
@@ -213,33 +265,64 @@ def test_add_server_validates_the_target_before_persisting(
     assert not settings_file.exists()
 
 
+CLOUD_ENTRY = {"host": "vbot.example.com", "port": 443, "scheme": "https"}
+
+
 @pytest.mark.parametrize(
     ("removed_target", "last_used", "removed", "servers", "last_used_after"),
     [
-        (("pi.lan", 9000), None, True, [{"host": "other.lan", "port": 8420}], None),
+        (
+            ("pi.lan", 9000),
+            None,
+            True,
+            [{"host": "other.lan", "port": 8420}, CLOUD_ENTRY],
+            None,
+        ),
         (
             ("ghost.lan", 1234),
             None,
             False,
-            [{"host": "pi.lan", "port": 9000}, {"host": "other.lan", "port": 8420}],
+            [{"host": "pi.lan", "port": 9000}, {"host": "other.lan", "port": 8420}, CLOUD_ENTRY],
             None,
         ),
         (
             ("pi.lan", 9000),
             {"host": "pi.lan", "port": 9000},
             True,
-            [{"host": "other.lan", "port": 8420}],
+            [{"host": "other.lan", "port": 8420}, CLOUD_ENTRY],
             None,
         ),
         (
             ("pi.lan", 9000),
             {"host": "other.lan", "port": 8420},
             True,
-            [{"host": "other.lan", "port": 8420}],
+            [{"host": "other.lan", "port": 8420}, CLOUD_ENTRY],
             {"host": "other.lan", "port": 8420},
         ),
+        (
+            ("https://vbot.example.com", 443),
+            CLOUD_ENTRY,
+            True,
+            [{"host": "pi.lan", "port": 9000}, {"host": "other.lan", "port": 8420}],
+            None,
+        ),
+        # The HTTP server of the same host is another server.
+        (
+            ("vbot.example.com", 443),
+            CLOUD_ENTRY,
+            False,
+            [{"host": "pi.lan", "port": 9000}, {"host": "other.lan", "port": 8420}, CLOUD_ENTRY],
+            CLOUD_ENTRY,
+        ),
     ],
-    ids=["removes", "unknown", "clears-its-last-used", "keeps-other-last-used"],
+    ids=[
+        "removes",
+        "unknown",
+        "clears-its-last-used",
+        "keeps-other-last-used",
+        "https",
+        "http-of-an-https-host",
+    ],
 )
 def test_remove_server_forgets_the_target_and_a_last_used_pointing_at_it(
     tmp_path: Path,
@@ -250,7 +333,11 @@ def test_remove_server_forgets_the_target_and_a_last_used_pointing_at_it(
     last_used_after: dict[str, Any] | None,
 ) -> None:
     saved: dict[str, Any] = {
-        "servers": [{"host": "pi.lan", "port": 9000}, {"host": "other.lan", "port": 8420}]
+        "servers": [
+            {"host": "pi.lan", "port": 9000},
+            {"host": "other.lan", "port": 8420},
+            CLOUD_ENTRY,
+        ]
     }
     if last_used is not None:
         saved["last_used"] = last_used
@@ -294,8 +381,24 @@ def test_remove_server_forgets_the_target_and_a_last_used_pointing_at_it(
             },
             ServerEntry("first.lan", 8420),
         ),
+        (
+            {
+                "servers": [
+                    {"host": "vbot.example.com", "port": 443},
+                    {**CLOUD_ENTRY, "label": "Cloud"},
+                ],
+                "last_used": CLOUD_ENTRY,
+            },
+            ServerEntry("vbot.example.com", 443, "Cloud", "https"),
+        ),
     ],
-    ids=["first-run", "last-used-with-label", "last-used-not-remembered", "first-server"],
+    ids=[
+        "first-run",
+        "last-used-with-label",
+        "last-used-not-remembered",
+        "first-server",
+        "https-last-used",
+    ],
 )
 def test_resolve_last_used_picks_the_launch_target(
     tmp_path: Path, saved: dict[str, Any] | None, expected: ServerEntry | None
@@ -307,8 +410,10 @@ def test_select_server_writes_last_used(tmp_path: Path) -> None:
     settings_file = _settings(tmp_path)
 
     desktop_connection.select_server("pi.lan", 9000, settings_file=settings_file)
-
     assert _stored(settings_file)["last_used"] == {"host": "pi.lan", "port": 9000}
+
+    desktop_connection.select_server("https://vbot.example.com", None, settings_file=settings_file)
+    assert _stored(settings_file)["last_used"] == CLOUD_ENTRY
 
 
 # -- Controller: launch connect ------------------------------------------------------
@@ -481,12 +586,12 @@ def test_a_user_connect_ends_a_launch_wait_and_is_never_overridden(
 def test_an_invalid_host_renders_the_invalid_target_screen_without_io(tmp_path: Path) -> None:
     controller, window, _ = _controller(tmp_path, status=None)
 
-    result = controller.launch_connect("http://pi.lan", 9000)
+    result = controller.launch_connect("https://pi.lan/app", 9000)
 
     assert result.status == PROBE_INVALID_TARGET
     assert window.loaded_urls == []
     assert 'role="alert"' in window.loaded_html[0]
-    assert 'value="http://pi.lan"' in window.loaded_html[0]
+    assert 'value="https://pi.lan/app"' in window.loaded_html[0]
 
 
 def test_connect_survives_active_server_listener_error(tmp_path: Path) -> None:
@@ -647,78 +752,321 @@ def test_first_run_auto_connect_shows_the_connection_screen_without_an_error(
     assert 'value="8420"' in page
 
 
-# -- Connection screen HTML ------------------------------------------------------------
+# -- Controller: sign-in -------------------------------------------------------------
+
+CLOUD = ServerAddress("https", "vbot.example.com", 443)
+CLOUD_HOST = CLOUD.bridge_host
+CLOUD_APP_URL = (
+    f"https://vbot.example.com/?accessor=desktop&desktop_session={_TEST_DESKTOP_SESSION_ID}"
+)
+TICKET_URL = re.compile(r"https://vbot\.example\.com/auth/ticket/[A-Za-z0-9_-]+")
 
 
-def test_connection_html_lists_saved_servers_with_connect_hooks() -> None:
-    servers = [ServerEntry("pi.lan", 9000, "Pi"), ServerEntry("10.0.0.5", 8500)]
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
 
-    page = desktop_connection.build_connection_html(servers)
-
-    assert "Pi (pi.lan:9000)" in page
-    # Saved hosts/ports ride data-* attributes; a static handler reads them as
-    # strings via dataset, never as interpolated JS (no inline onclick carries a
-    # host in a JS-string context).
-    assert 'data-host="pi.lan" data-port="9000"' in page
-    assert 'data-host="10.0.0.5" data-port="8500"' in page
-    assert "connectSaved('pi.lan'" not in page
-    assert "connectSaved('10.0.0.5'" not in page
-    assert "connectSaved(button.dataset.host" in page
+    def __call__(self) -> float:
+        return self.now
 
 
-def test_connection_html_awaits_bridge_result_before_navigation() -> None:
-    page = desktop_connection.build_connection_html([])
+class SignInRig:
+    """A controller over a fake window, signing in to ``server`` in the access mode
+    ``authenticated``; pairing polls every 10 ms."""
 
-    bridge_call = "await window.pywebview.api.connect(host, port)"
-    navigation = "window.location.assign(result.url)"
-    assert bridge_call in page
-    assert navigation in page
-    assert page.index(bridge_call) < page.index(navigation)
-    # The user's own connect hides a launch wait's waiting state first.
-    assert page.index("waiting.hidden = true") < page.index(bridge_call)
-    assert ".textContent = title" in page
-    assert ".textContent = body" in page
-    assert "prefillConnectionTarget(host, port)" in page
-    assert "innerHTML" not in page
-
-
-@pytest.mark.parametrize("state", ["error", "waiting"])
-def test_connection_html_escapes_the_target_host_in_its_banner_and_prefill(state: str) -> None:
-    malicious = '<script>alert("x")</script>'
-    target = DesktopTarget(malicious, 9000, "")
-    if state == "error":
-        page = desktop_connection.build_connection_html(
-            [], DesktopProbeResult(status=PROBE_INVALID_TARGET, target=target)
+    def __init__(self, tmp_path: Path, server: FakeAccessServer, access_mode: str | None) -> None:
+        self.server = server
+        self.store: DeviceTokenStore = token_store(tmp_path)
+        self.access: ServerAccess = build_access(
+            server, tmp_path, store=self.store, wait=lambda event, _seconds: event.wait(0.01)
         )
-    else:
-        page = desktop_connection.build_connection_html([], waiting_for=target)
+        self.settings_file = _settings(tmp_path)
+        self.window = FakeWindow()
+        self.clock = Clock()
+        self.controller = ConnectionController(
+            settings_file=self.settings_file,
+            window=self.window,
+            probe=probe_returning(PROBE_WEBUI_AVAILABLE, access_mode),
+            access=self.access,
+            clock=self.clock,
+        )
 
-    assert malicious not in page
-    assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in page
+    def pair_earlier(self) -> None:
+        device = self.server.add_device()
+        self.store.save_device(CLOUD.origin, device.token, device.id)
+
+    def ticket_redirected(self) -> None:
+        """The window redeemed the ticket it was sent to; the server redirected to ``/``."""
+        url = self.window.loaded_urls[-1]
+        assert TICKET_URL.fullmatch(url)
+        self.server.redeem(url.removeprefix("https://vbot.example.com"))
+        self.window.current_url = "https://vbot.example.com/"
+        self.controller.page_loaded()
+
+    def pairing_code(self) -> str:
+        [pairing] = self.server.pairings.values()
+        return pairing.code
 
 
-def test_connection_html_escapes_saved_server_label_and_host() -> None:
-    servers = [ServerEntry('<b>"evil"</b>', 9000, "<i>label</i>")]
-
-    page = desktop_connection.build_connection_html(servers)
-
-    assert "<b>" not in page
-    assert "<i>label</i>" not in page
-    assert "&lt;b&gt;" in page
-    assert "&lt;i&gt;label&lt;/i&gt;" in page
+@pytest.fixture
+def rig(tmp_path: Path) -> SignInRig:
+    return SignInRig(tmp_path, FakeAccessServer(), ACCESS_MODE_AUTHENTICATED)
 
 
-def test_quote_bearing_host_never_breaks_out_of_the_data_attribute() -> None:
-    # A host that would break out of the old inline onclick JS-string context.
-    # Validation rejects it before storage; a directly built entry must still
-    # render only html-escaped inside data-host, with no inline onclick.
-    malicious = "a');document.title='x';('"
-    with pytest.raises(ValueError):
-        validate_host(malicious)
+def _eventually(condition: Callable[[], bool]) -> None:
+    deadline = time.monotonic() + 5
+    while not condition():
+        assert time.monotonic() < deadline, "condition not reached"
+        time.sleep(0.005)
 
-    page = desktop_connection.build_connection_html([ServerEntry(malicious, 9000)])
 
-    assert 'data-host="a&#x27;);document.title=&#x27;x&#x27;;(&#x27;"' in page
-    assert malicious not in page
-    assert "');" not in page
-    assert 'onclick="connectSaved(' not in page
+def test_a_server_without_sign_in_opens_directly(tmp_path: Path) -> None:
+    rig = SignInRig(tmp_path, FakeAccessServer(), access_mode="lan")
+
+    rig.controller.launch_connect(CLOUD_HOST, None)
+
+    assert rig.window.loaded_urls == [CLOUD_APP_URL]
+    assert rig.server.requests == []
+
+
+def test_a_launch_connect_signs_the_window_in_with_the_stored_token(rig: SignInRig) -> None:
+    rig.pair_earlier()
+    urls: list[str] = []
+    rig.controller.set_active_server_listener(urls.append)
+
+    rig.controller.launch_connect(CLOUD_HOST, None, "Cloud")
+
+    # The window opens a login ticket first.
+    [ticket_url] = rig.window.loaded_urls
+    assert TICKET_URL.fullmatch(ticket_url)
+    stored = _stored(rig.settings_file)
+    assert stored["servers"] == [{**CLOUD_ENTRY, "label": "Cloud"}]
+    assert stored["last_used"] == CLOUD_ENTRY
+    assert urls == ["https://vbot.example.com/"]
+
+    rig.ticket_redirected()
+
+    # Signed in, the window loads the WebUI with the Desktop's parameters.
+    assert rig.window.loaded_urls == [ticket_url, CLOUD_APP_URL]
+    [window_device] = [device for device in rig.server.devices.values() if device.kind == "browser"]
+    _eventually(lambda: getattr(rig.store.get(CLOUD.origin), "webview_device_id", None) is not None)
+    stored_sign_in = rig.store.get(CLOUD.origin)
+    assert stored_sign_in is not None and stored_sign_in.webview_device_id == window_device.id
+    # Later pages are the WebUI's own business.
+    rig.controller.page_loaded()
+    assert len(rig.window.loaded_urls) == 2
+
+
+def test_a_connect_the_page_starts_never_hands_the_ticket_to_the_page(rig: SignInRig) -> None:
+    rig.pair_earlier()
+    rig.window.current_url = "https://other.example.com/"
+
+    payload = rig.controller.prepare_connect(CLOUD_HOST, 443, on_screen=True).to_bridge_payload()
+
+    assert payload == {"status": PROBE_WEBUI_AVAILABLE, "url": SIGN_IN_PAGE}
+    assert rig.window.loaded_urls == []
+    # The calling page itself loading again changes nothing.
+    rig.controller.page_loaded()
+    assert rig.window.loaded_urls == []
+
+    # The page went to the sign-in page: the window opens the ticket, then the WebUI.
+    rig.window.current_url = SIGN_IN_PAGE
+    rig.controller.page_loaded()
+    assert len(rig.window.loaded_urls) == 1
+    rig.ticket_redirected()
+    assert rig.window.loaded_urls[-1] == CLOUD_APP_URL
+
+
+def test_a_sign_in_that_does_not_land_in_time_is_dropped(rig: SignInRig) -> None:
+    rig.pair_earlier()
+    rig.controller.prepare_connect(CLOUD_HOST, 443)
+
+    rig.clock.now += SIGN_IN_LANDING_SECONDS + 1
+    rig.window.current_url = SIGN_IN_PAGE
+    rig.controller.page_loaded()
+
+    assert rig.window.loaded_urls == []
+
+
+def test_a_ticket_the_server_refuses_shows_the_sign_in_failure(rig: SignInRig) -> None:
+    rig.pair_earlier()
+    rig.controller.launch_connect(CLOUD_HOST, None)
+
+    # The server answered the ticket with its error page: the window stays there.
+    rig.controller.page_loaded()
+
+    [page] = rig.window.loaded_html
+    assert "Sign-in failed" in page and 'role="alert"' in page
+    assert len(rig.window.loaded_urls) == 1
+
+
+@pytest.mark.parametrize(
+    ("answer", "title"),
+    [
+        (
+            httpx.Response(403, json={"ok": False, "error": {"code": "access_denied"}}),
+            "Access denied",
+        ),
+        (
+            httpx.Response(
+                429,
+                headers={"Retry-After": "60"},
+                json={"ok": False, "error": {"code": "rate_limited"}},
+            ),
+            "Too many attempts",
+        ),
+    ],
+    ids=["access-denied", "rate-limited"],
+)
+def test_a_sign_in_the_server_refuses_shows_why(
+    rig: SignInRig, answer: httpx.Response, title: str
+) -> None:
+    rig.pair_earlier()
+    rig.server.scripted["/api/rpc"] = [answer]
+
+    payload = rig.controller.prepare_connect(CLOUD_HOST, 443).to_bridge_payload()
+
+    assert (payload["status"], payload["error_title"]) == (answer.json()["error"]["code"], title)
+    assert "url" not in payload
+    # The server answered, so it is remembered; it is not the window's server.
+    assert desktop_connection.list_servers(rig.settings_file) == [
+        ServerEntry("vbot.example.com", 443, None, "https")
+    ]
+    assert rig.controller.active_server_url() is None
+
+
+def test_a_launch_connect_without_a_sign_in_pairs_and_connects_once_approved(
+    rig: SignInRig,
+) -> None:
+    rig.controller.launch_connect(CLOUD_HOST, None)
+
+    [page] = rig.window.loaded_html
+    code = rig.pairing_code()
+    assert f'<p id="pairing-code" class="code">{code}</p>' in page
+    assert rig.window.loaded_urls == []
+    assert rig.server.pairings[next(iter(rig.server.pairings))].kind == "desktop"
+
+    rig.server.decide(code, "approved")
+    rig.window.wait_for_loads(2)
+    rig.controller.close()
+
+    assert rig.access.signed_in(CLOUD)
+    [ticket_url] = rig.window.loaded_urls
+    assert TICKET_URL.fullmatch(ticket_url)
+    rig.ticket_redirected()
+    assert rig.window.loaded_urls[-1] == CLOUD_APP_URL
+
+
+@pytest.mark.parametrize(
+    ("decision", "title"), [("denied", "Sign-in denied"), ("expired", "Code expired")]
+)
+def test_a_pairing_that_is_not_approved_shows_why(
+    rig: SignInRig, decision: str, title: str
+) -> None:
+    rig.server.pairing_outcome = decision
+
+    rig.controller.launch_connect(CLOUD_HOST, None)
+    rig.window.wait_for_loads(2)
+    rig.controller.close()
+
+    pairing_page, failure_page = rig.window.loaded_html
+    assert 'role="alert"' not in pairing_page
+    assert f'<h2 id="connection-error-title">{title}</h2>' in failure_page
+    assert rig.window.loaded_urls == []
+    assert not rig.access.signed_in(CLOUD)
+
+
+def test_a_pairing_the_page_starts_returns_its_code_and_connects_once_approved(
+    rig: SignInRig,
+) -> None:
+    payload = rig.controller.prepare_connect(CLOUD_HOST, 443, on_screen=True).to_bridge_payload()
+
+    code = rig.pairing_code()
+    assert payload["status"] == "pairing_required"
+    assert payload["pairing"]["code"] == code
+    assert payload["pairing"]["server"] == "https://vbot.example.com"
+    assert code in payload["error_body"]
+    assert "url" not in payload
+    assert rig.window.loaded_urls == rig.window.loaded_html == []
+
+    rig.server.decide(code, "approved")
+    rig.window.wait_for_loads(1)
+    rig.controller.close()
+
+    assert TICKET_URL.fullmatch(rig.window.loaded_urls[0])
+
+
+def test_a_cancelled_pairing_leaves_the_window_alone(rig: SignInRig) -> None:
+    rig.controller.launch_connect(CLOUD_HOST, None)
+
+    assert rig.controller.cancel_pairing() is True
+    assert rig.controller.cancel_pairing() is False
+    rig.controller.close()
+    polls = rig.server.requests.copy()
+    rig.server.decide(rig.pairing_code(), "approved")
+    time.sleep(0.05)
+
+    assert rig.server.requests == polls
+    assert len(rig.window.loaded_html) == 1
+    assert rig.window.loaded_urls == []
+
+
+def test_a_lost_sign_in_pairs_the_window_again_once(
+    rig: SignInRig, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig.pair_earlier()
+    rig.controller.launch_connect(CLOUD_HOST, None)
+    rig.ticket_redirected()
+    # Another server's refusal is not the window's concern.
+    rig.access.rejected("https://elsewhere.example.com/", None)
+
+    with caplog.at_level(logging.INFO, logger="vbot.desktop.connection"):
+        # A native request (Voice, dictation) is refused: the server revoked this Desktop.
+        assert rig.access.rejected(CLOUD.url, rig.access.header(CLOUD.url)) is False
+        rig.window.wait_for_loads(3)
+        # Further refusals do not connect the window again.
+        rig.access.rejected(CLOUD.url, None)
+    rig.controller.close()
+
+    [page] = rig.window.loaded_html
+    assert f'<p id="pairing-code" class="code">{rig.pairing_code()}</p>' in page
+    reconnects = [
+        record for record in caplog.records if "connecting the window again" in record.message
+    ]
+    assert len(reconnects) == 1
+
+
+def test_forgetting_a_sign_in_signs_out_without_pairing_again(rig: SignInRig) -> None:
+    rig.pair_earlier()
+    rig.controller.launch_connect(CLOUD_HOST, None, "Cloud")
+    rig.ticket_redirected()
+    assert [entry["signed_in"] for entry in rig.controller.describe_servers()] == [True]
+
+    assert rig.controller.forget_sign_in(CLOUD_HOST, 443) is True
+
+    assert rig.controller.describe_servers() == [
+        {
+            "host": CLOUD_HOST,
+            "port": 443,
+            "scheme": "https",
+            "label": "Cloud",
+            "active": True,
+            "signed_in": False,
+        }
+    ]
+    # The server's refusals that follow do not start a pairing in the window.
+    rig.access.rejected(CLOUD.url, None)
+    _eventually(lambda: rig.server.calls("devices.logout") != [])
+    rig.controller.close()
+    assert rig.window.loaded_html == []
+    assert rig.server.pairings == {}
+
+
+def test_removing_a_server_forgets_its_sign_in(rig: SignInRig) -> None:
+    rig.pair_earlier()
+    rig.controller.add_server(CLOUD_HOST, 443)
+
+    assert rig.controller.remove_server(CLOUD_HOST, 443) is True
+
+    assert rig.store.get(CLOUD.origin) is None
+    assert rig.controller.list_servers() == []

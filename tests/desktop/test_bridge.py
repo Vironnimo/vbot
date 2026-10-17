@@ -104,6 +104,8 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
         "addServer",
         "removeServer",
         "selectServer",
+        "cancelPairing",
+        "forgetSignIn",
         "getDesktopUpdate",
         "restartDesktop",
     }
@@ -229,6 +231,7 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
         "dictation": available,
         "secureOrigins": ["http://a.lan:8420", "http://pi.lan:9000"],
         "restart": False,
+        "signIn": False,
     }
 
 
@@ -473,26 +476,97 @@ def test_ports_are_coerced_where_possible(
         assert probed == [("pi.lan", probed_port)]
 
 
+class FakeSignInConnection:
+    """The sign-in part of the connection delegate, recording what the bridge asks."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, ...]] = []
+
+    def prepare_connect(
+        self, host: str, port: Any, label: str | None = None, *, on_screen: bool = False
+    ) -> SimpleNamespace:
+        self.calls.append(("prepare_connect", host, port, on_screen))
+        return SimpleNamespace(
+            to_bridge_payload=lambda: {"status": "pairing_required", "pairing": {"code": "K7M2"}}
+        )
+
+    def cancel_pairing(self) -> bool:
+        self.calls.append(("cancel_pairing",))
+        return True
+
+    def forget_sign_in(self, host: str, port: Any) -> bool:
+        self.calls.append(("forget_sign_in", host, port))
+        return False
+
+
+def test_the_connection_screen_shows_a_pairing_and_can_end_it() -> None:
+    connection = FakeSignInConnection()
+    bridge, _ = _bridge(connection=connection)
+
+    # The connection screen shows a pairing's outcome; a WebUI page knows only its start.
+    assert bridge.connect("https://vbot.example.com", None)["pairing"] == {"code": "K7M2"}
+    assert bridge.selectServer("https://vbot.example.com", None)["status"] == "pairing_required"
+    assert bridge.cancelPairing() == {"cancelled": True}
+    assert bridge.forgetSignIn("https://vbot.example.com", None) == {"forgotten": False}
+    assert connection.calls == [
+        ("prepare_connect", "https://vbot.example.com", None, True),
+        ("prepare_connect", "https://vbot.example.com", None, False),
+        ("cancel_pairing",),
+        ("forget_sign_in", "https://vbot.example.com", None),
+    ]
+
+
 def test_servers_are_remembered_listed_with_the_active_one_and_forgotten(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     bridge, probed = _server_bridge(tmp_path, monkeypatch)
-    assert bridge.addServer("10.0.0.5", 8500, "") == {"host": "10.0.0.5", "port": 8500}
-    assert bridge.listServers() == [{"host": "10.0.0.5", "port": 8500, "active": False}]
+    assert bridge.getDesktopCapabilities()["signIn"] is True
+    assert bridge.addServer("10.0.0.5", 8500, "") == {
+        "host": "10.0.0.5",
+        "port": 8500,
+        "scheme": "http",
+    }
+    assert bridge.listServers() == [
+        {"host": "10.0.0.5", "port": 8500, "scheme": "http", "active": False, "signed_in": False}
+    ]
 
     bridge.connect("pi.lan", 9000)
     assert bridge.addServer("pi.lan", "9000", "Pi") == {
         "host": "pi.lan",
         "port": 9000,
+        "scheme": "http",
         "label": "Pi",
+    }
+    # An HTTPS server is passed by its address; its port follows the address.
+    assert bridge.addServer("https://vbot.example.com", None, "Cloud") == {
+        "host": "https://vbot.example.com",
+        "port": 443,
+        "scheme": "https",
+        "label": "Cloud",
     }
 
     assert bridge.listServers() == [
-        {"host": "10.0.0.5", "port": 8500, "active": False},
-        {"host": "pi.lan", "port": 9000, "label": "Pi", "active": True},
+        {"host": "10.0.0.5", "port": 8500, "scheme": "http", "active": False, "signed_in": False},
+        {
+            "host": "pi.lan",
+            "port": 9000,
+            "scheme": "http",
+            "label": "Pi",
+            "active": True,
+            "signed_in": False,
+        },
+        {
+            "host": "https://vbot.example.com",
+            "port": 443,
+            "scheme": "https",
+            "label": "Cloud",
+            "active": False,
+            "signed_in": False,
+        },
     ]
     assert bridge.removeServer("10.0.0.5", "8500") == {"removed": True}
     assert bridge.removeServer("10.0.0.5", 8500) == {"removed": False}
+    assert bridge.removeServer("https://vbot.example.com", None) == {"removed": True}
     assert [server["host"] for server in bridge.listServers()] == ["pi.lan"]
     assert probed == [("pi.lan", 9000)]
 
@@ -515,6 +589,8 @@ def test_optional_services_raise_without_their_owner() -> None:
         lambda: bridge.addServer("pi.lan", 9000),
         lambda: bridge.removeServer("pi.lan", 9000),
         lambda: bridge.selectServer("pi.lan", 9000),
+        bridge.cancelPairing,
+        lambda: bridge.forgetSignIn("pi.lan", 9000),
     )
     for call in server_calls:
         with pytest.raises(RuntimeError, match="Server selection is not available"):

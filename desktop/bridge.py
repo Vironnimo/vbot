@@ -129,20 +129,25 @@ def _bridge_method(method: Callable[..., Any]) -> Callable[..., Any]:
 class ConnectionDelegate(Protocol):
     """The server-selection surface the bridge delegates to (``ConnectionController``)."""
 
-    def prepare_connect(self, host: str, port: Any, label: str | None = ...) -> PreparedConnection:
-        """Probe and persist a target without replacing the calling document."""
+    def prepare_connect(
+        self, host: str, port: Any, label: str | None = ..., *, on_screen: bool = ...
+    ) -> PreparedConnection:
+        """Probe, sign in and persist a target without replacing the calling document."""
 
     def add_server(self, host: str, port: Any, label: str | None = ...) -> ServerEntry:
         """Remember a server without connecting."""
 
     def remove_server(self, host: str, port: Any) -> bool:
-        """Forget a remembered server, reporting whether one was removed."""
+        """Forget a remembered server and its sign-in, reporting whether one was removed."""
 
-    def list_servers(self) -> list[ServerEntry]:
-        """Return the remembered servers in stored order."""
+    def describe_servers(self) -> list[dict[str, Any]]:
+        """Return the remembered servers with their ``active`` and ``signed_in`` marks."""
 
-    def active_server_url(self) -> str | None:
-        """Return the base URL of the window's current server, if any."""
+    def cancel_pairing(self) -> bool:
+        """End a pairing waiting for approval, reporting whether one was waiting."""
+
+    def forget_sign_in(self, host: str, port: Any) -> bool:
+        """Forget a server's stored sign-in, reporting whether one was stored."""
 
 
 @_reject_with_error_codes
@@ -189,6 +194,9 @@ class DesktopBridge:
             "dictation": self._dictation is not None and self._dictation.supported,
             "secureOrigins": list(self._secure_origins),
             "restart": self._restart is not None,
+            # The Desktop signs its window in to servers in the access mode
+            # ``authenticated``: ``selectServer`` pairs or opens a login ticket.
+            "signIn": self._connection is not None,
         }
 
     def setClipboardText(self, text: Any) -> dict[str, bool]:  # noqa: N802
@@ -314,27 +322,23 @@ class DesktopBridge:
 
     # -- Server selection ------------------------------------------------------
 
-    def connect(self, host: str, port: Any) -> dict[str, str]:
-        """Probe and persist a server for the connection screen, which then navigates.
+    def connect(self, host: str, port: Any) -> dict[str, Any]:
+        """Probe, sign in and persist a server for the connection screen, which then navigates.
 
         JavaScript navigates only after this call resolved: replacing the page
-        inside the call would destroy pywebview's result callback.
+        inside the call would destroy pywebview's result callback. A server
+        that needs pairing returns its code (``pairing``) for the screen to show.
         """
         controller = self._require_connection()
         with self._connection_lock:
-            prepared = controller.prepare_connect(host, _coerce_port(port))
+            prepared = controller.prepare_connect(host, _coerce_port(port), on_screen=True)
         return prepared.to_bridge_payload()
 
     def listServers(self) -> list[dict[str, Any]]:  # noqa: N802
-        """Return the remembered servers and mark the window's active one."""
+        """Return the remembered servers, marking the window's server and the signed-in ones."""
         controller = self._require_connection()
         with self._connection_lock:
-            servers = controller.list_servers()
-            active_url = (controller.active_server_url() or "").rstrip("/")
-        return [
-            {**entry.to_storage(), "active": f"http://{entry.host}:{entry.port}" == active_url}
-            for entry in servers
-        ]
+            return controller.describe_servers()
 
     def addServer(  # noqa: N802
         self, host: str, port: Any, label: str | None = None
@@ -343,21 +347,37 @@ class DesktopBridge:
         controller = self._require_connection()
         with self._connection_lock:
             entry = controller.add_server(host, _coerce_port(port), label or None)
-        return entry.to_storage()
+        return entry.to_bridge()
 
     def removeServer(self, host: str, port: Any) -> dict[str, bool]:  # noqa: N802
-        """Forget a remembered server, reporting whether one was removed."""
+        """Forget a remembered server and its sign-in, reporting whether one was removed."""
         controller = self._require_connection()
         with self._connection_lock:
             removed = controller.remove_server(host, _coerce_port(port))
         return {"removed": removed}
 
-    def selectServer(self, host: str, port: Any) -> dict[str, str]:  # noqa: N802
-        """Prepare a remembered server connection for navigation from JavaScript."""
+    def selectServer(self, host: str, port: Any) -> dict[str, Any]:  # noqa: N802
+        """Prepare a remembered server connection for navigation from JavaScript.
+
+        A server that needs pairing returns its code as ``pairing`` and as
+        ``error_title`` / ``error_body``; the window connects once it is approved.
+        """
         controller = self._require_connection()
         with self._connection_lock:
             prepared = controller.prepare_connect(host, _coerce_port(port))
         return prepared.to_bridge_payload()
+
+    def cancelPairing(self) -> dict[str, bool]:  # noqa: N802
+        """End a pairing waiting for approval; reports whether one was waiting."""
+        controller = self._require_connection()
+        with self._connection_lock:
+            return {"cancelled": controller.cancel_pairing()}
+
+    def forgetSignIn(self, host: str, port: Any) -> dict[str, bool]:  # noqa: N802
+        """Forget a server's stored sign-in; reports whether one was stored."""
+        controller = self._require_connection()
+        with self._connection_lock:
+            return {"forgotten": controller.forget_sign_in(host, _coerce_port(port))}
 
     # -- Internals -------------------------------------------------------------
 

@@ -8,8 +8,8 @@ user-writable and is replaced on update) and never in the shared server
 The on-disk schema is::
 
     {
-      "servers": [{"host": "...", "port": 8420, "label": "..."}],
-      "last_used": {"host": "...", "port": 8420},
+      "servers": [{"host": "...", "port": 8420, "label": "...", "scheme": "https"}],
+      "last_used": {"host": "...", "port": 8420, "scheme": "https"},
       "window": {"width": 1280, "height": 800},
       "microphone": {...},
       "wakeword": {...},
@@ -19,7 +19,10 @@ The on-disk schema is::
 
 ``servers`` is the list of remembered targets, ``last_used`` points at the
 target to auto-connect on launch (a ``{host, port}`` reference, not an index, so
-it survives list reordering), ``microphone`` holds the input device and echo
+it survives list reordering). ``scheme`` is present only for a server reached
+over ``https://`` (its ``host`` is then the lower-case domain and ``port`` the
+effective port); without it an entry is ``http://<host>:<port>/``, as every
+earlier file wrote it. ``microphone`` holds the input device and echo
 cancellation every Desktop speech feature uses (owner:
 :mod:`desktop.speech.microphone`), ``wakeword`` holds the Voice configuration
 (owner: :mod:`desktop.wakeword.config`), ``live_voice`` holds the Desktop-only
@@ -55,6 +58,9 @@ MICROPHONE_KEY = "microphone"
 WAKEWORD_KEY = "wakeword"
 LIVE_VOICE_KEY = "live_voice"
 DICTATION_KEY = "dictation"
+SCHEME_KEY = "scheme"
+HTTP_SCHEME = "http"
+HTTPS_SCHEME = "https"
 # Read and write both retry a few times on transient I/O errors (e.g. a
 # Windows file lock from antivirus or another accessor) before giving up.
 _IO_RETRY_ATTEMPTS = 3
@@ -214,10 +220,15 @@ def read_last_used(path: Path | None = None) -> dict[str, Any] | None:
     return _normalize_target_reference(full.get(LAST_USED_KEY))
 
 
-def write_last_used(host: str, port: int, path: Path | None = None) -> None:
+def write_last_used(
+    host: str, port: int, path: Path | None = None, *, scheme: str = HTTP_SCHEME
+) -> None:
     """Persist the last-used target reference, preserving other settings keys."""
 
-    _write_section(LAST_USED_KEY, {"host": host, "port": port}, path)
+    reference: dict[str, Any] = {"host": host, "port": port}
+    if scheme == HTTPS_SCHEME:
+        reference[SCHEME_KEY] = HTTPS_SCHEME
+    _write_section(LAST_USED_KEY, reference, path)
 
 
 def clear_last_used(path: Path | None = None) -> None:
@@ -355,7 +366,12 @@ def _settings_lock(resolved_path: Path) -> threading.RLock:
 
 
 def _normalize_server_entry(entry: Any) -> dict[str, Any] | None:
-    """Return a clean ``{host, port[, label]}`` dict, or ``None`` when invalid."""
+    """Return a clean ``{host, port[, label][, scheme]}`` dict, or ``None`` when invalid.
+
+    ``scheme`` is kept only as ``"https"``; any other value is a server a later
+    Desktop added over a scheme this one cannot reach, so the entry is dropped
+    rather than misread as HTTP.
+    """
 
     if not isinstance(entry, dict):
         return None
@@ -370,16 +386,22 @@ def _normalize_server_entry(entry: Any) -> dict[str, Any] | None:
     label = entry.get("label")
     if isinstance(label, str):
         server["label"] = label
+    scheme = entry.get(SCHEME_KEY, HTTP_SCHEME)
+    if scheme == HTTPS_SCHEME:
+        server[SCHEME_KEY] = HTTPS_SCHEME
+    elif scheme != HTTP_SCHEME:
+        return None
     return server
 
 
 def _normalize_target_reference(reference: Any) -> dict[str, Any] | None:
-    """Return a clean ``{host, port}`` reference, or ``None`` when invalid."""
+    """Return a clean ``{host, port[, scheme]}`` reference, or ``None`` when invalid."""
 
     server = _normalize_server_entry(reference)
     if server is None:
         return None
-    return {"host": server["host"], "port": server["port"]}
+    server.pop("label", None)
+    return server
 
 
 def _valid_window_dimension(value: Any) -> TypeGuard[int]:

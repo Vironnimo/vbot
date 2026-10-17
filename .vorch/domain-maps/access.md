@@ -25,7 +25,7 @@ Owners:
 
 Not owned here: the browser-origin guard (`server/_origins.py`, `server.md`), which still runs after the access guard; capability URL verification (`server/file_delivery.py`); Extension OAuth (`extensions.md`); credential storage.
 
-Accessor status: the WebUI signs in by pairing as a browser Device and manages Devices and pairing approvals in Settings -> System -> Access & devices (`webui/app-shell.md` -> Access gate, `webui/settings.md` -> Access and devices). The CLI and the TUI sign in on the server's computer with the local access token and elsewhere with a Device from `vbot devices pair <url>` (`cli.md`); the Windows tray uses the local access token and opens the browser through a login ticket (`cli/application/tray.md`). The Desktop has no pairing yet.
+Accessor status: the WebUI signs in by pairing as a browser Device and manages Devices and pairing approvals in Settings -> System -> Access & devices (`webui/app-shell.md` -> Access gate, `webui/settings.md` -> Access and devices). The CLI and the TUI sign in on the server's computer with the local access token and elsewhere with a Device from `vbot devices pair <url>` (`cli.md`); the Windows tray uses the local access token and opens the browser through a login ticket (`cli/application/tray.md`). The Desktop signs in (`desktop/sign-in.md`): pairing as a `desktop` Device, the local access token for the installation's own server, and its window through a login ticket.
 
 ## Terms
 

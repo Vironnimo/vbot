@@ -26,6 +26,12 @@ Retries: idempotent reads (``settings.get_path``, ``task_model.status``) and
 transcription make up to :data:`MAX_ATTEMPTS` attempts on transport failures and
 retryable statuses. The best-effort ``speech.prepare_transcription`` hint makes
 one attempt. Environment proxies are ignored (``trust_env=False``).
+
+Sign-in: with a :class:`ServerAuthorization`, every request carries its
+``Authorization`` header. A 401 is reported to it; when it has another
+credential (a re-read local access token) the request is sent once more,
+otherwise the refusal surfaces as the operation's error with ``status_code``
+401 (``rpc_code`` ``auth_required``). A 403 (``access_denied``) is never retried.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ import logging
 import random
 import threading
 from collections.abc import Callable, Mapping
-from typing import Any, Self
+from typing import Any, Protocol, Self
 
 import httpx
 
@@ -114,13 +120,24 @@ class SpeechRequestCancelled(Exception):  # noqa: N818 - a signal, not a failure
     """The client's lifetime ended before or during a request."""
 
 
+class ServerAuthorization(Protocol):
+    """The credentials of native requests (``desktop.access.ServerAccess``)."""
+
+    def header(self, server_url: str) -> str | None:
+        """Return the ``Authorization`` value for ``server_url``, or ``None``."""
+
+    def rejected(self, server_url: str, header: str | None) -> bool:
+        """Report a 401 for ``header``; ``True`` when another credential is worth a retry."""
+
+
 class SpeechServerClient:
     """Typed, retrying access to one vBot server for speech input.
 
     Safe to share between threads. ``cancel`` belongs to the owner's lifetime
     (for example one listener session): once set, every call of this client
     raises :class:`SpeechRequestCancelled` instead of starting or retrying a
-    request. ``transport`` replaces the network transport (tests).
+    request. ``authorization`` signs requests in; ``transport`` replaces the
+    network transport (tests).
     """
 
     def __init__(
@@ -128,6 +145,7 @@ class SpeechServerClient:
         server_url: str,
         *,
         cancel: threading.Event,
+        authorization: ServerAuthorization | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         base_url = (server_url or "").strip().rstrip("/")
@@ -135,6 +153,7 @@ class SpeechServerClient:
             raise ValueError("A server URL is required")
         self._server_url = base_url
         self._cancel = cancel
+        self._authorization = authorization
         # No keep-alive: a pooled connection the server closed in the meantime
         # would fail a single-attempt mutation for no reason.
         self._http = httpx.AsyncClient(
@@ -297,14 +316,15 @@ class SpeechServerClient:
             retry_transport_error=lambda exc: not isinstance(exc, httpx.ReadTimeout),
             files={"file": (filename, audio, media_type)},
         )
+        payload = _json_object(response)
         if response.status_code != 200:
             raise SpeechServerRejected(
                 ERROR_TRANSCRIPTION_FAILED,
                 f"Speech transcription failed: HTTP {response.status_code} "
                 f"{_response_preview(response)}".rstrip(),
                 status_code=response.status_code,
+                rpc_code=_error_code(payload),
             )
-        payload = _json_object(response)
         text = payload.get("text") if payload is not None else None
         if not isinstance(text, str):
             raise SpeechServerInvalidResponse(
@@ -409,7 +429,7 @@ class SpeechServerClient:
             self._raise_if_cancelled()
             last_attempt = attempt == attempts - 1
             try:
-                response = self._request(url, timeout=timeout, **request)
+                response = self._signed_in_request(url, timeout=timeout, **request)
             except httpx.RequestError as exc:
                 if last_attempt or not retry_transport_error(exc):
                     raise SpeechServerUnreachable(
@@ -424,6 +444,21 @@ class SpeechServerClient:
                 continue
             return response
         raise AssertionError("attempts must be at least 1")
+
+    def _signed_in_request(self, url: str, **request: Any) -> httpx.Response:
+        """Send with the current credential; after a 401 once more if a new one exists."""
+        authorization = self._authorization
+        if authorization is None:
+            return self._request(url, **request)
+        header = authorization.header(self._server_url)
+        response = self._request(url, headers=_authorization_headers(header), **request)
+        if response.status_code != 401 or not authorization.rejected(self._server_url, header):
+            return response
+        header = authorization.header(self._server_url)
+        response = self._request(url, headers=_authorization_headers(header), **request)
+        if response.status_code == 401:
+            authorization.rejected(self._server_url, header)
+        return response
 
     def _wait_before_retry(self, attempt: int) -> None:
         if self._cancel.wait(_backoff_delay(attempt)):
@@ -454,6 +489,16 @@ def _json_object(response: httpx.Response) -> dict[str, Any] | None:
     except ValueError:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _error_code(payload: Mapping[str, Any] | None) -> str | None:
+    error = payload.get("error") if payload is not None else None
+    code = error.get("code") if isinstance(error, Mapping) else None
+    return code if isinstance(code, str) else None
+
+
+def _authorization_headers(header: str | None) -> dict[str, str]:
+    return {} if header is None else {"Authorization": header}
 
 
 def _response_preview(response: httpx.Response) -> str:

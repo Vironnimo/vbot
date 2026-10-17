@@ -1,61 +1,76 @@
-"""In-window server selection for the vBot pywebview Desktop accessor.
+"""In-window server selection and sign-in for the vBot pywebview Desktop accessor.
 
 The Desktop owns a small native connection screen instead of a dead-end error
-page: it lists the remembered servers, lets the user add/select/remove one, and
-auto-connects to the last-used target on launch. Every probe failure
-(unreachable server, non-vBot server, missing WebUI, invalid target) lands the
-user back on the *same* interactive screen with the failed host/port prefilled,
-so there is never a page the user cannot recover from.
+page: it lists the remembered servers, lets the user add/select one, and
+auto-connects to the last-used target on launch. Every failure (unreachable
+server, non-vBot server, missing WebUI, invalid target, refused sign-in) lands
+the user back on the *same* interactive screen with the failed target
+prefilled, so there is never a page the user cannot recover from.
 
-Three pieces live here:
+Two pieces live here:
 
 - Remembered-servers operations over :mod:`desktop.settings`
   (:func:`list_servers` / :func:`add_server` / :func:`select_server` /
-  :func:`remove_server` / :func:`resolve_last_used`).
-- The escaped connection-screen HTML (:func:`build_connection_html`) — saved
-  server list, add/connect form, and an inline probe error.
+  :func:`remove_server` / :func:`resolve_last_used`). A server is a host and
+  port (HTTP) or an ``https://`` address (:mod:`desktop.server_address`).
 - :class:`ConnectionController`, which holds the live pywebview ``Window`` and
   drives the launch connect and server switches: a successful probe navigates
   the window to the server's WebUI via ``Window.load_url``; any failure renders
-  the connection screen inline via ``Window.load_html``. The launch connect
-  waits for a server that does not answer yet (a server still starting after an
-  update or at login), showing a waiting state meanwhile.
+  the connection screen (:mod:`desktop.connection_screen`) inline via
+  ``Window.load_html``. The launch connect waits for a server that does not
+  answer yet (a server still starting after an update or at login), showing a
+  waiting state meanwhile.
 
-Target classification reuses ``probe_target`` / ``validate_host`` /
-``validate_port`` from :mod:`desktop.main` rather than re-deriving them. pywebview
-is imported lazily (like the rest of ``desktop/``) so the backend test gate never
-requires the optional GUI package; tests inject a fake window.
+A server in the access mode ``authenticated`` needs a sign-in
+(:mod:`desktop.access`): the window opens a login ticket, whose redemption gives
+the WebView its cookie and redirects to ``/``, and then loads the WebUI with the
+Desktop's parameters. Without a credential the connection screen shows a
+pairing code until the pairing is approved, denied or expires, or the user
+cancels it. A ticket never reaches page JavaScript: a connect the page starts
+returns :data:`SIGN_IN_PAGE`, and the controller opens the ticket once that
+page has loaded (:meth:`ConnectionController.page_loaded`).
+
+pywebview is imported lazily (like the rest of ``desktop/``) so the backend test
+gate never requires the optional GUI package; tests inject a fake window.
 """
 
 from __future__ import annotations
 
-import html
 import logging
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from uuid import uuid4
 
+from desktop._windows import url_origin
+from desktop.access import TICKET_PATH_PREFIX, AccessFailure, PairingRequest, ServerAccess
+from desktop.connection_screen import (
+    STATUS_PAIRING_DENIED,
+    STATUS_PAIRING_EXPIRED,
+    STATUS_PAIRING_REQUIRED,
+    STATUS_SIGN_IN_FAILED,
+    PairingView,
+    build_connection_html,
+    connection_error_copy,
+)
 from desktop.main import (
+    ACCESS_MODE_AUTHENTICATED,
     ACCESSOR_QUERY_PARAM,
-    PROBE_INVALID_TARGET,
-    PROBE_NOT_VBOT_SERVER,
     PROBE_SERVER_UNREACHABLE,
     PROBE_WEBUI_AVAILABLE,
-    PROBE_WEBUI_UNAVAILABLE,
     DesktopProbeResult,
     DesktopTarget,
     SessionLink,
-    build_target_url,
     probe_target,
-    validate_host,
-    validate_port,
 )
+from desktop.server_address import Scheme, ServerAddress, parse_server_address
 from desktop.settings import (
+    HTTPS_SCHEME,
+    SCHEME_KEY,
     clear_last_used,
     read_last_used,
     read_servers,
@@ -65,12 +80,12 @@ from desktop.settings import (
 
 logger = logging.getLogger("vbot.desktop.connection")
 
-_DEFAULT_HOST_PLACEHOLDER = "127.0.0.1"
-_DEFAULT_PORT_PLACEHOLDER = 8420
 DESKTOP_SESSION_QUERY_PARAM = "desktop_session"
 # The WebUI opens this Session once it has loaded and removes both parameters.
 OPEN_AGENT_QUERY_PARAM = "open_agent"
 OPEN_SESSION_QUERY_PARAM = "open_session"
+SIGN_IN_PAGE = "about:blank"
+"""Where a page goes when its connect needs a sign-in; the controller opens the ticket next."""
 LAUNCH_WAIT_SECONDS = 60.0
 """How long the launch connect keeps trying a server that is unreachable."""
 LAUNCH_RETRY_SECONDS = 0.25
@@ -79,12 +94,12 @@ LAUNCH_RETRY_SECONDS = 0.25
 A loopback attempt fails within 0.2 s (``LOOPBACK_CONNECT_TIMEOUT_SECONDS``), so a
 short interval lets the window connect soon after a starting server answers.
 """
-# close() waits this long for a waiting launch connect to stop. It never touches
-# the window once ended, so a longer probe in flight may finish on its own.
-_LAUNCH_CLOSE_JOIN_SECONDS = 1.0
-_WAITING_BODY = (
-    "vBot Desktop connects as soon as the server answers. You can also choose another server below."
-)
+SIGN_IN_LANDING_SECONDS = 60.0
+"""How long a window sign-in may take to land: a login ticket's validity."""
+# close() waits this long for a background connect step to stop. It never
+# touches the window once ended, so a longer request in flight may finish on its own.
+_CLOSE_JOIN_SECONDS = 1.0
+_PAIRING_FAILURES = {"denied": STATUS_PAIRING_DENIED, "expired": STATUS_PAIRING_EXPIRED}
 
 
 class WindowProtocol(Protocol):
@@ -100,12 +115,15 @@ class WindowProtocol(Protocol):
     def load_html(self, content: str) -> Any:
         """Replace the live window content with inline HTML."""
 
+    def get_current_url(self) -> str | None:
+        """Return the URL of the loaded page (``None`` for inline HTML)."""
+
 
 @dataclass(frozen=True)
 class ServerEntry:
     """A remembered Desktop server target.
 
-    Identity is the ``(host, port)`` pair — the optional ``label`` is display
+    Identity is ``(scheme, host, port)`` — the optional ``label`` is display
     only. This mirrors the on-disk ``servers`` entry shape so the settings store
     and the controller speak the same vocabulary.
     """
@@ -113,17 +131,32 @@ class ServerEntry:
     host: str
     port: int
     label: str | None = None
+    scheme: Scheme = "http"
+
+    @classmethod
+    def for_address(cls, address: ServerAddress, label: str | None = None) -> ServerEntry:
+        """The entry of a validated address."""
+
+        return cls(address.host, address.port, label or None, address.scheme)
 
     @property
-    def key(self) -> tuple[str, int]:
+    def address(self) -> ServerAddress:
+        """The server address of the entry."""
+
+        return ServerAddress(self.scheme, self.host, self.port)
+
+    @property
+    def key(self) -> tuple[str, str, int]:
         """Return the identity used to match/deduplicate remembered servers."""
 
-        return (self.host, self.port)
+        return (self.scheme, self.host, self.port)
 
     def to_storage(self) -> dict[str, Any]:
-        """Render the entry as a settings ``servers`` dict (label omitted if unset)."""
+        """Render the entry as a settings ``servers`` dict (scheme only for HTTPS)."""
 
         entry: dict[str, Any] = {"host": self.host, "port": self.port}
+        if self.scheme == HTTPS_SCHEME:
+            entry[SCHEME_KEY] = HTTPS_SCHEME
         if self.label:
             entry["label"] = self.label
         return entry
@@ -137,44 +170,86 @@ class ServerEntry:
             host=entry["host"],
             port=entry["port"],
             label=label if isinstance(label, str) else None,
+            scheme="https" if entry.get(SCHEME_KEY) == HTTPS_SCHEME else "http",
         )
 
-    def display_name(self) -> str:
-        """Return a human label for the UI — explicit label or host:port."""
+    def to_bridge(self) -> dict[str, Any]:
+        """Render the entry for bridge callers, which pass ``host`` and ``port`` back.
 
+        ``host`` is the plain host of an HTTP server and the ``https://`` address
+        of an HTTPS one.
+        """
+
+        payload: dict[str, Any] = {
+            "host": self.address.bridge_host,
+            "port": self.port,
+            "scheme": self.scheme,
+        }
         if self.label:
-            return f"{self.label} ({self.host}:{self.port})"
-        return f"{self.host}:{self.port}"
+            payload["label"] = self.label
+        return payload
+
+    def display_name(self) -> str:
+        """Return a human label for the UI — explicit label or the address."""
+
+        display = self.address.display
+        return f"{self.label} ({display})" if self.label else display
 
 
 @dataclass(frozen=True)
 class PreparedConnection:
-    """A probed connection whose visible navigation has not happened yet.
+    """A connect outcome whose visible navigation has not happened yet.
 
     pywebview API calls return through a Promise callback stored in the current
     document. Replacing that document before the Python method returns destroys
     the callback and makes pywebview raise while delivering the result. This
     value lets bridge callers receive the outcome first and navigate from
-    JavaScript afterwards, while native launch callers can still apply the same
-    prepared outcome through :meth:`ConnectionController.connect`.
+    JavaScript afterwards, while native callers apply the same outcome
+    themselves.
+
+    ``failure`` names a sign-in outcome beside the probe ``result`` (a pairing
+    waiting for approval included). ``ticket_url`` signs the window in and
+    never leaves the Desktop: a bridge caller gets :data:`SIGN_IN_PAGE` as
+    ``navigation_url``.
     """
 
     result: DesktopProbeResult
     navigation_url: str | None = None
     error_title: str | None = None
     error_body: str | None = None
+    failure: str | None = None
+    pairing: PairingView | None = None
+    ticket_url: str | None = field(default=None, repr=False)
 
-    def to_bridge_payload(self) -> dict[str, str]:
+    @property
+    def status(self) -> str:
+        """The outcome: a sign-in status, else the probe status."""
+
+        return self.failure or self.result.status
+
+    def to_bridge_payload(self) -> dict[str, Any]:
         """Return the plain payload consumed by Desktop JavaScript callers."""
 
-        payload = {"status": self.result.status}
+        payload: dict[str, Any] = {"status": self.status}
         if self.navigation_url is not None:
             payload["url"] = self.navigation_url
         if self.error_title is not None:
             payload["error_title"] = self.error_title
         if self.error_body is not None:
             payload["error_body"] = self.error_body
+        if self.pairing is not None:
+            payload["pairing"] = self.pairing.to_payload()
         return payload
+
+
+@dataclass(frozen=True)
+class _Attempt:
+    """One connect attempt: the probe, then the sign-in the server needs."""
+
+    result: DesktopProbeResult
+    ticket_path: str | None = field(default=None, repr=False)
+    pairing: PairingRequest | None = None
+    failure: str | None = None
 
 
 @dataclass(eq=False)
@@ -191,6 +266,32 @@ class _LaunchConnect:
     stop: threading.Event = field(default_factory=threading.Event)
 
 
+@dataclass(eq=False)
+class _PairingWait:
+    """A pairing waiting for approval; its outcome may still replace the window's content."""
+
+    request: PairingRequest
+    target: DesktopTarget
+    label: str | None
+    open_session: SessionLink | None
+    location: str | None
+    # The connection screen shows the code; failures are shown there too.
+    on_screen: bool
+    stop: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass(eq=False)
+class _Landing:
+    """A window sign-in until the WebUI is loaded with the Desktop's parameters."""
+
+    address: ServerAddress
+    ticket_url: str = field(repr=False)
+    app_url: str
+    expires_at: float
+    # Set once the window was sent to the ticket.
+    redeeming: bool = False
+
+
 # -- Remembered-servers operations -------------------------------------------
 
 
@@ -202,26 +303,21 @@ def list_servers(settings_file: Path | None = None) -> list[ServerEntry]:
 
 def add_server(
     host: str,
-    port: int,
+    port: Any,
     label: str | None = None,
     *,
     settings_file: Path | None = None,
 ) -> ServerEntry:
-    """Add (or update) a remembered server, keyed by ``(host, port)``.
+    """Add (or update) a remembered server, keyed by scheme, host and port.
 
-    An existing entry with the same host/port is replaced in place (so a re-add
+    ``host`` may be an ``https://`` address (its port then wins over ``port``).
+    An existing entry with the same identity is replaced in place (so a re-add
     can refresh its label) rather than duplicated; the list order is otherwise
-    preserved. Host and port are validated through the shared Desktop rules
-    before anything is persisted, so a malformed entry never reaches disk.
+    preserved. The address is validated through the shared Desktop rules before
+    anything is persisted, so a malformed entry never reaches disk.
     """
 
-    validated_host = validate_host(host)
-    validated_port = validate_port(port)
-    entry = ServerEntry(
-        host=validated_host,
-        port=validated_port,
-        label=label if label else None,
-    )
+    entry = ServerEntry.for_address(parse_server_address(host, port), label)
 
     servers = list_servers(settings_file)
     replaced = False
@@ -241,18 +337,18 @@ def add_server(
 
 def remove_server(
     host: str,
-    port: int,
+    port: Any,
     *,
     settings_file: Path | None = None,
 ) -> bool:
-    """Remove a remembered server by ``(host, port)``.
+    """Remove a remembered server by its address (as :func:`add_server` takes it).
 
     Returns whether an entry was removed. Removing the last-used target also
     clears the last-used reference so launch does not point at a server the user
     just forgot.
     """
 
-    target_key = (host, port)
+    target_key = _entry_key(host, port)
     servers = list_servers(settings_file)
     remaining = [entry for entry in servers if entry.key != target_key]
     if len(remaining) == len(servers):
@@ -261,20 +357,21 @@ def remove_server(
     write_servers([entry.to_storage() for entry in remaining], settings_file)
 
     last_used = read_last_used(settings_file)
-    if last_used is not None and (last_used["host"], last_used["port"]) == target_key:
-        _clear_last_used(settings_file)
+    if last_used is not None and ServerEntry.from_storage(last_used).key == target_key:
+        clear_last_used(settings_file)
     return True
 
 
 def select_server(
     host: str,
-    port: int,
+    port: Any,
     *,
     settings_file: Path | None = None,
 ) -> None:
     """Mark a server as last-used so the next launch auto-connects to it."""
 
-    write_last_used(host, port, settings_file)
+    address = parse_server_address(host, port)
+    write_last_used(address.host, address.port, settings_file, scheme=address.scheme)
 
 
 def resolve_last_used(settings_file: Path | None = None) -> ServerEntry | None:
@@ -289,29 +386,40 @@ def resolve_last_used(settings_file: Path | None = None) -> ServerEntry | None:
     servers = list_servers(settings_file)
     last_used = read_last_used(settings_file)
     if last_used is not None:
-        wanted = (last_used["host"], last_used["port"])
+        wanted = ServerEntry.from_storage(last_used)
         for entry in servers:
-            if entry.key == wanted:
+            if entry.key == wanted.key:
                 return entry
-        return ServerEntry(host=last_used["host"], port=last_used["port"])
+        return wanted
     if servers:
         return servers[0]
     return None
+
+
+def _entry_key(host: Any, port: Any) -> tuple[str, Any, Any]:
+    """The identity of an address; a value that does not parse keeps its raw form."""
+
+    try:
+        return ServerEntry.for_address(parse_server_address(host, port)).key
+    except ValueError:
+        return ("http", host, port)
 
 
 # -- Controller --------------------------------------------------------------
 
 
 class ConnectionController:
-    """Drive the launch connect and server switches on one live pywebview window.
+    """Drive the launch connect, server switches and sign-in on one live pywebview window.
 
     The controller owns no window at construction time — the entrypoint creates
     the ``Window`` and hands it over via :meth:`attach_window` (the bridge is
     wired before the GUI loop exists, so the window arrives later). Every
-    connect probes the target with the shared :func:`probe_target`: the launch
-    connect (:meth:`launch_connect`, :meth:`auto_connect`) navigates the window
-    itself, a connect the user starts (:meth:`prepare_connect`) returns the
-    outcome for its calling document to apply.
+    connect probes the target with the shared :func:`probe_target` and signs in
+    through ``access`` when the server is in the access mode ``authenticated``:
+    the launch connect (:meth:`launch_connect`, :meth:`auto_connect`) navigates
+    the window itself, a connect the user starts (:meth:`prepare_connect`)
+    returns the outcome for its calling document to apply. The entrypoint wires
+    :meth:`page_loaded` to the window's ``loaded`` event.
     """
 
     def __init__(
@@ -320,11 +428,13 @@ class ConnectionController:
         settings_file: Path | None = None,
         window: WindowProtocol | None = None,
         probe: Callable[[DesktopTarget], DesktopProbeResult] = probe_target,
+        access: ServerAccess | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings_file = settings_file
         self._window = window
         self._probe = probe
+        self._access = access
         self._clock = clock
         # WebView2 reuses this persistent profile across Desktop restarts. A
         # launch-specific document URL prevents a previously cached SPA entry
@@ -334,18 +444,24 @@ class ConnectionController:
         # voice worker follows the window's active server (wired to the bridge in
         # the launcher — the controller stays decoupled from the voice stack).
         self._active_server_listener: Callable[[str], None] | None = None
-        # The server the window was last sent to. Read from the GUI thread
-        # (WebView2 permission requests), so it has its own short lock.
-        self._active_server_lock = threading.Lock()
-        self._active_server_url: str | None = None
-        self._active_target: tuple[str, int] | None = None
-        # The launch connect until its outcome is applied. A connect the user
-        # starts and close() end it under this lock, so a late launch outcome
+        # What the window was last sent to. Read from the GUI thread (WebView2
+        # permission requests) and the ``loaded`` event, so it has its own short
+        # lock, never held while the window is driven.
+        self._window_lock = threading.Lock()
+        self._active_address: ServerAddress | None = None
+        self._landing: _Landing | None = None
+        # Set once a lost sign-in of the active server was handled; reset by the
+        # next connect, so repeated refusals never loop the window.
+        self._lost_handled = False
+        # The launch connect or pairing until its outcome is applied. A connect
+        # the user starts and close() end it under this lock, so a late outcome
         # never replaces what the user chose. Never taken on the GUI thread.
-        self._launch_lock = threading.Lock()
-        self._launch: _LaunchConnect | None = None
-        self._launch_thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._pending: _LaunchConnect | _PairingWait | None = None
+        self._worker: threading.Thread | None = None
         self._closed = False
+        if access is not None:
+            access.set_sign_in_lost_listener(self._sign_in_lost)
 
     def attach_window(self, window: WindowProtocol) -> None:
         """Bind the live pywebview window the controller navigates."""
@@ -360,14 +476,19 @@ class ConnectionController:
     def active_server_url(self) -> str | None:
         """Return the base URL of the last successfully prepared connection."""
 
-        with self._active_server_lock:
-            return self._active_server_url
+        with self._window_lock:
+            return self._active_address.url if self._active_address is not None else None
 
     def active_target(self) -> tuple[str, int] | None:
-        """Return the ``(host, port)`` of the last successfully prepared connection."""
+        """Return the ``(host, port)`` of the last successfully prepared connection.
 
-        with self._active_server_lock:
-            return self._active_target
+        ``host`` is the ``https://`` address for an HTTPS server, as every
+        ``(host, port)`` surface takes it.
+        """
+
+        with self._window_lock:
+            address = self._active_address
+        return (address.bridge_host, address.port) if address is not None else None
 
     # -- Remembered-servers surface (delegates to the module operations) -----
 
@@ -376,15 +497,54 @@ class ConnectionController:
 
         return list_servers(self._settings_file)
 
-    def add_server(self, host: str, port: int, label: str | None = None) -> ServerEntry:
-        """Remember a server, keyed by ``(host, port)``."""
+    def describe_servers(self) -> list[dict[str, Any]]:
+        """Return the remembered servers for bridge callers.
+
+        Each entry is :meth:`ServerEntry.to_bridge` plus ``active`` (the window's
+        server) and ``signed_in`` (a device token is stored for it).
+        """
+
+        with self._window_lock:
+            active = self._active_address.origin if self._active_address is not None else None
+        return [
+            {
+                **entry.to_bridge(),
+                "active": entry.address.origin == active,
+                "signed_in": self._signed_in(entry.address),
+            }
+            for entry in self.list_servers()
+        ]
+
+    def add_server(self, host: str, port: Any, label: str | None = None) -> ServerEntry:
+        """Remember a server, keyed by scheme, host and port."""
 
         return add_server(host, port, label, settings_file=self._settings_file)
 
-    def remove_server(self, host: str, port: int) -> bool:
-        """Forget a remembered server by ``(host, port)``."""
+    def remove_server(self, host: str, port: Any) -> bool:
+        """Forget a remembered server and its stored sign-in."""
 
-        return remove_server(host, port, settings_file=self._settings_file)
+        removed = remove_server(host, port, settings_file=self._settings_file)
+        try:
+            address = parse_server_address(host, port)
+        except ValueError:
+            return removed
+        self.forget_sign_in(address.bridge_host, address.port)
+        return removed
+
+    def forget_sign_in(self, host: str, port: Any) -> bool:
+        """Forget the stored sign-in of a server; reports whether one was stored.
+
+        The window does not pair again by itself for a server whose sign-in the
+        user forgot; the next connect to it does.
+        """
+
+        address = parse_server_address(host, port)
+        if self._access is None:
+            return False
+        with self._window_lock:
+            if self._active_address is not None and self._active_address.origin == address.origin:
+                self._lost_handled = True
+        return self._access.forget(address)
 
     def resolve_last_used(self) -> ServerEntry | None:
         """Resolve the launch target (last-used, else first remembered, else None)."""
@@ -396,7 +556,7 @@ class ConnectionController:
     def launch_connect(
         self,
         host: str,
-        port: int,
+        port: Any,
         label: str | None = None,
         *,
         open_session: SessionLink | None = None,
@@ -404,25 +564,28 @@ class ConnectionController:
     ) -> DesktopProbeResult:
         """Connect the window at launch, waiting for a server that is unreachable.
 
-        On a successful probe the host/port are remembered (carrying ``label``)
-        and marked last-used, and the window loads the WebUI with the
-        ``accessor=desktop`` marker; ``open_session`` adds the ``open_agent`` /
-        ``open_session`` parameters, so the WebUI opens that Session once loaded,
-        and ``location`` (a URL fragment such as ``#settings``, restored after a
-        Desktop restart) opens that place of the WebUI.
+        On a successful probe the server is remembered (carrying ``label``) and
+        marked last-used, and the window loads the WebUI with the
+        ``accessor=desktop`` marker (signed in first when the server needs it);
+        ``open_session`` adds the ``open_agent`` / ``open_session`` parameters,
+        so the WebUI opens that Session once loaded, and ``location`` (a URL
+        fragment such as ``#settings``, restored after a Desktop restart) opens
+        that place of the WebUI.
 
         While the server is unreachable (still starting, for example), the
         connection screen shows a waiting state for the target and a background
         thread starts another attempt about every :data:`LAUNCH_RETRY_SECONDS`
         for up to :data:`LAUNCH_WAIT_SECONDS`; a success then connects exactly as
-        a first one would. Any other failure, and an unreachable server at the
-        deadline, shows the connection screen with the failed host/port
-        prefilled and an inline error, so the user corrects the target in place.
-        A connect the user starts (:meth:`prepare_connect`) or :meth:`close` ends
-        the launch connect: its outcome then never replaces the window's content.
+        a first one would. A server that needs pairing shows its code on the
+        connection screen and connects once the pairing is approved. Any other
+        failure, and an unreachable server at the deadline, shows the connection
+        screen with the failed target prefilled and an inline error, so the user
+        corrects the target in place. A connect the user starts
+        (:meth:`prepare_connect`) or :meth:`close` ends the launch connect: its
+        outcome then never replaces the window's content.
 
-        Returns the first attempt's result; ``server_unreachable`` means the
-        launch connect goes on waiting.
+        Returns the first attempt's probe result; ``server_unreachable`` means
+        the launch connect goes on waiting.
         """
 
         launch = _LaunchConnect(
@@ -432,34 +595,27 @@ class ConnectionController:
             location=location,
             started=self._clock(),
         )
-        with self._launch_lock:
-            self._end_launch_locked()
+        with self._lock:
+            self._end_pending_locked()
             if not self._closed:
-                self._launch = launch
-        result = self._probe(launch.target)
-        with self._launch_lock:
-            if self._launch is not launch:
-                return result
-            if result.status != PROBE_SERVER_UNREACHABLE:
-                self._launch = None
-                self._finish_launch(launch, result)
-                return result
+                self._pending = launch
+        attempt = self._attempt(launch.target)
+        with self._lock:
+            if self._pending is not launch:
+                return attempt.result
+            if attempt.result.status != PROBE_SERVER_UNREACHABLE:
+                self._pending = None
+                self._finish_launch(launch, attempt)
+                return attempt.result
             launch.waiting = True
             logger.info(
-                "Desktop waiting for %s:%s to answer (timeout=%ds)",
-                launch.target.host,
-                launch.target.port,
+                "Desktop waiting for %s to answer (timeout=%ds)",
+                launch.target.display,
                 LAUNCH_WAIT_SECONDS,
             )
             self._show_connection_screen(probe_result=None, waiting_for=launch.target)
-            self._launch_thread = threading.Thread(
-                target=self._keep_trying,
-                args=(launch,),
-                name="vbot-desktop-launch-wait",
-                daemon=True,
-            )
-            self._launch_thread.start()
-        return result
+            self._start_worker(self._keep_trying, launch, "vbot-desktop-launch-wait")
+        return attempt.result
 
     def auto_connect(self, *, open_session: SessionLink | None = None) -> DesktopProbeResult | None:
         """Launch entry point without a target: :meth:`launch_connect` to the last-used one.
@@ -479,51 +635,130 @@ class ConnectionController:
                 )
             self.show_connection_screen()
             return None
-        return self.launch_connect(entry.host, entry.port, entry.label, open_session=open_session)
+        return self.launch_connect(
+            entry.address.bridge_host, entry.port, entry.label, open_session=open_session
+        )
 
     def prepare_connect(
         self,
         host: str,
-        port: int,
+        port: Any,
         label: str | None = None,
+        *,
+        on_screen: bool = False,
     ) -> PreparedConnection:
-        """Probe and persist a target the user chose, without replacing the current document.
+        """Probe, sign in and persist a target the user chose, without replacing the document.
 
         One attempt, never waiting: successful attempts are remembered, marked
         last-used, and announced to the active-server listener exactly like
         :meth:`launch_connect`, but navigation is returned as data. Failed
-        attempts carry the existing inline error copy. This is the bridge-safe
-        seam: pywebview can deliver the payload to JavaScript before that
-        document applies the outcome. It ends the launch connect first, so the
+        attempts carry the inline error copy. This is the bridge-safe seam:
+        pywebview can deliver the payload to JavaScript before that document
+        applies the outcome. A server that needs pairing returns its code
+        (``pairing``, also as error copy for callers that know no pairing); the
+        window connects once the pairing is approved. ``on_screen`` means the
+        connection screen shows the code, so a pairing that fails is shown
+        there. It ends the launch connect and a pending pairing first, so the
         user's choice wins.
         """
 
-        self._end_launch("user_connect")
+        self._end_pending("user_connect")
         target = self._build_target(host, port)
-        return self._settle(target, self._probe(target), label)
+        attempt = self._attempt(target)
+        prepared = self._settle(target, attempt, label)
+        if attempt.pairing is not None and prepared.pairing is not None:
+            with self._lock:
+                self._wait_for_pairing_locked(
+                    _PairingWait(attempt.pairing, target, label, None, None, on_screen)
+                )
+        return prepared
 
-    def close(self) -> None:
-        """End the launch connect for good; the window is closing.
+    def cancel_pairing(self) -> bool:
+        """End a pairing waiting for approval; reports whether one was waiting.
 
-        A launch connect that is still waiting stops without touching the window.
+        The window keeps what it shows; the connection screen hides the code itself.
         """
 
-        self._end_launch("closed")
-        thread = self._launch_thread
+        with self._lock:
+            if not isinstance(self._pending, _PairingWait):
+                return False
+            self._end_pending_locked()
+        logger.info("Desktop pairing cancelled")
+        return True
+
+    def page_loaded(self) -> None:
+        """Continue a window sign-in once the window loaded a page (pywebview ``loaded``).
+
+        A connect the page started is signed in when the page it was sent to
+        (:data:`SIGN_IN_PAGE`) has loaded: the window opens the ticket. Once the
+        ticket redirected to the server's WebUI, the window loads it with the
+        Desktop's parameters, and this Desktop's window Device is recorded. A
+        ticket the server refused shows the connection screen. Any other page
+        is left alone.
+        """
+
+        window = self._window
+        if window is None:
+            return
+        try:
+            url = window.get_current_url()
+        except Exception:
+            logger.debug("The Desktop window has no current URL", exc_info=True)
+            return
+        with self._window_lock:
+            landing = self._landing
+            if landing is None:
+                return
+            if self._clock() > landing.expires_at:
+                self._landing = None
+                return
+            if not landing.redeeming:
+                if url not in (None, SIGN_IN_PAGE):
+                    return
+                landing.redeeming = True
+                step = "ticket"
+            else:
+                if url is None or url_origin(url) != landing.address.origin:
+                    return
+                self._landing = None
+                step = "refused" if urlsplit(url).path.startswith(TICKET_PATH_PREFIX) else "app"
+        if step == "ticket":
+            window.load_url(landing.ticket_url)
+        elif step == "refused":
+            logger.warning("%s did not accept the window's sign-in", landing.address.display)
+            target = DesktopTarget.for_address(landing.address)
+            self._show_connection_screen(DesktopProbeResult(STATUS_SIGN_IN_FAILED, target))
+        else:
+            window.load_url(landing.app_url)
+            access = self._access
+            if access is not None:
+                threading.Thread(
+                    target=access.record_window_device,
+                    args=(landing.address,),
+                    name="vbot-desktop-window-device",
+                    daemon=True,
+                ).start()
+
+    def close(self) -> None:
+        """End the launch connect and a pending pairing for good; the window is closing.
+
+        A background step that is still running stops without touching the window.
+        """
+
+        self._end_pending("closed")
+        thread = self._worker
         if thread is not None and thread is not threading.current_thread():
-            thread.join(_LAUNCH_CLOSE_JOIN_SECONDS)
+            thread.join(_CLOSE_JOIN_SECONDS)
 
-    def is_active_server(self, host: str, port: int) -> bool:
-        """Whether ``host:port`` is the server the window was last sent to."""
+    def is_active_server(self, host: str, port: Any) -> bool:
+        """Whether ``host:port`` (or an ``https://`` address) is the window's server."""
 
-        target = self._build_target(host, port)
-        active = self.active_server_url()
-        # Host names are case-insensitive; the rest of the base URL is fixed.
-        return (
-            target.configuration_error is None
-            and active is not None
-            and target.url.casefold() == active.casefold()
-        )
+        try:
+            origin = parse_server_address(host, port).origin
+        except ValueError:
+            return False
+        with self._window_lock:
+            return self._active_address is not None and self._active_address.origin == origin
 
     def show_connection_screen(self) -> None:
         """Render the connection screen with no inline error."""
@@ -532,7 +767,7 @@ class ConnectionController:
 
     # -- Internal ------------------------------------------------------------
 
-    def _build_target(self, host: str, port: int) -> DesktopTarget:
+    def _build_target(self, host: Any, port: Any) -> DesktopTarget:
         """Validate host/port into a :class:`DesktopTarget`, carrying any error.
 
         Invalid values are folded into ``configuration_error`` so the probe
@@ -541,8 +776,7 @@ class ConnectionController:
         """
 
         try:
-            validated_port = validate_port(port)
-            validated_host = validate_host(host)
+            address = parse_server_address(host, port)
         except ValueError as exc:
             return DesktopTarget(
                 host=str(host or ""),
@@ -550,11 +784,38 @@ class ConnectionController:
                 url="",
                 configuration_error=str(exc),
             )
-        return DesktopTarget(
-            host=validated_host,
-            port=validated_port,
-            url=build_target_url(validated_host, validated_port),
-        )
+        return DesktopTarget.for_address(address)
+
+    def _attempt(self, target: DesktopTarget, *, pair: bool = True) -> _Attempt:
+        """Probe the target; sign in when its server is in the access mode ``authenticated``.
+
+        Without a credential a pairing is started, unless ``pair`` is false (a
+        sign-in right after an approved pairing must not pair again).
+        """
+
+        result = self._probe(target)
+        address = target.address
+        if (
+            self._access is None
+            or address is None
+            or result.status != PROBE_WEBUI_AVAILABLE
+            or result.access_mode != ACCESS_MODE_AUTHENTICATED
+        ):
+            return _Attempt(result)
+        sign_in = self._access.sign_in(address)
+        if sign_in.ticket_path is not None:
+            return _Attempt(result, ticket_path=sign_in.ticket_path)
+        if sign_in.error_code is not None:
+            return _Attempt(result, failure=sign_in.error_code)
+        if not sign_in.pairing_required:
+            return _Attempt(result)
+        if not pair:
+            return _Attempt(result, failure=STATUS_SIGN_IN_FAILED)
+        try:
+            return _Attempt(result, pairing=self._access.start_pairing(address))
+        except AccessFailure as exc:
+            logger.warning("Desktop pairing with %s failed to start (%s)", address.display, exc)
+            return _Attempt(result, failure=exc.error_code)
 
     def _keep_trying(self, launch: _LaunchConnect) -> None:
         """Try the launch target again until it answers, the deadline passes or it ends."""
@@ -568,108 +829,249 @@ class ConnectionController:
                 max(0.0, attempt_started + LAUNCH_RETRY_SECONDS - self._clock())
             ):
                 attempt_started = self._clock()
-                result = self._probe(launch.target)
-                with self._launch_lock:
-                    if self._launch is not launch:
+                attempt = self._attempt(launch.target)
+                with self._lock:
+                    if self._pending is not launch:
                         return
-                    if result.status == PROBE_SERVER_UNREACHABLE and self._clock() < deadline:
+                    if (
+                        attempt.result.status == PROBE_SERVER_UNREACHABLE
+                        and self._clock() < deadline
+                    ):
                         logger.debug(
-                            "Desktop launch target %s:%s is still unreachable",
-                            launch.target.host,
-                            launch.target.port,
+                            "Desktop launch target %s is still unreachable",
+                            launch.target.display,
                         )
                         continue
-                    self._launch = None
-                    self._finish_launch(launch, result)
+                    self._pending = None
+                    self._finish_launch(launch, attempt)
                     return
         except Exception:
             logger.exception(
-                "Desktop launch connect to %s:%s stopped unexpectedly",
-                launch.target.host,
-                launch.target.port,
+                "Desktop launch connect to %s stopped unexpectedly", launch.target.display
             )
 
-    def _finish_launch(self, launch: _LaunchConnect, result: DesktopProbeResult) -> None:
-        """Apply the launch connect's outcome to the window (under the launch lock)."""
+    def _finish_launch(self, launch: _LaunchConnect, attempt: _Attempt) -> None:
+        """Apply the launch connect's outcome to the window (under the lock)."""
 
         waited = self._clock() - launch.started if launch.waiting else None
-        prepared = self._settle(launch.target, result, launch.label, waited=waited)
-        if prepared.navigation_url is None:
-            self._show_connection_screen(result)
+        prepared = self._settle(
+            launch.target,
+            attempt,
+            launch.label,
+            open_session=launch.open_session,
+            location=launch.location,
+            waited=waited,
+        )
+        if attempt.pairing is not None and prepared.pairing is not None:
+            self._wait_for_pairing_locked(
+                _PairingWait(
+                    attempt.pairing,
+                    launch.target,
+                    launch.label,
+                    launch.open_session,
+                    launch.location,
+                    on_screen=True,
+                )
+            )
+            self._show_connection_screen(probe_result=None, pairing=prepared.pairing)
             return
-        url = prepared.navigation_url
-        if launch.open_session is not None:
-            url = _with_session_link(url, launch.open_session)
-        if launch.location is not None:
-            url = f"{url}{launch.location}"
-        self._navigate_url(url)
+        self._apply(prepared)
+
+    def _wait_for_pairing_locked(self, wait: _PairingWait) -> None:
+        """Make ``wait`` the pending step and poll for its outcome in the background."""
+
+        self._end_pending_locked()
+        if self._closed:
+            return
+        self._pending = wait
+        self._start_worker(self._await_pairing, wait, "vbot-desktop-pairing")
+
+    def _await_pairing(self, wait: _PairingWait) -> None:
+        """Wait for the pairing's outcome; connect once approved, else report it."""
+
+        access = self._access
+        if access is None:
+            return
+        try:
+            outcome = access.await_pairing(wait.request, wait.stop)
+            attempt = (
+                self._attempt(wait.target, pair=False) if outcome.status == "approved" else None
+            )
+            with self._lock:
+                if self._pending is not wait:
+                    return
+                self._pending = None
+                if attempt is not None:
+                    prepared = self._settle(
+                        wait.target,
+                        attempt,
+                        wait.label,
+                        open_session=wait.open_session,
+                        location=wait.location,
+                    )
+                    if prepared.navigation_url is not None or wait.on_screen:
+                        self._apply(prepared)
+                    return
+                failure = _PAIRING_FAILURES.get(outcome.status, outcome.error_code)
+                if failure is not None and wait.on_screen:
+                    self._show_connection_screen(DesktopProbeResult(failure, wait.target))
+        except Exception:
+            logger.exception("Desktop pairing with %s stopped unexpectedly", wait.target.display)
+
+    def _apply(self, prepared: PreparedConnection) -> None:
+        """Navigate the window to a prepared outcome, or show its failure."""
+
+        if prepared.ticket_url is not None:
+            with self._window_lock:
+                if self._landing is not None:
+                    self._landing.redeeming = True
+            self._navigate_url(prepared.ticket_url)
+        elif prepared.navigation_url is not None:
+            self._navigate_url(prepared.navigation_url)
+        else:
+            self._show_connection_screen(replace(prepared.result, status=prepared.status))
 
     def _settle(
         self,
         target: DesktopTarget,
-        result: DesktopProbeResult,
+        attempt: _Attempt,
         label: str | None,
         *,
+        open_session: SessionLink | None = None,
+        location: str | None = None,
         waited: float | None = None,
     ) -> PreparedConnection:
-        """Remember and announce a successful probe, or describe the failure inline."""
+        """Remember and announce a successful connect, or describe the failure inline."""
 
+        result = attempt.result
         waited_note = "" if waited is None else f" (waited={waited:.0f}s)"
-        if result.status == PROBE_WEBUI_AVAILABLE:
-            if label is None:
-                # A connect without a name keeps the one the server was saved with.
-                label = next(
-                    (
-                        entry.label
-                        for entry in self.list_servers()
-                        if entry.key == (target.host, target.port)
-                    ),
-                    None,
-                )
-            self.add_server(target.host, target.port, label)
-            select_server(target.host, target.port, settings_file=self._settings_file)
-            logger.info("Desktop connecting to %s:%s%s", target.host, target.port, waited_note)
-            with self._active_server_lock:
-                self._active_server_url = target.url
-                self._active_target = (target.host, target.port)
-            self._notify_active_server(target.url)
+        address = target.address
+        if result.status != PROBE_WEBUI_AVAILABLE or address is None:
+            logger.warning(
+                "Desktop connection to %s failed (%s)%s",
+                target.display,
+                result.status,
+                waited_note,
+            )
+            return _failed(result, result.status)
+
+        self._remember(address, label)
+        if attempt.failure is not None:
+            logger.warning(
+                "Desktop sign-in to %s failed (%s)%s", address.display, attempt.failure, waited_note
+            )
+            return _failed(result, attempt.failure)
+        if attempt.pairing is not None:
+            view = PairingView(code=attempt.pairing.code, server=address.display, target=target)
+            logger.info("Desktop waiting for %s to approve its pairing", address.display)
             return PreparedConnection(
                 result=result,
-                navigation_url=_with_accessor_param(target.url, self._desktop_session_id),
+                failure=STATUS_PAIRING_REQUIRED,
+                error_title=view.title,
+                error_body=view.body,
+                pairing=view,
             )
 
-        logger.warning(
-            "Desktop connection to %s:%s failed (%s)%s",
-            target.host,
-            target.port,
-            result.status,
+        app_url = _with_accessor_param(address.url, self._desktop_session_id)
+        if open_session is not None:
+            app_url = _with_session_link(app_url, open_session)
+        if location is not None:
+            app_url = f"{app_url}{location}"
+        ticket_url = (
+            None
+            if attempt.ticket_path is None
+            else f"{address.url.rstrip('/')}{attempt.ticket_path}"
+        )
+        logger.info(
+            "Desktop connecting to %s%s%s",
+            address.display,
+            " (signing in)" if ticket_url is not None else "",
             waited_note,
         )
-        error_title, error_body = _connection_error_copy(result.status)
-        return PreparedConnection(
-            result=result,
-            error_title=error_title,
-            error_body=error_body,
+        landing = (
+            None
+            if ticket_url is None
+            else _Landing(address, ticket_url, app_url, self._clock() + SIGN_IN_LANDING_SECONDS)
         )
+        self._activate(address, landing)
+        if ticket_url is None:
+            return PreparedConnection(result=result, navigation_url=app_url)
+        return PreparedConnection(result=result, navigation_url=SIGN_IN_PAGE, ticket_url=ticket_url)
 
-    def _end_launch(self, reason: str) -> None:
-        with self._launch_lock:
+    def _remember(self, address: ServerAddress, label: str | None) -> None:
+        """Remember a server that answered; a connect without a name keeps the saved one."""
+
+        if label is None:
+            key = ServerEntry.for_address(address).key
+            label = next((entry.label for entry in self.list_servers() if entry.key == key), None)
+        self.add_server(address.bridge_host, address.port, label)
+
+    def _activate(self, address: ServerAddress, landing: _Landing | None) -> None:
+        """Make ``address`` the window's server: last-used, active, and announced."""
+
+        select_server(address.bridge_host, address.port, settings_file=self._settings_file)
+        with self._window_lock:
+            self._active_address = address
+            self._landing = landing
+            self._lost_handled = False
+        self._notify_active_server(address.url)
+
+    def _sign_in_lost(self, address: ServerAddress) -> None:
+        """A server refused this Desktop's stored sign-in: sign the window in again, once.
+
+        Only for the window's server, and only once until the next connect, so
+        a server that keeps refusing never loops the window.
+        """
+
+        with self._window_lock:
+            active = self._active_address
+            if self._lost_handled or active is None or active.origin != address.origin:
+                return
+            self._lost_handled = True
+        with self._lock:
+            if self._closed:
+                return
+        logger.info(
+            "%s refused this Desktop's sign-in; connecting the window again", address.display
+        )
+        threading.Thread(
+            target=self._reconnect,
+            args=(address,),
+            name="vbot-desktop-sign-in",
+            daemon=True,
+        ).start()
+
+    def _reconnect(self, address: ServerAddress) -> None:
+        try:
+            self.launch_connect(address.bridge_host, address.port)
+        except Exception:
+            logger.exception("Desktop could not connect the window to %s again", address.display)
+
+    def _end_pending(self, reason: str) -> None:
+        with self._lock:
             if reason == "closed":
                 self._closed = True
-            launch = self._end_launch_locked()
-        if launch is not None and launch.waiting:
+            pending = self._end_pending_locked()
+        if isinstance(pending, _LaunchConnect) and pending.waiting:
             logger.info(
-                "Desktop stopped waiting for %s:%s (reason=%s)",
-                launch.target.host,
-                launch.target.port,
+                "Desktop stopped waiting for %s (reason=%s)", pending.target.display, reason
+            )
+        elif isinstance(pending, _PairingWait):
+            logger.info(
+                "Desktop stopped waiting for the pairing with %s (reason=%s)",
+                pending.target.display,
                 reason,
             )
 
-    def _end_launch_locked(self) -> _LaunchConnect | None:
-        launch, self._launch = self._launch, None
-        if launch is not None:
-            launch.stop.set()
-        return launch
+    def _end_pending_locked(self) -> _LaunchConnect | _PairingWait | None:
+        pending, self._pending = self._pending, None
+        if pending is not None:
+            pending.stop.set()
+        return pending
+
+    def _start_worker(self, target: Callable[[Any], None], step: Any, name: str) -> None:
+        self._worker = threading.Thread(target=target, args=(step,), name=name, daemon=True)
+        self._worker.start()
 
     def _navigate_url(self, url: str) -> None:
         window = self._require_window()
@@ -696,15 +1098,27 @@ class ConnectionController:
         probe_result: DesktopProbeResult | None,
         *,
         waiting_for: DesktopTarget | None = None,
+        pairing: PairingView | None = None,
     ) -> None:
         window = self._require_window()
+        with self._window_lock:
+            # The screen replaces the page a sign-in was waiting for.
+            self._landing = None
+        servers = self.list_servers()
         window.load_html(
             build_connection_html(
-                servers=self.list_servers(),
+                servers=servers,
                 probe_result=probe_result,
                 waiting_for=waiting_for,
+                pairing=pairing,
+                signed_in=[
+                    entry.address.origin for entry in servers if self._signed_in(entry.address)
+                ],
             )
         )
+
+    def _signed_in(self, address: ServerAddress) -> bool:
+        return self._access is not None and self._access.signed_in(address)
 
     def _require_window(self) -> WindowProtocol:
         if self._window is None:
@@ -712,367 +1126,16 @@ class ConnectionController:
         return self._window
 
 
-# -- Connection screen HTML --------------------------------------------------
+def _failed(result: DesktopProbeResult, status: str) -> PreparedConnection:
+    """A failed connect with the inline error copy of ``status``."""
 
-
-def build_connection_html(
-    servers: list[ServerEntry],
-    probe_result: DesktopProbeResult | None = None,
-    *,
-    waiting_for: DesktopTarget | None = None,
-) -> str:
-    """Build the escaped interactive connection screen.
-
-    Subsumes the four probe outcomes the old static fallback rendered: when
-    ``probe_result`` is a failure its status drives an inline error banner and
-    its host/port prefill the connect form, so the user fixes the target in
-    place. ``waiting_for`` shows the launch connect's waiting state for that
-    target instead, which hides once the user connects to a server themselves.
-    With neither (first run) no banner shows and the form prefills with the
-    default suggestion. The saved-server list offers one-click reconnect to any
-    remembered target. Every interpolated value — labels, hosts, ports, error
-    copy — is HTML-escaped.
-    """
-
-    error_section = _render_error_section(probe_result)
-    waiting_section = _render_waiting_section(waiting_for)
-    servers_section = _render_servers_section(servers)
-    prefill_host, prefill_port = _resolve_prefill(probe_result, waiting_for)
-
-    return f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Connect · vBot</title>
-    <style>
-      :root {{
-        color-scheme: dark;
-        background: #15130f;
-        color: #f1eadf;
-        font-family: "Trebuchet MS", Verdana, sans-serif;
-      }}
-      body {{
-        min-height: 100vh;
-        margin: 0;
-        display: grid;
-        place-items: center;
-        background:
-          radial-gradient(circle at 20% 10%, rgba(240, 164, 58, 0.18), transparent 32rem),
-          #15130f;
-      }}
-      main {{
-        width: min(42rem, calc(100vw - 3rem));
-        padding: 2rem;
-        border: 1px solid rgba(240, 164, 58, 0.28);
-        border-radius: 1.5rem;
-        background: #211d17;
-        box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.36);
-      }}
-      .eyebrow {{
-        margin: 0 0 0.65rem;
-        color: #f0a43a;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
-      }}
-      h1 {{
-        margin: 0 0 1rem;
-        font-family: Georgia, "Times New Roman", serif;
-        font-size: clamp(2rem, 6vw, 3.25rem);
-        line-height: 1;
-      }}
-      p {{
-        margin: 0 0 1rem;
-        color: #b8aa95;
-        font-size: 1rem;
-        line-height: 1.6;
-      }}
-      .error {{
-        margin: 0 0 1.5rem;
-        padding: 1rem 1.15rem;
-        border: 1px solid rgba(232, 96, 72, 0.5);
-        border-radius: 1rem;
-        background: rgba(232, 96, 72, 0.12);
-      }}
-      .error h2 {{
-        margin: 0 0 0.4rem;
-        font-size: 1.05rem;
-        color: #f3b1a4;
-      }}
-      .error p {{ margin: 0; color: #e7c8c0; }}
-      .waiting {{
-        margin: 0 0 1.5rem;
-        padding: 1rem 1.15rem;
-        border: 1px solid rgba(240, 164, 58, 0.5);
-        border-radius: 1rem;
-        background: rgba(240, 164, 58, 0.1);
-      }}
-      .waiting h2 {{
-        margin: 0 0 0.4rem;
-        font-size: 1.05rem;
-        color: #f0a43a;
-      }}
-      .waiting p {{ margin: 0; color: #e7d9c4; }}
-      h2.section {{
-        margin: 1.75rem 0 0.75rem;
-        font-size: 0.8rem;
-        font-weight: 700;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color: #847762;
-      }}
-      ul.servers {{
-        margin: 0;
-        padding: 0;
-        list-style: none;
-        display: grid;
-        gap: 0.5rem;
-      }}
-      ul.servers button {{
-        width: 100%;
-        text-align: left;
-        padding: 0.85rem 1rem;
-        border: 1px solid rgba(240, 164, 58, 0.22);
-        border-radius: 0.85rem;
-        background: #2d271f;
-        color: #f1eadf;
-        font: inherit;
-        cursor: pointer;
-      }}
-      ul.servers button:hover {{ border-color: rgba(240, 164, 58, 0.55); }}
-      form {{
-        margin: 0.75rem 0 0;
-        display: grid;
-        grid-template-columns: 1fr max-content;
-        gap: 0.75rem;
-        align-items: end;
-      }}
-      label {{
-        display: grid;
-        gap: 0.3rem;
-        font-size: 0.8rem;
-        color: #847762;
-      }}
-      input {{
-        padding: 0.7rem 0.85rem;
-        border: 1px solid rgba(240, 164, 58, 0.28);
-        border-radius: 0.75rem;
-        background: #15130f;
-        color: #f1eadf;
-        font: inherit;
-      }}
-      .field-port {{ max-width: 8rem; }}
-      .actions {{ grid-column: 1 / -1; }}
-      button.primary {{
-        padding: 0.75rem 1.4rem;
-        border: none;
-        border-radius: 0.85rem;
-        background: #f0a43a;
-        color: #15130f;
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-      }}
-    </style>
-  </head>
-  <body>
-    <main>
-      <p class="eyebrow">vBot Desktop</p>
-      <h1>Connect to a server</h1>
-      <p>Pick a saved server or enter the host and port of a running vBot server.</p>
-{waiting_section}{error_section}
-{servers_section}
-      <h2 class="section">Add a server</h2>
-      <form id="connect-form" onsubmit="return false;">
-        <label>Host
-          <input id="host" name="host" type="text" autocomplete="off"
-                 value="{html.escape(prefill_host)}" placeholder="{_DEFAULT_HOST_PLACEHOLDER}">
-        </label>
-        <label class="field-port">Port
-          <input id="port" name="port" type="number" min="1" max="65535"
-                 value="{html.escape(prefill_port)}" placeholder="{_DEFAULT_PORT_PLACEHOLDER}">
-        </label>
-        <div class="actions">
-          <button class="primary" type="button" onclick="connectFromForm()">Connect</button>
-        </div>
-      </form>
-    </main>
-    <script>
-      function showConnectionError(title, body) {{
-        var container = document.getElementById("connection-error");
-        container.hidden = false;
-        container.setAttribute("role", "alert");
-        document.getElementById("connection-error-title").textContent = title;
-        document.getElementById("connection-error-body").textContent = body;
-      }}
-      function prefillConnectionTarget(host, port) {{
-        document.getElementById("host").value = host;
-        document.getElementById("port").value = Number.isInteger(port) ? port : "";
-      }}
-      async function requestConnection(host, port) {{
-        if (!(window.pywebview && window.pywebview.api && window.pywebview.api.connect)) {{
-          showConnectionError(
-            "Desktop bridge unavailable",
-            "The native Desktop bridge is not ready. Close the window and start vBot Desktop again."
-          );
-          return;
-        }}
-        var waiting = document.getElementById("connection-waiting");
-        if (waiting) {{
-          // The user's own connect ends the launch wait.
-          waiting.hidden = true;
-        }}
-        try {{
-          var result = await window.pywebview.api.connect(host, port);
-          if (result.url) {{
-            window.location.assign(result.url);
-            return;
-          }}
-          prefillConnectionTarget(host, port);
-          showConnectionError(result.error_title, result.error_body);
-        }} catch (error) {{
-          prefillConnectionTarget(host, port);
-          showConnectionError(
-            "Connection failed",
-            error && error.message
-              ? error.message
-              : "The Desktop bridge could not connect to that server."
-          );
-        }}
-      }}
-      function connectFromForm() {{
-        var host = document.getElementById("host").value;
-        var port = parseInt(document.getElementById("port").value, 10);
-        requestConnection(host, port);
-      }}
-      function connectSaved(host, port) {{
-        requestConnection(host, port);
-      }}
-      document.querySelectorAll("ul.servers button[data-host]").forEach(function (button) {{
-        button.addEventListener("click", function () {{
-          connectSaved(button.dataset.host, parseInt(button.dataset.port, 10));
-        }});
-      }});
-    </script>
-  </body>
-</html>
-"""
-
-
-def _render_error_section(probe_result: DesktopProbeResult | None) -> str:
-    """Return the escaped inline error banner and bridge-update target."""
-
-    if probe_result is None or probe_result.status == PROBE_WEBUI_AVAILABLE:
-        return (
-            '      <div id="connection-error" class="error" hidden>\n'
-            '        <h2 id="connection-error-title"></h2>\n'
-            '        <p id="connection-error-body"></p>\n'
-            "      </div>"
-        )
-    title, body = _connection_error_copy(probe_result.status)
-    return (
-        '      <div id="connection-error" class="error" role="alert">\n'
-        f'        <h2 id="connection-error-title">{html.escape(title)}</h2>\n'
-        f'        <p id="connection-error-body">{html.escape(body)}</p>\n'
-        "      </div>"
+    error_title, error_body = connection_error_copy(status)
+    return PreparedConnection(
+        result=result,
+        error_title=error_title,
+        error_body=error_body,
+        failure=None if status == result.status else status,
     )
-
-
-def _render_waiting_section(waiting_for: DesktopTarget | None) -> str:
-    """Return the escaped waiting state of the launch connect, or nothing."""
-
-    if waiting_for is None:
-        return ""
-    title = f"Waiting for {waiting_for.host}:{waiting_for.port} …"
-    return (
-        '      <div id="connection-waiting" class="waiting" role="status">\n'
-        f"        <h2>{html.escape(title)}</h2>\n"
-        f"        <p>{html.escape(_WAITING_BODY)}</p>\n"
-        "      </div>\n"
-    )
-
-
-def _render_servers_section(servers: list[ServerEntry]) -> str:
-    """Return the escaped saved-server list, or an empty-state line when none."""
-
-    if not servers:
-        return '      <h2 class="section">Saved servers</h2>\n      <p>No servers saved yet.</p>'
-
-    items: list[str] = []
-    for entry in servers:
-        escaped_host = html.escape(entry.host)
-        escaped_port = html.escape(str(entry.port))
-        escaped_name = html.escape(entry.display_name())
-        items.append(
-            "        <li>"
-            f'<button type="button" data-host="{escaped_host}" data-port="{escaped_port}">'
-            f"{escaped_name}</button></li>"
-        )
-    joined = "\n".join(items)
-    return (
-        '      <h2 class="section">Saved servers</h2>\n'
-        '      <ul class="servers">\n'
-        f"{joined}\n"
-        "      </ul>"
-    )
-
-
-def _resolve_prefill(
-    probe_result: DesktopProbeResult | None,
-    waiting_for: DesktopTarget | None = None,
-) -> tuple[str, str]:
-    """Return the (host, port) strings to prefill the connect form.
-
-    A failed probe prefills the offending host/port so the user can correct it
-    in place, and a waiting launch connect its target; otherwise the default
-    suggestion is offered (never an auto-connect target — just a hint).
-    """
-
-    if probe_result is not None and probe_result.status != PROBE_WEBUI_AVAILABLE:
-        target = probe_result.target
-        return (target.host, str(target.port))
-    if waiting_for is not None:
-        return (waiting_for.host, str(waiting_for.port))
-    return (_DEFAULT_HOST_PLACEHOLDER, str(_DEFAULT_PORT_PLACEHOLDER))
-
-
-def _connection_error_copy(status: str) -> tuple[str, str]:
-    """Return title/body copy for a failed probe status shown inline.
-
-    Covers the four failure outcomes the old static fallback page rendered.
-    Precondition: ``status`` is one of those failure statuses — the sole caller
-    (:func:`_render_error_section`) filters out ``None`` and the success status
-    first. Any other status is a programming error and raises rather than
-    rendering an empty banner.
-    """
-
-    if status == PROBE_SERVER_UNREACHABLE:
-        return (
-            "Server unreachable",
-            "vBot Desktop could not reach that host and port. Check the server is "
-            "running and the address is right, then try again.",
-        )
-    if status == PROBE_WEBUI_UNAVAILABLE:
-        return (
-            "WebUI unavailable",
-            "The vBot server answered, but it is not serving the WebUI at the root "
-            "path. Build or deploy the WebUI for that server, then reconnect.",
-        )
-    if status == PROBE_NOT_VBOT_SERVER:
-        return (
-            "Not a vBot server",
-            "Something answered at that address, but it is not a vBot server. "
-            "Use the host and port of a running vBot server.",
-        )
-    if status == PROBE_INVALID_TARGET:
-        return (
-            "Invalid host or port",
-            "That host could not be turned into a server address. Enter a plain host "
-            "name or IP address, without a scheme, path, or spaces.",
-        )
-    raise ValueError(f"Unsupported Desktop probe status: {status}")
 
 
 def _with_accessor_param(url: str, desktop_session_id: str) -> str:
@@ -1102,13 +1165,3 @@ def _display_port(value: Any) -> int:
         return int(value)
     except TypeError, ValueError:
         return 0
-
-
-def _clear_last_used(settings_file: Path | None) -> None:
-    """Drop the last-used reference so it cannot point at a forgotten server.
-
-    Reuses the settings store rather than reaching into the JSON file directly:
-    re-read, drop the key, and write back, preserving the other settings.
-    """
-
-    clear_last_used(settings_file)

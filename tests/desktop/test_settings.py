@@ -225,6 +225,13 @@ def test_a_section_write_preserves_a_malformed_document(tmp_path: Path, original
             {"host": "b.lan", "port": 1},
         ),
         (
+            lambda path: desktop_settings.write_last_used(
+                "vbot.example.com", 443, path, scheme="https"
+            ),
+            "last_used",
+            {"host": "vbot.example.com", "port": 443, "scheme": "https"},
+        ),
+        (
             lambda path: desktop_settings.write_window_size(1360, 880, path),
             "window",
             {"width": 1360, "height": 880},
@@ -237,7 +244,7 @@ def test_a_section_write_preserves_a_malformed_document(tmp_path: Path, original
             {"future": {"kept": True}, "hotkey": {"key": "F13"}},
         ),
     ],
-    ids=["servers", "last-used", "window", "section"],
+    ids=["servers", "last-used", "last-used-https", "window", "section"],
 )
 def test_each_section_writer_preserves_the_other_sections(
     tmp_path: Path, write: Callable[[Path], None], key: str, section: Any
@@ -287,8 +294,22 @@ def test_each_section_writer_preserves_the_other_sections(
             ],
             [{"host": "good.lan", "port": 8420}, {"host": "pi.lan", "port": 9000}],
         ),
+        # ``scheme`` is optional and present only for https; a scheme this Desktop
+        # cannot reach drops the entry instead of misreading it as http.
+        (
+            [
+                {"host": "pi.lan", "port": 9000, "scheme": "http"},
+                {"host": "vbot.example.com", "port": 443, "scheme": "https", "label": "Cloud"},
+                {"host": "quic.example.com", "port": 443, "scheme": "h3"},
+                {"host": "none.example.com", "port": 443, "scheme": None},
+            ],
+            [
+                {"host": "pi.lan", "port": 9000},
+                {"host": "vbot.example.com", "port": 443, "scheme": "https", "label": "Cloud"},
+            ],
+        ),
     ],
-    ids=["unset", "not-a-list", "valid", "malformed-entries-and-labels"],
+    ids=["unset", "not-a-list", "valid", "malformed-entries-and-labels", "schemes"],
 )
 def test_read_servers_keeps_only_valid_entries(
     tmp_path: Path, servers: Any, expected: list[dict[str, Any]]
@@ -302,6 +323,11 @@ def test_read_servers_keeps_only_valid_entries(
     ("last_used", "expected"),
     [
         ({"host": "pi.lan", "port": 9000, "label": "ignored"}, {"host": "pi.lan", "port": 9000}),
+        (
+            {"host": "vbot.example.com", "port": 443, "scheme": "https"},
+            {"host": "vbot.example.com", "port": 443, "scheme": "https"},
+        ),
+        ({"host": "vbot.example.com", "port": 443, "scheme": "ftp"}, None),
         ({"host": "", "port": 9000}, None),
         ({"host": "pi.lan"}, None),
         ({"host": "pi.lan", "port": "9000"}, None),

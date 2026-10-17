@@ -40,6 +40,10 @@ All exempt from the credential requirement (the peer and transport rules still a
   The Device is created when the approved request is claimed; a decided request is handed out once, later polls answer `expired`. Limits: 60 polls per client and 600 overall per minute (429); the server's own computer is outside the overall budget.
 - `GET /auth/ticket/<ticket>`: redeems a login ticket once. Success: 303 to `/` with the `__Host-vbot_device` cookie, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`; the new browser Device is named as the ticket asked and approved by the ticket's issuer. Failure (unknown, used, expired, issued by a Device revoked or expired since, or not `authenticated` mode): 400 HTML page "Sign-in link not valid", counted as a failed credential.
 
+## Accessor notes
+
+- Desktop (`desktop/sign-in.md`): reads `GET /api/auth/status` after its probe and signs in only in `authenticated` mode. It pairs as kind `desktop` named `vBot Desktop on <computer>` and keeps the token per origin outside `settings.json`; the installation's own Desktop instead uses the local access token over `http://127.0.0.1:<port>` (`--server-data-dir`). Its window signs in with `auth.login_ticket {name: "vBot Desktop window on <computer>"}` and opens `/auth/ticket/<ticket>` natively (never through page JavaScript), so every window sign-in creates a browser Device approved by the Desktop's Device (or `host`); the Desktop revokes the previous one (`devices.list`, `devices.revoke`), and Forget sign-in revokes the window's Device and calls `devices.logout`. Voice and dictation requests send `Authorization: Bearer`; a 401 drops a device token and shows pairing again, a 401 with the local access token re-reads the file once.
+
 ## RPCs
 
 Via `POST /api/rpc`; each needs a principal, so in-process dispatch is refused with `access_denied`.

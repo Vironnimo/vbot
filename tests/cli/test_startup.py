@@ -68,7 +68,10 @@ except SystemExit as error:
     assert error.code == 0, error.code
 assert len(launches) == 1
 arguments, options = launches[0]
-assert arguments[1:] == ['-m', 'desktop.main', '--host', '127.0.0.1', '--port', '18420']
+assert arguments[1:] == [
+    '-m', 'desktop.main', '--host', '127.0.0.1', '--port', '18420',
+    '--server-data-dir', str(root / 'data'),
+]
 assert Path(arguments[0]).is_relative_to(root / 'versions' / 'rel_test' / 'runtime')
 assert options['cwd'] == root / 'versions' / 'rel_test' / 'app'
 assert options['env']['VBOT_INSTALL_ROOT'] == str(root)
