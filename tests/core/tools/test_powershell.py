@@ -478,8 +478,10 @@ async def test_exit_status_follows_the_last_statement_and_output_is_the_commands
     for text in shows:
         assert text in output
     assert "silenced-sentinel" not in output
-    # vBot prints nothing of its own, and its statements never fail visibly.
-    assert "vBot" not in output and "__vbot" not in output
+    # vBot prints nothing of its own, and its statements never fail visibly. The
+    # command's own paths may name vBot: tests run under <repo>-data/.tmp.
+    own_output = output.replace(str(tmp_path), "")
+    assert "vBot" not in own_output and "__vbot" not in own_output
 
 
 @pytest.mark.asyncio

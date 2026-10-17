@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -31,6 +32,30 @@ if any(name.startswith("GIT_") for name in os.environ):
         ).stdout.split()
         for name in local_git_variables:
             os.environ.pop(name, None)
+
+
+def _primary_checkout(checkout: Path) -> Path:
+    """Return the primary checkout of a linked worktree, else ``checkout`` itself."""
+    dot_git = checkout / ".git"
+    if not dot_git.is_file():
+        return checkout
+    git_dir = Path(dot_git.read_text(encoding="utf-8").removeprefix("gitdir:").strip())
+    # A linked worktree's Git directory is <primary>/.git/worktrees/<name>.
+    return (checkout / git_dir).resolve().parents[2]
+
+
+# On Windows, temporary files stay out of the user profile, where antivirus
+# scanning slows every write: they go to <repo>-data/.tmp beside the primary
+# checkout, with the development data directories (scripts/README-worktree.md).
+# Outside the repository, test Git repositories and ignore rules stay their own.
+# TMP and TEMP carry the location to worker and other child processes.
+if os.name == "nt":
+    _primary = _primary_checkout(Path(__file__).resolve().parents[1])
+    _temp_root = _primary.parent / f"{_primary.name}-data" / ".tmp"
+    _temp_root.mkdir(parents=True, exist_ok=True)
+    os.environ["TMP"] = os.environ["TEMP"] = str(_temp_root)
+    os.environ.pop("TMPDIR", None)
+    tempfile.tempdir = str(_temp_root)
 
 
 @pytest.fixture(autouse=True)
