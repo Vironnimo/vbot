@@ -7,13 +7,20 @@ and makes it available again later:
   kept, wrapped, in the store document itself. A copy of the data directory is
   useless on another computer or under another account.
 - ``key_file`` (every other system): the key lives in a file outside the data
-  directory, ``$XDG_CONFIG_HOME/vbot/keys/<store id>.key`` (default
-  ``~/.config/vbot/keys``), owner-only; ``VBOT_SECRET_KEY_FILE`` names the file
-  instead (systemd credentials, containers). Backups of the data directory then
-  hold no usable secret.
+  directory, ``~/.config/vbot/keys/<store id>.key``, owner-only;
+  ``VBOT_SECRET_KEY_FILE`` names the file instead (systemd credentials,
+  containers). Backups of the data directory then hold no usable secret.
 
-A protection never overwrites an existing key file: a key that cannot be found
-or opened makes the store unavailable, never replaced.
+A new key file is always created in the default directory, which every lookup
+searches whatever the caller's environment: an update's verification start
+inherits the shell that ran ``vbot update``, and the service started later
+must find the key all the same. A lookup also searches
+``$XDG_CONFIG_HOME/vbot/keys`` (when absolute), where earlier builds created
+keys. ``VBOT_SECRET_KEY_FILE`` stays explicit: with it, only that file is used.
+
+A protection never overwrites an existing key file: the file is created
+exclusively, and a key that cannot be found or opened makes the store
+unavailable, never replaced.
 """
 
 from __future__ import annotations
@@ -24,13 +31,15 @@ import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 from core.secrets._crypto import is_data_key, new_data_key, new_identifier
-from core.utils.atomic import atomic_write_text
 from core.utils.file_status import exists_strict
+from core.utils.owner_only import OWNER_ONLY_MODE, restrict_to_owner
 
 KEY_FILE_ENVIRONMENT_VARIABLE = "VBOT_SECRET_KEY_FILE"
 KEY_FILE_FORMAT_VERSION = 1
@@ -40,7 +49,16 @@ _KEY_FILE_SUFFIX = ".key"
 
 
 class KeyUnavailableError(Exception):
-    """The data key of a store cannot be created, found, or opened."""
+    """The data key of a store cannot be created, found, or opened.
+
+    ``transient`` marks a key file that could not be checked or read (an I/O
+    error), which a later attempt may not repeat. A missing, wrong or
+    unopenable key is not transient.
+    """
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 @dataclass(frozen=True)
@@ -71,6 +89,14 @@ class KeyProtection(Protocol):
 
     def location(self, store_id: str) -> str | None:
         """Where the key lives, for operators; never the key itself."""
+        ...
+
+    def locations(self, store_id: str) -> tuple[str, ...]:
+        """Every place a lookup of the store's key searches, in order."""
+        ...
+
+    def new_key_location(self) -> str:
+        """Where the key of a new store is created, for operators."""
         ...
 
 
@@ -118,7 +144,16 @@ class DpapiKeyProtection:
         return key
 
     def location(self, store_id: str) -> str | None:
-        return "Windows DPAPI (current user), wrapped in secrets.json"
+        return _DPAPI_LOCATION
+
+    def locations(self, store_id: str) -> tuple[str, ...]:
+        return (_DPAPI_LOCATION,)
+
+    def new_key_location(self) -> str:
+        return _DPAPI_LOCATION
+
+
+_DPAPI_LOCATION = "Windows DPAPI (current user), wrapped in secrets.json"
 
 
 def _dpapi_entropy(store_id: str, key_id: str) -> bytes:
@@ -207,8 +242,8 @@ class KeyFileProtection:
     """Keeps the data key in an owner-only file outside the data directory.
 
     ``path`` names the key file directly (as ``VBOT_SECRET_KEY_FILE`` does);
-    ``directories`` replace the default key directories. Without either, both
-    are read from the process environment at each call.
+    ``directories`` replace the key directories, the first one taking new keys.
+    Without either, both are read from the process environment at each call.
     """
 
     def __init__(
@@ -228,21 +263,23 @@ class KeyFileProtection:
 
     def create(self, store_id: str) -> CreatedKey:
         explicit = self._explicit_path()
-        if explicit is not None:
-            if _exists(explicit):
-                # A provisioned key (systemd credential, container secret) is adopted.
-                key_id, key = _read_key_file(explicit)
-                return CreatedKey(key=key, key_id=key_id, location=str(explicit))
-            target = explicit
-        else:
-            target = self._candidates(store_id)[0]
-            if _exists(target):
-                raise KeyUnavailableError(
-                    f"a key file already exists at {target}; it is never overwritten"
-                )
+        if explicit is not None and _exists(explicit):
+            # A provisioned key (systemd credential, container secret) is adopted.
+            return _adopt(explicit)
+        # Never where the caller's environment points: the first directory is the
+        # default one, which every lookup searches.
+        target = explicit if explicit is not None else self._candidates(store_id)[0]
         key = new_data_key()
         key_id = new_identifier()
-        _write_key_file(target, key_id, key)
+        try:
+            _write_key_file(target, key_id, key)
+        except FileExistsError as exc:
+            if explicit is None:
+                raise KeyUnavailableError(
+                    f"a key file already exists at {target}; it is never overwritten"
+                ) from exc
+            # Another store created the named key file meanwhile; it is shared.
+            return _adopt(explicit)
         return CreatedKey(key=key, key_id=key_id, location=str(target))
 
     def load(self, store_id: str, key_id: str, record: Mapping[str, Any]) -> bytes:
@@ -272,6 +309,13 @@ class KeyFileProtection:
                 return str(candidate)
         return str(candidates[0])
 
+    def locations(self, store_id: str) -> tuple[str, ...]:
+        return tuple(str(candidate) for candidate in self._candidates(store_id))
+
+    def new_key_location(self) -> str:
+        explicit = self._explicit_path()
+        return str(explicit if explicit is not None else self._key_directories()[0])
+
     def _explicit_path(self) -> Path | None:
         if self._path is not None:
             return self._path
@@ -290,34 +334,48 @@ class KeyFileProtection:
     def _key_directories(self) -> list[Path]:
         if self._directories is not None:
             return list(self._directories)
-        directories: list[Path] = []
+        # The default directory comes first and takes every new key: a service
+        # unit and an interactive shell may disagree about XDG_CONFIG_HOME, and
+        # the key must be found by both.
+        directories = [Path.home() / ".config" / "vbot" / "keys"]
         configured = self._env().get("XDG_CONFIG_HOME", "")
-        # The XDG specification ignores a relative value.
+        # The XDG specification ignores a relative value. Earlier builds created
+        # keys there, so a lookup still searches it.
         if configured and Path(configured).is_absolute():
-            directories.append(Path(configured) / "vbot" / "keys")
-        # Also the default location: a service unit and an interactive shell may
-        # disagree about XDG_CONFIG_HOME, and the key must be found by both.
-        default = Path.home() / ".config" / "vbot" / "keys"
-        if default not in directories:
-            directories.append(default)
+            legacy = Path(configured) / "vbot" / "keys"
+            if legacy not in directories:
+                directories.append(legacy)
         return directories
 
     def _env(self) -> Mapping[str, str]:
         return os.environ if self._environ is None else self._environ
 
 
+def _adopt(path: Path) -> CreatedKey:
+    key_id, key = _read_key_file(path)
+    return CreatedKey(key=key, key_id=key_id, location=str(path))
+
+
 def _exists(path: Path) -> bool:
     try:
         return exists_strict(path)
     except OSError as exc:
-        raise KeyUnavailableError(f"the key file {path} cannot be checked: {exc}") from exc
+        raise KeyUnavailableError(
+            f"the key file {path} cannot be checked right now: {exc}", transient=True
+        ) from exc
 
 
 def _read_key_file(path: Path) -> tuple[str, bytes]:
     try:
         raw = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
+    except FileNotFoundError as exc:
+        raise KeyUnavailableError(f"the key file {path} is missing") from exc
+    except UnicodeError as exc:
         raise KeyUnavailableError(f"the key file {path} cannot be read: {exc}") from exc
+    except OSError as exc:
+        raise KeyUnavailableError(
+            f"the key file {path} cannot be read right now: {exc}", transient=True
+        ) from exc
     try:
         payload = json.loads(raw)
     except ValueError as exc:
@@ -340,13 +398,62 @@ def _read_key_file(path: Path) -> tuple[str, bytes]:
 
 
 def _write_key_file(path: Path, key_id: str, key: bytes) -> None:
+    """Create ``path`` holding the key; ``FileExistsError`` when anything is there.
+
+    The key is written owner-only into a staging file beside the target and
+    published with a hard link, which never replaces an entry: two stores
+    creating the same file never overwrite each other's key, and a reader
+    never sees a partial key. Where hard links are unsupported, the target is
+    created exclusively and written in place.
+    """
     payload = {
         "format_version": KEY_FILE_FORMAT_VERSION,
         "key_id": key_id,
         "key": base64.b64encode(key).decode("ascii"),
     }
+    data = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        atomic_write_text(path, json.dumps(payload, indent=2) + "\n", mode=0o600)
+        staging = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        _write_new(staging, data)
+        try:
+            os.link(staging, path)
+        except FileExistsError:
+            raise
+        except OSError:
+            # No hard links on this filesystem: create the target itself exclusively.
+            _write_new(path, data)
+        finally:
+            with suppress(OSError):
+                staging.unlink()
+        if os.name == "posix":
+            _fsync_directory(path.parent)
+    except FileExistsError:
+        raise
     except OSError as exc:
         raise KeyUnavailableError(f"the key file {path} cannot be written: {exc}") from exc
+
+
+def _write_new(path: Path, data: bytes) -> None:
+    """Create ``path`` exclusively, owner-only before any content, and write ``data``."""
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags, OWNER_ONLY_MODE)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            restrict_to_owner(path)
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        with suppress(OSError):
+            path.unlink()
+        raise
+
+
+def _fsync_directory(path: Path) -> None:
+    with suppress(OSError):
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)

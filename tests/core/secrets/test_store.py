@@ -5,8 +5,10 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import stat
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -15,12 +17,14 @@ import pytest
 
 from core.secrets import (
     CREDENTIALS,
+    LOCK_FILE_NAME,
     OAUTH_TOKENS,
     KeyFileProtection,
     SecretEntryUnavailableError,
     SecretStoreError,
     SecretStoreUnavailableError,
 )
+from core.secrets import store as store_module
 from tests.core.secrets.secrets_test_support import (
     TOKEN_TEXT,
     data_directory,
@@ -208,9 +212,13 @@ def test_a_reset_quarantines_the_store_which_its_key_still_opens(tmp_path: Path)
     store = open_store(tmp_path)
     store.set_entry(CREDENTIALS, "OPENAI_API_KEY", "sk-openai")
     old_status = store.status()
+    original = store.path.read_bytes()
+    # A store this process opens is never replaced, whatever an earlier check said.
+    with pytest.raises(SecretStoreError, match="reset only replaces"):
+        store.reset()
+    assert store.path.read_bytes() == original
     key_file = Path(str(old_status.key_location))
     hidden = key_file.rename(tmp_path / "hidden.key")
-    original = store.path.read_bytes()
     unavailable = open_store(tmp_path)
     assert unavailable.status().state == "unavailable"
 
@@ -230,12 +238,84 @@ def test_a_reset_quarantines_the_store_which_its_key_still_opens(tmp_path: Path)
     assert open_store(tmp_path).entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-entered-again"
 
 
-def test_concurrent_writers_keep_every_entry(tmp_path: Path) -> None:
-    data_directory(tmp_path)
-    store = open_store(tmp_path)
+def test_concurrent_writers_keep_every_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = data_directory(tmp_path)
+    # Separate instances share nothing in memory, as writers in separate processes.
+    stores = [open_store(tmp_path) for _writer in range(3)]
     names = [f"KEY_{index}" for index in range(24)]
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(lambda name: store.set_entry(CREDENTIALS, name, f"value-{name}"), names))
+        list(
+            pool.map(
+                lambda index: stores[index % len(stores)].set_entry(
+                    CREDENTIALS, names[index], f"value-{names[index]}"
+                ),
+                range(len(names)),
+            )
+        )
 
     assert open_store(tmp_path).entries(CREDENTIALS) == {name: f"value-{name}" for name in names}
+
+    # A writer that holds the lock too long makes a write fail, never overwrite.
+    monkeypatch.setattr(store_module, "_WRITE_LOCK_TIMEOUT_SECONDS", 0.2)
+    written = stores[0].path.read_bytes()
+    held = store_module._acquire_write_lock(data_dir / LOCK_FILE_NAME)
+    try:
+        with pytest.raises(SecretStoreError, match="another process has been writing"):
+            stores[1].set_entry(CREDENTIALS, "LATE_KEY", "late")
+    finally:
+        store_module._release_write_lock(held)
+    assert stores[0].path.read_bytes() == written
+    stores[1].set_entry(CREDENTIALS, "LATE_KEY", "late")
+    assert stores[2].entry(CREDENTIALS, "LATE_KEY") == "late"
+
+
+@pytest.mark.parametrize("failing", ["document", "key file"])
+def test_an_io_error_while_reading_is_retried_and_never_remembered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: str
+) -> None:
+    data_directory(tmp_path)
+    store = open_store(tmp_path)
+    store.set_entry(CREDENTIALS, "OPENAI_API_KEY", "sk-openai")
+    key_file = Path(str(store.status().key_location))
+    # Older than the racy window, so an unchanged document may be served from memory.
+    os.utime(store.path, (time.time() - 60, time.time() - 60))
+    written = store.path.read_bytes()
+    target = store.path if failing == "document" else key_file
+    failures = {"left": 0}
+    sleeps: list[float] = []
+    monkeypatch.setattr(store_module, "_sleep", sleeps.append)
+    real_open = Path.open
+
+    def busy_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path == target and failures["left"]:
+            failures["left"] -= 1
+            raise PermissionError(13, "The file is in use by another process", str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", busy_open)
+
+    # A scanner that holds the file briefly is waited out.
+    failures["left"] = 1
+    started = open_store(tmp_path)
+    assert started.entries(CREDENTIALS) == {"OPENAI_API_KEY": "sk-openai"}
+    assert sleeps
+
+    # One that holds it longer makes this access fail, never a write or a reset.
+    failures["left"] = 1_000
+    busy = open_store(tmp_path)
+    status = busy.status()
+    assert (status.state, busy.entries(CREDENTIALS)) == ("unavailable", {})
+    assert "cannot be read right now" in str(status.reason)
+    with pytest.raises(SecretStoreUnavailableError, match="cannot be read right now"):
+        busy.set_entry(CREDENTIALS, "OPENAI_API_KEY", "sk-new")
+    with pytest.raises(SecretStoreError, match="cannot be checked right now"):
+        busy.reset()
+
+    # Once the file is released, the same process reads it again: nothing was remembered.
+    failures["left"] = 0
+    assert store.path.read_bytes() == written
+    assert busy.status().state == "available"
+    assert busy.entries(CREDENTIALS) == {"OPENAI_API_KEY": "sk-openai"}

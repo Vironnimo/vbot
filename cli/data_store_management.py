@@ -436,7 +436,8 @@ def data_store_secrets_convert(instance: ServerInstance, confirm: bool) -> Comma
         )
 
     def convert() -> str:
-        imported = import_plaintext_credentials(store)
+        # An explicit import never removes an entry; only a pending update's does.
+        imported = import_plaintext_credentials(store, remove_missing=False)
         retired = retire_plaintext_credentials(store)
         parts: list[str] = []
         if imported is not None:
@@ -444,17 +445,25 @@ def data_store_secrets_convert(instance: ServerInstance, confirm: bool) -> Comma
                 f"imported {len(imported.credentials)} credentials and "
                 f"{len(imported.oauth_tokens)} OAuth logins"
             )
+            # Line numbers only: the text of such a line may be a pasted secret.
             parts.extend(
                 f"{item} left out: {reason}" for item, reason in sorted(imported.skipped.items())
             )
+            if imported.conflicts:
+                parts.append(
+                    "kept the Secret Store's own values of "
+                    + ", ".join(imported.conflicts)
+                    + " (the files hold others)"
+                )
         if retired is not None:
             if retired.deleted:
                 parts.append("deleted " + ", ".join(retired.deleted))
             parts.extend(f"{path} kept: {reason}" for path, reason in sorted(retired.kept.items()))
-            if retired.backup_entries or retired.snapshot_copies:
+            if retired.backup_entries or retired.snapshot_copies or retired.quarantine_copies:
                 parts.append(
-                    f"purged {retired.backup_entries} configuration-backup entries and "
-                    f"{retired.snapshot_copies} data-snapshot copies"
+                    f"purged {retired.backup_entries} configuration-backup entries, "
+                    f"{retired.snapshot_copies} data-snapshot copies and "
+                    f"{retired.quarantine_copies} quarantined copies"
                 )
             if not retired.backups_complete:
                 parts.append(

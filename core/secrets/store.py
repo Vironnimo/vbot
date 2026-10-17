@@ -18,22 +18,35 @@ A store is in one of three states:
   and nothing is ever overwritten; only :meth:`SecretStore.reset`, an explicit
   operator command, moves the store to quarantine and starts a new one.
 
+A read that fails with an I/O error (a scanner or backup tool holding the file,
+a key file that cannot be read) is retried briefly; when it keeps failing, the
+store reads as unavailable for that access only and the next access tries
+again. A document that does not validate, or a key that is missing or wrong,
+stays unavailable until the document changes.
+
+Every write holds ``<data-dir>/secrets.lock``, an OS-owned file lock, around
+its read-modify-write, so writers in different processes (the server, the
+CLI, an update's verification start) never lose each other's changes.
+
 Entry values are never logged.
 """
 
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
+import sys
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Any, Final, Literal
+from typing import IO, Any, Final, Literal
 
 from core.config_validation import (
     JsonDiagnostic,
@@ -86,18 +99,61 @@ SECTIONS: tuple[Section, ...] = (CREDENTIALS, OAUTH_TOKENS)
 PLAINTEXT_IMPORT_FIELD = "plaintext_import"
 #: The quarantine child of a store that ``reset`` replaced.
 QUARANTINE_NAME = "secret-store"
+#: The inter-process write lock beside the document.
+LOCK_FILE_NAME = "secrets.lock"
 
 ENTRY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}$")
 _STORE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # A document modified this recently may change again within the same filesystem
 # timestamp tick, so its stat stamp cannot prove it unchanged yet.
 _RACY_WINDOW_NS = 3_000_000_000
+# A read that fails with an I/O error is repeated after these delays; scanners
+# and backup tools release a file within milliseconds.
+_READ_RETRY_DELAYS = (0.05, 0.2)
+# How long a write waits for another process's write to finish.
+_WRITE_LOCK_TIMEOUT_SECONDS = 30.0
+_WRITE_LOCK_POLL_SECONDS = 0.05
+# Tests patch this seam instead of the process-wide ``time.sleep``.
+_sleep = time.sleep
 
 _LOGGER = get_logger("secrets")
 
 SecretStoreState = Literal["absent", "available", "unavailable"]
 
+#: Whether credential names ignore case, as environment-variable names do on Windows.
+CREDENTIAL_NAMES_IGNORE_CASE: Final = sys.platform == "win32"
+
+
+def credential_name_key(name: str) -> str:
+    """The name under which ``name`` is one credential on this system.
+
+    Uppercase on Windows, where the process environment ignores case and
+    ``os.environ`` reports names uppercased; ``name`` itself elsewhere.
+    """
+    return name.upper() if CREDENTIAL_NAMES_IGNORE_CASE else name
+
+
+def fold_credential_names(entries: Mapping[str, str]) -> dict[str, str]:
+    """One entry per credential of ``entries``, chosen the same way on every call.
+
+    On Windows, names differing only in case are one credential: its
+    all-uppercase spelling wins, otherwise the first spelling in sorted order.
+    Elsewhere every name is its own credential.
+    """
+    if not CREDENTIAL_NAMES_IGNORE_CASE:
+        return dict(entries)
+    chosen: dict[str, str] = {}
+    for name in sorted(entries):
+        key = credential_name_key(name)
+        current = chosen.get(key)
+        if current is None or (name == key and current != key):
+            chosen[key] = name
+    return {name: entries[name] for name in sorted(chosen.values())}
+
+
 _KEY_SHAPE = json_object({"id", "protection", "check", "wrapped"})
+# ``credentials`` and ``oauth_tokens`` are the name lists of the first record
+# format, still read (``core.secrets.plaintext``) but no longer written.
 _IMPORT_SHAPE = json_object(
     {"imported_at", "sources", "credentials", "oauth_tokens", "backups_pending"}
 )
@@ -167,15 +223,28 @@ def _validate_import_record(diagnostics: list[JsonDiagnostic], record: Any) -> N
         return
     sources = record.get("sources", {})
     if not isinstance(sources, dict) or any(
-        not isinstance(value, str) for value in sources.values()
+        not _is_import_source(value) for value in sources.values()
     ):
-        add_error(diagnostics, f"{path}.sources", "must map file paths to fingerprints")
+        add_error(diagnostics, f"{path}.sources", "must map file paths to source records")
     for name in (CREDENTIALS, OAUTH_TOKENS):
         value = record.get(name, [])
         if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
             add_error(diagnostics, f"{path}.{name}", "must be a list of names")
     if not isinstance(record.get("backups_pending", False), bool):
         add_error(diagnostics, f"{path}.backups_pending", "must be a boolean")
+
+
+def _is_import_source(value: Any) -> bool:
+    """A source record: ``{"fingerprint", "entries": {name: value fingerprint}}``.
+
+    The first record format kept only the content fingerprint as a string.
+    """
+    if isinstance(value, str):
+        return True
+    if not isinstance(value, dict) or not isinstance(value.get("fingerprint"), str):
+        return False
+    entries = value.get("entries", {})
+    return isinstance(entries, dict) and all(isinstance(item, str) for item in entries.values())
 
 
 SECRET_STORE_FORMAT = JsonDocumentFormat(
@@ -202,6 +271,10 @@ class SecretStoreStatus:
     damaged: tuple[str, ...] = ()
     #: Whether an import of plaintext credential files still waits to be finished.
     import_pending: bool = False
+    #: Every place this process searches for the store's key, in order.
+    key_locations: tuple[str, ...] = ()
+    #: Where this process would create the key of a new store (``reset``).
+    new_key_location: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -210,6 +283,8 @@ class SecretStoreStatus:
             "store_id": self.store_id,
             "protection": self.protection,
             "key_location": self.key_location,
+            "key_locations": list(self.key_locations),
+            "new_key_location": self.new_key_location,
             "credentials": self.credentials,
             "oauth_tokens": self.oauth_tokens,
             "damaged": list(self.damaged),
@@ -236,6 +311,8 @@ class _View:
     key: bytes | None = field(default=None, repr=False)
     values: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
     damaged: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: An I/O failure a later read may not repeat; such a view is never cached.
+    transient: bool = False
 
     @property
     def store_id(self) -> str | None:
@@ -356,8 +433,9 @@ class SecretStore:
     """Owns ``<data-dir>/secrets.json``: one instance per data directory and process.
 
     Thread-safe: every read and write holds one lock, and every write re-reads
-    the document first. ``protections`` are the key protections this process
-    can open; the first one protects a new store.
+    the document first while it holds the inter-process write lock.
+    ``protections`` are the key protections this process can open; the first
+    one protects a new store.
     """
 
     def __init__(
@@ -377,6 +455,8 @@ class SecretStore:
         self._view: _View | None = None
         self._keys: dict[tuple[str, str, str, str], bytes] = {}
         self._conditions = LoggedConditions()
+        # The inter-process write lock, re-entered by a write inside ``reset``.
+        self._write_lock_depth = 0
 
     # ------------------------------------------------------------------
     # Reads
@@ -390,9 +470,12 @@ class SecretStore:
             protection = view.key_record.get("protection")
             store_id = view.store_id
             location = None
+            locations: tuple[str, ...] = ()
             if isinstance(protection, str) and isinstance(store_id, str):
                 found = self._protection(protection)
-                location = None if found is None else found.location(store_id)
+                if found is not None:
+                    location = found.location(store_id)
+                    locations = found.locations(store_id)
             return SecretStoreStatus(
                 state=view.state,
                 reason=view.reason,
@@ -407,6 +490,8 @@ class SecretStore:
                     for name in view.damaged.get(section, ())
                 ),
                 import_pending=bool(isinstance(record, dict) and record.get("sources")),
+                key_locations=locations,
+                new_key_location=self._protections[0].new_key_location(),
             )
 
     def entries(self, section: Section) -> dict[str, str]:
@@ -481,20 +566,21 @@ class SecretStore:
     def update[Result](self, change: Callable[[SecretTransaction], Result]) -> Result:
         """Apply ``change`` to a fresh copy of the store and write it once.
 
-        Creates the store when it is absent. Raises
+        Creates the store when it is absent. Holds the inter-process write lock
+        from the read to the write, so a concurrent writer in another process
+        waits and then sees this change. Raises
         :class:`SecretStoreUnavailableError` while it is unavailable and
         :class:`SecretStoreError` when the document cannot be written; the
         document on disk is then unchanged.
         """
         # The snapshot freeze first: a waiting change keeps the locks it holds.
-        with document_change(self.path), self._lock:
+        # Checked before a key is created: no key file is left behind for a store
+        # that cannot be written.
+        with document_change(self.path), self._lock, self._write_lock():
             view = self._load()
             if view.state == "unavailable":
                 raise SecretStoreUnavailableError(_unavailable_message(view))
             if view.state == "absent":
-                # Checked before a key is created: no key file is left behind for
-                # a store that cannot be written.
-                self._require_data_dir()
                 transaction = SecretTransaction(
                     {CREDENTIALS: {}, OAUTH_TOKENS: {}}, None, {}, create=self._create_key
                 )
@@ -508,6 +594,8 @@ class SecretStore:
             result = change(transaction)
             if transaction.changed:
                 document = transaction.document
+                if transaction.created:
+                    self._require_absent()
                 self._write(document)
                 if transaction.created:
                     _LOGGER.info(
@@ -522,9 +610,21 @@ class SecretStore:
 
         The explicit operator command for a store whose key is lost: nothing is
         deleted, and the old store opens again once moved back with its key.
+        Refuses, under the write lock, a store that this process opens and one
+        that cannot be read right now (an I/O error is no lost key).
         """
-        with document_change(self.path), self._lock:
+        with document_change(self.path), self._lock, self._write_lock():
             quarantine: Path | None = None
+            current = self._load()
+            if current.state == "available":
+                raise SecretStoreError(
+                    "the Secret Store opens; reset only replaces a store whose key is lost or wrong"
+                )
+            if current.transient:
+                raise SecretStoreError(
+                    f"the Secret Store cannot be checked right now ({current.reason}); try "
+                    "again, a reset only replaces a store whose key is lost or wrong"
+                )
             try:
                 present = stat_or_none(self.path) is not None
             except OSError as exc:
@@ -580,22 +680,30 @@ class SecretStore:
         return view
 
     def _read(self) -> _View:
+        """Read the document; an I/O failure is retried briefly and never cached."""
+        view = self._read_once()
+        for delay in _READ_RETRY_DELAYS:
+            if not view.transient:
+                break
+            _sleep(delay)
+            view = self._read_once()
+        return view
+
+    def _read_once(self) -> _View:
         try:
-            status = stat_or_none(self.path)
+            with self.path.open("rb") as handle:
+                stamp = _stamp(os.fstat(handle.fileno()))
+                raw = handle.read()
+        except FileNotFoundError, NotADirectoryError:
+            return _View("absent")
         except OSError as exc:
-            return _View("unavailable", reason=f"secrets.json cannot be checked: {exc}")
-        if status is None:
-            return _View("absent")
-        stamp = _stamp(status)
-        report, data = read_json_file(self.path, validate_secret_store_data, missing_ok=True)
-        if not report.exists:
-            return _View("absent")
-        if not report.ok:
-            problems = "; ".join(
-                f"{diagnostic.path}: {diagnostic.message}"
-                for diagnostic in report.diagnostics
-                if diagnostic.severity == "error"
+            return _View(
+                "unavailable",
+                reason=f"secrets.json cannot be read right now: {exc}",
+                transient=True,
             )
+        data, problems = _decode_document(raw)
+        if problems:
             return _View(
                 "unavailable",
                 stamp=stamp,
@@ -618,6 +726,8 @@ class SecretStore:
         try:
             key = self._open_key(protection, document["store_id"], key_record)
         except KeyUnavailableError as exc:
+            if exc.transient:
+                return _View("unavailable", reason=str(exc), document=document, transient=True)
             return _View("unavailable", stamp=stamp, reason=str(exc), document=document)
         if not key_matches(key, document["store_id"], key_record["id"], key_record["check"]):
             self._keys.clear()
@@ -687,6 +797,40 @@ class SecretStore:
         if not self.data_dir.is_dir():
             raise SecretStoreError(f"the data directory {self.data_dir} does not exist")
 
+    def _require_absent(self) -> None:
+        """A new store never replaces a document, whatever an earlier read reported."""
+        try:
+            present = stat_or_none(self.path) is not None
+        except OSError as exc:
+            raise SecretStoreError(f"{self.path} cannot be checked: {exc}") from exc
+        if present:
+            raise SecretStoreError(
+                "secrets.json appeared while a new Secret Store was being created; nothing "
+                "was written"
+            )
+
+    @contextmanager
+    def _write_lock(self) -> Iterator[None]:
+        """Hold ``secrets.lock`` across processes; re-entrant within this store.
+
+        The caller holds ``self._lock``, which guards the depth.
+        """
+        if self._write_lock_depth:
+            self._write_lock_depth += 1
+            try:
+                yield
+            finally:
+                self._write_lock_depth -= 1
+            return
+        self._require_data_dir()
+        handle = _acquire_write_lock(self.data_dir / LOCK_FILE_NAME)
+        self._write_lock_depth = 1
+        try:
+            yield
+        finally:
+            self._write_lock_depth = 0
+            _release_write_lock(handle)
+
     def _write(self, document: Mapping[str, Any]) -> None:
         try:
             self._require_data_dir()
@@ -707,6 +851,15 @@ class SecretStore:
 
     def _report(self, view: _View) -> None:
         if view.state == "unavailable":
+            if view.transient:
+                if self._conditions.started("state", view.reason):
+                    _LOGGER.warning(
+                        "Secret Store cannot be read right now; every access tries again "
+                        "(store=%s reason=%s)",
+                        self.path,
+                        view.reason,
+                    )
+                return
             if self._conditions.started("state", view.reason):
                 _LOGGER.warning(
                     "Secret Store unavailable; the credentials it holds cannot be used until "
@@ -754,6 +907,81 @@ def validate_secret_store_file(path: str | Path) -> JsonValidationReport:
     return JsonValidationReport(store_path, True, tuple(diagnostics))
 
 
+def _decode_document(raw: bytes) -> tuple[Any, str | None]:
+    """The decoded document and, when it does not load, why (``read_json_file`` wording)."""
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except UnicodeError as exc:
+        return None, f"$: File is not valid UTF-8: {exc}"
+    except json.JSONDecodeError as exc:
+        return None, f"$: Invalid JSON: {exc.msg} at line {exc.lineno} column {exc.colno}"
+    except ValueError:
+        return None, "$: JSON exceeds decoder limits"
+    problems = "; ".join(
+        f"{diagnostic.path}: {diagnostic.message}"
+        for diagnostic in validate_secret_store_data(data)
+        if diagnostic.severity == "error"
+    )
+    return data, problems or None
+
+
+def _acquire_write_lock(path: Path) -> IO[bytes]:
+    """Take the OS-owned lock on byte 0 of ``path``, waiting for another writer.
+
+    The operating system releases it when a process ends, so a crashed writer
+    never leaves the store locked.
+    """
+    try:
+        handle = path.open("a+b")
+    except OSError as exc:
+        raise SecretStoreError(
+            f"the Secret Store write lock {path} cannot be opened: {exc}"
+        ) from exc
+    deadline = time.monotonic() + _WRITE_LOCK_TIMEOUT_SECONDS
+    try:
+        if sys.platform == "win32":
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+        while True:
+            try:
+                handle.seek(0)
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return handle
+            except OSError as exc:
+                if time.monotonic() >= deadline:
+                    raise SecretStoreError(
+                        "another process has been writing the Secret Store for "
+                        f"{_WRITE_LOCK_TIMEOUT_SECONDS:.0f} s; nothing was changed"
+                    ) from exc
+                _sleep(_WRITE_LOCK_POLL_SECONDS)
+    except BaseException:
+        handle.close()
+        raise
+
+
+def _release_write_lock(handle: IO[bytes]) -> None:
+    with suppress(OSError):
+        handle.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    handle.close()
+
+
 def _section(document: Mapping[str, Any] | None, section: str) -> dict[str, Any]:
     if document is None:
         return {}
@@ -775,6 +1003,8 @@ def _check_name(name: str) -> None:
 def _unavailable_message(view: _View) -> str:
     if view.state == "absent":
         return "the Secret Store does not exist yet"
+    if view.transient:
+        return f"the Secret Store cannot be read right now ({view.reason}); try again"
     return (
         f"the Secret Store is unavailable ({view.reason}); restore its key or start a new "
         "store with `vbot data-store secrets reset --yes`"

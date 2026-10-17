@@ -23,6 +23,7 @@ from core.database._connections import (
     is_wal_reset_vulnerable,
     required_journal_mode,
 )
+from core.database._documents import DOCUMENT_QUARANTINE_NAME
 from core.database.config_backups import (
     CONFIGURATION_FILE_PATTERNS,
     ConfigBackup,
@@ -74,6 +75,7 @@ from core.database.recovery import (
     UnregisteredDatabase,
     acknowledge_incident,
     active_incidents,
+    quarantine_batches,
     read_incident,
     restore_data_snapshot,
     retire_core_databases,
@@ -122,6 +124,7 @@ __all__ = [
     "CANONICAL",
     "CONFIGURATION_FILE_PATTERNS",
     "DISPOSABLE",
+    "DOCUMENT_QUARANTINE_NAME",
     "HELD_CAPTURE",
     "JOURNAL_MODE_DELETE",
     "JOURNAL_MODE_WAL",
@@ -160,6 +163,7 @@ __all__ = [
     "UpdateSnapshot",
     "acknowledge_incident",
     "active_incidents",
+    "quarantine_batches",
     "begin_maintenance",
     "canonical_database_path",
     "capture_config_backup",

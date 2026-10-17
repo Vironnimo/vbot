@@ -374,7 +374,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     from core.extensions.config_validation import validate_extension_documents
     from core.model_tasks.artifacts import validate_task_artifact_metadata_file
     from core.projects import validate_project_file
-    from core.secrets import plaintext_credential_reports, validate_secret_store_file
+    from core.secrets import credential_file_reports, validate_secret_store_file
     from core.skills import validate_skill_policy_file
     from core.storage.prompt_blocks import validate_prompt_layout_file
     from core.tools.terminal_store import (
@@ -426,8 +426,9 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         settings = {}
     directories = [Path(path).expanduser() for path in settings.get("extension_directories", [])]
     reports.extend(validate_extension_documents(root, directories))
-    # The plaintext credential files the Secret Store replaced: vBot ignores them.
-    reports.extend(plaintext_credential_reports(root))
+    # Credentials outside the live Secret Store: plaintext files vBot ignores, and
+    # quarantined copies.
+    reports.extend(credential_file_reports(root))
     reported = {report.file_path for report in reports}
     for pattern in DURABLE_DOCUMENTS.values():
         if pattern.startswith("extension-data/"):
