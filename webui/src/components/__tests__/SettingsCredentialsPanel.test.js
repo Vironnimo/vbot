@@ -187,6 +187,7 @@ describe('Settings credentials panel', () => {
       ['MY-TOKEN', 'settings.credentials.nameInvalid'],
       ['A'.repeat(201), 'settings.credentials.nameTooLong'],
       ['SKILL_TOKEN', 'settings.credentials.nameTaken'],
+      ['skill_token', 'settings.credentials.nameTaken'],
     ]) {
       await type('settings-credential-name', name);
       expect(fieldError('settings-credential-name')).toBe(

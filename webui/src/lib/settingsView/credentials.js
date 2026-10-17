@@ -34,7 +34,8 @@ export function normalizeCredentialList(result) {
 }
 
 // Why the server would refuse a typed name, '' when it accepts it. A name
-// already listed is refused too: its row replaces the value.
+// already listed is refused too: its row replaces the value. The comparison
+// ignores case, because a Windows server treats such names as one credential.
 export function credentialNameProblem(name, credentials = []) {
   if (!name) {
     return t('settings.credentials.nameRequired');
@@ -47,7 +48,10 @@ export function credentialNameProblem(name, credentials = []) {
   if (!CREDENTIAL_NAME_PATTERN.test(name)) {
     return t('settings.credentials.nameInvalid');
   }
-  if (credentials.some((credential) => credential.name === name)) {
+  const folded = name.toUpperCase();
+  if (
+    credentials.some((credential) => credential.name.toUpperCase() === folded)
+  ) {
     return t('settings.credentials.nameTaken');
   }
   return '';
