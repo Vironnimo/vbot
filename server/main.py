@@ -20,6 +20,16 @@ from typing import Any, Literal
 
 import psutil  # type: ignore[import-untyped]
 
+from core.access.config import (
+    ACCESS_MODES,
+    AccessConfig,
+    AccessConfigError,
+    access_config,
+    check_bind_host,
+    default_host,
+    inferred_access_mode,
+)
+from core.access.local_token import create_local_access_token, remove_local_access_token
 from core.storage.layout import DataDirectoryLayout, initialize_data_directory
 from core.utils.config import (
     DEFAULT_HOST,
@@ -80,9 +90,37 @@ else:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse server CLI arguments."""
     parser = argparse.ArgumentParser(description="Start the vBot server")
-    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument(
+        "--host",
+        help="Bind address; default 127.0.0.1 for local and authenticated behind a proxy, "
+        "else 0.0.0.0",
+    )
     parser.add_argument("--port", type=int)
     parser.add_argument("--data-dir")
+    parser.add_argument(
+        "--access",
+        choices=ACCESS_MODES,
+        help="Who may connect: local (this computer only), lan (home network without "
+        "login) or authenticated (with login, from the internet). Omitted: local for a "
+        "loopback bind, else lan. A packaged installation's record decides instead.",
+    )
+    parser.add_argument(
+        "--allow-network",
+        action="append",
+        default=[],
+        metavar="CIDR",
+        help="lan: also admit this network (repeatable)",
+    )
+    parser.add_argument("--public-url", help="authenticated: the HTTPS address browsers use")
+    parser.add_argument(
+        "--trusted-proxy",
+        action="append",
+        default=[],
+        metavar="IP_OR_CIDR",
+        help="authenticated: the reverse proxy that terminates HTTPS (repeatable)",
+    )
+    parser.add_argument("--tls-cert", help="authenticated: certificate chain file for HTTPS")
+    parser.add_argument("--tls-key", help="authenticated: private key file for HTTPS")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--verification-only", action="store_true")
     modes.add_argument("--test-instance", action="store_true")
@@ -105,7 +143,14 @@ def main(argv: list[str] | None = None) -> None:
     safe_startup_mode: Literal["verification", "test"] | None = (
         "verification" if args.verification_only else "test" if args.test_instance else None
     )
-    server_bind = resolve_server_bind(config, host=args.host, explicit_port=args.port)
+    port_bind = resolve_server_bind(config, host=DEFAULT_HOST, explicit_port=args.port)
+    try:
+        access, host, host_notice = _resolve_access(args, config.data_dir, port_bind["listen_port"])
+        tls = _tls_holder(access)
+    except AccessConfigError as exc:
+        print(f"vBot server cannot start: {exc}", file=sys.stderr)
+        raise SystemExit(STARTUP_FAILED_EXIT_CODE) from None
+    server_bind: ServerBind = {**port_bind, "listen_host": host}
     # Before containment, which nests this process in a Job of its own.
     enclosing_job = _enclosing_foreign_job()
     activate_process_containment()
@@ -116,10 +161,16 @@ def main(argv: list[str] | None = None) -> None:
         initialize_data_directory(config.data_dir, resources_dir=config.get("RESOURCES_PATH"))
     with server_control_claim(config.data_dir, server_bind["listen_port"]) as previous:
         control = create_server_control(config.data_dir, server_bind["listen_port"])
+        try:
+            local_token = create_local_access_token(config.data_dir, server_bind["listen_port"])
+        except BaseException:
+            remove_server_control(control)
+            raise
         lifecycle = _ServerLifecycle(
             config=config,
             server_bind=server_bind,
             mode=safe_startup_mode or "normal",
+            access=access.mode,
             # Durations need the wall-clock creation time, not the record's identity.
             process_created=psutil.Process().create_time(),
             main_entered_at=main_entered_at,
@@ -129,6 +180,7 @@ def main(argv: list[str] | None = None) -> None:
         server_holder: dict[str, Any] = {}
         ready_runtime: Any = None
         shutdown_event = asyncio.Event()
+        certificate_watch: list[asyncio.Task[None]] = []
         try:
 
             def request_shutdown(initiator: str = UNKNOWN_STOP_INITIATOR) -> None:
@@ -163,8 +215,16 @@ def main(argv: list[str] | None = None) -> None:
                 nonlocal ready_runtime
                 _prepare_for_serving()
                 ready_runtime = runtime
+                if tls is not None:
+                    certificate_watch.append(
+                        asyncio.get_running_loop().create_task(
+                            tls.watch(), name="tls-certificate-watch"
+                        )
+                    )
 
             def on_stopped(runtime_stopped_cleanly: bool) -> None:
+                for task in certificate_watch:
+                    task.cancel()
                 lifecycle.stopped(
                     listening=_server_listening(server_holder),
                     runtime_stopped_cleanly=runtime_stopped_cleanly,
@@ -179,16 +239,27 @@ def main(argv: list[str] | None = None) -> None:
                 "request_restart": request_restart,
                 "on_ready": on_ready,
                 "on_stopped": on_stopped,
+                "access": access,
+                "local_access_token": local_token.value,
             }
             if safe_startup_mode is not None:
                 app_kwargs["safe_startup_mode"] = safe_startup_mode
             app = create_app(**app_kwargs)
+            protocol: dict[str, Any] = {}
+            if tls is not None:
+                from server.access.tls import sniffing_protocol_class
+
+                protocol["http"] = sniffing_protocol_class(tls)
             uvicorn_config = uvicorn.Config(
                 app,
                 host=server_bind["listen_host"],
                 port=server_bind["listen_port"],
+                # The access guard alone resolves client addresses and schemes from
+                # forwarding headers, and only from configured trusted proxies.
+                proxy_headers=False,
                 # Keep synchronous WebSocket compression off the shared Event Loop.
                 ws_per_message_deflate=False,
+                **protocol,
                 timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_SECONDS,
                 log_level="info",
                 access_log=False,
@@ -206,6 +277,8 @@ def main(argv: list[str] | None = None) -> None:
                     "Previous server process ended without shutting down (pid=%s)", previous.pid
                 )
             _log_enclosing_job(enclosing_job)
+            if host_notice is not None:
+                _LOGGER.warning("%s", host_notice)
             server = uvicorn.Server(uvicorn_config)
             uvicorn_startup = server.startup
             uvicorn_handle_exit = server.handle_exit
@@ -231,6 +304,7 @@ def main(argv: list[str] | None = None) -> None:
                 # Covers a startup failure and an exit that skipped the app shutdown.
                 lifecycle.stopped(listening=_server_listening(server_holder))
                 log_manager.close()
+            remove_local_access_token(local_token)
             remove_server_control(control)
     # Current uvicorn itself exits with STARTUP_FAILED_EXIT_CODE when the application
     # fails to start; older versions return from run() instead.
@@ -253,6 +327,7 @@ class _ServerLifecycle:
         config: Config,
         server_bind: ServerBind,
         mode: str,
+        access: str,
         process_created: float,
         main_entered_at: float,
         setup_started: float,
@@ -260,6 +335,7 @@ class _ServerLifecycle:
         self._config = config
         self._server_bind = server_bind
         self._mode = mode
+        self._access = access
         self._process_created = process_created
         # Before main includes interpreter startup and the full import graph.
         # Later phases use a monotonic clock, including the final heap freeze.
@@ -298,6 +374,7 @@ class _ServerLifecycle:
             fields["version_id"] = version_id
         fields.update(
             mode=self._mode,
+            access=self._access,
             pid=os.getpid(),
             listen=f"{self._server_bind['listen_host']}:{self._server_bind['listen_port']}",
             data_dir=self._config.data_dir,
@@ -333,6 +410,81 @@ class _ServerLifecycle:
             "Server stopped (%s)",
             _format_fields(fields),
         )
+
+
+def _resolve_access(
+    args: argparse.Namespace, data_dir: Path, port: int
+) -> tuple[AccessConfig, str, str | None]:
+    """The access configuration, the bind host and a notice to log, if any.
+
+    The server of a packaged installation runs with its recorded access mode and
+    host, whatever its launcher passes: launchers that predate access modes pass
+    only ``--host``. Any other server takes the flags; without ``--access`` the
+    mode follows the bind host. Raises ``AccessConfigError`` for what must not start.
+    """
+    explicit = args.access is not None or any(
+        (args.allow_network, args.public_url, args.trusted_proxy, args.tls_cert, args.tls_key)
+    )
+    install = _recorded_installation(data_dir, port)
+    if install is not None:
+        recorded = install.access
+        host = install.server_host
+        assert recorded is not None and host is not None
+        if explicit and _flagged_access(args, host) != recorded:
+            raise AccessConfigError(
+                "this installation records its server's access mode "
+                f"({recorded.mode}); change it with: vbot application access set"
+            )
+        notice = None
+        if args.host is not None and args.host != host:
+            notice = (
+                "Server binds the installation's recorded address, not the requested one "
+                f"(requested={args.host} recorded={host})"
+            )
+        return recorded, host, notice
+    access = _flagged_access(args, args.host or DEFAULT_HOST)
+    host = args.host or default_host(access)
+    check_bind_host(access, host)
+    return access, host, None
+
+
+def _flagged_access(args: argparse.Namespace, host: str) -> AccessConfig:
+    return access_config(
+        args.access or inferred_access_mode(args.host or host),
+        allow_networks=args.allow_network,
+        public_url=args.public_url,
+        trusted_proxies=args.trusted_proxy,
+        tls_cert=args.tls_cert,
+        tls_key=args.tls_key,
+    )
+
+
+def _recorded_installation(data_dir: Path, port: int) -> Any:
+    """The packaged installation whose recorded server this process is, if any."""
+    from cli.application.state import ApplicationError, discover
+
+    try:
+        install = discover()
+    except ApplicationError as exc:
+        raise AccessConfigError(
+            f"the installation record, which holds the access mode, cannot be read: {exc}"
+        ) from exc
+    if install is None or not install.owns_server or install.server_port != port:
+        return None
+    recorded_data = Path(install.server_data_directory or "").expanduser().resolve()
+    if recorded_data != data_dir.expanduser().resolve():
+        return None
+    return install
+
+
+def _tls_holder(access: AccessConfig) -> Any:
+    """The reloading TLS context of direct TLS; ``None`` without it."""
+    if not access.direct_tls:
+        return None
+    from server.access.tls import TlsContextHolder
+
+    assert access.tls_cert is not None and access.tls_key is not None
+    return TlsContextHolder(access.tls_cert, access.tls_key)
 
 
 def _enclosing_foreign_job() -> ForeignJob | OSError | None:

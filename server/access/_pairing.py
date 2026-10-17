@@ -1,0 +1,174 @@
+"""Pending pairing requests and login tickets: short-lived, single-use, in memory only."""
+
+from __future__ import annotations
+
+import hashlib
+import secrets
+from collections import OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Literal
+
+from core.utils.ids import new_id
+
+PAIRING_TTL_SECONDS = 600.0
+LOGIN_TICKET_TTL_SECONDS = 60.0
+#: Unambiguous characters: no 0/O, 1/I/L or U/V look-alikes. 30^8 codes.
+PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"
+PAIRING_CODE_LENGTH = 8
+#: Bounds memory under a flood that the rate limits let through.
+MAX_PENDING_PAIRINGS = 256
+MAX_LOGIN_TICKETS = 256
+
+PairingState = Literal["pending", "approved", "denied"]
+
+
+def format_pairing_code(code: str) -> str:
+    """The display form ``XXXX-XXXX``."""
+    return f"{code[:4]}-{code[4:]}"
+
+
+def normalize_pairing_code(value: str) -> str | None:
+    """Accept the code as typed (any case, with dashes or spaces); ``None`` when malformed."""
+    code = "".join(value.split()).replace("-", "").upper()
+    if len(code) != PAIRING_CODE_LENGTH or any(c not in PAIRING_CODE_ALPHABET for c in code):
+        return None
+    return code
+
+
+def _digest(secret: str) -> bytes:
+    return hashlib.sha256(secret.encode("utf-8")).digest()
+
+
+@dataclass
+class PairingRequest:
+    """One device waiting to be approved."""
+
+    id: str
+    code: str
+    name: str
+    kind: str
+    client: str | None
+    requested_at: float
+    expires_at: float
+    poll_secret_hash: bytes = field(repr=False)
+    state: PairingState = "pending"
+    approved_by: str | None = None
+
+
+class PairingRegistry:
+    """Pending pairing requests by code and by request id.
+
+    ``clock`` is monotonic (expiry); ``wall_clock`` gives the request time shown
+    to the approver.
+    """
+
+    def __init__(self, *, clock: Callable[[], float], wall_clock: Callable[[], float]) -> None:
+        self._clock = clock
+        self._wall_clock = wall_clock
+        self._requests: OrderedDict[str, PairingRequest] = OrderedDict()
+
+    def start(self, *, name: str, kind: str, client: str | None) -> tuple[PairingRequest, str]:
+        """Create a request; returns it with the poll secret only the new device learns."""
+        self.sweep()
+        if len(self._requests) >= MAX_PENDING_PAIRINGS:
+            raise OverflowError("too many pending pairing requests")
+        codes = {request.code for request in self._requests.values()}
+        code = ""
+        while not code or code in codes:
+            code = "".join(
+                secrets.choice(PAIRING_CODE_ALPHABET) for _ in range(PAIRING_CODE_LENGTH)
+            )
+        poll_secret = secrets.token_urlsafe(32)
+        request = PairingRequest(
+            id=new_id("pair"),
+            code=code,
+            name=name,
+            kind=kind,
+            client=client,
+            requested_at=self._wall_clock(),
+            expires_at=self._clock() + PAIRING_TTL_SECONDS,
+            poll_secret_hash=_digest(poll_secret),
+        )
+        self._requests[request.id] = request
+        return request, poll_secret
+
+    def pending(self, code: str) -> PairingRequest | None:
+        """The pending request a typed code names, if it is still open."""
+        normalized = normalize_pairing_code(code)
+        if normalized is None:
+            return None
+        self.sweep()
+        for request in self._requests.values():
+            if request.state == "pending" and secrets.compare_digest(request.code, normalized):
+                return request
+        return None
+
+    def decide(self, request: PairingRequest, *, approved: bool, principal: str) -> None:
+        """Approve or deny a pending request; its device claims the outcome by polling."""
+        if request.state != "pending" or self._requests.get(request.id) is not request:
+            raise LookupError("pairing request is no longer pending")
+        request.state = "approved" if approved else "denied"
+        request.approved_by = principal if approved else None
+
+    def poll(self, request_id: str, poll_secret: str) -> PairingRequest | None:
+        """The request a device polls for, or ``None`` when unknown, expired or not its own.
+
+        A decided request is handed out once and then forgotten.
+        """
+        self.sweep()
+        request = self._requests.get(request_id)
+        if request is None or not secrets.compare_digest(
+            request.poll_secret_hash, _digest(poll_secret)
+        ):
+            return None
+        if request.state != "pending":
+            del self._requests[request_id]
+        return request
+
+    def expires_in(self, request: PairingRequest) -> int:
+        return max(0, round(request.expires_at - self._clock()))
+
+    def sweep(self) -> None:
+        now = self._clock()
+        for request_id in [key for key, item in self._requests.items() if item.expires_at <= now]:
+            del self._requests[request_id]
+
+
+@dataclass(frozen=True)
+class LoginTicket:
+    """What redeeming one ticket creates: a browser device approved by ``issued_by``."""
+
+    issued_by: str
+    name: str
+    expires_at: float
+
+
+class LoginTickets:
+    """Single-use tickets that turn a top-level navigation into a browser device."""
+
+    def __init__(self, *, clock: Callable[[], float]) -> None:
+        self._clock = clock
+        self._tickets: OrderedDict[bytes, LoginTicket] = OrderedDict()
+
+    def issue(self, *, issued_by: str, name: str) -> str:
+        self._sweep()
+        while len(self._tickets) >= MAX_LOGIN_TICKETS:
+            self._tickets.popitem(last=False)
+        ticket = secrets.token_urlsafe(32)
+        self._tickets[_digest(ticket)] = LoginTicket(
+            issued_by=issued_by, name=name, expires_at=self._clock() + LOGIN_TICKET_TTL_SECONDS
+        )
+        return ticket
+
+    def redeem(self, ticket: str) -> LoginTicket | None:
+        """Consume a ticket; ``None`` when unknown, used or expired."""
+        self._sweep()
+        if len(ticket) > 128:
+            return None
+        return self._tickets.pop(_digest(ticket), None)
+
+    def _sweep(self) -> None:
+        now = self._clock()
+        for key in [key for key, item in self._tickets.items() if item.expires_at <= now]:
+            del self._tickets[key]

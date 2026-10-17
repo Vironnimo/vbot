@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from server.rpc import (
+    access_methods,
     activity_methods,
     agent_methods,
     application_methods,
@@ -79,6 +80,7 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
         skill_methods,
         terminal_methods,
         activity_methods,
+        access_methods,
     ):
         handlers.update(registry.method_handlers())
     return handlers
