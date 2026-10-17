@@ -43,7 +43,7 @@ cd ..
 Start a development server with its own data directory and port, so it never touches an installed vBot at `~/.vbot` on port 8420:
 
 ```bash
-python server/main.py --data-dir ~/.vbot-dev --port 8421
+python server/main.py --data-dir ../vBot-data/dev --port 8421
 ```
 
 Then open [http://127.0.0.1:8421/](http://127.0.0.1:8421/). Rebuild the WebUI with `npm run build` in `webui/` after frontend changes.

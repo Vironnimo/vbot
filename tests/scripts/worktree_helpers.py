@@ -74,7 +74,7 @@ def _create_task_worktree(module, repo: Path, name: str) -> Path:
     _git(repo, "worktree", "add", "-b", name, str(worktrees_dir / name))
     worktree_path = worktrees_dir / name
     (worktree_path / module.WORKTREE_FILE_NAME).write_text(
-        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": True}),
+        json.dumps({"data_dir": str(module.DATA_ROOT / name), "managed_branch": True}),
         encoding="utf-8",
     )
     return worktree_path
@@ -83,6 +83,7 @@ def _create_task_worktree(module, repo: Path, name: str) -> Path:
 def _patch_repo_globals(monkeypatch, module, repo: Path) -> None:
     monkeypatch.setattr(module, "PROJECT_ROOT", repo)
     monkeypatch.setattr(module, "WORKTREES_DIR", repo / ".worktrees")
+    monkeypatch.setattr(module, "DATA_ROOT", repo.parent / "data")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: repo.parent / "home"))
     monkeypatch.setenv("USERPROFILE", str(repo.parent / "home"))
     monkeypatch.setenv("HOME", str(repo.parent / "home"))

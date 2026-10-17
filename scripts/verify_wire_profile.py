@@ -68,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Data directory with Settings and a Secret Store (default: this "
-            "checkout's instance, ~/.vbot-dev in the main checkout)."
+            "checkout's instance, vBot-data/dev in the main checkout)."
         ),
     )
     parser.add_argument(

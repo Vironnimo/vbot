@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from core.utils import config
 from tests import cpu_pool
 
 # Tests run git in temporary repositories. Started from a git hook, pytest inherits
@@ -53,14 +54,24 @@ def _isolated_home(_home_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Give every test an empty home directory of its own.
 
     ``Path.home()`` and ``~`` read HOME on POSIX and USERPROFILE on Windows,
-    so no test reads or writes the real home: its ``~/.vbot`` data, the
-    ``~/.vbot-dev`` data a worktree checkout resolves, Secret Store key files,
-    or Git configuration. Tests reach the directory through ``Path.home()``.
+    so no test reads or writes the real home: its ``~/.vbot`` data, Secret
+    Store key files, or Git configuration. Tests reach the directory through
+    ``Path.home()``. The checkout's own ``.vbot-worktree`` marker names its
+    development data directory by absolute path, so the default data directory
+    ignores it and falls back to the isolated ``~/.vbot``.
     """
     home = _home_root / str(next(_HOME_NUMBERS))
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+    checkout_marker = config._WORKTREE_FILE
+    find_cwd_marker = config._find_worktree_file_from_cwd
+    monkeypatch.setattr(config, "_WORKTREE_FILE", home / ".vbot-worktree")
+    monkeypatch.setattr(
+        config,
+        "_find_worktree_file_from_cwd",
+        lambda: None if (marker := find_cwd_marker()) == checkout_marker else marker,
+    )
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("VBOT_SECRET_KEY_FILE", raising=False)
 

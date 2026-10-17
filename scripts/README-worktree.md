@@ -21,7 +21,7 @@ The entrypoint owns checkout creation/removal and merge orchestration. Private `
 For each created worktree it does all of the following:
 
 - creates a Git worktree under `.worktrees/<name>`
-- creates a dedicated data directory at `~/.vbot-<name>`
+- creates a dedicated data directory at `<repo>-data/<name>`, a sibling of the repository root (for `C:/Development/projects/vBot`: `C:/Development/projects/vBot-data/<name>`)
 - initializes the canonical empty data-directory structure through `core/storage/layout.py`
 - writes `settings.json` in that data directory with a dedicated `server_port`, a paired local fake-Provider endpoint, and chat/fallback/image/speech fake Models
 - writes a `.vbot-worktree` marker into the worktree root, which also records the assigned `server_port`
@@ -44,17 +44,19 @@ There are four separate things involved:
 For a worktree named `feature-a`, the expected layout is:
 
 ```text
-.worktrees/feature-a/
-~/.vbot-feature-a/
+vBot/.worktrees/feature-a/
+vBot-data/feature-a/
 ```
 
 The primary development checkout remains independent and uses:
 
 ```text
 repo root          -> current branch, usually main
-~/.vbot-dev        -> primary development data dir
+vBot-data/dev      -> primary development data dir
 8421               -> primary development server port
 ```
+
+Data directories stay outside the user profile, so a folder excluded from antivirus scanning for development (such as Windows Defender's exclusion of the projects folder) covers their database and log writes too. They stay outside the repository, because an Agent Workspace inside it would inherit the repository's Git context and ignore rules: `git` commands would act on vBot itself and the Search Tool would skip every file. Worktrees created before this layout keep their `~/.vbot-<name>` data directory until deleted; `delete` and `merge` recognize it from the marker.
 
 The separately installed application retains the product defaults `~/.vbot` and `8420`. The first generated Worktree server port starts at `8422`; its paired fake Provider uses `18422`. Additional Worktrees get the next server port whose paired fake-Provider port is also unassigned and unbound.
 
@@ -81,13 +83,13 @@ python scripts/worktree.py create my-task
 Worktree names must be a single safe path segment. They may contain letters,
 numbers, dots, underscores, and hyphens, and must start with a letter or number.
 They must not end with a dot. `dev` is reserved, case-insensitively, for the
-primary checkout. Creation refuses an existing `~/.vbot-<name>` (including a
+primary checkout. Creation refuses an existing `vBot-data/<name>` (including a
 link) before changing it; choose another name or inspect the old directory.
 
 This creates:
 
 - `.worktrees/my-task/`
-- `~/.vbot-my-task/`
+- `vBot-data/my-task/`
 - a branch named `my-task`
 
 It also prints the assigned port, data dir, path, and local URL.
@@ -160,7 +162,7 @@ python scripts/worktree.py delete my-task
 This deletes:
 
 - the Git worktree at `.worktrees/my-task`
-- the dedicated data dir `~/.vbot-my-task` when its ownership records match
+- the dedicated data dir `vBot-data/my-task` when its ownership records match
 - the managed branch `my-task` if the script created that branch itself
 
 On success, the command prints `status: deleted`.
@@ -258,13 +260,13 @@ It stores at least the worktree data dir:
 
 ```json
 {
-  "data_dir": "~/.vbot-my-task",
+  "data_dir": "C:\Development\projects\vBot-data\my-task",
   "managed_branch": true,
   "data_owner": "unique-token-generated-during-creation"
 }
 ```
 
-The matching `~/.vbot-my-task/.vbot-worktree-owner.json` binds that token to the
+The matching `vBot-data/my-task/.vbot-worktree-owner.json` binds that token to the
 canonical repository and worktree paths. Cleanup requires both records and
 refuses redirected data roots. Copying a checkout marker alone does not transfer
 data ownership. Older worktrees keep their existing config behavior, but cleanup
@@ -279,14 +281,14 @@ The primary checkout's local marker additionally sets `"cwd_only": true`. That s
 3. repository-root `.vbot-worktree` resolved from the module path, unless it sets `cwd_only: true`
 4. `~/.vbot`
 
-That means the worktree behavior depends on where the process is launched from. The primary checkout carries a git-ignored cwd-only `.vbot-worktree` marker selecting `~/.vbot-dev`; its `settings.json` selects port `8421`. Outside that checkout, a parameterless installed CLI falls through to `~/.vbot` and port `8420`.
+That means the worktree behavior depends on where the process is launched from. The primary checkout carries a git-ignored cwd-only `.vbot-worktree` marker selecting `vBot-data/dev` by absolute path (`{"data_dir": "<repo>-data/dev", "cwd_only": true}`, created by hand once per clone); its `settings.json` selects port `8421`. Outside that checkout, a parameterless installed CLI falls through to `~/.vbot` and port `8420`.
 
 If you are inside `.worktrees/my-task`, normal relative entrypoints should use:
 
-- `~/.vbot-my-task`
+- `vBot-data/my-task`
 - that worktree's assigned `server_port`
 
-If you launch a command from the main checkout, it uses the primary development instance at `~/.vbot-dev:8421`, not the separately installed application at `~/.vbot:8420`.
+If you launch a command from the main checkout, it uses the primary development instance at `vBot-data/dev`, port `8421`, not the separately installed application at `~/.vbot:8420`.
 
 ## What a fresh agent or shell must know
 
@@ -386,7 +388,7 @@ Commits in the worktree run the tracked pre-commit hook's static checks (formatt
 
 This is the machine-readable marker used by config and cleanup logic.
 
-### `~/.vbot-<name>/settings.json`
+### `vBot-data/<name>/settings.json`
 
 This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Creation seeds only its newly created data directory. The fixture is `scripts/fake-provider-settings.json` from the checkout that runs `worktree.py` (like the data-directory layout), not from the main repository, so a branch that changes it seeds its own version. Its task-model options must be valid for the option schemas vBot builds for those fake Models (for these Custom Provider Models, TTS offers only the `mp3`/`pcm` formats and image generation only `extra_options`), otherwise saving Specialized Models fails on an untouched option; `tests/scripts/test_worktree.py` validates the seeded bindings through the same Task Model check Settings runs.
 
@@ -477,7 +479,7 @@ Check these first:
 1. Are you actually inside the worktree directory?
 2. Does `.vbot-worktree` exist in that worktree root?
 3. Is `VBOT_DATA_DIR` set in the environment and overriding the marker?
-4. Does `~/.vbot-<name>/settings.json` contain the expected `server_port`?
+4. Does `vBot-data/<name>/settings.json` contain the expected `server_port`?
 
 ### The worktree server will not start because the port is busy
 
