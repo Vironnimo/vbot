@@ -222,7 +222,8 @@ class DesktopBridge:
             "secureOrigins": list(self._secure_origins),
             "restart": self._restart is not None,
             # The Desktop signs its window in to servers in the access mode
-            # ``authenticated``: ``selectServer`` pairs or opens a login ticket.
+            # ``authenticated``: ``selectServer`` opens a login ticket or sends
+            # the window to the connection screen's pairing offer.
             "signIn": self._connection is not None,
         }
 
