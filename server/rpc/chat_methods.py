@@ -672,6 +672,37 @@ async def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:
     return cast(JsonObject, inspection)
 
 
+async def _subagent_tree(state: Any, params: JsonObject) -> JsonObject:
+    """List one Session's Sub-Agents at every depth, breadth first, as they are now.
+
+    Each entry names its Session (``agent_id`` as a qualified Agent address,
+    ``session_id``) and the ``parent_id`` of the Sub-Agent it works for,
+    ``None`` for a direct Sub-Agent of the Session.
+    """
+    _reject_unsupported(params, {"agent_id", "session_id"}, "subagent.tree")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    try:
+        subagents = await state.runtime.subagents.subagents(
+            SessionAddress(project_id, agent_id, session_id)
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {
+        "subagents": [
+            {
+                "id": subagent.id,
+                "title": subagent.title,
+                "agent_id": subagent.agent_id,
+                "session_id": subagent.session.session_id,
+                "parent_id": subagent.parent_id,
+                "status": subagent.status,
+            }
+            for subagent in subagents
+        ]
+    }
+
+
 def _command_output(outcome: CommandOutcome) -> str:
     if outcome.navigation is not None:
         return "action"
@@ -1559,4 +1590,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.queue_remove": _chat_queue_remove,
         "chat.queue_update": _chat_queue_update,
         "subagent.inspect": _subagent_inspect,
+        "subagent.tree": _subagent_tree,
     }

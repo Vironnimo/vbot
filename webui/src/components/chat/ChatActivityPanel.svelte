@@ -13,7 +13,7 @@
     subAgentStatusDetails,
   } from '$lib/chatTimelinePresentation.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
-  import { formatTokens } from '$lib/statisticsView.js';
+  import { formatCost, formatTokens } from '$lib/statisticsView.js';
   import {
     formatAbsoluteTime,
     formatMoment,
@@ -41,18 +41,20 @@
     backgroundCommandStatuses = {},
     commandStatuses = {},
     reflectionTasks = [],
-    // The displayed Session's change statistics: undefined until read, null
-    // when it changed no files. The panel asks for them while it is open.
+    // The change statistics of the displayed Session and its Sub-Agents:
+    // undefined until read, null when they changed no files. The panel asks
+    // for them, the usage and the Sub-Agent tree while it is open.
     sessionStats = undefined,
     onSessionStatsWanted = () => {},
     // The displayed Session's list row as last read (`{ displayName,
     // createdAt, lastActiveAt }`), or null until then.
     session = null,
-    // Token totals over the Session's turns (`session_usage`), or null.
-    sessionUsage = null,
-    // Renders the Session's context readout (ContextUsageRing with figures);
-    // null while the context is unknown.
-    contextReadout = null,
+    // The usage of the Session's own Runs and its Sub-Agents' Runs
+    // (`{ session, subAgents, total, subAgentCount }`, report Totals), or null.
+    usage = null,
+    // The Session's Sub-Agents at every depth (`subagent.tree` entries: id,
+    // title, agent_id, session_id, parent_id, status), breadth first.
+    subAgentTree = [],
     parentSession = null,
     onNavigateToSubAgent = () => {},
     // Open in split view for a Sub-Agent row (`{ label, open(target) }`, with
@@ -371,21 +373,76 @@
     }
   };
 
-  // Session-wide token totals: every turn counts, cache reads as a share of
-  // the input.
-  let tokenTotals = $derived.by(() => {
-    const input = nonNegative(sessionUsage?.input_tokens);
-    const output = nonNegative(sessionUsage?.output_tokens);
+  // The Sub-Agents each Sub-Agent works with, by its id; a row with any
+  // offers to show them below it. Expanded rows are view state only.
+  let subAgentChildren = $derived(
+    (subAgentTree ?? []).reduce((children, entry) => {
+      if (entry?.parent_id && entry.id) {
+        (children[entry.parent_id] ??= []).push(entry);
+      }
+      return children;
+    }, Object.create(null)),
+  );
+  const expandedSubAgents = new SvelteSet();
+  const childrenOf = (subAgentId) =>
+    (subAgentId && subAgentChildren[subAgentId]) || [];
+  const nestedListId = (subAgentId) => `${panelId}-nested-${subAgentId}`;
+  const toggleNested = (subAgentId) => {
+    if (expandedSubAgents.has(subAgentId)) {
+      expandedSubAgents.delete(subAgentId);
+    } else {
+      expandedSubAgents.add(subAgentId);
+    }
+  };
+  // A nested Sub-Agent's state as `subagent.tree` reports it.
+  const treeDotStatus = (status) =>
+    status === 'working' ? 'running' : status === 'queued' ? 'queued' : 'idle';
+  const treeStatusLabel = (status) =>
+    status === 'working'
+      ? t('chat.activity.status.running')
+      : status === 'queued'
+        ? t('chat.activity.status.queued')
+        : t('chat.activity.status.idle');
+
+  // Token totals and cost over the Session's and its Sub-Agents' Runs, cache
+  // reads as a share of the input; with Sub-Agents, a card splits them.
+  let usageFacts = $derived.by(() => {
+    const total = usage?.total;
+    const input = nonNegative(total?.input_tokens);
+    const output = nonNegative(total?.output_tokens);
     if (input <= 0 && output <= 0) {
       return null;
     }
     const locale = activeLocaleTag();
-    const cacheRead = nonNegative(sessionUsage?.cache_read_tokens);
+    const cacheRead = nonNegative(total?.cache_read_tokens);
+    const tokens = (totals) =>
+      t('chat.activity.overview.tokensValue', {
+        input: formatTokens(nonNegative(totals?.input_tokens), locale),
+        output: formatTokens(nonNegative(totals?.output_tokens), locale),
+      });
+    const cost = (totals) => formatCost(totals?.cost_usd, locale);
+    const split = (value) =>
+      usage.subAgentCount > 0
+        ? {
+            title: t('chat.activity.overview.splitTitle'),
+            rows: [
+              {
+                label: t('chat.activity.overview.ownRuns'),
+                value: value(usage.session),
+              },
+              {
+                label: t('chat.activity.overview.subAgentRuns', {
+                  count: usage.subAgentCount,
+                }),
+                value: value(usage.subAgents),
+              },
+            ],
+            placement: 'left',
+          }
+        : null;
     return {
-      tokens: t('chat.activity.overview.tokensValue', {
-        input: formatTokens(input, locale),
-        output: formatTokens(output, locale),
-      }),
+      tokens: tokens(total),
+      tokensSplit: split(tokens),
       cache:
         input > 0 && cacheRead > 0
           ? new Intl.NumberFormat(locale, {
@@ -393,6 +450,8 @@
               maximumFractionDigits: 0,
             }).format(Math.min(1, cacheRead / input))
           : '',
+      cost: Number.isFinite(total?.cost_usd) ? cost(total) : '',
+      costSplit: split(cost),
     };
   });
 
@@ -572,9 +631,93 @@
           </span>
         </span>
       </Button>
+      {@render nestedToggle(task.subAgentId, task.description || task.agentId)}
       {@render cancelButton(task)}
     </div>
+    {#if expandedSubAgents.has(task.subAgentId)}
+      {@render nestedList(task.subAgentId)}
+    {/if}
   {/if}
+{/snippet}
+
+<!-- How many Sub-Agents a Sub-Agent works with; shows them below its row. -->
+{#snippet nestedToggle(subAgentId, name)}
+  {@const count = childrenOf(subAgentId).length}
+  {#if count > 0}
+    {@const expanded = expandedSubAgents.has(subAgentId)}
+    {@const label = t('chat.activity.nested.toggle', { count, name })}
+    <Button
+      variant="tertiary"
+      class="chat-activity__nested-toggle"
+      ariaLabel={label}
+      tooltip={{ text: label, placement: 'left' }}
+      aria-expanded={expanded}
+      aria-controls={expanded ? nestedListId(subAgentId) : undefined}
+      onClick={() => toggleNested(subAgentId)}
+    >
+      <span class="chat-activity__nested-count">{count}</span>
+      <svg
+        class="chat-activity__disclosure"
+        viewBox="0 0 16 16"
+        width="10"
+        height="10"
+        aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
+      >
+    </Button>
+  {/if}
+{/snippet}
+
+<!-- The Sub-Agents below one Sub-Agent, each opening its own Session and
+     showing its own Sub-Agents in turn. -->
+{#snippet nestedList(parentId)}
+  <ul id={nestedListId(parentId)} class="chat-activity__nested">
+    {#each childrenOf(parentId) as child (child.id)}
+      {@const name = child.title || child.agent_id}
+      <li>
+        <div class="chat-activity__task-row chat-activity__task-row--nested">
+          <Button
+            variant="tertiary"
+            class="chat-activity__task-link"
+            ariaLabel={t('chat.activity.taskAria', {
+              agent: child.agent_id,
+              status: treeStatusLabel(child.status),
+            })}
+            onClick={() =>
+              onNavigateToSubAgent({
+                agentId: child.agent_id,
+                sessionId: child.session_id,
+              })}
+          >
+            <span class="chat-activity__task-copy">
+              <span
+                class="chat-activity__task-title"
+                use:tooltip={{
+                  text: name,
+                  whenTruncated: true,
+                  placement: 'left',
+                }}>{name}</span
+              >
+              <span class="chat-activity__task-meta">
+                {@render statusIcon({
+                  dotStatus: treeDotStatus(child.status),
+                })}
+                <span class="chat-activity__task-kind"
+                  >{treeStatusLabel(child.status)}</span
+                >
+                {#if child.title}
+                  <span class="chat-activity__task-name">{child.agent_id}</span>
+                {/if}
+              </span>
+            </span>
+          </Button>
+          {@render nestedToggle(child.id, name)}
+        </div>
+        {#if expandedSubAgents.has(child.id)}
+          {@render nestedList(child.id)}
+        {/if}
+      </li>
+    {/each}
+  </ul>
 {/snippet}
 
 <!-- A Reflection's title already names its kind; its second line holds the
@@ -867,23 +1010,35 @@
             class="chat-activity__group-title"
           >
             {t('chat.activity.overview.title')}
+            {#if usage?.subAgentCount > 0}
+              <!-- Usage and changes below cover the Sub-Agents too. -->
+              <span class="chat-activity__scope"
+                >{usage.subAgentCount === 1
+                  ? t('chat.activity.overview.withSubAgentsOne')
+                  : t('chat.activity.overview.withSubAgentsMany', {
+                      count: usage.subAgentCount,
+                    })}</span
+              >
+            {/if}
           </h3>
           <dl class="chat-activity__facts">
-            {#if contextReadout}
-              <div class="chat-activity__fact">
-                <dt>{t('chat.activity.overview.context')}</dt>
-                <dd>{@render contextReadout()}</dd>
-              </div>
-            {/if}
-            {#if tokenTotals}
+            {#if usageFacts}
               <div class="chat-activity__fact">
                 <dt>{t('chat.activity.overview.tokens')}</dt>
-                <dd>{tokenTotals.tokens}</dd>
+                <dd use:tooltip={usageFacts.tokensSplit}>
+                  {usageFacts.tokens}
+                </dd>
               </div>
-              {#if tokenTotals.cache}
+              {#if usageFacts.cache}
                 <div class="chat-activity__fact">
                   <dt>{t('chat.activity.overview.cache')}</dt>
-                  <dd>{tokenTotals.cache}</dd>
+                  <dd>{usageFacts.cache}</dd>
+                </div>
+              {/if}
+              {#if usageFacts.cost}
+                <div class="chat-activity__fact">
+                  <dt>{t('chat.activity.overview.cost')}</dt>
+                  <dd use:tooltip={usageFacts.costSplit}>{usageFacts.cost}</dd>
                 </div>
               {/if}
             {/if}
@@ -1159,8 +1314,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Label and value pairs in even rows, tall enough for the context
-     readout's ring. */
+  /* Label and value pairs in even rows. */
   .chat-activity__facts {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -1220,6 +1374,15 @@
     font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
     font-weight: 500;
+  }
+  .chat-activity__scope {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-lo);
+    font-size: var(--fs-label-sm);
+    font-weight: 400;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .chat-activity__count {
     color: var(--text-lo);
@@ -1392,8 +1555,34 @@
     color: var(--text-hi);
   }
   :global(.chat-activity__outcome-toggle[aria-expanded='true'])
+    .chat-activity__disclosure,
+  :global(.chat-activity__nested-toggle[aria-expanded='true'])
     .chat-activity__disclosure {
     transform: rotate(90deg);
+  }
+  /* The count of Sub-Agents below a Sub-Agent, opening them under its row. */
+  :global(.chat-activity__nested-toggle.btn-tertiary) {
+    min-width: 0;
+    min-height: 22px;
+    flex: 0 0 auto;
+    gap: 3px;
+    padding: 0 5px;
+    border: 0;
+    border-radius: var(--r-sm);
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
+    font-weight: 400;
+  }
+  :global(.chat-activity__nested-toggle.btn-tertiary:hover) {
+    background: var(--surface-3);
+    color: var(--text-hi);
+  }
+  .chat-activity__nested {
+    margin: 0 0 2px 14px;
+    padding: 0 0 0 4px;
+    border-left: 1px solid var(--border);
+    list-style: none;
   }
   .chat-activity__changes {
     display: flex;
@@ -1488,6 +1677,7 @@
   :global(.chat-activity__rail.btn-tertiary:focus-visible),
   :global(.chat-activity__close.btn-tertiary:focus-visible),
   :global(.chat-activity__outcome-toggle.btn-tertiary:focus-visible),
+  :global(.chat-activity__nested-toggle.btn-tertiary:focus-visible),
   :global(.chat-activity__task-link.btn-tertiary:focus-visible),
   :global(.chat-activity__parent-link.btn-tertiary:focus-visible),
   :global(.chat-activity__more.btn-tertiary:focus-visible) {

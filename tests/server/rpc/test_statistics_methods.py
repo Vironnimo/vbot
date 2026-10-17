@@ -21,6 +21,7 @@ from core.database import write_bootstrap_marker
 from core.projects import ProjectStore
 from core.sessions import ChatSession, ChatSessionManager
 from core.statistics import REPORT_SECTIONS, StatisticsIndex
+from core.subagents.links import link_session
 from server.rpc.methods import dispatch_rpc
 from server.rpc.statistics_methods import _RuntimeSkillInventory
 from tests.core.sessions.history_fixtures import complete_run
@@ -212,6 +213,45 @@ async def test_run_activity_returns_correlated_run_details(tmp_path: Path) -> No
     assert result["truncated"] is False
     assert result["runs"][0]["run_id"] == "r1"
     assert result["runs"][0]["measured_input_tokens"] == 30
+
+
+@pytest.mark.asyncio
+async def test_session_usage_sums_the_session_and_its_subagents(tmp_path: Path) -> None:
+    state, manager = _state(tmp_path, ["main"])
+    root = manager.create("main")
+    child = manager.create("helper")
+    link_session(
+        manager,
+        child.address,
+        subagent_id="sub-child",
+        parent=root.address,
+        run_id="r1",
+        tool_call_id=None,
+        tool_call_index=None,
+    )
+    for session, tokens in ((root, 30), (child, 12)):
+        _complete(
+            session,
+            f"r-{tokens}",
+            ChatMessage.assistant(
+                model="m", content="hi", usage={"input_tokens": tokens}, timestamp=BASE
+            ),
+            1,
+        )
+
+    result = await _result(
+        state, "statistics.session_usage", {"agent_id": "main", "session_id": root.id}
+    )
+    missing = await dispatch_rpc(
+        state,
+        {"method": "statistics.session_usage", "params": {"agent_id": "main", "session_id": "x"}},
+    )
+
+    assert result["subagent_count"] == 1
+    assert result["session"]["input_tokens"] == 30
+    assert result["subagents"]["input_tokens"] == 12
+    assert result["total"]["input_tokens"] == 42
+    assert missing["ok"] is False
 
 
 _INVERTED = {"since": "2026-06-10T00:00:00Z", "until": "2026-06-01T00:00:00Z"}

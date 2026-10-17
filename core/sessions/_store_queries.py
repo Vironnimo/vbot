@@ -510,27 +510,49 @@ def change_totals(
 
 
 def session_change_stats(
-    connection: sqlite3.Connection, address: SessionAddress
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    merged: Sequence[SessionAddress] = (),
 ) -> JsonObject | None:
     """Return one Session's change statistics with its changed files, or ``None``.
 
     Adds to ``change_totals`` the ``file_stats`` of up to
     ``MAX_SESSION_CHANGE_PATHS`` files in path order, each with its lines summed
     over the Runs; a count is ``None`` when a Run recorded the file without one.
+    The own Runs of the live Sessions in *merged* count as the Session's own;
+    absent ones are skipped. Paths are absolute, so a file several of them
+    changed counts once.
     """
-    session_key = int(_store_values._require_live(connection, address)["session_key"])
-    totals = change_totals(connection, [session_key]).get(session_key)
-    if totals is None:
+    keys = [int(_store_values._require_live(connection, address)["session_key"])]
+    for other in merged:
+        row = _store_values._find_live(connection, other)
+        if row is not None:
+            keys.append(int(row["session_key"]))
+    # One bound JSON array keeps any tree size below SQLite's variable limit.
+    selected = json.dumps(list(dict.fromkeys(keys)))
+    in_tree = "r.session_key IN (SELECT value FROM json_each(?)) AND r.inherited = 0"
+    totals_row = connection.execute(
+        "SELECT MAX(r.changed_files) AS most_files, SUM(r.lines_added) AS added, "
+        "SUM(r.lines_removed) AS removed, "
+        "(SELECT COUNT(DISTINCT p.path) FROM runs AS r "
+        f"JOIN run_change_paths AS p ON p.run_key = r.run_key WHERE {in_tree}) AS listed "
+        f"FROM runs AS r WHERE {in_tree} AND r.changed_files IS NOT NULL",
+        (selected, selected),
+    ).fetchone()
+    files = max(int(totals_row["most_files"] or 0), int(totals_row["listed"] or 0))
+    if not files:
         return None
     rows = connection.execute(
         "SELECT p.path, SUM(p.lines_added) AS added, SUM(p.lines_removed) AS removed, "
         "COUNT(*) = COUNT(p.lines_added) AND COUNT(*) = COUNT(p.lines_removed) AS known "
         "FROM runs AS r JOIN run_change_paths AS p ON p.run_key = r.run_key "
-        "WHERE r.session_key = ? AND r.inherited = 0 GROUP BY p.path ORDER BY p.path LIMIT ?",
-        (session_key, MAX_SESSION_CHANGE_PATHS),
+        f"WHERE {in_tree} GROUP BY p.path ORDER BY p.path LIMIT ?",
+        (selected, MAX_SESSION_CHANGE_PATHS),
     ).fetchall()
     return {
-        **totals,
+        "files": files,
+        "added": int(totals_row["added"] or 0),
+        "removed": int(totals_row["removed"] or 0),
         "file_stats": [
             {
                 "path": str(row["path"]),

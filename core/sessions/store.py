@@ -799,10 +799,12 @@ class SessionStore:
     def summary(self, address: SessionAddress) -> JsonObject | None:
         return self._read_decoded(lambda connection: _store_queries.summary(connection, address))
 
-    def change_stats(self, address: SessionAddress) -> JsonObject | None:
+    def change_stats(
+        self, address: SessionAddress, merged: Sequence[SessionAddress] = ()
+    ) -> JsonObject | None:
         """Return the Session's change statistics with its changed files, or ``None``."""
         return self._read(
-            lambda connection: _store_queries.session_change_stats(connection, address)
+            lambda connection: _store_queries.session_change_stats(connection, address, merged)
         )
 
     def list_completion_activity(

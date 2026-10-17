@@ -8,7 +8,7 @@ resolution uses the resolver's own async API.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from core.archive import ArchiveSubjectInUseError
 from core.channels import ChannelConfigError
@@ -27,6 +27,7 @@ from core.sessions import (
     SessionListCursor,
     SessionListFilters,
 )
+from core.subagents.links import descendants
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
 from core.utils.timestamps import canonical_timestamp
@@ -441,18 +442,33 @@ async def _session_change_stats(state: Any, params: JsonObject) -> JsonObject:
 
     ``change_stats`` is ``{files, added, removed, file_stats}`` or ``None``
     when the Session changed no file; ``session.list`` rows carry the totals.
+    With ``include_subagents``, the Runs of its Sub-Agents at every depth count
+    as its own and ``subagents`` names how many Sub-Agent Sessions were merged.
     """
-    _reject_unsupported(params, {"agent_id", "session_id"}, "session.change_stats")
+    _reject_unsupported(
+        params, {"agent_id", "session_id", "include_subagents"}, "session.change_stats"
+    )
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
-    try:
-        chat_sessions = state.runtime.chat_sessions
-        change_stats = await chat_sessions.run_async(
-            chat_sessions.change_stats, _session_address(agent_id, session_id, project_id)
+    include_subagents = _optional_bool(params, "include_subagents", default=False)
+    address = _session_address(agent_id, session_id, project_id)
+    chat_sessions = state.runtime.chat_sessions
+
+    def read() -> JsonObject:
+        merged = (
+            [link.session for link in descendants(chat_sessions, address)]
+            if include_subagents
+            else []
         )
+        result: JsonObject = {"change_stats": chat_sessions.change_stats(address, merged=merged)}
+        if include_subagents:
+            result["subagents"] = len(merged)
+        return result
+
+    try:
+        return cast(JsonObject, await chat_sessions.run_async(read))
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"change_stats": change_stats}
 
 
 def _session_list_cursor(value: Any) -> SessionListCursor | None:

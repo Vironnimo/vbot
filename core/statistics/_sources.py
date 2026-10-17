@@ -13,6 +13,7 @@ from core.sessions import (
     OwnedSessionSummary,
     SessionAddress,
 )
+from core.statistics._extensions import extension_actor_key
 from core.statistics.index import (
     StatisticsScope,
 )
@@ -121,6 +122,47 @@ def extension_session_summary(owned: OwnedSessionSummary) -> JsonObject:
     if label:
         summary["title"] = label
     return summary
+
+
+def _session_scopes(
+    addresses: Sequence[SessionAddress],
+    owned: Mapping[SessionAddress, OwnedSessionSummary],
+    summary_of: Callable[[SessionAddress], JsonObject | None],
+) -> tuple[StatisticsScope, ...]:
+    """Scope the live Sessions among ``addresses`` as the full report does.
+
+    An Extension-owned Session (in ``owned``) keeps its owner and labelled
+    summary, so a partial read never rewrites its index row differently;
+    others get their own listed summary. Sessions no longer live are left out.
+    """
+    grouped: dict[tuple[str | None, str], list[JsonObject]] = {}
+    scopes: list[StatisticsScope] = []
+    for address in dict.fromkeys(addresses):
+        owner = owned.get(address)
+        if owner is not None:
+            scopes.append(
+                StatisticsScope(
+                    project_id=address.project_id,
+                    agent_id=address.agent_id,
+                    display_key=extension_actor_key(owner.owner_name),
+                    summaries=(extension_session_summary(owner),),
+                    owner_name=owner.owner_name,
+                )
+            )
+            continue
+        summary = summary_of(address)
+        if summary is not None:
+            grouped.setdefault((address.project_id, address.agent_id), []).append(summary)
+    scopes.extend(
+        StatisticsScope(
+            project_id=project_id,
+            agent_id=agent_id,
+            display_key=agent_id,
+            summaries=tuple(summaries),
+        )
+        for (project_id, agent_id), summaries in grouped.items()
+    )
+    return tuple(scopes)
 
 
 def _owner_scopes(
