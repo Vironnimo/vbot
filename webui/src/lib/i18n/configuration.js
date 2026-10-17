@@ -228,8 +228,6 @@ export default Object.freeze({
   'settings.desktop.connection.port': 'Port',
   'settings.desktop.connection.portFromAddress':
     'An address uses its own port, 443 for https:// unless it names another.',
-  'settings.desktop.connection.cancelPairingError':
-    'The sign-in request could not be cancelled.',
   'settings.desktop.connection.portInvalid':
     'Enter a port between 1 and 65535.',
   'settings.desktop.connection.label': 'Label (optional)',

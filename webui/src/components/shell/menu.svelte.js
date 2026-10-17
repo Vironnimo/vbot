@@ -2,6 +2,7 @@ import { SvelteSet, SvelteURL } from 'svelte/reactivity';
 import { t } from '$lib/i18n.js';
 import {
   getDesktopClipboardText,
+  isDesktopDeclined,
   openDesktopExternalUrl,
   setDesktopClipboardText,
 } from '$lib/desktopBridge.js';
@@ -268,8 +269,9 @@ export function createDesktopContextMenu(context) {
           'insertFromPaste',
         );
       }
-    } catch {
-      notifyContextMenuFailure();
+    } catch (error) {
+      // A paste the user declined in the Desktop's dialog needs no notice.
+      if (!isDesktopDeclined(error)) notifyContextMenuFailure();
     }
   };
 

@@ -2,7 +2,11 @@
   // The Desktop app's saved servers. A server is a host and port reached over
   // HTTP, or an https:// address (its own port, 443 by default); the Desktop
   // keys both by scheme, host and port and hands https servers over with the
-  // address as `host`.
+  // address as `host`. A server that needs this Desktop signed in sends the
+  // window to the Desktop's connection screen, which offers the pairing. On
+  // another server's page the Desktop asks the user before it adds, selects a
+  // new or removes a server; a declined request changes nothing and needs no
+  // notice.
   import { onMount, tick } from 'svelte';
 
   import Banner from '../ui/Banner.svelte';
@@ -14,7 +18,7 @@
   import TextField from '../ui/TextField.svelte';
   import {
     addDesktopServer,
-    cancelDesktopPairing,
+    isDesktopDeclined,
     listDesktopServers,
     removeDesktopServer,
     selectDesktopServer,
@@ -23,7 +27,6 @@
 
   const noop = () => {};
   const URL_MARKER = '://';
-  const PAIRING_REQUIRED = 'pairing_required';
 
   let { onToast = noop, idPrefix = 'desktop-settings-server' } = $props();
 
@@ -31,8 +34,6 @@
   let loading = $state(true);
   let loadError = $state('');
   let operationError = $state('');
-  // The server asked this Desktop to sign in: its pairing waits for approval.
-  let pairing = $state(null);
   let adding = $state(false);
   let addOpen = $state(false);
   let connectingKey = $state('');
@@ -142,10 +143,12 @@
         variant: 'success',
       });
     } catch (error) {
-      formError = errorMessage(
-        error,
-        t('settings.desktop.connection.addError'),
-      );
+      if (!isDesktopDeclined(error)) {
+        formError = errorMessage(
+          error,
+          t('settings.desktop.connection.addError'),
+        );
+      }
     } finally {
       adding = false;
     }
@@ -154,36 +157,23 @@
   async function handleConnect(server) {
     const key = serverKey(server);
     operationError = '';
-    pairing = null;
     connectingKey = key;
     try {
       const result = await selectDesktopServer(server.host, server.port);
-      if (result?.status === PAIRING_REQUIRED && result.pairing) {
-        pairing = result.pairing;
-      } else if (!result?.url) {
+      if (!result?.url) {
         operationError = [result?.error_title, result?.error_body]
           .filter(Boolean)
           .join(' — ');
       }
     } catch (error) {
-      operationError = errorMessage(
-        error,
-        t('settings.desktop.connection.connectError'),
-      );
+      if (!isDesktopDeclined(error)) {
+        operationError = errorMessage(
+          error,
+          t('settings.desktop.connection.connectError'),
+        );
+      }
     } finally {
       connectingKey = '';
-    }
-  }
-
-  async function handleCancelPairing() {
-    pairing = null;
-    try {
-      await cancelDesktopPairing();
-    } catch (error) {
-      operationError = errorMessage(
-        error,
-        t('settings.desktop.connection.cancelPairingError'),
-      );
     }
   }
 
@@ -202,10 +192,12 @@
         variant: 'success',
       });
     } catch (error) {
-      operationError = errorMessage(
-        error,
-        t('settings.desktop.connection.removeError'),
-      );
+      if (!isDesktopDeclined(error)) {
+        operationError = errorMessage(
+          error,
+          t('settings.desktop.connection.removeError'),
+        );
+      }
     } finally {
       removingKey = '';
     }
@@ -224,17 +216,6 @@
 <div class="desktop-connection-settings">
   {#if operationError}
     <Banner variant="error" role="alert">{operationError}</Banner>
-  {/if}
-  {#if pairing}
-    <Banner variant="info" role="status">
-      <span>
-        <strong>{pairing.title}</strong>
-        {pairing.body}
-      </span>
-      <Button variant="secondary" onClick={handleCancelPairing}>
-        {t('common.cancel')}
-      </Button>
-    </Banner>
   {/if}
 
   <div class="s-group-toolbar s-list-toolbar">

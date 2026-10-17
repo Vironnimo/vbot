@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   isDesktopAccessor,
+  isDesktopDeclined,
   desktopErrorCode,
   getDesktopCapabilities,
   getDesktopClipboardText,
@@ -542,6 +543,9 @@ describe('Desktop bridge calls', () => {
     );
 
     expect(desktopErrorCode(rejected)).toBe('voice_config_invalid');
+    expect(isDesktopDeclined(rejected)).toBe(false);
+    // The user said no in the Desktop's own dialog.
+    expect(isDesktopDeclined(new Error('declined'))).toBe(true);
     for (const failure of [
       new Error('Desktop bridge not available'),
       new Error('Voice_config_invalid'),

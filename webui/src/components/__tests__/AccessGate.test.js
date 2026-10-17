@@ -123,6 +123,10 @@ describe('access gate', () => {
     expect(document.body.textContent).toContain(
       'vbot devices approve K7QM-4XPA',
     );
+    // The code names the server it belongs to.
+    expect(document.body.textContent).toContain(
+      `signed in to vBot at ${window.location.origin}`,
+    );
 
     await settle(2_000);
     expect(appShown()).toBeNull();

@@ -169,7 +169,9 @@
 
 {#if phase === PAIRING_WAITING}
   <ol class="pairing__steps">
-    <li>{t('access.pairing.stepDevice')}</li>
+    <li>
+      {t('access.pairing.stepDevice', { origin: window.location.origin })}
+    </li>
     <li>
       {t('access.pairing.stepServer')}
       <span class="pairing__command">

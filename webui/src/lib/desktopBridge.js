@@ -58,6 +58,9 @@ const DICTATION_STATES = new Set(['idle', 'recording', 'transcribing']);
 // ignore kinds they do not know.
 const VOICE_EVENT_KIND_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const DESKTOP_ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]*$/;
+// The user said no in the Desktop's own dialog: another server's page asked to
+// add or remove a server, read the clipboard or install a wake word model.
+const DESKTOP_DECLINED = 'declined';
 
 let cachedCapabilities = null;
 let cachedBridgeApi = null;
@@ -127,6 +130,14 @@ export function desktopErrorCode(error) {
     : null;
 }
 
+/**
+ * True when the user declined the bridge call in the Desktop's own dialog.
+ * The user just answered, so the page reports nothing.
+ */
+export function isDesktopDeclined(error) {
+  return desktopErrorCode(error) === DESKTOP_DECLINED;
+}
+
 /** Call a bridge method by name, returning a Promise of the result. */
 function callBridge(method, ...args) {
   if (!bridgeAvailable()) {
@@ -191,7 +202,10 @@ export async function setDesktopClipboardText(text) {
   return callBridge('setClipboardText', String(text));
 }
 
-/** Read plain text from the Desktop host clipboard. */
+/**
+ * Read plain text from the Desktop host clipboard. The page of a server other
+ * than the installation's own asks the user first (`declined`).
+ */
 export async function getDesktopClipboardText() {
   const text = await callBridge('getClipboardText');
   return typeof text === 'string' ? text : '';
@@ -208,19 +222,21 @@ export async function listDesktopServers() {
   return Array.isArray(servers) ? servers : [];
 }
 
-/** Remember a Desktop server without changing the current connection. */
+/**
+ * Remember a Desktop server without changing the current connection. The page
+ * of a server other than the installation's own asks the user first for a new
+ * server (`declined`).
+ */
 export async function addDesktopServer(host, port, label = '') {
   return callBridge('addServer', host, port, label);
 }
 
-/** Forget an inactive remembered Desktop server. */
+/**
+ * Forget an inactive remembered Desktop server. The page of a server other
+ * than the installation's own asks the user first (`declined`).
+ */
 export async function removeDesktopServer(host, port) {
   return callBridge('removeServer', host, port);
-}
-
-/** End the Desktop's pairing that waits for approval; `{cancelled}`. */
-export async function cancelDesktopPairing() {
-  return callBridge('cancelPairing');
 }
 
 /**
@@ -230,8 +246,10 @@ export async function cancelDesktopPairing() {
  */
 //
 // A server that needs this Desktop signed in first answers `pairing_required`
-// with its `pairing` (`{code, server, title, body}`); the Desktop window opens
-// the server by itself once the pairing is approved.
+// with a `url` as well: the window then shows the Desktop's connection screen,
+// where the user decides about pairing. A server that is not remembered is
+// added first, which the page of a server other than the installation's own
+// asks the user for (`declined`).
 export async function selectDesktopServer(host, port) {
   const result = await callBridge('selectServer', host, port);
   if (result?.url) {
@@ -589,6 +607,8 @@ export async function listWakewordModels() {
 }
 
 /** Validate and install one user-selected TFLite wakeword model. */
+// The page of a server other than the installation's own asks the user first
+// (`declined`).
 export async function importWakewordModel(filename, contentBase64) {
   return callBridge('importWakewordModel', filename, contentBase64);
 }

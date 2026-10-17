@@ -40,7 +40,7 @@ export default Object.freeze({
     'vBot cannot reach the server. Check the connection and try again.',
   'access.pairing.error.generic': 'The sign-in request failed. Try again.',
   'access.pairing.stepDevice':
-    'On a device that is already signed in, open Settings → System → Access & devices, choose Add device and enter this code.',
+    'On a device that is already signed in to vBot at {origin}, open Settings → System → Access & devices, choose Add device and enter this code. Enter it only there: whoever approves it lets this browser in.',
   'access.pairing.stepServer': 'Or run this on the server’s computer:',
   'access.pairing.copyCommand': 'Copy approval command',
   'access.pairing.deviceName': 'This browser will be listed as “{name}”.',
@@ -132,7 +132,7 @@ export default Object.freeze({
   'settings.access.add.requested': 'Requested',
   'settings.access.add.code': 'Code',
   'settings.access.add.warning':
-    'Approve only a device you have in front of you. An approved device can use everything in vBot.',
+    'Approve only a device you have in front of you, never a code someone sent you or another website showed you. An approved device can use everything in vBot and act with the server’s rights on its computer.',
   'settings.access.add.deny': 'Deny',
   'settings.access.add.approve': 'Approve',
   'settings.access.add.approved': '{name} is approved and signs in now.',
