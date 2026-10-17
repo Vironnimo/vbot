@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -16,7 +17,9 @@ from websockets.http11 import Request, Response
 from cli._server_target import HealthProbeResult
 from cli.application import monitor as monitor_module
 from cli.application.monitor import MonitorStatus, ServerMonitor
-from cli.server_management import ServerState
+from cli.server_management import ServerInstance, ServerState
+from core.access.local_token import create_local_access_token
+from tests.cli.cli_test_support import make_instance
 
 _STARTED_AT = "2026-10-05T12:58:10.000000Z"
 _RUN_EVENT = {
@@ -57,7 +60,11 @@ def _query(path: str) -> dict[str, str]:
     return {key: values[0] for key, values in parse_qs(urlsplit(path).query).items()}
 
 
-def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart():
+def _target(tmp_path: Path, server: Any) -> ServerInstance:
+    return make_instance(tmp_path, port=next(iter(server.sockets)).getsockname()[1])
+
+
+def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart(tmp_path: Path):
     paths: list[str] = []
     resumed = asyncio.Event()
 
@@ -88,9 +95,10 @@ def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart():
 
     async def scenario() -> list[tuple[str, Any]]:
         async with serve(handler, "127.0.0.1", 0) as server:
-            url = f"http://127.0.0.1:{next(iter(server.sockets)).getsockname()[1]}"
+            target = _target(tmp_path, server)
+            url = target.url
             recorder = _Recorder()
-            monitor = ServerMonitor(lambda: url, recorder, local=True, user_agent="test")
+            monitor = ServerMonitor(lambda: target, recorder, local=True, user_agent="test")
             await asyncio.to_thread(monitor.start)
             try:
                 calls = [await recorder.next() for _ in range(3)]
@@ -129,6 +137,7 @@ def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart():
     ],
 )
 def test_monitor_classifies_a_target_without_an_event_stream(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     health: str | type[TimeoutError] | None,
     recorded: ServerState,
@@ -162,10 +171,10 @@ def test_monitor_classifies_a_target_without_an_event_stream(
 
     async def scenario() -> tuple[str, Any]:
         async with serve(never_streams, "127.0.0.1", 0, process_request=respond) as server:
-            url = f"http://127.0.0.1:{next(iter(server.sockets)).getsockname()[1]}"
+            target = _target(tmp_path, server)
             recorder = _Recorder()
             monitor = ServerMonitor(
-                lambda: url, recorder, local=True, user_agent="test", classify=classify
+                lambda: target, recorder, local=True, user_agent="test", classify=classify
             )
             await asyncio.to_thread(monitor.start)
             try:
@@ -184,3 +193,60 @@ def test_monitor_classifies_a_target_without_an_event_stream(
         (item.reachable, item.is_vbot, item.timed_out) == (False, False, health is TimeoutError)
         for item in observed
     )
+
+
+@pytest.mark.parametrize(
+    ("close_code", "restarted", "expected", "attempts"),
+    [
+        # The server restarted with a new local access token: the retry reads it.
+        pytest.param(4401, True, "connected", 2, id="new-local-token"),
+        pytest.param(4401, False, "denied", 2, id="token-refused-twice"),
+        pytest.param(4403, False, "denied", 1, id="access-mode-refuses"),
+    ],
+)
+def test_monitor_signs_in_and_does_not_hammer_a_refusing_server(
+    tmp_path: Path, close_code: int, restarted: bool, expected: str, attempts: int
+):
+    sent: list[str | None] = []
+    tokens: list[str] = []
+    target = make_instance(tmp_path)
+
+    async def handler(connection: ServerConnection) -> None:
+        assert connection.request is not None
+        sent.append(connection.request.headers.get("Authorization"))
+        if restarted and len(sent) == 2:
+            hello = {"epoch": "e1", "last_sequence": 0, "server": {"started_at": _STARTED_AT}}
+            await connection.send(json.dumps({"type": "connection_ready", **hello}))
+            await connection.wait_closed()
+            return
+        if restarted:
+            tokens.append(create_local_access_token(target.data_dir, target.port).value)
+        await connection.close(close_code, "refused")
+
+    async def scenario() -> list[MonitorStatus]:
+        nonlocal target
+        async with serve(handler, "127.0.0.1", 0) as server:
+            target = _target(tmp_path, server)
+            tokens.append(create_local_access_token(target.data_dir, target.port).value)
+            recorder = _Recorder()
+            monitor = ServerMonitor(lambda: target, recorder, local=True, user_agent="test")
+            await asyncio.to_thread(monitor.start)
+            statuses: list[MonitorStatus] = []
+            try:
+                while not statuses or statuses[-1].connection != expected:
+                    name, value = await recorder.next()
+                    if name == "status":
+                        statuses.append(value)
+                # A refused tray waits for minutes instead of reconnecting at once.
+                await asyncio.sleep(0.3)
+            finally:
+                await asyncio.to_thread(monitor.close)
+        return statuses
+
+    statuses = asyncio.run(scenario())
+
+    assert statuses[-1].connection == expected
+    assert len(sent) == attempts
+    # Every attempt carries the local access token the server wrote last.
+    expected_tokens = tokens if restarted else tokens * attempts
+    assert sent == [f"Bearer {token}" for token in expected_tokens]

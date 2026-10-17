@@ -261,7 +261,7 @@ class ActivityRecorder:
         with self._lock:
             previous, self._connection = self._connection, connection
             crashed = self._crashed and connection == "refused"
-            if connection in {"refused", "unreachable", "connected"}:
+            if connection in {"refused", "unreachable", "denied", "connected"}:
                 self._stopping = self._crashed = False
             if connection != "connected":
                 entry = self._down_entry(previous, connection, crashed)
@@ -304,6 +304,9 @@ class ActivityRecorder:
             return None
         if crashed:
             return "server_crashed", "Server stopped unexpectedly", "warning", ""
+        if connection == "denied":
+            text = "The server refused the tray's connection; the tray tries again in 5 minutes"
+            return "tray_refused", text, "warning", ""
         if not self._owns_server:
             return None
         if connection == "unresponsive":

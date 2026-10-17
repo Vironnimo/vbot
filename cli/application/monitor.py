@@ -7,6 +7,13 @@ server. While disconnected, the monitor retries with a bounded backoff and
 classifies the listener through ``/health``; when that goes unanswered too, the
 optional ``classify`` callback tells a busy server from an unreachable target,
 and when nothing listens, a starting or stopping server process from a stopped one.
+
+Every request and the stream carry the target's credential and TLS verification
+from ``cli/server_client.py``. A server that refuses the stream's credential
+(close code 4401) gets one immediate retry with the credential read again, for a
+server that restarted with a new local access token; a second refusal, or a
+refusal of the connection itself (4403), pauses the monitor for
+``_DENIED_RETRY_SECONDS`` instead of reconnecting in a loop.
 """
 
 from __future__ import annotations
@@ -27,8 +34,9 @@ import httpx
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
-from cli._server_target import HEALTH_PATH, HealthProbeResult, health_result
+from cli._server_target import HEALTH_PATH, HealthProbeResult, ServerInstance, health_result
 from cli.rpc_client import RPC_PATH
+from cli.server_client import WEBSOCKET_REFUSALS, http_options, websocket_target
 
 if TYPE_CHECKING:
     from cli.server_management import ServerState
@@ -42,6 +50,10 @@ COOPERATIVE_CLOSE_CODES = frozenset({1000, 1001, 1012})
 _RESUME_WINDOW_SECONDS = 60.0
 _RETARGET_INTERVAL_SECONDS = 30.0
 _NO_TARGET_RETRY_SECONDS = 30.0
+# A refused credential or access mode changes only with a sign-in or a server
+# reconfiguration; the tray checks again this rarely, or at once on reconnect().
+_DENIED_RETRY_SECONDS = 300.0
+_AUTH_REQUIRED_CLOSE = 4401
 
 
 @dataclass(frozen=True)
@@ -52,13 +64,15 @@ class MonitorStatus:
     the event stream is open, ``refused`` when nothing listens, ``not_listening``
     when nothing listens but the target's own server process lives (it is still
     starting or already shutting down), ``rejected`` when a listener answered but
-    refused the stream, ``unresponsive`` when the target's own server process
-    lives but answered neither the stream nor ``/health`` (a busy Event Loop),
-    ``unreachable`` when the target could not be reached otherwise, and
-    ``no_target`` without a target. ``vbot`` says whether the listener's
-    ``/health`` identified vBot. While connected, ``server_version`` and
-    ``started_at`` (canonical UTC) name the running server as its hello reported
-    it; both are empty for a server that does not report them.
+    refused the stream, ``denied`` when a vBot server refused the stream's
+    credential or this connection in its access mode (close code 4401 or 4403),
+    ``unresponsive`` when the target's own server process lives but answered
+    neither the stream nor ``/health`` (a busy Event Loop), ``unreachable`` when
+    the target could not be reached otherwise, and ``no_target`` without a target.
+    ``vbot`` says whether the listener's ``/health`` identified vBot. While
+    connected, ``server_version`` and ``started_at`` (canonical UTC) name the
+    running server as its hello reported it; both are empty for a server that
+    does not report them.
     """
 
     url: str | None = None
@@ -78,8 +92,19 @@ class MonitorListener(Protocol):
     def event_received(self, event: dict[str, Any]) -> None: ...
 
 
+class _StreamRefusedError(Exception):
+    """The server closed the stream with an access refusal before its hello."""
+
+    def __init__(self, close_code: int) -> None:
+        super().__init__(f"stream refused with close code {close_code}")
+        self.close_code = close_code
+
+
 class ServerMonitor:
     """Own the tray's background event loop, stream connection and server RPC client.
+
+    ``target`` names the server to follow, read again before every connect; the
+    HTTP client follows it, with that target's credential and TLS verification.
 
     ``classify`` classifies the target from the monitor's own failed request,
     which it receives as the health observation. It runs on the monitor's thread
@@ -90,7 +115,7 @@ class ServerMonitor:
 
     def __init__(
         self,
-        target: Callable[[], str | None],
+        target: Callable[[], ServerInstance | None],
         listener: MonitorListener,
         *,
         local: bool,
@@ -109,6 +134,7 @@ class ServerMonitor:
         self._main: asyncio.Task[None] | None = None
         self._wake: asyncio.Event | None = None
         self._client: httpx.AsyncClient | None = None
+        self._client_target: ServerInstance | None = None
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, name="vbot-tray-monitor", daemon=True)
 
@@ -138,8 +164,8 @@ class ServerMonitor:
     async def rpc(self, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
         """Call one RPC on the monitored server; ``None`` for any failure."""
 
-        url, client = self._status.url, self._client
-        if url is None or client is None:
+        url, client, target = self._status.url, self._client, self._client_target
+        if url is None or client is None or target is None or target.url != url:
             return None
         try:
             response = await client.post(
@@ -167,33 +193,51 @@ class ServerMonitor:
         self._main = asyncio.current_task()
         self._wake = asyncio.Event()
         self._ready.set()
-        async with httpx.AsyncClient(trust_env=False, timeout=5.0) as client:
-            self._client = client
+        try:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._follow()
+        finally:
+            if self._client is not None:
+                await self._client.aclose()
+
+    async def _use(self, target: ServerInstance) -> httpx.AsyncClient:
+        """The HTTP client for ``target``, replacing the client of an earlier target."""
+
+        if self._client is None or self._client_target != target:
+            if self._client is not None:
+                await self._client.aclose()
+            self._client = httpx.AsyncClient(timeout=5.0, **http_options(target))
+            self._client_target = target
+        return self._client
 
     async def _follow(self) -> None:
         delay = 0.0
         cursor: tuple[str, int] | None = None
         lost_at = 0.0
+        refusals = 0
         while True:
-            url = self._target()
-            if url is None:
+            target = self._target()
+            if target is None:
                 self._set_status(MonitorStatus(connection="no_target"))
                 await self._pause(_NO_TARGET_RETRY_SECONDS)
                 continue
+            url = target.url
+            await self._use(target)
             resume = cursor if time.monotonic() - lost_at < _RESUME_WINDOW_SECONDS else None
+            stream_url, options = websocket_target(
+                target, _stream_path(self._connection_id, resume)
+            )
             try:
                 connection = await connect(
-                    _stream_url(url, self._connection_id, resume),
+                    stream_url,
                     user_agent_header=self._user_agent,
-                    proxy=None,
                     compression=None,
                     open_timeout=10,
                     ping_interval=20,
                     ping_timeout=20,
                     close_timeout=2,
                     max_size=None,
+                    **options,
                 )
             except asyncio.CancelledError:
                 raise
@@ -204,13 +248,21 @@ class ServerMonitor:
                 await self._pause(delay)
                 continue
             try:
-                hello = await self._hello(connection)
+                try:
+                    hello = await self._hello(connection)
+                except _StreamRefusedError as refused:
+                    refusals += 1
+                    self._set_status(MonitorStatus(url=url, connection="denied", vbot=True))
+                    # A restarted server wrote a new local access token: read it once more.
+                    again = refused.close_code == _AUTH_REQUIRED_CLOSE and refusals == 1
+                    await self._pause(0.0 if again else _DENIED_RETRY_SECONDS)
+                    continue
                 if hello is None:
                     await self._classify_failure(url, TimeoutError("no connection_ready"))
                     delay = min(5.0, max(1.0, delay * 2))
                     await self._pause(delay)
                     continue
-                delay = 0.0
+                delay, refusals = 0.0, 0
                 cursor = _next_cursor(cursor, hello)
                 server = hello.get("server")
                 server = server if isinstance(server, dict) else {}
@@ -234,9 +286,16 @@ class ServerMonitor:
 
     @staticmethod
     async def _hello(connection: ClientConnection) -> dict[str, Any] | None:
+        """The server's ``connection_ready`` frame; raises ``_StreamRefusedError`` for 4401/4403."""
+
         try:
             hello = json.loads(await asyncio.wait_for(connection.recv(), timeout=10))
-        except ConnectionClosed, TimeoutError, ValueError:
+        except ConnectionClosed as closed:
+            code = closed.rcvd.code if closed.rcvd is not None else None
+            if code in WEBSOCKET_REFUSALS:
+                raise _StreamRefusedError(code) from closed
+            return None
+        except TimeoutError, ValueError:
             return None
         if not isinstance(hello, dict) or hello.get("type") != "connection_ready":
             return None
@@ -275,7 +334,8 @@ class ServerMonitor:
         # A Desktop Client follows the server its Desktop last used.
         while True:
             await asyncio.sleep(_RETARGET_INTERVAL_SECONDS)
-            if self._target() != url:
+            target = self._target()
+            if target is None or target.url != url:
                 await connection.close(1000, "target changed")
                 return
 
@@ -365,9 +425,8 @@ def _next_cursor(cursor: tuple[str, int] | None, hello: dict[str, Any]) -> tuple
     return (epoch, last_sequence)
 
 
-def _stream_url(url: str, connection_id: str, resume: tuple[str, int] | None) -> str:
-    scheme, _, rest = url.partition("://")
+def _stream_path(connection_id: str, resume: tuple[str, int] | None) -> str:
     params: dict[str, str | int] = {"connection_id": connection_id, "accessor": "tray"}
     if resume is not None:
         params["epoch"], params["after_sequence"] = resume
-    return f"{'wss' if scheme == 'https' else 'ws'}://{rest}/ws?{urlencode(params)}"
+    return f"/ws?{urlencode(params)}"
