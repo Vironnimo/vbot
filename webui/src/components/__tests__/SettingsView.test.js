@@ -297,7 +297,7 @@ describe('SettingsView', () => {
         ],
         integrations: ['channels', 'extensions'],
         archive: ['archive_retention', 'archive_entries'],
-        system: ['server', 'debug'],
+        system: ['server', 'access', 'debug'],
       };
       for (const [pageId, sectionIds] of Object.entries(expectedSections)) {
         const page = document.querySelector(`[data-settings-page="${pageId}"]`);

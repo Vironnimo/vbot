@@ -15,6 +15,7 @@
   import SettingsArchivePanel from './settings/SettingsArchivePanel.svelte';
   import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
+  import SettingsAccessPanel from './settings/SettingsAccessPanel.svelte';
   import SettingsLibrarianPanel from './settings/SettingsLibrarianPanel.svelte';
   import SettingsLiveVoicePanel from './settings/SettingsLiveVoicePanel.svelte';
   import SettingsNotificationsPanel from './settings/SettingsNotificationsPanel.svelte';
@@ -192,6 +193,7 @@
       label: () => t('settings.extensions.title'),
     },
     { id: 'server', label: () => t('settings.sections.server') },
+    { id: 'access', label: () => t('settings.sections.access') },
     {
       id: 'desktop_connection',
       label: () => t('settings.desktop.connection.title'),
@@ -290,6 +292,7 @@
       description: () => t('settings.pages.systemDescription'),
       sections: [
         'server',
+        'access',
         ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
         'debug',
       ],
@@ -1080,6 +1083,8 @@
       onCommit={commitGeneralSettings}
       onError={(message) => reportSettingsError(message)}
     />
+  {:else if panelId === 'access'}
+    <SettingsAccessPanel {clientsRefreshToken} {onToast} />
   {:else if panelId === 'desktop_connection'}
     <DesktopConnectionSettings {onToast} />
   {:else if panelId === 'live_voice_shortcut'}
