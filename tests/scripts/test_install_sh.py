@@ -244,8 +244,12 @@ def test_installer_refuses_a_package_it_cannot_verify_against_the_release_identi
         # The application installer chooses the default mode and its bind address.
         pytest.param((), "", id="default"),
         pytest.param(
-            ("--access", "lan", "--allow-network", "100.64.0.0/10", "--allow-network", "fd7a::/48"),
-            " --access lan --allow-network 100.64.0.0/10 --allow-network fd7a::/48",
+            (
+                *("--access", "lan", "--allow-network", "100.64.0.0/10"),
+                *("--allow-network", "fd7a::/48", "--allow-host", "vbot.home.arpa"),
+            ),
+            " --access lan --allow-network 100.64.0.0/10 --allow-network fd7a::/48"
+            " --allow-host vbot.home.arpa",
             id="lan",
         ),
         pytest.param(

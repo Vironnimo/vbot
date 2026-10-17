@@ -16,6 +16,11 @@ import uvicorn.server
 
 from core.access.config import access_config
 from core.access.local_token import local_token_path, read_local_access_token
+from core.access.server_record import (
+    RecordedServerAccess,
+    read_server_access,
+    server_access_path,
+)
 from core.database import DataStoreMarker, read_marker
 from core.utils.log_viewer import LOG_LINE_PATTERN
 from core.utils.logging import resolve_daily_log_path
@@ -69,18 +74,24 @@ def _patch_serving(
             self.app = app
             calls.append({"app": app, **kwargs})
 
+    def start_lines(config: FakeConfig) -> int:
+        log_path = resolve_daily_log_path(config.app["config"].data_dir)
+        if not log_path.exists():
+            return 0
+        return log_path.read_text(encoding="utf-8").count(" - Server started (")
+
     class FakeServer:
         def __init__(self, config: FakeConfig) -> None:
             self.config = config
             self.should_exit = False
             self.started = False
             self.bind_failure = False
+            self.earlier_starts = start_lines(config)
 
         async def startup(self, sockets=None) -> None:
             self.config.app["on_ready"](_READY_RUNTIME)
-            log_path = resolve_daily_log_path(self.config.app["config"].data_dir)
-            if log_path.exists():
-                assert " - Server started (" not in log_path.read_text(encoding="utf-8")
+            # The start line follows binding, not readiness.
+            assert start_lines(self.config) == self.earlier_starts
             if self.bind_failure:
                 self.config.app["on_stopped"](True)
                 raise SystemExit(uvicorn.server.STARTUP_FAILURE)
@@ -463,6 +474,53 @@ def test_main_serves_the_access_mode_its_flags_or_bind_host_select(
     assert calls[0]["host"] == host
     assert calls[0]["app"]["server_bind"]["listen_host"] == host
     assert calls[0]["app"]["access"].mode == mode
+    # The data directory records what it served for the next start without flags.
+    recorded = read_server_access(tmp_path / "data")
+    assert recorded == RecordedServerAccess(calls[0]["app"]["access"], host)
+
+
+def test_main_serves_what_the_data_directory_records_until_access_flags_replace_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls = _patch_serving(monkeypatch, _serve_until("control"))
+    data_dir = tmp_path / "data"
+    login = [
+        "--access",
+        "authenticated",
+        "--public-url",
+        "https://vbot.example.org",
+        "--trusted-proxy",
+        "127.0.0.1",
+    ]
+
+    def serve(*argv: str) -> tuple[str, Any]:
+        main(["--data-dir", str(data_dir), "--port", "8765", *argv])
+        return calls[-1]["host"], calls[-1]["app"]["access"]
+
+    def refused(*argv: str) -> str:
+        with pytest.raises(SystemExit) as exited:
+            main(["--data-dir", str(data_dir), "--port", "8765", *argv])
+        assert exited.value.code == STARTUP_FAILED_EXIT_CODE
+        return capsys.readouterr().err
+
+    authenticated = serve(*login)
+    # `vbot server start|restart` and scheduled restarts pass no access options, and
+    # the CLI may pass its default host: neither weakens what the data directory chose.
+    assert serve() == authenticated
+    assert serve("--host", "0.0.0.0") == authenticated
+    log = resolve_daily_log_path(data_dir).read_text(encoding="utf-8")
+    assert "[WARN] vbot.server - Server binds the data directory's recorded address" in log
+    # Options without --access would change a recorded configuration half-way.
+    assert "give --access together with" in refused("--allow-host", "vbot.home.arpa")
+    # Explicit access options replace the record deliberately.
+    lan = serve("--access", "lan", "--allow-host", "vbot.home.arpa")
+    assert lan == ("0.0.0.0", access_config("lan", allow_hosts=["vbot.home.arpa"]))
+    assert serve() == lan
+    # A record that cannot be read refuses the start instead of guessing a mode.
+    server_access_path(data_dir).write_text("{not json", encoding="utf-8")
+    assert "records cannot be read" in refused()
+    assert "records cannot be read" in refused("--host", "127.0.0.1")
+    assert len(calls) == 5
 
 
 @pytest.mark.parametrize(
@@ -497,6 +555,11 @@ def test_main_serves_the_access_mode_its_flags_or_bind_host_select(
             ["--access", "lan", "--allow-network", "0.0.0.0/0"],
             "every address",
             id="whole-internet-without-login",
+        ),
+        pytest.param(
+            ["--access", "lan", "--allow-host", "*.example.org"],
+            "--allow-host needs a host name",
+            id="wildcard-host-name",
         ),
         pytest.param(
             [
@@ -555,14 +618,25 @@ def test_a_packaged_server_serves_the_access_mode_its_installation_records(
 
     # Its launcher may predate access modes and pass the host it knew.
     old_launcher = serve("old-launcher", "--host", "127.0.0.1")
+    # The data directory mirrors the installation record; an unreadable mirror is
+    # replaced, since the installation record stays the authority.
+    mirrored = RecordedServerAccess(recorded, "0.0.0.0")
+    assert read_server_access(old_launcher) == mirrored
+    server_access_path(old_launcher).write_text("{not json", encoding="utf-8")
+    serve("old-launcher")
+    assert read_server_access(old_launcher) == mirrored
     # Flags that repeat the record are fine; contradicting ones are refused.
     serve("same-flags", "--access", "lan", "--allow-network", "100.64.0.0/10")
     with pytest.raises(SystemExit) as refused:
         serve("other-flags", "--access", "local")
-    # Another port of the recorded data directory is not the recorded server.
-    serve("other-port", port=9000)
+    # Another port of the recorded data directory is not the recorded server, yet
+    # it serves the mirrored configuration rather than one inferred from its host.
+    serve("old-launcher", "--host", "127.0.0.1", port=9000)
+    serve("fresh", port=9000)
 
     assert [(call["host"], call["app"]["access"]) for call in calls] == [
+        ("0.0.0.0", recorded),
+        ("0.0.0.0", recorded),
         ("0.0.0.0", recorded),
         ("0.0.0.0", recorded),
         ("127.0.0.1", access_config("local")),
@@ -571,6 +645,8 @@ def test_a_packaged_server_serves_the_access_mode_its_installation_records(
     assert "vbot application access set" in capsys.readouterr().err
     log = resolve_daily_log_path(old_launcher).read_text(encoding="utf-8")
     assert "[WARN] vbot.server - Server binds the installation's recorded address" in log
+    assert "[WARN] vbot.server - Replacing the data directory's access record" in log
+    assert "[WARN] vbot.server - Server binds the data directory's recorded address" in log
 
 
 def test_a_packaged_server_with_an_unreadable_installation_record_does_not_start(

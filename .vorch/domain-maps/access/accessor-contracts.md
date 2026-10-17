@@ -6,18 +6,22 @@ What an accessor (WebUI, Desktop, CLI/TUI, tray) relies on to reach a server in 
 
 - HTTP errors of the guard and the `/api/auth/*` endpoints use the RPC envelope `{"ok": false, "error": {"code", "message"}}` with `Cache-Control: no-store`. Accessors branch on `code`, never on `message`.
   - 401 `auth_required` (`WWW-Authenticate: Bearer`): a protected request without a valid credential in `authenticated` mode. Show pairing or sign-in; a host tool re-reads the local access token once (the server writes a new one each start).
-  - 403 `access_denied`: the peer or transport is not admitted (wrong network, proxy headers in `local`/`lan`, plain HTTP from another computer in `authenticated`). Retrying does not help; do not offer pairing.
+  - 403 `access_denied`: the peer or transport is not admitted (wrong network, proxy headers in `local`/`lan`, plain HTTP from another computer in `authenticated`), or the `Host` names no host the server knows (message "Access denied: unknown host name"). Retrying does not help; do not offer pairing.
   - 429 `rate_limited` with `Retry-After` (seconds): too many failed credentials, pairing starts or polls from this client.
   - 409 `auth_disabled`: pairing and login tickets exist only in `authenticated` mode.
   - 503 `devices_unavailable`: the device store cannot be read or written; the host must repair it.
   - 400 `invalid_request` (also 413/415 for an oversized or non-JSON body).
-- WebSockets refused by the guard are accepted and closed at once: 4401 (sign in) or 4403 (not admitted), so the browser sees the code instead of a bare handshake failure. A Device's open WebSocket closes with 4401 `Device signed out` when it is revoked or expires; its SSE streams end. Accessors stop reconnecting on 4401/4403.
+- WebSockets refused by the guard are accepted and closed at once: 4401 (sign in) or 4403 (not admitted), so the browser sees the code instead of a bare handshake failure. When a Device is revoked or expires, its open WebSockets close with 4401 `Device signed out`, its SSE streams and downloads end, and a request still waiting for its answer gets 401 `auth_required` ("Device signed out"). The request that revoked (for example `devices.logout`) still gets its answer. Accessors stop reconnecting on 4401/4403.
+
+## Host names
+
+Every mode answers only to a `Host` that is an IP address or a name the server knows: `localhost`, the server computer's host name (also short and as `<short>.local`), its bind host, the public URL's host, and each `--allow-host` (installer `-AllowHost`). This stops DNS rebinding. An accessor that reaches the server by another name (a LAN DNS name, a router alias) gets 403 "unknown host name" until the host adds that name with `--allow-host`. Several `Host` headers are refused. A reverse proxy passes the browser's `Host` through, or sets the public URL's host.
 - RPC errors from the access RPCs travel in the normal `/api/rpc` envelope (HTTP 200): `auth_required`, `access_denied`, `rate_limited` (`data.retry_after`), `auth_disabled`, `devices_unavailable`, `invalid_request`, `pairing_not_found`, `device_not_found`.
 
 ## Credentials
 
 - Device token `vbt_<device id>_<43 base64url>`: Desktop and CLI Devices send `Authorization: Bearer <token>`. It is shown once, in the approved poll answer; keep it in the accessor's secret storage.
-- Browser Devices get the cookie `vbot_device` instead: `HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=34560000` (400 days). Page code never sees the token. `Authorization` wins when both are present. A refused cookie comes back cleared (`Max-Age=0`).
+- Browser Devices get the cookie `__Host-vbot_device` instead: `HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=34560000` (400 days). The `__Host-` prefix makes browsers keep it only as set (Secure, `Path=/`, no `Domain`), so no other site or subdomain can plant or shadow it; Chromium and Firefox also store and send it on `http://localhost` and `http://127.0.0.1`. Page code never sees the token. `Authorization` wins when both are present. A refused cookie comes back cleared (`Max-Age=0`). A request that carries the cookie more than once is refused as malformed (401 in `authenticated`) and nothing is cleared, since one of the values may be valid.
 - Local access token `vbl_<43 base64url>` in `<data-dir>/runtime/local-access-<port>.token`, owner-only, rewritten at every server start: tools on the server's computer send it as `Authorization: Bearer` to a loopback URL (`http://127.0.0.1:<port>` works in every mode, also with direct TLS). Read it at each connection and again after a 401; never send it to another computer. `cli/server_client.py` is the reference (`ServerAuth` re-reads it after a 401 and repeats the request once when it changed).
 - In `local` and `lan` no credential is needed and a wrong one is ignored.
 - A Device unused for 90 days expires and must pair again.
@@ -27,14 +31,14 @@ What an accessor (WebUI, Desktop, CLI/TUI, tray) relies on to reach a server in 
 All exempt from the credential requirement (the peer and transport rules still apply).
 
 - `GET /api/auth/status` -> `{mode, mode_label, authenticated, principal, device}`: `mode` `local|lan|authenticated` with its label; `principal` `host|device|open` or `null`; `authenticated` is `principal != null` (so `true` with `open` in `local`/`lan`); `device {id, name, kind}` for a Device, else `null`. An accessor calls it first to decide whether to show pairing.
-- `POST /api/auth/pair/start {kind, name}` (`kind`: `browser|desktop|cli`; `name` 1-80 characters, whitespace collapsed, no control characters) -> `{request_id, code, poll_secret, expires_in: 600, poll_interval: 2}`. Show `code` (`XXXX-XXXX`, alphabet `23456789ABCDEFGHJKMNPQRSTVWXYZ`) and tell the user to approve it on a device that is already signed in, or with `vbot devices approve <code>` on the server's computer. Keep `poll_secret` private; it alone can claim the result. Limits: 10 starts per client and 100 overall per 10 minutes, at most 256 pending requests (429).
+- `POST /api/auth/pair/start {kind, name}` (`kind`: `browser|desktop|cli`; `name` 1-80 characters, whitespace collapsed, no control characters) -> `{request_id, code, poll_secret, expires_in: 600, poll_interval: 2}`. Show `code` (`XXXX-XXXX`, alphabet `23456789ABCDEFGHJKMNPQRSTVWXYZ`) and tell the user to approve it on a device that is already signed in, or with `vbot devices approve <code>` on the server's computer. Keep `poll_secret` private; it alone can claim the result. Limits: 10 starts per client and 100 overall per 10 minutes, at most 256 pending requests (429). A client is its effective address, an IPv6 client its /64. Requests from the server's own computer (direct loopback, no forwarding header) count only against their per-client limit and never against the overall budget or the pending cap. A full table drops the oldest undecided request of the client holding the most; it answers 429 only when every pending request is already approved.
 - `POST /api/auth/pair/poll {request_id, poll_secret}` (each a string of at most 128 characters) -> one of
   - `{status: "pending", expires_in}`: poll again after `poll_interval`;
-  - `{status: "approved", device: {id, name, kind}, token}` for `desktop`/`cli`; for `browser` the same without `token`, and the response sets the `vbot_device` cookie;
-  - `{status: "denied"}`;
+  - `{status: "approved", device: {id, name, kind}, token}` for `desktop`/`cli`; for `browser` the same without `token`, and the response sets the `__Host-vbot_device` cookie;
+  - `{status: "denied"}`: denied, or approved by a Device that was revoked or expired before the claim;
   - `{status: "expired"}`: unknown, expired, already claimed, or the secret does not match.
-  The Device is created when the approved request is claimed; a decided request is handed out once, later polls answer `expired`. Limits: 60 polls per client and 600 overall per minute (429).
-- `GET /auth/ticket/<ticket>`: redeems a login ticket once. Success: 303 to `/` with the `vbot_device` cookie, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`; the new browser Device is named as the ticket asked and approved by the ticket's issuer. Failure (unknown, used, expired, or not `authenticated` mode): 400 HTML page "Sign-in link not valid", counted as a failed credential.
+  The Device is created when the approved request is claimed; a decided request is handed out once, later polls answer `expired`. Limits: 60 polls per client and 600 overall per minute (429); the server's own computer is outside the overall budget.
+- `GET /auth/ticket/<ticket>`: redeems a login ticket once. Success: 303 to `/` with the `__Host-vbot_device` cookie, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`; the new browser Device is named as the ticket asked and approved by the ticket's issuer. Failure (unknown, used, expired, issued by a Device revoked or expired since, or not `authenticated` mode): 400 HTML page "Sign-in link not valid", counted as a failed credential.
 
 ## RPCs
 
@@ -43,7 +47,7 @@ Via `POST /api/rpc`; each needs a principal, so in-process dispatch is refused w
 - `auth.login_ticket {name?}` -> `{ticket, path: "/auth/ticket/<ticket>", expires_in: 60}`: needs a signed-in `host` or `device` principal in `authenticated` mode; `name` defaults to `Browser`. Open `<public-url><path>` in the system browser at once; never log or store the ticket.
 - `devices.list {}` -> `{devices: [{id, name, kind, created_at, last_used_at, last_client, approved_by, current}]}`, oldest first; `current` marks the calling Device; `approved_by` is `host` or a device id.
 - `devices.rename {id, name}` -> `{device}`.
-- `devices.revoke {id}` -> `{revoked: [id]}`; its live connections close at once.
+- `devices.revoke {id}` -> `{revoked: [id]}`; its live connections close at once, and what it approved but nobody claimed yet is withdrawn (pairings poll `denied`, its login tickets stop working). The same holds for `revoke_others`, `logout` and expiry.
 - `devices.revoke_others {}` -> `{revoked: [...]}`: every Device except the calling one.
 - `devices.logout {}` -> `{revoked: [own id]}`: only for a Device principal. The browser cookie cannot be deleted through RPC; the next request clears it.
 - `devices.pending {code}` -> `{code, name, kind, client, requested_at, expires_in}`: what the approver confirms before approving (`client` is the requester's effective address).

@@ -1,4 +1,4 @@
-"""Open WebSockets and SSE streams per device, so that revoking a device closes them."""
+"""Open requests per device, so that revoking a device ends or refuses them."""
 
 from __future__ import annotations
 
@@ -8,10 +8,17 @@ from dataclasses import dataclass, field
 
 @dataclass(eq=False)
 class LiveConnection:
-    """One long-lived request of a device: a WebSocket or an SSE response."""
+    """One request of a device, registered while the access guard runs it.
+
+    ``streaming`` marks what revocation cancels: a WebSocket, or an HTTP
+    response that has started and not finished (an SSE stream, a download). A
+    request whose response has not started is only marked ``revoked``; the guard
+    refuses it when it starts to answer.
+    """
 
     device_id: str
     task: asyncio.Task[object] | None
+    streaming: bool = False
     revoked: bool = False
     _cancels: int = field(default=0, repr=False)
 
@@ -30,8 +37,8 @@ class LiveConnections:
     def __init__(self) -> None:
         self._by_device: dict[str, set[LiveConnection]] = {}
 
-    def register(self, device_id: str) -> LiveConnection:
-        connection = LiveConnection(device_id, asyncio.current_task())
+    def register(self, device_id: str, *, streaming: bool) -> LiveConnection:
+        connection = LiveConnection(device_id, asyncio.current_task(), streaming=streaming)
         self._by_device.setdefault(device_id, set()).add(connection)
         return connection
 
@@ -43,16 +50,31 @@ class LiveConnections:
                 del self._by_device[connection.device_id]
 
     def revoke(self, device_ids: set[str]) -> int:
-        """End every open connection of these devices; returns how many there were."""
+        """End or refuse every open request of these devices; returns how many there were.
+
+        The request that revokes runs in the current task and still answers: a
+        device that logs itself out gets its confirmation.
+        """
+        current = _current_task()
         count = 0
         for device_id in device_ids:
             for connection in list(self._by_device.pop(device_id, ())):
+                if current is not None and connection.task is current:
+                    continue
                 count += 1
                 connection.revoked = True
-                if connection.task is not None and not connection.task.done():
-                    connection.task.cancel()
+                task = connection.task
+                if connection.streaming and task is not None and not task.done():
+                    task.cancel()
                     connection._cancels += 1
         return count
 
     def count(self, device_id: str) -> int:
         return len(self._by_device.get(device_id, ()))
+
+
+def _current_task() -> asyncio.Task[object] | None:
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None

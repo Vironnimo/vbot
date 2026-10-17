@@ -7,14 +7,8 @@ import json
 from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Any
 
-from server.access._connections import LiveConnection
-from server.access._principal import (
-    PRINCIPAL_SCOPE_KEY,
-    Principal,
-    bind_principal,
-    unbind_principal,
-)
-from server.access._rules import RouteClass, classify_route
+from server.access._principal import PRINCIPAL_SCOPE_KEY, Principal
+from server.access._rules import RouteClass, classify_route, request_host
 from server.access._service import (
     ACCESS_DENIED,
     AUTH_REQUIRED,
@@ -55,9 +49,10 @@ class AccessGuard:
     not admit (403 ``access_denied``, WebSocket 4403), authenticates, refuses
     protected routes without a principal in ``authenticated`` mode (401
     ``auth_required``, WebSocket 4401, 429 ``rate_limited`` once a client keeps
-    presenting bad credentials) and attaches the principal to the scope and the
-    context. A device's WebSockets and SSE streams are tracked so that revoking
-    the device ends them. Every HTTP response gets the security headers.
+    presenting bad credentials) and attaches the principal to the scope. A
+    device's requests are tracked so that revoking the device ends its
+    WebSockets and streams and refuses answers not yet started. Every HTTP
+    response gets the security headers.
     """
 
     def __init__(self, app: Any, *, service: AccessService) -> None:
@@ -75,6 +70,13 @@ class AccessGuard:
         facts = service.inspect(scope)
         if scope_type == "http":
             send = _with_security_headers(send, route=route, secure=facts.secure)
+        if facts.refusal == "host_not_allowed":
+            # Answering only to known names defeats DNS rebinding.
+            service.refused(facts.refusal, facts, path, detail=f"host={request_host(scope)}")
+            await _refuse(
+                scope, receive, send, 403, ACCESS_DENIED, "Access denied: unknown host name"
+            )
+            return
         if facts.refusal is not None:
             service.refused(facts.refusal, facts, path)
             await _refuse(scope, receive, send, 403, ACCESS_DENIED, "Access denied")
@@ -102,46 +104,47 @@ class AccessGuard:
                 await _refuse(scope, receive, send, 401, AUTH_REQUIRED, "Authentication required")
             return
         scope[PRINCIPAL_SCOPE_KEY] = principal
-        token = bind_principal(principal)
-        try:
-            if principal is not None and principal.device is not None:
-                await self._tracked(scope, receive, send, principal)
-            else:
-                await self._app(scope, receive, send)
-        finally:
-            unbind_principal(token)
+        if principal is not None and principal.device is not None:
+            await self._tracked(scope, receive, send, principal)
+        else:
+            await self._app(scope, receive, send)
 
     async def _tracked(
         self, scope: Scope, receive: Receive, send: Send, principal: Principal
     ) -> None:
-        """Run a device's request so that revoking the device ends it if it streams."""
+        """Run a device's request so that revoking the device ends or refuses it.
+
+        The request is registered from its first moment: revocation cancels a
+        WebSocket or a started response, and a response that starts after the
+        revocation becomes a 401 ``auth_required`` instead.
+        """
         assert principal.device is not None
         connections = self._service.connections
         websocket = scope.get("type") == "websocket"
         state = {"accepted": False, "closed": False, "started": False, "finished": False}
-        connection: LiveConnection | None = (
-            connections.register(principal.device.id) if websocket else None
-        )
+        connection = connections.register(principal.device.id, streaming=websocket)
 
         async def tracked_send(message: Message) -> None:
-            nonlocal connection
-            if connection is not None and connection.revoked:
-                raise asyncio.CancelledError
             kind = message.get("type")
+            if connection.revoked:
+                if kind == "http.response.start" and not state["started"]:
+                    state["started"] = state["finished"] = True
+                    await _refuse(scope, receive, send, 401, AUTH_REQUIRED, "Device signed out")
+                raise asyncio.CancelledError
             if kind == "websocket.accept":
                 state["accepted"] = True
             elif kind == "websocket.close":
                 state["closed"] = True
             elif kind == "http.response.start":
                 state["started"] = True
-                if connection is None and _is_event_stream(message):
-                    connection = connections.register(principal.device.id)  # type: ignore[union-attr]
+                connection.streaming = True
             elif kind == "http.response.body" and not message.get("more_body", False):
                 state["finished"] = True
+                connection.streaming = False
             await send(message)
 
         async def tracked_receive() -> Message:
-            if connection is not None and connection.revoked:
+            if connection.revoked:
                 return (
                     {"type": "websocket.disconnect", "code": WEBSOCKET_AUTH_REQUIRED}
                     if websocket
@@ -153,12 +156,11 @@ class AccessGuard:
             try:
                 await self._app(scope, tracked_receive, tracked_send)
             finally:
-                if connection is not None:
-                    connections.unregister(connection)
+                connections.unregister(connection)
         except asyncio.CancelledError:
-            if connection is None or not connection.revoked:
+            if not connection.revoked:
                 raise
-        if connection is None or not connection.revoked:
+        if not connection.revoked:
             return
         connection.settle()
         try:
@@ -247,10 +249,3 @@ def _with_cleared_cookie(send: Send) -> Send:
         await send(message)
 
     return clearing
-
-
-def _is_event_stream(message: Message) -> bool:
-    return any(
-        name.lower() == b"content-type" and value.lower().startswith(b"text/event-stream")
-        for name, value in message.get("headers") or ()
-    )

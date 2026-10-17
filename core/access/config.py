@@ -10,6 +10,10 @@ installation record, installer options) and never changeable through RPC:
   protected request. It needs a public ``https://`` URL and either direct TLS
   (certificate and key) or at least one trusted reverse proxy.
 
+In every mode ``--allow-host`` adds names a request's ``Host`` may carry besides
+the ones the server knows itself (``localhost``, its machine names, its bind
+address, the public URL's host); an IP address always passes.
+
 This module validates and normalizes that configuration and answers the
 address questions the server edge asks. Enforcement lives in ``server.access``.
 """
@@ -70,12 +74,14 @@ class AccessConfig:
     """One validated, normalized access configuration.
 
     Build it with :func:`access_config` or :func:`access_config_from_record`;
-    both enforce the mode rules. Networks are normalized CIDR strings, the public
-    URL an ``https://host[:port]`` origin, and the TLS files absolute paths.
+    both enforce the mode rules. Networks are normalized CIDR strings, allowed
+    hosts lowercase names or IP addresses, the public URL an
+    ``https://host[:port]`` origin, and the TLS files absolute paths.
     """
 
     mode: AccessMode = DEFAULT_ACCESS_MODE
     allow_networks: tuple[str, ...] = ()
+    allow_hosts: tuple[str, ...] = ()
     public_url: str | None = None
     trusted_proxies: tuple[str, ...] = ()
     tls_cert: str | None = None
@@ -115,6 +121,7 @@ class AccessConfig:
         return {
             "mode": self.mode,
             "allow_networks": list(self.allow_networks),
+            "allow_hosts": list(self.allow_hosts),
             "public_url": self.public_url,
             "trusted_proxies": list(self.trusted_proxies),
             "tls_cert": self.tls_cert,
@@ -126,6 +133,7 @@ def access_config(
     mode: str,
     *,
     allow_networks: Iterable[str] = (),
+    allow_hosts: Iterable[str] = (),
     public_url: str | None = None,
     trusted_proxies: Iterable[str] = (),
     tls_cert: str | Path | None = None,
@@ -143,6 +151,7 @@ def access_config(
             f"Unknown access mode {mode!r}; choose one of {', '.join(ACCESS_MODES)}"
         )
     networks = _normalize_networks(allow_networks, "--allow-network")
+    hosts = _normalize_hosts(allow_hosts)
     proxies = _normalize_networks(trusted_proxies, "--trusted-proxy")
     url = _normalize_public_url(public_url) if public_url not in (None, "") else None
     if (tls_cert in (None, "")) != (tls_key in (None, "")):
@@ -173,6 +182,7 @@ def access_config(
     return AccessConfig(
         mode=cast(AccessMode, mode),
         allow_networks=networks,
+        allow_hosts=hosts,
         public_url=url,
         trusted_proxies=proxies,
         tls_cert=cert,
@@ -186,11 +196,13 @@ def access_config_from_record(value: Any) -> AccessConfig:
     if not isinstance(value, Mapping):
         raise AccessConfigError("The recorded access configuration must be an object")
     allow = value.get("allow_networks", [])
+    hosts = value.get("allow_hosts", [])
     proxies = value.get("trusted_proxies", [])
     texts = (value.get("public_url"), value.get("tls_cert"), value.get("tls_key"))
     if (
         not isinstance(value.get("mode"), str)
         or not _is_string_list(allow)
+        or not _is_string_list(hosts)
         or not _is_string_list(proxies)
         or any(item is not None and not isinstance(item, str) for item in texts)
     ):
@@ -198,6 +210,7 @@ def access_config_from_record(value: Any) -> AccessConfig:
     return access_config(
         value["mode"],
         allow_networks=allow,
+        allow_hosts=hosts,
         public_url=texts[0],
         trusted_proxies=proxies,
         tls_cert=texts[1],
@@ -300,6 +313,40 @@ def _normalize_networks(values: Iterable[str], option: str) -> tuple[str, ...]:
                 f"{option} {text} would cover every address; name the actual network"
             )
         normalized = str(network)
+        if normalized not in found:
+            found.append(normalized)
+    return tuple(found)
+
+
+def normalize_host_name(value: str) -> str | None:
+    """A ``Host`` name in its comparable form, or ``None`` when it is no host.
+
+    IP addresses come back in their canonical text (IPv4-mapped IPv6 unwrapped,
+    brackets and zone removed), names lowercase without a trailing dot.
+    """
+    text = value.strip()
+    address = parse_ip(text)
+    if address is not None:
+        return str(address)
+    name = text.casefold().removesuffix(".")
+    if not name or len(name) > 253:
+        return None
+    if not all(_HOST_LABEL.fullmatch(label) for label in name.split(".")):
+        return None
+    return name
+
+
+def _normalize_hosts(values: Iterable[str]) -> tuple[str, ...]:
+    if isinstance(values, str):
+        values = (values,)
+    found: list[str] = []
+    for raw in values:
+        normalized = normalize_host_name(str(raw))
+        if normalized is None:
+            raise AccessConfigError(
+                "--allow-host needs a host name or an IP address such as vbot.home.arpa, "
+                f"without scheme, port or wildcard, not {raw!r}"
+            )
         if normalized not in found:
             found.append(normalized)
     return tuple(found)

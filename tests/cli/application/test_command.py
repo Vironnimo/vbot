@@ -393,7 +393,10 @@ def test_access_mode_change_is_recorded_for_the_next_server_start(tmp_path, monk
 
     assert run(["application", "access", "show", "--output", "plain"]) == 0
     shown = json.loads(capsys.readouterr().out)
-    set_lan = ["application", "access", "set", "lan", "--allow-network", "100.64.0.0/10"]
+    set_lan = [
+        *("application", "access", "set", "lan", "--allow-network", "100.64.0.0/10"),
+        *("--allow-host", "vbot.home.arpa"),
+    ]
     assert run([*set_lan, "--output", "plain"]) == 0
     changed = json.loads(capsys.readouterr().out)
 
@@ -401,7 +404,10 @@ def test_access_mode_change_is_recorded_for_the_next_server_start(tmp_path, monk
     loaded = load_installation(install.root)
     # A mode that serves the network binds every interface unless told otherwise.
     assert loaded.server_host == "0.0.0.0"
-    assert loaded.access == access_config("lan", allow_networks=["100.64.0.0/10"])
+    assert loaded.access == access_config(
+        "lan", allow_networks=["100.64.0.0/10"], allow_hosts=["vbot.home.arpa"]
+    )
+    assert changed["allow_hosts"] == ["vbot.home.arpa"]
     assert changed["applies"] == "on the next server start"
     assert refreshed == ["0.0.0.0"]
     log = resolve_daily_log_path(install.root).read_text(encoding="utf-8")

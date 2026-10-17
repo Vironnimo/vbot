@@ -296,11 +296,17 @@ def normalize_stop_initiator(value: str | None) -> str:
 
 
 def is_authorized_control_token(provided: str | None, expected: str | None) -> bool:
-    """Compare a supplied control token without exposing timing differences."""
+    """Compare a supplied control token without exposing timing differences.
+
+    Bytes are compared: ``compare_digest`` refuses non-ASCII text, and a header or
+    RPC parameter may carry any.
+    """
 
     if not provided or not expected:
         return False
-    return secrets.compare_digest(provided, expected)
+    return secrets.compare_digest(
+        provided.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass")
+    )
 
 
 __all__ = [

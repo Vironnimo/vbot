@@ -13,10 +13,11 @@ import socket
 import sys
 import time
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from types import FrameType
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 import psutil  # type: ignore[import-untyped]
 
@@ -30,6 +31,11 @@ from core.access.config import (
     inferred_access_mode,
 )
 from core.access.local_token import create_local_access_token, remove_local_access_token
+from core.access.server_record import (
+    RecordedServerAccess,
+    read_server_access,
+    write_server_access,
+)
 from core.storage.layout import DataDirectoryLayout, initialize_data_directory
 from core.utils.config import (
     DEFAULT_HOST,
@@ -93,7 +99,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--host",
         help="Bind address; default 127.0.0.1 for local and authenticated behind a proxy, "
-        "else 0.0.0.0",
+        "else 0.0.0.0. Without access options the data directory's recorded address wins.",
     )
     parser.add_argument("--port", type=int)
     parser.add_argument("--data-dir")
@@ -101,8 +107,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--access",
         choices=ACCESS_MODES,
         help="Who may connect: local (this computer only), lan (home network without "
-        "login) or authenticated (with login, from the internet). Omitted: local for a "
-        "loopback bind, else lan. A packaged installation's record decides instead.",
+        "login) or authenticated (with login, from the internet). Omitted: what the data "
+        "directory records; without a record local for a loopback bind, else lan. A "
+        "packaged installation's record decides for its own server.",
     )
     parser.add_argument(
         "--allow-network",
@@ -110,6 +117,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[],
         metavar="CIDR",
         help="lan: also admit this network (repeatable)",
+    )
+    parser.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="also accept this name in a request's Host header, such as a DNS name of "
+        "this machine (repeatable)",
     )
     parser.add_argument("--public-url", help="authenticated: the HTTPS address browsers use")
     parser.add_argument(
@@ -145,12 +160,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     port_bind = resolve_server_bind(config, host=DEFAULT_HOST, explicit_port=args.port)
     try:
-        access, host, host_notice = _resolve_access(args, config.data_dir, port_bind["listen_port"])
-        tls = _tls_holder(access)
+        served = _resolve_access(args, config.data_dir, port_bind["listen_port"])
+        tls = _tls_holder(served.access)
     except AccessConfigError as exc:
-        print(f"vBot server cannot start: {exc}", file=sys.stderr)
-        raise SystemExit(STARTUP_FAILED_EXIT_CODE) from None
-    server_bind: ServerBind = {**port_bind, "listen_host": host}
+        _refuse_start(str(exc))
+    access = served.access
+    server_bind: ServerBind = {**port_bind, "listen_host": served.host}
     # Before containment, which nests this process in a Job of its own.
     enclosing_job = _enclosing_foreign_job()
     activate_process_containment()
@@ -160,6 +175,11 @@ def main(argv: list[str] | None = None) -> None:
         # marker; an existing root without that marker is refused at startup.
         initialize_data_directory(config.data_dir)
     with server_control_claim(config.data_dir, server_bind["listen_port"]) as previous:
+        if served.record is not None:
+            try:
+                write_server_access(config.data_dir, served.record)
+            except (OSError, ValueError) as exc:
+                _refuse_start(f"recording the access configuration failed: {exc}")
         control = create_server_control(config.data_dir, server_bind["listen_port"])
         try:
             local_token = create_local_access_token(config.data_dir, server_bind["listen_port"])
@@ -277,8 +297,14 @@ def main(argv: list[str] | None = None) -> None:
                     "Previous server process ended without shutting down (pid=%s)", previous.pid
                 )
             _log_enclosing_job(enclosing_job)
-            if host_notice is not None:
-                _LOGGER.warning("%s", host_notice)
+            for warning in served.warnings:
+                _LOGGER.warning("%s", warning)
+            if served.record is not None:
+                _LOGGER.info(
+                    "Server access recorded for the data directory (access=%s listen=%s)",
+                    access.mode,
+                    served.host,
+                )
             server = uvicorn.Server(uvicorn_config)
             uvicorn_startup = server.startup
             uvicorn_handle_exit = server.handle_exit
@@ -412,51 +438,103 @@ class _ServerLifecycle:
         )
 
 
-def _resolve_access(
-    args: argparse.Namespace, data_dir: Path, port: int
-) -> tuple[AccessConfig, str, str | None]:
-    """The access configuration, the bind host and a notice to log, if any.
+@dataclass(frozen=True)
+class _ServedAccess:
+    """What the server serves, what it records for its data directory and what it warns."""
 
-    The server of a packaged installation runs with its recorded access mode and
-    host, whatever its launcher passes: launchers that predate access modes pass
-    only ``--host``. Any other server takes the flags; without ``--access`` the
-    mode follows the bind host. Raises ``AccessConfigError`` for what must not start.
+    access: AccessConfig
+    host: str
+    #: Written to the data directory before serving; ``None`` keeps the record as it is.
+    record: RecordedServerAccess | None
+    warnings: tuple[str, ...] = ()
+
+
+def _resolve_access(args: argparse.Namespace, data_dir: Path, port: int) -> _ServedAccess:
+    """Decide the access configuration and bind host; raise ``AccessConfigError`` to refuse.
+
+    Precedence: the server of a packaged installation runs with its installation
+    record, whatever its launcher passes (launchers that predate access modes pass
+    only ``--host``), and mirrors it into the data directory. Any other server
+    takes explicit access options and records them; without them it serves what
+    the data directory records, and only a data directory without a record lets
+    the mode follow the bind host. A record that cannot be read refuses the start.
     """
     explicit = args.access is not None or any(
-        (args.allow_network, args.public_url, args.trusted_proxy, args.tls_cert, args.tls_key)
+        (
+            args.allow_network,
+            args.allow_host,
+            args.public_url,
+            args.trusted_proxy,
+            args.tls_cert,
+            args.tls_key,
+        )
     )
     install = _recorded_installation(data_dir, port)
     if install is not None:
-        recorded = install.access
-        host = install.server_host
-        assert recorded is not None and host is not None
-        if explicit and _flagged_access(args, host) != recorded:
-            raise AccessConfigError(
-                "this installation records its server's access mode "
-                f"({recorded.mode}); change it with: vbot application access set"
+        return _installation_access(args, data_dir, install, explicit=explicit)
+    recorded = read_server_access(data_dir)
+    if recorded is not None and not explicit:
+        warnings: tuple[str, ...] = ()
+        if args.host is not None and args.host != recorded.host:
+            warnings = (
+                "Server binds the data directory's recorded address, not the requested one "
+                f"(requested={args.host} recorded={recorded.host}); start it with --access "
+                "and the access options to change it",
             )
-        notice = None
-        if args.host is not None and args.host != host:
-            notice = (
-                "Server binds the installation's recorded address, not the requested one "
-                f"(requested={args.host} recorded={host})"
-            )
-        return recorded, host, notice
+        return _ServedAccess(recorded.access, recorded.host, None, warnings)
+    if recorded is not None and args.access is None:
+        raise AccessConfigError(
+            f"this data directory records its server's access mode ({recorded.access.mode}); "
+            "give --access together with every access option to replace it"
+        )
     access = _flagged_access(args, args.host or DEFAULT_HOST)
     host = args.host or default_host(access)
     check_bind_host(access, host)
-    return access, host, None
+    served = RecordedServerAccess(access=access, host=host)
+    return _ServedAccess(access, host, None if served == recorded else served)
+
+
+def _installation_access(
+    args: argparse.Namespace, data_dir: Path, install: Any, *, explicit: bool
+) -> _ServedAccess:
+    access: AccessConfig = install.access
+    host: str = install.server_host
+    if explicit and _flagged_access(args, host) != access:
+        raise AccessConfigError(
+            "this installation records its server's access mode "
+            f"({access.mode}); change it with: vbot application access set"
+        )
+    warnings: list[str] = []
+    if args.host is not None and args.host != host:
+        warnings.append(
+            "Server binds the installation's recorded address, not the requested one "
+            f"(requested={args.host} recorded={host})"
+        )
+    try:
+        mirrored = read_server_access(data_dir)
+    except AccessConfigError as exc:
+        # The installation record is the authority; the mirror only guards other launchers.
+        warnings.append(f"Replacing the data directory's access record ({exc})")
+        mirrored = None
+    served = RecordedServerAccess(access=access, host=host)
+    return _ServedAccess(access, host, None if served == mirrored else served, tuple(warnings))
 
 
 def _flagged_access(args: argparse.Namespace, host: str) -> AccessConfig:
     return access_config(
         args.access or inferred_access_mode(args.host or host),
         allow_networks=args.allow_network,
+        allow_hosts=args.allow_host,
         public_url=args.public_url,
         trusted_proxies=args.trusted_proxy,
         tls_cert=args.tls_cert,
         tls_key=args.tls_key,
     )
+
+
+def _refuse_start(reason: str) -> NoReturn:
+    print(f"vBot server cannot start: {reason}", file=sys.stderr)
+    raise SystemExit(STARTUP_FAILED_EXIT_CODE)
 
 
 def _recorded_installation(data_dir: Path, port: int) -> Any:

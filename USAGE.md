@@ -109,7 +109,7 @@ Windows options are passed through the ScriptBlock form:
 | `-Version <tag>` | Install a specific release, such as `v0.2.0` or `0.2.0`; cannot be combined with `-Main` |
 | `-DataDir <path>` | Server data directory; default `~\.vbot` |
 | `-HostName <host>` | Server bind host; default from the access mode, `127.0.0.1` for `local` |
-| `-Access <mode>` | Server access mode: `local` (default), `lan` or `authenticated`; its options `-AllowNetwork`, `-PublicUrl`, `-TrustedProxy`, `-TlsCert`, `-TlsKey` are described in [Server access](#server-access) |
+| `-Access <mode>` | Server access mode: `local` (default), `lan` or `authenticated`; its options `-AllowNetwork`, `-AllowHost`, `-PublicUrl`, `-TrustedProxy`, `-TlsCert`, `-TlsKey` are described in [Server access](#server-access) |
 | `-Port <port>` | Server port; default `8420` |
 | `-Desktop` | Install Server + Desktop |
 | `-DesktopClient` | Install only the Desktop Client for an existing remote server |
@@ -137,7 +137,7 @@ Linux options are passed after `bash -s --`:
 | `--version <tag>` | Install a specific release tag, such as `v0.2.0`; cannot be combined with `--main` |
 | `--data-dir <path>` | Server data directory; default `~/.vbot` |
 | `--host <host>` | Server bind host; default from the access mode, `127.0.0.1` for `local` |
-| `--access <mode>` | Server access mode: `local` (default), `lan` or `authenticated`; its options `--allow-network`, `--public-url`, `--trusted-proxy`, `--tls-cert`, `--tls-key` are described in [Server access](#server-access) |
+| `--access <mode>` | Server access mode: `local` (default), `lan` or `authenticated`; its options `--allow-network`, `--allow-host`, `--public-url`, `--trusted-proxy`, `--tls-cert`, `--tls-key` are described in [Server access](#server-access) |
 | `--port <port>` | Server port; default `8420` |
 | `--no-autostart` | Do not register the systemd user unit or start the server |
 | `-h`, `--help` | Show Installer help |
@@ -176,6 +176,35 @@ vbot devices pair https://vbot.example.com
 ```
 
 It shows a code; approve it in the WebUI of a signed-in device (Settings > Access & devices > Add device) or with `vbot devices approve <code>` on the server's computer. In a terminal the command waits until the code is approved; from a script it returns after 50 seconds and the same command keeps waiting for the same code. The device token is stored for the current user on that computer (encrypted with Windows DPAPI on Windows, an owner-only file elsewhere) and never printed. Afterwards every command, including `vbot tui`, reaches that server with `--url https://vbot.example.com`, or with the environment variable `VBOT_SERVER_URL=https://vbot.example.com`. `vbot devices logout https://vbot.example.com` revokes the device on the server and removes the stored token. Pairing needs the server's `https://` address; a `local` or `lan` server needs no pairing.
+
+`lan` trusts the source address of each connection. Anything that forwards outside traffic with a private or loopback source address lets those clients in without login: router port forwarding with source NAT, Windows `netsh interface portproxy`, Docker's port publishing, or an SSH or VPN tunnel that ends on the server. Make vBot reachable from outside your home network only in `authenticated` mode.
+
+In every mode the server answers only to an IP address or a name it knows as its own: `localhost`, this computer's name (also as `<name>.local`), its bind address and the public URL's host. This stops DNS rebinding, where a website points its own name at your server. If you reach vBot through another name, such as a DNS name in your home network, add it with `-AllowHost`/`--allow-host` (once per name); otherwise the browser gets "Access denied: unknown host name".
+
+Behind a reverse proxy, the proxy must pass the browser's `Host` through, append the client's address to `X-Forwarded-For`, set `X-Forwarded-Proto` to `https`, and pass WebSocket upgrades. Caddy's `reverse_proxy` does this by default. For nginx:
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    # listen 443 ssl; server_name and certificates as usual
+    location / {
+        proxy_pass http://127.0.0.1:8420;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_buffering off;
+    }
+}
+```
+
+A server started from a development checkout keeps its access mode in its data directory (`access/server.json`): `vbot server start`, `vbot server restart` and restarts the server schedules itself serve what it records. To change it, start the server once with the access options, for example `python -m server.main --access lan --data-dir ~/.vbot-alt`. A server that cannot read the record refuses to start.
 
 ### Development checkout
 

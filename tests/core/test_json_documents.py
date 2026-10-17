@@ -342,7 +342,7 @@ def test_render_json_document_sorts_nested_keys_after_the_version() -> None:
     assert text.index('"a": [') < text.index('"z"')
 
 
-def test_snapshot_documents_leave_out_blob_sidecars_and_the_device_store(
+def test_snapshot_documents_leave_out_blob_sidecars_and_the_access_documents(
     tmp_path: Path,
 ) -> None:
     assert set(DURABLE_DOCUMENTS) >= DOCUMENTS_OUTSIDE_SNAPSHOTS
@@ -351,11 +351,13 @@ def test_snapshot_documents_leave_out_blob_sidecars_and_the_device_store(
         "artifacts/attachments/*.json",
         "artifacts/speech/*.json",
         "access/devices.json",
+        "access/server.json",
     }
-    # A restore must never revive a revoked device: no data snapshot and no
-    # configuration backup holds the device store.
+    # A restore must never revive a revoked device or a weaker access mode: no
+    # data snapshot and no configuration backup holds the access documents.
     (tmp_path / "access").mkdir()
     (tmp_path / "access" / "devices.json").write_text('{"format_version": 1, "devices": []}')
+    (tmp_path / "access" / "server.json").write_text('{"format_version": 1}')
     (tmp_path / "settings.json").write_text("{}")
     assert snapshot_document_paths(tmp_path) == ("settings.json",)
     assert configuration_paths(tmp_path) == ("settings.json",)

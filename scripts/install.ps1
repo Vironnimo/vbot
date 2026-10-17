@@ -22,6 +22,8 @@ param(
     [ValidateSet("local", "lan", "authenticated")]
     [string]$Access = "",
     [string[]]$AllowNetwork = @(),
+    # Further names a request's Host may carry, such as a DNS name of this machine.
+    [string[]]$AllowHost = @(),
     [string]$PublicUrl = "",
     [string[]]$TrustedProxy = @(),
     [string]$TlsCert = "",
@@ -238,6 +240,11 @@ function Install-NativeRelease {
                 throw "-AllowNetwork and -TrustedProxy take addresses or networks such as 192.168.1.0/24."
             }
         }
+        foreach ($value in @($AllowHost)) {
+            if ($value -match '["\r\n,]') {
+                throw "-AllowHost takes host names or addresses such as vbot.home.arpa."
+            }
+        }
         Write-Step "Installing $label"
         $tasks = if ($NoAutostart -or $Shape -eq "desktop-client") { "" } else { "startup" }
         $arguments = @(
@@ -253,6 +260,7 @@ function Install-NativeRelease {
             VBOTHOST = $HostName
             VBOTACCESS = $Access
             VBOTALLOWNETWORK = (@($AllowNetwork) -join ",")
+            VBOTALLOWHOST = (@($AllowHost) -join ",")
             VBOTPUBLICURL = $PublicUrl
             VBOTTRUSTEDPROXY = (@($TrustedProxy) -join ",")
             VBOTTLSCERT = $TlsCert

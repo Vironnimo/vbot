@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from core.access.devices import (
+    DeviceNotFoundError,
     DeviceStore,
     DeviceStoreUnavailableError,
     new_device,
@@ -59,6 +60,13 @@ def test_device_tokens_authenticate_until_the_device_is_removed(tmp_path: Path) 
     assert store.lookup(token, now=_NOW) == ("invalid", None)
     assert _loaded(tmp_path).devices() == [other]
     assert store.lookup(other_token, now=_NOW)[0] == "valid"
+    # What a removed device approved but nobody claimed in time never becomes a device.
+    late, _late_token = new_device(
+        name="Tablet", kind="desktop", approved_by=device.id, client=None, now=_LATER
+    )
+    with pytest.raises(DeviceNotFoundError):
+        store.add(late)
+    assert _loaded(tmp_path).devices() == [other]
 
 
 def test_devices_expire_after_ninety_idle_days_and_record_use_hourly(tmp_path: Path) -> None:

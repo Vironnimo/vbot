@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import secrets
 import time
 from collections.abc import Callable, Coroutine, Mapping
@@ -37,7 +38,12 @@ from server.access._pairing import (
     format_pairing_code,
 )
 from server.access._principal import HOST, OPEN, Principal
-from server.access._rules import TICKET_PATH_PREFIX, RequestFacts, inspect_request
+from server.access._rules import (
+    TICKET_PATH_PREFIX,
+    RequestFacts,
+    host_policy,
+    inspect_request,
+)
 
 _LOGGER = get_logger("server.access")
 # Device store writes run in submission order, off the Event Loop.
@@ -52,7 +58,9 @@ INVALID_REQUEST = "invalid_request"
 PAIRING_NOT_FOUND = "pairing_not_found"
 DEVICE_NOT_FOUND = "device_not_found"
 
-DEVICE_COOKIE = "vbot_device"
+#: ``__Host-``: browsers keep it only when set Secure, with Path=/ and without
+#: Domain, so no other site or subdomain can plant or shadow it.
+DEVICE_COOKIE = "__Host-vbot_device"
 DEVICE_COOKIE_MAX_AGE = 400 * 24 * 3600
 PAIRING_POLL_INTERVAL_SECONDS = 2
 REFUSAL_LOG_INTERVAL_SECONDS = 60.0
@@ -92,6 +100,11 @@ def _limit(per_client: int, overall: int, window: float, clock: Callable[[], flo
     )
 
 
+def _acquire(limit: RateLimit, key: str, *, local: bool) -> float | None:
+    """Count one event; this computer's own clients stay outside the shared budget."""
+    return limit.per_client.acquire(key) if local else limit.acquire(key)
+
+
 class AccessService:
     """Access mode, device store, pairing, tickets, rate limits and live connections.
 
@@ -104,6 +117,7 @@ class AccessService:
         config: AccessConfig,
         *,
         local_token: str | None,
+        bind_host: str | None = None,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
         utc_now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -112,6 +126,7 @@ class AccessService:
         self._local_token = local_token
         self._admitted = config.admitted_networks()
         self._proxies = config.proxy_networks()
+        self._hosts = host_policy(config, bind_host=bind_host)
         self._utc_now = utc_now
         self._wall_clock = wall_clock
         self._store: DeviceStore | None = None
@@ -157,7 +172,9 @@ class AccessService:
     # Request path ------------------------------------------------------------
 
     def inspect(self, scope: Mapping[str, Any]) -> RequestFacts:
-        return inspect_request(scope, self.config, admitted=self._admitted, proxies=self._proxies)
+        return inspect_request(
+            scope, self.config, admitted=self._admitted, proxies=self._proxies, hosts=self._hosts
+        )
 
     def authenticate(
         self, headers: list[tuple[bytes, bytes]], facts: RequestFacts
@@ -188,12 +205,17 @@ class AccessService:
                     enforcing,
                 )
             return self._device(token, facts, enforcing, from_cookie=False)
-        cookie = _cookie_value(headers, DEVICE_COOKIE)
-        if cookie is not None:
-            return self._device(cookie, facts, enforcing, from_cookie=True)
+        cookies = _cookie_values(headers, DEVICE_COOKIE)
+        if len(cookies) > 1:
+            # Which one the browser meant is unknown; clearing could drop the valid one.
+            return self._refused("malformed_credentials", enforcing)
+        if cookies:
+            return self._device(cookies[0], facts, enforcing, from_cookie=True)
         return Authentication(None if enforcing else OPEN)
 
-    def refused(self, reason: str, facts: RequestFacts, path: str) -> None:
+    def refused(
+        self, reason: str, facts: RequestFacts, path: str, *, detail: str | None = None
+    ) -> None:
         """Log one refused request, aggregated per reason."""
         if self._refusals is None:
             loop = asyncio.get_running_loop()
@@ -202,7 +224,9 @@ class AccessService:
             )
         client = facts.client or facts.peer
         self._refusals.refused(
-            reason, client=None if client is None else str(client), detail=f"path={_log_path(path)}"
+            reason,
+            client=None if client is None else str(client),
+            detail=f"path={_log_path(path)}" + (f" {detail}" if detail else ""),
         )
 
     def failed_authentication(self, facts: RequestFacts) -> float | None:
@@ -226,7 +250,11 @@ class AccessService:
         except ValueError as exc:
             raise AccessError(INVALID_REQUEST, str(exc)) from None
         self._require_store()
-        wait = self._pair_start.acquire(_client_key(facts))
+        # This computer's own clients pair outside the shared budget and the pending
+        # cap, so that a flood from elsewhere can never lock out its host.
+        local = facts.direct_loopback
+        key = _client_key(facts)
+        wait = _acquire(self._pair_start, key, local=local)
         if wait is not None:
             self.refused("pairing_rate_limited", facts, "/api/auth/pair/start")
             raise AccessError(
@@ -234,7 +262,7 @@ class AccessService:
             )
         try:
             request, poll_secret = self.pairings.start(
-                name=name, kind=kind, client=_client_text(facts)
+                name=name, kind=kind, client=_client_text(facts), client_key=key, local=local
             )
         except OverflowError:
             raise AccessError(
@@ -262,7 +290,7 @@ class AccessService:
         request_id, poll_secret = body.get("request_id"), body.get("poll_secret")
         if not _is_secret(request_id) or not _is_secret(poll_secret):
             raise AccessError(INVALID_REQUEST, "request_id and poll_secret are required")
-        wait = self._pair_poll.acquire(_client_key(facts))
+        wait = _acquire(self._pair_poll, _client_key(facts), local=facts.direct_loopback)
         if wait is not None:
             raise AccessError(RATE_LIMITED, "Polling too fast", status=429, retry_after=wait)
         request = self.pairings.poll(request_id, poll_secret)
@@ -273,13 +301,16 @@ class AccessService:
         if request.state == "denied":
             return {"status": "denied"}, None
         assert request.approved_by is not None
-        device, token = await self._create_device(
+        created = await self._create_device(
             name=request.name,
             kind=request.kind,
             approved_by=request.approved_by,
             client=_client_text(facts),
             via="pairing",
         )
+        if created is None:
+            return {"status": "denied"}, None
+        device, token = created
         payload: dict[str, Any] = {"status": "approved", "device": _device_summary(device)}
         if device.kind == "browser":
             return payload, token
@@ -356,14 +387,14 @@ class AccessService:
         redeemed = self.tickets.redeem(ticket)
         if redeemed is None:
             return None
-        _device, token = await self._create_device(
+        created = await self._create_device(
             name=redeemed.name,
             kind="browser",
             approved_by=redeemed.issued_by,
             client=_client_text(facts),
             via="ticket",
         )
-        return token
+        return None if created is None else created[1]
 
     # Device management ---------------------------------------------------------
 
@@ -400,6 +431,9 @@ class AccessService:
         store = self._require_store()
         if not missing_ok and any(store.get(device_id) is None for device_id in device_ids):
             raise AccessError(DEVICE_NOT_FOUND, "No device has this id", status=404)
+        # What these devices approved but nobody claimed yet goes with them, before
+        # the store write lets anything else run.
+        self._withdraw_approvals(set(device_ids))
         try:
             removed = await _DEVICE_WRITES.call_async(lambda: store.remove(device_ids))
         except (DeviceStoreUnavailableError, OSError) as exc:
@@ -446,13 +480,21 @@ class AccessService:
 
     async def _create_device(
         self, *, name: str, kind: str, approved_by: str, client: str | None, via: str
-    ) -> tuple[Device, str]:
+    ) -> tuple[Device, str] | None:
+        """Add the device; ``None`` when its approver is no longer a paired device."""
         store = self._require_store()
         device, token = new_device(
             name=name, kind=kind, approved_by=approved_by, client=client, now=self._utc_now()
         )
         try:
             await _DEVICE_WRITES.call_async(lambda: store.add(device))
+        except DeviceNotFoundError:
+            _LOGGER.info(
+                "Device not paired: its approver was revoked (approved_by=%s via=%s)",
+                approved_by,
+                via,
+            )
+            return None
         except (DeviceStoreUnavailableError, OSError) as exc:
             raise _store_failure(exc) from None
         _LOGGER.info(
@@ -469,6 +511,7 @@ class AccessService:
         if not devices or store is None:
             return
         ids = [device.id for device in devices]
+        self._withdraw_approvals(set(ids))
         try:
             removed = await _DEVICE_WRITES.call_async(lambda: store.remove(ids))
         except (DeviceStoreUnavailableError, OSError) as exc:
@@ -478,6 +521,19 @@ class AccessService:
         for device in removed:
             _LOGGER.info(
                 "Device expired (device=%s idle_days=%d)", device.id, DEVICE_IDLE_EXPIRY.days
+            )
+
+    def _withdraw_approvals(self, device_ids: set[str]) -> None:
+        """Deny the unclaimed pairings these devices approved and drop their login tickets.
+
+        A claim re-checks its approver as well (``DeviceStore.add``); this makes the
+        withdrawal visible at once.
+        """
+        denied = self.pairings.withdraw_approvals(device_ids)
+        dropped = self.tickets.drop_issued_by(device_ids)
+        if denied or dropped:
+            _LOGGER.info(
+                "Approvals of revoked devices withdrawn (pairings=%d tickets=%d)", denied, dropped
             )
 
     def _schedule_flush(self, store: DeviceStore) -> None:
@@ -542,24 +598,34 @@ def _client_text(facts: RequestFacts) -> str | None:
 
 
 def _client_key(facts: RequestFacts) -> str:
+    """The rate limit key of the effective client: its address, an IPv6 one by /64.
+
+    One IPv6 host commonly holds a whole /64; counting its addresses apart would
+    multiply its budget.
+    """
     client = facts.client or facts.peer
-    return "unknown" if client is None else str(client)
+    if client is None:
+        return "unknown"
+    if isinstance(client, ipaddress.IPv6Address):
+        return str(ipaddress.IPv6Network((client, 64), strict=False))
+    return str(client)
 
 
 def _is_secret(value: Any) -> TypeIs[str]:
     return isinstance(value, str) and 0 < len(value) <= _MAX_SECRET_CHARS
 
 
-def _cookie_value(headers: list[tuple[bytes, bytes]], name: str) -> str | None:
-    """The first value of cookie ``name`` across ``Cookie`` headers."""
+def _cookie_values(headers: list[tuple[bytes, bytes]], name: str) -> list[str]:
+    """Every value of cookie ``name`` across ``Cookie`` headers."""
+    values: list[str] = []
     for key, value in headers:
         if key != b"cookie":
             continue
         for part in value.decode("latin-1").split(";"):
             cookie_name, separator, cookie_value = part.strip().partition("=")
             if separator and cookie_name == name:
-                return cookie_value.strip().strip('"')
-    return None
+                values.append(cookie_value.strip().strip('"'))
+    return values
 
 
 def _log_path(path: str) -> str:

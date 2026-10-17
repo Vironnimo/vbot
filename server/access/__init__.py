@@ -9,7 +9,12 @@ from server.access._guard import (
     WEBSOCKET_AUTH_REQUIRED,
     AccessGuard,
 )
-from server.access._principal import Principal, current_principal
+from server.access._principal import (
+    Principal,
+    bound_principal,
+    current_principal,
+    scope_principal,
+)
 from server.access._routes import register_access_routes
 from server.access._service import (
     ACCESS_DENIED,
@@ -39,6 +44,8 @@ __all__ = [
     "AccessGuard",
     "AccessService",
     "Principal",
+    "bound_principal",
     "current_principal",
     "register_access_routes",
+    "scope_principal",
 ]

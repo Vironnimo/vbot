@@ -103,6 +103,10 @@ def test_control_token_authorization_requires_exact_nonempty_secret() -> None:
     assert is_authorized_control_token("wrong", "secret") is False
     assert is_authorized_control_token(None, "secret") is False
     assert is_authorized_control_token("secret", None) is False
+    # A header decodes as Latin-1 and an RPC parameter may hold any text: a refusal, never
+    # an error.
+    for foreign in ("s\xe9cret", "☃", "\ud800"):
+        assert is_authorized_control_token(foreign, "secret") is False
 
 
 def test_control_claim_prevents_replacing_current_authority(tmp_path: Path) -> None:
