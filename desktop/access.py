@@ -11,14 +11,17 @@ origin it resolves one credential, in this order:
 3. none: the Desktop has to pair (:meth:`ServerAccess.start_pairing`,
    :meth:`ServerAccess.await_pairing`).
 
-The window signs in through a login ticket (:meth:`ServerAccess.sign_in`): its
-redemption gives the WebView a browser Device and its cookie. Each sign-in
-creates such a Device; :meth:`ServerAccess.record_window_device` remembers the
-current one and revokes the previous one. Native requests (speech, Voice) send
-the credential as ``Authorization: Bearer`` (:meth:`ServerAccess.header`); a
-refused one (:meth:`ServerAccess.rejected`) is re-read (local access token) or
-dropped (device token), and a dropped sign-in is reported to the listener so
-the window can pair again.
+The window signs in through a login ticket (:meth:`ServerAccess.sign_in`) that
+lands it on the WebUI page the Desktop asks for. The ticket's redemption gives
+the WebView a browser Device and its cookie; a WebView that is signed in already
+keeps its Device. The server revokes such a ticket-created Device together with
+the Device that issued the ticket, so forgetting this Desktop's sign-in signs its
+window out too. Native requests (speech, Voice) send the credential as
+``Authorization: Bearer`` (:meth:`ServerAccess.header`); a refused one
+(:meth:`ServerAccess.rejected`, a 401) is re-read (local access token) or
+dropped (device token), and a dropped sign-in is reported to the listener so the
+window can pair again. No other answer, ``devices_unavailable`` (503) included,
+drops a credential.
 
 Tokens, tickets, poll secrets and pairing codes never appear in logs.
 """
@@ -39,7 +42,6 @@ import httpx
 
 from desktop._http import shared_ssl_context
 from desktop.credentials import (
-    DEVICE_ID_PATTERN,
     DEVICE_TOKEN_PATTERN,
     CredentialStoreError,
     DeviceTokenStore,
@@ -181,71 +183,38 @@ class ServerAccess:
 
     # -- Window sign-in ----------------------------------------------------------
 
-    def sign_in(self, address: ServerAddress) -> SignIn:
+    def sign_in(self, address: ServerAddress, landing: str | None = None) -> SignIn:
         """Get a login ticket for the window, trying each credential in turn.
 
-        A refused local access token is read again once (the server writes a
-        new one at each start); a refused device token is dropped. Without any
-        valid credential the answer is ``pairing_required``.
+        ``landing`` is the WebUI page (path and query) the ticket redirects to;
+        without it the server's start page. A refused local access token is
+        read again once (the server writes a new one at each start); a refused
+        device token is dropped. Without any valid credential the answer is
+        ``pairing_required``.
         """
+        params: dict[str, Any] = {"name": self.window_name}
+        if landing is not None:
+            params["next"] = landing
         local = self._local_token(address)
         if local is not None:
-            answer = self._login_ticket(address, _Credential(local, _HOST_ACTOR))
+            answer = self._login_ticket(address, _Credential(local, _HOST_ACTOR), params)
             if not isinstance(answer, _Refused):
                 return answer
             fresh = self._local_token(address)
             if fresh is not None and fresh != local:
-                answer = self._login_ticket(address, _Credential(fresh, _HOST_ACTOR))
+                answer = self._login_ticket(address, _Credential(fresh, _HOST_ACTOR), params)
                 if not isinstance(answer, _Refused):
                     return answer
             logger.warning("%s refused the local access token", address.origin)
         stored = self._stored(address)
         if stored is not None and stored.token is not None and stored.device_id is not None:
-            answer = self._login_ticket(address, _Credential(stored.token, stored.device_id))
+            answer = self._login_ticket(
+                address, _Credential(stored.token, stored.device_id), params
+            )
             if not isinstance(answer, _Refused):
                 return answer
             self._drop(address, stored.token)
         return SignIn(pairing_required=True)
-
-    def record_window_device(self, address: ServerAddress) -> None:
-        """Remember the browser Device the window just signed in as; revoke the previous one.
-
-        The newest browser Device named :attr:`window_name` that this Desktop's
-        credential approved is the window's. Best effort: failures are logged.
-        """
-        credential = self._credential(address)
-        if credential is None:
-            return
-        listed = self._call(address, credential, "devices.list", {})
-        devices = listed.get("devices") if listed is not None else None
-        if not isinstance(devices, list):
-            return
-        mine = [
-            device
-            for device in devices
-            if isinstance(device, dict)
-            and device.get("kind") == "browser"
-            and device.get("name") == self.window_name
-            and device.get("approved_by") == credential.actor
-            and isinstance(device.get("id"), str)
-            and DEVICE_ID_PATTERN.fullmatch(device["id"])
-        ]
-        if not mine:
-            return
-        current = max(mine, key=lambda device: str(device.get("created_at") or ""))["id"]
-        stored = self._stored(address)
-        previous = stored.webview_device_id if stored is not None else None
-        try:
-            self._store.set_webview_device(address.origin, current)
-        except CredentialStoreError:
-            return
-        known = {device.get("id") for device in devices if isinstance(device, dict)}
-        if previous is None or previous == current or previous not in known:
-            return
-        if self._call(address, credential, "devices.revoke", {"id": previous}) is not None:
-            logger.info(
-                "Revoked the earlier Desktop window device %s on %s", previous, address.origin
-            )
 
     # -- Pairing -----------------------------------------------------------------
 
@@ -379,8 +348,8 @@ class ServerAccess:
         """Forget the stored sign-in of a server; reports whether a device token was stored.
 
         The local copy goes at once. The server is then asked, in the
-        background and best effort, to revoke the window's browser Device and
-        this Desktop's own Device.
+        background and best effort, to revoke this Desktop's Device; the
+        browser Device of the window it signed in goes with it.
         """
         stored = self._store.remove(address.origin)
         if stored is None or stored.token is None or stored.device_id is None:
@@ -389,7 +358,7 @@ class ServerAccess:
         credential = _Credential(stored.token, stored.device_id)
         threading.Thread(
             target=self._sign_out,
-            args=(address, credential, stored.webview_device_id),
+            args=(address, credential),
             name="vbot-desktop-sign-out",
             daemon=True,
         ).start()
@@ -397,11 +366,7 @@ class ServerAccess:
 
     # -- Internals ----------------------------------------------------------------
 
-    def _sign_out(
-        self, address: ServerAddress, credential: _Credential, window_device: str | None
-    ) -> None:
-        if window_device is not None:
-            self._call(address, credential, "devices.revoke", {"id": window_device})
+    def _sign_out(self, address: ServerAddress, credential: _Credential) -> None:
         if self._call(address, credential, "devices.logout", {}) is not None:
             logger.info("Signed this Desktop out of %s", address.origin)
 
@@ -440,12 +405,14 @@ class ServerAccess:
             )
         return outcome
 
-    def _login_ticket(self, address: ServerAddress, credential: _Credential) -> SignIn | _Refused:
+    def _login_ticket(
+        self, address: ServerAddress, credential: _Credential, params: dict[str, Any]
+    ) -> SignIn | _Refused:
         try:
             response = self._post(
                 address,
                 RPC_PATH,
-                {"method": "auth.login_ticket", "params": {"name": self.window_name}},
+                {"method": "auth.login_ticket", "params": params},
                 token=credential.token,
             )
         except httpx.RequestError:

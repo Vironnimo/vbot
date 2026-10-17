@@ -43,7 +43,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from uuid import uuid4
 
 from desktop._windows import url_origin
@@ -282,7 +282,11 @@ class _PairingWait:
 
 @dataclass(eq=False)
 class _Landing:
-    """A window sign-in until the WebUI is loaded with the Desktop's parameters."""
+    """A window sign-in until its ticket has landed the window on the WebUI.
+
+    The ticket redirects to ``app_url``'s page; ``app_url`` is loaded only when
+    the window landed anywhere else on the server.
+    """
 
     address: ServerAddress
     ticket_url: str = field(repr=False)
@@ -599,7 +603,7 @@ class ConnectionController:
             self._end_pending_locked()
             if not self._closed:
                 self._pending = launch
-        attempt = self._attempt(launch.target)
+        attempt = self._attempt(launch.target, self._app_path(launch.open_session))
         with self._lock:
             if self._pending is not launch:
                 return attempt.result
@@ -664,7 +668,7 @@ class ConnectionController:
 
         self._end_pending("user_connect")
         target = self._build_target(host, port)
-        attempt = self._attempt(target)
+        attempt = self._attempt(target, self._app_path(None))
         prepared = self._settle(target, attempt, label)
         if attempt.pairing is not None and prepared.pairing is not None:
             with self._lock:
@@ -690,11 +694,12 @@ class ConnectionController:
         """Continue a window sign-in once the window loaded a page (pywebview ``loaded``).
 
         A connect the page started is signed in when the page it was sent to
-        (:data:`SIGN_IN_PAGE`) has loaded: the window opens the ticket. Once the
-        ticket redirected to the server's WebUI, the window loads it with the
-        Desktop's parameters, and this Desktop's window Device is recorded. A
-        ticket the server refused shows the connection screen. Any other page
-        is left alone.
+        (:data:`SIGN_IN_PAGE`) has loaded: the window opens the ticket. The
+        ticket redirects to the WebUI with the Desktop's parameters, and a URL
+        fragment the ticket URL carries stays with that redirect. A window the
+        server sent to another page loads the WebUI page itself. A ticket the
+        server refused shows the connection screen. Any other page is left
+        alone.
         """
 
         window = self._window
@@ -721,7 +726,15 @@ class ConnectionController:
                 if url is None or url_origin(url) != landing.address.origin:
                     return
                 self._landing = None
-                step = "refused" if urlsplit(url).path.startswith(TICKET_PATH_PREFIX) else "app"
+                parts = urlsplit(url)
+                if parts.path.startswith(TICKET_PATH_PREFIX):
+                    step = "refused"
+                elif parse_qs(parts.query).get(DESKTOP_SESSION_QUERY_PARAM) == [
+                    self._desktop_session_id
+                ]:
+                    return
+                else:
+                    step = "app"
         if step == "ticket":
             window.load_url(landing.ticket_url)
         elif step == "refused":
@@ -730,14 +743,6 @@ class ConnectionController:
             self._show_connection_screen(DesktopProbeResult(STATUS_SIGN_IN_FAILED, target))
         else:
             window.load_url(landing.app_url)
-            access = self._access
-            if access is not None:
-                threading.Thread(
-                    target=access.record_window_device,
-                    args=(landing.address,),
-                    name="vbot-desktop-window-device",
-                    daemon=True,
-                ).start()
 
     def close(self) -> None:
         """End the launch connect and a pending pairing for good; the window is closing.
@@ -786,11 +791,12 @@ class ConnectionController:
             )
         return DesktopTarget.for_address(address)
 
-    def _attempt(self, target: DesktopTarget, *, pair: bool = True) -> _Attempt:
+    def _attempt(self, target: DesktopTarget, landing: str, *, pair: bool = True) -> _Attempt:
         """Probe the target; sign in when its server is in the access mode ``authenticated``.
 
-        Without a credential a pairing is started, unless ``pair`` is false (a
-        sign-in right after an approved pairing must not pair again).
+        The sign-in's ticket lands on ``landing`` (:meth:`_app_path`). Without a
+        credential a pairing is started, unless ``pair`` is false (a sign-in
+        right after an approved pairing must not pair again).
         """
 
         result = self._probe(target)
@@ -802,7 +808,7 @@ class ConnectionController:
             or result.access_mode != ACCESS_MODE_AUTHENTICATED
         ):
             return _Attempt(result)
-        sign_in = self._access.sign_in(address)
+        sign_in = self._access.sign_in(address, landing)
         if sign_in.ticket_path is not None:
             return _Attempt(result, ticket_path=sign_in.ticket_path)
         if sign_in.error_code is not None:
@@ -829,7 +835,7 @@ class ConnectionController:
                 max(0.0, attempt_started + LAUNCH_RETRY_SECONDS - self._clock())
             ):
                 attempt_started = self._clock()
-                attempt = self._attempt(launch.target)
+                attempt = self._attempt(launch.target, self._app_path(launch.open_session))
                 with self._lock:
                     if self._pending is not launch:
                         return
@@ -895,7 +901,9 @@ class ConnectionController:
         try:
             outcome = access.await_pairing(wait.request, wait.stop)
             attempt = (
-                self._attempt(wait.target, pair=False) if outcome.status == "approved" else None
+                self._attempt(wait.target, self._app_path(wait.open_session), pair=False)
+                if outcome.status == "approved"
+                else None
             )
             with self._lock:
                 if self._pending is not wait:
@@ -972,15 +980,12 @@ class ConnectionController:
                 pairing=view,
             )
 
-        app_url = _with_accessor_param(address.url, self._desktop_session_id)
-        if open_session is not None:
-            app_url = _with_session_link(app_url, open_session)
-        if location is not None:
-            app_url = f"{app_url}{location}"
+        base = address.url.rstrip("/")
+        # A fragment of the ticket URL stays with the ticket's redirect.
+        fragment = location or ""
+        app_url = f"{base}{self._app_path(open_session)}{fragment}"
         ticket_url = (
-            None
-            if attempt.ticket_path is None
-            else f"{address.url.rstrip('/')}{attempt.ticket_path}"
+            None if attempt.ticket_path is None else f"{base}{attempt.ticket_path}{fragment}"
         )
         logger.info(
             "Desktop connecting to %s%s%s",
@@ -997,6 +1002,12 @@ class ConnectionController:
         if ticket_url is None:
             return PreparedConnection(result=result, navigation_url=app_url)
         return PreparedConnection(result=result, navigation_url=SIGN_IN_PAGE, ticket_url=ticket_url)
+
+    def _app_path(self, open_session: SessionLink | None) -> str:
+        """The WebUI page the window opens: ``/`` with the Desktop's query parameters."""
+
+        path = _with_accessor_param("/", self._desktop_session_id)
+        return path if open_session is None else _with_session_link(path, open_session)
 
     def _remember(self, address: ServerAddress, label: str | None) -> None:
         """Remember a server that answered; a connect without a name keeps the saved one."""
