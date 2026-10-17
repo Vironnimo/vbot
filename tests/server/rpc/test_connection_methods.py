@@ -5,6 +5,7 @@ OAuth Device Flow RPCs live in ``test_connection_methods_oauth.py``.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from core.providers.providers import (
 )
 from core.providers.reasoning import REASONING_INTENT_ON, ReasoningIntent
 from core.runtime.runtime import Runtime
+from core.secrets import CREDENTIALS
 from core.storage.storage import StorageManager
 from core.utils.config import Config
 from server.events import ServerEventBus
@@ -663,11 +665,20 @@ async def test_custom_provider_crud_is_live_and_keeps_key_out_of_settings(
         custom_items = settings["providers"]["custom_endpoints"]["items"]
         assert [item["id"] for item in custom_items] == ["local-ai"]
 
+        # An account credential that no longer decrypts is removed with the rest.
+        secrets = runtime.storage.secrets
+        secrets.set_entry(CREDENTIALS, "VBOT_CUSTOM_LOCAL_AI_API_KEY__WORK", "work-secret")
+        document = json.loads(secrets.path.read_text(encoding="utf-8"))
+        entries = document[CREDENTIALS]
+        entries["VBOT_CUSTOM_LOCAL_AI_API_KEY__WORK"] = entries["VBOT_CUSTOM_LOCAL_AI_API_KEY"]
+        secrets.path.write_text(json.dumps(document), encoding="utf-8")
+        assert secrets.reload().damaged == ("credentials/VBOT_CUSTOM_LOCAL_AI_API_KEY__WORK",)
+
         deleted = await rpc_result(state, "provider.custom_delete", provider_id="local-ai")
 
-        assert deleted == {"provider_id": "local-ai", "deleted": True, "credentials_removed": 1}
+        assert deleted == {"provider_id": "local-ai", "deleted": True, "credentials_removed": 2}
         assert runtime.storage.load_custom_providers_settings() == {}
-        assert "VBOT_CUSTOM_LOCAL_AI_API_KEY" not in runtime.storage.load_environment()
+        assert secrets.entry_names(CREDENTIALS) == ()
         with pytest.raises(KeyError):
             providers.get("local-ai")
     finally:
