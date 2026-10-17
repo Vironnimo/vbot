@@ -162,6 +162,13 @@ def test_install_rejects_overlapping_data_before_mutations(
             access_config("lan", allow_networks=["100.64.0.0/10"]),
             id="lan-with-vpn",
         ),
+        # A host name alone already selects the default mode with that name accepted.
+        pytest.param(
+            ["--allow-host", "vbot.home.arpa"],
+            "127.0.0.1",
+            access_config("local", allow_hosts=["vbot.home.arpa"]),
+            id="allowed-host-name",
+        ),
         pytest.param(
             [
                 "--access",

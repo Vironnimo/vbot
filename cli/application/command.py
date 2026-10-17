@@ -457,6 +457,8 @@ def _access_lines(host: str | None, access) -> list[str]:
     lines = [f"Access: {access.label} ({access.mode})", f"Bind address: {host}"]
     if access.allow_networks:
         lines.append(f"Also admitted networks: {', '.join(access.allow_networks)}")
+    if access.allow_hosts:
+        lines.append(f"Also accepted host names: {', '.join(access.allow_hosts)}")
     if access.public_url:
         lines.append(f"Public URL: {access.public_url}")
     if access.trusted_proxies:

@@ -171,6 +171,7 @@ var
   ServerData: String;
   ServerAccess: String;
   AllowNetworks: String;
+  AllowHosts: String;
   PublicUrl: String;
   TrustedProxies: String;
   TlsCert: String;
@@ -190,22 +191,24 @@ begin
   ServerData := ExpandConstant('{param:VBOTDATA|{%USERPROFILE}\.vbot}');
   ServerAccess := ExpandConstant('{param:VBOTACCESS|}');
   AllowNetworks := ExpandConstant('{param:VBOTALLOWNETWORK|}');
+  AllowHosts := ExpandConstant('{param:VBOTALLOWHOST|}');
   PublicUrl := ExpandConstant('{param:VBOTPUBLICURL|}');
   TrustedProxies := ExpandConstant('{param:VBOTTRUSTEDPROXY|}');
   TlsCert := ExpandConstant('{param:VBOTTLSCERT|}');
   TlsKey := ExpandConstant('{param:VBOTTLSKEY|}');
   if UnsafeParameter(ServerHost) or UnsafeParameter(ServerPort) or
     UnsafeParameter(ServerData) or UnsafeParameter(ServerAccess) or
-    UnsafeParameter(AllowNetworks) or UnsafeParameter(PublicUrl) or
-    UnsafeParameter(TrustedProxies) or UnsafeParameter(TlsCert) or
-    UnsafeParameter(TlsKey) then
+    UnsafeParameter(AllowNetworks) or UnsafeParameter(AllowHosts) or
+    UnsafeParameter(PublicUrl) or UnsafeParameter(TrustedProxies) or
+    UnsafeParameter(TlsCert) or UnsafeParameter(TlsKey) then
     RaiseException('vBot installer parameters contain unsupported characters.');
   Parameters := 'application install --root "' + ExpandConstant('{app}') +
     '" --payload "' + ExpandConstant('{tmp}\vbot-payload') +
     '" --shape {#InstallShape} --port "' + ServerPort +
     '" --data-dir "' + ServerData + '" --public-key "{#ReleasePublicKey}" --channel {#UpdateChannel}' +
     OptionalOption('--host', ServerHost) + OptionalOption('--access', ServerAccess) +
-    RepeatedOption('--allow-network', AllowNetworks) + OptionalOption('--public-url', PublicUrl) +
+    RepeatedOption('--allow-network', AllowNetworks) + RepeatedOption('--allow-host', AllowHosts) +
+    OptionalOption('--public-url', PublicUrl) +
     RepeatedOption('--trusted-proxy', TrustedProxies) + OptionalOption('--tls-cert', TlsCert) +
     OptionalOption('--tls-key', TlsKey);
 #endif

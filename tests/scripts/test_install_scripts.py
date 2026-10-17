@@ -177,6 +177,7 @@ foreach ($Mode in ($Modes -split ",")) {
     $HostName = if ($Mode -eq "main") { "" } else { "127.0.0.1" }
     $Access = if ($Mode -eq "main") { "authenticated" } else { "" }
     $TrustedProxy = if ($Mode -eq "main") { @("127.0.0.1", "10.0.0.0/8") } else { @() }
+    $AllowHost = if ($Mode -eq "main") { @("vbot.home.arpa", "nas.local") } else { @() }
     $PublicUrl = if ($Mode -eq "main") { "https://vbot.example.org" } else { "" }
     try { Install-NativeRelease -Tag $tag -Shape $Shape -MainBuild ($Mode -eq "main") }
     catch { $failure = $_.Exception.Message }
@@ -212,6 +213,7 @@ $results | ConvertTo-Json -Compress -Depth 5
         server_options = (
             [
                 '/VBOTACCESS="authenticated"',
+                '/VBOTALLOWHOST="vbot.home.arpa,nas.local"',
                 '/VBOTPUBLICURL="https://vbot.example.org"',
                 '/VBOTTRUSTEDPROXY="127.0.0.1,10.0.0.0/8"',
             ]

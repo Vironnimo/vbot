@@ -40,6 +40,7 @@ Options:
   --access <mode>     Who may connect: local (this computer only, default), lan (home
                       network without login) or authenticated (with login, internet)
   --allow-network <cidr>   lan: also admit this network, such as a VPN's (repeatable)
+  --allow-host <name>      also accept this name in a request's Host header (repeatable)
   --public-url <url>       authenticated: the https:// address browsers use
   --trusted-proxy <ip>     authenticated: the reverse proxy that terminates HTTPS (repeatable)
   --tls-cert <path>        authenticated: certificate chain file for direct HTTPS
@@ -80,7 +81,7 @@ while [ "$#" -gt 0 ]; do
         --data-dir) require_value "$@"; DATA_DIR="$2"; shift 2 ;;
         --host) require_value "$@"; HOST="$2"; shift 2 ;;
         --port) require_value "$@"; PORT="$2"; shift 2 ;;
-        --access | --allow-network | --public-url | --trusted-proxy | --tls-cert | --tls-key)
+        --access | --allow-network | --allow-host | --public-url | --trusted-proxy | --tls-cert | --tls-key)
             require_value "$@"; ACCESS_ARGS+=("$1" "$2"); shift 2 ;;
         --no-autostart) NO_AUTOSTART=1; shift ;;
         -h|--help) usage; exit 0 ;;

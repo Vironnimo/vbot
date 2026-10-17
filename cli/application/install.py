@@ -175,6 +175,14 @@ def add_access_arguments(parser: argparse.ArgumentParser) -> None:
         help="lan: also admit this network, for example a VPN's 100.64.0.0/10 (repeatable)",
     )
     parser.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="<name>",
+        help="also accept this name in a request's Host header, such as a DNS name of this "
+        "machine (repeatable)",
+    )
+    parser.add_argument(
         "--public-url",
         metavar="<https-url>",
         help="authenticated: the HTTPS address browsers use, such as https://vbot.example.org",
@@ -198,6 +206,7 @@ def access_from_arguments(mode: str, args: argparse.Namespace) -> AccessConfig:
         return access_config(
             mode,
             allow_networks=args.allow_network,
+            allow_hosts=args.allow_host,
             public_url=args.public_url,
             trusted_proxies=args.trusted_proxy,
             tls_cert=args.tls_cert,
@@ -237,7 +246,14 @@ def main(argv: list[str] | None = None) -> int:
     add_access_arguments(parser)
     args = parser.parse_args(argv)
     given = args.access is not None or any(
-        (args.allow_network, args.public_url, args.trusted_proxy, args.tls_cert, args.tls_key)
+        (
+            args.allow_network,
+            args.allow_host,
+            args.public_url,
+            args.trusted_proxy,
+            args.tls_cert,
+            args.tls_key,
+        )
     )
     install_payload(
         args.root,
