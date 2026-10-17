@@ -41,6 +41,7 @@ const LAPTOP = {
   created_at: '2026-10-01T08:00:00Z',
   last_used_at: '2026-10-17T09:30:00Z',
   last_client: '192.168.1.20',
+  approved_by: 'host',
   current: true,
 };
 const PHONE = {
@@ -50,6 +51,7 @@ const PHONE = {
   created_at: '2026-10-02T08:00:00Z',
   last_used_at: null,
   last_client: null,
+  approved_by: 'dev-1',
   current: false,
 };
 
@@ -129,7 +131,11 @@ describe('Settings access panel', () => {
     const [laptop, phone] = rows();
     expect(laptop).toContain(t('settings.access.devices.thisDevice'));
     expect(laptop).toContain('from 192.168.1.20');
+    expect(laptop).toContain(t('settings.access.devices.approvedByHost'));
     expect(phone).not.toContain(t('settings.access.devices.thisDevice'));
+    expect(phone).toContain(
+      t('settings.access.devices.approvedBy', { name: 'Firefox on Linux' }),
+    );
 
     await click(t('settings.access.signOut.button'));
     await click(t('settings.access.signOut.confirm'));

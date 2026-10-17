@@ -313,7 +313,7 @@
               </StatusChip>
             {/if}
           </div>
-          <div class="s-row-desc">{describeDeviceUse(device)}</div>
+          <div class="s-row-desc">{describeDeviceUse(device, devices)}</div>
         </div>
         <div class="s-row-control access-device__actions">
           <Button

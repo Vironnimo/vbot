@@ -43,13 +43,32 @@ export function formatDeviceTime(value) {
   });
 }
 
-// One line under a Device's name: its kind, when it was added and last
-// used, and the address it last connected from.
-export function describeDeviceUse(device) {
+// Who approved a Device: `approved_by` is `host` or the id of the approving
+// Device, named from `devices` while it is still paired.
+function describeDeviceApprover(approvedBy, devices = []) {
+  if (approvedBy === 'host') {
+    return t('settings.access.devices.approvedByHost');
+  }
+  if (typeof approvedBy !== 'string' || !approvedBy) {
+    return '';
+  }
+  const approver = devices.find((entry) => entry?.id === approvedBy);
+  return approver?.name
+    ? t('settings.access.devices.approvedBy', { name: approver.name })
+    : t('settings.access.devices.approvedByRemoved');
+}
+
+// One line under a Device's name: its kind, when it was added and by whom,
+// when it was last used, and the address it last connected from.
+export function describeDeviceUse(device, devices = []) {
   const parts = [deviceKindLabel(device?.kind)];
   const created = formatDeviceTime(device?.created_at);
   if (created) {
     parts.push(t('settings.access.devices.added', { time: created }));
+  }
+  const approver = describeDeviceApprover(device?.approved_by, devices);
+  if (approver) {
+    parts.push(approver);
   }
   const lastUsed = formatDeviceTime(device?.last_used_at);
   if (lastUsed) {
