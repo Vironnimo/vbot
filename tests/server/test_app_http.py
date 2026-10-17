@@ -11,19 +11,20 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 import server.app as server_app
 from core.access.config import AccessConfig, access_config
+from core.utils.config import DEFAULT_PORT
 from server._request_bodies import JSON_REQUEST_BODY_MAX_BYTES
 from server.app import WEBUI_DOCUMENT_CACHE_HEADERS, create_app
 from server.rpc.dispatcher import dispatch_rpc
 from tests.server.app_test_support import ServerStubRuntime
 
-_SAME_ORIGIN = "http://127.0.0.1:8420"
+_SAME_ORIGIN = f"http://127.0.0.1:{DEFAULT_PORT}"
 
 
 def test_browser_origin_guard_admits_only_the_served_origin(tmp_path: Path) -> None:
     app = create_app(runtime=ServerStubRuntime(tmp_path))
     foreign_origins = [
         "https://attacker.example",
-        "http://testserver:8420",
+        f"http://testserver:{DEFAULT_PORT}",
         "https://testserver",
         "null",
     ]

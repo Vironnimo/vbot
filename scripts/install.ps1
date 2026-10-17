@@ -16,7 +16,7 @@ param(
     # Empty: 127.0.0.1, or 0.0.0.0 for -Access lan or direct HTTPS.
     [string]$HostName = "",
     [ValidateRange(1, 65535)]
-    [int]$Port = 8420,
+    [int]$Port = 22332,
     # Who may connect: local (this computer only, the default), lan (home network
     # without login) or authenticated (with login, from the internet).
     [ValidateSet("local", "lan", "authenticated")]

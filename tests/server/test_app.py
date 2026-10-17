@@ -22,7 +22,7 @@ from core.runs import ChatRunManager, Run
 from core.runtime import Runtime
 from core.sessions import ChatSessionManager
 from core.statistics import StatisticsIndex
-from core.utils.config import Config
+from core.utils.config import DEFAULT_PORT, Config
 from core.utils.errors import ConfigError
 from core.utils.server_control import (
     CONTROL_INITIATOR_HEADER,
@@ -65,7 +65,7 @@ def test_real_runtime_serves_a_fresh_data_directory_and_stops_with_the_app(
         assert runtime.trigger_service is not None
         assert app.state.server_bind == {
             "listen_host": "127.0.0.1",
-            "listen_port": 8420,
+            "listen_port": DEFAULT_PORT,
             "port_source": "default",
         }
 

@@ -76,8 +76,8 @@ jobs:
 
           vbot="$HOME/.local/bin/vbot"
           "$vbot" server start
-          curl -fsSL "http://127.0.0.1:8420/health" | python3 -c 'import json, sys; assert json.load(sys.stdin) == {"status": "ok"}'
-          curl -fsSL "http://127.0.0.1:8420/" -o "${RUNNER_TEMP}/webui-index.html"
+          curl -fsSL "http://127.0.0.1:22332/health" | python3 -c 'import json, sys; assert json.load(sys.stdin) == {"status": "ok"}'
+          curl -fsSL "http://127.0.0.1:22332/" -o "${RUNNER_TEMP}/webui-index.html"
           test -s "${RUNNER_TEMP}/webui-index.html"
           "$vbot" server stop
 
@@ -103,7 +103,7 @@ jobs:
             -InstallDir $installDir `
             -DataDir $dataDir `
             -HostName "127.0.0.1" `
-            -Port 8420 `
+            -Port 22332 `
             -Version $env:RELEASE_TAG `
             -NoAutostart `
             -AllowElevatedInstall
@@ -133,11 +133,11 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $status -notmatch '(?m)^running: yes\s*$') {
             throw "Server status did not report a running vBot server"
           }
-          $health = Invoke-RestMethod -Uri "http://127.0.0.1:8420/health"
+          $health = Invoke-RestMethod -Uri "http://127.0.0.1:22332/health"
           if ($health.status -ne "ok") { throw "Health probe returned an unexpected response" }
           $builtIndex = Join-Path $installDir "versions\$activeVersion\app\webui\dist\index.html"
           if (-not (Test-Path -LiteralPath $builtIndex -PathType Leaf)) { throw "Installed WebUI is missing" }
-          $webui = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8420/"
+          $webui = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:22332/"
           if ($webui.StatusCode -ne 200 -or [string]::IsNullOrWhiteSpace($webui.Content)) { throw "WebUI probe failed" }
           & $vbot server stop
           if ($LASTEXITCODE -ne 0) { throw "Server stop failed" }

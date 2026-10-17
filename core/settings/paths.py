@@ -14,7 +14,6 @@ from core.model_tasks.constants import SUPPORTED_TASK_TYPES
 from core.settings._path_definitions import (
     _DEFINITIONS,
     DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
-    DEFAULT_SERVER_PORT,
     DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
     SUBAGENT_SETTING_DEFAULTS,
 )
@@ -57,7 +56,8 @@ from core.settings.normalizers import (
 from core.settings.settings import (
     effective_timezone_name,
 )
-from core.settings.validation import PORT_SETTING_KEYS, SETTINGS_SHAPE, validate_settings_data
+from core.settings.validation import SETTINGS_SHAPE, validate_settings_data
+from core.utils.config import DEFAULT_PORT, PORT_SETTING_KEYS
 from core.utils.errors import StorageError
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
@@ -137,8 +137,8 @@ def resolve_setting(raw_path: str | SettingsPath) -> ResolvedSetting:
 def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
     """Build the normalized public Settings document from persisted data."""
 
-    port = DEFAULT_SERVER_PORT
-    for key in ("server_port", "SERVER_PORT", "port", "PORT"):
+    port = DEFAULT_PORT
+    for key in PORT_SETTING_KEYS:
         if key in raw_settings:
             port = int(raw_settings[key])
             break
@@ -260,11 +260,7 @@ def apply_settings_patch(
         if operation.operation == "set":
             if operation.resolved.path.values == ("server", "port"):
                 before = next(
-                    (
-                        original[key]
-                        for key in ("server_port", "SERVER_PORT", "port", "PORT")
-                        if key in original
-                    ),
+                    (original[key] for key in PORT_SETTING_KEYS if key in original),
                     _MISSING,
                 )
                 for key in PORT_SETTING_KEYS:
@@ -279,11 +275,7 @@ def apply_settings_patch(
         before = _lookup(original, raw_path, _MISSING)
         if operation.resolved.path.values == ("server", "port"):
             before = next(
-                (
-                    original[key]
-                    for key in ("server_port", "SERVER_PORT", "port", "PORT")
-                    if key in original
-                ),
+                (original[key] for key in PORT_SETTING_KEYS if key in original),
                 _MISSING,
             )
             for key in PORT_SETTING_KEYS:
@@ -331,11 +323,7 @@ def setting_details(
     configured_value = _lookup(raw_settings, raw_values, _MISSING)
     if public_values == ("server", "port"):
         configured_value = next(
-            (
-                raw_settings[key]
-                for key in ("server_port", "SERVER_PORT", "port", "PORT")
-                if key in raw_settings
-            ),
+            (raw_settings[key] for key in PORT_SETTING_KEYS if key in raw_settings),
             _MISSING,
         )
 
@@ -668,7 +656,6 @@ __all__ = [
     "APPLICATION_LIVE",
     "APPLICATION_RESTART",
     "DEFAULT_ATTACHMENT_MAX_SIZE_BYTES",
-    "DEFAULT_SERVER_PORT",
     "DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES",
     "DefinitionSegment",
     "DynamicRemainder",

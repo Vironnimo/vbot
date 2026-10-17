@@ -14,7 +14,7 @@ from core.channels import (
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.models import MODEL_TASK_ORDER
 from core.providers.reasoning import THINKING_EFFORT_ORDER
-from core.utils.config import DEFAULT_HOST
+from core.utils.config import DEFAULT_HOST, DEFAULT_PORT
 
 # Public paths are registered here, alongside their compatibility spellings.
 # Dispatch keeps its existing action ids; help teaches the readable paths.
@@ -517,7 +517,7 @@ def _add_target_arguments(
         "--port",
         action=_TargetArgument,
         type=int,
-        help="Server port; normally --port > VBOT_SERVER_PORT > local Settings > 8420",
+        help=f"Server port; normally --port > VBOT_SERVER_PORT > local Settings > {DEFAULT_PORT}",
     )
     if url:
         parser.add_argument(

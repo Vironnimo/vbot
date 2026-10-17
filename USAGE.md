@@ -7,7 +7,7 @@ This guide covers installing, configuring, using, operating, and integrating vBo
 A new installation takes three steps:
 
 1. Run the standard Installer for your operating system.
-2. Open `http://127.0.0.1:8420/` after the Installer reports that the server is running.
+2. Open `http://127.0.0.1:22332/` after the Installer reports that the server is running.
 3. Use the setup guide to connect a Provider or OAuth subscription, choose a Model, and send the first message in the Session vBot created for you.
 
 | I want to… | Go to |
@@ -71,7 +71,7 @@ The Installer needs only `curl` and `python3`; the package brings its own CPytho
 
 Linux packages contain the server only. Use the WebUI in a browser, or connect a Windows Desktop Client from another computer.
 
-After either installation, open `http://127.0.0.1:8420/` once the Installer reports that the server is running. The first-run setup is described in [First-run setup](#first-run-setup).
+After either installation, open `http://127.0.0.1:22332/` once the Installer reports that the server is running. The first-run setup is described in [First-run setup](#first-run-setup).
 
 As with any `curl | bash` or `irm | iex` command, inspect [install.sh](scripts/install.sh) or [install.ps1](scripts/install.ps1) and run the downloaded file locally if you do not want to execute network content directly.
 
@@ -110,7 +110,7 @@ Windows options are passed through the ScriptBlock form:
 | `-DataDir <path>` | Server data directory; default `~\.vbot` |
 | `-HostName <host>` | Server bind host; default from the access mode, `127.0.0.1` for `local` |
 | `-Access <mode>` | Server access mode: `local` (default), `lan` or `authenticated`; its options `-AllowNetwork`, `-AllowHost`, `-PublicUrl`, `-TrustedProxy`, `-TlsCert`, `-TlsKey` are described in [Server access](#server-access) |
-| `-Port <port>` | Server port; default `8420` |
+| `-Port <port>` | Server port; default `22332` |
 | `-Desktop` | Install Server + Desktop |
 | `-DesktopClient` | Install only the Desktop Client for an existing remote server |
 | `-NoAutostart` | Register no logon task; the server is not started |
@@ -138,7 +138,7 @@ Linux options are passed after `bash -s --`:
 | `--data-dir <path>` | Server data directory; default `~/.vbot` |
 | `--host <host>` | Server bind host; default from the access mode, `127.0.0.1` for `local` |
 | `--access <mode>` | Server access mode: `local` (default), `lan` or `authenticated`; its options `--allow-network`, `--allow-host`, `--public-url`, `--trusted-proxy`, `--tls-cert`, `--tls-key` are described in [Server access](#server-access) |
-| `--port <port>` | Server port; default `8420` |
+| `--port <port>` | Server port; default `22332` |
 | `--no-autostart` | Do not register the systemd user unit or start the server |
 | `-h`, `--help` | Show Installer help |
 
@@ -167,7 +167,7 @@ The server's access mode decides who may connect:
 
 Choose the mode at installation with `-Access`/`--access`. `authenticated` also needs `-PublicUrl`/`--public-url` (the `https://` address browsers use) and HTTPS: either `-TrustedProxy`/`--trusted-proxy` with the address of the reverse proxy that terminates HTTPS, or `-TlsCert`/`--tls-cert` with `-TlsKey`/`--tls-key` for the server's own certificate, which it reloads when the files change. `vbot application access show` prints the current setting; `vbot application access set <mode> [options]` changes it for the next `vbot server restart`. The server refuses to start with options that do not fit its mode.
 
-`local` and `lan` have no login: everyone they admit can use vBot with your account's permissions. Both refuse requests forwarded by a reverse proxy, so a proxy in front of vBot needs `authenticated`. On the server's own computer the CLI, TUI, tray and Desktop keep working in every mode through a local access token, and the tray's **Open in browser** signs that browser in. They send that token only to the address the server listens on, such as `http://127.0.0.1:8420`; a name such as `localhost` may lead to another program, so `--url http://localhost:8420` gets no token. `vbot devices list|approve|deny|rename|revoke` manages the paired devices. Removing a device also signs out the browsers it signed in through a sign-in link, such as the Desktop's window; devices it approved by code stay. While the server cannot read its device list, signed-in devices keep their sign-in and wait until the server can check it again.
+`local` and `lan` have no login: everyone they admit can use vBot with your account's permissions. Both refuse requests forwarded by a reverse proxy, so a proxy in front of vBot needs `authenticated`. On the server's own computer the CLI, TUI, tray and Desktop keep working in every mode through a local access token, and the tray's **Open in browser** signs that browser in. They send that token only to the address the server listens on, such as `http://127.0.0.1:22332`; a name such as `localhost` may lead to another program, so `--url http://localhost:22332` gets no token. `vbot devices list|approve|deny|rename|revoke` manages the paired devices. Removing a device also signs out the browsers it signed in through a sign-in link, such as the Desktop's window; devices it approved by code stay. While the server cannot read its device list, signed-in devices keep their sign-in and wait until the server can check it again.
 
 A CLI on another computer signs in to an `authenticated` server once:
 
@@ -192,7 +192,7 @@ map $http_upgrade $connection_upgrade {
 server {
     # listen 443 ssl; server_name and certificates as usual
     location / {
-        proxy_pass http://127.0.0.1:8420;
+        proxy_pass http://127.0.0.1:22332;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -293,7 +293,7 @@ The command refuses while you are inside the installation directory, and refuses
 
 ## First-run setup
 
-Open `http://127.0.0.1:8420/`. vBot has already created an initial Identity Agent and its first Session, so you do not need to create an Agent before getting started.
+Open `http://127.0.0.1:22332/`. vBot has already created an initial Identity Agent and its first Session, so you do not need to create an Agent before getting started.
 
 1. Follow the setup guide to choose a Provider.
 2. Connect an API key, an OAuth subscription, or a keyless local Connection such as Ollama.
@@ -578,23 +578,23 @@ vbot autostart disable
 
 On Windows, Autostart is a per-user Task Scheduler logon task that starts the vBot tray, which starts the server. On Linux, it is the systemd user unit `vbot.service`, which runs the server and restarts it after a failure, together with login lingering so that the server starts at boot; while that unit exists, `vbot server start`, `stop` and `restart` go through `systemctl --user`.
 
-The default host is `127.0.0.1` and the default port is `8420`. Confirm the exact vBot health contract with:
+The default host is `127.0.0.1` and the default port is `22332`. Confirm the exact vBot health contract with:
 
 ```bash
-curl http://127.0.0.1:8420/health
+curl http://127.0.0.1:22332/health
 ```
 
 The expected body is exactly `{"status":"ok"}`.
 
 ## WebUI and Desktop
 
-The WebUI at `http://127.0.0.1:8420/` provides Chat, Agent and Project management, Cron, System Prompt editing, Settings, Logs, Statistics, and Debug views. It connects to the server-owned runtime, so closing the browser does not stop a Run.
+The WebUI at `http://127.0.0.1:22332/` provides Chat, Agent and Project management, Cron, System Prompt editing, Settings, Logs, Statistics, and Debug views. It connects to the server-owned runtime, so closing the browser does not stop a Run.
 
 Launch the optional Desktop accessor with:
 
 ```bash
 vbot desktop
-vbot desktop --host 192.168.1.50 --port 8420
+vbot desktop --host 192.168.1.50 --port 22332
 ```
 
 On Windows, `-Desktop` and `-DesktopClient` installations also create a `vBot Desktop` Start-menu entry that launches Desktop without a console window. `vbot desktop` remains the equivalent command for terminal use.
@@ -740,7 +740,7 @@ vbot tui --agent coder
 vbot tui --agent coder@my-project
 vbot tui --agent coder --session SESSION_ID
 vbot tui --agent coder --project my-project
-vbot tui --host 127.0.0.1 --port 8420
+vbot tui --host 127.0.0.1 --port 22332
 vbot tui --url https://vbot.example.com
 ```
 
@@ -1288,7 +1288,7 @@ Send `{"method":"...","params":{...}}` to `POST /api/rpc`. Responses use an `ok`
 The PowerShell example below creates a Session for an Identity Agent. Use `agent@project` as `agent_id` for a Project Agent:
 
 ```powershell
-$base = "http://127.0.0.1:8420"
+$base = "http://127.0.0.1:22332"
 
 $createBody = @{
   method = "session.create"

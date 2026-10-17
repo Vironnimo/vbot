@@ -7,6 +7,7 @@ import socket
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from core.utils.config import DEFAULT_PORT
 from scripts._worktree_records import (
     DATA_DIR_KEY,
     SERVER_PORT_KEY,
@@ -14,10 +15,12 @@ from scripts._worktree_records import (
     _read_worktree_marker,
 )
 
-MAIN_DEV_PORT = 8421
+# Development ports follow the installation's default port: the primary
+# development server takes the next one, managed worktrees the ones after it.
+MAIN_DEV_PORT = DEFAULT_PORT + 1
 
 
-FIRST_WORKTREE_PORT = 8422
+FIRST_WORKTREE_PORT = DEFAULT_PORT + 2
 
 
 FAKE_PROVIDER_PORT_OFFSET = 10_000

@@ -30,6 +30,7 @@ from core.access.config import (
     load_tls_context,
 )
 from core.utils.atomic import atomic_write_text
+from core.utils.config import DEFAULT_PORT
 
 #: Global Agent defaults a new data directory starts with. An install-time seed,
 #: not a Runtime fallback: an existing data directory keeps its settings.
@@ -54,7 +55,7 @@ def install_payload(
     *,
     shape: str,
     host: str | None = None,
-    port: int = 8420,
+    port: int = DEFAULT_PORT,
     data_dir: Path | None = None,
     public_key: str = "",
     channel: str = "release",
@@ -238,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--payload", type=Path, required=True)
     parser.add_argument("--shape", choices=sorted(SHAPES), required=True)
     parser.add_argument("--host", help="Bind address; default 127.0.0.1, or 0.0.0.0 for lan")
-    parser.add_argument("--port", type=int, default=8420)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--public-key", default="")
     parser.add_argument("--channel", choices=sorted(CHANNEL_URLS), default="release")

@@ -40,13 +40,13 @@ cd ..
 
 `cli.search_runtime` provisions the ripgrep executable that the search Tools need. The Git hooks format, lint and type-check your staged files.
 
-Start a development server with its own data directory and port, so it never touches an installed vBot at `~/.vbot` on port 8420:
+Start a development server with its own data directory and port, so it never touches an installed vBot at `~/.vbot` on port 22332:
 
 ```bash
-python server/main.py --data-dir ../vBot-data/dev --port 8421
+python server/main.py --data-dir ../vBot-data/dev --port 22333
 ```
 
-Then open [http://127.0.0.1:8421/](http://127.0.0.1:8421/). Rebuild the WebUI with `npm run build` in `webui/` after frontend changes.
+Then open [http://127.0.0.1:22333/](http://127.0.0.1:22333/). Rebuild the WebUI with `npm run build` in `webui/` after frontend changes.
 
 ## Running checks
 

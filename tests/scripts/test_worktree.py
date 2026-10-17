@@ -16,6 +16,7 @@ from core.providers.providers import ProviderRegistry
 from core.sessions.store import SessionStore
 from core.storage import StorageManager
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
+from core.utils.config import DEFAULT_PORT
 from scripts import _worktree_ports as worktree_ports
 from scripts import _worktree_seed as worktree_seed
 from tests.scripts.worktree_helpers import MODULE_PATH, PROJECT_ROOT, _load_worktree_module
@@ -100,10 +101,10 @@ def test_find_free_port_starts_after_main_dev_port(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "scan_used_ports", lambda _worktrees_dir: set())
     monkeypatch.setattr(module, "is_port_bound", lambda _port: False)
 
-    assert module.MAIN_DEV_PORT == 8421
-    assert module.FIRST_WORKTREE_PORT == 8422
-    assert module.find_free_port(tmp_path) == 8422
-    assert module.find_free_port(tmp_path, start=8421) == 8422
+    assert module.MAIN_DEV_PORT == DEFAULT_PORT + 1
+    assert module.FIRST_WORKTREE_PORT == DEFAULT_PORT + 2
+    assert module.find_free_port(tmp_path) == DEFAULT_PORT + 2
+    assert module.find_free_port(tmp_path, start=DEFAULT_PORT + 1) == DEFAULT_PORT + 2
 
 
 def test_run_command_defaults_to_project_root(monkeypatch):
@@ -401,9 +402,13 @@ def test_cmd_create_holds_port_lock_until_marker_and_settings_are_durable(tmp_pa
 def test_find_free_port_skips_server_when_paired_provider_port_is_bound(tmp_path, monkeypatch):
     module = worktree_ports
     monkeypatch.setattr(module, "scan_used_ports", lambda _worktrees_dir: set())
-    monkeypatch.setattr(module, "is_port_bound", lambda port: port == 18_422)
+    monkeypatch.setattr(
+        module,
+        "is_port_bound",
+        lambda port: port == module.FIRST_WORKTREE_PORT + module.FAKE_PROVIDER_PORT_OFFSET,
+    )
 
-    assert module.find_free_port(tmp_path) == 8423
+    assert module.find_free_port(tmp_path) == module.FIRST_WORKTREE_PORT + 1
 
 
 def test_seed_worktree_settings_preserves_existing_user_values(tmp_path):

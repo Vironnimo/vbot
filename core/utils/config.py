@@ -23,9 +23,10 @@ _WORKTREE_FILE = VBOT_ROOT / ".vbot-worktree"
 _WORKTREE_CWD_ONLY_KEY = "cwd_only"
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8420
+# The one default server port. Python code imports it from here; the parts that
+# cannot import it (Desktop, WebUI, installers) repeat it, and tests keep them equal.
+DEFAULT_PORT = 22332
 # Ordered by resolution priority: the first key present in settings.json wins.
-# This is deliberately a tuple, not the unordered validation-side frozenset.
 PORT_SETTING_KEYS = ("server_port", "SERVER_PORT", "port", "PORT")
 _LOGGER = logging.getLogger("vbot.config")
 

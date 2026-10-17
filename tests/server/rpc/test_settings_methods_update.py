@@ -24,6 +24,7 @@ from core.extensions.settings_schema import parse_settings_fields
 from core.model_tasks import TASK_TEXT_TO_SPEECH, TaskModelService
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.storage import StorageError, StorageManager
+from core.utils.config import DEFAULT_PORT
 from server.rpc.methods import dispatch_rpc
 from tests.server.rpc_test_support import (
     JsonObject,
@@ -417,7 +418,12 @@ async def test_settings_patch_applies_searxng_configuration_atomically(tmp_path:
             {"server_port": 9000},
             9000,
             _unset("server.port"),
-            {"value": 9000, "pending_value": 8420, "configured": False, "restart_required": True},
+            {
+                "value": 9000,
+                "pending_value": DEFAULT_PORT,
+                "configured": False,
+                "restart_required": True,
+            },
             True,
             {},
             id="unset-restart-setting",

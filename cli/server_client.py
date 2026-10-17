@@ -8,7 +8,7 @@ WebSocket. Callers build their clients from :func:`http_options` and
 Which credential a request carries:
 
 - A plain ``http://`` target on a loopback address the server on that port
-  listens on, named by its IP literal (``http://127.0.0.1:8420``, never
+  listens on, named by its IP literal (``http://127.0.0.1:22332``, never
   ``localhost``), gets that server's local access token from the target's data
   directory (``core.access.local_token``). It is read at the first request and
   again after a 401, because every server start writes a new one.

@@ -16,6 +16,7 @@ from core.settings.paths import (
     resolve_setting,
     setting_details,
 )
+from core.utils.config import DEFAULT_PORT
 
 
 def test_parse_settings_path_preserves_dotted_and_quoted_segments() -> None:
@@ -419,7 +420,7 @@ def test_server_port_patch_canonicalizes_and_unsets_all_raw_aliases() -> None:
     assert updated == {"server_port": 8300}
     assert cleared == {}
     assert changed == ("server.port",)
-    assert setting_details(cleared, "server.port")["value"] == 8420
+    assert setting_details(cleared, "server.port")["value"] == DEFAULT_PORT
 
 
 def test_dynamic_model_key_with_period_round_trips() -> None:

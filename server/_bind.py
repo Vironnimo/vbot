@@ -4,13 +4,9 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from core.utils.config import Config, resolve_server_bind
+from core.utils.config import DEFAULT_HOST, DEFAULT_PORT, Config, resolve_server_bind
 
 JsonObject = dict[str, Any]
-
-DEFAULT_SERVER_HOST = "127.0.0.1"
-
-DEFAULT_SERVER_PORT = 8420
 
 DEFAULT_SERVER_PORT_SOURCE = "default"
 
@@ -39,13 +35,13 @@ def _resolve_server_bind(
     if config is None:
         return _default_server_bind()
 
-    return resolve_server_bind(config, host=DEFAULT_SERVER_HOST)
+    return resolve_server_bind(config, host=DEFAULT_HOST)
 
 
 def _default_server_bind() -> ServerBindState:
     return {
-        "listen_host": DEFAULT_SERVER_HOST,
-        "listen_port": DEFAULT_SERVER_PORT,
+        "listen_host": DEFAULT_HOST,
+        "listen_port": DEFAULT_PORT,
         "port_source": DEFAULT_SERVER_PORT_SOURCE,
     }
 
@@ -60,7 +56,7 @@ def _runtime_config(runtime: Any) -> Config | None:
 
 def _coerce_bind_host(value: Any) -> str:
     if not isinstance(value, str) or not value:
-        return DEFAULT_SERVER_HOST
+        return DEFAULT_HOST
     return value
 
 

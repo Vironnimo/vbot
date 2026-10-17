@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import pytest
 
 from core.utils.config import (
     DEFAULT_PORT,
+    VBOT_ROOT,
     Config,
     _find_worktree_file_from_cwd,
     _resolve_default_data_dir,
@@ -18,6 +20,25 @@ from core.utils.config import (
 from core.utils.errors import ConfigError
 
 _PORT_SETTINGS = {"format_version": 1, "server_port": 8500}
+
+# The parts that cannot import DEFAULT_PORT repeat it; each pattern captures that copy.
+_DEFAULT_PORT_COPIES = {
+    "desktop/main.py": r"^DEFAULT_PORT = (\d+)$",
+    "scripts/install.ps1": r"\[int\]\$Port = (\d+),",
+    "scripts/install.sh": r'^PORT="(\d+)"$',
+    "scripts/windows/vbot.iss": r"\{param:VBOTPORT\|(\d+)\}",
+    "webui/src/components/settings/DesktopConnectionSettings.svelte": (
+        r"const DEFAULT_SERVER_PORT = '(\d+)';"
+    ),
+}
+
+
+@pytest.mark.parametrize("path", sorted(_DEFAULT_PORT_COPIES))
+def test_parts_that_cannot_import_the_default_port_repeat_it(path: str) -> None:
+    source = (VBOT_ROOT / path).read_text(encoding="utf-8")
+    copies = re.findall(_DEFAULT_PORT_COPIES[path], source, flags=re.MULTILINE)
+
+    assert copies == [str(DEFAULT_PORT)]
 
 
 def test_config_layers_overrides_below_the_process_environment_and_ignores_env_files(

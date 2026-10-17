@@ -56,6 +56,7 @@ from cli._parser_operations import (
 )
 from cli._progress import color_enabled, status_line
 from cli._recovery import format_command
+from core.utils.config import DEFAULT_PORT
 
 AREA_ALIASES = {
     "agents": "agent",
@@ -223,7 +224,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if tokens and tokens[0] in {"--server", "--restart", "--start", "--stop"}:
         parser.error(
             "Use an area followed by an action, for example: vbot server restart. "
-            "Put target options before the area or after the action (e.g. --port 8420). "
+            f"Put target options before the area or after the action (e.g. --port {DEFAULT_PORT}). "
             "Server lifecycle commands run on the machine that owns the server."
         )
     if _is_command_group(parser, tokens):
