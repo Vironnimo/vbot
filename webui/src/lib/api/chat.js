@@ -155,8 +155,15 @@ export function getSession(agentId, sessionId, options = {}) {
 }
 
 // Read the lines one live Session's own Runs changed, with its changed files;
-// `change_stats` is null when the Session changed no file.
-export function getSessionChangeStats(agentId, sessionId, options = {}) {
+// `change_stats` is null when the Session changed no file. With
+// `includeSubAgents`, its Sub-Agents' Runs at every depth count as its own and
+// `subagents` says how many Sub-Agent Sessions that merged.
+export function getSessionChangeStats(
+  agentId,
+  sessionId,
+  { includeSubAgents = false } = {},
+  options = {},
+) {
   requireNonEmptyString(
     agentId,
     'Agent id must be a non-empty string',
@@ -169,6 +176,31 @@ export function getSessionChangeStats(agentId, sessionId, options = {}) {
   );
   return rpc(
     'session.change_stats',
+    {
+      agent_id: agentId,
+      session_id: sessionId,
+      ...(includeSubAgents ? { include_subagents: true } : {}),
+    },
+    options,
+  );
+}
+
+// List one Session's Sub-Agents at every depth, breadth first: each names its
+// Session and the `parent_id` of the Sub-Agent it works for (null for a direct
+// Sub-Agent of the Session).
+export function getSubAgentTree(agentId, sessionId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'subagent.tree',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'subagent.tree',
+  );
+  return rpc(
+    'subagent.tree',
     { agent_id: agentId, session_id: sessionId },
     options,
   );

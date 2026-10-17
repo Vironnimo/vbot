@@ -116,8 +116,16 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       }),
     getSession: (agentId, sessionId) =>
       call('session.get', { agent_id: agentId, session_id: sessionId }),
-    getSessionChangeStats: (agentId, sessionId) =>
+    getSessionChangeStats: (agentId, sessionId, { includeSubAgents } = {}) =>
       call('session.change_stats', {
+        agent_id: agentId,
+        session_id: sessionId,
+        ...(includeSubAgents ? { include_subagents: true } : {}),
+      }),
+    getSubAgentTree: (agentId, sessionId) =>
+      call('subagent.tree', { agent_id: agentId, session_id: sessionId }),
+    getStatisticsSessionUsage: (agentId, sessionId) =>
+      call('statistics.session_usage', {
         agent_id: agentId,
         session_id: sessionId,
       }),

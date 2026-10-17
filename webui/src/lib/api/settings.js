@@ -523,6 +523,16 @@ export function getStatisticsReport(
   return rpc('statistics.report', params, options);
 }
 
+// The usage of one Session's own Runs (`session`), of its Sub-Agents' Runs at
+// every depth (`subagents`) and both (`total`), in the report Totals shape.
+export function getStatisticsSessionUsage(agentId, sessionId, options = {}) {
+  return rpc(
+    'statistics.session_usage',
+    { agent_id: agentId, session_id: sessionId },
+    options,
+  );
+}
+
 export function getStatisticsRunActivity(params, options = {}) {
   return rpc('statistics.run_activity', params, options);
 }

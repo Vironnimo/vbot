@@ -4,8 +4,10 @@
 ``REPORT_SECTIONS``) for an optional hour-aligned window, with day series in an
 IANA timezone (default: the Settings timezone). ``statistics.run_activity``
 returns the bounded Run projection overlapping a required time window for
-Provider-limit correlation. Both run on the Statistics index database's worker
-pool and expose no raw Tool arguments or Reasoning.
+Provider-limit correlation. ``statistics.session_usage`` sums the usage of one
+Session's own Runs and of its Sub-Agents' Runs at every depth. All run on the
+Statistics index database's worker pool and expose no raw Tool arguments or
+Reasoning.
 """
 
 from __future__ import annotations
@@ -13,13 +15,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, cast
 
+from core.sessions import SessionAddress
+from core.sessions.errors import SessionNotFoundError
 from core.settings.settings import SettingsValidationError, validate_timezone_name
 from core.skills import project_skill_origin, scan_skill_names
 from core.statistics import REPORT_SECTIONS, StatisticsService
+from core.subagents.links import descendants
 from core.utils.timestamps import parse_timestamp
 from server.rpc.dispatcher import RpcMethodHandler
+from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.validation import _reject_unsupported
+from server.rpc.validation import _reject_unsupported, _required_agent_address, _required_string
 
 JsonObject = dict[str, Any]
 
@@ -148,6 +154,32 @@ class _RuntimeSkillInventory:
         return [(skill.name, origin) for skill in self._runtime.project_own_skills(project_id)]
 
 
+async def _statistics_session_usage(state: Any, params: JsonObject) -> JsonObject:
+    """Return ``{session, subagents, total}`` usage Totals of one live Session's tree.
+
+    ``session`` covers the Session's own Runs, ``subagents`` the Runs of its
+    Sub-Agents at every depth, and ``subagent_count`` how many Sub-Agent
+    Sessions that is.
+    """
+    _reject_unsupported(params, {"agent_id", "session_id"}, "statistics.session_usage")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+    chat_sessions = state.runtime.chat_sessions
+
+    def subagent_sessions() -> list[SessionAddress]:
+        if chat_sessions.summary(address) is None:
+            raise SessionNotFoundError(f"session does not exist: {session_id}")
+        return [link.session for link in descendants(chat_sessions, address)]
+
+    try:
+        subagents = await chat_sessions.run_async(subagent_sessions)
+        usage = await statistics_service(state).session_tree_usage_async(address, subagents)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {**usage, "subagent_count": len(subagents)}
+
+
 def statistics_service(state: Any) -> StatisticsService:
     service = getattr(state, "statistics_service", None)
     if service is not None:
@@ -171,4 +203,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
         "statistics.report": _statistics_report,
         "statistics.run_activity": _statistics_run_activity,
+        "statistics.session_usage": _statistics_session_usage,
     }

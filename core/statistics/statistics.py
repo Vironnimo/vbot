@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,11 +21,13 @@ from core.statistics._sections import (
     ReportWindow,
     build_sections,
 )
+from core.statistics._session_usage import session_tree_usage
 from core.statistics._sources import (
     AgentDirectory,
     ProjectDirectory,
     SessionSource,
     _owner_scopes,
+    _session_scopes,
     extension_session_summary,
 )
 from core.statistics.index import (
@@ -408,6 +410,47 @@ class StatisticsService:
         return self._index.read(
             self._sessions,
             _owner_scopes(records, owner_name, summaries, self._sessions.summary),
+            consume,
+            prune=False,
+            usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
+        )
+
+    async def session_tree_usage_async(
+        self, session: SessionAddress, subagents: Sequence[SessionAddress]
+    ) -> JsonObject:
+        """Return the usage of a Session's own Runs and of its Sub-Agents' Runs.
+
+        ``{session, subagents, total}``, each in the report Totals shape;
+        ``subagents`` lists the Sub-Agent Sessions below *session*.
+        """
+        return await self._index.run_async(self._session_tree_usage, session, tuple(subagents))
+
+    def _session_tree_usage(
+        self, session: SessionAddress, subagents: tuple[SessionAddress, ...]
+    ) -> JsonObject:
+        self._import_session_usage()
+        addresses = (session, *subagents)
+        owned = {
+            owner.address: owner
+            for owner in self._sessions.list_owned_session_summaries(metadata_keys=("seen_skills",))
+        }
+
+        def consume(view: IndexView) -> JsonObject:
+            keys = [
+                indexed.session_key if indexed is not None else None
+                for indexed in (
+                    view.session(address.project_id, address.agent_id, address.session_id)
+                    for address in addresses
+                )
+            ]
+            return session_tree_usage(
+                view.connection, keys[0], [key for key in keys[1:] if key is not None]
+            )
+
+        return self._index.read(
+            self._sessions,
+            _session_scopes(addresses, owned, self._sessions.summary),
             consume,
             prune=False,
             usage_recorder=self._usage_recorder,

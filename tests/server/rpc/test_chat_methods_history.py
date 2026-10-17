@@ -1,4 +1,4 @@
-"""``chat.history``, ``chat.reflections`` and ``subagent.inspect`` read contracts."""
+"""``chat.history``, ``chat.reflections`` and ``subagent.*`` read contracts."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from core.runs import ChatRunManager, RunAdmission, RunKind
 from core.sessions import SUBAGENT_REPLY_TARGET_META_KEY, ChatSession, SessionAddress
 from core.settings.normalizers import normalize_compaction_settings
 from core.skills import SkillAuthoringService
+from core.subagents import SubAgentState
 from core.subagents.links import link_session
 from core.tools.tools import tool_success
 from server.file_delivery import FileDelivery
@@ -1122,3 +1123,63 @@ async def test_subagent_inspect_dispatches_the_exact_qualified_work_address() ->
 
     assert response["result"]["result"] == "done"
     assert calls == [("worker", "child-session", "sub-work-one", "project-one")]
+
+
+@pytest.mark.asyncio
+async def test_subagent_tree_lists_every_depth_with_its_session() -> None:
+    callers: list[SessionAddress] = []
+    child = SessionAddress("project-one", "helper", "child-session")
+
+    class Subagents:
+        async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
+            callers.append(caller)
+            return [
+                SubAgentState(
+                    id="sub-child",
+                    title="Research",
+                    agent_id="helper@project-one",
+                    session=child,
+                    parent_id=None,
+                    status="working",
+                    last_tool="read",
+                    activity_file=None,
+                ),
+                SubAgentState(
+                    id="sub-grandchild",
+                    title="Check",
+                    agent_id="helper@project-one",
+                    session=SessionAddress("project-one", "helper", "grandchild-session"),
+                    parent_id="sub-child",
+                    status="idle",
+                    last_tool=None,
+                    activity_file=None,
+                ),
+            ]
+
+    state = SimpleNamespace(runtime=SimpleNamespace(subagents=Subagents()))
+
+    response = await call(
+        state, "subagent.tree", agent_id="worker@project-one", session_id="root-session"
+    )
+
+    assert callers == [SessionAddress("project-one", "worker", "root-session")]
+    assert response["result"] == {
+        "subagents": [
+            {
+                "id": "sub-child",
+                "title": "Research",
+                "agent_id": "helper@project-one",
+                "session_id": "child-session",
+                "parent_id": None,
+                "status": "working",
+            },
+            {
+                "id": "sub-grandchild",
+                "title": "Check",
+                "agent_id": "helper@project-one",
+                "session_id": "grandchild-session",
+                "parent_id": "sub-child",
+                "status": "idle",
+            },
+        ]
+    }

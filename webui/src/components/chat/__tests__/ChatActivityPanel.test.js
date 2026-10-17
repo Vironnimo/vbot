@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRawSnippet, flushSync, mount, unmount } from 'svelte';
+import { flushSync, mount, unmount } from 'svelte';
 
 import { reflectionTaskRows } from '../../../lib/chatTimelinePresentation.js';
 import { init, t } from '../../../lib/i18n.js';
@@ -543,14 +543,17 @@ describe('ChatActivityPanel', () => {
         createdAt: '2026-10-01T08:00:00.000Z',
         lastActiveAt: '2026-10-02T09:30:00.000Z',
       },
-      sessionUsage: {
-        input_tokens: 120000,
-        output_tokens: 3400,
-        cache_read_tokens: 90000,
+      usage: {
+        session: { input_tokens: 100000, output_tokens: 3000 },
+        subAgents: { input_tokens: 20000, output_tokens: 400 },
+        total: {
+          input_tokens: 120000,
+          output_tokens: 3400,
+          cache_read_tokens: 90000,
+          cost_usd: 1.25,
+        },
+        subAgentCount: 2,
       },
-      contextReadout: createRawSnippet(() => ({
-        render: () => '<span class="test-context">51K / 1M</span>',
-      })),
       sessionStats: {
         files: 2,
         added: 8,
@@ -572,20 +575,22 @@ describe('ChatActivityPanel', () => {
       ]),
     );
     expect(Object.keys(facts)).toEqual([
-      t('chat.activity.overview.context'),
       t('chat.activity.overview.tokens'),
       t('chat.activity.overview.cache'),
+      t('chat.activity.overview.cost'),
       t('chat.activity.overview.changes'),
       t('chat.activity.overview.started'),
       t('chat.activity.overview.lastActive'),
     ]);
+    // Usage and changes cover the Session and its Sub-Agents.
     expect(
-      facts[t('chat.activity.overview.context')].querySelector('.test-context'),
-    ).not.toBeNull();
+      document.querySelector('.chat-activity__scope').textContent.trim(),
+    ).toBe(t('chat.activity.overview.withSubAgentsMany', { count: 2 }));
     expect(facts[t('chat.activity.overview.tokens')].textContent).toContain(
       '120K',
     );
     expect(facts[t('chat.activity.overview.cache')].textContent).toBe('75%');
+    expect(facts[t('chat.activity.overview.cost')].textContent).toBe('$1.25');
     const filesChanged = `${t('chat.changeStats.filesMany', { count: 2 })},`;
     expect(
       [
@@ -595,6 +600,74 @@ describe('ChatActivityPanel', () => {
       ].map((part) => part.textContent),
     ).toEqual([filesChanged, '+8', '-2']);
     expect(document.querySelector('.chat-activity__stats-empty')).toBeNull();
+  });
+
+  it('opens the Sub-Agents below a Sub-Agent and their Sessions', () => {
+    const onNavigateToSubAgent = vi.fn();
+    const tree = [
+      {
+        id: 'sub-lead',
+        title: 'Lead',
+        agent_id: 'builder',
+        session_id: 'session-lead',
+        parent_id: null,
+        status: 'working',
+      },
+      {
+        id: 'sub-check',
+        title: 'Check',
+        agent_id: 'helper@vbot',
+        session_id: 'session-check',
+        parent_id: 'sub-lead',
+        status: 'working',
+      },
+      {
+        id: 'sub-deep',
+        title: 'Deep',
+        agent_id: 'helper@vbot',
+        session_id: 'session-deep',
+        parent_id: 'sub-check',
+        status: 'idle',
+      },
+    ];
+    openPanel({
+      timelineItems: [
+        runItem([
+          subAgentTask({
+            id: 'lead',
+            agentId: 'builder',
+            description: 'Lead',
+            status: 'running',
+          }),
+        ]),
+      ],
+      subAgentTree: tree,
+      onNavigateToSubAgent,
+    });
+
+    const toggle = rowContaining('Lead').querySelector(
+      '.chat-activity__nested-toggle',
+    );
+    expect(toggle.textContent.trim()).toBe('1');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(rowContaining('Check')).toBeUndefined();
+
+    toggle.click();
+    flushSync();
+    const nested = rowContaining('Check');
+    expect(nested.textContent).toContain(status('running'));
+    nested.querySelector('.chat-activity__nested-toggle').click();
+    flushSync();
+    expect(rowContaining('Deep').textContent).toContain(status('idle'));
+    expect(
+      rowContaining('Deep').querySelector('.chat-activity__nested-toggle'),
+    ).toBeNull();
+
+    nested.querySelector('.chat-activity__task-link').click();
+    expect(onNavigateToSubAgent).toHaveBeenCalledWith({
+      agentId: 'helper@vbot',
+      sessionId: 'session-check',
+    });
   });
 
   it('shortens a long Finished section to its newest entries until asked', () => {

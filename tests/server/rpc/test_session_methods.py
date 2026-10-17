@@ -22,6 +22,7 @@ from core.channels import ChannelConfig
 from core.chat import ChatMessage
 from core.database import write_bootstrap_marker
 from core.sessions import FORK_SOURCE_META_KEY, ChatSessionManager, SessionAddress
+from core.subagents.links import link_session
 from core.utils.timestamps import canonical_timestamp
 from server.events import ServerEventBus
 from server.rpc.errors import RPC_ERROR_DOMAIN
@@ -547,6 +548,45 @@ async def test_session_change_stats_and_rows_report_the_sessions_changed_lines(
     }
     missing = await rpc_error(state, "session.change_stats", agent_id="coder", session_id="gone")
     assert missing["code"] == RPC_ERROR_DOMAIN
+
+    # Asked to, the Session's Sub-Agents at every depth count as its own.
+    parent = session.address
+    for child_id, child_file in (("child", "/repo/b.py"), ("grandchild", "/repo/a.py")):
+        child = sessions.create("helper", session_id=child_id)
+        link_session(
+            sessions,
+            child.address,
+            subagent_id=f"sub-{child_id}",
+            parent=parent,
+            run_id="run-one",
+            tool_call_id=None,
+            tool_call_index=None,
+        )
+        await child.start_run(f"run-{child_id}").record_change_stats_async(
+            {
+                "files": 1,
+                "added": 2,
+                "removed": 0,
+                "paths": [child_file],
+                "file_stats": [{"path": child_file, "added": 2, "removed": 0}],
+            }
+        )
+        parent = child.address
+    tree = await rpc_result(
+        state, "session.change_stats", agent_id="coder", session_id="work", include_subagents=True
+    )
+    assert tree == {
+        "change_stats": {
+            "files": 2,
+            "added": 7,
+            "removed": 1,
+            "file_stats": [
+                {"path": "/repo/a.py", "added": 5, "removed": 1},
+                {"path": "/repo/b.py", "added": 2, "removed": 0},
+            ],
+        },
+        "subagents": 2,
+    }
 
 
 @pytest.mark.asyncio

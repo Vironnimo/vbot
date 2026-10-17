@@ -141,20 +141,34 @@ describe('ChatView Sessions', () => {
   );
 
   describe('Session information', () => {
-    it('reads the Session change statistics from the server while it is open', async () => {
+    it('reads the change statistics and usage of the Session and its Sub-Agents while it is open', async () => {
       const answers = [
         { files: 1, added: 3, removed: 1, file_stats: [] },
         { files: 2, added: 5, removed: 1, file_stats: [] },
       ];
       const fallback = createChatRpcMock();
-      rpcMock.mockImplementation(async (method, params) =>
-        method === 'session.change_stats'
-          ? {
-              change_stats:
-                answers[rpcCalls('session.change_stats').length - 1] ?? null,
-            }
-          : fallback(method, params),
-      );
+      const totals = (input_tokens) => ({ input_tokens, output_tokens: 10 });
+      rpcMock.mockImplementation(async (method, params) => {
+        if (method === 'session.change_stats') {
+          return {
+            change_stats:
+              answers[rpcCalls('session.change_stats').length - 1] ?? null,
+            subagents: 1,
+          };
+        }
+        if (method === 'statistics.session_usage') {
+          return {
+            session: totals(4000),
+            subagents: totals(3000),
+            total: totals(7000),
+            subagent_count: 1,
+          };
+        }
+        if (method === 'subagent.tree') {
+          return { subagents: [] };
+        }
+        return fallback(method, params);
+      });
       const props = reactiveProps({ sessionsRefreshToken: 0 });
       await chat.mountChat(props);
       const statsText = () =>
@@ -166,9 +180,17 @@ describe('ChatView Sessions', () => {
       document.querySelector('.chat-activity__rail').click();
       flushSync();
       await waitForCondition(() => statsText().includes('+3'));
+      const session = { agent_id: 'alpha', session_id: 'session-1' };
       expect(rpcCalls('session.change_stats')).toEqual([
-        { agent_id: 'alpha', session_id: 'session-1' },
+        { ...session, include_subagents: true },
       ]);
+      expect(rpcCalls('statistics.session_usage')).toEqual([session]);
+      expect(rpcCalls('subagent.tree')).toEqual([session]);
+      await waitForCondition(() =>
+        document
+          .querySelector('.chat-activity__facts')
+          ?.textContent.includes('7K'),
+      );
 
       // A Sessions refresh (a Run ended somewhere) reads them again.
       props.sessionsRefreshToken = 1;

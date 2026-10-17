@@ -14,7 +14,7 @@ from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
 from core.chat.messages import ToolCall
 from core.runs import ChatRunManager, Run, RunAdmission, RunInterruptedError, RunKind
-from core.sessions import SESSION_RUN_KINDS_META_KEY, SessionRunRecord
+from core.sessions import SESSION_RUN_KINDS_META_KEY, SessionAddress, SessionRunRecord
 from core.sessions._types import SessionRunCompletion
 from core.sessions.errors import SessionNotFoundError
 from tests.core.sessions.history_fixtures import complete_run
@@ -508,3 +508,22 @@ async def test_change_statistics_persist_while_running_and_sum_per_session(manag
     fork = await manager.fork(session.address)
     assert manager.change_stats(fork.address) is None
     assert "change_stats" not in manager.summary(fork.address)
+
+    # Merged Sessions' own Runs count as the Session's own, each file once;
+    # a merged Session no longer live is skipped.
+    helper = manager.create("helper")
+    await helper.start_run("helper-run").record_change_stats_async(
+        _changes(("/repo/a.py", 1, 1), ("/repo/c.py", 2, 0))
+    )
+    gone = SessionAddress(None, "helper", "gone")
+    assert manager.change_stats(session.address, merged=[helper.address, gone]) == {
+        "files": 4,
+        "added": 13,
+        "removed": 5,
+        "file_stats": [
+            {"path": "/repo/a.py", "added": 6, "removed": 5},
+            {"path": "/repo/b.py", "added": 1, "removed": 0},
+            {"path": "/repo/c.py", "added": 2, "removed": 0},
+            {"path": "/repo/legacy.py", "added": None, "removed": None},
+        ],
+    }
