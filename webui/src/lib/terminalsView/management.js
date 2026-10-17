@@ -68,12 +68,7 @@ export function createTerminalManagement({
     try {
       const result = await api.deleteTerminalGroup(groupId);
       await loadTerminals({ silent: true });
-      return (
-        result ?? {
-          group_id: groupId,
-          terminals_killed: 0,
-        }
-      );
+      return result ?? { group_id: groupId, terminals_moved: 0 };
     } catch (error) {
       state.actionError = errorMessage(error);
       return null;
@@ -96,6 +91,12 @@ export function createTerminalManagement({
     }
     // Optimistic local order: rewrite the terminal list in the new order so
     // the canvas reflows immediately; the server order follows.
+    // Members off the canvas (finished ones) keep their place after them.
+    const hidden = state.terminals.filter(
+      (terminal) =>
+        terminal.group_id === groupId &&
+        !ordered.includes(terminal.terminal_id),
+    );
     state.terminals = state.terminals
       .filter((terminal) => terminal.group_id !== groupId)
       .concat(
@@ -104,6 +105,7 @@ export function createTerminalManagement({
             (terminal) => terminal.terminal_id === terminalId,
           ),
         ),
+        hidden,
       );
     void api.setTerminalGroupOrder(groupId, ordered).catch(() => {
       if (!isDestroyed()) {
@@ -136,18 +138,17 @@ export function createTerminalManagement({
         throw new Error('The server returned an invalid terminal.');
       }
       reconcileTerminalLaunchHistory(state, result);
-      state.selectedGroupId =
-        terminal.group_id || groupId || state.selectedGroupId;
-      // The append tile marks the next position, including after a reload.
-      // Save through the existing group-order contract instead of relying on
-      // the catalog's default newest-first ordering.
-      reorderGroup(state.selectedGroupId, [
-        ...visibleTerminals(state)
-          .filter((item) => item.terminal_id !== terminal.terminal_id)
-          .map((item) => item.terminal_id),
-        terminal.terminal_id,
-      ]);
+      // The server places a new terminal last in its view.
+      state.historyTerminalId = '';
+      if (terminal.group_id && terminal.group_id !== state.selectedGroupId) {
+        state.lingeringIds = [];
+        state.selectedGroupId = terminal.group_id;
+      }
       state.selectedTerminalId = terminal.terminal_id;
+      // A view that did not exist yet comes with the next list.
+      if (!state.groups.some((group) => group.group_id === terminal.group_id)) {
+        void loadTerminals({ silent: true });
+      }
       reconcileStreams();
       return terminal;
     } catch (error) {
@@ -160,11 +161,49 @@ export function createTerminalManagement({
     }
   }
 
+  // Show a terminal in another view: a group or a conversation (`groupId`),
+  // or where it started (`null`). The tile moves at once; the list follows.
+  async function moveTerminal(terminalId, groupId) {
+    const terminal = state.terminals.find(
+      (item) => item.terminal_id === terminalId,
+    );
+    if (!terminal || isUnavailable()) {
+      return false;
+    }
+    state.actionError = '';
+    const target = groupId ?? terminal.home_group_id;
+    if (target) {
+      mergeTerminalSummary(state, {
+        ...terminal,
+        group_id: target,
+        pinned: groupId !== null,
+      });
+      reconcileStreams();
+    }
+    try {
+      const result = await api.moveTerminal(terminalId, groupId);
+      if (!isDestroyed()) {
+        mergeTerminalSummary(state, result?.terminal);
+      }
+      return true;
+    } catch (error) {
+      if (!isDestroyed()) {
+        state.actionError = errorMessage(error);
+      }
+      return false;
+    } finally {
+      if (!isDestroyed()) {
+        await loadTerminals({ silent: true });
+      }
+    }
+  }
+
   return {
     createGroup,
     renameGroup,
     deleteGroup,
     reorderGroup,
+    moveTerminal,
     startManualTerminal,
   };
 }

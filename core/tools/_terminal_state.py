@@ -200,6 +200,15 @@ class TerminalOwner:
 
 
 @dataclass(frozen=True, slots=True)
+class TerminalSessionView:
+    """The conversation a Terminal is shown under: the root Session of a
+    Sub-Agent tree, with its title (``None`` before it has one)."""
+
+    root: TerminalOwner
+    title: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class TerminalAttention:
     """One program-agnostic Agent-attention boundary for a Terminal Session."""
 
@@ -227,6 +236,8 @@ class TerminalInfo:
     launch_command: str | None
     launch_arguments: tuple[str, ...]
     name: str | None
+    # A short first name, unique among retained Terminals, that the user calls it by.
+    call_name: str
     group_id: str | None
     cwd: Path
     pid: int

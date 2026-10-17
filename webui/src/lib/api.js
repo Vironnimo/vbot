@@ -207,6 +207,7 @@ export {
   createTerminalGroup,
   renameTerminalGroup,
   deleteTerminalGroup,
+  moveTerminal,
   setTerminalGroupOrder,
   listCronJobs,
   createCronJob,

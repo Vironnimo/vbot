@@ -69,11 +69,17 @@ async def test_list_shows_every_terminal_with_its_title_and_attachment(
     listed = await call(terminal_manager, context, {"action": "list"})
     terminals = cast(dict[str, Any], listed["data"])["terminals"]
     assert terminals == [
-        {"terminal_id": terminal_id, "program": "fake-tui", "state": "running", "attached": "here"}
+        {
+            "terminal_id": terminal_id,
+            "call_name": "Anna",
+            "program": "fake-tui",
+            "state": "running",
+            "attached": "here",
+        }
     ]
     [shown] = details(terminal_manager, tmp_path, {"action": "list"}, listed)
     assert shown["type"] == "results"
-    assert shown["items"] == [{"title": "fake-tui", "meta": "running · attached here"}]
+    assert shown["items"] == [{"title": "Anna · fake-tui", "meta": "running · attached here"}]
     discovered = await call(
         terminal_manager, make_context(tmp_path, session_id="other"), {"action": "list"}
     )

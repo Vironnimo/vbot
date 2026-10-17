@@ -136,7 +136,13 @@ from core.tools.load_tools import register_load_tools_tool
 from core.tools.scratch_areas import ScratchAreas
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
-from core.tools.terminal_manager import TerminalManager, observe_process_tree
+from core.tools.terminal_manager import (
+    TerminalManager,
+    TerminalOwner,
+    TerminalSessionView,
+    observe_process_tree,
+    resolve_root_view,
+)
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.tools.update_goal import register_update_goal_tool
 from core.usage import UsageRecorder
@@ -664,6 +670,8 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._trigger_service.set_owned_completion_starter(runtime._start_owned_completion)
         runtime._trigger_service.set_owned_completion_validator(runtime._validate_owned_completion)
+        agents = runtime._agents
+        assert agents is not None
         runtime._terminal_manager = TerminalManager(
             runtime._trigger_service,
             temporary_files=runtime._storage.temporary_files,
@@ -671,6 +679,12 @@ def bootstrap(runtime: Runtime) -> None:
             groups_path=runtime._storage.layout.terminals / "groups.json",
             data_dir=runtime._storage.data_dir,
             process_observer=observe_process_tree,
+            session_view=partial(_terminal_session_view, runtime._chat_sessions),
+            reserved_call_names=partial(_agent_names, agents),
+        )
+        terminal_manager = runtime._terminal_manager
+        runtime._chat_sessions.add_title_changed_callback(
+            lambda _address: terminal_manager.forget_session_views()
         )
         runtime._start_terminal_manager()
         runtime._command_manager = CommandManager(
@@ -865,6 +879,42 @@ def bootstrap(runtime: Runtime) -> None:
     # startup traceback as its context.
     clean_up_failed_startup(runtime)
     raise startup_error
+
+
+def _agent_names(agents: AgentStore) -> list[str]:
+    """The ids and names of the Agents, which Terminals are not called by."""
+    return [name for agent in agents.list() for name in (agent.id, agent.name)]
+
+
+def _terminal_session_view(sessions: Any, scope: TerminalOwner) -> TerminalSessionView:
+    """Name the conversation a Terminal's Session belongs to: the root Session
+    of its Sub-Agent tree, with that Session's title."""
+
+    def address(owner: TerminalOwner) -> SessionAddress:
+        return SessionAddress(owner.project_id, owner.agent_id, owner.session_id)
+
+    def parent(owner: TerminalOwner) -> TerminalOwner | None:
+        value = sessions.metadata_value(address(owner), "subagent_parent")
+        if not isinstance(value, dict):
+            return None
+        agent_id, session_id = value.get("agent_id"), value.get("session_id")
+        if not isinstance(agent_id, str) or not isinstance(session_id, str):
+            return None
+        project_id = value.get("project_id")
+        return TerminalOwner(
+            project_id=project_id if isinstance(project_id, str) and project_id else None,
+            agent_id=agent_id,
+            session_id=session_id,
+        )
+
+    def title(owner: TerminalOwner) -> str | None:
+        for key in ("title", "auto_title"):
+            value = sessions.metadata_value(address(owner), key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    return resolve_root_view(scope, parent, title)
 
 
 def _agent_default_project(agents: AgentStore, agent_id: str) -> str | None:

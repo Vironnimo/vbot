@@ -4,6 +4,7 @@ import {
   forgetTerminal,
   killTerminal,
   listTerminals,
+  moveTerminal,
   prepareSpeechTranscription,
   renameTerminalGroup,
   setTerminalGroupOrder,
@@ -17,6 +18,7 @@ import {
   TERMINAL_STREAM_IDLE,
   TERMINAL_STREAM_CONNECTED,
   TERMINAL_STREAM_SNAPSHOT,
+  defaultTerminalGroupId,
   visibleTerminals,
   terminalIsFinished,
   reconcileTerminalList,
@@ -48,6 +50,7 @@ export function createTerminalsController({
     forgetTerminal,
     killTerminal,
     listTerminals,
+    moveTerminal,
     renameTerminalGroup,
     setTerminalGroupOrder,
     startTerminal,
@@ -78,6 +81,7 @@ export function createTerminalsController({
     renameGroup,
     deleteGroup,
     reorderGroup,
+    moveTerminal: moveTerminalToView,
     startManualTerminal,
   } = createTerminalManagement({
     state,
@@ -166,6 +170,8 @@ export function createTerminalsController({
     state.actionError = '';
   }
 
+  // Another view leaves the history; the shown one keeps it (closeHistory
+  // leaves it).
   function selectGroup(groupId) {
     if (groupId === state.selectedGroupId) {
       return;
@@ -173,6 +179,9 @@ export function createTerminalsController({
     if (!state.groups.some((group) => group.group_id === groupId)) {
       return;
     }
+    // Finished terminals stay only while their view is shown.
+    state.lingeringIds = [];
+    state.historyTerminalId = '';
     state.selectedGroupId = groupId;
     state.actionError = '';
     const firstVisible = visibleTerminals(state)[0];
@@ -186,6 +195,30 @@ export function createTerminalsController({
     ) {
       state.selectedTerminalId = firstVisible?.terminal_id ?? '';
     }
+    reconcileStreams();
+  }
+
+  // Show one finished terminal alone, read-only; closeHistory returns to the
+  // shown view.
+  function openHistory(terminalId) {
+    const terminal = state.terminals.find(
+      (item) => item.terminal_id === terminalId,
+    );
+    if (!terminal || !terminalIsFinished(terminal)) {
+      return;
+    }
+    state.historyTerminalId = terminalId;
+    state.selectedTerminalId = terminalId;
+    state.actionError = '';
+    reconcileStreams();
+  }
+
+  function closeHistory() {
+    if (!state.historyTerminalId) {
+      return;
+    }
+    state.historyTerminalId = '';
+    state.selectedTerminalId = visibleTerminals(state)[0]?.terminal_id ?? '';
     reconcileStreams();
   }
 
@@ -356,13 +389,22 @@ export function createTerminalsController({
         return [group];
       }
       const nextCount = Math.max(0, Number(group.terminal_count) - removed);
-      if (
-        nextCount === 0 &&
-        (group.kind === 'automatic' || group.kind === 'finished')
-      ) {
+      if (nextCount === 0 && group.kind !== 'user') {
         return [];
       }
-      return [{ ...group, terminal_count: nextCount }];
+      const removedLive = (result?.terminals ?? []).filter(
+        (terminal) =>
+          closingIds.has(terminal?.terminal_id) &&
+          terminal?.group_id === group.group_id &&
+          !terminalIsFinished(terminal),
+      ).length;
+      return [
+        {
+          ...group,
+          terminal_count: nextCount,
+          live_count: Math.max(0, Number(group.live_count) - removedLive),
+        },
+      ];
     });
     return { ...result, terminals, groups };
   }
@@ -392,19 +434,28 @@ export function createTerminalsController({
     if (groupIndex >= 0) {
       const group = state.groups[groupIndex];
       const nextCount = Math.max(0, Number(group.terminal_count) - 1);
-      if (
-        nextCount === 0 &&
-        (group.kind === 'automatic' || group.kind === 'finished')
-      ) {
+      const liveCount = Math.max(
+        0,
+        Number(group.live_count) - (terminalIsFinished(item) ? 0 : 1),
+      );
+      if (nextCount === 0 && group.kind !== 'user') {
         state.groups = state.groups.filter(
           (candidate) => candidate.group_id !== group.group_id,
         );
         if (state.selectedGroupId === group.group_id) {
-          state.selectedGroupId = state.groups[0]?.group_id ?? '';
+          state.selectedGroupId = defaultTerminalGroupId(state);
         }
       } else {
-        state.groups[groupIndex] = { ...group, terminal_count: nextCount };
+        state.groups[groupIndex] = {
+          ...group,
+          terminal_count: nextCount,
+          live_count: liveCount,
+        };
       }
+    }
+    state.lingeringIds = state.lingeringIds.filter((id) => id !== terminalId);
+    if (state.historyTerminalId === terminalId) {
+      state.historyTerminalId = '';
     }
     if (state.selectedTerminalId === terminalId) {
       state.selectedTerminalId = visibleTerminals(state)[0]?.terminal_id ?? '';
@@ -488,11 +539,14 @@ export function createTerminalsController({
   return {
     cancelSpeech,
     toggleSpeech,
+    closeHistory,
     closeTerminal,
     createGroup,
     deleteGroup,
     destroy,
     loadTerminals,
+    moveTerminal: moveTerminalToView,
+    openHistory,
     queueInput,
     renameGroup,
     reorderGroup,

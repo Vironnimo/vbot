@@ -72,6 +72,7 @@ from server.live._targets import (
     LiveRefs,
     SessionKey,
     TeamCache,
+    group_label,
     resolve_target,
     session_key,
     session_title,
@@ -375,7 +376,7 @@ class LiveToolExecutor:
             await self._ctx.view("show", terminal_id=target.terminal["terminal_id"])
             return live_success(f"Showing {ref} in the Terminals view.")
         if target.group is not None:
-            label = target.group.get("name") or target.group["group_id"]
+            label = group_label(target.group)
             await self._ctx.view("show_group", group_id=target.group["group_id"])
             return live_success(f'Showing the group "{label}" in the Terminals view.')
         if target.project is not None:

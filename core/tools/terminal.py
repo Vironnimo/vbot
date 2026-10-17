@@ -49,7 +49,6 @@ from core.tools.terminal_manager import (
     TERMINAL_DEFAULT_COLUMNS,
     TERMINAL_DEFAULT_ROWS,
     TERMINAL_FINISHED_TTL,
-    TERMINAL_GROUP_NAME_MAX_CHARS,
     TERMINAL_INPUT_KEY_SEQUENCES,
     TERMINAL_INPUT_MAX_CHARS,
     TERMINAL_MAX_COLUMNS,
@@ -191,16 +190,8 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "maxLength": 80,
             "description": (
-                "Label the user sees for the terminal, such as its task. Omit to show the "
-                "program instead."
-            ),
-        },
-        "group": {
-            "type": "string",
-            "maxLength": TERMINAL_GROUP_NAME_MAX_CHARS,
-            "description": (
-                "Group to show the terminal in; joins or creates the group of that name. Omit "
-                "for automatic grouping."
+                "Label the user sees next to the terminal's call_name: what it works on, "
+                "such as its task. Omit to show the program instead."
             ),
         },
         "text": {
@@ -267,6 +258,7 @@ TERMINAL_UNADVERTISED_PARAMETERS: JsonObject = {
     "start_line": {"type": "integer", "minimum": 0},
     "expected_screen_revision": {"type": "integer", "minimum": 0},
     "after_revision": {"type": "integer", "minimum": 0},
+    "group": {"type": "string"},
 }
 
 
@@ -496,7 +488,7 @@ async def _handle_start(
         workdir_value = None
     workdir = _resolve_workdir(projects, context, workdir_value)
     if not workdir.is_dir():
-        # Checked here, before a named group is created for the terminal.
+        # Checked here, before the terminal is launched.
         raise ToolContractError(
             f"No terminal was started: workdir {model_path(workdir)} is not a directory. Pass "
             "an existing directory, or omit workdir to use the working directory."
@@ -510,14 +502,11 @@ async def _handle_start(
         if not name:
             raise ToolContractError("terminal was not run: name must not be blank; omit it.")
     owner = _owner(context)
-    group_id = None
-    raw_group = arguments.get("group")
-    if raw_group == "":
-        raw_group = None
-    if raw_group is not None:
-        if not isinstance(raw_group, str) or not raw_group.strip():
-            raise ToolContractError("terminal was not run: group must be a non-empty name.")
-        group_id = terminal_manager.resolve_or_create_agent_group(raw_group.strip()).group_id
+    if arguments.get("group") not in (None, ""):
+        notes.append(
+            "group has no effect: the user sees each terminal under the conversation that "
+            "started it. To say what it works on, pass name."
+        )
     overlay = None
     if scratch_areas is not None:
         try:
@@ -539,7 +528,6 @@ async def _handle_start(
             origin_run_id=context.run_id,
             execution_owner=context.execution_owner,
             name=name,
-            group_id=group_id,
         )
     except TerminalLaunchError as error:
         cause = error.__cause__
@@ -656,6 +644,7 @@ async def _handle_list(
     for info in terminals:
         row: JsonObject = {
             "terminal_id": info.terminal_id,
+            "call_name": info.call_name,
             "program": _short_program(info.program),
             "name": info.name,
             "state": _agent_state(info),
@@ -1195,12 +1184,15 @@ def _screen_result(
     log_end = end if isinstance(end, int) and not log_complete else None
     projected: JsonObject = {
         "terminal_id": snapshot["terminal_id"],
+        "call_name": snapshot.get("call_name") if view in {"start", "status"} else None,
         "state": _agent_state_of(snapshot),
     }
+    if not projected["call_name"]:
+        del projected["call_name"]
     if projected["state"] != "running" and snapshot.get("exit_code") is not None:
         projected["exit_code"] = snapshot["exit_code"]
     for key, value in snapshot.items():
-        if key in _HIDDEN_SNAPSHOT_FIELDS or key in projected or key == "state":
+        if key in _HIDDEN_SNAPSHOT_FIELDS or key in projected or key in {"state", "call_name"}:
             continue
         if value is None or value == "" or key == "exit_code":
             continue
@@ -1352,6 +1344,7 @@ def _attachment(info: TerminalInfo, owner: TerminalOwner) -> str:
 def _terminal_facts(info: TerminalInfo, owner: TerminalOwner) -> JsonObject:
     facts: JsonObject = {
         "terminal_id": info.terminal_id,
+        "call_name": info.call_name,
         "program": _short_program(info.program),
         "name": info.name,
         "state": _agent_state(info),
@@ -1449,8 +1442,8 @@ def _call(action: str, terminal_id: str) -> str:
 def _terminal_label(info: TerminalInfo) -> str:
     label = " ".join((info.name or info.program).split())
     if len(label) > _TERMINAL_LABEL_CHARS:
-        return label[: _TERMINAL_LABEL_CHARS - 3] + "..."
-    return label
+        label = label[: _TERMINAL_LABEL_CHARS - 3] + "..."
+    return f"{info.call_name}, {label}" if info.call_name else label
 
 
 def _attached_terminals(
@@ -1816,7 +1809,14 @@ def _terminal_detail_blocks(arguments: JsonObject, result: JsonObject | None) ->
             return [*blocks, display_notice("info", "No terminal is open.")]
         items = [
             {
-                "title": item.get("name") or item.get("program") or item.get("terminal_id"),
+                "title": " · ".join(
+                    str(part)
+                    for part in (
+                        item.get("call_name"),
+                        item.get("name") or item.get("program") or item.get("terminal_id"),
+                    )
+                    if part
+                ),
                 "meta": " · ".join(
                     part for part in (_terminal_state_text(item), _attachment_text(item)) if part
                 ),

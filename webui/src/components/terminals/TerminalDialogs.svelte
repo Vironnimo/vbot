@@ -4,6 +4,7 @@
   import {
     parseTerminalCommandLine,
     formatTerminalCommandLine,
+    pinTargetOf,
   } from '$lib/terminalsView.js';
   import {
     groupKindLabel,
@@ -12,6 +13,7 @@
     launchHistoryDetails,
     launchHistoryLabel,
     launchHistoryWorkdir,
+    viewLabel,
   } from './terminalLabels.js';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
@@ -64,28 +66,27 @@
     })),
   );
 
-  let groupOptions = $derived(
-    viewState.groups
-      .filter((group) => group.kind === 'user' || group.kind === 'agent')
+  // Where a terminal can show: the user's groups, the conversations, and
+  // the user's own terminals (no pin, value '').
+  let groupOptions = $derived([
+    {
+      value: '',
+      label: viewLabel({ kind: 'manual' }),
+      secondaryLabel: groupKindLabel('manual'),
+    },
+    ...viewState.groups
+      .filter((group) => pinTargetOf(group) !== null)
       .map((group) => ({
         value: group.group_id,
-        label: group.name,
+        label: viewLabel(group),
         secondaryLabel: groupKindLabel(group.kind),
       })),
-  );
-
-  const groupOptionAutomatic = {
-    value: '',
-    label: t('terminals.groupAutomatic'),
-    secondaryLabel: t('terminals.kind.manual'),
-  };
+  ]);
 
   export function openStartDialog() {
     applyLaunchHistory(viewState.launchHistory[0] ?? null);
     startName = '';
-    startGroupId = groupCanEdit(selectedGroup)
-      ? (viewState.selectedGroupId ?? '')
-      : '';
+    startGroupId = pinTargetOf(selectedGroup) ?? '';
     viewState.startError = '';
     startDialogOpen = true;
   }
@@ -405,7 +406,7 @@
                 id={field.controlId}
                 ariaLabelledby={field.labelId}
                 value={startGroupId}
-                options={[groupOptionAutomatic, ...groupOptions]}
+                options={groupOptions}
                 ariaLabel={t('terminals.startGroupLabel')}
                 ariaDescribedby={field.describedBy}
                 disabled={viewState.startingTerminal}
@@ -524,7 +525,7 @@
           {t('terminals.deleteGroupWarning')}
         </p>
         {#if deleteGroup && deleteGroup.terminal_count > 0}
-          <Banner variant="warn">
+          <Banner variant="neutral">
             {t('terminals.deleteGroupCount', {
               count: deleteGroup.terminal_count,
             })}
@@ -545,11 +546,7 @@
         loading={viewState.groupActionPending}
         onClick={() => void confirmDeleteGroup()}
       >
-        {deleteGroup?.terminal_count
-          ? t('terminals.deleteGroupConfirm', {
-              count: deleteGroup.terminal_count,
-            })
-          : t('terminals.deleteGroupEmptyConfirm')}
+        {t('terminals.deleteGroupEmptyConfirm')}
       </Button>
     {/snippet}
   </Modal>

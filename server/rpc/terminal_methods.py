@@ -81,19 +81,36 @@ def _terminal_group_rename(state: Any, params: JsonObject) -> JsonObject:
     return {"group": group}
 
 
-async def _terminal_group_delete(state: Any, params: JsonObject) -> JsonObject:
+def _terminal_group_delete(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"group_id"}, "terminal.group.delete")
     group_id = _required_string(params, "group_id")
     try:
-        result = await _terminal_manager(state).delete_group_for_operator(group_id)
+        result = _terminal_manager(state).delete_group_for_operator(group_id)
     except ValueError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except TerminalManagerError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     return {
         "group_id": str(result.get("group_id")),
-        "terminals_killed": result.get("terminals_killed"),
+        "terminals_moved": result.get("terminals_moved"),
     }
+
+
+def _terminal_move(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"terminal_id", "group_id"}, "terminal.move")
+    terminal_id = _required_string(params, "terminal_id")
+    if "group_id" not in params:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "params.group_id is required (null to unpin the terminal)"
+        )
+    group_id = params["group_id"]
+    if group_id is not None and (not isinstance(group_id, str) or not group_id):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.group_id must be a string or null")
+    try:
+        terminal = _terminal_manager(state).move_for_operator(terminal_id, group_id)
+    except (ValueError, TerminalManagerError) as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    return {"terminal": terminal}
 
 
 def _terminal_group_order(state: Any, params: JsonObject) -> JsonObject:
@@ -275,6 +292,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "terminal.input": _terminal_input,
         "terminal.kill": _terminal_kill,
         "terminal.forget": _terminal_forget,
+        "terminal.move": _terminal_move,
         "terminal.group.create": _terminal_group_create,
         "terminal.group.rename": _terminal_group_rename,
         "terminal.group.delete": _terminal_group_delete,

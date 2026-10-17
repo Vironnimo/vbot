@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from core.tools.terminal_manager import TerminalNotFoundError
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
 from server.rpc.terminal_methods import (
@@ -19,6 +20,7 @@ from server.rpc.terminal_methods import (
     _terminal_input,
     _terminal_kill,
     _terminal_list,
+    _terminal_move,
     _terminal_read,
     _terminal_start,
 )
@@ -82,6 +84,7 @@ class FakeTerminalManager:
         self.group_renames: list[tuple[str, str]] = []
         self.group_deletes: list[str] = []
         self.group_orders: list[tuple[str, list[str]]] = []
+        self.moves: list[tuple[str, str | None]] = []
 
     def list_groups_for_operator(self) -> list[dict[str, Any]]:
         return list(self.groups)
@@ -96,9 +99,15 @@ class FakeTerminalManager:
         self.group_renames.append((group_id, name))
         return {"group_id": group_id, "name": name, "kind": "user"}
 
-    async def delete_group_for_operator(self, group_id: str) -> dict[str, Any]:
+    def delete_group_for_operator(self, group_id: str) -> dict[str, Any]:
         self.group_deletes.append(group_id)
-        return {"group_id": group_id, "terminals_killed": 1}
+        return {"group_id": group_id, "terminals_moved": 1}
+
+    def move_for_operator(self, terminal_id: str, group_id: str | None) -> dict[str, Any]:
+        if group_id == "missing":
+            raise TerminalNotFoundError("Terminal group not found: missing")
+        self.moves.append((terminal_id, group_id))
+        return {"terminal_id": terminal_id, "group_id": group_id or "auto:manual"}
 
     def set_group_order_for_operator(self, group_id: str, order: list[str]) -> dict[str, Any]:
         self.group_orders.append((group_id, order))
@@ -222,11 +231,12 @@ async def test_terminal_operator_handlers_validate_and_register_contract() -> No
         "terminal.group.rename",
         "terminal.group.delete",
         "terminal.group.order",
+        "terminal.move",
     } <= set(handlers)
 
 
 @pytest.mark.asyncio
-async def test_terminal_group_handlers_create_rename_delete_and_order() -> None:
+async def test_terminal_group_handlers_create_rename_delete_order_and_move() -> None:
     manager = FakeTerminalManager()
     state = _state(manager)
 
@@ -240,9 +250,9 @@ async def test_terminal_group_handlers_create_rename_delete_and_order() -> None:
     }
     assert manager.group_renames == [("group-1", "Dev")]
 
-    assert await _terminal_group_delete(state, {"group_id": "group-1"}) == {
+    assert _terminal_group_delete(state, {"group_id": "group-1"}) == {
         "group_id": "group-1",
-        "terminals_killed": 1,
+        "terminals_moved": 1,
     }
     assert manager.group_deletes == ["group-1"]
 
@@ -251,6 +261,17 @@ async def test_terminal_group_handlers_create_rename_delete_and_order() -> None:
         "order": ["term-2", "term-1"],
     }
     assert manager.group_orders == [("group-1", ["term-2", "term-1"])]
+
+    assert _terminal_move(state, {"terminal_id": "term-1", "group_id": "group-1"}) == {
+        "terminal": {"terminal_id": "term-1", "group_id": "group-1"}
+    }
+    # null lifts the pin; the group_id must still be sent.
+    _terminal_move(state, {"terminal_id": "term-1", "group_id": None})
+    assert manager.moves == [("term-1", "group-1"), ("term-1", None)]
+    for params in ({"terminal_id": "term-1"}, {"terminal_id": "term-1", "group_id": "missing"}):
+        with pytest.raises(RpcError) as move_error:
+            _terminal_move(state, params)
+        assert move_error.value.code == "invalid_request"
 
     with pytest.raises(RpcError) as blank_name_error:
         _terminal_group_create(state, {"name": "   "})

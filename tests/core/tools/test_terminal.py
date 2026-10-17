@@ -63,7 +63,6 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
         "args",
         "workdir",
         "name",
-        "group",
         "text",
         "key",
         "data",
@@ -79,6 +78,8 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
         "start_line",
         "expected_screen_revision",
         "after_revision",
+        # Advertised until terminals were shown by conversation; still sent by habit.
+        "group",
     }
     assert properties["action"]["enum"] == list(TERMINAL_ACTIONS)
     assert (properties["lines"]["default"], properties["timeout"]["default"]) == (30, 60)
@@ -206,6 +207,7 @@ async def test_start_returns_the_first_screen_once_startup_output_settles(
     data = cast(dict[str, Any], result["data"])
     assert data == {
         "terminal_id": data["terminal_id"],
+        "call_name": "Anna",
         "state": "running",
         "screen": data["screen"],
         "cursor": "row 2, column 8",
@@ -521,7 +523,8 @@ async def test_capacity_refusal_names_the_terminals_to_stop(
     assert refused == tool_failure(
         "terminal_capacity",
         "This Session already runs 2 terminals, the most it can run at once, so no terminal "
-        f"was started. Your running terminals: {first} (build watcher); {second} (python -i). "
+        f"was started. Your running terminals: {first} (Anna, build watcher); {second} "
+        "(Ben, python -i). "
         'Stop one you no longer need with terminal action "kill" and its terminal_id from this '
         "list, then start again.",
         retryable=True,
@@ -829,6 +832,7 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     attached = await run({"action": "attach"})
     assert attached["data"] == {
         "terminal_id": terminal_id,
+        "call_name": "Anna",
         "program": "host-shell",
         "name": "afk codex",
         "state": "running",

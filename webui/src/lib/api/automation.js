@@ -68,6 +68,19 @@ export function deleteTerminalGroup(groupId, options = {}) {
   return rpc('terminal.group.delete', { group_id: groupId }, options);
 }
 
+export function moveTerminal(terminalId, groupId, options = {}) {
+  requireNonEmptyString(
+    terminalId,
+    'Terminal id must be a non-empty string',
+    'terminal.move',
+  );
+  return rpc(
+    'terminal.move',
+    { terminal_id: terminalId, group_id: groupId || null },
+    options,
+  );
+}
+
 export function setTerminalGroupOrder(groupId, order, options = {}) {
   requireNonEmptyString(
     groupId,

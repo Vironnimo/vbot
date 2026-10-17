@@ -383,8 +383,8 @@ def live_tool_definitions() -> list[JsonObject]:
                 "restore returns to the group layout. key presses one key in a Terminal, for "
                 "example to answer a menu. close stops a Terminal and removes it; use it only "
                 "when the user asks to close that Terminal. reorder sets the order of the "
-                "Terminals in a group. create_group, rename_group and delete_group manage "
-                "Terminal groups; delete_group also stops every Terminal in the group."
+                "Terminals in a group. create_group, rename_group and delete_group manage the "
+                "user's own Terminal groups; delete_group stops no Terminal."
             ),
             "parameters": _object(
                 {
@@ -413,8 +413,8 @@ def live_tool_definitions() -> list[JsonObject]:
                     "confirm": {
                         "type": "boolean",
                         "description": (
-                            "For close and delete_group: true only after the user agreed to "
-                            "close Terminals that are still working. Omit it otherwise."
+                            "For close: true only after the user agreed to close a Terminal "
+                            "that is still working. Omit it otherwise."
                         ),
                     },
                 },

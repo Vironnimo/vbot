@@ -455,8 +455,7 @@ async def describe(target: Target, refs: LiveRefs, catalog: LiveCatalog) -> str:
         ref = refs.terminal(str(target.terminal["terminal_id"]), terminal_title(target.terminal))
         return f"{ref} ({terminal_label(target.terminal)})"
     if target.group is not None:
-        name = target.group.get("name") or target.group["group_id"]
-        return f'group "{name}" (id {target.group["group_id"]})'
+        return f'group "{group_label(target.group)}" (id {target.group["group_id"]})'
     if target.agent is not None:
         team = f"{target.agent.project} team, " if target.agent.project else ""
         return f"Agent {target.agent.name} ({team}id {target.agent.address})"
@@ -465,12 +464,28 @@ async def describe(target: Target, refs: LiveRefs, catalog: LiveCatalog) -> str:
     return "?"
 
 
-def terminal_label(item: JsonObject) -> str:
-    """The Terminal's name, or the program it runs."""
-    name = item.get("name")
+def group_label(group: JsonObject) -> str:
+    """The name a Terminal group goes by: the user's name for it, the title of the
+    conversation it shows, or what the app calls it."""
+    name = group.get("name")
     if isinstance(name, str) and name.strip():
         return name.strip()
-    return str(item.get("launch_command") or item.get("command") or "Terminal")
+    if group.get("kind") == "manual":
+        return "Your terminals"
+    if group.get("kind") == "session":
+        return "Untitled conversation"
+    return str(group["group_id"])
+
+
+def terminal_label(item: JsonObject) -> str:
+    """The Terminal's call name with its name, or the program it runs."""
+    name = item.get("name")
+    if isinstance(name, str) and name.strip():
+        label = name.strip()
+    else:
+        label = str(item.get("launch_command") or item.get("command") or "Terminal")
+    call_name = item.get("call_name")
+    return f"{call_name}, {label}" if isinstance(call_name, str) and call_name else label
 
 
 def coding_program(item: JsonObject) -> CodingProgram | None:
@@ -481,10 +496,13 @@ def coding_program(item: JsonObject) -> CodingProgram | None:
 
 
 def terminal_title(item: JsonObject) -> str:
-    """What a Terminal is, as the call's ref legend names it: ``Codex Terminal "Build"``."""
+    """What a Terminal is, as the call's ref legend names it: ``Codex Terminal Anna "Build"``."""
     program = coding_program(item)
     command = str(item.get("launch_command") or item.get("command") or "").strip()
-    kind = f"{program.label if program else command} Terminal".strip()
+    call_name = _legend_name(item.get("call_name"))
+    kind = " ".join(
+        part for part in (program.label if program else command, "Terminal", call_name) if part
+    )
     name = _legend_name(item.get("name"))
     return f'{kind} "{name}"' if name else kind
 
@@ -592,7 +610,9 @@ async def _terminal_names(text: str, refs: LiveRefs, catalog: LiveCatalog) -> li
     return [
         Target(kind=TERMINAL, terminal=item)
         for item in await catalog.terminals()
-        if key and spelling(str(item.get("name") or "")) == key
+        if key
+        and key
+        in {spelling(str(item.get("name") or "")), spelling(str(item.get("call_name") or ""))}
     ]
 
 
@@ -610,7 +630,7 @@ async def _group_names(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[
     return [
         Target(kind=GROUP, group=item)
         for item in await catalog.groups()
-        if key and spelling(str(item.get("name") or "")) == key
+        if key and spelling(group_label(item)) == key
     ]
 
 

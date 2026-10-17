@@ -107,7 +107,7 @@ def test_documents_that_failed_to_load_are_never_overwritten(
     with caplog.at_level("WARNING"):
         store.remember_launch(command="pwsh", arguments=[], workdir=None)
         store.groups["u-1"] = TerminalGroup(
-            group_id="u-1", name="Builds", kind="user", order=[], created_at=_SEED_TIMESTAMP
+            group_id="u-1", name="Builds", order=[], created_at=_SEED_TIMESTAMP
         )
         store.persist_groups()
 
@@ -126,7 +126,7 @@ def test_invalid_entries_are_skipped_kept_verbatim_and_reported(tmp_path: Path) 
     )
     store.remember_launch(command="pwsh", arguments=[], workdir=None)
     store.groups["u-1"] = TerminalGroup(
-        group_id="u-1", name="Builds", kind="user", order=[], created_at=_SEED_TIMESTAMP
+        group_id="u-1", name="Builds", order=[], created_at=_SEED_TIMESTAMP
     )
     store.persist_groups()
     history = json.loads(history_path.read_text(encoding="utf-8"))
@@ -204,7 +204,7 @@ def test_persist_keeps_unknown_fields_of_the_documents(tmp_path: Path) -> None:
     ]
 
 
-def test_persist_groups_writes_only_user_groups_and_survives_reload(tmp_path: Path) -> None:
+def test_persist_groups_survives_reload(tmp_path: Path) -> None:
     groups_path = tmp_path / "groups.json"
     store = TerminalOperatorStore(
         launch_history_path=None, groups_path=groups_path, data_dir=tmp_path
@@ -213,15 +213,10 @@ def test_persist_groups_writes_only_user_groups_and_survives_reload(tmp_path: Pa
     user_group = TerminalGroup(
         group_id="u-1",
         name="Builds",
-        kind="user",
         order=["t-2", "t-1"],
         created_at=_SEED_TIMESTAMP,
     )
-    agent_group = TerminalGroup(
-        group_id="a-1", name="Agent", kind="agent", order=[], created_at=_SEED_TIMESTAMP
-    )
     store.groups[user_group.group_id] = user_group
-    store.groups[agent_group.group_id] = agent_group
     store.persist_groups()
 
     reloaded = TerminalOperatorStore(
@@ -230,30 +225,19 @@ def test_persist_groups_writes_only_user_groups_and_survives_reload(tmp_path: Pa
     assert list(reloaded.groups) == ["u-1"]
     restored = reloaded.groups["u-1"]
     assert restored.name == "Builds"
-    assert restored.kind == "user"
     assert restored.order == ["t-2", "t-1"]
     assert restored.created_at == user_group.created_at
 
 
-def test_group_name_lookup_is_case_insensitive_across_user_and_agent_kinds() -> None:
+def test_group_names_are_taken_case_insensitively() -> None:
     store = TerminalOperatorStore(launch_history_path=None, groups_path=None, data_dir=None)
     store.groups["u-1"] = TerminalGroup(
-        group_id="u-1", name="Builds", kind="user", order=[], created_at=_SEED_TIMESTAMP
-    )
-    store.groups["auto:agent:x"] = TerminalGroup(
-        group_id="auto:agent:x",
-        name="BUILD",
-        kind="automatic",
-        order=[],
-        created_at=_SEED_TIMESTAMP,
+        group_id="u-1", name="Builds", order=[], created_at=_SEED_TIMESTAMP
     )
 
-    found = store.group_by_name("builds")
-    assert found is not None and found.group_id == "u-1"
-    # Automatic groups never satisfy a by-name lookup or block a new name.
-    assert store.group_by_name("build") is None
     assert store.group_name_taken("builds") is True
     assert store.group_name_taken("builds", exclude="u-1") is False
+    assert store.group_name_taken("build") is False
 
 
 def test_validate_group_name_trims_and_rejects_invalid_input() -> None:

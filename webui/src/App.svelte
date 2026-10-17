@@ -1049,6 +1049,7 @@
           {terminalsRefreshToken}
           {serverUnavailable}
           onToast={desktop.showToast}
+          onOpenSession={navigateToSession}
         />
       {:else if activeViewId === 'projects'}
         <ProjectsView
