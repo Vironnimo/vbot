@@ -26,6 +26,7 @@
   import ComposerSessionSettings from './chat/ComposerSessionSettings.svelte';
   import ComputerUseControl from './ComputerUseControl.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
+  import ContextUsageRing from './chat/ContextUsageRing.svelte';
   import { agentActivityState } from './chat/agentActivityTooltip.js';
   import {
     backgroundTasks,
@@ -42,7 +43,7 @@
   import { createChatViewNavigation } from './chat/view/navigation.svelte.js';
   import { createChatViewActions } from './chat/view/actions.svelte.js';
   import { createChatViewLayout } from './chat/view/layout.svelte.js';
-  import { createSessionChanges } from './chat/view/sessionChanges.svelte.js';
+  import { createSessionInfo } from './chat/view/sessionInfo.svelte.js';
   import { createSessionSettings } from './chat/view/sessionSettings.svelte.js';
   import './chat/view/chatView.css';
 
@@ -299,7 +300,7 @@
     },
   });
 
-  const sessionChanges = createSessionChanges({
+  const sessionInfo = createSessionInfo({
     get target() {
       return target;
     },
@@ -919,7 +920,32 @@
         : null;
     untrack(() => onNavigationIndicator(indicator));
   });
+
+  // The Session information panel repeats the composer's context readout
+  // with its figures once the tokens and the window are known.
+  let sessionContextKnown = $derived(
+    Number.isFinite(target.activeSessionState?.contextUsage?.tokens) &&
+      target.activeSessionState?.contextUsage?.context_window > 0,
+  );
 </script>
+
+{#snippet sessionContextReadout()}
+  <ContextUsageRing
+    showFigures
+    contextUsage={target.activeSessionState?.contextUsage}
+    contextWindow={target.activeSessionState?.contextUsage?.context_window}
+    usage={target.activeSessionState?.usage}
+    sessionUsage={target.activeSessionState?.sessionUsage}
+    compactionPolicy={target.activeSessionState?.compactionPolicy}
+    onForceCompaction={actions.handleCompactContext}
+    compactionState={composerSendMessage && target.activeSessionState
+      ? contextCompactionState(target.activeSessionState)
+      : 'unavailable'}
+    compactionSubmitting={actions.isCompactionSubmitting(
+      target.activeSessionState,
+    )}
+  />
+{/snippet}
 
 <section
   class="view view-chat active chat-view"
@@ -976,10 +1002,7 @@
   {:else if !target.activeAgent}
     <EmptyState fill title={t('chat.noAgentSelected')} />
   {:else}
-    <div
-      class="chat-view__content-shell"
-      class:chat-view__content-shell--activity-open={activityPanelOpen}
-    >
+    <div class="chat-view__content-shell">
       {#if showSessionDrawer}
         <SessionListDrawer
           agentId={target.activeAgentAddress}
@@ -1248,8 +1271,11 @@
           ?.backgroundCommandStatuses}
         commandStatuses={displayedCommandStatuses}
         reflectionTasks={reflectionTaskRows(target.activeSessionState)}
-        sessionStats={sessionChanges.stats}
-        onSessionStatsWanted={sessionChanges.setWanted}
+        sessionStats={sessionInfo.stats}
+        session={sessionInfo.summary}
+        sessionUsage={target.activeSessionState?.sessionUsage}
+        contextReadout={sessionContextKnown ? sessionContextReadout : null}
+        onSessionStatsWanted={sessionInfo.setWanted}
         parentSession={navigation.sessionParentLink}
         onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
         otherArea={subAgentOtherArea}

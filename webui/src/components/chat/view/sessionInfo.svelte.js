@@ -4,21 +4,25 @@ import {
   runChangeStats,
   sessionChangeStats,
 } from '$lib/chatTimelinePresentation.js';
+import { sessionDisplayName } from '$lib/sessionListView.js';
 
-// The displayed Session's change statistics for the Activity panel. The server
-// owns them (`session.change_stats`, summed over all of the Session's own
-// Runs, not only the loaded History), so they are read while the panel shows
-// them: when it opens, when the displayed Session or a Sessions refresh
-// changes, and whenever a loaded Run's own statistics change. The server
-// stores a Run's statistics before it streams them, so a read prompted by a
-// live update already includes it.
+// What the Session information panel shows about the displayed Session itself:
+// its list row (name, creation, last activity; `session.get`) and its change
+// statistics (`session.change_stats`, summed over all of the Session's own
+// Runs, not only the loaded History). The server owns both, so they are read
+// while the panel shows them: when it opens, when the displayed Session or a
+// Sessions refresh changes, and whenever a loaded Run's own statistics change.
+// The server stores a Run's statistics before it streams them, so a read
+// prompted by a live update already includes it.
 //
 // `stats` is undefined until the first read for the displayed Session answers,
-// then null (no changes) or the presented statistics.
-export function createSessionChanges(context) {
+// then null (no changes) or the presented statistics. `summary` is null until
+// its read answers.
+export function createSessionInfo(context) {
   let wanted = $state(false);
   let stats = $state.raw(undefined);
-  let statsSessionKey = '';
+  let summary = $state.raw(null);
+  let infoSessionKey = '';
   let requestedKey = '';
 
   let runRevision = $derived(runStatsRevision(context.timelineItems));
@@ -32,9 +36,10 @@ export function createSessionChanges(context) {
       ? `${displayKey}::${context.sessionsRefreshToken}::${runRevision}`
       : '';
     untrack(() => {
-      if (displayKey !== statsSessionKey) {
-        statsSessionKey = displayKey;
+      if (displayKey !== infoSessionKey) {
+        infoSessionKey = displayKey;
         stats = undefined;
+        summary = null;
         requestedKey = '';
       }
       if (!open) {
@@ -51,11 +56,12 @@ export function createSessionChanges(context) {
         return;
       }
       requestedKey = key;
-      load(key, addressing.agentAddress, addressing.sessionId);
+      loadStats(key, addressing.agentAddress, addressing.sessionId);
+      loadSummary(key, addressing.agentAddress, addressing.sessionId);
     });
   });
 
-  async function load(key, agentAddress, sessionId) {
+  async function loadStats(key, agentAddress, sessionId) {
     try {
       const result = await context.chatController.getSessionChangeStats(
         agentAddress,
@@ -73,9 +79,31 @@ export function createSessionChanges(context) {
     }
   }
 
+  async function loadSummary(key, agentAddress, sessionId) {
+    try {
+      const result = await context.chatController.getSession(
+        agentAddress,
+        sessionId,
+      );
+      const session = result?.session;
+      if (requestedKey === key && session) {
+        summary = {
+          displayName: sessionDisplayName(session),
+          createdAt: session.created_at ?? null,
+          lastActiveAt: session.last_active_at ?? null,
+        };
+      }
+    } catch {
+      // Best effort: the panel keeps the row it showed last.
+    }
+  }
+
   return {
     get stats() {
       return stats;
+    },
+    get summary() {
+      return summary;
     },
     setWanted(value) {
       wanted = Boolean(value);

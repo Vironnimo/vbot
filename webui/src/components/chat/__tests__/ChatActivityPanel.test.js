@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
+import { createRawSnippet, flushSync, mount, unmount } from 'svelte';
 
 import { reflectionTaskRows } from '../../../lib/chatTimelinePresentation.js';
 import { init, t } from '../../../lib/i18n.js';
@@ -431,9 +431,7 @@ describe('ChatActivityPanel', () => {
       expect(new Set(panels.map((panel) => panel.id)).size).toBe(2);
       panels.forEach((panel, index) => {
         expect(toggles[index].getAttribute('aria-controls')).toBe(panel.id);
-        expect(
-          document.getElementById(panel.getAttribute('aria-labelledby')),
-        ).not.toBeNull();
+        expect(panel.getAttribute('aria-label')).toBe(t('chat.activity.label'));
       });
       panels[1].setAttribute('tabindex', '-1');
       panels[1].focus();
@@ -453,7 +451,7 @@ describe('ChatActivityPanel', () => {
     ).toContain(t('chat.activity.empty'));
     expect(
       document.querySelector('.chat-activity__stats-empty').textContent.trim(),
-    ).toBe(t('chat.activity.statsEmpty'));
+    ).toBe(t('chat.activity.overview.noChanges'));
     expect(
       document.querySelector(
         '.chat-activity__group, .chat-activity__parent-link',
@@ -538,8 +536,21 @@ describe('ChatActivityPanel', () => {
     expect(onSessionStatsWanted).toHaveBeenLastCalledWith(false);
   });
 
-  it('shows the Session change stats above the tasks', () => {
+  it('names the Session and gives its overview above the tasks', () => {
     openPanel({
+      session: {
+        displayName: 'Release notes',
+        createdAt: '2026-10-01T08:00:00.000Z',
+        lastActiveAt: '2026-10-02T09:30:00.000Z',
+      },
+      sessionUsage: {
+        input_tokens: 120000,
+        output_tokens: 3400,
+        cache_read_tokens: 90000,
+      },
+      contextReadout: createRawSnippet(() => ({
+        render: () => '<span class="test-context">51K / 1M</span>',
+      })),
       sessionStats: {
         files: 2,
         added: 8,
@@ -551,14 +562,61 @@ describe('ChatActivityPanel', () => {
       },
     });
 
-    const filesChanged = `${t('chat.changeStats.filesMany', { count: 2 })},`;
-    const statsValue = document.querySelector('.chat-activity__stats-value');
     expect(
-      [...statsValue.querySelectorAll('.change-stats__part')].map(
-        (part) => part.textContent,
-      ),
+      document.querySelector('.chat-activity__title').textContent.trim(),
+    ).toBe('Release notes');
+    const facts = Object.fromEntries(
+      [...document.querySelectorAll('.chat-activity__fact')].map((fact) => [
+        fact.querySelector('dt').textContent.trim(),
+        fact.querySelector('dd'),
+      ]),
+    );
+    expect(Object.keys(facts)).toEqual([
+      t('chat.activity.overview.context'),
+      t('chat.activity.overview.tokens'),
+      t('chat.activity.overview.cache'),
+      t('chat.activity.overview.changes'),
+      t('chat.activity.overview.started'),
+      t('chat.activity.overview.lastActive'),
+    ]);
+    expect(
+      facts[t('chat.activity.overview.context')].querySelector('.test-context'),
+    ).not.toBeNull();
+    expect(facts[t('chat.activity.overview.tokens')].textContent).toContain(
+      '120K',
+    );
+    expect(facts[t('chat.activity.overview.cache')].textContent).toBe('75%');
+    const filesChanged = `${t('chat.changeStats.filesMany', { count: 2 })},`;
+    expect(
+      [
+        ...facts[t('chat.activity.overview.changes')].querySelectorAll(
+          '.change-stats__part',
+        ),
+      ].map((part) => part.textContent),
     ).toEqual([filesChanged, '+8', '-2']);
     expect(document.querySelector('.chat-activity__stats-empty')).toBeNull();
+  });
+
+  it('shortens a long Finished section to its newest entries until asked', () => {
+    const finished = Array.from({ length: 7 }, (_, index) =>
+      backgroundCommandTask({
+        id: `done-${index}`,
+        command: `step ${index}`,
+      }),
+    );
+    openPanel({ timelineItems: [runItem(finished)] });
+
+    const more = document.querySelector('.chat-activity__more');
+    expect(taskRows()).toHaveLength(5);
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+    expect(more.textContent.trim()).toBe(
+      t('chat.activity.showAll', { count: 7 }),
+    );
+
+    more.click();
+    flushSync();
+    expect(taskRows()).toHaveLength(7);
+    expect(more.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('lists reflection reviews with navigation and no cancel control', async () => {

@@ -12,8 +12,13 @@
     reflectionOutcomeLabel,
     subAgentStatusDetails,
   } from '$lib/chatTimelinePresentation.js';
-  import { t } from '$lib/i18n.js';
-  import { formatMoment } from '$lib/timeText.js';
+  import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { formatTokens } from '$lib/statisticsView.js';
+  import {
+    formatAbsoluteTime,
+    formatMoment,
+    formatRelativeTime,
+  } from '$lib/timeText.js';
   import { tooltip } from '$lib/tooltip.js';
 
   import Button from '../ui/Button.svelte';
@@ -40,6 +45,14 @@
     // when it changed no files. The panel asks for them while it is open.
     sessionStats = undefined,
     onSessionStatsWanted = () => {},
+    // The displayed Session's list row as last read (`{ displayName,
+    // createdAt, lastActiveAt }`), or null until then.
+    session = null,
+    // Token totals over the Session's turns (`session_usage`), or null.
+    sessionUsage = null,
+    // Renders the Session's context readout (ContextUsageRing with figures);
+    // null while the context is unknown.
+    contextReadout = null,
     parentSession = null,
     onNavigateToSubAgent = () => {},
     // Open in split view for a Sub-Agent row (`{ label, open(target) }`, with
@@ -83,6 +96,15 @@
   // Running work first, then finished work; each entry names its kind.
   let sections = $derived(activitySections(tasks, reflectionTasks));
   let runningTaskCount = $derived(sections.running.length);
+  // A long Finished section shows its newest entries until the user asks for
+  // all of them; view state only.
+  const FINISHED_PREVIEW = 5;
+  let showAllFinished = $state(false);
+  let visibleFinished = $derived(
+    showAllFinished
+      ? sections.finished
+      : sections.finished.slice(0, FINISHED_PREVIEW),
+  );
   $effect(() => {
     onSessionStatsWanted(open);
   });
@@ -348,6 +370,35 @@
       expandedOutputs.add(task.id);
     }
   };
+
+  // Session-wide token totals: every turn counts, cache reads as a share of
+  // the input.
+  let tokenTotals = $derived.by(() => {
+    const input = nonNegative(sessionUsage?.input_tokens);
+    const output = nonNegative(sessionUsage?.output_tokens);
+    if (input <= 0 && output <= 0) {
+      return null;
+    }
+    const locale = activeLocaleTag();
+    const cacheRead = nonNegative(sessionUsage?.cache_read_tokens);
+    return {
+      tokens: t('chat.activity.overview.tokensValue', {
+        input: formatTokens(input, locale),
+        output: formatTokens(output, locale),
+      }),
+      cache:
+        input > 0 && cacheRead > 0
+          ? new Intl.NumberFormat(locale, {
+              style: 'percent',
+              maximumFractionDigits: 0,
+            }).format(Math.min(1, cacheRead / input))
+          : '',
+    };
+  });
+
+  function nonNegative(value) {
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
 
   let railLabel = $derived(
     runningTaskCount === 1
@@ -736,11 +787,18 @@
     <aside
       id={panelId}
       class="chat-activity__panel"
-      aria-labelledby={`${panelId}-title`}
+      aria-label={t('chat.activity.label')}
     >
       <header class="chat-activity__header">
-        <h2 id={`${panelId}-title`} class="chat-activity__title">
-          {t('chat.activity.title')}
+        <h2
+          class="chat-activity__title"
+          use:tooltip={{
+            text: session?.displayName ?? '',
+            whenTruncated: true,
+            placement: 'left',
+          }}
+        >
+          {session?.displayName ?? t('chat.activity.title')}
         </h2>
         <Button
           id={`${panelId}-close`}
@@ -801,22 +859,72 @@
         {/if}
 
         <section
-          class="chat-activity__stats"
-          aria-labelledby={`${panelId}-stats-title`}
+          class="chat-activity__overview"
+          aria-labelledby={`${panelId}-overview-title`}
         >
-          <h3 id={`${panelId}-stats-title`} class="chat-activity__group-title">
-            {t('chat.activity.statsTitle')}
+          <h3
+            id={`${panelId}-overview-title`}
+            class="chat-activity__group-title"
+          >
+            {t('chat.activity.overview.title')}
           </h3>
-          {#if sessionStats}
-            <!-- The panel sits at the right edge, so its card opens to the left. -->
-            <p class="chat-activity__stats-value">
-              <ChangeStats stats={sessionStats} placement="left" />
-            </p>
-          {:else if sessionStats === null}
-            <p class="chat-activity__stats-empty">
-              {t('chat.activity.statsEmpty')}
-            </p>
-          {/if}
+          <dl class="chat-activity__facts">
+            {#if contextReadout}
+              <div class="chat-activity__fact">
+                <dt>{t('chat.activity.overview.context')}</dt>
+                <dd>{@render contextReadout()}</dd>
+              </div>
+            {/if}
+            {#if tokenTotals}
+              <div class="chat-activity__fact">
+                <dt>{t('chat.activity.overview.tokens')}</dt>
+                <dd>{tokenTotals.tokens}</dd>
+              </div>
+              {#if tokenTotals.cache}
+                <div class="chat-activity__fact">
+                  <dt>{t('chat.activity.overview.cache')}</dt>
+                  <dd>{tokenTotals.cache}</dd>
+                </div>
+              {/if}
+            {/if}
+            <!-- Until the first read answers, the panel claims neither
+                 changes nor none. -->
+            {#if sessionStats !== undefined}
+              <div class="chat-activity__fact">
+                <dt>{t('chat.activity.overview.changes')}</dt>
+                <dd class="chat-activity__stats-value">
+                  {#if sessionStats}
+                    <!-- The panel sits at the right edge, so its card opens
+                         to the left. -->
+                    <ChangeStats stats={sessionStats} placement="left" />
+                  {:else}
+                    <span class="chat-activity__stats-empty"
+                      >{t('chat.activity.overview.noChanges')}</span
+                    >
+                  {/if}
+                </dd>
+              </div>
+            {/if}
+            {#if session?.createdAt}
+              <div class="chat-activity__fact">
+                <dt>{t('chat.activity.overview.started')}</dt>
+                <dd>{formatAbsoluteTime(session.createdAt)}</dd>
+              </div>
+            {/if}
+            {#if session?.lastActiveAt}
+              <div class="chat-activity__fact">
+                <dt>{t('chat.activity.overview.lastActive')}</dt>
+                <dd
+                  use:tooltip={{
+                    text: formatAbsoluteTime(session.lastActiveAt),
+                    placement: 'left',
+                  }}
+                >
+                  {formatRelativeTime(session.lastActiveAt)}
+                </dd>
+              </div>
+            {/if}
+          </dl>
         </section>
 
         <div class="chat-activity__tasks">
@@ -825,7 +933,7 @@
               {t('chat.activity.empty')}
             </p>
           {:else}
-            {#each [['running', sections.running], ['finished', sections.finished]] as [section, entries] (section)}
+            {#each [['running', sections.running, sections.running], ['finished', sections.finished, visibleFinished]] as [section, entries, shown] (section)}
               {#if entries.length > 0}
                 <section
                   class={`chat-activity__group chat-activity__group--${section}`}
@@ -841,7 +949,7 @@
                     <span class="chat-activity__count">{entries.length}</span>
                   </h3>
                   <ul class="chat-activity__task-list">
-                    {#each entries as entry (entry.key)}
+                    {#each shown as entry (entry.key)}
                       <li>
                         {#if entry.kind === 'reflection'}
                           {@render reflectionRow(entry.row)}
@@ -851,6 +959,20 @@
                       </li>
                     {/each}
                   </ul>
+                  {#if section === 'finished' && entries.length > FINISHED_PREVIEW}
+                    <Button
+                      variant="tertiary"
+                      class="chat-activity__more"
+                      aria-expanded={showAllFinished}
+                      onClick={() => (showAllFinished = !showAllFinished)}
+                    >
+                      {showAllFinished
+                        ? t('chat.activity.showFewer')
+                        : t('chat.activity.showAll', {
+                            count: entries.length,
+                          })}
+                    </Button>
+                  {/if}
                 </section>
               {/if}
             {/each}
@@ -874,13 +996,36 @@
     transform: translateY(-50%);
   }
 
-  /* The panel grows with the Chat area (about 70% of its height) but never
-     below a usable height nor past the area itself. */
+  /* Open, the panel is a full-height column at the right edge, the
+     counterpart of the Session list on the left. It lies over the chat
+     while the area is too narrow to give both their room... */
   .chat-activity--open {
+    top: 0;
+    right: 0;
+    bottom: 0;
     display: flex;
-    align-items: center;
-    width: min(var(--chat-activity-width), calc(100% - 16px));
-    height: min(calc(100% - 24px), max(70%, 360px));
+    width: min(var(--chat-activity-width), calc(100% - 48px));
+    height: auto;
+    box-shadow: var(--floating-elevation);
+    transform: none;
+  }
+
+  /* ...and docks beside it otherwise, so the chat centers in the rest and
+     keeps its scrollbar. Beside a docked Session list it needs more room. */
+  @container chat-area (min-width: 740px) {
+    .chat-activity--open {
+      position: relative;
+      flex: 0 0 var(--chat-activity-width);
+      box-shadow: none;
+    }
+  }
+  @container chat-area (min-width: 740px) and (max-width: 1019px) {
+    :global(.chat-view__content-shell:has(> .session-drawer))
+      .chat-activity--open {
+      position: absolute;
+      flex: none;
+      box-shadow: var(--floating-elevation);
+    }
   }
 
   :global(.chat-activity__rail.btn-tertiary) {
@@ -934,28 +1079,28 @@
   .chat-activity__panel {
     display: flex;
     width: 100%;
-    max-height: 100%;
+    height: 100%;
     min-height: 0;
     flex-direction: column;
     overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--secondary-surface);
-    box-shadow: var(--floating-elevation);
+    border-left: 1px solid var(--border);
+    background: var(--surface);
   }
+  /* Matches the Session list's header. */
   .chat-activity__header {
     display: flex;
     flex: 0 0 auto;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    padding: 10px 8px 6px 16px;
+    gap: 4px;
+    padding: 3px;
+    border-bottom: 1px solid var(--border);
   }
   :global(.chat-activity__close.btn-tertiary.btn-icon) {
-    width: 24px;
-    min-width: 24px;
-    height: 24px;
-    min-height: 24px;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    min-height: 28px;
     border: 0;
     color: var(--text-lo);
   }
@@ -971,20 +1116,27 @@
     stroke-width: 1.5;
   }
   .chat-activity__title {
+    min-width: 0;
+    flex: 1;
     margin: 0;
+    padding: 5px 8px;
+    overflow: hidden;
     color: var(--text-hi);
     font-family: var(--font-ui);
-    font-size: var(--fs-body-md);
-    font-weight: 600;
+    font-size: var(--fs-label-md);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .chat-activity__body {
+    display: flex;
     min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 14px;
     overflow-y: auto;
-    padding: 0 8px 10px;
+    padding: 10px 8px 12px;
     scrollbar-width: thin;
-  }
-  .chat-activity__parent {
-    margin-bottom: 8px;
   }
   :global(.chat-activity__parent-link.btn-tertiary) {
     width: 100%;
@@ -1007,25 +1159,56 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .chat-activity__stats {
-    padding-bottom: 12px;
-  }
-  .chat-activity__stats-value,
-  .chat-activity__stats-empty {
+  /* Label and value pairs in even rows, tall enough for the context
+     readout's ring. */
+  .chat-activity__facts {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 4px 12px;
     margin: 0;
-    padding: 4px 8px;
+    padding: 4px 8px 0;
     font-size: var(--fs-body-sm);
     font-variant-numeric: tabular-nums;
+  }
+  .chat-activity__fact {
+    display: contents;
+  }
+  .chat-activity__fact dt {
+    align-self: center;
+    color: var(--text-lo);
+  }
+  .chat-activity__fact dd {
+    display: flex;
+    min-width: 0;
+    min-height: 22px;
+    align-items: center;
+    margin: 0;
+    overflow: hidden;
+    color: var(--text-hi);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chat-activity__stats-empty {
     color: var(--text-med);
+  }
+  :global(.chat-activity__more.btn-tertiary) {
+    min-height: 0;
+    margin: 4px 0 0;
+    padding: 3px 8px;
+    border: 0;
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+    font-weight: 400;
+  }
+  :global(.chat-activity__more.btn-tertiary:hover) {
+    background: var(--surface-2);
+    color: var(--text-hi);
   }
   .chat-activity__empty {
     margin: 0;
     padding: 8px;
     color: var(--text-med);
     font-size: var(--fs-body-sm);
-  }
-  .chat-activity__group + .chat-activity__group {
-    margin-top: 10px;
   }
   .chat-activity__group-title {
     display: flex;
@@ -1306,7 +1489,8 @@
   :global(.chat-activity__close.btn-tertiary:focus-visible),
   :global(.chat-activity__outcome-toggle.btn-tertiary:focus-visible),
   :global(.chat-activity__task-link.btn-tertiary:focus-visible),
-  :global(.chat-activity__parent-link.btn-tertiary:focus-visible) {
+  :global(.chat-activity__parent-link.btn-tertiary:focus-visible),
+  :global(.chat-activity__more.btn-tertiary:focus-visible) {
     outline: 1px solid var(--accent);
     outline-offset: -1px;
   }

@@ -3,7 +3,7 @@
    On phones it keeps using the whole width. */
 .chat-view {
   --chat-footer-inset: var(--chat-msg-gutter);
-  --chat-activity-width: 264px;
+  --chat-activity-width: 272px;
 
   display: flex;
   width: 100%;
@@ -30,8 +30,9 @@
   container: chat-surface / inline-size;
 }
 
-/* The Session list docks beside the chat and pushes it; an area too narrow
-   for both shows the list over the chat instead. */
+/* The Session list and the Session information panel dock beside the chat
+   and push it; an area too narrow for them shows them over the chat
+   instead (ChatActivityPanel.svelte). */
 .chat-view__content-shell {
   position: relative;
   display: flex;
@@ -39,18 +40,6 @@
   flex: 1;
   overflow: hidden;
   container: chat-area / inline-size;
-}
-
-/* The open Session-info panel pushes the chat the same way: the timeline's
-   content and the composer keep its width plus its edge gaps free
-   (`--chat-activity-reserve`) and center in the rest, while the timeline's
-   scrollbar stays at the edge. A chat too narrow for both keeps the panel
-   over it instead. */
-@container chat-surface (min-width: 740px) {
-  .chat-view__content-shell--activity-open .chat-view__timeline-shell,
-  .chat-view__content-shell--activity-open .chat-view__footer-stack {
-    --chat-activity-reserve: calc(var(--chat-activity-width) + 16px);
-  }
 }
 
 /* Icon actions in the Chat header: the Session list, New session and the
@@ -100,9 +89,7 @@
   position: absolute;
   /* Ends before the timeline's scrollbar column so the scrollbar stays
       visible over its full height instead of disappearing behind us. */
-  right: calc(
-    var(--chat-scrollbar-width, 0px) + var(--chat-activity-reserve, 0px)
-  );
+  right: var(--chat-scrollbar-width, 0px);
   bottom: 0;
   left: 0;
   z-index: 3;

@@ -19,7 +19,7 @@
   position: absolute;
   /* Floats immediately above the composer overlay, not behind it. */
   bottom: calc(12px + var(--chat-overlay-height, 0px));
-  left: calc(50% - var(--chat-activity-reserve, 0px) / 2);
+  left: 50%;
   z-index: 1;
   width: 36px;
   height: 36px;
