@@ -585,11 +585,13 @@ export default Object.freeze({
   'settings.webSearch.searxngBaseUrlHelp':
     'SearXNG is a free, self-hosted metasearch engine; vBot does not include one. Enter the address of your own instance or of one you can reach.\n\nThe instance must allow JSON results (add json to search.formats in its settings.yml); otherwise every search fails with HTTP 403.',
   'settings.webSearch.searxngBaseUrlPlaceholder': 'http://localhost:8888',
+  'settings.secretStore.unavailable':
+    'vBot cannot open its Secret Store on the server, so saved API keys, sign-ins and tokens are missing and saving new ones fails. Credentials set in the server environment still work. On the server’s computer, vbot data-store secrets status shows why.',
+  'settings.secretStore.damaged':
+    'Some credentials saved in vBot’s Secret Store cannot be decrypted and count as missing: {names}. Save them again or remove them.',
   'settings.serviceKey.label': 'API key',
   'settings.serviceKey.help':
-    'vBot keeps the key on its server and never shows it again. A key set in the server environment takes precedence over a saved one and can only be changed there.',
-  'settings.serviceKey.helpFile':
-    'Saved keys go in the .env file in {path}. Keys can also be added to that file by hand; restart the vBot server after editing it.',
+    'vBot keeps the key encrypted in its Secret Store on the server and never shows it again. A key set in the server environment takes precedence over a saved one and can only be changed there.',
   'settings.serviceKey.helpShared':
     'Web search and Web page reading use the same {variable} key, so a change here applies to both.',
   'settings.serviceKey.set': 'Set',
@@ -597,7 +599,7 @@ export default Object.freeze({
   'settings.serviceKey.optionMissing': 'API key missing',
   'settings.serviceKey.missing': 'Missing',
   'settings.serviceKey.stateSaved':
-    'Saved in the data directory as {variable}.',
+    'Saved in vBot’s Secret Store as {variable}.',
   'settings.serviceKey.stateMissing':
     'This service needs an API key ({variable}).',
   'settings.serviceKey.stateEnvironment':
@@ -829,7 +831,7 @@ export default Object.freeze({
   'settings.providers.disconnectError':
     'Provider connection could not be disconnected.',
   'settings.providers.oauthTokenHelp':
-    'vBot reads this sign-in token from the process environment or the data directory .env file; it cannot be changed here.',
+    'This sign-in cannot be started or changed here. vBot keeps its token encrypted in the Secret Store on the server.',
   'settings.providers.localContext.title': 'Context windows',
   'settings.providers.localContext.help':
     'The context window vBot budgets against and requests from the local server per call.\n\nLeave a field empty to use the default of 32k tokens, capped at the Model maximum.',
@@ -913,13 +915,13 @@ export default Object.freeze({
   'settings.providers.accounts.defaultLabel': 'Default',
   'settings.providers.accounts.notUsable': 'Not usable',
   'settings.providers.accounts.source.processEnv': 'Environment variable',
-  'settings.providers.accounts.source.dataDir': 'Data directory .env',
+  'settings.providers.accounts.source.dataDir': 'Secret Store',
   'settings.providers.accounts.source.oauth': 'OAuth sign-in',
   'settings.providers.accounts.variable': 'Variable',
   'settings.providers.accounts.sourceHint.processEnv':
     'Read from the environment of the vBot server process. Change or remove it where the server is started.',
   'settings.providers.accounts.sourceHint.dataDir':
-    'Stored in the .env file of vBot’s data directory on the server.',
+    'Stored encrypted in vBot’s Secret Store on the server.',
   'settings.providers.accounts.sourceHint.oauth':
     'Signed in with the Provider; vBot stores and refreshes the token.',
   'settings.providers.accounts.notUsableKey':
@@ -947,14 +949,14 @@ export default Object.freeze({
     'All available providers are already connected.',
   'settings.providers.add.methodApiKey': 'API key',
   'settings.providers.add.methodApiKeyDescription':
-    'Paste a static API key; it is stored in the data directory.',
+    'Paste a static API key; vBot stores it encrypted on the server.',
   'settings.providers.add.methodOAuth': 'Sign in (OAuth)',
   'settings.providers.add.methodOAuthDescription':
     'Authorize vBot through the provider account in a browser.',
   'settings.providers.add.apiKeyLabel': 'API key',
   'settings.providers.add.apiKeyPlaceholder': 'Paste the API key…',
   'settings.providers.add.apiKeyHint':
-    'Stored as {credentialKey} in the data directory .env.',
+    'Stored as {credentialKey} in vBot’s encrypted Secret Store. A {credentialKey} set in the server environment takes precedence.',
   'settings.providers.add.saveKey': 'Save key',
   'settings.providers.add.keyError': 'API key could not be saved.',
   'settings.providers.add.oauthIntro':
@@ -994,7 +996,7 @@ export default Object.freeze({
   'settings.providers.custom.apiKey': 'API key (optional)',
   'settings.providers.custom.replaceApiKey': 'Replace API key (optional)',
   'settings.providers.custom.apiKeyHint':
-    'Stored in the data directory .env. Leave empty to keep the current key.',
+    'Stored in vBot’s encrypted Secret Store. Leave empty to keep the current key.',
   'settings.providers.custom.modelsTitle': 'Manual Models',
   'settings.providers.custom.modelsHint':
     'Manual facts override discovered Models with the same wire id.',
@@ -1105,7 +1107,7 @@ export default Object.freeze({
     'Per account + channel + peer',
   'settings.channels.token_env_var': 'Token env var',
   'settings.channels.token_env_var.help':
-    'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
+    'Name of the variable that holds the bot token; only the name goes here. vBot reads it from the server environment, or else from its encrypted Secret Store, where vbot channel token set <channel-id> --stdin saves a token.',
   'settings.channels.idHelp': 'A name you choose; it cannot be changed later.',
   'settings.channels.dm_scope.help':
     'How direct messages are grouped into Sessions.\n\nPer conversation: one Session per chat.\n\nMain: all DMs share one Session.\n\nPer peer: one Session per person.\n\nPer account + channel + peer: one Session per chat and person.\n\nGroup chats always share one Session per group, regardless of this setting.',

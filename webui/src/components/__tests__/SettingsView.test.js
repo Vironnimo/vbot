@@ -247,6 +247,40 @@ describe('SettingsView', () => {
       expect(general().querySelector('[data-activity]')).toBeNull();
     });
 
+    it('warns on the pages that manage credentials while the Secret Store cannot be read', async () => {
+      const props = reactiveProps({ secretStore: { state: 'available' } });
+      await mountSettings({}, props);
+      const warnedPages = () =>
+        Array.from(
+          document.querySelectorAll('[data-secret-store-problem]'),
+          (banner) => [
+            banner.closest('[data-settings-page]').dataset.settingsPage,
+            banner.textContent.trim(),
+          ],
+        );
+      expect(warnedPages()).toEqual([]);
+
+      props.secretStore = { state: 'unavailable', damaged: [] };
+      flushSync();
+      const unavailable = t('settings.secretStore.unavailable');
+      expect(warnedPages()).toEqual([
+        ['providers', unavailable],
+        ['tools', unavailable],
+        ['integrations', unavailable],
+      ]);
+
+      props.secretStore = {
+        state: 'available',
+        damaged: ['credentials/OPENAI_API_KEY', 'oauth_tokens/openai-codex'],
+      };
+      flushSync();
+      expect(warnedPages()[0][1]).toBe(
+        t('settings.secretStore.damaged', {
+          names: 'OPENAI_API_KEY, openai-codex',
+        }),
+      );
+    });
+
     it('groups settings by purpose and keeps small controls out of page navigation', async () => {
       const navigate = vi.fn();
       const navigation = createStandaloneNavigation();

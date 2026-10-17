@@ -50,7 +50,6 @@
   let service = $derived(
     services.find((item) => item.id === webSearchSettings.provider) ?? null,
   );
-  let dataDirectory = $derived(settings?.general?.data_directory ?? '');
   let saveDisabled = $derived(saving || !webSearchDraftHasChanges());
   const autosaveContext = useAutosaveContext();
   const webSearchAutosave = createDebouncedAutosave({
@@ -167,7 +166,6 @@
     <ServiceApiKey
       id="settings-web-search-api-key"
       {service}
-      {dataDirectory}
       {onCommit}
       {onToast}
       {onError}

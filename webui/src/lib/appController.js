@@ -107,6 +107,8 @@ export function createAppControllerState() {
     // (replay gap or server restart).
     sessionsRefreshToken: 0,
     dataStoreIncident: null,
+    // The Secret Store projection of `data_store.status` (`secrets`).
+    secretStore: null,
     // The server serves a newer WebUI build than this page runs.
     webuiOutdated: false,
     skillsRefreshToken: 0,

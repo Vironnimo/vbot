@@ -210,6 +210,7 @@
   let modelsRefreshToken = $derived(appControllerState.modelsRefreshToken);
   let recallIndexStatus = $derived(appControllerState.recallIndexStatus);
   let backgroundActivity = $derived(appControllerState.backgroundActivity);
+  let secretStore = $derived(appControllerState.secretStore);
   let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
@@ -645,6 +646,7 @@
     try {
       const result = await getDataStoreStatus();
       appControllerState.dataStoreIncident = result?.incidents?.[0] ?? null;
+      appControllerState.secretStore = result?.secrets ?? null;
     } catch {
       // Preserve the last durable incident projection during a transient RPC failure.
     }
@@ -1119,6 +1121,7 @@
           {modelsRefreshToken}
           {recallIndexStatus}
           {backgroundActivity}
+          {secretStore}
           {clientsRefreshToken}
           {channelsRefreshToken}
           {archiveRefreshToken}

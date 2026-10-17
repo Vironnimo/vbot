@@ -33,7 +33,6 @@ const settings = {
       },
     ],
   },
-  general: { data_directory: '/vbot-data' },
 };
 
 describe('Web Fetch settings', () => {
@@ -102,7 +101,7 @@ describe('Web Fetch settings', () => {
     document.querySelector('[data-api-key] .info-hint').click();
     flushSync();
     expect(document.querySelector('.info-popover').textContent).toContain(
-      '/vbot-data',
+      t('settings.serviceKey.help'),
     );
     expect(rpcMock).not.toHaveBeenCalled();
   });

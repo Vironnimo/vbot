@@ -29,7 +29,6 @@ function webSearchSettings(services) {
       searxng: { base_url: 'http://localhost:8888' },
       services,
     },
-    general: { data_directory: '/vbot-data' },
   };
 }
 
@@ -86,11 +85,11 @@ describe('Web Search settings', () => {
     // The selected provider's key row names the variable it needs.
     expect(keyRow().dataset.apiKey).toBe('missing');
     expect(keyRow().textContent).toContain('BRAVE_API_KEY');
-    // Where the .env file lives stays behind the key's "?".
+    // Where the key is kept stays behind the key's "?".
     keyRow().querySelector('.info-hint').click();
     flushSync();
     expect(document.querySelector('.info-popover').textContent).toContain(
-      '/vbot-data',
+      t('settings.serviceKey.help'),
     );
 
     const options = openProviders();

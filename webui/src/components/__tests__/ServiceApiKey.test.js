@@ -84,7 +84,6 @@ describe('Service API key', () => {
     const props = reactiveProps({
       id: INPUT_ID,
       service: tavily(),
-      dataDirectory: '/vbot-data',
       onCommit: (next) => commits.push(next),
       onToast: (toast) => toasts.push(toast.title),
     });
@@ -101,11 +100,11 @@ describe('Service API key', () => {
     mountKey(props);
 
     expect(row().dataset.apiKey).toBe('missing');
-    // The "?" names the .env location and that the key is shared.
+    // The "?" says where the key is kept and that it is shared.
     document.querySelector('.info-hint').click();
     flushSync();
     const help = document.querySelector('.info-popover').textContent;
-    expect(help).toContain('/vbot-data');
+    expect(help).toContain(t('settings.serviceKey.help'));
     expect(help).toContain(
       t('settings.serviceKey.helpShared', { variable: 'TAVILY_API_KEY' }),
     );
