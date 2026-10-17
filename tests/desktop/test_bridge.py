@@ -99,6 +99,8 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
         "setLiveHotkey",
         "getDictation",
         "setDictation",
+        "getZoom",
+        "setZoom",
         "connect",
         "listServers",
         "addServer",
@@ -218,6 +220,7 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
     bridge, _ = _bridge(
         live_hotkey=hotkey,
         dictation=hotkey,
+        zoom=hotkey,
         secure_origins=("http://a.lan:8420", "http://pi.lan:9000"),
     )
 
@@ -229,6 +232,7 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
         "microphone": True,
         "liveHotkey": available,
         "dictation": available,
+        "zoom": available,
         "secureOrigins": ["http://a.lan:8420", "http://pi.lan:9000"],
         "restart": False,
         "signIn": False,
@@ -579,6 +583,8 @@ def test_optional_services_raise_without_their_owner() -> None:
         lambda: bridge.setLiveHotkey({"enabled": True}),
         bridge.getDictation,
         lambda: bridge.setDictation({"enabled": True}),
+        bridge.getZoom,
+        lambda: bridge.setZoom(125),
     )
     for call in hotkey_calls:
         with pytest.raises(RuntimeError, match="is not available in this Desktop"):

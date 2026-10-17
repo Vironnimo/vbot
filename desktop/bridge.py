@@ -12,13 +12,13 @@ looks like a code, and is logged with its traceback.
 The same instance stays the window's ``js_api`` across navigation, so it
 serves both the shell connection screen (server selection) and the remote
 WebUI (capabilities, clipboard and browser, the microphone, the Live voice
-hotkey, Voice, Desktop dictation, the update restart). The facade holds no
-state of its own: microphone methods delegate to
+hotkey, Voice, Desktop dictation, the window zoom, the update restart). The
+facade holds no state of its own: microphone methods delegate to
 :class:`desktop.speech.microphone.MicrophoneService`, Voice methods to
 :class:`desktop.wakeword.controller.VoiceController`, dictation methods to
-:class:`desktop.dictation.controller.DictationController`, server
-selection to the connection controller, the update restart to
-:class:`desktop.restart.DesktopRestart`.
+:class:`desktop.dictation.controller.DictationController`, zoom methods to
+:class:`desktop.zoom.DesktopZoom`, server selection to the connection
+controller, the update restart to :class:`desktop.restart.DesktopRestart`.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from desktop.restart import DesktopRestart
     from desktop.speech.microphone import MicrophoneService
     from desktop.wakeword.controller import VoiceController
+    from desktop.zoom import DesktopZoom
 
 logger = logging.getLogger("vbot.desktop.bridge")
 
@@ -165,6 +166,7 @@ class DesktopBridge:
         dictation: DictationController | None = None,
         secure_origins: tuple[str, ...] = (),
         restart: DesktopRestart | None = None,
+        zoom: DesktopZoom | None = None,
     ) -> None:
         self._voice = voice
         self._microphone = microphone
@@ -173,6 +175,7 @@ class DesktopBridge:
         self._live_hotkey = live_hotkey
         self._dictation = dictation
         self._restart = restart
+        self._zoom = zoom
         # Remote HTTP origins WebView2 treats as secure for this process. A
         # server added later needs a Desktop restart before its microphone works.
         self._secure_origins = tuple(secure_origins)
@@ -192,6 +195,7 @@ class DesktopBridge:
             "microphone": True,
             "liveHotkey": self._live_hotkey is not None and self._live_hotkey.supported,
             "dictation": self._dictation is not None and self._dictation.supported,
+            "zoom": self._zoom is not None and self._zoom.supported,
             "secureOrigins": list(self._secure_origins),
             "restart": self._restart is not None,
             # The Desktop signs its window in to servers in the access mode
@@ -293,6 +297,16 @@ class DesktopBridge:
         """Merge, persist, and re-register the Live voice hotkey; returns its status."""
         return self._require_live_hotkey().update(changes)
 
+    # -- Window zoom -----------------------------------------------------------
+
+    def getZoom(self) -> dict[str, Any]:  # noqa: N802
+        """Return ``{supported, percent, levels, default}`` for the window zoom."""
+        return self._require_zoom().status()
+
+    def setZoom(self, percent: Any) -> dict[str, Any]:  # noqa: N802
+        """Store and apply one of the zoom levels; returns the zoom status."""
+        return self._require_zoom().set(percent)
+
     # -- Desktop dictation -----------------------------------------------------
 
     def getDictation(self) -> dict[str, Any]:  # noqa: N802
@@ -390,6 +404,11 @@ class DesktopBridge:
         if self._dictation is None:
             raise RuntimeError("Desktop dictation is not available in this Desktop")
         return self._dictation
+
+    def _require_zoom(self) -> DesktopZoom:
+        if self._zoom is None:
+            raise RuntimeError("The window zoom is not available in this Desktop")
+        return self._zoom
 
     def _require_connection(self) -> ConnectionDelegate:
         if self._connection is None:

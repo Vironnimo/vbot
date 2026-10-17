@@ -623,6 +623,7 @@ def _run_desktop(
     from desktop.page_events import PageEventDispatcher
     from desktop.speech.cues import CuePlayer
     from desktop.speech.microphone import MicrophoneService
+    from desktop.zoom import DesktopZoom
 
     _http.prewarm_outbound_http()
     webview = webview_module if webview_module is not None else load_webview()
@@ -679,6 +680,7 @@ def _run_desktop(
         if contract is not None
         else None
     )
+    zoom = DesktopZoom(settings_path=settings_file)
     bridge = DesktopBridge(
         voice=voice,
         microphone=microphone,
@@ -687,6 +689,7 @@ def _run_desktop(
         dictation=dictation,
         secure_origins=secure_origins,
         restart=desktop_restart,
+        zoom=zoom,
     )
 
     # Voice and dictation follow the window: every successful in-window connect
@@ -737,6 +740,9 @@ def _run_desktop(
     _windows.allow_server_microphone(
         window, lambda: _windows.url_origin(controller.active_server_url())
     )
+    apply_zoom = _windows.bind_window_zoom(window, zoom.factor)
+    if apply_zoom is not None:
+        zoom.attach(apply_zoom)
     controller.attach_window(window)
     # Continues a window sign-in: ticket first, then the WebUI.
     window.events.loaded += controller.page_loaded

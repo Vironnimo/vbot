@@ -35,6 +35,7 @@ import {
   getDesktopMicrophone,
   setDesktopMicrophone,
   getDesktopDictation,
+  getDesktopZoom,
   setDesktopDictation,
   onDesktopDictationRecording,
   getDesktopUpdate,
@@ -51,6 +52,7 @@ const DISABLED_CAPABILITIES = {
   liveHotkey: false,
   microphone: false,
   dictation: false,
+  zoom: false,
   restart: false,
   secureOrigins: [],
 };
@@ -188,6 +190,7 @@ describe('getDesktopCapabilities', () => {
       liveHotkey: 1,
       microphone: true,
       dictation: 1,
+      zoom: 1,
       restart: true,
       secureOrigins: ['http://pi.lan:8420', 42, null],
     }));
@@ -202,6 +205,7 @@ describe('getDesktopCapabilities', () => {
       liveHotkey: true,
       microphone: true,
       dictation: true,
+      zoom: true,
       restart: true,
       secureOrigins: ['http://pi.lan:8420'],
     });
@@ -412,7 +416,7 @@ describe('Desktop bridge calls', () => {
     await expect(call()).resolves.toEqual(empty);
   });
 
-  it('reads missing microphone and dictation fields as their defaults', async () => {
+  it('reads missing microphone, dictation and zoom fields as their defaults', async () => {
     desktopWindow({
       getMicrophone: () => ({ device: { index: 'two', name: 'Desk mic' } }),
       getDictation: () => ({
@@ -422,6 +426,7 @@ describe('Desktop bridge calls', () => {
         state: 'thinking',
         last_failure: { code: 'nothing_heard', at: 7 },
       }),
+      getZoom: () => ({ percent: 125, levels: [100, 125, 'x'], default: 100 }),
     });
 
     await expect(getDesktopMicrophone()).resolves.toEqual({
@@ -443,13 +448,26 @@ describe('Desktop bridge calls', () => {
       state: 'idle',
       last_failure: { code: 'nothing_heard', at: null },
     });
+    await expect(getDesktopZoom()).resolves.toEqual({
+      supported: true,
+      percent: 125,
+      levels: [100, 125],
+      default: 100,
+    });
 
-    desktopWindow({ getMicrophone: () => null, getDictation: () => [] });
+    desktopWindow({
+      getMicrophone: () => null,
+      getDictation: () => [],
+      getZoom: () => ({ percent: 33, levels: [100], default: 100 }),
+    });
     await expect(getDesktopMicrophone()).rejects.toThrow(
       'The Desktop returned invalid microphone settings',
     );
     await expect(getDesktopDictation()).rejects.toThrow(
       'The Desktop returned an invalid dictation status',
+    );
+    await expect(getDesktopZoom()).rejects.toThrow(
+      'The Desktop returned an invalid zoom status',
     );
   });
 

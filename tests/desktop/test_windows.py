@@ -27,6 +27,7 @@ def test_other_platforms_do_not_load_windows_dependencies(monkeypatch, platform)
     _windows.configure_dpi()
     _windows.configure_winforms()
     _windows.bind_window_dpi(object(), (800, 600))
+    assert _windows.bind_window_zoom(object(), lambda: 1.0) is None
     assert _windows.primary_scale() == 1.0
     importer.assert_not_called()
 
@@ -596,3 +597,41 @@ def test_permission_hook_attach_failure_never_breaks_startup(monkeypatch, caplog
     window.events.before_show.handlers[0]()
 
     assert any("permission hook failed (attach)" in r.getMessage() for r in caplog.records)
+
+
+# -- WebView2 zoom ---------------------------------------------------------------------
+
+
+def test_the_desktop_owns_the_webview2_zoom(monkeypatch):
+    monkeypatch.setattr(_windows.sys, "platform", "win32")
+    gui_thread = []
+    system = SimpleNamespace(Action=lambda callback: callback)
+    monkeypatch.setattr(_windows.importlib, "import_module", lambda name: system)
+    control = SimpleNamespace(
+        CoreWebView2InitializationCompleted=_DotnetEvent(),
+        CoreWebView2=SimpleNamespace(Settings=SimpleNamespace(IsZoomControlEnabled=True)),
+        ZoomFactor=1.0,
+        IsDisposed=False,
+        BeginInvoke=gui_thread.append,
+    )
+    window = SimpleNamespace(
+        events=SimpleNamespace(before_show=_DotnetEvent()),
+        native=SimpleNamespace(browser=SimpleNamespace(webview=control)),
+    )
+    factor = [1.25]
+
+    apply = _windows.bind_window_zoom(window, lambda: factor[0])
+    assert apply is not None
+    apply(1.5)  # before WebView2 exists: initialization applies the stored factor
+    window.events.before_show.handlers[0]()
+    control.CoreWebView2InitializationCompleted.handlers[0](
+        control, SimpleNamespace(IsSuccess=True)
+    )
+    assert control.CoreWebView2.Settings.IsZoomControlEnabled is False
+    assert control.ZoomFactor == 1.25
+    assert gui_thread == []
+
+    apply(0.9)
+    assert control.ZoomFactor == 1.25  # only on the GUI thread
+    gui_thread.pop()()
+    assert control.ZoomFactor == 0.9

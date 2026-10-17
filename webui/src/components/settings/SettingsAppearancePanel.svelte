@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
+  import DesktopZoomSetting from './DesktopZoomSetting.svelte';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
@@ -23,7 +24,13 @@
 
   const noop = () => {};
 
-  let { settings = null, onCommit = noop, onError = noop } = $props();
+  let {
+    settings = null,
+    // The Desktop window zoom owner, only in a Desktop that offers it.
+    desktopZoom = null,
+    onCommit = noop,
+    onError = noop,
+  } = $props();
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
   // reactive dependency); later commits flow back through saveDisabled.
@@ -234,6 +241,10 @@
       />
     </div>
   </div>
+
+  {#if desktopZoom}
+    <DesktopZoomSetting {desktopZoom} />
+  {/if}
 </div>
 
 <div class="s-footer">

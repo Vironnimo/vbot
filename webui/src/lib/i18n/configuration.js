@@ -1229,6 +1229,11 @@ export default Object.freeze({
     'Normal shows each Thinking block and Tool call in the Chat as it happens.\n\nCompact folds each stretch of Thinking and Tool calls between the Agent’s messages into one line: while the Agent works it shows the current step, afterwards which Tools ran, how many, any failures and how long it took. The Agent’s messages always stay visible, and the line opens to show every step.',
   'settings.appearance.chatWorkingMode.normal': 'Normal',
   'settings.appearance.chatWorkingMode.compact': 'Compact',
+  'settings.appearance.zoom.label': 'Zoom',
+  'settings.appearance.zoom.description':
+    'Scales everything in this Desktop app on this computer. Ctrl + Plus, Ctrl + Minus and Ctrl + mouse wheel change it too; Ctrl + 0 resets it.',
+  'settings.appearance.zoom.level': '{percent}%',
+  'settings.appearance.zoom.defaultLevel': '{percent}% (default)',
   'settings.language.en': 'English',
   'settings.voice.title': 'Voice',
   'settings.voice.aboutAria': 'About {name}',
