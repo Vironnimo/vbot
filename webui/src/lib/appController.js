@@ -21,6 +21,7 @@ import {
   RESOURCE_TOKEN_CRON,
   RESOURCE_TOKEN_COMMANDS,
   RESOURCE_TOKEN_DEBUG_TRACES,
+  RESOURCE_TOKEN_DEVICES,
   RESOURCE_TOKEN_MODELS,
   RESOURCE_TOKEN_PROJECTS,
   RESOURCE_TOKEN_SESSIONS,
@@ -80,6 +81,7 @@ export function createAppControllerState() {
     connectionSnapshot: null,
     connectionState: createConnectionState(),
     debugTracesRefreshToken: 0,
+    devicesRefreshToken: 0,
     modelsRefreshToken: 0,
     memoriesRefreshToken: 0,
     projectsRefreshToken: 0,
@@ -224,6 +226,7 @@ export function createAppController({
         state.projectsRefreshToken += 1;
         state.sessionsRefreshToken += 1;
         state.clientsRefreshToken += 1;
+        state.devicesRefreshToken += 1;
         state.channelsRefreshToken += 1;
         state.cronRefreshToken += 1;
         state.calendarRefreshToken += 1;
@@ -343,6 +346,9 @@ export function createAppController({
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_CLIENTS)) {
       state.clientsRefreshToken += 1;
+    }
+    if (tokenKeys.includes(RESOURCE_TOKEN_DEVICES)) {
+      state.devicesRefreshToken += 1;
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_CHANNELS)) {
       state.channelsRefreshToken += 1;

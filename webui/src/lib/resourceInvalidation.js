@@ -17,6 +17,7 @@ export const RESOURCE_TOKEN_AGENTS = 'agents';
 export const RESOURCE_TOKEN_MEMORIES = 'memories';
 export const RESOURCE_TOKEN_SESSIONS = 'sessions';
 export const RESOURCE_TOKEN_CLIENTS = 'clients';
+export const RESOURCE_TOKEN_DEVICES = 'devices';
 export const RESOURCE_TOKEN_CHANNELS = 'channels';
 export const RESOURCE_TOKEN_DEBUG_TRACES = 'debug_traces';
 export const RESOURCE_TOKEN_PROJECTS = 'projects';
@@ -34,7 +35,9 @@ export const RESOURCE_KIND_DATA_STORE = 'data_store';
 // reloads its model list AND its connection list together. Agent CRUD bumps the
 // "agents" group (re-fetch agent.list) and session create/switch bumps the
 // "sessions" group (re-fetch a session list). An archive entry that appears,
-// changes state or goes bumps the "archive" group (re-fetch archive.list).
+// changes state or goes bumps the "archive" group (re-fetch archive.list). A
+// paired Device that appears, changes or goes, and a pairing that is decided,
+// bump the "devices" group (re-fetch devices.list).
 // New kinds add their mapping here.
 const KIND_TOKEN_GROUPS = {
   models: [RESOURCE_TOKEN_MODELS],
@@ -43,6 +46,7 @@ const KIND_TOKEN_GROUPS = {
   memories: [RESOURCE_TOKEN_MEMORIES],
   sessions: [RESOURCE_TOKEN_SESSIONS],
   clients: [RESOURCE_TOKEN_CLIENTS],
+  devices: [RESOURCE_TOKEN_DEVICES],
   channels: [RESOURCE_TOKEN_CHANNELS],
   debug_traces: [RESOURCE_TOKEN_DEBUG_TRACES],
   projects: [RESOURCE_TOKEN_PROJECTS],

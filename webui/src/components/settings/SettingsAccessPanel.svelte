@@ -3,9 +3,9 @@
   // configuration: shown read-only with the command that changes it. The
   // paired Devices can be renamed and removed here, a new one approved by
   // its pairing code, and this browser signed out (the access gate then
-  // shows the pairing screen).
-  import { onDestroy } from 'svelte';
-
+  // shows the pairing screen). The list follows the server's `devices`
+  // invalidation, so a Device approved elsewhere appears once it claimed its
+  // approval.
   import AddDeviceDialog from './AddDeviceDialog.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
@@ -37,11 +37,9 @@
 
   const noop = () => {};
   const SHOW_COMMAND = 'vbot application access show';
-  // An approved device appears once it polled its approval (every 2 s).
-  const APPROVED_DEVICE_RELOAD_MS = 4_000;
   const DEVICE_NAME_MAX = 80;
 
-  let { clientsRefreshToken = 0, onToast = noop } = $props();
+  let { devicesRefreshToken = 0, onToast = noop } = $props();
 
   let status = $state(null);
   let statusError = $state('');
@@ -58,13 +56,6 @@
   let dialogBusy = $state(false);
   let dialogError = $state('');
 
-  let reloadTimer = null;
-  let destroyed = false;
-  onDestroy(() => {
-    destroyed = true;
-    clearTimeout(reloadTimer);
-  });
-
   const mode = $derived(status?.mode ?? '');
   const authenticatedMode = $derived(mode === ACCESS_MODE_AUTHENTICATED);
   // Only a paired Device can sign itself out; the host and the open modes
@@ -72,10 +63,10 @@
   const signedInAsDevice = $derived(status?.principal === 'device');
   const otherDevices = $derived(devices.filter((device) => !device.current));
 
-  // Reload on mount and whenever the connected clients change: a newly
-  // paired device usually connects right after it was approved.
+  // Reload on mount and whenever the server reports a change of the paired
+  // Devices: one paired, renamed, revoked or expired, here or elsewhere.
   $effect(() => {
-    void clientsRefreshToken;
+    void devicesRefreshToken;
     void loadStatus();
     void loadDevices();
   });
@@ -200,13 +191,8 @@
         : t('settings.access.add.denied', { name }),
       variant: approved ? 'success' : 'info',
     });
-    if (approved) {
-      void loadDevices();
-      clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(() => {
-        if (!destroyed) void loadDevices();
-      }, APPROVED_DEVICE_RELOAD_MS);
-    }
+    // The approved Device appears with the `devices` invalidation its claim
+    // publishes; until then the approval toast stands for it.
   }
 </script>
 
