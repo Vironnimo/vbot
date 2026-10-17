@@ -62,7 +62,6 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
         "command",
         "args",
         "workdir",
-        "name",
         "text",
         "key",
         "data",
@@ -78,8 +77,10 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
         "start_line",
         "expected_screen_revision",
         "after_revision",
-        # Advertised until terminals were shown by conversation; still sent by habit.
+        # Advertised until terminals were shown by conversation and called by call_name;
+        # still sent by habit.
         "group",
+        "name",
     }
     assert properties["action"]["enum"] == list(TERMINAL_ACTIONS)
     assert (properties["lines"]["default"], properties["timeout"]["default"]) == (30, 60)
@@ -87,7 +88,6 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
     assert "maximum" not in properties["timeout"]
     assert "600" in properties["timeout"]["description"]
     assert "default" not in properties["command"]
-    assert properties["name"]["maxLength"] == 80
     assert "enum" not in properties["key"]
     assert "f1-f12" in properties["key"]["description"]
     assert "ctrl_a-ctrl_z" in properties["key"]["description"]
@@ -512,7 +512,7 @@ async def test_capacity_refusal_names_the_terminals_to_stop(
     started = [
         cast(dict[str, Any], (await call(terminal_manager, context, arguments))["data"])
         for arguments in (
-            {"action": "start", "command": "fake-tui", "name": "build watcher"},
+            {"action": "start", "command": "fake-tui"},
             {"action": "start", "command": "python", "args": ["-i"]},
         )
     ]
@@ -523,48 +523,13 @@ async def test_capacity_refusal_names_the_terminals_to_stop(
     assert refused == tool_failure(
         "terminal_capacity",
         "This Session already runs 2 terminals, the most it can run at once, so no terminal "
-        f"was started. Your running terminals: {first} (Anna, build watcher); {second} "
+        f"was started. Your running terminals: {first} (Anna, fake-tui); {second} "
         "(Ben, python -i). "
         'Stop one you no longer need with terminal action "kill" and its terminal_id from this '
         "list, then start again.",
         retryable=True,
     )
     assert len(factory.calls) == 2
-
-
-@pytest.mark.asyncio
-async def test_start_name_is_trimmed_and_shown_only_with_launch_facts(
-    manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
-) -> None:
-    terminal_manager, factory = manager
-    context = make_context(tmp_path)
-    started = await call(
-        terminal_manager, context, {"action": "start", "command": "fake-tui", "name": "  joe  "}
-    )
-    started_data = cast(dict[str, Any], started["data"])
-    terminal_id = started_data["terminal_id"]
-    assert "name" not in started_data
-
-    listed = await call(terminal_manager, context, {"action": "list"})
-    assert cast(dict[str, Any], listed["data"])["terminals"][0]["name"] == "joe"
-    status = await call(terminal_manager, context, {"action": "status", "terminal_id": terminal_id})
-    assert cast(dict[str, Any], status["data"])["name"] == "joe"
-
-    for follow_up in (
-        {"action": "wait", "timeout": 0.01},
-        {"action": "input", "text": "x"},
-        {"action": "kill"},
-    ):
-        result = await call(terminal_manager, context, {**follow_up, "terminal_id": terminal_id})
-        assert result["ok"] is True, follow_up
-        assert "name" not in cast(dict[str, Any], result["data"]), follow_up
-
-    for invalid in ("   ", "x" * 81):
-        refused = await call(
-            terminal_manager, context, {"action": "start", "command": "fake-tui", "name": invalid}
-        )
-        assert cast(dict[str, Any], refused["error"])["code"] == "invalid_arguments"
-    assert len(factory.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -793,9 +758,7 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
 ) -> None:
     monkeypatch.setattr(manager_module, "default_terminal_argv", lambda env: ["host-shell"])
     terminal_manager, factory = manager
-    manual = await terminal_manager.spawn_for_operator(
-        command=None, arguments=[], cwd=tmp_path, name="afk codex"
-    )
+    manual = await terminal_manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path)
     terminal_id = manual["terminal_id"]
     persisted: list[Callable[[], None]] = []
     context = make_context(tmp_path, result_persisted_hook=persisted.append)
@@ -834,7 +797,6 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
         "terminal_id": terminal_id,
         "call_name": "Anna",
         "program": "host-shell",
-        "name": "afk codex",
         "state": "running",
         "attached": "here",
         "next": _DELIVERIES,

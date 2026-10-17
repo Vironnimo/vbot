@@ -297,7 +297,6 @@ class TerminalCatalog:
             "pinned": info.group_id is not None and self._pin_valid(info.group_id),
             "state": info.state,
             "command": Path(info.command).name or info.command,
-            "name": info.name,
             "call_name": info.call_name,
             "arguments": list(info.arguments),
             "launch_command": info.launch_command,

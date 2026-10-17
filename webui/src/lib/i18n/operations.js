@@ -382,10 +382,6 @@ export default Object.freeze({
   'terminals.commandHelp':
     'Program and arguments, for example: codex --profile "work space". Quote values containing spaces. Arguments are literal; pipes and shell expansions are not evaluated. Leave empty for the default shell.',
   'terminals.commandPlaceholder': 'Default shell',
-  'terminals.nameLabel': 'Name',
-  'terminals.nameHelp':
-    'Optional. What the terminal works on, shown next to its call name for you and the Agent.',
-  'terminals.namePlaceholder': 'Unnamed',
   'terminals.commandError.unclosedQuote':
     'Close the quotation marks before starting.',
   'terminals.commandError.emptyArgument':

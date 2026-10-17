@@ -47,7 +47,7 @@ async def test_overview_shows_selection_agents_sessions_and_terminals(fx: Fixtur
         "run_ask": "I drafted it.\n\nShould I use a formal tone?",
         "run_done": "All checks pass. " + "x" * 300 + " Done.",
     }
-    fx.app.add_terminal("term_a", name="Build")
+    fx.app.add_terminal("term_a", call_name="Anna")
     fx.app.add_terminal("term_b", "pwsh", state="exited")
     # Codex ended (or never started) in term_c; only its shell is still open.
     fx.app.add_terminal("term_c", state="ready")
@@ -76,7 +76,7 @@ async def test_overview_shows_selection_agents_sessions_and_terminals(fx: Fixtur
     assert 'Done."' in text
     assert "Old draft" not in text
     # Folders read with forward slashes, whatever the host writes.
-    assert f'- t1 Codex "Build" in {PROJECT_FOLDER_SHOWN}: idle' in text
+    assert f"- t1 Codex Anna in {PROJECT_FOLDER_SHOWN}: idle" in text
     assert (
         f"- t2 Codex in {PROJECT_FOLDER_SHOWN}: Codex is not running; only the command line is open"
     ) in text
@@ -314,12 +314,12 @@ async def test_an_agent_name_selects_a_channel_session_when_it_has_no_other(fx: 
 @pytest.mark.asyncio
 async def test_a_name_shared_by_a_terminal_and_an_agent_is_ambiguous(fx: Fixture) -> None:
     fx.app.sessions = [session_row("ses_1", "coder", has_active_run=True)]
-    fx.app.add_terminal("term_a", name="coder")
-    # Neither the Agent's exact id nor the Terminal's name wins by kind.
+    fx.app.add_terminal("term_a", call_name="coder")
+    # Neither the Agent's exact id nor the Terminal's call name wins by kind.
     for target in ("coder", "Coder"):
         code, message = await fx.failed("send_message", target=target, text="yes")
         assert code == "ambiguous_target"
-        assert "t1 (coder)" in message
+        assert "t1 (coder, codex)" in message
         assert "Agent Coder (id coder)" in message
         assert 'call overview with {"agent": "<its id>"}' in message
     assert fx.app.effects() == []
@@ -514,25 +514,18 @@ async def test_known_refs_say_what_each_ref_names_most_recent_last(fx: Fixture) 
     """A later delegation sees the call's refs without reading them again."""
     assert fx.executor.known_refs() == ""
     fx.app.sessions = [session_row("ses_run", "coder", title="Fix login", has_active_run=True)]
-    fx.app.add_terminal("term_a", name="Build")
+    fx.app.add_terminal("term_a", call_name="Anna")
     await fx.ok("overview")
     # Addressing s1 again keeps its title and makes it the most recent ref.
     await fx.ok("send_message", target="s1", text="go on")
-    await fx.ok("start_coding_terminal", program="claude", count=1, name="Docs")
+    await fx.ok("start_coding_terminal", program="claude", count=1)
 
     assert fx.executor.known_refs().splitlines() == [
-        '- t1: Codex Terminal "Build"',
+        "- t1: Codex Terminal Anna",
         '- s1: Session at Coder "Fix login"',
         # A started Terminal carries its call name.
-        '- t2: Claude Code Terminal Ben "Docs"',
+        "- t2: Claude Code Terminal Ben",
     ]
-    # A name set in the app stays on its own short line.
-    fx.app.add_terminal("term_long", name="Line one\nline two " + "x" * 80)
-    await fx.ok("read_output", target="term_long")
-    last = fx.executor.known_refs().splitlines()[-1]
-    assert last.startswith('- t3: Codex Terminal "Line one line two xx')
-    assert last.endswith('..."')
-    assert len(last) < 90
 
 
 @pytest.mark.asyncio

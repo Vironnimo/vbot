@@ -41,8 +41,6 @@
 
   let startWorkdir = $state('');
 
-  let startName = $state('');
-
   let startGroupId = $state('');
 
   let groupDialogOpen = $state(false);
@@ -85,7 +83,6 @@
 
   export function openStartDialog() {
     applyLaunchHistory(viewState.launchHistory[0] ?? null);
-    startName = '';
     startGroupId = pinTargetOf(selectedGroup) ?? '';
     viewState.startError = '';
     startDialogOpen = true;
@@ -132,7 +129,6 @@
     startCommandError = '';
     const { command, args } = parsed;
     const workdir = startWorkdir.trim();
-    const name = startName.trim();
     const params = {};
     if (command) {
       params.command = command;
@@ -142,9 +138,6 @@
     }
     if (workdir) {
       params.workdir = workdir;
-    }
-    if (name) {
-      params.name = name;
     }
 
     const started = await controller.startManualTerminal(params, {
@@ -362,31 +355,6 @@
                 onInput={(next) => {
                   startWorkdir = next;
                   markLaunchHistoryEdited();
-                }}
-              />
-            {/snippet}
-          </FormField>
-
-          <FormField controlId="terminal-start-name">
-            {#snippet labelContent()}
-              <span>{t('terminals.nameLabel')}</span>
-              <InfoHint
-                text={t('terminals.nameHelp')}
-                ariaLabel={t('terminals.nameLabel')}
-              />
-            {/snippet}
-
-            {#snippet children(field)}
-              <TextField
-                id={field.controlId}
-                variant="modal"
-                aria-describedby={field.describedBy}
-                ariaLabel={t('terminals.nameLabel')}
-                value={startName}
-                disabled={viewState.startingTerminal}
-                placeholder={t('terminals.namePlaceholder')}
-                onInput={(next) => {
-                  startName = next;
                 }}
               />
             {/snippet}

@@ -63,12 +63,8 @@ export function terminalTitle(item) {
   return callName ? `${callName} · ${label}` : label;
 }
 
-/** What a terminal works on: its name, its title, or the program it runs. */
+/** What a terminal works on: the title its program announces, or the program it runs. */
 export function terminalLabel(item) {
-  const customName = typeof item?.name === 'string' ? item.name.trim() : '';
-  if (customName) {
-    return customName;
-  }
   const announcedTitle =
     typeof item?.title === 'string' ? item.title.trim() : '';
   if (announcedTitle) {

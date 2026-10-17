@@ -27,7 +27,6 @@ from pathlib import Path
 from core.model_tasks.live import live_failure, live_success
 from core.tools.call_syntax import spelling
 from core.tools.live import (
-    MAX_LIVE_NAME_CHARS,
     MAX_LIVE_TEXT_CHARS,
     TOOL_MANAGE_TERMINALS,
     TOOL_READ_OUTPUT,
@@ -142,16 +141,16 @@ def terminal_state(item: JsonObject) -> str:
 
 
 def terminal_line(ref: str, item: JsonObject, *, program_running: bool | None = None) -> str:
-    """One overview line: ref, program, name, folder, state.
+    """One overview line: ref, program, call name, folder, state.
 
     ``program_running`` False marks a coding Terminal whose program ended or
     never started: its shell is still open, so its state alone says idle.
     """
     program = coding_program(item)
     parts = [ref, program.label if program else terminal_label(item)]
-    name = item.get("name")
-    if isinstance(name, str) and name.strip() and program is not None:
-        parts.append(f'"{name.strip()}"')
+    call_name = item.get("call_name")
+    if isinstance(call_name, str) and call_name and program is not None:
+        parts.append(call_name)
     folder = item.get("workdir")
     if isinstance(folder, str) and folder:
         parts.append(f"in {model_path(folder)}")
@@ -201,7 +200,6 @@ class LiveTerminals:
         program: CodingProgram,
         count: int,
         folder: str,
-        name: str,
         task: str,
         catalog: LiveCatalog,
     ) -> JsonObject:
@@ -211,12 +209,6 @@ class LiveTerminals:
                 "invalid_task",
                 f"{problem} Call start_coding_terminal again with the task as plain text.",
             )
-        if len(name) > MAX_LIVE_NAME_CHARS:
-            raise LiveToolError(
-                "invalid_name",
-                f"name must be at most {MAX_LIVE_NAME_CHARS} characters. Call "
-                "start_coding_terminal again with a shorter name.",
-            )
         workdir = await self._workdir(folder, catalog)
         self._ctx.ensure_active()
         started: list[str] = []
@@ -225,15 +217,13 @@ class LiveTerminals:
             for _ in range(count):
                 self._ctx.ensure_active()
                 params: JsonObject = {"command": program.command, "workdir": workdir}
-                if name:
-                    params["name"] = name
                 result = await self._ctx.call("terminal.start", params)
                 terminal_id = str(result["terminal"]["terminal_id"])
                 started.append(terminal_id)
                 titles[terminal_id] = terminal_title(result["terminal"])
         except Exception as exc:
             catalog.forget_terminals()
-            return self._start_failure(program, name, count, started, exc)
+            return self._start_failure(program, count, started, exc)
         catalog.forget_terminals()
         refs = [self._refs.terminal(terminal_id, titles[terminal_id]) for terminal_id in started]
         head = (
@@ -276,7 +266,7 @@ class LiveTerminals:
         return live_failure("partial", f"{head} {report}")
 
     def _start_failure(
-        self, program: CodingProgram, name: str, count: int, started: list[str], exc: Exception
+        self, program: CodingProgram, count: int, started: list[str], exc: Exception
     ) -> JsonObject:
         if isinstance(exc, LiveToolError | RpcError):
             reason = exc.message
@@ -285,7 +275,7 @@ class LiveTerminals:
             _LOGGER.exception("Live Terminal start failed unexpectedly")
             reason = "The start failed unexpectedly."
             uncertain = True
-        title = terminal_title({"launch_command": program.command, "name": name})
+        title = terminal_title({"launch_command": program.command})
         refs = [self._refs.terminal(terminal_id, title) for terminal_id in started]
         done = (
             f"Started {program.label} in {join_words(refs)}; "

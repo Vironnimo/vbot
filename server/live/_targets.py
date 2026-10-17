@@ -478,12 +478,8 @@ def group_label(group: JsonObject) -> str:
 
 
 def terminal_label(item: JsonObject) -> str:
-    """The Terminal's call name with its name, or the program it runs."""
-    name = item.get("name")
-    if isinstance(name, str) and name.strip():
-        label = name.strip()
-    else:
-        label = str(item.get("launch_command") or item.get("command") or "Terminal")
+    """The Terminal's call name with the program it runs."""
+    label = str(item.get("launch_command") or item.get("command") or "Terminal")
     call_name = item.get("call_name")
     return f"{call_name}, {label}" if isinstance(call_name, str) and call_name else label
 
@@ -496,15 +492,13 @@ def coding_program(item: JsonObject) -> CodingProgram | None:
 
 
 def terminal_title(item: JsonObject) -> str:
-    """What a Terminal is, as the call's ref legend names it: ``Codex Terminal Anna "Build"``."""
+    """What a Terminal is, as the call's ref legend names it: ``Codex Terminal Anna``."""
     program = coding_program(item)
     command = str(item.get("launch_command") or item.get("command") or "").strip()
     call_name = _legend_name(item.get("call_name"))
-    kind = " ".join(
+    return " ".join(
         part for part in (program.label if program else command, "Terminal", call_name) if part
     )
-    name = _legend_name(item.get("name"))
-    return f'{kind} "{name}"' if name else kind
 
 
 def session_title(agent_name: str, title: str = "") -> str:
@@ -610,9 +604,7 @@ async def _terminal_names(text: str, refs: LiveRefs, catalog: LiveCatalog) -> li
     return [
         Target(kind=TERMINAL, terminal=item)
         for item in await catalog.terminals()
-        if key
-        and key
-        in {spelling(str(item.get("name") or "")), spelling(str(item.get("call_name") or ""))}
+        if key and key == spelling(str(item.get("call_name") or ""))
     ]
 
 

@@ -121,7 +121,6 @@ class FakeApp:
         terminal = {
             "terminal_id": terminal_id,
             "group_id": "grp_mine",
-            "name": None,
             "state": "ready",
             "command": "pwsh.exe",
             "launch_command": command,
@@ -209,7 +208,6 @@ class FakeApp:
             group_id=params.get("group_id") or "auto:manual",
             call_name=CALL_NAMES[len(self.terminals) % len(CALL_NAMES)],
             workdir=params["workdir"],
-            name=params.get("name"),
             state="starting",
         )
         ready = CODEX_READY if params["command"] == "codex" else CLAUDE_READY

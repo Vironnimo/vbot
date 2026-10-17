@@ -149,7 +149,7 @@ async def test_start_takes_an_argument_list_as_command(
     assert len(manager[1].calls) == 1
 
     # Only start takes a command, so a call that names a program without an action starts it.
-    implicit = await terminal({"command": "fake-tui", "args": ["-i"], "name": "console"})
+    implicit = await terminal({"command": "fake-tui", "args": ["-i"]})
     assert implicit["ok"] is True
     assert manager[1].calls[-1][0] == ["fake-tui", "-i"]
     # An empty argument is an argument: the program receives it.
@@ -159,17 +159,25 @@ async def test_start_takes_an_argument_list_as_command(
 
 
 @pytest.mark.asyncio
-async def test_start_with_a_group_starts_and_says_the_group_had_no_effect(
-    terminal: Terminal,
+@pytest.mark.parametrize(
+    ("field", "note"),
+    [
+        (
+            "group",
+            "group has no effect: the user sees each terminal under the conversation that "
+            "started it.",
+        ),
+        ("name", "name has no effect: the user calls each terminal by its call_name."),
+    ],
+)
+async def test_start_with_a_retired_field_starts_and_says_it_had_no_effect(
+    terminal: Terminal, field: str, note: str
 ) -> None:
-    started = await terminal({"action": "start", "command": "fake-tui", "group": "Codex"})
+    started = await terminal({"action": "start", "command": "fake-tui", field: "Codex"})
 
-    assert started["data"]["note"] == (
-        "group has no effect: the user sees each terminal under the conversation that "
-        "started it. To say what it works on, pass name."
-    )
+    assert started["data"]["note"] == note
     # An empty placeholder requests nothing.
-    plain = await terminal({"action": "start", "command": "fake-tui", "group": ""})
+    plain = await terminal({"action": "start", "command": "fake-tui", field: ""})
     assert "note" not in plain["data"]
 
 
@@ -641,7 +649,7 @@ async def test_fields_another_action_owns_fail_with_the_call_that_uses_them(
 async def test_fields_that_only_shape_a_result_are_dropped_where_unused(
     terminal: Terminal,
 ) -> None:
-    terminal_id = await terminal.start(name="build")
+    terminal_id = await terminal.start()
 
     listed = await terminal({"action": "list", "terminal_id": terminal_id})
     assert [item["terminal_id"] for item in listed["data"]["terminals"]] == [terminal_id]
@@ -815,12 +823,12 @@ async def test_unknown_terminal_id_lists_attached_terminals(
     assert "term_missing" in _error(missing)["message"]
     assert listing in _error(missing)["message"]
 
-    first = await terminal.start(name="build")
+    first = await terminal.start()
     second = await terminal.start()
     await terminal({"action": "kill", "terminal_id": first})
     listed = await terminal({"action": "wait", "terminal_id": "term_missing", "timeout": 0.01})
     assert (
-        f"{second} (running: Ben, fake-tui); {first} (stopped: Anna, build)"
+        f"{second} (running: Ben, fake-tui); {first} (stopped: Anna, fake-tui)"
         in _error(listed)["message"]
     )
 

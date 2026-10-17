@@ -342,7 +342,6 @@ class TerminalManager:
         columns: int = TERMINAL_DEFAULT_COLUMNS,
         rows: int = TERMINAL_DEFAULT_ROWS,
         origin_run_id: str,
-        name: str | None = None,
         group_id: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
     ) -> TerminalInfo:
@@ -361,7 +360,6 @@ class TerminalManager:
             columns=columns,
             rows=rows,
             origin_run_id=origin_run_id,
-            name=name,
             group_id=group_id,
             execution_owner=execution_owner,
             integrate_shell=True,
@@ -375,7 +373,6 @@ class TerminalManager:
         arguments: Sequence[str],
         cwd: Path | None,
         launch_workdir: str | None = None,
-        name: str | None = None,
         group_id: str | None = None,
         columns: int = TERMINAL_DEFAULT_COLUMNS,
         rows: int = TERMINAL_DEFAULT_ROWS,
@@ -401,7 +398,6 @@ class TerminalManager:
                 columns=columns,
                 rows=rows,
                 origin_run_id=None,
-                name=name,
                 group_id=group_id,
                 integrate_shell=True,
             )
@@ -423,7 +419,6 @@ class TerminalManager:
                     columns=columns,
                     rows=rows,
                     origin_run_id=None,
-                    name=name,
                     group_id=group_id,
                     command_line=start.command_line,
                     cleanup=start.remove_scratch if start.scratch is not None else None,
@@ -504,7 +499,6 @@ class TerminalManager:
         columns: int,
         rows: int,
         origin_run_id: str | None,
-        name: str | None = None,
         group_id: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
         command_line: str | None = None,
@@ -576,7 +570,6 @@ class TerminalManager:
             adapter=adapter,
             screen=screen,
             launch=launch,
-            name=name,
             call_name=self._catalog.allocate_call_name(),
             group_id=group_id,
             origin_run_id=origin_run_id,
@@ -783,7 +776,6 @@ class TerminalManager:
         *,
         lines: int = TERMINAL_STATUS_DEFAULT_LINES,
         start_line: int | None = None,
-        include_name: bool = True,
     ) -> dict[str, Any]:
         """Return the screen and one history page.
 
@@ -796,7 +788,7 @@ class TerminalManager:
         if start_line is not None and start_line < 0:
             raise ValueError("start_line must be a non-negative integer")
         session = self._attached(terminal_id, owner)
-        return await session.snapshot(lines=lines, start_line=start_line, include_name=include_name)
+        return await session.snapshot(lines=lines, start_line=start_line)
 
     async def read(
         self,
@@ -814,9 +806,7 @@ class TerminalManager:
             raise ValueError(f"lines must be between 1 and {TERMINAL_STATUS_MAX_LINES}")
         if start_line is not None and start_line < 0:
             raise ValueError("start_line must be a non-negative integer")
-        return await self._get(terminal_id).snapshot(
-            lines=lines, start_line=start_line, include_name=True
-        )
+        return await self._get(terminal_id).snapshot(lines=lines, start_line=start_line)
 
     async def wait(
         self,

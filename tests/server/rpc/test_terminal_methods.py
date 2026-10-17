@@ -164,7 +164,6 @@ async def test_terminal_operator_handlers_project_list_input_and_kill() -> None:
             "command": "codex",
             "args": ["--profile", "work space"],
             "workdir": "~/repo",
-            "name": "  joe  ",
             "columns": 100,
             "rows": 30,
         },
@@ -190,7 +189,6 @@ async def test_terminal_operator_handlers_project_list_input_and_kill() -> None:
             "arguments": ["--profile", "work space"],
             "cwd": Path("~/repo").expanduser(),
             "launch_workdir": "~/repo",
-            "name": "joe",
             "group_id": None,
             "columns": 100,
             "rows": 30,
@@ -212,9 +210,9 @@ async def test_terminal_operator_handlers_validate_and_register_contract() -> No
     with pytest.raises(RpcError) as blank_command_error:
         await _terminal_start(state, {"command": "   "})
     assert blank_command_error.value.code == "invalid_request"
-    with pytest.raises(RpcError) as blank_name_error:
-        await _terminal_start(state, {"name": "   "})
-    assert blank_name_error.value.code == "invalid_request"
+    with pytest.raises(RpcError) as name_error:
+        await _terminal_start(state, {"name": "joe"})
+    assert name_error.value.code == "invalid_request"
     with pytest.raises(RpcError) as blank_argument_error:
         await _terminal_start(state, {"args": ["  "]})
     assert blank_argument_error.value.code == "invalid_request"

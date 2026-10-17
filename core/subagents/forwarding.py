@@ -283,7 +283,8 @@ async def running_entries(runtime: RuntimeServices, address: SessionAddress) -> 
         for info in terminal_manager.list_terminals():
             if info.attachment != owner or info.finished_at is not None:
                 continue
-            label = info.name or " ".join((info.command, *info.arguments)).strip()
+            command = " ".join((info.command, *info.arguments)).strip()
+            label = f"{info.call_name}, {command}" if info.call_name else command
             entries.append(RunningEntry("terminal", info.terminal_id, _single_line(label)))
     sessions = runtime.chat_sessions
     for link in await sessions.run_async(children, sessions, address):

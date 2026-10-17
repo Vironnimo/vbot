@@ -186,14 +186,6 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
                 "use the working directory."
             ),
         },
-        "name": {
-            "type": "string",
-            "maxLength": 80,
-            "description": (
-                "Label the user sees next to the terminal's call_name: what it works on, "
-                "such as its task. Omit to show the program instead."
-            ),
-        },
         "text": {
             "type": "string",
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
@@ -259,6 +251,7 @@ TERMINAL_UNADVERTISED_PARAMETERS: JsonObject = {
     "expected_screen_revision": {"type": "integer", "minimum": 0},
     "after_revision": {"type": "integer", "minimum": 0},
     "group": {"type": "string"},
+    "name": {"type": "string"},
 }
 
 
@@ -493,20 +486,14 @@ async def _handle_start(
             f"No terminal was started: workdir {model_path(workdir)} is not a directory. Pass "
             "an existing directory, or omit workdir to use the working directory."
         )
-    raw_name = arguments.get("name")
-    name = optional_string(raw_name, field_name="name")
-    if raw_name == "":
-        name = None
-    if name is not None:
-        name = name.strip()
-        if not name:
-            raise ToolContractError("terminal was not run: name must not be blank; omit it.")
     owner = _owner(context)
     if arguments.get("group") not in (None, ""):
         notes.append(
             "group has no effect: the user sees each terminal under the conversation that "
-            "started it. To say what it works on, pass name."
+            "started it."
         )
+    if arguments.get("name") not in (None, ""):
+        notes.append("name has no effect: the user calls each terminal by its call_name.")
     overlay = None
     if scratch_areas is not None:
         try:
@@ -527,7 +514,6 @@ async def _handle_start(
             rows=rows,
             origin_run_id=context.run_id,
             execution_owner=context.execution_owner,
-            name=name,
         )
     except TerminalLaunchError as error:
         cause = error.__cause__
@@ -646,7 +632,6 @@ async def _handle_list(
             "terminal_id": info.terminal_id,
             "call_name": info.call_name,
             "program": _short_program(info.program),
-            "name": info.name,
             "state": _agent_state(info),
             "exit_code": info.exit_code if info.finished else None,
             **_attachment_fields(info, owner, holders),
@@ -797,7 +782,7 @@ async def _handle_wait(
         notes.append(f"No output matched pattern within {seconds:g} seconds.")
     if capped and ended == "timeout":
         notes.append(_capped_wait_note())
-    snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
+    snapshot = await terminal_manager.snapshot(terminal_id, owner)
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
     data = _screen_result(snapshot, view="wait", unseen_from=_unseen_from(snapshot))
     data["wait_ended"] = _wait_end(ended, data)
@@ -959,7 +944,7 @@ async def _handle_input(
             ended = await terminal_manager.wait_for_reply(
                 terminal_id, owner, seconds=seconds, after_quiet=int(sent["quiet_boundaries"])
             )
-        snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
+        snapshot = await terminal_manager.snapshot(terminal_id, owner)
     except Exception as error:
         # The input was sent: a screen that cannot be read must not hide that.
         data = _unread_screen_result(
@@ -1024,7 +1009,7 @@ async def _handle_resize(
     changed = await terminal_manager.resize(
         terminal_id, owner, columns=columns, rows=rows, seconds=TERMINAL_REPLY_SECONDS
     )
-    snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
+    snapshot = await terminal_manager.snapshot(terminal_id, owner)
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
     data = _screen_result(snapshot, view="resize", unseen_from=_unseen_from(snapshot))
     # The Agent asked for this size; the notice is for sizes it did not set.
@@ -1133,7 +1118,7 @@ _ALTERNATE_SCREEN_NOTE = (
 )
 # Launch facts: status shows them; other results do not repeat them, except
 # that start names the log.
-_LAUNCH_FIELDS = ("program", "title", "workdir", "log", "name")
+_LAUNCH_FIELDS = ("program", "title", "workdir", "log")
 # Results that follow the program: their history holds only lines the Agent
 # has not seen, and they offer no pages (user decision D1).
 _FOLLOWING_VIEWS = frozenset({"start", "input", "wait", "resize"})
@@ -1346,7 +1331,6 @@ def _terminal_facts(info: TerminalInfo, owner: TerminalOwner) -> JsonObject:
         "terminal_id": info.terminal_id,
         "call_name": info.call_name,
         "program": _short_program(info.program),
-        "name": info.name,
         "state": _agent_state(info),
         "exit_code": info.exit_code if info.finished else None,
         "attached": _attachment(info, owner),
@@ -1440,7 +1424,7 @@ def _call(action: str, terminal_id: str) -> str:
 
 
 def _terminal_label(info: TerminalInfo) -> str:
-    label = " ".join((info.name or info.program).split())
+    label = " ".join(info.program.split())
     if len(label) > _TERMINAL_LABEL_CHARS:
         label = label[: _TERMINAL_LABEL_CHARS - 3] + "..."
     return f"{info.call_name}, {label}" if info.call_name else label
@@ -1813,7 +1797,7 @@ def _terminal_detail_blocks(arguments: JsonObject, result: JsonObject | None) ->
                     str(part)
                     for part in (
                         item.get("call_name"),
-                        item.get("name") or item.get("program") or item.get("terminal_id"),
+                        item.get("program") or item.get("terminal_id"),
                     )
                     if part
                 ),

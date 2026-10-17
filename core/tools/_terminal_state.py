@@ -235,7 +235,6 @@ class TerminalInfo:
     arguments: tuple[str, ...]
     launch_command: str | None
     launch_arguments: tuple[str, ...]
-    name: str | None
     # A short first name, unique among retained Terminals, that the user calls it by.
     call_name: str
     group_id: str | None

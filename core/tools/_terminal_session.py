@@ -153,7 +153,6 @@ class TerminalSession:
         adapter: TerminalAdapter,
         screen: TerminalScreen,
         launch: TerminalLaunch,
-        name: str | None,
         call_name: str,
         group_id: str | None,
         origin_run_id: str | None,
@@ -171,7 +170,6 @@ class TerminalSession:
         self.owner = owner
         self.lifecycle_owner = owner
         self.attachment = owner
-        self.name = name
         self.call_name = call_name
         self.group_id = group_id
         self.origin_run_id = origin_run_id
@@ -314,7 +312,6 @@ class TerminalSession:
             arguments=self._launch.arguments,
             launch_command=self._launch.launch_command,
             launch_arguments=self._launch.launch_arguments,
-            name=self.name,
             call_name=self.call_name,
             group_id=self.group_id,
             cwd=self._launch.cwd,
@@ -977,9 +974,7 @@ class TerminalSession:
 
     # Observation
 
-    async def snapshot(
-        self, *, lines: int, start_line: int | None, include_name: bool
-    ) -> dict[str, Any]:
+    async def snapshot(self, *, lines: int, start_line: int | None) -> dict[str, Any]:
         """Return the screen, one history page and the facts an Agent result shows.
 
         ``screen`` marks reverse-video text and suggestions, ``cursor`` is the visible
@@ -1041,8 +1036,6 @@ class TerminalSession:
                     "Use positions from the current screen."
                 ),
             }
-        if include_name:
-            data["name"] = info.name
         data["call_name"] = info.call_name
         data["program"] = info.program
         data["stopped"] = info.stopped
@@ -1774,7 +1767,7 @@ class TerminalSession:
 
     def _notice_label(self) -> str:
         info = self.info()
-        label = " ".join((info.name or info.program).split())
+        label = " ".join(info.program.split())
         if len(label) > _NOTICE_LABEL_CHARS:
             label = label[: _NOTICE_LABEL_CHARS - 3] + "..."
         return f"{info.call_name}, {label}" if info.call_name else label
