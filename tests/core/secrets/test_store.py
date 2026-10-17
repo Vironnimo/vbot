@@ -246,6 +246,23 @@ def test_concurrent_writers_keep_every_entry(
     stores = [open_store(tmp_path) for _writer in range(3)]
     names = [f"KEY_{index}" for index in range(24)]
 
+    if sys.platform == "win32":
+        import msvcrt
+
+        # Another first writer can hold byte 0 while the lock file is still empty.
+        with (data_dir / LOCK_FILE_NAME).open("w+b") as held_empty:
+            msvcrt.locking(held_empty.fileno(), msvcrt.LK_NBLCK, 1)
+            waits = []
+
+            def release_first_writer(delay: float) -> None:
+                waits.append(delay)
+                msvcrt.locking(held_empty.fileno(), msvcrt.LK_UNLCK, 1)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(store_module, "_sleep", release_first_writer)
+                stores[0].set_entry(CREDENTIALS, names[0], f"value-{names[0]}")
+            assert len(waits) == 1
+
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(
             pool.map(
