@@ -10,6 +10,11 @@ must use HTTPS.
 
 The certificate files are re-read when they change (a Let's Encrypt renewal), so
 new connections use the new certificate without a restart; open ones keep theirs.
+
+A server shutdown closes a TLS connection like a plain one: it sends close_notify
+and closes the socket once the pending data is written, without waiting for the
+client's close_notify, which a client that does not read (an idle pooled
+connection) never sends.
 """
 
 from __future__ import annotations
@@ -106,7 +111,7 @@ class TlsSniffingProtocol(asyncio.Protocol):
     """Classify one connection by its first byte and hand it to uvicorn's protocol.
 
     Until then it counts as one of uvicorn's connections, so a shutdown closes it
-    instead of waiting for it.
+    instead of waiting for it; a TLS connection is then counted by its TLS session.
     """
 
     _holder: TlsContextHolder
@@ -125,7 +130,6 @@ class TlsSniffingProtocol(asyncio.Protocol):
         self._loop = _loop or asyncio.get_running_loop()
         self._transport: asyncio.Transport | None = None
         self._timeout: asyncio.TimerHandle | None = None
-        self._handshake: asyncio.Future[None] | None = None
         self._decided = False
 
     @override
@@ -148,23 +152,13 @@ class TlsSniffingProtocol(asyncio.Protocol):
             app_state=self._app_state,
             _loop=self._loop,
         )
+        self._server_state.connections.discard(self)
         if data[0] != _TLS_HANDSHAKE_RECORD:
-            self._server_state.connections.discard(self)
             transport.set_protocol(inner)
             inner.connection_made(transport)
             inner.data_received(data)
             return
-        handshake: asyncio.Future[None] = self._loop.create_future()
-        handshake.add_done_callback(self._handshake_done)
-        self._handshake = handshake
-        tls = SSLProtocol(
-            self._loop,
-            inner,
-            self._holder.context,
-            handshake,
-            server_side=True,
-            ssl_handshake_timeout=TLS_HANDSHAKE_TIMEOUT_SECONDS,
-        )
+        tls = _ServerTlsProtocol(self._loop, inner, self._holder.context, self._server_state)
         transport.set_protocol(tls)
         tls.connection_made(transport)
         view = memoryview(data)
@@ -185,17 +179,9 @@ class TlsSniffingProtocol(asyncio.Protocol):
         self._server_state.connections.discard(self)
 
     def shutdown(self) -> None:
-        """uvicorn's shutdown: close a connection not yet handed to uvicorn's protocol."""
+        """uvicorn's shutdown: close a connection that has not been classified yet."""
         self._server_state.connections.discard(self)
-        if self._handshake is not None and self._handshake.done():
-            return
         self._abort()
-
-    def _handshake_done(self, handshake: asyncio.Future[None]) -> None:
-        # After a completed handshake uvicorn's protocol tracks the connection.
-        self._server_state.connections.discard(self)
-        if not handshake.cancelled():
-            handshake.exception()
 
     def _abort(self) -> None:
         self._cancel_timeout()
@@ -206,3 +192,80 @@ class TlsSniffingProtocol(asyncio.Protocol):
         if self._timeout is not None:
             self._timeout.cancel()
             self._timeout = None
+
+
+class _ServerTlsProtocol(SSLProtocol):
+    """One server TLS session, counted as one of uvicorn's connections.
+
+    uvicorn's shutdown reaches it next to the HTTP or WebSocket protocol on top:
+    a handshake in progress is aborted; on an established session, the close the
+    protocol on top makes now (an idle connection) or after its response stops
+    waiting for the client's close_notify. Any other close keeps waiting for it
+    (``ssl_shutdown_timeout``), so a slow client still receives what was sent.
+    Counting it next to the protocol on top would matter only to uvicorn's
+    ``limit_concurrency``, which the server does not set.
+    """
+
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        app_protocol: asyncio.BaseProtocol,
+        context: ssl.SSLContext,
+        server_state: Any,
+    ) -> None:
+        self._handshake: asyncio.Future[None] = loop.create_future()
+        self._handshake.add_done_callback(_retrieve_failure)
+        super().__init__(
+            loop,
+            app_protocol,
+            context,
+            self._handshake,
+            server_side=True,
+            ssl_handshake_timeout=TLS_HANDSHAKE_TIMEOUT_SECONDS,
+        )
+        self._server_state = server_state
+        self._socket: asyncio.Transport | None = None
+        self._close_started = False
+        self._server_closing = False
+
+    @override
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        assert isinstance(transport, asyncio.Transport)
+        self._socket = transport
+        self._server_state.connections.add(self)
+        super().connection_made(transport)
+
+    @override
+    def connection_lost(self, exc: BaseException | None) -> None:
+        self._socket = None
+        self._server_state.connections.discard(self)
+        super().connection_lost(exc)
+
+    def shutdown(self) -> None:
+        """uvicorn's shutdown; uvicorn then waits only for the protocol on top."""
+        self._server_state.connections.discard(self)
+        if not self._handshake.done():
+            if self._socket is not None:
+                self._socket.abort()
+            return
+        self._server_closing = True
+        self._close_after_close_notify()
+
+    @override
+    def _start_shutdown(self) -> None:
+        # The protocol on top closed its transport, or the client sent close_notify.
+        self._close_started = True
+        super()._start_shutdown()
+        if self._server_closing:
+            self._close_after_close_notify()
+
+    def _close_after_close_notify(self) -> None:
+        # close_notify is written; closing the socket still writes everything buffered.
+        if self._close_started and self._socket is not None and not self._socket.is_closing():
+            self._socket.close()
+
+
+def _retrieve_failure(handshake: asyncio.Future[None]) -> None:
+    # A failed handshake ends the connection; the failure needs no further report.
+    if not handshake.cancelled():
+        handshake.exception()

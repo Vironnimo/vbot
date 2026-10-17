@@ -77,9 +77,11 @@ async def _scheme_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
 
 
 @asynccontextmanager
-async def _serving(holder: TlsContextHolder) -> AsyncIterator[tuple[uvicorn.Server, int]]:
+async def _serving(
+    holder: TlsContextHolder, app: Any = _scheme_app
+) -> AsyncIterator[tuple[uvicorn.Server, int]]:
     config = uvicorn.Config(
-        _scheme_app,
+        app,
         http=sniffing_protocol_class(holder),
         lifespan="off",
         log_config=None,
@@ -156,23 +158,73 @@ def test_one_listener_serves_https_and_plain_http_and_reloads_its_certificate(
     assert len(failures) == 1 and failures[0].levelname == "WARNING"
 
 
-def test_a_connection_that_never_speaks_does_not_hold_up_shutdown(tmp_path: Path) -> None:
-    holder = TlsContextHolder(*_write_certificate(tmp_path, serial=1))
+def _blocking_tls_request(port: int, cert: str, path: str) -> ssl.SSLSocket:
+    """Send one keep-alive request from a client that reads only when asked.
 
-    async def scenario() -> bytes:
-        async with _serving(holder) as (server, port):
-            reader, writer = await asyncio.open_connection("127.0.0.1", port)
-            await asyncio.sleep(0.05)
+    Unlike an asyncio client it does not answer the server's close_notify by itself,
+    just like an idle pooled connection of a blocking HTTP client.
+    """
+    raw = socket.create_connection(("127.0.0.1", port), timeout=5)
+    client = _trusting(cert).wrap_socket(raw, server_hostname="localhost")
+    client.sendall(f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+    return client
+
+
+def _read_until(client: ssl.SSLSocket, end: bytes = b"") -> bytes:
+    """Read until the received bytes end with ``end``, or else until the close."""
+    received = bytearray()
+    while not (end and received.endswith(end)) and (chunk := client.recv(65536)):
+        received += chunk
+    return bytes(received)
+
+
+def test_shutdown_finishes_responses_without_waiting_for_idle_connections(
+    tmp_path: Path,
+) -> None:
+    cert, key = _write_certificate(tmp_path, serial=1)
+    holder = TlsContextHolder(cert, key)
+    body = b"x" * 1_000_000
+
+    async def scenario() -> tuple[bytes, bytes, float]:
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+            if scope["path"] != "/slow":
+                await _scheme_app(scope, receive, send)
+                return
+            entered.set()
+            await release.wait()
+            headers = [(b"content-length", str(len(body)).encode())]
+            await send({"type": "http.response.start", "status": 200, "headers": headers})
+            await send({"type": "http.response.body", "body": body})
+
+        loop = asyncio.get_running_loop()
+        async with _serving(holder, app) as (server, port):
+            _, silent = await asyncio.open_connection("127.0.0.1", port)
+            idle = await asyncio.to_thread(_blocking_tls_request, port, cert, "/")
+            assert await asyncio.to_thread(_read_until, idle, b"\r\n\r\nhttps")
+            busy = await asyncio.to_thread(_blocking_tls_request, port, cert, "/slow")
+            await entered.wait()
+            stopping = loop.time()
             server.should_exit = True
-            try:
-                return await asyncio.wait_for(reader.read(), 5)
-            except ConnectionResetError:
-                return b""
-            finally:
-                writer.close()
+            # The shutdown closes the idle connection while the request is in flight.
+            idle_rest = await asyncio.to_thread(_read_until, idle)
+            release.set()
+            response = await asyncio.to_thread(_read_until, busy)
+        stopped = loop.time() - stopping
+        silent.close()
+        idle.close()
+        busy.close()
+        return idle_rest, response, stopped
 
-    # uvicorn's graceful shutdown would wait 30 s for a connection it could not close.
-    assert asyncio.run(asyncio.wait_for(scenario(), 10)) == b""
+    idle_rest, response, stopped = asyncio.run(asyncio.wait_for(scenario(), 10))
+
+    assert idle_rest == b""
+    # Closing the socket at shutdown still writes the response the client has not read.
+    assert response.split(b"\r\n\r\n", 1)[1] == body
+    # A connection that never spoke and a client that never answers close_notify
+    # would each hold uvicorn's graceful shutdown up for 30 s.
+    assert stopped < 2
 
 
 def test_a_missing_or_broken_certificate_refuses_the_start(tmp_path: Path) -> None:
