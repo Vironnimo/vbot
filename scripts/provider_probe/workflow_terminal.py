@@ -330,14 +330,23 @@ async def _probe_terminal_case(
                             actual["command"],
                             *actual.get("args", []),
                         ]
-                    effect_ok = effect_ok and child.name == actual.get("name")
+                    effect_ok = (
+                        effect_ok
+                        and bool(child.call_name)
+                        and data.get("call_name") == child.call_name
+                        and child.group_id is None
+                    )
+                    if actual.get("name"):
+                        effect_ok = (
+                            effect_ok and child.call_name != actual["name"] and "note" in data
+                        )
                     if actual.get("text"):
                         # The result says the text was not typed.
                         effect_ok = (
                             effect_ok and factory.adapters[-1].writes == [] and "note" in data
                         )
                     if actual.get("group"):
-                        effect_ok = effect_ok and child.group_id is not None
+                        effect_ok = effect_ok and "note" in data
                 elif actual["action"] == "status":
                     effect_ok = ("screen" in data) == ("start_line" not in actual)
                     if "start_line" in actual:

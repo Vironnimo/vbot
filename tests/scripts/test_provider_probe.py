@@ -206,12 +206,21 @@ class EchoAdapter:
 
 
 @pytest.mark.parametrize(
-    "case_id", ["start_group", "invalid_args", "invalid_fields", "wait_revision", "input_text"]
+    "case_id",
+    [
+        "start_default",
+        "start_name",
+        "start_group",
+        "invalid_args",
+        "invalid_fields",
+        "wait_revision",
+        "input_text",
+    ],
 )
 def test_terminal_probe_case_reaches_the_production_terminal_tool(case_id: str) -> None:
     # Holds core/tools/terminal.py and _terminal_arguments.py: `args` without `command`,
-    # named groups, input fields on a call without a terminal, explicit `after_revision`
-    # waits and attention acknowledgment after input.
+    # assigned call names and retired name/group fields, input fields without a terminal,
+    # explicit `after_revision` waits and attention acknowledgment after input.
     from scripts.provider_probe.workflow_terminal import _probe_terminal_case, _terminal_cases
 
     case = next(case for case in _terminal_cases() if case["id"] == case_id)
