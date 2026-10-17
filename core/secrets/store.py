@@ -943,11 +943,8 @@ def _acquire_write_lock(path: Path) -> IO[bytes]:
         ) from exc
     deadline = time.monotonic() + _WRITE_LOCK_TIMEOUT_SECONDS
     try:
-        if sys.platform == "win32":
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
+        # Windows can lock bytes beyond EOF. Writing a sentinel first races
+        # another writer that has already locked byte 0 of the empty file.
         while True:
             try:
                 handle.seek(0)
