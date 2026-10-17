@@ -24,6 +24,7 @@ import {
   commandFailureMessage,
   errorMessage,
 } from '../components/voice/voiceLabels.js';
+import { createDesktopZoom } from './desktopZoom.svelte.js';
 
 const TOAST_AUTO_DISMISS_MS = 3200;
 const DESKTOP_BRIDGE_PROBE_TIMEOUT_MS = 1000;
@@ -267,6 +268,9 @@ export function createAppDesktop(context) {
   let toastState = $state(createToastState());
 
   let desktopCapabilities = $state(null);
+  const zoom = createDesktopZoom({
+    onError: () => showToast({ title: t('errors.generic'), variant: 'error' }),
+  });
 
   const toastDismissTimers = new SvelteMap();
 
@@ -476,6 +480,7 @@ export function createAppDesktop(context) {
         desktopCapabilities = caps;
         if (supportsDesktopVoice(caps)) voice.start();
         if (caps.restart) updateSync.start();
+        if (caps.zoom) zoom.start();
       } catch {
         scheduleDesktopCapabilityRetry();
       }
@@ -501,6 +506,7 @@ export function createAppDesktop(context) {
       }
       voice.stop();
       updateSync.stop();
+      zoom.stop();
     };
   });
   return {
@@ -512,6 +518,10 @@ export function createAppDesktop(context) {
     },
     get desktopVoice() {
       return desktopVoice;
+    },
+    // The window zoom owner while the Desktop offers it, else null.
+    get desktopZoom() {
+      return desktopCapabilities?.zoom ? zoom : null;
     },
     get voiceAvailable() {
       return voiceAvailable;

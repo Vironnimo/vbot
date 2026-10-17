@@ -1116,6 +1116,7 @@
           projects={selection.projects}
           desktopCapabilities={desktop.desktopCapabilities}
           desktopVoice={desktop.desktopVoice}
+          desktopZoom={desktop.desktopZoom}
           onDebugEnabledChange={handleDebugEnabledChange}
           onOpenSetupGuide={setup.reopenOnboarding}
           {modelsRefreshToken}

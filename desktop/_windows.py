@@ -2,10 +2,10 @@
 
 DPI bootstrap and screen conversion, the per-user single-instance guard with
 its activation request handoff, the WebView2 browser arguments (secure remote
-HTTP origins, autoplay), the WebView2 microphone permission hook, and the Win32
-DLL loading that the Desktop's ctypes bindings share. Every function is a no-op
-on other platforms and loads Win32/.NET code only on Windows; the DLL helpers
-raise ``OSError`` there.
+HTTP origins, autoplay), the WebView2 microphone permission hook, the window's
+WebView2 zoom, and the Win32 DLL loading that the Desktop's ctypes bindings
+share. Every function is a no-op on other platforms and loads Win32/.NET code
+only on Windows; the DLL helpers raise ``OSError`` there.
 """
 
 from __future__ import annotations
@@ -701,3 +701,73 @@ def allow_server_microphone(window: Any, allowed_origin: Callable[[], str | None
             report("attach")
 
     window.events.before_show += before_show
+
+
+# -- WebView2 zoom ------------------------------------------------------------------
+
+
+def bind_window_zoom(
+    window: Any, zoom_factor: Callable[[], float]
+) -> Callable[[float], None] | None:
+    """Make the Desktop the only owner of the window's WebView2 zoom.
+
+    Once WebView2 is initialized, its own zoom inputs (Ctrl + Plus/Minus/0,
+    Ctrl + mouse wheel, pinch) are turned off, because a zoom the user makes
+    there lasts only for the current page; the page sends these inputs to the
+    Desktop instead (:mod:`desktop.zoom`). ``zoom_factor()`` is applied then; a
+    zoom the host sets stays across navigations. Returns the function that
+    applies a new factor from any thread, or ``None`` on other platforms. A
+    failure is logged once per stage and leaves the zoom as it is.
+    """
+
+    if sys.platform != "win32":
+        return None
+    failures: set[str] = set()
+    controls: list[Any] = []
+
+    def report(stage: str) -> None:
+        if stage not in failures:
+            failures.add(stage)
+            logger.warning("Desktop zoom failed (%s)", stage, exc_info=True)
+
+    def set_zoom(control: Any, factor: float) -> None:
+        try:
+            if not control.IsDisposed:
+                control.ZoomFactor = factor
+        except Exception:
+            report("apply")
+
+    def initialization_completed(sender: Any, args: Any) -> None:
+        try:
+            if not args.IsSuccess:
+                return
+            # Runs after pywebview's own handler, which turns these inputs on.
+            sender.CoreWebView2.Settings.IsZoomControlEnabled = False
+            sender.ZoomFactor = zoom_factor()
+            controls.append(sender)
+        except Exception:
+            report("initialization")
+
+    def before_show() -> None:
+        # Runs on the GUI thread before WebView2 completes its initialization.
+        try:
+            window.native.browser.webview.CoreWebView2InitializationCompleted += (
+                initialization_completed
+            )
+        except Exception:
+            report("attach")
+
+    def apply(factor: float) -> None:
+        # Before initialization there is nothing to change: it applies the
+        # stored factor itself.
+        if not controls:
+            return
+        control = controls[0]
+        try:
+            system = importlib.import_module("System")
+            control.BeginInvoke(system.Action(lambda: set_zoom(control, factor)))
+        except Exception:
+            report("apply")
+
+    window.events.before_show += before_show
+    return apply

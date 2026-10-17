@@ -81,6 +81,9 @@
     desktopCapabilities = null,
     // The app-level Desktop Voice owner (see app/desktop.svelte.js).
     desktopVoice = null,
+    // The app-level window zoom owner in a Desktop that offers it, else null
+    // (see app/desktopZoom.svelte.js).
+    desktopZoom = null,
     onDebugEnabledChange = noop,
     onOpenSetupGuide = noop,
     modelsRefreshToken = 0,
@@ -1058,6 +1061,7 @@
   {:else if panelId === 'appearance'}
     <SettingsAppearancePanel
       {settings}
+      {desktopZoom}
       onCommit={(next) => commitSettings(next, ['appearance'])}
       onError={(message) => reportSettingsError(message)}
     />

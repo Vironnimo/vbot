@@ -29,6 +29,7 @@ const DISABLED_DESKTOP_CAPABILITIES = Object.freeze({
   liveHotkey: false,
   microphone: false,
   dictation: false,
+  zoom: false,
   restart: false,
   secureOrigins: Object.freeze([]),
 });
@@ -140,7 +141,7 @@ function callBridge(method, ...args) {
  * Returns disabled capability flags when the bridge is absent, without caching.
  * `voiceApi` is the Desktop Voice bridge version (0 when none is offered);
  * `microphone` offers the shared microphone settings, `dictation` Desktop
- * dictation; `restart` tells whether the Desktop can restart itself into a
+ * dictation, `zoom` the window zoom; `restart` tells whether the Desktop can restart itself into a
  * new version (false for Desktops from before that protocol).
  */
 export async function getDesktopCapabilities() {
@@ -162,6 +163,7 @@ export async function getDesktopCapabilities() {
     liveHotkey: Boolean(caps?.liveHotkey),
     microphone: Boolean(caps?.microphone),
     dictation: Boolean(caps?.dictation),
+    zoom: Boolean(caps?.zoom),
     restart: Boolean(caps?.restart),
     secureOrigins: Array.isArray(caps?.secureOrigins)
       ? caps.secureOrigins.filter((origin) => typeof origin === 'string')
@@ -807,4 +809,42 @@ export async function getDesktopLiveHotkey() {
  */
 export async function setDesktopLiveHotkey(changes) {
   return callBridge('setLiveHotkey', changes);
+}
+
+// -- Window zoom (capability `zoom`) -------------------------------------------
+
+function normalizeZoom(raw) {
+  const levels = Array.isArray(raw?.levels)
+    ? raw.levels.filter((level) => Number.isSafeInteger(level) && level > 0)
+    : [];
+  if (
+    !isPlainObject(raw) ||
+    levels.length === 0 ||
+    !levels.includes(raw.percent) ||
+    !levels.includes(raw.default)
+  ) {
+    throw new Error('The Desktop returned an invalid zoom status');
+  }
+  return {
+    supported: raw.supported !== false,
+    percent: raw.percent,
+    levels,
+    default: raw.default,
+  };
+}
+
+/**
+ * Read the window zoom: `{supported, percent, levels, default}`, where
+ * `levels` are the zoom levels in percent, ascending.
+ */
+export async function getDesktopZoom() {
+  return normalizeZoom(await callBridge('getZoom'));
+}
+
+/**
+ * Set the window zoom to one of its levels (percent); the Desktop saves and
+ * applies it and answers with the resulting status.
+ */
+export async function setDesktopZoom(percent) {
+  return normalizeZoom(await callBridge('setZoom', percent));
 }
