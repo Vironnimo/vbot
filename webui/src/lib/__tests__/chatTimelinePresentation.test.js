@@ -12,6 +12,7 @@ import {
   labelForEvent,
   labelForMessage,
   takeoverSeparatorLabel,
+  goalEventLabel,
   toolDetailPresentation,
   toolRowFromEvent,
   toolRowPresentation,
@@ -295,6 +296,31 @@ describe('message presentation', () => {
       null,
     ]) {
       expect(takeoverSeparatorLabel(message)).toBe(generic);
+    }
+  });
+
+  it('labels each goal change, falling back for facts it does not know', () => {
+    const cases = [
+      [
+        { event: 'set', objective: 'Ship it', max_turns: 30 },
+        t('chat.goalRow.setWithLimit', { objective: 'Ship it', max: 30 }),
+      ],
+      [{ event: 'set' }, t('chat.goalRow.setGeneric')],
+      [
+        { event: 'turn', turn: 3, max_turns: 30 },
+        t('chat.goalRow.turn', { turn: 3, max: 30 }),
+      ],
+      [
+        { event: 'paused', reason: 'limit', max_turns: 30 },
+        t('chat.goalRow.pausedAtLimit', { max: 30 }),
+      ],
+      [{ event: 'paused', reason: 'agent' }, t('chat.goalRow.paused.agent')],
+      [{ event: 'paused', reason: 'later' }, t('chat.goalRow.paused')],
+      [{ event: 'complete' }, t('chat.goalRow.event.complete')],
+      [{ event: 'renamed' }, t('chat.goalRow.updated')],
+    ];
+    for (const [goal, label] of cases) {
+      expect(goalEventLabel(goal)).toBe(label);
     }
   });
 });

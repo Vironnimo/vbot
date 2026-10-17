@@ -203,7 +203,7 @@ class ChatLoop:
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
         source_session_id: str | None = None,
-        context_note: str | None = None,
+        context_note: str | ChatMessage | None = None,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
 
@@ -225,7 +225,9 @@ class ChatLoop:
         Session it examines; it is accessor-only provenance on the Run.
 
         ``context_note`` is stored as a note right before the input, for context
-        the Model reads with it, such as what happened since the previous Run.
+        the Model reads with it, such as what happened since the previous Run;
+        a prepared note keeps its display record, and an internal Run stores it
+        before its input note too.
         """
         return await self._start_run(
             agent_id,
@@ -288,7 +290,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
-        context_note: str | None = None,
+        context_note: str | ChatMessage | None = None,
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
 
@@ -351,7 +353,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
-        context_note: str | None = None,
+        context_note: str | ChatMessage | None = None,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
 
@@ -517,7 +519,7 @@ class ChatLoop:
         contributes_to_agent_activity: bool = True,
         edit_message_id: str | None = None,
         source_session_id: str | None = None,
-        context_note: str | None = None,
+        context_note: str | ChatMessage | None = None,
     ) -> Run:
         _validate_run_tool_iteration_limit(max_tool_iterations)
         if session_id is None and create_missing and new_session is None:

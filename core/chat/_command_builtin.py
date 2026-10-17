@@ -53,6 +53,11 @@ if TYPE_CHECKING:
 
 
 HANDOFF_FRAGMENT_NAME = "handoff.md"
+# Reasons: ``.vorch/domain-maps/chat/commands.md`` -> Agent-facing text.
+HANDOFF_INSTRUCTION_NOTE = (
+    "The user's /handoff message after this note adds an instruction for this handoff. "
+    "Follow it while writing, without dropping anything else that genuinely matters."
+)
 
 CHANNEL_SOURCE_META_KEY = "source_channel_id"
 
@@ -76,16 +81,11 @@ def _session_change(
 
 
 def _build_handoff_prompt(base_instruction: str, instruction: str | None) -> str:
+    """The note before the user's ``/handoff`` message, which carries any instruction."""
     base = base_instruction.strip()
-    cleaned = (instruction or "").strip()
-    if not cleaned:
+    if not (instruction or "").strip():
         return base
-    return (
-        f"{base}\n\n"
-        "The user added a specific instruction for this handoff. Follow it while "
-        "writing, without dropping anything else that genuinely matters:\n"
-        f"{cleaned}"
-    )
+    return f"{base}\n\n{HANDOFF_INSTRUCTION_NOTE}"
 
 
 async def _execute_compact(
@@ -165,13 +165,15 @@ async def _execute_handoff(
         storage.read_prompt_fragment,
         HANDOFF_FRAGMENT_NAME,
     )
+    # The user's command is the visible input; the brief is the note before it.
     handoff_run = await trigger_service.trigger_run(
         context.agent_id,
-        _build_handoff_prompt(handoff_prompt, parsed.instruction),
+        context.command_text,
         session_id=context.session_id,
         project_id=context.project_id,
-        internal=True,
+        sender=context.sender,
         reply_surface=context.reply_surface,
+        context_note=_build_handoff_prompt(handoff_prompt, parsed.instruction),
     )
     handoff_message = await handoff_run.wait()
     handoff_text = _extract_text(handoff_message.content)
@@ -265,13 +267,15 @@ async def _execute_learn(
     if not getattr(agent, "workspace", ""):
         return _notice("learn", "Skill authoring needs an identity agent with its own skill home.")
     learn_prompt = await _COMMAND_WORKERS.run(learn_brief, storage, argument)
+    # The user's command is the visible input; the brief is the note before it.
     learn_run = await trigger_service.trigger_run(
         context.agent_id,
-        learn_prompt,
+        context.command_text,
         session_id=context.session_id,
         project_id=context.project_id,
-        internal=True,
+        sender=context.sender,
         reply_surface=context.reply_surface,
+        context_note=learn_prompt,
     )
     learn_message = await learn_run.wait()
     summary = _extract_text(learn_message.content) or "Skill authoring run completed."

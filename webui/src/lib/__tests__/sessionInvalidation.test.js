@@ -18,7 +18,7 @@ function deferred() {
 }
 
 describe('sessionInvalidationTarget', () => {
-  it('names the exact Session, terminal Run and read acknowledgement', () => {
+  it('names the exact Session, terminal Run, read acknowledgement and appended History', () => {
     expect(
       sessionInvalidationTarget({
         project_id: 'vbot',
@@ -31,6 +31,7 @@ describe('sessionInvalidationTarget', () => {
       sessionId: 'one',
       runId: 'run-1',
       readRunId: '',
+      historyAppended: false,
     });
     expect(
       sessionInvalidationTarget({
@@ -38,12 +39,14 @@ describe('sessionInvalidationTarget', () => {
         agent_id: 'coder',
         session_id: 'two',
         read_run_id: 'run-2',
+        history: 'appended',
       }),
     ).toEqual({
       agentAddress: 'coder',
       sessionId: 'two',
       runId: '',
       readRunId: 'run-2',
+      historyAppended: true,
     });
   });
 

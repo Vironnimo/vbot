@@ -164,6 +164,8 @@ class RunTimeline:
             self._recount_text_slots()
         elif kind == "model_fallback_activated":
             self._fallback(event)
+        elif kind == "goal_event_recorded":
+            self._goal_event(event)
         elif kind.startswith("compaction_"):
             self._compaction(event)
         elif kind == "provider_heartbeat":
@@ -199,9 +201,10 @@ class RunTimeline:
             target[index] = item
 
     def _user(self, message: JsonObject, event: JsonObject) -> None:
+        # A goal row of the Run's input precedes its message and keeps it the Run's input.
         if (
             self._first_user is None
-            and not self.run["items"]
+            and all(item["type"] == "goal_event" for item in self.run["items"])
             and not (event.get("payload") or {}).get("queue_item_id")
         ):
             self._first_user = message["id"]
@@ -456,6 +459,26 @@ class RunTimeline:
                 "from_model": payload.get("from_model", ""),
                 "to_model": payload.get("to_model", ""),
                 "timestamp": event.get("timestamp"),
+                "events": [copy.deepcopy(event)],
+            }
+        )
+
+    def _goal_event(self, event: JsonObject) -> None:
+        payload = event.get("payload") or {}
+        note_id = payload.get("id")
+        child_id = f"goal-{note_id}" if note_id else self._new_id("goal_event")
+        if any(item["id"] == child_id for item in self.run["items"]):
+            return
+        self.run["items"].append(
+            {
+                "id": child_id,
+                "type": "goal_event",
+                **{
+                    key: copy.deepcopy(payload[key])
+                    for key in ("event", "reason", "objective", "turn", "max_turns")
+                    if key in payload
+                },
+                "timestamp": payload.get("timestamp") or event.get("timestamp"),
                 "events": [copy.deepcopy(event)],
             }
         )

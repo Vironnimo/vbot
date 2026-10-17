@@ -58,6 +58,7 @@ import {
   truncateSessionForEdit,
 } from './history.js';
 import { startRun } from './runEvents.js';
+import { takeSessionInvalidations } from '../sessionInvalidation.js';
 import { resolveMoveActionFromResponse } from './addressing.js';
 
 const RPC_ERROR_QUEUE_ITEM_STEERING = 'queue_item_steering';
@@ -239,12 +240,35 @@ export function createChatController({
     isDisplayedSession,
     errorMessage,
   });
-  const {
-    applySessionInvalidations,
-    markSessionCompletionRead,
-    refreshAgentActivity,
-    syncAgentActivity,
-  } = activity;
+  const { markSessionCompletionRead, refreshAgentActivity, syncAgentActivity } =
+    activity;
+  let lastHistoryInvalidationId = null;
+
+  // Apply App's Session invalidation window: activity first, then the History
+  // of a displayed Session that gained records outside any Run (a goal row),
+  // which no Run event delivers.
+  function applySessionInvalidations(entries) {
+    activity.applySessionInvalidations(entries);
+    const { targets, lastId } = takeSessionInvalidations(
+      entries,
+      lastHistoryInvalidationId,
+    );
+    lastHistoryInvalidationId = lastId;
+    const reread = new Set();
+    for (const target of targets) {
+      if (!target.historyAppended) continue;
+      const sessionState =
+        chatState.sessions[sessionKey(target.agentAddress, target.sessionId)];
+      if (
+        sessionState?.historyLoaded &&
+        !reread.has(sessionState.key) &&
+        isDisplayedSession(target.agentAddress, target.sessionId)
+      ) {
+        reread.add(sessionState.key);
+        void loadHistoryForSession(target.agentAddress, target.sessionId);
+      }
+    }
+  }
 
   function errorMessage(error) {
     return typeof error?.message === 'string' && error.message

@@ -101,6 +101,7 @@ export {
   timestampForItem,
   groupTransientCards,
   takeoverSeparatorLabel,
+  goalEventLabel,
   compactionSeparatorLabel,
   compactionSeparatorDetails,
   compactionSummaryText,

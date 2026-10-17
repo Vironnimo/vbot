@@ -278,6 +278,57 @@ class ModelFallback:
 
 
 @dataclass(frozen=True)
+class GoalEvent:
+    """A Session goal change a note records, for display in the conversation.
+
+    Presentation only: the note's text, empty when the Model needs none, is what
+    the Model reads; this record never enters a Provider request. ``reason`` is
+    a pause reason, ``objective`` the goal a ``set`` names, ``turn`` the number
+    of an automatic turn and ``max_turns`` the goal's limit.
+    """
+
+    event: str
+    reason: str | None = None
+    objective: str | None = None
+    turn: int | None = None
+    max_turns: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.event, str) or not self.event:
+            raise ChatMessageValidationError("goal event must be a non-empty string")
+        for key, text in (("reason", self.reason), ("objective", self.objective)):
+            if text is not None and (not isinstance(text, str) or not text):
+                raise ChatMessageValidationError(f"goal event {key} must be a non-empty string")
+        for key, number in (("turn", self.turn), ("max_turns", self.max_turns)):
+            if number is not None and (
+                isinstance(number, bool) or not isinstance(number, int) or number < 1
+            ):
+                raise ChatMessageValidationError(f"goal event {key} must be a positive integer")
+
+    def to_dict(self) -> JsonObject:
+        """Return a JSON-serializable goal event dictionary without empty fields."""
+        data: JsonObject = {"event": self.event}
+        for key in ("reason", "objective", "turn", "max_turns"):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = value
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Any) -> GoalEvent:
+        """Build a goal event from a JSON object, ignoring unknown fields."""
+        if not isinstance(data, dict):
+            raise ChatMessageValidationError("goal_event must be an object")
+        return cls(
+            event=cast(str, data.get("event")),
+            reason=data.get("reason"),
+            objective=data.get("objective"),
+            turn=data.get("turn"),
+            max_turns=data.get("max_turns"),
+        )
+
+
+@dataclass(frozen=True)
 class ReplySurface:
     """Immutable identity and rendering facts for one interactive reply destination."""
 
@@ -434,6 +485,7 @@ class ChatMessage:
     interruption_cause: str | None = None
     output_files: list[AssistantFileReference] | None = None
     model_fallback: ModelFallback | None = None
+    goal_event: GoalEvent | None = None
     # Internal destination captured by Sessions when this entry is persisted.
     subagent_reply_target: str | None = None
     # Actual package loaded by a Skill activation; never sent to the Model.
@@ -475,12 +527,13 @@ class ChatMessage:
         content: str,
         *,
         model_fallback: ModelFallback | None = None,
+        goal_event: GoalEvent | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a kernel-internal note message.
 
-        A note that records a Model fallback switch also carries that switch,
-        which History shows in the Run in place of the note.
+        A note that records a Model fallback switch or a goal change also
+        carries that record, which History shows in place of the note.
         """
         return cls(
             id=_new_message_id(),
@@ -488,6 +541,7 @@ class ChatMessage:
             role="note",
             content=content,
             model_fallback=model_fallback,
+            goal_event=goal_event,
         )
 
     @classmethod
@@ -811,6 +865,8 @@ class ChatMessage:
             message["output_files"] = [reference.to_dict() for reference in self.output_files]
         if self.model_fallback is not None:
             message["model_fallback"] = self.model_fallback.to_dict()
+        if self.goal_event is not None:
+            message["goal_event"] = self.goal_event.to_dict()
         return message
 
     @classmethod
@@ -883,6 +939,8 @@ class ChatMessage:
             if model_fallback_data is not None
             else None
         )
+        goal_event_data = data.get("goal_event")
+        goal_event = GoalEvent.from_dict(goal_event_data) if goal_event_data is not None else None
         try:
             package_data = data.get("skill_package")
             skill_package = (
@@ -935,6 +993,7 @@ class ChatMessage:
             interruption_cause=interruption_cause,
             output_files=output_files,
             model_fallback=model_fallback,
+            goal_event=goal_event,
         )
         message.validate()
         return message

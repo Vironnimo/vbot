@@ -59,7 +59,7 @@ def test_briefs_compose_per_fragment_overrides_and_share_each_fragment(tmp_path:
         "\n\n[learn-method.md]"
     )
     assert learn_brief(storage, " deploy steps ") == (
-        f"{learn}\n\nThe request to learn from:\ndeploy steps"
+        f"{learn}\n\nThe request to learn from is the user's /learn message after this note."
     )
     assert learn_brief(storage, None) == (
         f"{learn}\n\nNo request was given. If the recent conversation clearly establishes "

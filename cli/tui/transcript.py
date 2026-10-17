@@ -352,7 +352,7 @@ class Transcript(ScrollView, can_focus=True):
         if kind in _DISCLOSURES:
             if self.view is None or row.key not in self.view.expanded_rows:
                 return 1
-        elif kind in {"run_footer", "run_status", "history_gap", "model_fallback"}:
+        elif kind in {"run_footer", "run_status", "history_gap", "model_fallback", "goal_event"}:
             return 1
         width = max(10, self._width() - 4)
         text = (tool_detail(row.item) if kind == "tool_call" else item_text(row.item)) or " "
@@ -652,6 +652,9 @@ class Transcript(ScrollView, can_focus=True):
         if kind == "model_fallback":
             text = " ".join((item_text(item) or "Model fallback").split())
             return [Strip([Segment(f"  ⚠ {text}", self._style("warning"))])]
+        if kind == "goal_event":
+            text = " ".join(item_text(item).split())
+            return [Strip([Segment(f"  ◆ {text}", muted)]).crop(0, width)]
         if kind in {"compaction_separator", "takeover_separator"}:
             label = f" {item_heading(item) or ''} "
             side = max(2, (width - len(label)) // 2)

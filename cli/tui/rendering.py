@@ -122,8 +122,52 @@ def pretty(value: Any) -> str:
     return structured(value)
 
 
+_GOAL_PAUSES = {
+    "user": "Goal paused",
+    "agent": "Goal paused by the agent",
+    "stop": "Goal paused because the turn was stopped",
+    "run_failed": "Goal paused because a turn failed",
+    "limit": "Goal paused at its limit of automatic turns",
+    "restart": "Goal paused because vBot restarted",
+    "takeover": "Goal paused because the session moved to another agent",
+}
+_GOAL_EVENTS = {
+    "resumed": "Goal resumed",
+    "reactivated": "Goal continues after your reply",
+    "blocked": "Goal waiting: the agent needs your input",
+    "complete": "Goal complete",
+    "cleared": "Goal cleared",
+}
+
+
+def goal_text(item: JsonObject) -> str:
+    """One goal change, a Run child or a History row; unknown facts read plainly."""
+    message = item.get("message")
+    goal: JsonObject = message if isinstance(message, dict) else item
+    event, limit = goal.get("event"), goal.get("max_turns")
+    limited = isinstance(limit, int) and not isinstance(limit, bool)
+    if event == "set":
+        objective = goal.get("objective")
+        if not isinstance(objective, str) or not objective:
+            return "Goal set"
+        suffix = f" · up to {limit} automatic turns" if limited else ""
+        return terminal_text(f"Goal set: {objective}{suffix}")
+    if event == "turn":
+        turn = goal.get("turn")
+        if isinstance(turn, int) and limited:
+            return f"Goal · automatic turn {turn} of {limit}"
+        return "Goal · automatic turn"
+    if event == "paused":
+        if goal.get("reason") == "limit" and limited:
+            return f"Goal paused at its limit of {limit} automatic turns"
+        return _GOAL_PAUSES.get(str(goal.get("reason")), "Goal paused")
+    return _GOAL_EVENTS.get(str(event), "Goal updated")
+
+
 def item_text(item: JsonObject) -> str:
     kind = item.get("type")
+    if kind == "goal_event":
+        return goal_text(item)
     if kind == "message":
         return content_text((item.get("message") or {}).get("content"))
     if kind == "user_message":

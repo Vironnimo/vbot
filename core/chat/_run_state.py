@@ -256,7 +256,7 @@ class _RunRequest:
     # Input the Parent Agent of this Sub-Agent Session wrote, not the user.
     parent_agent_input: bool = False
     # A note stored right before the input, such as what happened since the last Run.
-    context_note: str | None = None
+    context_note: str | ChatMessage | None = None
 
     @property
     def supports_steering(self) -> bool:

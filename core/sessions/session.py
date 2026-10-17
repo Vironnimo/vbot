@@ -35,7 +35,7 @@ from core.skills.policy import SkillPackageRef
 from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
-    from core.chat.messages import ChatMessage, ModelFallback
+    from core.chat.messages import ChatMessage, GoalEvent, ModelFallback
 
 
 @dataclass
@@ -305,10 +305,23 @@ class ChatSession:
     async def flush_deferred_notes_async(self) -> None:
         await self.append_many_async(self._take_deferred_notes())
 
-    def add_note(self, content: str, *, model_fallback: ModelFallback | None = None) -> None:
+    def add_note(
+        self,
+        content: str,
+        *,
+        model_fallback: ModelFallback | None = None,
+        goal_event: GoalEvent | None = None,
+    ) -> None:
         from core.chat.messages import ChatMessage
 
-        note = ChatMessage.note(content, model_fallback=model_fallback)
+        self.add_note_message(
+            ChatMessage.note(content, model_fallback=model_fallback, goal_event=goal_event)
+        )
+
+    def add_note_message(self, note: ChatMessage) -> None:
+        """Add a prepared note, such as one that carries a display record."""
+        if note.role != "note":
+            raise ValueError("add_note_message requires a note")
         with self._buffers.lock:
             deferred = self._buffers.defer_notes
             if deferred:
@@ -318,9 +331,15 @@ class ChatSession:
             self.append(note)
 
     async def add_note_async(
-        self, content: str, *, model_fallback: ModelFallback | None = None
+        self,
+        content: str,
+        *,
+        model_fallback: ModelFallback | None = None,
+        goal_event: GoalEvent | None = None,
     ) -> None:
-        await self._store.run_async(lambda: self.add_note(content, model_fallback=model_fallback))
+        await self._store.run_async(
+            lambda: self.add_note(content, model_fallback=model_fallback, goal_event=goal_event)
+        )
 
     def drain_pending_notes(self) -> list[ChatMessage]:
         with self._buffers.lock:

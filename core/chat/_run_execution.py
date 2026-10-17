@@ -7,6 +7,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from core.chat._message_history import (
+    _add_context_note,
     _append_input_origin_note,
     _append_reply_surface_note,
 )
@@ -35,6 +36,7 @@ from core.chat.errors import (
 )
 from core.chat.events import (
     _close_adapter,
+    _emit_goal_events,
     _emit_message_event,
     _persist_run_error,
 )
@@ -283,6 +285,7 @@ class RunExecution:
                     if internal:
                         if not isinstance(request.content, str):
                             raise ChatError("internal runs require string content")
+                        _add_context_note(session, request.context_note)
                         _append_reply_surface_note(
                             session,
                             request.reply_surface,
@@ -295,8 +298,7 @@ class RunExecution:
                     else:
                         if user_content is None:
                             raise ChatError("content is required for non-retry runs")
-                        if request.context_note:
-                            session.add_note(request.context_note)
+                        _add_context_note(session, request.context_note)
                         _append_input_origin_note(session, request.input_origin)
                         if request.parent_agent_input:
                             session.add_note(PARENT_AGENT_INPUT_SYSTEM_REMINDER)
@@ -347,6 +349,7 @@ class RunExecution:
                         report_subagent_user_input(
                             self._dependencies, session_address, user_message.id
                         )
+                    _emit_goal_events(run, persisted_messages)
                     if not internal and not request.input_already_persisted:
                         # A Stop during speech-to-text still persisted the input.
                         _emit_message_event(
