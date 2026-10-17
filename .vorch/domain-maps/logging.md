@@ -32,14 +32,14 @@ Everything that happens per step, per call, per attempt or per poll belongs at D
 - **Line format:** `<Event in past tense> (key=value key=value)` - stable vBot ids, changed field names (not values), counts, durations. Multi-value fields are comma-separated inside one value. `extra=` is not rendered by the formatter; everything an operator needs goes into the message.
 - **One event, one line.** A "started" plus "completed" pair for one short operation is merged into the outcome line; the start moves to DEBUG.
 - **Log at the owner.** A mutation logs in the core owner that performs it, so RPC, Tool, command and CLI paths are all covered; when more than one path can cause the change, an `actor=` field (for example `rpc`, `tool`, `command`, `agent=<id>`) says which one did; a single-path owner omits it. The RPC layer does not add a second line.
-- **Transitions, not repetitions.** A persistent condition (unreachable server, invalid configuration file, missing include, unsupported SQLite build) logs once when it starts and once when it ends - not on every read, build, poll or attempt. Retry loops log attempts at DEBUG and the final outcome once. Track such conditions with `core/utils/log_conditions.py` (`LoggedConditions`, bounded) rather than a private warn-once set.
+- **Transitions, not repetitions.** A persistent condition (unreachable server, invalid configuration file, missing include, unsupported SQLite build) logs once when it starts and once when it ends - not on every read, build, poll or attempt. Retry loops log attempts at DEBUG and the final outcome once. Track such conditions with `core/utils/log_conditions.py` (`LoggedConditions`, bounded) rather than a private warn-once set. Events that outsiders can repeat at will, such as refused requests at the server edge, log the first occurrence per reason and then one summary line per interval (`access.md`).
 - **Failures are never INFO.** An outcome field such as `outcome=failed` on an INFO line is a WARNING.
 
 ## Never log
 
 At any level, including DEBUG and exception messages built by vBot:
 
-- credentials, token values, OAuth codes, Provider Account ids;
+- credentials, token values, OAuth codes, Provider Account ids; pairing codes, poll secrets and login tickets of the access domain, and request paths beyond their second segment where a capability or ticket can follow (`access.md`);
 - Prompt, Skill, Cron, Memory and Workspace file content; Model output; user message text; titles generated from them;
 - external conversation, chat, user, thread or Live call ids and platform display names (Channel platforms, Provider-assigned Live call or conversation ids), including ids derived from them. Provider-assigned Tool call ids are correlation ids within a stored Session and may be logged, and so may the id of a paid Provider job whose cost vBot could not record (a video job, `model_tasks/video.md`), since only it lets the charge be traced.
 

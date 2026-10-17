@@ -108,7 +108,7 @@ The Installer downloads the signed package of the latest release, which brings i
 
 > **vBot Agents run with the operating-system permissions of the account that starts the server.** They can read and write files, run commands, contact external services and restart vBot. Trusted Extensions run inside the same process.
 
-The server has no built-in authentication and binds to `127.0.0.1` by default. To use vBot from your phone or another computer, reach it through a VPN or trusted private network, restrictive firewall rules, or an authenticated TLS reverse proxy. Never expose the vBot port to the public internet: network access to vBot amounts to remote code execution on the host. Keep `~/.vbot` private; it holds credentials, Sessions and Agent state. See [Operational notes](USAGE.md#operational-notes).
+By default the server binds to `127.0.0.1` and admits only this computer. To use vBot from your phone or another computer, install it with the access mode `lan` (home network without login), which admits private networks and a VPN range you name, and keep restrictive firewall rules. Never forward the port of a server without login to the public internet: network access to vBot amounts to remote code execution on the host. See [Server access](USAGE.md#server-access). Keep `~/.vbot` private; it holds credentials, Sessions and Agent state. See [Operational notes](USAGE.md#operational-notes).
 
 ## Documentation
 
