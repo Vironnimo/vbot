@@ -24,6 +24,7 @@ from core.providers.task_client import ProviderTaskClient
 from core.providers.token_getter import OAuthTokenGetter, TokenGetter
 from core.providers.token_store import OAuthToken, TokenStore
 from core.providers.xai import XAIAdapter
+from core.secrets import SecretStore
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
 XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
@@ -402,7 +403,8 @@ async def test_xai_403_recovers_only_exact_oauth_token_rejection(
     provider = ProviderRegistry.load(RESOURCES).get("xai")
     connection = provider.get_connection("subscription")
     assert connection.oauth is not None
-    store = TokenStore(tmp_path / "data")
+    (tmp_path / "data").mkdir()
+    store = TokenStore(SecretStore(tmp_path / "data"))
     original = OAuthToken(
         access_token="old-test-token",
         refresh_token="old-test-refresh",

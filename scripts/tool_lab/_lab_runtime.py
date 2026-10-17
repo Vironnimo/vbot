@@ -31,12 +31,10 @@ async def lab_runtime(*, extensions: bool = True) -> AsyncIterator[tuple[Runtime
     """
     with tempfile.TemporaryDirectory(prefix="vbot-tool-lab-", ignore_cleanup_errors=True) as tmp:
         root = Path(tmp)
-        # Startup chatter would bury the output; warnings and errors still show.
-        env = root / "lab.env"
-        env.write_text("LOG_LEVEL=WARNING\n", encoding="utf-8")
         with _lab_instance(root / "data"):
             runtime = Runtime(
-                Config(data_dir=root / "data", env_path=env),
+                # Startup chatter would bury the output; warnings and errors still show.
+                Config(data_dir=root / "data", overrides={"LOG_LEVEL": "WARNING"}),
                 safe_startup_mode=None if extensions else "verification",
             )
             runtime.start()

@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> None:
         # The control claim writes into the data directory. A fresh root must come
         # from the canonical layout so it carries the Session store's bootstrap
         # marker; an existing root without that marker is refused at startup.
-        initialize_data_directory(config.data_dir, resources_dir=config.get("RESOURCES_PATH"))
+        initialize_data_directory(config.data_dir)
     with server_control_claim(config.data_dir, server_bind["listen_port"]) as previous:
         control = create_server_control(config.data_dir, server_bind["listen_port"])
         lifecycle = _ServerLifecycle(

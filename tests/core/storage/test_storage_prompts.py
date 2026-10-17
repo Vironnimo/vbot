@@ -19,9 +19,6 @@ EDITABLE_FRAGMENTS = [
 
 
 def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = True) -> None:
-    environment_template = resources_dir / "data-dir" / ".env.example"
-    environment_template.parent.mkdir(parents=True)
-    environment_template.write_text("# test environment\n", encoding="utf-8")
     prompts_dir = resources_dir / "prompts"
     prompts_dir.mkdir(parents=True)
     prompt_names = [

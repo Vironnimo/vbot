@@ -22,6 +22,7 @@ from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.providers import OAuthConfig, ProviderConfig
 from core.providers.token_getter import OAuthTokenGetter
 from core.providers.token_store import OAuthToken, TokenStore
+from core.secrets import SecretStore
 
 from .discovery_test_support import (
     OPENAI_SUBSCRIPTION_MODELS_URL,
@@ -100,7 +101,8 @@ async def test_openai_subscription_catalog_renews_a_rejected_token_once(
     connection = config.get_connection("subscription")
     old_token = jwt_with_openai_account("old-test-account")
     new_token = jwt_with_openai_account("new-test-account")
-    store = TokenStore(tmp_path / "data")
+    (tmp_path / "data").mkdir()
+    store = TokenStore(SecretStore(tmp_path / "data"))
     store.save(
         "openai",
         "subscription",

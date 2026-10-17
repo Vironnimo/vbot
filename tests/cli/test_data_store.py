@@ -25,6 +25,7 @@ from core.database import (
 )
 from core.database.marker import begin_maintenance, read_maintenance
 from core.database.recovery import incident_path
+from core.secrets import CREDENTIALS, SecretStore
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.cli.cli_test_support import FakeRpc, RunCli
 from tests.core.database.database_test_support import notes_spec
@@ -107,6 +108,13 @@ def test_remote_data_store_commands_never_inspect_local_data(tmp_path: Path, mon
         assert "local data directory" in result.message
 
 
+def _recorded(
+    calls: list[tuple[str, object]], name: str, detail: object, instance: ServerInstance
+) -> CommandResult:
+    calls.append((name, detail))
+    return CommandResult(ok=True, message=name, instance=instance)
+
+
 def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
     instance = _instance(tmp_path)
     calls: list[tuple[str, object]] = []
@@ -155,7 +163,7 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
                 "--file",
                 "settings.json",
                 "--file",
-                ".env",
+                "secrets.json",
                 "--yes",
             ]
         ),
@@ -194,6 +202,22 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
             config_backup_show_fn=config_show,
             config_backup_restore_fn=config_restore,
         ).ok
+    for args in (
+        parse_args(["data-store", "secrets", "status"]),
+        parse_args(["data-store", "secrets", "convert", "--yes"]),
+        parse_args(["data-store", "secrets", "reset"]),
+    ):
+        assert dispatch_data_store_command(
+            args,
+            instance,
+            secrets_status_fn=lambda resolved: _recorded(calls, "secrets status", None, resolved),
+            secrets_convert_fn=lambda resolved, confirm: _recorded(
+                calls, "secrets convert", confirm, resolved
+            ),
+            secrets_reset_fn=lambda resolved, confirm: _recorded(
+                calls, "secrets reset", confirm, resolved
+            ),
+        ).ok
     assert calls == [
         ("status", (instance, False)),
         ("create", "update"),
@@ -203,8 +227,11 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
         ("unregister", (_EXTENSION, True)),
         ("config list", None),
         ("config show", "b-1"),
-        ("config restore", ("b-1", True, ("settings.json", ".env"), False)),
+        ("config restore", ("b-1", True, ("settings.json", "secrets.json"), False)),
         ("config restore", ("b-1", False, (), True)),
+        ("secrets status", None),
+        ("secrets convert", True),
+        ("secrets reset", False),
     ]
 
 
@@ -692,3 +719,47 @@ def test_config_backup_restore_refuses_or_finishes_before_stopping_the_server(
 
     assert result.ok is (expected == "nothing to restore")
     assert expected in result.message
+
+
+def test_secrets_convert_runs_while_the_server_is_stopped_and_reset_spares_an_open_store(
+    tmp_path: Path, monkeypatch
+) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    env = tmp_path / ".env"
+    env.write_text("OPENAI_API_KEY=sk-openai\n", encoding="utf-8")
+    calls: list[str] = []
+
+    def record(action: str) -> Callable[[ServerInstance], CommandResult]:
+        def run(resolved: ServerInstance) -> CommandResult:
+            calls.append(action)
+            return CommandResult(ok=True, message=action, instance=resolved)
+
+        return run
+
+    _classified(monkeypatch, "running", "absent")
+    monkeypatch.setattr(data_store_management, "stop_server", record("stop"))
+    monkeypatch.setattr(data_store_management, "start_server", record("start"))
+
+    unconfirmed = data_store_management.data_store_secrets_convert(instance, False)
+    status = data_store_management.data_store_secrets_status(instance)
+
+    assert not unconfirmed.ok and "--yes" in unconfirmed.message
+    assert json.loads(status.message)["plaintext_files"] == [".env"]
+    assert "sk-openai" not in status.message
+    assert calls == []
+
+    converted = data_store_management.data_store_secrets_convert(instance, True)
+
+    assert converted.ok, converted.message
+    assert "imported 1 credentials" in converted.message
+    assert "deleted .env" in converted.message
+    assert calls == ["stop", "start"]
+    assert not env.exists()
+    assert SecretStore(tmp_path).entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai"
+
+    reset = data_store_management.data_store_secrets_reset(instance, True)
+
+    assert not reset.ok and "the Secret Store is available" in reset.message
+    assert calls == ["stop", "start"]
+    assert SecretStore(tmp_path).entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai"

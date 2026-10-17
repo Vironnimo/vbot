@@ -238,7 +238,7 @@ def _extension_ready_state(record: ExtensionRecord, state: Any) -> str:
 
 
 async def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:
-    """Set or clear a schema'd extension's secret in the data-dir ``.env``.
+    """Set or clear a schema'd extension's secret in the Secret Store.
 
     ``key`` is the **schema field key**, never the env key — the server looks up
     the declared ``env_key`` so a client can never choose where a secret lands.

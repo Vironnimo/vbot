@@ -13,6 +13,7 @@ import pytest
 from core.providers.auth_flow import DeviceFlowSession
 from core.providers.providers import OAuthConfig
 from core.providers.token_store import OAuthToken
+from core.secrets import OAUTH_TOKENS
 from server.events import PROVIDER_AUTH_COMPLETED_EVENT
 from tests.server.rpc.oauth_provider_test_support import (
     api_key_connection,
@@ -163,18 +164,17 @@ async def test_provider_disconnect_deletes_only_the_account_token_and_cancels_it
 
 
 @pytest.mark.asyncio
-async def test_provider_disconnect_removes_a_token_file_that_fails_to_load(
+async def test_provider_disconnect_removes_a_stored_token_that_fails_to_load(
     tmp_path: Path,
 ) -> None:
     state = oauth_provider_state(tmp_path, copilot_provider(oauth_connection()))
-    token_path = tmp_path / "oauth" / "github-copilot-oauth.json"
-    token_path.parent.mkdir(parents=True)
-    token_path.write_text("not json", encoding="utf-8")
+    secrets = state.runtime.storage.secrets
+    secrets.set_entry(OAUTH_TOKENS, "github-copilot-oauth", "not json")
 
     result = await rpc_result(state, "provider.disconnect", **_CONNECTION)
 
     assert result["status"] == "disconnected"
-    assert not token_path.exists()
+    assert secrets.entry_names(OAUTH_TOKENS) == ()
 
 
 @pytest.mark.asyncio

@@ -32,8 +32,8 @@ class SettingsFieldDeclaration:
     """One declared settings field on an extension's schema.
 
     ``default`` is forbidden for ``secret`` fields and must match the field type
-    otherwise. ``env_key`` is required for ``secret`` fields (naming the ``.env``
-    key the secret is stored under) and forbidden for every other type.
+    otherwise. ``env_key`` is required for ``secret`` fields (naming the credential
+    the secret is stored under in the Secret Store) and forbidden for every other type.
     """
 
     key: str
@@ -145,7 +145,7 @@ def validate_extension_config(
 
     Returns a list of human-readable error strings (empty when valid). Per the
     contract: unknown keys are rejected, a key naming a ``secret`` field is
-    rejected (secrets live in ``.env``, never in config), type mismatches are
+    rejected (secrets live in the Secret Store, never in config), type mismatches are
     rejected, and a ``required`` non-secret field that is absent or an empty
     string is rejected.
     """
@@ -155,7 +155,7 @@ def validate_extension_config(
 
     for key in config:
         if key in secret_keys:
-            errors.append(f"{key!r}: secret values are stored in .env, not in config")
+            errors.append(f"{key!r}: secret values are stored in the Secret Store, not in config")
         elif key not in fields_by_key:
             errors.append(f"{key!r}: unknown settings key")
 

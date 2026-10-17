@@ -20,6 +20,7 @@ from core.database import (
     read_incident,
     read_maintenance,
     read_verified_manifest,
+    remove_retired_document_copies,
     restore_data_snapshot,
     snapshot_root,
     snapshot_summaries,
@@ -40,7 +41,7 @@ from tests.core.database.database_test_support import (
 _DOCUMENTS = {
     "settings.json": '{"format_version": 1, "theme": "dark"}\n',
     "agents/main/agent.json": '{"format_version": 1, "id": "main"}\n',
-    "oauth/provider.json": '{"format_version": 1, "access_token": "secret"}\n',
+    "secrets.json": '{"format_version": 1, "credentials": {"KEY": "secret"}}\n',
 }
 
 
@@ -96,14 +97,12 @@ def test_a_document_keeps_its_permissions_through_snapshots_and_restores(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, mode: int
 ) -> None:
     original = '{"format_version": 1}\n'
-    token = write_document(data_dir, "oauth/provider.json", original)
+    token = write_document(data_dir, "secrets.json", original)
     token.chmod(mode)
     permissions = stat.S_IMODE(token.stat().st_mode)
 
     first = snapshot_with_notes(data_dir, "saved")
-    assert stat.S_IMODE((first / "documents" / "oauth" / "provider.json").stat().st_mode) == (
-        permissions
-    )
+    assert stat.S_IMODE((first / "documents" / "secrets.json").stat().st_mode) == (permissions)
     # A failed attempt and retention remove copies whatever their bits.
     with monkeypatch.context() as patched:
         patched.setattr(snapshots_module, "verify_database_file", _corrupt)
@@ -241,7 +240,7 @@ def test_the_document_set_is_restored_as_one_unit(data_dir: Path) -> None:
     kept = result.documents.quarantine
     assert "light" in (kept / "settings.json").read_text(encoding="utf-8")
     assert (kept / "channels" / "new" / "channel.json").is_file()
-    assert not (kept / "oauth").exists()
+    assert not (kept / "secrets.json").exists()
     # Databases were not selected.
     assert stored_bodies(notes_spec(data_dir)) == ["saved", "later"]
     assert read_maintenance(data_dir) is None
@@ -263,9 +262,7 @@ def test_a_failed_document_quarantine_rolls_back_and_keeps_the_guard(
     snapshot = _with_documents(data_dir)
     changed = '{"format_version": 1, "theme": "light"}\n'
     write_document(data_dir, "settings.json", changed)
-    write_document(
-        data_dir, "oauth/provider.json", '{"format_version": 1, "access_token": "new"}\n'
-    )
+    write_document(data_dir, "secrets.json", '{"format_version": 1, "credentials": "new"}\n')
     real_replace = os.replace
     moves: list[Path] = []
 
@@ -281,7 +278,7 @@ def test_a_failed_document_quarantine_rolls_back_and_keeps_the_guard(
         restore_data_snapshot(data_dir, snapshot, names=(), documents=True)
 
     assert (data_dir / "settings.json").read_text(encoding="utf-8") == changed
-    assert "new" in (data_dir / "oauth" / "provider.json").read_text(encoding="utf-8")
+    assert "new" in (data_dir / "secrets.json").read_text(encoding="utf-8")
     assert read_maintenance(data_dir) is not None
     assert not [path for path in data_dir.rglob("*.tmp") if ".restore." in path.name], (
         "staged copies are removed"
@@ -298,3 +295,27 @@ def test_selecting_nothing_is_refused(data_dir: Path) -> None:
 
     with pytest.raises(ValueError, match="no snapshot member selected"):
         restore_data_snapshot(data_dir, snapshot, names=())
+
+
+def test_retired_document_copies_leave_every_snapshot_usable(data_dir: Path) -> None:
+    # A copy an older vBot captured: OAuth token files before the Secret Store.
+    snapshot = _with_documents(data_dir)
+    retired = snapshot / "documents" / "oauth" / "provider.json"
+    retired.parent.mkdir(parents=True)
+    retired.write_text('{"format_version": 1, "access_token": "plaintext"}\n', encoding="utf-8")
+
+    def older(payload: dict[str, Any]) -> None:
+        payload["documents"]["oauth/provider.json"] = {
+            "file_size": retired.stat().st_size,
+            "sha256": "0" * 64,
+        }
+
+    rewrite_manifest(snapshot, older)
+
+    with pytest.raises(ValueError, match="outside the snapshot document set"):
+        remove_retired_document_copies(data_dir, ("secrets.json",))
+    assert remove_retired_document_copies(data_dir, ("oauth/*.json",)) == 1
+
+    assert not (snapshot / "documents" / "oauth").exists()
+    assert list_data_snapshots(data_dir) == [snapshot]
+    assert remove_retired_document_copies(data_dir, ("oauth/*.json",)) == 0

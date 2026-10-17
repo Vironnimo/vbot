@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import argparse
 import errno
-import logging
 import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-
-_LOGGER = logging.getLogger("vbot.storage")
 
 DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("artifacts"),
@@ -36,7 +33,6 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("cron"),
     Path("extensions"),
     Path("logs"),
-    Path("oauth"),
     Path("processes"),
     Path("projects"),
     Path("prompts"),
@@ -45,13 +41,11 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("terminals"),
 )
 
-ENVIRONMENT_TEMPLATE_RELATIVE_PATH = Path("data-dir/.env.example")
 SETTINGS_FILE_NAME = "settings.json"
 # An empty Settings document in the current Settings format. Kept literal so this
 # module stays importable without the Settings domain (setup runs it as a script);
 # a test pins it to ``core.settings.SETTINGS_FORMAT``.
 INITIAL_SETTINGS_DOCUMENT = '{\n  "format_version": 1\n}\n'
-ENVIRONMENT_FILE_NAME = ".env"
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,10 +155,6 @@ class DataDirectoryLayout:
         return self.root / "logs"
 
     @property
-    def oauth(self) -> Path:
-        return self.root / "oauth"
-
-    @property
     def processes(self) -> Path:
         return self.root / "processes"
 
@@ -187,10 +177,6 @@ class DataDirectoryLayout:
     @property
     def terminals(self) -> Path:
         return self.root / "terminals"
-
-    @property
-    def environment_file(self) -> Path:
-        return self.root / ENVIRONMENT_FILE_NAME
 
     @property
     def settings_file(self) -> Path:
@@ -338,19 +324,15 @@ class DataDirectoryInitializationResult:
 def initialize_data_directory(
     data_dir: str | Path,
     *,
-    resources_dir: str | Path | None = None,
     require_new: bool = False,
 ) -> DataDirectoryInitializationResult:
-    """Create the canonical layout, optionally requiring exclusive root creation."""
+    """Create the canonical layout, optionally requiring exclusive root creation.
+
+    Credentials are never seeded: they live in the Secret Store
+    (``secrets.json``), which its first write creates.
+    """
 
     layout = DataDirectoryLayout(data_dir)
-    resources_root = (
-        Path(resources_dir)
-        if resources_dir is not None
-        else Path(__file__).resolve().parents[2] / "resources"
-    )
-    environment_template = resources_root / ENVIRONMENT_TEMPLATE_RELATIVE_PATH
-
     created_directories: list[Path] = []
     created_files: list[Path] = []
     if _create_marked_root(layout.root):
@@ -368,25 +350,6 @@ def initialize_data_directory(
             raise NotADirectoryError(
                 f"Canonical data-directory path is not a directory: {directory}"
             )
-    environment_template_bytes = b""
-    if not layout.environment_file.exists():
-        try:
-            environment_template_bytes = environment_template.read_bytes()
-        except OSError as error:
-            _LOGGER.warning(
-                "Could not read data-directory environment template '%s'; creating an empty "
-                ".env file: %s",
-                environment_template,
-                error,
-            )
-
-    try:
-        with layout.environment_file.open("xb") as target:
-            target.write(environment_template_bytes)
-        created_files.append(layout.environment_file)
-    except FileExistsError:
-        pass
-
     try:
         with layout.settings_file.open("x", encoding="utf-8", newline="\n") as settings_file:
             settings_file.write(INITIAL_SETTINGS_DOCUMENT)
@@ -406,18 +369,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Create the canonical vBot data-directory layout without overwriting files."
     )
     parser.add_argument("data_dir", type=Path, help="vBot data directory to initialize")
-    parser.add_argument(
-        "--resources-dir",
-        type=Path,
-        help="Resources root containing data-dir/.env.example",
-    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        result = initialize_data_directory(args.data_dir, resources_dir=args.resources_dir)
+        result = initialize_data_directory(args.data_dir)
     except OSError as error:
         print(f"data-directory-layout..... ERROR: {error}", file=sys.stderr)
         return 1

@@ -87,6 +87,7 @@ from core.runtime._recall import RecallIntegration
 from core.runtime._shutdown import clean_up_failed_startup
 from core.runtime.databases import RETIRED_CANONICAL_DATABASES
 from core.runtime.keep_awake import KeepAwakeController
+from core.secrets import settle_plaintext_credentials
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.errors import SessionNotFoundError
 from core.sessions.titles import SessionTitleService
@@ -187,6 +188,13 @@ def bootstrap(runtime: Runtime) -> None:
                 "Staging left by interrupted data-store operations stays until the next start: %s",
                 exc,
             )
+        # An update's verification start imports plaintext credential files into
+        # the Secret Store without touching them, failing the verification when
+        # that fails; the first normal start after activation deletes them.
+        settle_plaintext_credentials(
+            runtime._storage.secrets,
+            mode="normal" if runtime.safe_startup_mode is None else runtime.safe_startup_mode,
+        )
         if runtime.safe_startup_mode is None:
             # Not in an update's verification start: its rollback needs every
             # database still registered as the pre-update snapshot recorded it.
@@ -227,7 +235,7 @@ def bootstrap(runtime: Runtime) -> None:
             custom_providers=custom_providers,
             tolerate_invalid=True,
         )
-        runtime._token_store = TokenStore(runtime._storage.data_dir)
+        runtime._token_store = TokenStore(runtime._storage.secrets)
         runtime._provider_credentials = ProviderCredentialResolver(
             runtime._providers,
             fallback_credentials=data_dir_credentials,

@@ -92,7 +92,7 @@ class ExtensionAPI:
         return self._config_provider()
 
     def resolve_credential(self, key: str) -> str:
-        """Resolve one credential **live** per call (process env, then ``.env``).
+        """Resolve one credential **live** per call (process env, then the Secret Store).
 
         Returns ``""`` when no resolver is wired (standalone construction).
         """

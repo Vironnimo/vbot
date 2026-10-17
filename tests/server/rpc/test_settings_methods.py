@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from core.secrets import CREDENTIALS
 from core.tools.web_fetch import LocalBrowser
 from server.rpc import settings_methods
 from tests.server.rpc_test_support import (
@@ -75,8 +76,9 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
     ):
         monkeypatch.delenv(key, raising=False)
     state = make_state(tmp_path, StubAdapter())
-    # Blank entries, like the seeded .env's placeholders, are present but not set.
-    (tmp_path / ".env").write_text('TAVILY_API_KEY=\nEXA_API_KEY="  "\n', encoding="utf-8")
+    # Blank data-directory entries are present but not set.
+    state.runtime.storage.secrets.set_entry(CREDENTIALS, "TAVILY_API_KEY", "")
+    state.runtime.storage.secrets.set_entry(CREDENTIALS, "EXA_API_KEY", "  ")
     state.runtime.providers.add(_copilot_device_flow_provider())
     state.runtime.providers.add(openrouter_provider())
     state.runtime.models._models["github-copilot"] = []

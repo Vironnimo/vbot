@@ -19,6 +19,7 @@ from core.database import (
 )
 from core.database import snapshots as snapshots_module
 from core.database.recovery import write_incident
+from core.secrets import SecretStore
 from core.sessions import ChatSessionManager
 from server.events import ServerEventBus
 from tests.core.database.database_test_support import notes_spec
@@ -47,7 +48,7 @@ def _state(data_dir: Path, sessions: ChatSessionManager) -> SimpleNamespace:
             chat_sessions=sessions,
             canonical_databases=lambda: (sessions.database,),
             snapshot_barrier=SnapshotBarrier(),
-            storage=SimpleNamespace(data_dir=data_dir),
+            storage=SimpleNamespace(data_dir=data_dir, secrets=SecretStore(data_dir)),
             unregister_extension_database=unregister_extension_database,
         ),
         event_bus=ServerEventBus(),
@@ -109,6 +110,7 @@ async def test_status_snapshot_and_incident_acknowledgement_are_operator_safe(
     assert status["state"] == "snapshot_degraded"
     assert set(status["databases"]) == {"sessions"}
     assert status["databases"]["sessions"]["state"] == "healthy"
+    assert status["secrets"]["state"] == "absent"
     assert created["snapshot"]["reason"] == "manual"
     assert set(created["snapshot"]["members"]) == {"sessions"}
     # The reply reads the fresh snapshot back without re-verifying its directory:

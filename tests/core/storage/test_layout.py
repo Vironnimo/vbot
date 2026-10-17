@@ -25,7 +25,6 @@ from core.storage.layout import (
 from core.storage.storage import StorageManager
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-RESOURCE_TEMPLATE = PROJECT_ROOT / "resources" / "data-dir" / ".env.example"
 PRODUCTION_SOURCE_ROOTS = (
     PROJECT_ROOT / "core",
     PROJECT_ROOT / "server",
@@ -67,7 +66,6 @@ def test_layout_exposes_every_canonical_named_path(tmp_path: Path) -> None:
     assert layout.bootstrap == tmp_path / "bootstrap"
     assert layout.processes == tmp_path / "processes"
     assert layout.terminals == tmp_path / "terminals"
-    assert layout.environment_file == tmp_path / ".env"
     assert layout.settings_file == tmp_path / "settings.json"
 
 
@@ -75,17 +73,15 @@ def test_layout_exposes_every_canonical_named_path(tmp_path: Path) -> None:
 def test_initialize_creates_exact_canonical_layout(tmp_path: Path, require_new: bool) -> None:
     data_dir = tmp_path / "data"
 
-    result = initialize_data_directory(
-        data_dir, resources_dir=PROJECT_ROOT / "resources", require_new=require_new
-    )
+    result = initialize_data_directory(data_dir, require_new=require_new)
 
     actual_directories = {
         path.relative_to(data_dir) for path in data_dir.rglob("*") if path.is_dir()
     }
     actual_files = {path.relative_to(data_dir) for path in data_dir.rglob("*") if path.is_file()}
     assert actual_directories == set(DATA_DIRECTORY_RELATIVE_PATHS)
-    assert actual_files == {Path(".env"), Path("settings.json"), Path("data-store.json")}
-    assert (data_dir / ".env").read_bytes() == RESOURCE_TEMPLATE.read_bytes()
+    # No credentials are seeded: the Secret Store is created by its first write.
+    assert actual_files == {Path("settings.json"), Path("data-store.json")}
     assert (data_dir / "settings.json").read_text(encoding="utf-8") == INITIAL_SETTINGS_DOCUMENT
     assert render_json_document({}, version=SETTINGS_FORMAT_VERSION) == INITIAL_SETTINGS_DOCUMENT
     report = validate_settings_file(data_dir / "settings.json")
@@ -104,8 +100,8 @@ def test_initialize_preserves_existing_configuration_bytes(tmp_path: Path) -> No
     (data_dir / ".env").write_bytes(environment_bytes)
     (data_dir / "settings.json").write_bytes(settings_bytes)
 
-    first = initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
-    second = initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
+    first = initialize_data_directory(data_dir)
+    second = initialize_data_directory(data_dir)
 
     assert (data_dir / ".env").read_bytes() == environment_bytes
     assert (data_dir / "settings.json").read_bytes() == settings_bytes
@@ -159,7 +155,7 @@ def test_initialize_losing_root_creation_race_never_writes_marker(
     data_dir = tmp_path / "data"
     _race_root_publication(monkeypatch, data_dir)
 
-    result = initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
+    result = initialize_data_directory(data_dir)
 
     # An unrelated creator's empty directory stays unmarked, including on Linux
     # where an ordinary rename could replace it with the staged directory.
@@ -233,9 +229,7 @@ def test_initialize_require_new_leaves_existing_root_untouched(
         data_dir.mkdir()
 
     with pytest.raises(FileExistsError):
-        initialize_data_directory(
-            data_dir, resources_dir=PROJECT_ROOT / "resources", require_new=True
-        )
+        initialize_data_directory(data_dir, require_new=True)
 
     assert list(data_dir.iterdir()) == []
 
@@ -247,7 +241,7 @@ def test_initialize_tolerates_concurrently_created_canonical_directory(
     contested = data_dir / "artifacts" / "temp" / "commands"
     _race_mkdir(monkeypatch, contested)
 
-    result = initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
+    result = initialize_data_directory(data_dir)
 
     assert contested.is_dir()
     assert contested not in result.created_directories
@@ -263,7 +257,7 @@ def test_initialize_rejects_concurrently_created_non_directory(
     _race_mkdir(monkeypatch, contested, concurrent_creator="file")
 
     with pytest.raises(NotADirectoryError):
-        initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
+        initialize_data_directory(data_dir)
 
 
 def test_initialize_rejects_existing_non_directory_root(tmp_path: Path) -> None:
@@ -271,30 +265,7 @@ def test_initialize_rejects_existing_non_directory_root(tmp_path: Path) -> None:
     data_dir.write_bytes(b"not a directory")
 
     with pytest.raises(NotADirectoryError):
-        initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
-
-
-def test_initialize_uses_empty_environment_when_template_is_unavailable(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    data_dir = tmp_path / "data"
-    template_path = tmp_path / "missing-resources" / "data-dir" / ".env.example"
-
-    with caplog.at_level("WARNING", logger="vbot.storage"):
-        result = initialize_data_directory(
-            data_dir,
-            resources_dir=tmp_path / "missing-resources",
-        )
-
-    assert (data_dir / ".env").read_bytes() == b""
-    assert (data_dir / "settings.json").read_text(encoding="utf-8") == INITIAL_SETTINGS_DOCUMENT
-    assert result.created_files == (
-        data_dir / "data-store.json",
-        data_dir / ".env",
-        data_dir / "settings.json",
-    )
-    assert str(template_path) in caplog.text
+        initialize_data_directory(data_dir)
 
 
 class _Config:
@@ -326,7 +297,7 @@ def test_layout_cli_initializes_data_directory(
     monkeypatch.setattr(
         sys,
         "argv",
-        [str(script), str(data_dir), "--resources-dir", str(PROJECT_ROOT / "resources")],
+        [str(script), str(data_dir)],
     )
 
     with pytest.raises(SystemExit) as exit_info:

@@ -25,7 +25,7 @@ FIRST_PARTY_WEB_SEARCH_PROVIDERS = frozenset(
 )
 DEFAULT_SEARXNG_BASE_URL = "http://localhost:8888"
 # Environment variable holding each keyed provider's API key (process
-# environment or the data directory's .env). Providers absent here need no key.
+# environment or the data directory's Secret Store). Providers absent here need no key.
 WEB_SEARCH_CREDENTIALS = {
     WEB_SEARCH_PROVIDER_BRAVE: "BRAVE_API_KEY",
     WEB_SEARCH_PROVIDER_TAVILY: "TAVILY_API_KEY",

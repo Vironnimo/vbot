@@ -1,36 +1,38 @@
-"""OAuth token persistence for provider connections."""
+"""OAuth token persistence for provider connections.
+
+Each token is one OAuth token document (``OAUTH_TOKEN_FORMAT``) stored as an
+encrypted entry of the Secret Store (``core.secrets``), keyed by its token id
+``<provider>-<connection>`` or ``<provider>-<connection>--<account>``.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from threading import RLock
 from typing import Any
 
 from core.config_validation import (
-    JsonConfigValidationError,
     JsonDiagnostic,
-    JsonValidationReport,
     add_error,
     error_diagnostic,
-    load_validated_json_file,
-    validate_json_file,
     validate_non_empty_string,
     warn_unknown_keys,
 )
 from core.json_documents import (
     JsonDocumentFormat,
-    JsonDocumentWriteError,
-    document_change,
     json_document,
+    preserve_unknown_fields,
+    render_json_document,
     validate_format_version,
-    write_json_document,
 )
 from core.providers.accounts import ACCOUNT_ID_PATTERN, DEFAULT_ACCOUNT_ID, sorted_account_ids
+from core.secrets import OAUTH_TOKENS, SecretStore, SecretStoreError, SecretTransaction
 from core.utils.errors import ConfigError
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
@@ -39,19 +41,14 @@ _ACCOUNT_FILE_SEPARATOR = "--"
 OAUTH_TOKEN_FORMAT_VERSION = 1
 # ``extra`` is keyed by data (Provider-specific metadata), so only the root has fields.
 OAUTH_TOKEN_SHAPE = json_document({"access_token", "refresh_token", "expires_at", "extra"})
-_RESET_HINT = "Disconnecting the Provider account removes the file; then connect it again."
+_RESET_HINT = "Disconnecting the Provider account removes the token; then connect it again."
 
 _LOGGER = get_logger("providers.token_store")
 _TOKEN_WORKERS = BoundedWorkerPool(name="provider-tokens", max_workers=4)
 
 
 class OAuthTokenFileError(ConfigError):
-    """Raised when a stored OAuth token file fails to load or must not be overwritten."""
-
-
-def validate_oauth_token_file(token_path: str | Path) -> JsonValidationReport:
-    """Validate one persisted OAuth token file without consuming it."""
-    return validate_json_file(token_path, validate_oauth_token_data, missing_ok=False)
+    """Raised when a stored OAuth token fails to load or must not be overwritten."""
 
 
 def validate_oauth_token_data(data: Any) -> list[JsonDiagnostic]:
@@ -100,13 +97,13 @@ class OAuthToken:
 
 
 class TokenStore:
-    """File-backed OAuth token store rooted in the runtime data directory."""
+    """OAuth token store of the Provider Connections, kept in the Secret Store."""
 
-    def __init__(self, data_dir: Path) -> None:
-        self._data_dir = data_dir
-        self._oauth_dir = data_dir / "oauth"
+    def __init__(self, secrets: SecretStore) -> None:
+        self._secrets = secrets
         self._refresh_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._mutation_lock = RLock()
+        self._unusable = LoggedConditions()
 
     def refresh_lock(
         self,
@@ -137,22 +134,21 @@ class TokenStore:
         *,
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
-        """Persist *token* atomically for the provider connection account.
+        """Persist *token* for the provider connection account.
 
-        Raises :class:`OAuthTokenFileError` instead of overwriting a stored token
-        file that fails to load.
+        Fields a newer vBot added to the stored token stay. Raises
+        :class:`OAuthTokenFileError` instead of overwriting a stored token that
+        fails to load, or when the Secret Store cannot be written.
         """
 
-        token_path = self._token_path(provider_id, local_connection_id, account_id)
+        token_id = self._token_id(provider_id, local_connection_id, account_id)
+        payload = self._token_to_dict(token)
         with self._mutation_lock:
             try:
-                write_json_document(
-                    token_path,
-                    self._token_to_dict(token),
-                    OAUTH_TOKEN_FORMAT,
-                    data_dir=self._data_dir,
+                self._secrets.update(
+                    lambda transaction: self._write(transaction, token_id, payload)
                 )
-            except JsonDocumentWriteError as error:
+            except SecretStoreError as error:
                 raise OAuthTokenFileError(f"{error} {_RESET_HINT}") from error
 
     async def save_async(
@@ -177,18 +173,20 @@ class TokenStore:
     ) -> OAuthToken | None:
         """Load a token for the provider connection account, if one exists.
 
-        Raises :class:`OAuthTokenFileError` when the stored file fails to load.
+        Raises :class:`OAuthTokenFileError` when the stored token fails to load,
+        including while the Secret Store is unavailable.
         """
 
-        token_path = self._token_path(provider_id, local_connection_id, account_id)
+        token_id = self._token_id(provider_id, local_connection_id, account_id)
         try:
-            data = load_validated_json_file(token_path, validate_oauth_token_data, missing_ok=True)
-        except (JsonConfigValidationError, OSError) as error:
+            text = self._secrets.entry(OAUTH_TOKENS, token_id)
+        except SecretStoreError as error:
             raise OAuthTokenFileError(
-                f"OAuth token file failed to load: {error}. {_RESET_HINT}"
+                f"OAuth token failed to load: {error}. {_RESET_HINT}"
             ) from error
-        if data is None:
+        if text is None:
             return None
+        data = _decode_token(text)
         return OAuthToken(
             access_token=data["access_token"],
             refresh_token=data.get("refresh_token"),
@@ -203,9 +201,10 @@ class TokenStore:
         *,
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> bool:
-        """Return whether a token file is stored, without loading it."""
+        """Return whether a token is stored, without loading it."""
 
-        return self._token_path(provider_id, local_connection_id, account_id).exists()
+        token_id = self._token_id(provider_id, local_connection_id, account_id)
+        return token_id in self._secrets.entry_names(OAUTH_TOKENS)
 
     async def load_async(
         self,
@@ -214,7 +213,7 @@ class TokenStore:
         *,
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> OAuthToken | None:
-        """Read current credentials without filesystem work on the Event Loop."""
+        """Read current credentials without store work on the Event Loop."""
         return await _TOKEN_WORKERS.run(
             self.load, provider_id, local_connection_id, account_id=account_id
         )
@@ -226,14 +225,17 @@ class TokenStore:
         *,
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
-        """Delete the token for a provider connection account, if it exists."""
+        """Delete the token for a provider connection account, if it exists.
 
-        token_path = self._token_path(provider_id, local_connection_id, account_id)
-        with self._mutation_lock, document_change(token_path):
+        Raises :class:`OAuthTokenFileError` when the Secret Store cannot be written.
+        """
+
+        token_id = self._token_id(provider_id, local_connection_id, account_id)
+        with self._mutation_lock:
             try:
-                token_path.unlink()
-            except FileNotFoundError:
-                return
+                self._secrets.remove_entry(OAUTH_TOKENS, token_id)
+            except SecretStoreError as error:
+                raise OAuthTokenFileError(str(error)) from error
 
     def replace_if_current(
         self,
@@ -287,14 +289,19 @@ class TokenStore:
     ) -> bool:
         """Return whether a token exists and is usable without user interaction.
 
-        A token file that fails to load is not usable; the failure is logged.
+        A token that fails to load is not usable; the failure is logged when it
+        starts or changes, not on every check.
         """
 
+        token_id = self._token_id(provider_id, local_connection_id, account_id)
         try:
             token = self.load(provider_id, local_connection_id, account_id=account_id)
         except OAuthTokenFileError as error:
-            _LOGGER.warning("Stored OAuth token is unusable: %s", error)
+            if self._unusable.started(token_id, str(error)):
+                _LOGGER.warning("Stored OAuth token is unusable: %s", error)
             return False
+        if self._unusable.ended(token_id):
+            _LOGGER.info("Stored OAuth token loads again (token=%s)", token_id)
         if token is None:
             return False
         if token.expires_at is None:
@@ -306,43 +313,52 @@ class TokenStore:
     def list_account_ids(self, provider_id: str, local_connection_id: str) -> list[str]:
         """Return stored account ids for the connection, default first then sorted."""
 
-        safe_provider_id = self._validate_token_id("provider_id", provider_id)
-        safe_connection_id = self._validate_token_id(
-            "local_connection_id",
-            local_connection_id,
-        )
+        base = self._token_id(provider_id, local_connection_id, DEFAULT_ACCOUNT_ID)
+        prefix = f"{base}{_ACCOUNT_FILE_SEPARATOR}"
         account_ids: list[str] = []
-        if (self._oauth_dir / f"{safe_provider_id}-{safe_connection_id}.json").exists():
-            account_ids.append(DEFAULT_ACCOUNT_ID)
-        if not self._oauth_dir.is_dir():
-            return account_ids
-
-        prefix = f"{safe_provider_id}-{safe_connection_id}{_ACCOUNT_FILE_SEPARATOR}"
-        for token_path in self._oauth_dir.glob(f"{prefix}*.json"):
-            suffix = token_path.name.removeprefix(prefix).removesuffix(".json")
-            if ACCOUNT_ID_PATTERN.fullmatch(suffix) and suffix not in account_ids:
+        for token_id in self._secrets.entry_names(OAUTH_TOKENS):
+            if token_id == base:
+                account_ids.append(DEFAULT_ACCOUNT_ID)
+                continue
+            suffix = token_id.removeprefix(prefix)
+            if (
+                suffix != token_id
+                and ACCOUNT_ID_PATTERN.fullmatch(suffix)
+                and suffix not in account_ids
+            ):
                 account_ids.append(suffix)
         return sorted_account_ids(account_ids)
 
-    def _token_path(self, provider_id: str, local_connection_id: str, account_id: str) -> Path:
+    def _write(
+        self, transaction: SecretTransaction, token_id: str, payload: dict[str, object]
+    ) -> None:
+        # A stored token that fails to load is never overwritten.
+        try:
+            previous_text = transaction.get(OAUTH_TOKENS, token_id)
+            previous = None if previous_text is None else _decode_token(previous_text)
+        except (SecretStoreError, OAuthTokenFileError) as error:
+            raise OAuthTokenFileError(
+                f"Refusing to overwrite OAuth token {token_id}, which fails to load. {_RESET_HINT}"
+            ) from error
+        body: Any = payload
+        if previous is not None:
+            body = preserve_unknown_fields(previous, payload, OAUTH_TOKEN_SHAPE)
+        text = render_json_document(
+            body, version=OAUTH_TOKEN_FORMAT_VERSION, sort_keys=OAUTH_TOKEN_FORMAT.sort_keys
+        )
+        transaction.set(OAUTH_TOKENS, token_id, text)
+
+    def _token_id(self, provider_id: str, local_connection_id: str, account_id: str) -> str:
         safe_provider_id = self._validate_token_id("provider_id", provider_id)
         safe_connection_id = self._validate_token_id(
             "local_connection_id",
             local_connection_id,
         )
         safe_account_id = self._validate_account_id(account_id)
-        file_name = f"{safe_provider_id}-{safe_connection_id}.json"
+        token_id = f"{safe_provider_id}-{safe_connection_id}"
         if safe_account_id != DEFAULT_ACCOUNT_ID:
-            file_name = (
-                f"{safe_provider_id}-{safe_connection_id}"
-                f"{_ACCOUNT_FILE_SEPARATOR}{safe_account_id}.json"
-            )
-        token_path = self._oauth_dir / file_name
-        oauth_root = self._oauth_dir.resolve()
-        resolved_path = token_path.resolve()
-        if resolved_path.parent != oauth_root:
-            raise ValueError("OAuth token path must stay within the token store directory")
-        return token_path
+            token_id = f"{token_id}{_ACCOUNT_FILE_SEPARATOR}{safe_account_id}"
+        return token_id
 
     def _validate_token_id(self, field_name: str, value: str) -> str:
         if not TOKEN_ID_PATTERN.fullmatch(value):
@@ -372,6 +388,20 @@ class TokenStore:
         if value is None:
             return None
         return value.astimezone(UTC).isoformat()
+
+
+def _decode_token(text: str) -> dict[str, Any]:
+    """Decode and validate one stored token document."""
+    try:
+        data = json.loads(text)
+    except ValueError as error:
+        raise OAuthTokenFileError(f"OAuth token is not valid JSON. {_RESET_HINT}") from error
+    errors = [item for item in validate_oauth_token_data(data) if item.severity == "error"]
+    if errors:
+        details = "; ".join(f"{item.path}: {item.message}" for item in errors)
+        raise OAuthTokenFileError(f"OAuth token failed to load: {details}. {_RESET_HINT}")
+    assert isinstance(data, dict)
+    return data
 
 
 def _parse_datetime(value: str | None) -> datetime | None:

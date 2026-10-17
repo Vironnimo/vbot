@@ -4,7 +4,7 @@ Thin HTTP wrappers around the built-in Home Assistant REST API
 (``{url}/api/``). The tools are always registered; a readiness predicate on
 each keeps them invisible in the prompt, the provider definitions, and the tool
 pickers until ``HASS_TOKEN`` resolves to a non-empty string. The token
-(``.env`` key ``HASS_TOKEN``) and the server URL (extension config field
+(credential ``HASS_TOKEN``) and the server URL (extension config field
 ``url``) are read **live** on every call, so setting either through Settings →
 Extensions takes effect without a restart.
 
@@ -869,7 +869,7 @@ _HASS_READINESS_HINT = (
 
 
 def _resolve_token(api: Any) -> str:
-    """Resolve the HA token live (process env, then data-dir ``.env``)."""
+    """Resolve the HA token live (process env, then the Secret Store)."""
     return str(api.resolve_credential(_HASS_TOKEN_ENV_KEY)).strip()
 
 

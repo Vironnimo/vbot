@@ -27,7 +27,6 @@ from core.providers.wire_profiles import (
     wire_profile_files,
 )
 from core.storage.storage import StorageManager
-from core.utils.config import read_env_file
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RESOURCES_DIR = PROJECT_ROOT / "resources"
@@ -64,11 +63,10 @@ def open_target(
         runtime_models_dir=storage.layout.models,
         custom_providers=custom_providers,
     )
-    token_store = TokenStore(data_dir)
-    env_path = data_dir / ".env"
+    token_store = TokenStore(storage.secrets)
     credentials = ProviderCredentialResolver(
         providers,
-        fallback_credentials=read_env_file(env_path) if env_path.is_file() else {},
+        fallback_credentials=storage.load_data_dir_credentials(),
         process_env=dict(os.environ),
         token_store=token_store,
         enabled_overrides_loader=lambda: {},

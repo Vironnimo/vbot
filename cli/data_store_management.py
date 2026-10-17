@@ -1,4 +1,5 @@
-"""Operational controls for the data directory's canonical databases and configuration backups."""
+"""Operational controls for the data directory's canonical databases, configuration
+backups and Secret Store."""
 
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ from core.database import (
     snapshot_summary,
     unregister_database,
 )
+from core.utils.errors import StorageError
 from core.utils.server_control import live_server_ports
 
 if TYPE_CHECKING:
@@ -246,11 +248,12 @@ def data_store_snapshot_restore(
             message=f"snapshot cannot be restored: {snapshot_id}: {exc}",
             instance=instance,
         )
-    return _restore_while_stopped(
+    return _change_while_stopped(
         instance,
         lambda: _describe_restore(restore_and_verify(snapshot)),
-        noun="data snapshot",
-        item_id=snapshot_id,
+        action="restore",
+        subject=f"data snapshot {snapshot_id}",
+        done=f"restored data snapshot {snapshot_id}",
     )
 
 
@@ -340,11 +343,12 @@ def data_store_config_backup_restore(
             + ")",
             instance=instance,
         )
-    return _restore_while_stopped(
+    return _change_while_stopped(
         instance,
         lambda: _describe_config_restore(restore(check_only=False)),
-        noun="configuration backup",
-        item_id=backup_id,
+        action="restore",
+        subject=f"configuration backup {backup_id}",
+        done=f"restored configuration backup {backup_id}",
     )
 
 
@@ -365,14 +369,172 @@ def _describe_config_restore(restored: ConfigRestore) -> str:
     return "; ".join(parts)
 
 
-def _restore_while_stopped(
-    instance: ServerInstance, restore: Callable[[], str], *, noun: str, item_id: str
-) -> CommandResult:
-    """Run ``restore`` while the exact target is stopped; start it again if it ran.
+def data_store_secrets_status(instance: ServerInstance) -> CommandResult:
+    """Show the Secret Store's state and ignored plaintext credential files; never a value."""
+    if instance.host not in _LOOPBACK_HOSTS:
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+    from core.secrets import SecretStore, secret_store_health
 
-    ``restore`` changes the data directory and describes what it changed. A
+    projection = secret_store_health(SecretStore(instance.data_dir))
+    projection["data_dir"] = instance.data_dir.as_posix()
+    return CommandResult(
+        ok=projection["state"] != "unavailable",
+        message=_dump(projection),
+        instance=instance,
+    )
+
+
+def data_store_secrets_convert(instance: ServerInstance, confirm: bool) -> CommandResult:
+    """Import the plaintext credential files into the Secret Store, then delete them.
+
+    The import is verified by reading the store back before any file is
+    deleted, and a file that does not match the store stays. The exact target
+    is stopped meanwhile and started again if it ran, so it loads the result.
+    """
+    if instance.host not in _LOOPBACK_HOSTS:
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+    if not confirm:
+        return CommandResult(
+            ok=False,
+            message=(
+                "refusing to convert the plaintext credentials without confirmation; the "
+                "server is stopped meanwhile; re-run with --yes"
+            ),
+            instance=instance,
+        )
+    from core.secrets import (
+        SecretStore,
+        import_plaintext_credentials,
+        plaintext_credential_files,
+        retire_plaintext_credentials,
+    )
+
+    store = SecretStore(instance.data_dir)
+    try:
+        # Check before stopping the server: nothing changes yet.
+        files = plaintext_credential_files(instance.data_dir)
+        status = store.status()
+        record = store.import_record()
+    except (OSError, StorageError) as exc:
+        return CommandResult(
+            ok=False, message=f"the credentials cannot be converted: {exc}", instance=instance
+        )
+    if not files and record is None:
+        return CommandResult(
+            ok=True,
+            message="no plaintext credential files; nothing to convert",
+            instance=instance,
+        )
+    if status.state == "unavailable":
+        return CommandResult(
+            ok=False,
+            message=(
+                f"the Secret Store is unavailable ({status.reason}); restore its key, or start "
+                "a new store with `vbot data-store secrets reset --yes` and convert again"
+            ),
+            instance=instance,
+        )
+
+    def convert() -> str:
+        imported = import_plaintext_credentials(store)
+        retired = retire_plaintext_credentials(store)
+        parts: list[str] = []
+        if imported is not None:
+            parts.append(
+                f"imported {len(imported.credentials)} credentials and "
+                f"{len(imported.oauth_tokens)} OAuth logins"
+            )
+            parts.extend(
+                f"{item} left out: {reason}" for item, reason in sorted(imported.skipped.items())
+            )
+        if retired is not None:
+            if retired.deleted:
+                parts.append("deleted " + ", ".join(retired.deleted))
+            parts.extend(f"{path} kept: {reason}" for path, reason in sorted(retired.kept.items()))
+            if retired.backup_entries or retired.snapshot_copies:
+                parts.append(
+                    f"purged {retired.backup_entries} configuration-backup entries and "
+                    f"{retired.snapshot_copies} data-snapshot copies"
+                )
+            if not retired.backups_complete:
+                parts.append(
+                    "some configuration-backup copies remain until a later start purges them"
+                )
+        return "; ".join(parts) or "nothing changed"
+
+    return _change_while_stopped(
+        instance,
+        convert,
+        action="conversion",
+        subject="plaintext credential",
+        done="converted the plaintext credentials",
+    )
+
+
+def data_store_secrets_reset(instance: ServerInstance, confirm: bool) -> CommandResult:
+    """Replace an unavailable Secret Store with a new empty one.
+
+    The old store moves to quarantine, never deleted: restoring its key file
+    (Linux) or the Windows account it belongs to makes it readable again. Only
+    an unavailable store is replaced.
+    """
+    if instance.host not in _LOOPBACK_HOSTS:
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+    if not confirm:
+        return CommandResult(
+            ok=False,
+            message=(
+                "refusing to replace the Secret Store without confirmation: every stored "
+                "credential and OAuth login must then be entered again; re-run with --yes"
+            ),
+            instance=instance,
+        )
+    from core.secrets import SecretStore
+
+    store = SecretStore(instance.data_dir)
+    status = store.status()
+    if status.state != "unavailable":
+        return CommandResult(
+            ok=False,
+            message=(
+                f"the Secret Store is {status.state}; reset only replaces a store whose key "
+                "is lost or wrong"
+            ),
+            instance=instance,
+        )
+
+    def reset() -> str:
+        replaced = store.reset()
+        kept = (
+            "the old store was already gone"
+            if replaced.quarantine is None
+            else f"the old store is kept at {replaced.quarantine.as_posix()}"
+        )
+        return f"{kept}; enter the credentials and OAuth logins again"
+
+    return _change_while_stopped(
+        instance,
+        reset,
+        action="reset",
+        subject="Secret Store",
+        done="started a new empty Secret Store",
+    )
+
+
+def _change_while_stopped(
+    instance: ServerInstance,
+    change: Callable[[], str],
+    *,
+    action: str,
+    subject: str,
+    done: str,
+) -> CommandResult:
+    """Run ``change`` while the exact target is stopped; start it again if it ran.
+
+    ``change`` changes the data directory and describes what it changed. A
     server that was running, busy or answering, is stopped first and started
-    again only after the restore succeeded.
+    again only after the change succeeded. ``action`` names the change in
+    refusals, ``subject`` what it acts on, and ``done`` the success.
     """
     health = probe_health_patiently(instance)
     state = classify_server(instance, health=health)
@@ -380,7 +542,7 @@ def _restore_while_stopped(
         return CommandResult(
             ok=False,
             message=(
-                "refusing data-store restore because another process or a vBot server of "
+                f"refusing data-store {action} because another process or a vBot server of "
                 f"another data directory holds {instance.host}:{instance.port}"
             ),
             instance=instance,
@@ -401,11 +563,12 @@ def _restore_while_stopped(
             health=stopped.health,
         )
     try:
-        described = restore()
-    except (OSError, ValueError, DatabaseError) as exc:
+        described = change()
+    except (OSError, ValueError, DatabaseError, StorageError) as exc:
+        # The server stays stopped: the data directory may be part-way changed.
         return CommandResult(
             ok=False,
-            message=f"{noun} restore failed: {item_id}: {exc}",
+            message=f"{subject} {action} failed: {exc}",
             instance=instance,
             health=health,
         )
@@ -416,8 +579,7 @@ def _restore_while_stopped(
             return CommandResult(
                 ok=False,
                 message=(
-                    f"restored {noun} {item_id}, but restoring the prior server "
-                    f"state failed: {restarted.message}"
+                    f"{done}, but restoring the prior server state failed: {restarted.message}"
                 ),
                 instance=instance,
                 health=restarted.health,
@@ -425,8 +587,7 @@ def _restore_while_stopped(
     return CommandResult(
         ok=True,
         message=(
-            f"restored {noun} {item_id} ({described})"
-            + (" and restarted the server" if restarted is not None else "")
+            f"{done} ({described})" + (" and restarted the server" if restarted is not None else "")
         ),
         instance=instance,
         health=health,
@@ -489,13 +650,18 @@ def _verify_restored(restored: Iterable[str], specs: dict[str, DatabaseSpec]) ->
 
 def _local_status(data_dir: Path, *, verify_search: bool = False) -> dict[str, Any]:
     from core.database import data_store_status as read_status
+    from core.secrets import SecretStore, secret_store_health
 
     specs = _specs_by_name(data_dir)
     if verify_search:
         from core.sessions._store_schema import session_database_spec
 
         specs["sessions"] = session_database_spec(data_dir / "sessions.db", verify_search=True)
-    return read_status(data_dir, specs=specs.values())
+    return read_status(
+        data_dir,
+        specs=specs.values(),
+        secret_store=secret_store_health(SecretStore(data_dir)),
+    )
 
 
 def _specs_by_name(data_dir: Path) -> dict[str, DatabaseSpec]:

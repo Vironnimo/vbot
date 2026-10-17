@@ -122,16 +122,16 @@ def install_payload(
             if bootstrap.is_file() and not (root / name).exists():
                 shutil.copy2(bootstrap, root / name)
         if install.owns_server and not resolved_data.exists():
-            _initialize_data(resolved_data, destination / "app" / "resources")
+            _initialize_data(resolved_data)
         install.save()
         install.activate(manifest["version_id"])
     return install
 
 
-def _initialize_data(data_dir: Path, resources: Path) -> None:
+def _initialize_data(data_dir: Path) -> None:
     from core.storage import initialize_data_directory
 
-    created = initialize_data_directory(data_dir, resources_dir=resources)
+    created = initialize_data_directory(data_dir)
     settings = created.layout.settings_file
     if settings in created.created_files:
         document = json.loads(settings.read_text(encoding="utf-8"))

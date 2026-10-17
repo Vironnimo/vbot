@@ -12,6 +12,7 @@ from threading import Event
 import pytest
 
 from core.database import (
+    ConfigBackupPurge,
     DatabaseCorruptError,
     DatabaseFormatError,
     DatabaseUnavailableError,
@@ -21,6 +22,7 @@ from core.database import (
     data_store_status,
     describe_config_backup,
     list_config_backups,
+    purge_config_backup_files,
     read_config_backup,
     read_maintenance,
     restore_config_backup,
@@ -31,6 +33,8 @@ from tests.core.database.database_test_support import write_document
 from tests.directory_links import link_directory
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
+# A configuration file that is no JSON document.
+NOTE = "prompts/blocks/custom/notes.md"
 
 
 def _settings(value: str) -> str:
@@ -59,7 +63,7 @@ def _backup(data_dir: Path, *, now: datetime = NOW, reason: str = "test") -> str
 def test_a_backup_holds_the_configuration_files_and_nothing_else(data_dir: Path) -> None:
     configuration = {
         "settings.json": _settings("Europe/Berlin"),
-        ".env": "OPENAI_API_KEY=secret\n",
+        "secrets.json": '{"format_version": 1, "credentials": {"OPENAI_API_KEY": "sealed"}}\n',
         "agents/nova/agent.json": '{"format_version": 1, "id": "nova"}\n',
         "agents/nova/workspace/SOUL.md": "# Soul\n",
         "agents/nova/workspace/USER.md": "- likes tea\n",
@@ -70,7 +74,10 @@ def test_a_backup_holds_the_configuration_files_and_nothing_else(data_dir: Path)
     }
     for relative, text in configuration.items():
         _write(data_dir, relative, text)
-    # Workspace files, Skills, blob sidecars and the backups themselves stay out.
+    # Workspace files, Skills, blob sidecars, plaintext credential files and the
+    # backups themselves stay out.
+    _write(data_dir, ".env", "OPENAI_API_KEY=plaintext\n")
+    _write(data_dir, "oauth/github-copilot-oauth.json", '{"format_version": 1}\n')
     _write(data_dir, "agents/nova/workspace/notes.txt", "scratch\n")
     _write(data_dir, "agents/nova/skills/demo/SKILL.md", "skill\n")
     _write(data_dir, "artifacts/attachments/att_1.json", '{"format_version": 1}\n')
@@ -98,7 +105,7 @@ def test_only_a_changed_configuration_is_backed_up_and_unchanged_contents_are_sh
     data_dir: Path,
 ) -> None:
     _write(data_dir, "settings.json", _settings("Europe/Berlin"))
-    _write(data_dir, ".env", "KEY=one\n")
+    _write(data_dir, NOTE, "KEY=one\n")
     first = _backup(data_dir)
     stored = _objects(data_dir)
 
@@ -111,7 +118,7 @@ def test_only_a_changed_configuration_is_backed_up_and_unchanged_contents_are_sh
     assert len(_objects(data_dir) - stored) == 1
     described = describe_config_backup(data_dir, first)
     assert described["files"]["settings.json"]["state"] == "differs"
-    assert described["files"][".env"]["state"] == "same"
+    assert described["files"][NOTE]["state"] == "same"
 
 
 def test_a_damaged_json_document_is_marked_and_never_restored(data_dir: Path) -> None:
@@ -242,12 +249,12 @@ def test_restoring_a_whole_backup_leaves_newer_files_and_vanished_or_linked_fold
 
 def test_a_restore_verifies_every_copy_before_it_changes_anything(data_dir: Path) -> None:
     _write(data_dir, "settings.json", _settings("Europe/Berlin"))
-    _write(data_dir, ".env", "KEY=one\n")
+    _write(data_dir, NOTE, "KEY=one\n")
     backup_id = _backup(data_dir)
     _write(data_dir, "settings.json", _settings("UTC"))
-    _write(data_dir, ".env", "KEY=two\n")
-    env_object = read_config_backup(data_dir, backup_id).files[".env"].sha256
-    (config_backup_root(data_dir) / "objects" / env_object[:2] / env_object).write_bytes(b"x")
+    _write(data_dir, NOTE, "KEY=two\n")
+    note_object = read_config_backup(data_dir, backup_id).files[NOTE].sha256
+    (config_backup_root(data_dir) / "objects" / note_object[:2] / note_object).write_bytes(b"x")
 
     with pytest.raises(DatabaseCorruptError, match="altered"):
         restore_config_backup(data_dir, backup_id)
@@ -261,10 +268,10 @@ def test_a_backup_repairs_a_stored_copy_altered_to_the_same_size(
     data_dir: Path, changed: bool
 ) -> None:
     _write(data_dir, "settings.json", _settings("Europe/Berlin"))
-    _write(data_dir, ".env", "KEY=one\n")
+    _write(data_dir, NOTE, "KEY=one\n")
     first = _backup(data_dir)
-    env_object = read_config_backup(data_dir, first).files[".env"].sha256
-    (config_backup_root(data_dir) / "objects" / env_object[:2] / env_object).write_bytes(
+    note_object = read_config_backup(data_dir, first).files[NOTE].sha256
+    (config_backup_root(data_dir) / "objects" / note_object[:2] / note_object).write_bytes(
         b"KEY=bad\n"
     )
     if changed:
@@ -273,9 +280,9 @@ def test_a_backup_repairs_a_stored_copy_altered_to_the_same_size(
     second = capture_config_backup(data_dir, reason="test", now=NOW + timedelta(minutes=5))
 
     assert (second is not None) is changed
-    _write(data_dir, ".env", "KEY=two\n")
-    restore_config_backup(data_dir, first if second is None else second.backup_id, paths=[".env"])
-    assert _read(data_dir, ".env") == "KEY=one\n"
+    _write(data_dir, NOTE, "KEY=two\n")
+    restore_config_backup(data_dir, first if second is None else second.backup_id, paths=[NOTE])
+    assert _read(data_dir, NOTE) == "KEY=one\n"
 
 
 @pytest.mark.parametrize("wrote_every_file", [False, True], ids=["mid-write", "after writing"])
@@ -283,12 +290,12 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, wrote_every_file: bool
 ) -> None:
     _write(data_dir, "settings.json", _settings("Europe/Berlin"))
-    _write(data_dir, ".env", "KEY=one\n")
+    _write(data_dir, NOTE, "KEY=one\n")
     backup_id = _backup(data_dir)
     _write(data_dir, "settings.json", _settings("Asia/Tokyo"))
     other_id = _backup(data_dir, now=NOW + timedelta(minutes=5))
     _write(data_dir, "settings.json", _settings("UTC"))
-    _write(data_dir, ".env", "KEY=two\n")
+    _write(data_dir, NOTE, "KEY=two\n")
     real_write = config_backups_module.atomic_write_bytes
 
     def fail_on_settings(target: Path, *args: object, **kwargs: object) -> None:
@@ -317,7 +324,7 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated
     assert read_maintenance(data_dir) is None
     assert repeated.restored == (() if wrote_every_file else ("settings.json",))
     assert repeated.before_restore == first_before.backup_id
-    assert _read(data_dir, ".env") == "KEY=one\n"
+    assert _read(data_dir, NOTE) == "KEY=one\n"
     assert _read(data_dir, "settings.json") == _settings("Europe/Berlin")
 
 
@@ -340,10 +347,10 @@ def test_a_backup_does_not_wait_long_for_another_data_store_operation(
 def test_restore_holds_the_operation_lock_until_every_file_and_the_guard_are_settled(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write(data_dir, ".env", "KEY=old\n")
+    _write(data_dir, NOTE, "KEY=old\n")
     _write(data_dir, "settings.json", _settings("Europe/Berlin"))
     backup_id = _backup(data_dir)
-    _write(data_dir, ".env", "KEY=new\n")
+    _write(data_dir, NOTE, "KEY=new\n")
     _write(data_dir, "settings.json", _settings("UTC"))
     writing, finish = Event(), Event()
     real_write = config_backups_module.atomic_write_bytes
@@ -363,7 +370,7 @@ def test_restore_holds_the_operation_lock_until_every_file_and_the_guard_are_set
             guard = read_maintenance(data_dir)
             assert guard is not None
             with pytest.raises(DatabaseUnavailableError):
-                restore_config_backup(data_dir, backup_id, paths=[".env"])
+                restore_config_backup(data_dir, backup_id, paths=[NOTE])
             assert read_maintenance(data_dir) == guard
             with pytest.raises(DatabaseFormatError):
                 capture_config_backup(data_dir, reason="during restore")
@@ -372,3 +379,42 @@ def test_restore_holds_the_operation_lock_until_every_file_and_the_guard_are_set
         restoring.result(timeout=2)
     assert read_maintenance(data_dir) is None
     assert _read(data_dir, "settings.json") == _settings("Europe/Berlin")
+
+
+def test_purging_retired_files_rewrites_the_backups_and_deletes_their_contents(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Backups an older vBot took, when plaintext credentials were configuration files.
+    with monkeypatch.context() as older:
+        older.setattr(
+            config_backups_module,
+            "CONFIGURATION_FILE_PATTERNS",
+            (*config_backups_module.CONFIGURATION_FILE_PATTERNS, ".env", "oauth/*.json"),
+        )
+        _write(data_dir, "settings.json", _settings("Europe/Berlin"))
+        _write(data_dir, ".env", "OPENAI_API_KEY=plaintext\n")
+        _write(data_dir, "oauth/github-copilot-oauth.json", '{"format_version": 1}\n')
+        first = _backup(data_dir)
+        _write(data_dir, ".env", "OPENAI_API_KEY=rotated\n")
+        _write(data_dir, "settings.json", _settings("UTC"))
+        second = _backup(data_dir, now=NOW + timedelta(minutes=5))
+    kept_settings = {
+        backup.backup_id: backup.files["settings.json"].sha256
+        for backup in list_config_backups(data_dir)
+    }
+
+    with pytest.raises(ValueError, match="outside the configuration set"):
+        purge_config_backup_files(data_dir, ("settings.json",))
+    purge = purge_config_backup_files(data_dir, (".env", "oauth/*.json"))
+
+    assert purge == ConfigBackupPurge(removed_entries=4, rewritten_backups=2, complete=True)
+    backups = list_config_backups(data_dir)
+    assert [backup.backup_id for backup in backups] == [second, first]
+    assert all(sorted(backup.files) == ["settings.json"] for backup in backups)
+    assert {backup.backup_id: backup.files["settings.json"].sha256 for backup in backups} == (
+        kept_settings
+    )
+    assert _objects(data_dir) == set(kept_settings.values())
+    restore_config_backup(data_dir, first)
+    assert _read(data_dir, "settings.json") == _settings("Europe/Berlin")
+    assert purge_config_backup_files(data_dir, (".env", "oauth/*.json")) == ConfigBackupPurge()

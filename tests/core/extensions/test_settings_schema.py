@@ -116,7 +116,7 @@ def test_config_validation_accepts_a_matching_config_and_names_each_violation() 
     )
     rejected: dict[str, tuple[dict[str, Any], str]] = {
         "unknown key": ({"url": "http://x", "extra": 1}, "unknown settings key"),
-        "secret in config": ({"url": "http://x", "token": "abc"}, "stored in .env"),
+        "secret in config": ({"url": "http://x", "token": "abc"}, "stored in the Secret Store"),
         "text type mismatch": ({"url": 5}, "must be a string"),
         "number is a bool": ({"url": "http://x", "port": True}, "must be a number"),
         "toggle type mismatch": ({"url": "http://x", "verbose": "yes"}, "must be a boolean"),

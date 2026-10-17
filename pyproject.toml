@@ -32,7 +32,7 @@ Repository = "https://github.com/Vironnimo/vbot"
 Issues = "https://github.com/Vironnimo/vbot/issues"
 
 [project.optional-dependencies]
-server  = ["fastapi", "starlette>=0.48,<2", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "av>=18,<19", "psutil"]
+server  = ["fastapi", "starlette>=0.48,<2", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "av>=18,<19", "psutil", "cryptography>=46,<51"]
 cli     = ["psutil", "cryptography>=46,<51", "textual>=8.2.8,<9"]
 application = ["cryptography>=46,<51", "uv==0.12.11"]
 local-tts = ["uv==0.12.11"]

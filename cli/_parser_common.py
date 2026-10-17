@@ -111,7 +111,7 @@ AREA_HELP = {
     "tui": "Open the interactive full-screen terminal chat",
     "data-store": (
         "Inspect, snapshot, verify, recover, and release the canonical SQLite databases, "
-        "and restore configuration backups"
+        "restore configuration backups, and manage the Secret Store"
     ),
     "channel": "Inspect and manage channel configs",
     "tool": "Inspect public tool catalog",
@@ -192,11 +192,24 @@ DATA_STORE_HELP = {
     "snapshot": "Manage verified data snapshots of every canonical database",
     "config-backup": (
         "List, inspect and restore the automatic backups of the configuration files "
-        "(settings, Agents, Projects, Channels, jobs, tokens, .env, SOUL/USER/MEMORY.md, "
+        "(settings, Agents, Projects, Channels, jobs, Secret Store, SOUL/USER/MEMORY.md, "
         "prompt overrides)"
     ),
     "incident": "Manage durable database recovery incidents",
     "unregister": "Release the database of a removed Extension (files move to quarantine)",
+    "secrets": "Inspect, convert or replace the encrypted Secret Store of the credentials",
+}
+
+
+DATA_STORE_SECRETS_HELP = {
+    "status": "Show the Secret Store's state and ignored plaintext credential files",
+    "convert": (
+        "Import the plaintext .env and OAuth token files into the Secret Store, then delete them"
+    ),
+    "reset": (
+        "Replace a Secret Store whose key is lost with a new empty one (the old one moves "
+        "to quarantine)"
+    ),
 }
 
 
@@ -418,7 +431,7 @@ EXTENSIONS_HELP = {
     "enable": "Enable a disabled extension (applied live)",
     "disable": "Disable an extension (applied live)",
     "show": "Show one extension's settings (schema, current values, secret set-state)",
-    "set": "Set one extension setting (secret -> .env, other fields -> live config)",
+    "set": "Set one extension setting (secret -> Secret Store, other fields -> live config)",
 }
 
 

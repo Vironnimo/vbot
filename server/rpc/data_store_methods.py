@@ -16,6 +16,7 @@ from core.database import (
     data_store_status,
 )
 from core.database.snapshots import read_snapshot_health, read_snapshot_summary
+from core.secrets import secret_store_health
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_DATA_STORE
 from server.rpc.dispatcher import RpcMethodHandler
@@ -35,7 +36,11 @@ def _runtime(state: Any) -> tuple[Any, Path]:
 
 
 def _status(runtime: Any, data_dir: Path) -> JsonObject:
-    return data_store_status(data_dir, databases=runtime.canonical_databases())
+    return data_store_status(
+        data_dir,
+        databases=runtime.canonical_databases(),
+        secret_store=secret_store_health(runtime.storage.secrets),
+    )
 
 
 async def _data_store_status(state: Any, params: JsonObject) -> JsonObject:

@@ -1,7 +1,8 @@
 """Storage manager for vBot data directories, settings, and prompt fragments.
 
-``StorageManager`` owns the data-directory lifecycle, ``.env`` credential snapshots,
-and serialized read-modify-write transactions over ``settings.json``. Section
+``StorageManager`` owns the data-directory lifecycle, the data-directory
+credentials (kept encrypted by its Secret Store, ``core.secrets``), and serialized
+read-modify-write transactions over ``settings.json``. Section
 normalization is delegated to :mod:`core.settings.normalizers` (the settings domain
 owns the section schemas) and prompt fragments to
 :class:`core.storage.prompt_fragments.PromptFragmentStore`.
@@ -26,6 +27,7 @@ from core.json_documents import (
     strip_unknown_fields,
     write_json_document,
 )
+from core.secrets import CREDENTIALS, SecretStore
 from core.settings import (
     SETTINGS_FORMAT,
     SettingsValidationError,
@@ -69,13 +71,7 @@ from core.storage.layout import DataDirectoryLayout, initialize_data_directory
 from core.storage.prompt_blocks import PromptBlockStore
 from core.storage.prompt_fragments import PromptFragmentStore
 from core.storage.temp_files import TemporaryFileManager
-from core.utils.atomic import atomic_write_text
-from core.utils.config import (
-    build_environment_snapshot,
-    format_env_value,
-    read_env_file,
-    split_env_lines,
-)
+from core.utils.config import build_environment_snapshot
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -108,10 +104,13 @@ class StorageManager:
         *,
         config: ConfigProtocol | None = None,
         resources_dir: str | Path | None = None,
+        secrets: SecretStore | None = None,
     ) -> None:
         self.data_dir = self._resolve_data_dir(data_dir, config).expanduser()
         self.resources_dir = self._resolve_resources_dir(resources_dir)
         self.layout = DataDirectoryLayout(self.data_dir)
+        #: The data directory's Secret Store; one instance per data directory and process.
+        self.secrets = secrets if secrets is not None else SecretStore(self.data_dir)
         self._settings_lock = RLock()
         self._settings_diagnostic_signature: tuple[str, ...] | None = None
         # Usable Settings of the last loaded file version as JSON, with its stat stamp.
@@ -150,24 +149,25 @@ class StorageManager:
     def ensure_directories(self) -> None:
         """Create the canonical data-directory structure if it is missing."""
 
-        initialize_data_directory(self.data_dir, resources_dir=self.resources_dir)
+        initialize_data_directory(self.data_dir)
 
     def load_environment(self) -> dict[str, str]:
-        """Return a read-only snapshot of credentials from ``<data_dir>/.env``.
+        """Return a read-only snapshot of the data-directory credentials.
 
-        The returned mapping is suitable for later merging with the live
-        process environment, but this method never mutates ``os.environ``.
+        The credentials come from the Secret Store; while it is unavailable the
+        snapshot is empty. The mapping is suitable for later merging with the
+        live process environment, but this method never mutates ``os.environ``.
         """
 
         return self.load_data_dir_credentials()
 
     def load_data_dir_credentials(self) -> dict[str, str]:
-        """Read ``<data_dir>/.env`` as a credential fallback snapshot."""
+        """Every data-directory credential that decrypts, by environment-variable name."""
 
-        return read_env_file(self.data_dir / ".env")
+        return self.secrets.entries(CREDENTIALS)
 
     def set_data_dir_credential(self, key: str, value: str) -> None:
-        """Write or replace one credential in ``<data_dir>/.env``."""
+        """Write or replace one data-directory credential in the Secret Store."""
 
         if not ENV_KEY_PATTERN.fullmatch(key):
             raise StorageError(f"Invalid environment key: {key}")
@@ -177,45 +177,11 @@ class StorageManager:
             raise StorageError("Credential value must be a single line")
 
         self.ensure_directories()
-        with self._settings_lock:
-            env_path = self.data_dir / ".env"
-            # A file that exists but cannot be read is never replaced: rewriting it
-            # from nothing would drop every other credential.
-            try:
-                lines = split_env_lines(env_path.read_text(encoding="utf-8"))
-            except FileNotFoundError:
-                lines = []
-            except OSError as exc:
-                raise StorageError(f"Cannot read {env_path}: {exc}") from exc
-
-            new_line = f"{key}={format_env_value(value)}"
-            updated_lines: list[str] = []
-            replaced = False
-            for line in lines:
-                stripped = line.strip()
-                if stripped and not stripped.startswith("#") and "=" in stripped:
-                    candidate_key = stripped.partition("=")[0].strip()
-                    if candidate_key == key:
-                        if not replaced:
-                            updated_lines.append(new_line)
-                            replaced = True
-                        continue
-                updated_lines.append(line)
-
-            if not replaced:
-                updated_lines.append(new_line)
-
-            try:
-                atomic_write_text(
-                    env_path,
-                    "\n".join(updated_lines) + "\n",
-                    data_dir=self.data_dir,
-                )
-            except OSError as exc:
-                raise StorageError(f"Cannot write {env_path}: {exc}") from exc
+        # SecretStoreError is a StorageError: an unavailable store is never written.
+        self.secrets.set_entry(CREDENTIALS, key, value)
 
     def remove_data_dir_credential(self, key: str) -> bool:
-        """Remove one credential from ``<data_dir>/.env``.
+        """Remove one data-directory credential.
 
         Returns whether a matching entry existed. Process-environment values
         are never touched; removing a key that is also set in the process
@@ -224,40 +190,7 @@ class StorageManager:
 
         if not ENV_KEY_PATTERN.fullmatch(key):
             raise StorageError(f"Invalid environment key: {key}")
-
-        with self._settings_lock:
-            env_path = self.data_dir / ".env"
-            try:
-                lines = split_env_lines(env_path.read_text(encoding="utf-8"))
-            except FileNotFoundError:
-                return False
-            except OSError as exc:
-                raise StorageError(f"Cannot read {env_path}: {exc}") from exc
-
-            updated_lines: list[str] = []
-            removed = False
-            for line in lines:
-                stripped = line.strip()
-                if stripped and not stripped.startswith("#") and "=" in stripped:
-                    candidate_key = stripped.partition("=")[0].strip()
-                    if candidate_key == key:
-                        removed = True
-                        continue
-                updated_lines.append(line)
-
-            if not removed:
-                return False
-
-            self.ensure_directories()
-            try:
-                atomic_write_text(
-                    env_path,
-                    "\n".join(updated_lines) + "\n",
-                    data_dir=self.data_dir,
-                )
-            except OSError as exc:
-                raise StorageError(f"Cannot write {env_path}: {exc}") from exc
-            return True
+        return self.secrets.remove_entry(CREDENTIALS, key)
 
     def build_environment_snapshot(self) -> dict[str, str]:
         """Return process-env-over-data-dir merged credentials without mutation."""

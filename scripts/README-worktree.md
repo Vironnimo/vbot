@@ -388,11 +388,11 @@ This is the machine-readable marker used by config and cleanup logic.
 
 ### `~/.vbot-<name>/settings.json`
 
-This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Creation seeds only its newly created data directory. The fixture is `scripts/fake-provider-settings.json` from the checkout that runs `worktree.py` (like the data-directory layout and seed resources), not from the main repository, so a branch that changes it seeds its own version. Its task-model options must be valid for the option schemas vBot builds for those fake Models (for these Custom Provider Models, TTS offers only the `mp3`/`pcm` formats and image generation only `extra_options`), otherwise saving Specialized Models fails on an untouched option; `tests/scripts/test_worktree.py` validates the seeded bindings through the same Task Model check Settings runs.
+This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Creation seeds only its newly created data directory. The fixture is `scripts/fake-provider-settings.json` from the checkout that runs `worktree.py` (like the data-directory layout), not from the main repository, so a branch that changes it seeds its own version. Its task-model options must be valid for the option schemas vBot builds for those fake Models (for these Custom Provider Models, TTS offers only the `mp3`/`pcm` formats and image generation only `extra_options`), otherwise saving Specialized Models fails on an untouched option; `tests/scripts/test_worktree.py` validates the seeded bindings through the same Task Model check Settings runs.
 
-### `~/.vbot-<name>/.env` and canonical directories
+### Canonical directories and credentials
 
-Worktree creation uses the same canonical initializer as Setup and Runtime, with exclusive root creation required. It seeds `.env` from `resources/data-dir/.env.example`, creates every canonical directory, and leaves `agents/` empty until Runtime's first start. A concurrent creator winning the root creation race causes refusal before any seeding.
+Worktree creation uses the same canonical initializer as Setup and Runtime, with exclusive root creation required. It creates every canonical directory and seeds no credentials, and leaves `agents/` empty until Runtime's first start. A concurrent creator winning the root creation race causes refusal before any seeding. Credentials a worktree server needs are saved through vBot (Settings, `vbot provider set-key`), which creates the data directory's Secret Store `secrets.json` (`.vorch/domain-maps/secrets.md`); a plaintext `.env` placed there by hand is ignored until `vbot data-store secrets convert --yes` imports it.
 
 ## Delete rules and safety
 

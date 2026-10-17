@@ -15,6 +15,9 @@ from cli.data_store_management import (
     data_store_config_backup_restore,
     data_store_config_backup_show,
     data_store_incident_acknowledge,
+    data_store_secrets_convert,
+    data_store_secrets_reset,
+    data_store_secrets_status,
     data_store_snapshot_create,
     data_store_snapshot_list,
     data_store_snapshot_restore,
@@ -420,8 +423,14 @@ def dispatch_data_store_command(
         [ServerInstance, str], CommandResult
     ] = data_store_config_backup_show,
     config_backup_restore_fn: Callable[..., CommandResult] = data_store_config_backup_restore,
+    secrets_status_fn: Callable[[ServerInstance], CommandResult] = data_store_secrets_status,
+    secrets_convert_fn: Callable[
+        [ServerInstance, bool], CommandResult
+    ] = data_store_secrets_convert,
+    secrets_reset_fn: Callable[[ServerInstance, bool], CommandResult] = data_store_secrets_reset,
 ) -> CommandResult:
-    """Dispatch operator controls for the canonical databases and configuration backups."""
+    """Dispatch operator controls for the canonical databases, configuration backups
+    and the Secret Store."""
 
     if args.command == "status":
         return status_fn(instance, verify_search=args.verify_search)
@@ -454,4 +463,11 @@ def dispatch_data_store_command(
         return incident_acknowledge_fn(instance, args.incident_id)
     if args.command == "unregister":
         return unregister_fn(instance, args.name, args.yes)
+    if args.command == "secrets":
+        if args.secrets_command == "status":
+            return secrets_status_fn(instance)
+        if args.secrets_command == "convert":
+            return secrets_convert_fn(instance, args.yes)
+        if args.secrets_command == "reset":
+            return secrets_reset_fn(instance, args.yes)
     raise ValueError(f"Unsupported data-store command: {args.command}")

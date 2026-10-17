@@ -182,16 +182,15 @@ def initialize_data_dir(data_dir: Path) -> None:
 
     # Load the layout from this checkout, not PROJECT_ROOT: a worktree may carry a
     # newer canonical layout than the linked main repository, and the checkout's
-    # own code defines the layout its server expects. The seed resources
-    # (.env.example and friends) come from the same checkout, otherwise a branch
-    # that changes a resource would seed the main copy and diverge from it.
+    # own code defines the layout its server expects. Credentials are never seeded:
+    # a worktree's data directory starts without a Secret Store.
     checkout_root = _script_checkout_root()
     layout_module = runpy.run_path(
         str(checkout_root / "core" / "storage" / "layout.py"),
         run_name="vbot_data_directory_layout",
     )
     initializer = layout_module["initialize_data_directory"]
-    initializer(data_dir, resources_dir=checkout_root / "resources", require_new=True)
+    initializer(data_dir, require_new=True)
 
 
 def _canonical_path(path: Path) -> str:

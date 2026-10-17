@@ -1,4 +1,4 @@
-"""Runtime credential sources: data-directory ``.env`` fallback behind the process environment."""
+"""Runtime credential sources: data-directory credentials behind the process environment."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from core.chat.errors import ChatError
 from core.chat.model_resolution import _resolve_agent_connection
 from core.providers.accounts import ConnectionRef
 from core.runtime.runtime import Runtime
+from core.secrets import CREDENTIALS, SecretStore
 from core.utils.config import Config
 from core.utils.errors import ConfigError
 
@@ -19,14 +20,14 @@ OPENROUTER = ConnectionRef("openrouter", "openrouter:api-key")
 
 
 @pytest.mark.asyncio
-async def test_data_dir_env_supplies_provider_credentials_behind_the_process_environment(
+async def test_data_dir_credentials_supply_providers_behind_the_process_environment(
     config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     for key in ("OPENROUTER_API_KEY", "OPENAI_API_KEY"):
         monkeypatch.delenv(key, raising=False)
-    config.data_dir.joinpath(".env").write_text(
-        "OPENROUTER_API_KEY=sk-or-from-data-dir\n", encoding="utf-8"
-    )
+    SecretStore(config.data_dir).set_entry(CREDENTIALS, "OPENROUTER_API_KEY", "sk-or-from-data-dir")
+    # A plaintext .env of an earlier vBot is never read.
+    config.data_dir.joinpath(".env").write_text("OPENAI_API_KEY=sk-plaintext\n", encoding="utf-8")
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     try:
@@ -80,7 +81,7 @@ def test_environment_credentials_prefer_the_process_and_reload_into_live_resolve
         assert runtime.resolve_environment_credential("CHANNEL_TOKEN_TEST") == "process-token"
 
         # The fallback follows the host's name case rules: a Skill granting
-        # ``GitHub_Token`` resolves a `.env` ``GITHUB_TOKEN`` on Windows.
+        # ``GitHub_Token`` resolves a data-directory ``GITHUB_TOKEN`` on Windows.
         for ignore_case in (True, False):
             monkeypatch.setattr("core.runtime.runtime._ENVIRONMENT_NAMES_IGNORE_CASE", ignore_case)
             if ignore_case:
