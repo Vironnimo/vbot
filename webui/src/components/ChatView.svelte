@@ -350,6 +350,7 @@
   });
 
   let showSessionDrawer = $state(false);
+  let activityPanelOpen = $state(false);
   // Counts the Sessions this area's drafts created; each one refreshes the
   // Session list.
   let createdSessions = $state(0);
@@ -975,7 +976,10 @@
   {:else if !target.activeAgent}
     <EmptyState fill title={t('chat.noAgentSelected')} />
   {:else}
-    <div class="chat-view__content-shell">
+    <div
+      class="chat-view__content-shell"
+      class:chat-view__content-shell--activity-open={activityPanelOpen}
+    >
       {#if showSessionDrawer}
         <SessionListDrawer
           agentId={target.activeAgentAddress}
@@ -1234,6 +1238,7 @@
         </div>
       </div>
       <ChatActivityPanel
+        bind:open={activityPanelOpen}
         timelineItems={activeTimelineItems}
         subAgentStatuses={chatState.subAgentStatuses}
         subAgentWork={chatState.subAgentWork}

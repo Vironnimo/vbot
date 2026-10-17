@@ -57,9 +57,11 @@
     // (`(commandId) => Promise`, see CommandOutput.svelte); null offers no
     // output view.
     onLoadCommandOutput = null,
+    // Whether the panel is open; Chat reserves room for it beside the
+    // timeline while it is.
+    open = $bindable(false),
   } = $props();
 
-  let open = $state(false);
   const cancellingTaskIds = new SvelteSet();
   // Finished reviews whose change list is open, and those asking to confirm
   // their undo; both are view state only.
@@ -877,7 +879,7 @@
   .chat-activity--open {
     display: flex;
     align-items: center;
-    width: min(264px, calc(100% - 16px));
+    width: min(var(--chat-activity-width), calc(100% - 16px));
     height: min(calc(100% - 24px), max(70%, 360px));
   }
 

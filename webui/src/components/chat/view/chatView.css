@@ -3,6 +3,7 @@
    On phones it keeps using the whole width. */
 .chat-view {
   --chat-footer-inset: var(--chat-msg-gutter);
+  --chat-activity-width: 264px;
 
   display: flex;
   width: 100%;
@@ -26,6 +27,7 @@
   flex-direction: column;
   overflow: hidden;
   background: var(--bg);
+  container: chat-surface / inline-size;
 }
 
 /* The Session list docks beside the chat and pushes it; an area too narrow
@@ -37,6 +39,16 @@
   flex: 1;
   overflow: hidden;
   container: chat-area / inline-size;
+}
+
+/* The open Session-info panel pushes the chat the same way: timeline and
+   composer keep its width plus its edge gaps free and center in the rest.
+   A chat too narrow for both keeps the panel over it instead. */
+@container chat-surface (min-width: 740px) {
+  .chat-view__content-shell--activity-open .chat-view__timeline-shell,
+  .chat-view__content-shell--activity-open .chat-view__footer-stack {
+    margin-right: calc(var(--chat-activity-width) + 16px);
+  }
 }
 
 /* Icon actions in the Chat header: the Session list, New session and the
