@@ -68,6 +68,14 @@ export {
 export { describeBackgroundActivity } from './settingsView/activity.js';
 export { describeSecretStoreProblem } from './settingsView/secretStore.js';
 export {
+  CREDENTIAL_SOURCE_ENVIRONMENT,
+  CREDENTIAL_STORE_UNAVAILABLE,
+  credentialNameProblem,
+  credentialValueProblem,
+  describeCredential,
+  normalizeCredentialList,
+} from './settingsView/credentials.js';
+export {
   ACCESS_MODE_AUTHENTICATED,
   accessModeDescription,
   describeDeviceUse,

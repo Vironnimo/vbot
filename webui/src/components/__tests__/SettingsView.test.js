@@ -329,7 +329,7 @@ describe('SettingsView', () => {
           'decision_model',
           'subagents',
         ],
-        integrations: ['channels', 'extensions'],
+        integrations: ['channels', 'extensions', 'credentials'],
         archive: ['archive_retention', 'archive_entries'],
         system: ['server', 'access', 'debug'],
       };

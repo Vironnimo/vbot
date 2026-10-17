@@ -11,6 +11,7 @@
   import SettingsActivityPanel from './settings/SettingsActivityPanel.svelte';
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
+  import SettingsCredentialsPanel from './settings/SettingsCredentialsPanel.svelte';
   import SettingsDebugPanel from './settings/SettingsDebugPanel.svelte';
   import SettingsArchivePanel from './settings/SettingsArchivePanel.svelte';
   import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
@@ -54,7 +55,7 @@
 
   const noop = () => {};
   // The pages where credentials are entered (Provider keys and sign-ins, web
-  // service keys, Channel tokens and Extension secrets).
+  // service keys, Channel tokens, Extension secrets and named credentials).
   const CREDENTIAL_PAGES = new Set(['providers', 'tools', 'integrations']);
   // Shared Agent defaults live in Agents; these words lead there.
   const AGENT_DEFAULTS_TERMS = normalizeSearchText(
@@ -99,6 +100,8 @@
     clientsRefreshToken = 0,
     // Paired Devices and decided pairings changed (Access & devices).
     devicesRefreshToken = 0,
+    // Saved credentials changed (Credentials).
+    credentialsRefreshToken = 0,
     channelsRefreshToken = 0,
     archiveRefreshToken = 0,
     agentsRefreshToken = 0,
@@ -208,6 +211,10 @@
       id: 'extensions',
       label: () => t('settings.extensions.title'),
     },
+    {
+      id: 'credentials',
+      label: () => t('settings.credentials.title'),
+    },
     { id: 'server', label: () => t('settings.sections.server') },
     { id: 'access', label: () => t('settings.sections.access') },
     {
@@ -291,7 +298,8 @@
       id: 'integrations',
       label: () => t('settings.pages.integrations'),
       description: () => t('settings.pages.integrationsDescription'),
-      sections: ['channels', 'extensions'],
+      // Named credentials last: they are rarely managed on their own.
+      sections: ['channels', 'extensions', 'credentials'],
     },
     {
       id: 'archive',
@@ -963,6 +971,8 @@
       {agentsRefreshToken}
       onError={(message) => reportSettingsError(message)}
     />
+  {:else if panelId === 'credentials'}
+    <SettingsCredentialsPanel {credentialsRefreshToken} {onToast} />
   {:else if panelId === 'live_voice_model'}
     <SettingsLiveVoicePanel
       {settings}

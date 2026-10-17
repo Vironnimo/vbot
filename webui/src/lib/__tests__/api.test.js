@@ -749,6 +749,17 @@ describe('RPC wrappers', () => {
       (o) => api.prepareSpeechTranscription(o),
       {},
     ],
+    ['secrets.list', (o) => api.listCredentials(o), {}],
+    [
+      'secrets.set',
+      (o) => api.setCredential('SKILL_TOKEN', 'value-1', o),
+      { name: 'SKILL_TOKEN', value: 'value-1' },
+    ],
+    [
+      'secrets.unset',
+      (o) => api.unsetCredential('SKILL_TOKEN', o),
+      { name: 'SKILL_TOKEN' },
+    ],
     ['devices.list', (o) => api.listDevices(o), {}],
     [
       'devices.rename',

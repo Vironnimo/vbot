@@ -223,6 +223,9 @@
   let sessionDeletion = $derived(appControllerState.sessionDeletion);
   let clientsRefreshToken = $derived(appControllerState.clientsRefreshToken);
   let devicesRefreshToken = $derived(appControllerState.devicesRefreshToken);
+  let credentialsRefreshToken = $derived(
+    appControllerState.credentialsRefreshToken,
+  );
   let channelsRefreshToken = $derived(appControllerState.channelsRefreshToken);
   let cronRefreshToken = $derived(appControllerState.cronRefreshToken);
   let calendarRefreshToken = $derived(appControllerState.calendarRefreshToken);
@@ -1126,6 +1129,7 @@
           {secretStore}
           {clientsRefreshToken}
           {devicesRefreshToken}
+          {credentialsRefreshToken}
           {channelsRefreshToken}
           {archiveRefreshToken}
           agentsRefreshToken={selection.agentsRefreshToken}

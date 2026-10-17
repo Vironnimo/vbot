@@ -194,6 +194,36 @@ export function setServiceKey(params = {}, options = {}) {
   return rpc('settings.set_service_key', params, options);
 }
 
+// Named credentials of the server's Secret Store: `secrets.list` reports
+// names, states and sources, never a value; a value enters only through
+// `setCredential`.
+export function listCredentials(options = {}) {
+  return rpc('secrets.list', {}, options);
+}
+
+export function setCredential(name, value, options = {}) {
+  requireNonEmptyString(
+    name,
+    'Credential name must be a non-empty string',
+    'secrets.set',
+  );
+  requireNonEmptyString(
+    value,
+    'Credential value must be a non-empty string',
+    'secrets.set',
+  );
+  return rpc('secrets.set', { name, value }, options);
+}
+
+export function unsetCredential(name, options = {}) {
+  requireNonEmptyString(
+    name,
+    'Credential name must be a non-empty string',
+    'secrets.unset',
+  );
+  return rpc('secrets.unset', { name }, options);
+}
+
 export function listAgentMemories(agentId, options = {}) {
   requireNonEmptyString(
     agentId,

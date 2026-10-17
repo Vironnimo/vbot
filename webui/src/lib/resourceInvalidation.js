@@ -27,6 +27,7 @@ export const RESOURCE_TOKEN_COMMANDS = 'commands';
 export const RESOURCE_TOKEN_TERMINALS = 'terminals';
 export const RESOURCE_TOKEN_SKILLS = 'skills';
 export const RESOURCE_TOKEN_ARCHIVE = 'archive';
+export const RESOURCE_TOKEN_CREDENTIALS = 'credentials';
 export const RESOURCE_KIND_DATA_STORE = 'data_store';
 
 // Which token group(s) each resource kind invalidates. Both a model-catalog
@@ -37,11 +38,14 @@ export const RESOURCE_KIND_DATA_STORE = 'data_store';
 // "sessions" group (re-fetch a session list). An archive entry that appears,
 // changes state or goes bumps the "archive" group (re-fetch archive.list). A
 // paired Device that appears, changes or goes, and a pairing that is decided,
-// bump the "devices" group (re-fetch devices.list).
+// bump the "devices" group (re-fetch devices.list). A saved, replaced or
+// removed credential publishes "data_store" (the credential RPCs, service keys,
+// Channel tokens, Extension secrets) or only "providers" (Provider keys), so
+// both bump the "credentials" group (re-fetch secrets.list).
 // New kinds add their mapping here.
 const KIND_TOKEN_GROUPS = {
   models: [RESOURCE_TOKEN_MODELS],
-  providers: [RESOURCE_TOKEN_MODELS],
+  providers: [RESOURCE_TOKEN_MODELS, RESOURCE_TOKEN_CREDENTIALS],
   agents: [RESOURCE_TOKEN_AGENTS],
   memories: [RESOURCE_TOKEN_MEMORIES],
   sessions: [RESOURCE_TOKEN_SESSIONS],
@@ -56,6 +60,7 @@ const KIND_TOKEN_GROUPS = {
   terminals: [RESOURCE_TOKEN_TERMINALS],
   skills: [RESOURCE_TOKEN_SKILLS],
   archive: [RESOURCE_TOKEN_ARCHIVE],
+  data_store: [RESOURCE_TOKEN_CREDENTIALS],
 };
 
 // Return the refresh-token group(s) a resource kind invalidates (empty for an
