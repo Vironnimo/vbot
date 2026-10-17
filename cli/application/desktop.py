@@ -1,10 +1,17 @@
-"""Launch the installed Desktop without loading server or tray services."""
+"""Launch the installed Desktop, and read what a Desktop Client's tray follows.
+
+The tray of a Desktop Client follows the server the Desktop last used and signs
+in with the Desktop's Device: it reads the Desktop's settings and sign-ins
+through the Desktop's own modules (stdlib-only; they import nothing else of vBot)
+and never writes either.
+"""
 
 from __future__ import annotations
 
 import json
 import os
 import subprocess
+from dataclasses import dataclass
 
 from cli.application.operations import child_environment
 from cli.application.state import ApplicationError, Installation, exclusive
@@ -87,3 +94,62 @@ def relaunch_contract(install: Installation, version_id: str) -> str:
             "command": [str(install.root / "vBot.GUI.exe"), "desktop"],
         }
     )
+
+
+@dataclass(frozen=True)
+class DesktopServer:
+    """The server the Desktop last connected to, which a Desktop Client tray follows.
+
+    ``host`` and ``port`` are what the Desktop's ``--host``/``--port`` take (an
+    HTTPS server's host is its URL); ``origin`` is where the tray connects and
+    the key of the Desktop's stored sign-in.
+    """
+
+    host: str
+    port: int
+    origin: str
+
+
+def desktop_server() -> DesktopServer | None:
+    """Read the Desktop's last-used server from its settings; ``None`` without one."""
+
+    try:
+        from desktop.server_address import parse_server_address
+        from desktop.settings import read_last_used
+    except ImportError:
+        return None
+    reference = read_last_used()
+    if reference is None:
+        return None
+    host, port = reference["host"], reference["port"]
+    try:
+        address = parse_server_address(
+            f"https://{host}:{port}" if reference.get("scheme") == "https" else host, port
+        )
+    except ValueError:
+        return None
+    return DesktopServer(address.bridge_host, address.port, address.origin)
+
+
+def desktop_sign_in(origin: str) -> str | None:
+    """The Device token the Desktop keeps for ``origin``, read fresh; ``None`` without one.
+
+    The Desktop owns the file (``desktop/credentials.py``); the tray only reads
+    it and never removes a token the server refused. The Desktop's own sign-in
+    goes first; the CLI's sign-in of the same origin is the fallback.
+    """
+
+    from cli.server_client import cli_sign_in
+
+    try:
+        from desktop.credentials import DEVICE_TOKENS_FILE_NAME, DeviceTokenStore
+        from desktop.settings import config_dir
+    except ImportError:
+        return cli_sign_in(origin)
+    try:
+        stored = DeviceTokenStore(config_dir() / DEVICE_TOKENS_FILE_NAME).get(origin)
+    except OSError:
+        stored = None
+    if stored is not None and stored.token is not None:
+        return stored.token
+    return cli_sign_in(origin)

@@ -5,15 +5,19 @@
 //
 // Only the access guard's own refusals count: HTTP 401 `auth_required`, 429
 // `rate_limited` (the guard answers it on a protected route only after
-// presented credentials kept failing), 403 `access_denied`, and the WebSocket
-// close codes 4401 / 4403. A bare 403 without the JSON envelope (the
-// browser-origin guard) and a route's own 429 are ordinary request failures.
+// presented credentials kept failing), 403 `access_denied`, 503
+// `devices_unavailable` (the server cannot check this page's Device right now;
+// the sign-in stays), and the WebSocket close codes 4401 / 4403 / 4503. A bare
+// 403 without the JSON envelope (the browser-origin guard), a route's own 429
+// and any other 503 are ordinary request failures.
 
 export const ACCESS_LOSS_AUTH_REQUIRED = 'auth_required';
 export const ACCESS_LOSS_ACCESS_DENIED = 'access_denied';
+export const ACCESS_LOSS_DEVICES_UNAVAILABLE = 'devices_unavailable';
 
 export const WEBSOCKET_CLOSE_AUTH_REQUIRED = 4401;
 export const WEBSOCKET_CLOSE_ACCESS_DENIED = 4403;
+export const WEBSOCKET_CLOSE_DEVICES_UNAVAILABLE = 4503;
 
 const listeners = new Set();
 
@@ -41,6 +45,9 @@ export function accessLossFromResponse(status, payload) {
   if (status === 403 && code === 'access_denied') {
     return ACCESS_LOSS_ACCESS_DENIED;
   }
+  if (status === 503 && code === 'devices_unavailable') {
+    return ACCESS_LOSS_DEVICES_UNAVAILABLE;
+  }
   return null;
 }
 
@@ -51,6 +58,9 @@ export function accessLossFromClose(event) {
   }
   if (event?.code === WEBSOCKET_CLOSE_ACCESS_DENIED) {
     return ACCESS_LOSS_ACCESS_DENIED;
+  }
+  if (event?.code === WEBSOCKET_CLOSE_DEVICES_UNAVAILABLE) {
+    return ACCESS_LOSS_DEVICES_UNAVAILABLE;
   }
   return null;
 }
@@ -67,7 +77,7 @@ export function reportRefusedResponse(status, payload) {
 // Reports a refused HTTP response whose body was not read yet. The body is
 // read from a clone, so the caller can still read the response.
 export async function reportRefusedHttpResponse(response) {
-  if (![401, 403, 429].includes(response?.status)) {
+  if (![401, 403, 429, 503].includes(response?.status)) {
     return false;
   }
   let payload;
@@ -79,7 +89,7 @@ export async function reportRefusedHttpResponse(response) {
   return reportRefusedResponse(response.status, payload);
 }
 
-// Close listener for a socket: reports a 4401 / 4403 close.
+// Close listener for a socket: reports a 4401 / 4403 / 4503 close.
 export function reportClosedSocket(event) {
   const loss = accessLossFromClose(event);
   if (loss) {

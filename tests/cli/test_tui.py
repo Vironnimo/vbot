@@ -616,12 +616,39 @@ async def test_transport_preserves_send_uncertainty_and_local_files(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code", "close", "close_code", "explained"),
+    [
+        pytest.param(
+            401,
+            "auth_required",
+            4403,
+            "access_denied",
+            "vbot devices pair https://vbot.example.com",
+            id="refused",
+        ),
+        pytest.param(
+            503,
+            "devices_unavailable",
+            4503,
+            "devices_unavailable",
+            "device store is unavailable",
+            id="device-store-unavailable",
+        ),
+    ],
+)
 async def test_transport_explains_access_refusals(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    code: str,
+    close: int,
+    close_code: str,
+    explained: str,
 ) -> None:
     async def respond(request: httpx.Request) -> httpx.Response:
-        error = {"code": "auth_required", "message": "Authentication required"}
-        return httpx.Response(401, json={"ok": False, "error": error})
+        error = {"code": code, "message": "Refused"}
+        return httpx.Response(status, json={"ok": False, "error": error})
 
     class RefusedSocket:
         async def __aenter__(self) -> RefusedSocket:
@@ -634,7 +661,7 @@ async def test_transport_explains_access_refusals(
             return self
 
         async def __anext__(self) -> str:
-            raise ConnectionClosedError(Close(4403, "Access denied"), None)
+            raise ConnectionClosedError(Close(close, "Refused"), None)
 
     monkeypatch.setattr(transport_module, "connect", lambda *_args, **_kwargs: RefusedSocket())
     target = resolve_instance(data_dir=tmp_path / "data", url="https://vbot.example.com")
@@ -645,9 +672,9 @@ async def test_transport_explains_access_refusals(
             async for _event in client.events():
                 pass
 
-    assert rpc_refusal.value.code == "auth_required"
-    assert "vbot devices pair https://vbot.example.com" in str(rpc_refusal.value)
-    assert stream_refusal.value.code == "access_denied"
+    assert rpc_refusal.value.code == code
+    assert explained in str(rpc_refusal.value)
+    assert stream_refusal.value.code == close_code
 
 
 @pytest.mark.asyncio

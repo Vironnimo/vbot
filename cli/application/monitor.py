@@ -9,11 +9,15 @@ optional ``classify`` callback tells a busy server from an unreachable target,
 and when nothing listens, a starting or stopping server process from a stopped one.
 
 Every request and the stream carry the target's credential and TLS verification
-from ``cli/server_client.py``. A server that refuses the stream's credential
-(close code 4401) gets one immediate retry with the credential read again, for a
-server that restarted with a new local access token; a second refusal, or a
-refusal of the connection itself (4403), pauses the monitor for
-``_DENIED_RETRY_SECONDS`` instead of reconnecting in a loop.
+from ``cli/server_client.py``; a Desktop Client's tray names the Desktop's own
+sign-ins as the place its Device token comes from. A server that refuses the
+stream's credential (close code 4401) gets one immediate retry with the
+credential read again, for a server that restarted with a new local access token
+or a Desktop that signed in again; a second refusal or a refusal of the
+connection itself (4403) pauses the monitor for ``_DENIED_RETRY_SECONDS``
+instead of reconnecting in a loop. A server that cannot check devices right now
+(4503) is asked again after ``_UNAVAILABLE_RETRY_SECONDS``, the retry hint its
+HTTP refusal carries. No refusal removes a credential.
 """
 
 from __future__ import annotations
@@ -36,7 +40,12 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from cli._server_target import HEALTH_PATH, HealthProbeResult, ServerInstance, health_result
 from cli.rpc_client import RPC_PATH
-from cli.server_client import WEBSOCKET_REFUSALS, http_options, websocket_target
+from cli.server_client import (
+    WEBSOCKET_REFUSALS,
+    DeviceSignIn,
+    http_options,
+    websocket_target,
+)
 
 if TYPE_CHECKING:
     from cli.server_management import ServerState
@@ -53,7 +62,10 @@ _NO_TARGET_RETRY_SECONDS = 30.0
 # A refused credential or access mode changes only with a sign-in or a server
 # reconfiguration; the tray checks again this rarely, or at once on reconnect().
 _DENIED_RETRY_SECONDS = 300.0
+# The server's device store failed; the operator repairs it without the tray.
+_UNAVAILABLE_RETRY_SECONDS = 30.0
 _AUTH_REQUIRED_CLOSE = 4401
+_DEVICES_UNAVAILABLE_CLOSE = 4503
 
 
 @dataclass(frozen=True)
@@ -65,7 +77,8 @@ class MonitorStatus:
     when nothing listens but the target's own server process lives (it is still
     starting or already shutting down), ``rejected`` when a listener answered but
     refused the stream, ``denied`` when a vBot server refused the stream's
-    credential or this connection in its access mode (close code 4401 or 4403),
+    credential or this connection in its access mode (close code 4401 or 4403)
+    or could not check the credential (4503),
     ``unresponsive`` when the target's own server process lives but answered
     neither the stream nor ``/health`` (a busy Event Loop), ``unreachable`` when
     the target could not be reached otherwise, and ``no_target`` without a target.
@@ -90,6 +103,17 @@ class MonitorListener(Protocol):
     def connection_lost(self, close_code: int) -> None: ...
 
     def event_received(self, event: dict[str, Any]) -> None: ...
+
+
+def _refusal_pause(close_code: int, refusals: int) -> float:
+    """How long the monitor waits after the ``refusals``-th refusal in a row."""
+
+    if close_code == _AUTH_REQUIRED_CLOSE and refusals == 1:
+        # A restarted server wrote a new local access token: read it once more.
+        return 0.0
+    if close_code == _DEVICES_UNAVAILABLE_CLOSE:
+        return _UNAVAILABLE_RETRY_SECONDS
+    return _DENIED_RETRY_SECONDS
 
 
 class _StreamRefusedError(Exception):
@@ -121,12 +145,14 @@ class ServerMonitor:
         local: bool,
         user_agent: str,
         classify: Callable[[HealthProbeResult], ServerState] | None = None,
+        device_sign_in: DeviceSignIn | None = None,
     ) -> None:
         self._target = target
         self._listener = listener
         self._local = local
         self._user_agent = user_agent
         self._classify = classify
+        self._device_sign_in = device_sign_in
         # One stable id lets the server's client roster recognize reconnects.
         self._connection_id = uuid.uuid4().hex
         self._status = MonitorStatus()
@@ -206,7 +232,9 @@ class ServerMonitor:
         if self._client is None or self._client_target != target:
             if self._client is not None:
                 await self._client.aclose()
-            self._client = httpx.AsyncClient(timeout=5.0, **http_options(target))
+            self._client = httpx.AsyncClient(
+                timeout=5.0, **http_options(target, device_sign_in=self._device_sign_in)
+            )
             self._client_target = target
         return self._client
 
@@ -225,7 +253,9 @@ class ServerMonitor:
             await self._use(target)
             resume = cursor if time.monotonic() - lost_at < _RESUME_WINDOW_SECONDS else None
             stream_url, options = websocket_target(
-                target, _stream_path(self._connection_id, resume)
+                target,
+                _stream_path(self._connection_id, resume),
+                device_sign_in=self._device_sign_in,
             )
             try:
                 connection = await connect(
@@ -253,9 +283,7 @@ class ServerMonitor:
                 except _StreamRefusedError as refused:
                     refusals += 1
                     self._set_status(MonitorStatus(url=url, connection="denied", vbot=True))
-                    # A restarted server wrote a new local access token: read it once more.
-                    again = refused.close_code == _AUTH_REQUIRED_CLOSE and refusals == 1
-                    await self._pause(0.0 if again else _DENIED_RETRY_SECONDS)
+                    await self._pause(_refusal_pause(refused.close_code, refusals))
                     continue
                 if hello is None:
                     await self._classify_failure(url, TimeoutError("no connection_ready"))
@@ -286,7 +314,7 @@ class ServerMonitor:
 
     @staticmethod
     async def _hello(connection: ClientConnection) -> dict[str, Any] | None:
-        """The server's ``connection_ready`` frame; raises ``_StreamRefusedError`` for 4401/4403."""
+        """The server's ``connection_ready`` frame; ``_StreamRefusedError`` for 4401/4403/4503."""
 
         try:
             hello = json.loads(await asyncio.wait_for(connection.recv(), timeout=10))

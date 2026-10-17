@@ -10,6 +10,7 @@ import {
 import {
   ACCESS_LOSS_ACCESS_DENIED,
   ACCESS_LOSS_AUTH_REQUIRED,
+  ACCESS_LOSS_DEVICES_UNAVAILABLE,
   signalAccessLoss,
 } from './accessLoss.js';
 import { isPlainObject } from '../values.js';
@@ -50,7 +51,7 @@ export function pollPairing({ requestId, pollSecret }, options) {
 
 // Errors carry the server's code (`rate_limited`, `auth_disabled`,
 // `devices_unavailable`, `access_denied`, `invalid_request`), the HTTP status
-// and, for `rate_limited`, `retryAfter` in seconds.
+// and, for `rate_limited` and `devices_unavailable`, `retryAfter` in seconds.
 async function requestAccess(method, path, body, options = {}) {
   const fetchFunction = options.fetch ?? globalThis.fetch;
   let response;
@@ -97,8 +98,8 @@ function retryAfterSeconds(value) {
 
 // One shared check whether this page still has access, for transports that
 // cannot read the refusal themselves (an EventSource sees no status code).
-// Reports a loss when the server refuses this client or no longer knows its
-// credential; a failed check reports nothing.
+// Reports a loss when the server refuses this client, no longer knows its
+// credential or cannot check it right now; a failed check reports nothing.
 let accessCheck = null;
 
 export function verifyAccess(options = {}) {
@@ -112,6 +113,8 @@ export function verifyAccess(options = {}) {
       (error) => {
         if (error?.code === 'access_denied') {
           signalAccessLoss(ACCESS_LOSS_ACCESS_DENIED);
+        } else if (error?.code === 'devices_unavailable') {
+          signalAccessLoss(ACCESS_LOSS_DEVICES_UNAVAILABLE);
         }
       },
     )

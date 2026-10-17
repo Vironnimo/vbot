@@ -171,7 +171,7 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
             inspection = ["archive", "show", data["entry_id"]]
 
     sign_in: tuple[str, ...] | None = None
-    if code in {"auth_required", "access_denied"} and result is not None:
+    if code in {"auth_required", "access_denied", "devices_unavailable"} and result is not None:
         from cli.server_client import access_refusal
 
         explanation = access_refusal(result.instance, code, command=False) or explanation

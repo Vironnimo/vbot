@@ -6,6 +6,7 @@ import {
   GATE_LOOPING,
   GATE_NOTICE_NOT_KEPT,
   GATE_PAIRING,
+  GATE_UNAVAILABLE,
   GATE_UNREACHABLE,
   createAccessGate,
 } from '../accessGate.js';
@@ -85,6 +86,12 @@ describe('createAccessGate()', () => {
     ],
     ['a browser without sign-in', SIGNED_OUT, GATE_PAIRING],
     ['a refused client', failure('access_denied'), GATE_DENIED],
+    // Pairing again would not help: the sign-in stays and the gate waits.
+    [
+      'a server that cannot check devices',
+      failure('devices_unavailable'),
+      GATE_UNAVAILABLE,
+    ],
     // The server stays the security boundary: the app shows its own
     // offline state and reconnects.
     ['an unreachable server', failure('network_error'), GATE_APP],
@@ -144,6 +151,24 @@ describe('createAccessGate()', () => {
     await vi.advanceTimersByTimeAsync(1_200);
 
     expect(f.getAuthStatus).toHaveBeenCalledTimes(4);
+    expect(f.gate.state.screen).toBe(GATE_APP);
+  });
+
+  it('waits as long as the server asks while it cannot check devices', async () => {
+    const f = gateFixture(
+      SIGNED_IN,
+      Object.assign(failure('devices_unavailable'), { retryAfter: 30 }),
+      SIGNED_IN,
+    );
+    await f.gate.start();
+
+    await f.lose('devices_unavailable');
+    expect(f.gate.state.screen).toBe(GATE_UNAVAILABLE);
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(f.getAuthStatus).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(f.getAuthStatus).toHaveBeenCalledTimes(3);
     expect(f.gate.state.screen).toBe(GATE_APP);
   });
 

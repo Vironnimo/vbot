@@ -33,7 +33,7 @@ def test_device_tokens_authenticate_until_the_device_is_removed(tmp_path: Path) 
     )
     store.add(device)
     other, other_token = new_device(
-        name="Laptop", kind="cli", approved_by=device.id, client=None, now=_LATER
+        name="Laptop", kind="browser", approved_by=device.id, client=None, now=_LATER, via="ticket"
     )
     store.add(other)
     secret = token[-43:]
@@ -51,9 +51,11 @@ def test_device_tokens_authenticate_until_the_device_is_removed(tmp_path: Path) 
         assert store.lookup(forged, now=_NOW) == ("invalid", None)
 
     renamed = store.rename(device.id, "Phone")
-    # A fresh store reads exactly what was written; no token is ever stored.
+    # A fresh store reads exactly what was written; no token is ever stored. A
+    # device without a recorded origin (written before ``via``) keeps none.
     reloaded = _loaded(tmp_path)
     assert reloaded.devices() == [renamed, other]
+    assert (renamed.via, other.via, other.describe()["via"]) == (None, "ticket", "ticket")
     assert token not in (tmp_path / "access" / "devices.json").read_text(encoding="utf-8")
 
     assert store.remove([device.id, "dev_unknown"]) == [renamed]

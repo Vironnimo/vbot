@@ -431,6 +431,7 @@ describe('App controller', () => {
     ['memories', ['memories']],
     ['projects', ['projects']],
     ['clients', ['clients']],
+    ['devices', ['devices']],
     ['channels', ['channels']],
     ['debug_traces', ['debugTraces']],
     ['cron', ['cron']],

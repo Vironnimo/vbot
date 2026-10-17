@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../lib/i18n.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const api = vi.hoisted(() => ({
   getAuthStatus: vi.fn(),
@@ -57,6 +58,7 @@ const PHONE = {
 
 let component;
 let onToast;
+let props;
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -81,7 +83,8 @@ async function settle() {
 }
 
 async function render() {
-  component = mount(Panel, { target: document.body, props: { onToast } });
+  props = reactiveProps({ onToast, devicesRefreshToken: 0 });
+  component = mount(Panel, { target: document.body, props });
   await settle();
 }
 
@@ -229,10 +232,12 @@ describe('Settings access panel', () => {
       }),
     );
     expect(document.getElementById('add-device-code')).toBeNull();
-    // Reloaded now and again once the new device picked up its approval.
+    // The new device appears once the server reports it, never on a timer.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(api.listDevices).toHaveBeenCalledTimes(1);
+    props.devicesRefreshToken = 1;
+    await settle();
     expect(api.listDevices).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(4_000);
-    expect(api.listDevices).toHaveBeenCalledTimes(3);
   });
 
   it('tells an unknown pairing code apart', async () => {

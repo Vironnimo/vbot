@@ -173,11 +173,22 @@ def test_a_refused_sign_in_points_to_pairing_and_keeps_the_url_target(tmp_path):
         False, "test sentinel", remote, failure=RpcFailure("session.delete", "responded")
     )
 
+    unavailable = CommandResult(
+        False,
+        "test sentinel",
+        remote,
+        failure=RpcFailure("agent.list", "responded", "devices_unavailable", 503),
+    )
+
     sign_in = recovery_guidance(parse_args(["agent", "list"]), refused)
     inspection = recovery_guidance(parse_args(["session", "delete", "a@p", "s", "--yes"]), failed)
+    # The server cannot check devices: the sign-in stays and pairing again would not help.
+    kept = recovery_guidance(parse_args(["agent", "list"]), unavailable)
 
     assert sign_in.commands[0] == ("vbot", "devices", "pair", "https://vbot.example.com")
     assert "no sign-in" in sign_in.explanation
+    assert "device store is unavailable" in kept.explanation
+    assert all(command[1] != "devices" for command in kept.commands)
     assert parse_args(inspection.commands[0][1:]).url == "https://vbot.example.com"
 
 

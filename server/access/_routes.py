@@ -25,6 +25,7 @@ from server.access._rules import (
 from server.access._service import (
     DEVICE_COOKIE,
     DEVICE_COOKIE_MAX_AGE,
+    DEVICES_UNAVAILABLE,
     INVALID_REQUEST,
     AccessError,
     AccessService,
@@ -89,10 +90,17 @@ def register_access_routes(app: FastAPIType, service: AccessService) -> None:
     async def redeem_ticket(request: Request, ticket: str) -> Response:
         facts = _facts(service, request)
         try:
-            token = await service.redeem_ticket(ticket, facts)
-        except AccessError:
-            token = None
-        if token is None:
+            redemption = await service.redeem_ticket(ticket, facts, scope_principal(request.scope))
+        except AccessError as exc:
+            if exc.code == DEVICES_UNAVAILABLE:
+                return _ticket_page(
+                    "Sign-in not available",
+                    "The server cannot check its devices right now. "
+                    "Try again later; the host finds the cause in the server log.",
+                    status_code=503,
+                )
+            redemption = None
+        if redemption is None:
             service.refused("invalid_ticket", facts, request.url.path)
             service.failed_authentication(facts)
             return _ticket_page(
@@ -102,9 +110,12 @@ def register_access_routes(app: FastAPIType, service: AccessService) -> None:
                 status_code=400,
             )
         response = RedirectResponse(
-            "/", status_code=303, headers={**_NO_STORE, "Referrer-Policy": "no-referrer"}
+            redemption.next,
+            status_code=303,
+            headers={**_NO_STORE, "Referrer-Policy": "no-referrer"},
         )
-        _set_device_cookie(response, token)
+        if redemption.token is not None:
+            _set_device_cookie(response, redemption.token)
         return response
 
 

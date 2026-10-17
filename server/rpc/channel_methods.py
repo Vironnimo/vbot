@@ -15,7 +15,7 @@ from core.channels import (
 )
 from core.database import DatabaseError
 from core.utils.logging import get_logger
-from server.events import RESOURCE_KIND_CHANNELS
+from server.events import RESOURCE_KIND_CHANNELS, RESOURCE_KIND_DATA_STORE
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -114,6 +114,9 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
             _restore_channel_token(state.runtime, app_key, previous_app_value)
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+    if app_written or managed_token is not None:
+        # The Secret Store's status is part of the data store status.
+        publish_resource_changed(state, RESOURCE_KIND_DATA_STORE)
     _LOGGER.info(
         "Channel created (channel=%s platform=%s enabled=%s)",
         config.id,
@@ -309,6 +312,8 @@ async def _set_channel_token(state: Any, params: JsonObject) -> JsonObject:
         )
     if credential_result["changed"] or adapter_restart_requested:
         publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+    # The Secret Store's status is part of the data store status.
+    publish_resource_changed(state, RESOURCE_KIND_DATA_STORE)
 
     return {
         "id": config.id,

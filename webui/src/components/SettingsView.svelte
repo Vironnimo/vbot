@@ -97,6 +97,8 @@
     // credentials warn while the Secret Store cannot be read.
     secretStore = null,
     clientsRefreshToken = 0,
+    // Paired Devices and decided pairings changed (Access & devices).
+    devicesRefreshToken = 0,
     channelsRefreshToken = 0,
     archiveRefreshToken = 0,
     agentsRefreshToken = 0,
@@ -1099,7 +1101,7 @@
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'access'}
-    <SettingsAccessPanel {clientsRefreshToken} {onToast} />
+    <SettingsAccessPanel {devicesRefreshToken} {onToast} />
   {:else if panelId === 'desktop_connection'}
     <DesktopConnectionSettings {onToast} />
   {:else if panelId === 'live_voice_shortcut'}

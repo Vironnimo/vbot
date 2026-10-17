@@ -15,7 +15,7 @@ ORIGIN = "https://vbot.example.com"
 OTHER_ORIGIN = "http://pi.lan:8420"
 DEVICE_ID = "dev_0123456789abcdef"
 TOKEN = f"vbt_{DEVICE_ID}_{'S' * 43}"
-WINDOW_DEVICE_ID = "dev_fedcba9876543210"
+OTHER_DEVICE_ID = "dev_fedcba9876543210"
 
 
 def _store(tmp_path: Path) -> DeviceTokenStore:
@@ -25,16 +25,11 @@ def _store(tmp_path: Path) -> DeviceTokenStore:
 def test_a_stored_sign_in_survives_a_restart(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.save_device(ORIGIN, TOKEN, DEVICE_ID)
-    store.set_webview_device(ORIGIN, WINDOW_DEVICE_ID)
 
     stored = _store(tmp_path).get(ORIGIN)
 
     assert stored is not None
-    assert (stored.token, stored.device_id, stored.webview_device_id) == (
-        TOKEN,
-        DEVICE_ID,
-        WINDOW_DEVICE_ID,
-    )
+    assert (stored.token, stored.device_id) == (TOKEN, DEVICE_ID)
     assert TOKEN not in repr(stored)
     assert _store(tmp_path).get(OTHER_ORIGIN) is None
 
@@ -42,18 +37,14 @@ def test_a_stored_sign_in_survives_a_restart(tmp_path: Path) -> None:
 def test_only_the_refused_token_is_dropped(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.save_device(ORIGIN, TOKEN, DEVICE_ID)
-    store.set_webview_device(ORIGIN, WINDOW_DEVICE_ID)
+    store.save_device(OTHER_ORIGIN, TOKEN, DEVICE_ID)
 
     assert store.drop_device(ORIGIN, f"vbt_{DEVICE_ID}_{'X' * 43}") is False
     assert store.drop_device(ORIGIN, TOKEN) is True
 
-    stored = _store(tmp_path).get(ORIGIN)
-    assert stored is not None
-    assert (stored.token, stored.device_id, stored.webview_device_id) == (
-        None,
-        None,
-        WINDOW_DEVICE_ID,
-    )
+    assert _store(tmp_path).get(ORIGIN) is None
+    other = _store(tmp_path).get(OTHER_ORIGIN)
+    assert other is not None and other.token == TOKEN
 
 
 def test_removing_a_sign_in_returns_what_was_stored(tmp_path: Path) -> None:
@@ -73,7 +64,7 @@ def test_removing_a_sign_in_returns_what_was_stored(tmp_path: Path) -> None:
     ("token", "device_id"),
     [
         ("vbl_" + "L" * 43, DEVICE_ID),
-        (TOKEN, WINDOW_DEVICE_ID),
+        (TOKEN, OTHER_DEVICE_ID),
         (TOKEN + "x", DEVICE_ID),
     ],
     ids=["local-access-token", "other-device", "malformed"],
@@ -141,8 +132,8 @@ def test_fields_a_later_desktop_added_are_kept(tmp_path: Path) -> None:
     [
         "not json",
         "[]",
-        json.dumps({"servers": {ORIGIN: {"token": f"vbt_{WINDOW_DEVICE_ID}_{'S' * 43}"}}}),
-        json.dumps({"servers": {ORIGIN: {"token": TOKEN, "device_id": WINDOW_DEVICE_ID}}}),
+        json.dumps({"servers": {ORIGIN: {"token": f"vbt_{OTHER_DEVICE_ID}_{'S' * 43}"}}}),
+        json.dumps({"servers": {ORIGIN: {"token": TOKEN, "device_id": OTHER_DEVICE_ID}}}),
     ],
     ids=["damaged", "not-an-object", "token-without-device", "token-of-another-device"],
 )

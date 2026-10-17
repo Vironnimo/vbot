@@ -415,20 +415,24 @@ def test_access_mode_change_is_recorded_for_the_next_server_start(tmp_path, monk
 
 
 @pytest.mark.parametrize(
-    ("argv", "pending"),
+    ("argv", "pending", "in_run"),
     [
-        pytest.param(["local", "--host", "0.0.0.0"], False, id="local-on-the-network"),
-        pytest.param(["authenticated", "--trusted-proxy", "127.0.0.1"], False, id="no-url"),
-        pytest.param(["lan"], True, id="pending-update"),
+        pytest.param(["local", "--host", "0.0.0.0"], False, False, id="local-on-the-network"),
+        pytest.param(["authenticated", "--trusted-proxy", "127.0.0.1"], False, False, id="no-url"),
+        pytest.param(["lan"], True, False, id="pending-update"),
+        # An Agent must not open the server because some text asked it to.
+        pytest.param(["lan"], False, True, id="inside-an-agent-run"),
     ],
 )
 def test_access_mode_change_refuses_what_the_server_could_not_start_with(
-    tmp_path, monkeypatch, argv: list[str], pending: bool
+    tmp_path, monkeypatch, argv: list[str], pending: bool, in_run: bool
 ):
     install = _install(tmp_path)
     install.save()
     if pending:
         Operation(id="upd_pending", phase="queued").save(install)
+    if in_run:
+        monkeypatch.setenv("VBOT_RUN_AGENT_ID", "builder")
     monkeypatch.setattr(command, "discover", lambda: install)
 
     with pytest.raises(ApplicationError):

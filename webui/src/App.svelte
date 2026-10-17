@@ -222,6 +222,7 @@
   let queueInvalidation = $derived(appControllerState.queueInvalidation);
   let sessionDeletion = $derived(appControllerState.sessionDeletion);
   let clientsRefreshToken = $derived(appControllerState.clientsRefreshToken);
+  let devicesRefreshToken = $derived(appControllerState.devicesRefreshToken);
   let channelsRefreshToken = $derived(appControllerState.channelsRefreshToken);
   let cronRefreshToken = $derived(appControllerState.cronRefreshToken);
   let calendarRefreshToken = $derived(appControllerState.calendarRefreshToken);
@@ -1124,6 +1125,7 @@
           {backgroundActivity}
           {secretStore}
           {clientsRefreshToken}
+          {devicesRefreshToken}
           {channelsRefreshToken}
           {archiveRefreshToken}
           agentsRefreshToken={selection.agentsRefreshToken}

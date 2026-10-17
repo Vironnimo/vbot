@@ -3,7 +3,8 @@
 It answers the pairing endpoints and the RPC methods the Desktop uses
 (``auth.login_ticket``, ``devices.list``, ``devices.revoke``,
 ``devices.logout``) through ``httpx.MockTransport``, with the wire shapes of
-``.vorch/domain-maps/access/accessor-contracts.md``.
+``.vorch/domain-maps/access/accessor-contracts.md``. Like the server, it revokes
+the browser Devices a ticket created together with the Device that issued it.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ class FakeDevice:
     kind: str
     approved_by: str
     created_at: str
+    via: str = "pairing"
 
 
 @dataclass
@@ -54,7 +56,10 @@ class FakeAccessServer:
         self.local_token: str | None = None
         self.devices: dict[str, FakeDevice] = {}
         self.pairings: dict[str, FakePairing] = {}
-        self.tickets: dict[str, tuple[str, str]] = {}
+        # Per ticket: who issued it, the name of its Device and where it lands.
+        self.tickets: dict[str, tuple[str, str, str]] = {}
+        # Where each redeemed ticket redirected the browser, in order.
+        self.redirects: list[str] = []
         self.requests: list[httpx.Request] = []
         # Answers served before the regular ones, per path.
         self.scripted: dict[str, list[httpx.Response]] = {}
@@ -72,7 +77,12 @@ class FakeAccessServer:
     # -- Test controls ---------------------------------------------------------
 
     def add_device(
-        self, *, kind: str = "desktop", name: str = DEVICE_NAME, approved_by: str = "host"
+        self,
+        *,
+        kind: str = "desktop",
+        name: str = DEVICE_NAME,
+        approved_by: str = "host",
+        via: str = "pairing",
     ) -> FakeDevice:
         with self._lock:
             number = next(self._ids)
@@ -84,6 +94,7 @@ class FakeAccessServer:
             kind=kind,
             approved_by=approved_by,
             created_at=f"2026-10-17T10:{number:02d}:00Z",
+            via=via,
         )
         self.devices[device_id] = device
         return device
@@ -97,9 +108,10 @@ class FakeAccessServer:
         raise AssertionError(f"no pairing request shows {code}")
 
     def redeem(self, path: str) -> FakeDevice:
-        """Redeem a login ticket as the WebView would: a new browser Device."""
-        actor, name = self.tickets.pop(path.removeprefix("/auth/ticket/"))
-        return self.add_device(kind="browser", name=name, approved_by=actor)
+        """Redeem a login ticket as a signed-out WebView would: a new browser Device."""
+        actor, name, landing = self.tickets.pop(path.removeprefix("/auth/ticket/"))
+        self.redirects.append(landing)
+        return self.add_device(kind="browser", name=name, approved_by=actor, via="ticket")
 
     def calls(self, method: str) -> list[dict[str, Any]]:
         """The params of every RPC call of ``method``."""
@@ -186,7 +198,11 @@ class FakeAccessServer:
         if method == "auth.login_ticket":
             with self._lock:
                 ticket = f"ticket{next(self._ids):020d}"
-            self.tickets[ticket] = (principal, params.get("name", "Browser"))
+            self.tickets[ticket] = (
+                principal,
+                params.get("name", "Browser"),
+                params.get("next", "/"),
+            )
             return _result({"ticket": ticket, "path": f"/auth/ticket/{ticket}", "expires_in": 60})
         if method == "devices.list":
             return _result(
@@ -207,14 +223,27 @@ class FakeAccessServer:
                 }
             )
         if method == "devices.revoke":
-            if self.devices.pop(params["id"], None) is None:
+            if params["id"] not in self.devices:
                 return _error(200, "device_not_found")
-            return _result({"revoked": [params["id"]]})
+            return _result({"revoked": self._revoke(params["id"])})
         if method == "devices.logout":
-            if self.devices.pop(principal, None) is None:
+            if principal not in self.devices:
                 return _error(200, "access_denied")
-            return _result({"revoked": [principal]})
+            return _result({"revoked": self._revoke(principal)})
         return _error(200, "method_not_found")
+
+    def _revoke(self, device_id: str) -> list[str]:
+        """Revoke a Device and the browser Devices its tickets created, transitively."""
+        revoked = [device_id]
+        for issuer in revoked:
+            revoked += [
+                device.id
+                for device in self.devices.values()
+                if device.via == "ticket" and device.approved_by == issuer
+            ]
+        for revoked_id in revoked:
+            self.devices.pop(revoked_id, None)
+        return revoked
 
     def _principal(self, request: httpx.Request) -> str | None:
         header = request.headers.get("Authorization")

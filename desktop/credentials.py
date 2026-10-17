@@ -8,11 +8,14 @@ platforms the file is owner-only (0600). Neither protects against another
 process of the same user, which could read either store, so the Desktop adds no
 keyring dependency.
 
-Beside the token, a record keeps the device id and the id of the browser Device
-the Desktop window last signed in as (:mod:`desktop.access` revokes the
-previous one after each sign-in). The document carries ``format_version``;
-readers tolerate and writers keep fields they do not know. Tokens never appear
-in logs or in exceptions.
+Beside the token, a record keeps the device id and when it was paired. The
+document carries ``format_version``; readers tolerate and writers keep fields
+they do not know (earlier versions also kept ``webview_device_id``). Tokens never
+appear in logs or in exceptions.
+
+The tray of a Desktop Client reads this file through :class:`DeviceTokenStore`
+to sign in as the Desktop (``cli/application/desktop.py``); only the Desktop
+writes it.
 """
 
 from __future__ import annotations
@@ -45,10 +48,8 @@ _SERVERS_KEY = "servers"
 _TOKEN_KEY = "token"
 _DPAPI_TOKEN_KEY = "token_dpapi"
 _DEVICE_ID_KEY = "device_id"
-_WEBVIEW_DEVICE_ID_KEY = "webview_device_id"
 _PAIRED_AT_KEY = "paired_at"
 DEVICE_TOKEN_PATTERN = re.compile(r"vbt_(dev_[0-9a-z]{16})_[A-Za-z0-9_-]{43}")
-DEVICE_ID_PATTERN = re.compile(r"dev_[0-9a-z]{16}")
 _DPAPI_UI_FORBIDDEN = 0x1  # CRYPTPROTECT_UI_FORBIDDEN: never prompt, fail instead.
 
 
@@ -62,7 +63,6 @@ class StoredSignIn:
 
     token: str | None = field(repr=False)
     device_id: str | None
-    webview_device_id: str | None
 
 
 class DeviceTokenStore:
@@ -118,12 +118,6 @@ class DeviceTokenStore:
 
         self._update(origin, change)
         return True
-
-    def set_webview_device(self, origin: str, device_id: str) -> None:
-        """Remember the browser Device the Desktop window is signed in as on ``origin``."""
-        if not DEVICE_ID_PATTERN.fullmatch(device_id):
-            raise ValueError("Not a device id")
-        self._update(origin, lambda record: record.__setitem__(_WEBVIEW_DEVICE_ID_KEY, device_id))
 
     def remove(self, origin: str) -> StoredSignIn | None:
         """Forget everything stored for ``origin``; returns what was stored."""
@@ -220,21 +214,12 @@ def _parsed(text: str, path: Path) -> dict[str, Any]:
 
 def _stored(origin: str, record: dict[str, Any]) -> StoredSignIn:
     device_id = record.get(_DEVICE_ID_KEY)
-    webview_device_id = record.get(_WEBVIEW_DEVICE_ID_KEY)
     token = _unprotect(record, origin)
     if token is not None:
         match = DEVICE_TOKEN_PATTERN.fullmatch(token)
         if match is None or match.group(1) != device_id:
             token = None
-    return StoredSignIn(
-        token=token,
-        device_id=device_id if token is not None else None,
-        webview_device_id=(
-            webview_device_id
-            if isinstance(webview_device_id, str) and DEVICE_ID_PATTERN.fullmatch(webview_device_id)
-            else None
-        ),
-    )
+    return StoredSignIn(token=token, device_id=device_id if token is not None else None)
 
 
 # -- Token protection ------------------------------------------------------------

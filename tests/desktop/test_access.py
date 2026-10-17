@@ -13,6 +13,7 @@ import pytest
 
 from desktop.access import (
     ERROR_ACCESS_DENIED,
+    ERROR_DEVICES_UNAVAILABLE,
     ERROR_RATE_LIMITED,
     ERROR_SIGN_IN_FAILED,
     AccessFailure,
@@ -132,10 +133,14 @@ def test_a_paired_desktop_signs_in_with_its_device_token(tmp_path: Path) -> None
     server = FakeAccessServer()
     access, _, device = _paired(server, tmp_path)
 
-    sign_in = access.sign_in(REMOTE)
+    sign_in = access.sign_in(REMOTE, "/?accessor=desktop")
 
     assert sign_in.ticket_path is not None
     assert server.bearers() == [f"Bearer {device.token}"]
+    # The ticket lands the window on the page the Desktop asked for.
+    assert server.calls("auth.login_ticket") == [
+        {"name": WINDOW_NAME, "next": "/?accessor=desktop"}
+    ]
     assert access.signed_in(REMOTE) is True
     # Native requests use the same credential, whatever the URL spelling.
     assert access.header("https://VBOT.example.com:443/") == f"Bearer {device.token}"
@@ -170,6 +175,16 @@ def test_a_refused_device_token_is_dropped_and_pairing_is_required(tmp_path: Pat
             ),
             SignIn(error_code=ERROR_RATE_LIMITED, retry_after=30.0),
             id="rate-limited",
+        ),
+        # The server cannot check devices right now; the sign-in stays.
+        pytest.param(
+            httpx.Response(
+                503,
+                headers={"Retry-After": "30"},
+                json={"ok": False, "error": {"code": "devices_unavailable"}},
+            ),
+            SignIn(error_code=ERROR_DEVICES_UNAVAILABLE, retry_after=30.0),
+            id="devices-unavailable",
         ),
         pytest.param(
             httpx.Response(200, json={"ok": False, "error": {"code": "internal_error"}}),
@@ -384,38 +399,21 @@ def test_a_refused_local_access_token_retries_only_when_the_file_changed(tmp_pat
     assert access.header(LOOPBACK.url) == f"Bearer {renewed}"
 
 
-# -- The window's browser Device ----------------------------------------------------------
-
-
-def test_each_window_sign_in_revokes_the_windows_previous_browser_device(tmp_path: Path) -> None:
-    server = FakeAccessServer()
-    access, store, own = _paired(server, tmp_path)
-    other_browser = server.add_device(kind="browser", name="Firefox", approved_by=own.id)
-
-    first = server.redeem(access.sign_in(REMOTE).ticket_path or "")
-    access.record_window_device(REMOTE)
-    second = server.redeem(access.sign_in(REMOTE).ticket_path or "")
-    access.record_window_device(REMOTE)
-
-    assert set(server.devices) == {own.id, other_browser.id, second.id}
-    assert first.id not in server.devices
-    stored = store.get(REMOTE.origin)
-    assert stored is not None and stored.webview_device_id == second.id
+# -- Forgetting ------------------------------------------------------------------------
 
 
 def test_forgetting_a_sign_in_signs_the_desktop_and_its_window_out(tmp_path: Path) -> None:
     server = FakeAccessServer()
     access, store, _ = _paired(server, tmp_path)
-    window = server.redeem(access.sign_in(REMOTE).ticket_path or "")
-    access.record_window_device(REMOTE)
+    server.redeem(access.sign_in(REMOTE).ticket_path or "")
 
     assert access.forget(REMOTE) is True
     assert access.signed_in(REMOTE) is False
     assert store.get(REMOTE.origin) is None
-    # The server is told in the background.
+    # The server is told in the background; the window's Device goes with the Desktop's.
     deadline = time.monotonic() + 5
     while server.devices and time.monotonic() < deadline:
         time.sleep(0.005)
     assert server.devices == {}
-    assert server.calls("devices.revoke") == [{"id": window.id}]
+    assert [len(server.calls(method)) for method in ("devices.logout", "devices.revoke")] == [1, 0]
     assert access.forget(REMOTE) is False

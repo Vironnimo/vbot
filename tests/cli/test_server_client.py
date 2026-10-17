@@ -156,3 +156,38 @@ def test_websocket_target_carries_the_credential_and_verifies_wss(
     assert options["additional_headers"] == {"Authorization": f"Bearer {expected}"}
     assert options["proxy"] is None
     assert isinstance(options.get("ssl"), ssl.SSLContext) is verified
+
+
+def test_a_named_sign_in_source_replaces_the_cli_sign_ins_and_is_read_again_after_a_401(
+    tmp_path: Path,
+) -> None:
+    remote = resolve_instance(data_dir=tmp_path / "data", url="https://vbot.example.com")
+    loopback = make_instance(tmp_path)
+    local = create_local_access_token(loopback.data_dir, loopback.port).value
+    _sign_in(remote.url)
+    # The Desktop signs in again while the tray's client still holds the old token.
+    desktop_tokens = ["vbt_dev2_" + "a" * 43, "vbt_dev2_" + "b" * 43]
+    asked: list[str] = []
+
+    def desktop_sign_in(origin: str) -> str | None:
+        asked.append(origin)
+        return desktop_tokens[min(len(asked), 2) - 1]
+
+    seen: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("Authorization"))
+        if request.headers.get("Authorization") == f"Bearer {desktop_tokens[1]}":
+            return httpx.Response(200, json={"ok": True, "result": {}})
+        return httpx.Response(401, json={"ok": False, "error": {"code": "auth_required"}})
+
+    options = http_options(remote, device_sign_in=desktop_sign_in)
+    with httpx.Client(transport=httpx.MockTransport(handler), **options) as client:
+        answered = client.post(f"{remote.url}/api/rpc", json={})
+    _url, stream = websocket_target(loopback, "/ws", device_sign_in=desktop_sign_in)
+
+    assert answered.status_code == 200
+    assert seen == [f"Bearer {desktop_tokens[0]}", f"Bearer {desktop_tokens[1]}"]
+    assert asked == [remote.url, remote.url]
+    # This computer's own server still gets its local access token.
+    assert stream["additional_headers"] == {"Authorization": f"Bearer {local}"}

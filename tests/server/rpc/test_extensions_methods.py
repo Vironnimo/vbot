@@ -426,6 +426,8 @@ async def test_set_secret_saves_or_clears_the_credential_without_logging_it(
 
     assert result == {"name": "homeassistant", "key": "token", "set": is_set}
     assert state.runtime.storage.credentials == ({"HASS_TOKEN": value} if value else {})
+    # A change reaches the Secret Store's part of the data store status.
+    assert resource_changes(state, "data_store") == [{"kind": "data_store"}] * len(logged)
     # Live credential resolution sees the change without a restart.
     assert listed["extensions"][0]["settings_schema"][1]["set"] is is_set
     messages = [record.getMessage() for record in caplog.records]

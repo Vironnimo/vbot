@@ -21,7 +21,13 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 from cli._server_target import ServerInstance
-from cli.server_client import WEBSOCKET_REFUSALS, access_refusal, http_options, websocket_target
+from cli.server_client import (
+    DEVICES_UNAVAILABLE,
+    WEBSOCKET_REFUSALS,
+    access_refusal,
+    http_options,
+    websocket_target,
+)
 
 type JsonObject = dict[str, Any]
 
@@ -108,7 +114,7 @@ class TerminalClient:
             if body.get("ok") is False and isinstance(error, dict):
                 message, code = error.get("message"), error.get("code")
                 if isinstance(message, str) and isinstance(code, str):
-                    if response.status_code in _REFUSAL_STATUSES:
+                    if response.status_code in _REFUSAL_STATUSES or code == DEVICES_UNAVAILABLE:
                         raise self.refusal(code)
                     raise ClientError(message, code=code)
             if (
@@ -166,7 +172,7 @@ class TerminalClient:
             raise ClientError("Timeline connection lost; the Run can still be working.") from exc
 
     async def events(self) -> AsyncIterator[JsonObject]:
-        """Server events; an access refusal (close 4401/4403) raises its ``ClientError``."""
+        """Server events; an access refusal (close 4401/4403/4503) raises its ``ClientError``."""
 
         query = urlencode({"accessor": "tui", "connection_id": self.connection_id})
         url, options = websocket_target(self.target, f"/ws?{query}")

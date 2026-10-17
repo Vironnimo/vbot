@@ -410,6 +410,11 @@ def _access_command(args: argparse.Namespace, install: Installation) -> int:
             lines=_access_lines(install.server_host, current),
         )
         return 0
+    from cli.device_management import run_refusal
+
+    refusal = run_refusal("application access set", "change the access mode yourself in a terminal")
+    if refusal is not None:
+        raise ApplicationError(refusal)
     selected = access_from_arguments(args.mode, args)
     keeps_transport = selected.mode == current.mode and selected.direct_tls == current.direct_tls
     host = args.bind_host or (

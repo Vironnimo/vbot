@@ -13,17 +13,21 @@ Which credential a request carries:
   one. Without a token file, the stored Device sign-in of the origin is used
   (a tunnel to another computer's server).
 - Any other target gets the stored Device sign-in of its exact origin
-  (``cli/sign_ins.py``), which ``vbot devices pair`` creates.
+  (``cli/sign_ins.py``), which ``vbot devices pair`` creates. A caller can name
+  another place that keeps Device sign-ins (``device_sign_in``): the tray of a
+  Desktop Client signs in with the Desktop's own Device.
 - A request to another origin never carries either; clients built here do not
   follow redirects.
 
 In ``local`` and ``lan`` a server ignores the credential, so sending it is
-harmless. Tokens are never logged or printed.
+harmless. A server whose device store is unavailable answers 503
+``devices_unavailable`` (WebSocket 4503): the credential stays as it is.
+Tokens are never logged or printed.
 """
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from typing import Any, Literal, override
 from urllib.parse import urlsplit
@@ -38,8 +42,12 @@ from core.utils.tls import ssl_context_for
 #: The access refusals a server sends before routing (``access.md``).
 AUTH_REQUIRED = "auth_required"
 ACCESS_DENIED = "access_denied"
+DEVICES_UNAVAILABLE = "devices_unavailable"
 #: WebSocket close codes of the same refusals.
-WEBSOCKET_REFUSALS = {4401: AUTH_REQUIRED, 4403: ACCESS_DENIED}
+WEBSOCKET_REFUSALS = {4401: AUTH_REQUIRED, 4403: ACCESS_DENIED, 4503: DEVICES_UNAVAILABLE}
+
+#: Looks up the Device token kept for a server origin; ``None`` without one.
+DeviceSignIn = Callable[[str], str | None]
 
 
 @dataclass(frozen=True)
@@ -58,8 +66,14 @@ class Credential:
         return f"Bearer {self.token}"
 
 
-def credential_for(instance: ServerInstance) -> Credential | None:
-    """The credential requests to ``instance`` carry now (see the module docstring)."""
+def credential_for(
+    instance: ServerInstance, *, device_sign_in: DeviceSignIn | None = None
+) -> Credential | None:
+    """The credential requests to ``instance`` carry now (see the module docstring).
+
+    ``device_sign_in`` replaces the CLI's own sign-ins as the source of the
+    Device token; the local access token of a loopback target still comes first.
+    """
 
     if is_loopback_target(instance):
         token = read_local_access_token(instance.data_dir, instance.port)
@@ -68,32 +82,45 @@ def credential_for(instance: ServerInstance) -> Credential | None:
     origin = server_origin(instance.url)
     if origin is None:
         return None
+    token = (device_sign_in or cli_sign_in)(origin)
+    return None if token is None else Credential("device", token)
+
+
+def cli_sign_in(origin: str) -> str | None:
+    """The Device token ``vbot devices pair`` stored for ``origin``."""
+
     try:
         sign_in = SignInStore().sign_in(origin)
     except SignInStoreError:
         # An unreadable file signs in nothing; pairing reports the file itself.
         return None
-    return None if sign_in is None else Credential("device", sign_in.token)
+    return None if sign_in is None else sign_in.token
 
 
-def authorization_headers(instance: ServerInstance) -> dict[str, str]:
+def authorization_headers(
+    instance: ServerInstance, *, device_sign_in: DeviceSignIn | None = None
+) -> dict[str, str]:
     """The ``Authorization`` header for one connection to ``instance``, read fresh."""
 
-    credential = credential_for(instance)
+    credential = credential_for(instance, device_sign_in=device_sign_in)
     return {} if credential is None else {"Authorization": credential.header}
 
 
 class ServerAuth(httpx.Auth):
-    """Attach the target's credential; after a 401, re-read the local token once.
+    """Attach the target's credential; after a 401, look it up again once.
 
     The credential is looked up at the first request and kept for later ones on
-    the same client. A 401 from a loopback target re-reads the local access token
-    and repeats the request once when the token changed (the server restarted).
-    Requests to any other origin than the target's go out without a credential.
+    the same client. A 401 looks it up again and repeats the request once when
+    it changed: a restarted server wrote a new local access token, or the
+    accessor signed in again meanwhile. Requests to any other origin than the
+    target's go out without a credential.
     """
 
-    def __init__(self, instance: ServerInstance) -> None:
+    def __init__(
+        self, instance: ServerInstance, *, device_sign_in: DeviceSignIn | None = None
+    ) -> None:
         self._instance = instance
+        self._device_sign_in = device_sign_in
         self._origin = server_origin(instance.url)
         self._credential: Credential | None = None
         self._looked_up = False
@@ -104,32 +131,30 @@ class ServerAuth(httpx.Auth):
             yield request
             return
         if not self._looked_up:
-            self._credential, self._looked_up = credential_for(self._instance), True
+            self._credential, self._looked_up = self._lookup(), True
         sent = self._credential
         if sent is not None:
             request.headers["Authorization"] = sent.header
         response = yield request
         if response.status_code != httpx.codes.UNAUTHORIZED:
             return
-        fresh = self._fresh_local_token(sent)
-        if fresh is None:
+        fresh = self._lookup()
+        if fresh is None or fresh == sent:
             return
         self._credential = fresh
         request.headers["Authorization"] = fresh.header
         yield request
 
-    def _fresh_local_token(self, sent: Credential | None) -> Credential | None:
-        """The local token of a loopback target when it differs from the one sent."""
-
-        if not is_loopback_target(self._instance):
-            return None
-        token = read_local_access_token(self._instance.data_dir, self._instance.port)
-        if token is None or (sent is not None and sent.token == token):
-            return None
-        return Credential("local", token)
+    def _lookup(self) -> Credential | None:
+        return credential_for(self._instance, device_sign_in=self._device_sign_in)
 
 
-def http_options(instance: ServerInstance, *, sign_in: bool = True) -> dict[str, Any]:
+def http_options(
+    instance: ServerInstance,
+    *,
+    sign_in: bool = True,
+    device_sign_in: DeviceSignIn | None = None,
+) -> dict[str, Any]:
     """Keyword arguments for an ``httpx`` client or request to ``instance``.
 
     Ambient proxy settings and ``.netrc`` are ignored: RPC bodies carry secrets.
@@ -140,11 +165,13 @@ def http_options(instance: ServerInstance, *, sign_in: bool = True) -> dict[str,
 
     options: dict[str, Any] = {"trust_env": False, "verify": ssl_context_for(instance.url)}
     if sign_in:
-        options["auth"] = ServerAuth(instance)
+        options["auth"] = ServerAuth(instance, device_sign_in=device_sign_in)
     return options
 
 
-def websocket_target(instance: ServerInstance, path: str) -> tuple[str, dict[str, Any]]:
+def websocket_target(
+    instance: ServerInstance, path: str, *, device_sign_in: DeviceSignIn | None = None
+) -> tuple[str, dict[str, Any]]:
     """The ``ws(s)://`` URL of a server path and the ``websockets.connect`` options it needs.
 
     The options carry the credential, read fresh for this connection, TLS
@@ -154,20 +181,30 @@ def websocket_target(instance: ServerInstance, path: str) -> tuple[str, dict[str
     scheme, _, rest = instance.url.partition("://")
     secure = scheme == "https"
     url = f"{'wss' if secure else 'ws'}://{rest}{path}"
-    options: dict[str, Any] = {"proxy": None, "additional_headers": authorization_headers(instance)}
+    options: dict[str, Any] = {
+        "proxy": None,
+        "additional_headers": authorization_headers(instance, device_sign_in=device_sign_in),
+    }
     if secure:
         options["ssl"] = ssl_context_for(instance.url)
     return url, options
 
 
 def access_refusal(instance: ServerInstance, code: str, *, command: bool = True) -> str | None:
-    """What an ``auth_required`` or ``access_denied`` refusal means for this target, and the fix.
+    """What an access refusal means for this target, and the fix.
 
+    Codes: ``auth_required``, ``access_denied`` and ``devices_unavailable``.
     ``command=False`` leaves out the sign-in command, for output that prints it
     as ``Next:``. ``None`` for any other code.
     """
 
     origin = server_origin(instance.url) or instance.url
+    if code == DEVICES_UNAVAILABLE:
+        return (
+            f"The server at {origin} cannot check signed-in devices right now: its device "
+            "store is unavailable. This computer's sign-in stays; the server log on the "
+            "server's computer names the cause."
+        )
     pair = f" Sign in with: vbot devices pair {origin}" if command else ""
     if code == AUTH_REQUIRED:
         if is_loopback_target(instance):

@@ -20,6 +20,21 @@ _RUN_AGENT_ENV = "VBOT_RUN_AGENT_ID"
 _KIND_LABELS = {"browser": "browser", "desktop": "Desktop app", "cli": "CLI"}
 
 
+def run_refusal(action: str, instead: str) -> str | None:
+    """Why ``action`` refuses to run inside an Agent's Run; ``None`` outside one.
+
+    Actions that hand out access (approving a device, minting a sign-in link,
+    changing the access mode) come from the person, never from an Agent that
+    some text asked to. The Run's shell environment (``VBOT_RUN_AGENT_ID``) is
+    the only signal. It keeps a cooperative Agent from doing so by accident; it
+    is no security boundary, since an Agent runs as the same user as the host
+    and could unset it or read the local access token itself.
+    """
+    if not os.environ.get(_RUN_AGENT_ENV, "").strip():
+        return None
+    return f"{action} does not run inside an Agent's Run; {instead}"
+
+
 def devices_list(instance: ServerInstance) -> CommandResult:
     payload = _rpc_call(instance, "devices.list", {})
     if not payload.ok:
@@ -41,16 +56,11 @@ def devices_approve(
     confirm: Callable[[str], bool] | None = None,
 ) -> CommandResult:
     """Approve the device waiting with ``code`` after showing what it is."""
-    if os.environ.get(_RUN_AGENT_ENV):
-        # An Agent must not hand out access because some text asked it to.
-        return CommandResult(
-            ok=False,
-            message=(
-                "devices approve does not run inside an Agent's Run; approve devices yourself "
-                "in a terminal or in the WebUI"
-            ),
-            instance=instance,
-        )
+    refusal = run_refusal(
+        "devices approve", "approve devices yourself in a terminal or in the WebUI"
+    )
+    if refusal is not None:
+        return CommandResult(ok=False, message=refusal, instance=instance)
     pending = _rpc_call(instance, "devices.pending", {"code": code})
     if not pending.ok:
         return pending.to_command_result()

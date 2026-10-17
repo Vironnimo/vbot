@@ -152,6 +152,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
         "data_store",
         "extensions",
         "archive",
+        "devices",
     } == ALLOWED_RESOURCE_KINDS
 
 

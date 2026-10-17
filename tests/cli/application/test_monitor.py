@@ -202,6 +202,7 @@ def test_monitor_classifies_a_target_without_an_event_stream(
         pytest.param(4401, True, "connected", 2, id="new-local-token"),
         pytest.param(4401, False, "denied", 2, id="token-refused-twice"),
         pytest.param(4403, False, "denied", 1, id="access-mode-refuses"),
+        pytest.param(4503, False, "denied", 1, id="device-store-unavailable"),
     ],
 )
 def test_monitor_signs_in_and_does_not_hammer_a_refusing_server(

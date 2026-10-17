@@ -19,6 +19,8 @@ from tests.server.rpc_test_support import resource_changes, rpc_error, rpc_resul
 
 JsonObject = dict[str, Any]
 _CHANNELS_CHANGED = {"kind": "channels"}
+#: A credential write changes the Secret Store's part of the data store status.
+_DATA_STORE_CHANGED = {"kind": "data_store"}
 _TOKEN_KEY = "TELEGRAM_BOT_TOKEN_TG_ASSISTANT"
 _MANAGED_KEY = "VBOT_CHANNEL_TOKEN__74672D6D61696E"  # managed key of the id "tg-main"
 _TELEGRAM = {
@@ -198,6 +200,7 @@ async def test_channel_create_with_managed_token_stores_secret_without_returning
     assert state.runtime.live_credentials == {_MANAGED_KEY: "super-secret-token"}
     [created] = state.runtime.channel_service.create_channel.call_args.args
     assert created.token_env_var == _MANAGED_KEY
+    assert resource_changes(state) == [_CHANNELS_CHANGED, _DATA_STORE_CHANGED]
 
 
 @pytest.mark.asyncio
@@ -365,7 +368,7 @@ async def test_channel_set_token_saves_the_credential_and_restarts_only_when_it_
         [] if process_override else [call("tg-assistant")]
     )
     state.runtime.reload_channel_tool.assert_called_once_with()
-    assert resource_changes(state) == [_CHANNELS_CHANGED]
+    assert resource_changes(state) == [_CHANNELS_CHANGED, _DATA_STORE_CHANGED]
     assert all("rotated-secret" not in record.getMessage() for record in caplog.records)
 
 

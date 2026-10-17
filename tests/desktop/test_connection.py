@@ -36,7 +36,12 @@ from desktop.main import (
     SessionLink,
 )
 from desktop.server_address import ServerAddress
-from tests.desktop.access_test_support import FakeAccessServer, build_access, token_store
+from tests.desktop.access_test_support import (
+    WINDOW_NAME,
+    FakeAccessServer,
+    build_access,
+    token_store,
+)
 
 _TEST_DESKTOP_SESSION_ID = "desktop-test-session"
 PI_URL = f"http://pi.lan:9000/?accessor=desktop&desktop_session={_TEST_DESKTOP_SESSION_ID}"
@@ -756,10 +761,9 @@ def test_first_run_auto_connect_shows_the_connection_screen_without_an_error(
 
 CLOUD = ServerAddress("https", "vbot.example.com", 443)
 CLOUD_HOST = CLOUD.bridge_host
-CLOUD_APP_URL = (
-    f"https://vbot.example.com/?accessor=desktop&desktop_session={_TEST_DESKTOP_SESSION_ID}"
-)
-TICKET_URL = re.compile(r"https://vbot\.example\.com/auth/ticket/[A-Za-z0-9_-]+")
+CLOUD_APP_PATH = f"/?accessor=desktop&desktop_session={_TEST_DESKTOP_SESSION_ID}"
+CLOUD_APP_URL = f"https://vbot.example.com{CLOUD_APP_PATH}"
+TICKET_URL = re.compile(r"https://vbot\.example\.com/auth/ticket/[A-Za-z0-9_-]+(#.*)?")
 
 
 class Clock:
@@ -795,12 +799,20 @@ class SignInRig:
         device = self.server.add_device()
         self.store.save_device(CLOUD.origin, device.token, device.id)
 
-    def ticket_redirected(self) -> None:
-        """The window redeemed the ticket it was sent to; the server redirected to ``/``."""
+    def ticket_redirected(self, landing: str | None = None) -> None:
+        """The window redeemed the ticket it was sent to and followed the redirect.
+
+        The server redirects to the ticket's ``next`` (or to ``landing``), and
+        the fragment of the ticket URL stays with the redirect.
+        """
         url = self.window.loaded_urls[-1]
         assert TICKET_URL.fullmatch(url)
-        self.server.redeem(url.removeprefix("https://vbot.example.com"))
-        self.window.current_url = "https://vbot.example.com/"
+        path, _, fragment = url.removeprefix("https://vbot.example.com").partition("#")
+        self.server.redeem(path)
+        redirect = self.server.redirects[-1] if landing is None else landing
+        self.window.current_url = f"https://vbot.example.com{redirect}" + (
+            f"#{fragment}" if fragment else ""
+        )
         self.controller.page_loaded()
 
     def pairing_code(self) -> str:
@@ -846,15 +858,32 @@ def test_a_launch_connect_signs_the_window_in_with_the_stored_token(rig: SignInR
 
     rig.ticket_redirected()
 
-    # Signed in, the window loads the WebUI with the Desktop's parameters.
-    assert rig.window.loaded_urls == [ticket_url, CLOUD_APP_URL]
-    [window_device] = [device for device in rig.server.devices.values() if device.kind == "browser"]
-    _eventually(lambda: getattr(rig.store.get(CLOUD.origin), "webview_device_id", None) is not None)
-    stored_sign_in = rig.store.get(CLOUD.origin)
-    assert stored_sign_in is not None and stored_sign_in.webview_device_id == window_device.id
+    # The ticket itself lands the window on the WebUI with the Desktop's parameters.
+    assert rig.server.calls("auth.login_ticket") == [{"name": WINDOW_NAME, "next": CLOUD_APP_PATH}]
+    assert rig.window.current_url == CLOUD_APP_URL
+    assert rig.window.loaded_urls == [ticket_url]
     # Later pages are the WebUI's own business.
     rig.controller.page_loaded()
-    assert len(rig.window.loaded_urls) == 2
+    assert rig.window.loaded_urls == [ticket_url]
+
+
+@pytest.mark.parametrize("server_lands", [True, False], ids=["on-the-page", "elsewhere"])
+def test_a_signed_in_window_opens_the_session_and_place_it_was_asked_for(
+    rig: SignInRig, server_lands: bool
+) -> None:
+    rig.pair_earlier()
+    link = SessionLink(agent="coder@site", session="ses_1")
+    page = f"{CLOUD_APP_PATH}&open_agent=coder%40site&open_session=ses_1"
+
+    rig.controller.launch_connect(CLOUD_HOST, None, open_session=link, location="#settings")
+    [ticket_url] = rig.window.loaded_urls
+    rig.ticket_redirected(None if server_lands else "/")
+
+    assert ticket_url.endswith("#settings")
+    assert rig.server.calls("auth.login_ticket") == [{"name": WINDOW_NAME, "next": page}]
+    # A window the server sent elsewhere opens the page itself.
+    expected = [ticket_url] if server_lands else [ticket_url, f"{CLOUD.url[:-1]}{page}#settings"]
+    assert rig.window.loaded_urls == expected
 
 
 def test_a_connect_the_page_starts_never_hands_the_ticket_to_the_page(rig: SignInRig) -> None:
@@ -874,7 +903,8 @@ def test_a_connect_the_page_starts_never_hands_the_ticket_to_the_page(rig: SignI
     rig.controller.page_loaded()
     assert len(rig.window.loaded_urls) == 1
     rig.ticket_redirected()
-    assert rig.window.loaded_urls[-1] == CLOUD_APP_URL
+    assert rig.window.current_url == CLOUD_APP_URL
+    assert len(rig.window.loaded_urls) == 1
 
 
 def test_a_sign_in_that_does_not_land_in_time_is_dropped(rig: SignInRig) -> None:
@@ -954,7 +984,7 @@ def test_a_launch_connect_without_a_sign_in_pairs_and_connects_once_approved(
     [ticket_url] = rig.window.loaded_urls
     assert TICKET_URL.fullmatch(ticket_url)
     rig.ticket_redirected()
-    assert rig.window.loaded_urls[-1] == CLOUD_APP_URL
+    assert rig.window.current_url == CLOUD_APP_URL
 
 
 @pytest.mark.parametrize(
@@ -1023,7 +1053,7 @@ def test_a_lost_sign_in_pairs_the_window_again_once(
     with caplog.at_level(logging.INFO, logger="vbot.desktop.connection"):
         # A native request (Voice, dictation) is refused: the server revoked this Desktop.
         assert rig.access.rejected(CLOUD.url, rig.access.header(CLOUD.url)) is False
-        rig.window.wait_for_loads(3)
+        rig.window.wait_for_loads(2)
         # Further refusals do not connect the window again.
         rig.access.rejected(CLOUD.url, None)
     rig.controller.close()
