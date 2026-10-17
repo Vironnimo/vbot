@@ -19,7 +19,7 @@ vbot config raw                                   # diagnostic-only internal set
 - `unset` is not the same as setting `null`: `unset` removes the configured override and restores the default/inherited value, while `null` is an explicit value accepted only by nullable paths. `describe` reports whether a path is nullable and unsettable.
 - `patch` is the right command when fields must change together. Every operation is validated first; an invalid value, unknown path, duplicate path, or parent/child overlap persists nothing. A successful mutation reports each active value, any pending next-start value, whether the setting applies live or on restart, and an aggregate `restart_required` result.
 - `effective` includes normalized defaults and active runtime values. `raw` exposes the internal persistence shape only for diagnosis; do not derive paths from it and do not edit `settings.json` when a public command can express the change. After an unavoidable manual edit, run `vbot doctor settings` (or `vbot doctor config` for every JSON document in the data directory) — see `server.md`.
-- Secrets are not Settings paths. Use `provider key set`, `extensions set <name> <field> --stdin`, or the Channel token commands so credentials never enter `settings.json` or normal command output.
+- Secrets are not Settings paths. Use `provider key set`, `extensions set <name> <field> --stdin`, the Channel token commands, or `data-store secrets set <NAME>` for any other named credential, so credentials never enter `settings.json` or normal command output.
 
 Switch `web_search` to SearXNG in one atomic live change:
 
@@ -75,8 +75,8 @@ vbot extensions enable|disable <name>
 
 Extension settings and enable/disable changes apply live. Read commands only inspect state:
 
-- `set` routes by the field's declared type: a secret field is stored in the data-dir `.env` under the key the extension declares; any other field is type-validated and written to the extension's live config. `<field>` is the schema field key (e.g. `token`), not an env-variable name — inspect with `vbot extensions show <name>` first.
-- For secrets, prefer `--stdin` to keep the value out of shell history, and never echo it back. An empty value clears a secret.
+- `set` routes by the field's declared type: a secret field is stored in the data directory's Secret Store under the credential name the extension declares; any other field is type-validated and written to the extension's live config. `<field>` is the schema field key (e.g. `token`), not an env-variable name — inspect with `vbot extensions show <name>` first.
+- For secrets, use `--stdin`, never the `<value>` argument, and never echo the value back. An empty value clears a secret.
 - `enable` rebuilds the extension layer so freshly-loaded code takes effect at once (a failed activation or failed activation check exits nonzero while preserving the saved enabled setting); `disable` deactivates the extension immediately.
 - For managed operations, run `vbot extensions operations <name>`, then `vbot extensions run <name> <operation> --help`. Put vBot target/output options before the operation; arguments after it belong to the Extension. These are Extension-owned actions with their own completion and job states; MCP has a dedicated reference.
 - `reload` reports each failed Extension and exits nonzero if any failed. It rebuilds the whole extension layer from disk — use it after editing extension code or adding/removing extension directories.

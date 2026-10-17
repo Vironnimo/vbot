@@ -4,7 +4,7 @@ All installation commands, application add-ons, processes, working directories, 
 
 ## Configure and enable
 
-All abbreviated commands in this reference start with `vbot extensions run mcp`; for example, `status <id>` means `vbot extensions run mcp status <id>`. Repeat the same host/port target options.
+All abbreviated commands in this reference start with `vbot extensions run mcp`; for example, `status <id>` means `vbot extensions run mcp status <id>`. Repeat the same target options (`--host`/`--port` or `--url`).
 
 Discover the installed interface with `vbot extensions operations mcp` and `vbot extensions run mcp <operation> --help`. Inspect `list` and `status` before changing an existing connection. Enable the Extension with `vbot extensions enable mcp` if needed.
 
