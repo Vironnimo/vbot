@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from core.secrets._crypto import is_data_key, new_data_key, new_identifier
+from core.utils import dpapi
 from core.utils.atomic import atomic_write_text
 from core.utils.file_status import exists_strict
 
@@ -126,13 +127,13 @@ def _dpapi_entropy(store_id: str, key_id: str) -> bytes:
 
 
 def _dpapi_protect(data: bytes, entropy: bytes) -> bytes:
-    if sys.platform != "win32":
+    if not dpapi.available():
         raise KeyUnavailableError("Windows DPAPI is not available on this system")
     return _dpapi_call(data, entropy, protect=True)
 
 
 def _dpapi_unprotect(data: bytes, entropy: bytes) -> bytes:
-    if sys.platform != "win32":
+    if not dpapi.available():
         raise KeyUnavailableError(
             "the key is protected by Windows DPAPI, which is not available on this system"
         )
@@ -140,62 +141,14 @@ def _dpapi_unprotect(data: bytes, entropy: bytes) -> bytes:
 
 
 def _dpapi_call(data: bytes, entropy: bytes, *, protect: bool) -> bytes:
-    import ctypes
-    from ctypes import wintypes
-    from typing import cast
-
-    # Windows-only ctypes members, typed loosely so other platforms type-check.
-    native = cast(Any, ctypes)
-
-    class DataBlob(ctypes.Structure):
-        _fields_ = (
-            ("cbData", wintypes.DWORD),
-            ("pbData", ctypes.POINTER(ctypes.c_char)),
-        )
-
-    crypt32 = native.WinDLL("crypt32", use_last_error=True)
-    kernel32 = native.WinDLL("kernel32", use_last_error=True)
-    function = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
-    function.argtypes = [
-        ctypes.POINTER(DataBlob),
-        ctypes.c_void_p,
-        ctypes.POINTER(DataBlob),
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        wintypes.DWORD,
-        ctypes.POINTER(DataBlob),
-    ]
-    function.restype = wintypes.BOOL
-    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
-    kernel32.LocalFree.restype = ctypes.c_void_p
-
-    input_buffer = ctypes.create_string_buffer(data, len(data))
-    entropy_buffer = ctypes.create_string_buffer(entropy, len(entropy))
-    input_blob = DataBlob(len(data), ctypes.cast(input_buffer, ctypes.POINTER(ctypes.c_char)))
-    entropy_blob = DataBlob(
-        len(entropy), ctypes.cast(entropy_buffer, ctypes.POINTER(ctypes.c_char))
-    )
-    output_blob = DataBlob()
-    ui_forbidden = 0x1  # CRYPTPROTECT_UI_FORBIDDEN: never prompt, fail instead.
-    if not function(
-        ctypes.byref(input_blob),
-        None,
-        ctypes.byref(entropy_blob),
-        None,
-        None,
-        ui_forbidden,
-        ctypes.byref(output_blob),
-    ):
-        code = native.get_last_error()
+    try:
+        return dpapi.protect(data, entropy) if protect else dpapi.unprotect(data, entropy)
+    except dpapi.DpapiError as exc:
         action = "wrap" if protect else "unwrap"
         raise KeyUnavailableError(
-            f"Windows DPAPI could not {action} the key (error {code}); a key wrapped for "
+            f"Windows DPAPI could not {action} the key (error {exc.code}); a key wrapped for "
             "another Windows account or computer cannot be opened here"
-        )
-    try:
-        return ctypes.string_at(output_blob.pbData, output_blob.cbData)
-    finally:
-        kernel32.LocalFree(ctypes.cast(output_blob.pbData, ctypes.c_void_p))
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
