@@ -112,6 +112,11 @@ def _resolve_project_root() -> Path:
 PROJECT_ROOT = _resolve_project_root()
 
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
+# Data directories live beside the repository, not in it: an Agent Workspace
+# inside the repository would inherit its Git repository and ignore rules. The
+# sibling keeps them out of the user profile, where antivirus scanning slows
+# every database and log write. ``dev`` is the primary checkout's instance.
+DATA_ROOT = PROJECT_ROOT.parent / f"{PROJECT_ROOT.name}-data"
 # Relative to the running script's checkout (see ``_script_checkout_root``).
 FAKE_PROVIDER_SETTINGS_RELATIVE_PATH = Path("scripts") / "fake-provider-settings.json"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -173,8 +178,23 @@ def validate_worktree_name(name: str) -> str | None:
 
 
 def _expected_data_dir(name: str) -> Path:
-    """Return the managed data-dir path for a worktree name."""
-    return Path.home() / f".vbot-{name}"
+    """Return the managed data-dir path for a new worktree."""
+    return DATA_ROOT / name
+
+
+def _managed_data_dir(name: str, marker_data: dict[str, object] | None) -> Path:
+    """Return the data dir a worktree was created with.
+
+    Worktrees created before ``DATA_ROOT`` keep ``~/.vbot-<name>``; any other
+    recorded path gets the current location, which ownership checks then reject.
+    """
+    legacy = Path.home() / f".vbot-{name}"
+    raw_data_dir = marker_data.get(DATA_DIR_KEY) if marker_data is not None else None
+    if isinstance(raw_data_dir, str) and os.path.normcase(
+        os.path.abspath(Path(raw_data_dir).expanduser())
+    ) == os.path.normcase(os.path.abspath(legacy)):
+        return legacy
+    return _expected_data_dir(name)
 
 
 def initialize_data_dir(data_dir: Path) -> None:
@@ -699,17 +719,17 @@ def cmd_create(args: argparse.Namespace) -> int:
         print_error(stderr or "git worktree add failed")
         return 1
 
-    data_dir_tilde = f"~/.vbot-{name}"
     marker_data: dict[str, object] | None = None
     try:
         with _port_allocation_lock():
             if os.path.lexists(data_dir):
                 raise FileExistsError(f"data directory already exists: {data_dir}")
             port = find_free_port(WORKTREES_DIR)
+            data_dir.parent.mkdir(parents=True, exist_ok=True)
             initialize_data_dir(data_dir)
             token = uuid4().hex
             marker_data = {
-                DATA_DIR_KEY: data_dir_tilde,
+                DATA_DIR_KEY: str(data_dir),
                 MANAGED_BRANCH_KEY: managed_branch,
                 DATA_OWNER_KEY: token,
                 SERVER_PORT_KEY: port,
@@ -774,7 +794,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         branch=branch,
         port=port,
         **{"provider-port": port + FAKE_PROVIDER_PORT_OFFSET},
-        **{"data-dir": data_dir_tilde},
+        **{"data-dir": data_dir},
         path=worktree_path,
         url=f"http://localhost:{port}",
     )
@@ -823,7 +843,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
     marker = worktree_path / WORKTREE_FILE_NAME
     marker_data = _read_worktree_marker(marker)
-    data_dir = _expected_data_dir(name)
+    data_dir = _managed_data_dir(name, marker_data)
 
     data_owned = _owns_data_dir(worktree_path, data_dir, marker_data)
     if data_owned:

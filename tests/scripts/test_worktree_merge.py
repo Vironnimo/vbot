@@ -160,7 +160,7 @@ def test_cmd_merge_merges_removes_worktree_and_branch(real_repo, monkeypatch, ca
     _commit_file(real_repo, "shared.txt", "base\n", "base file")
     worktree_a = _create_task_worktree(module, real_repo, "task-a")
     _commit_file(worktree_a, "feature-a.txt", "a\n", "add feature a")
-    data_dir = real_repo.parent / "home" / ".vbot-task-a"
+    data_dir = real_repo.parent / "data" / "task-a"
     data_dir.mkdir(parents=True)
     (data_dir / "sentinel.txt").write_text("keep if unowned", encoding="utf-8")
     if owned:

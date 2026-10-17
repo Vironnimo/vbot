@@ -66,11 +66,12 @@ def test_cmd_delete_preserves_both_data_dirs_when_marker_is_tampered(tmp_path, m
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(module, "DATA_ROOT", tmp_path / "data")
 
     name = "safe-delete"
     worktree_path = module.WORKTREES_DIR / name
     _make_checkout(worktree_path)
-    expected_data_dir = tmp_path / "home" / f".vbot-{name}"
+    expected_data_dir = tmp_path / "data" / name
     expected_data_dir.mkdir(parents=True)
     malicious_target = tmp_path / "malicious-target"
     malicious_target.mkdir()
@@ -101,27 +102,33 @@ def test_cmd_delete_preserves_both_data_dirs_when_marker_is_tampered(tmp_path, m
 
 
 @pytest.mark.parametrize(
-    ("settings", "marker", "port"),
+    ("settings", "marker", "port", "data_root"),
     [
-        pytest.param({"server_port": 8422}, {"server_port": 8423}, "8422", id="settings-port"),
-        pytest.param({}, {"server_port": 8422}, "8422", id="port-recorded-at-creation"),
-        pytest.param(None, {"server_port": 8422}, "8422", id="missing-settings"),
-        pytest.param({}, {}, None, id="unknown-port-stops-nothing"),
-        pytest.param(None, {}, None, id="missing-settings-and-port"),
+        pytest.param(
+            {"server_port": 8422}, {"server_port": 8423}, "8422", "data", id="settings-port"
+        ),
+        pytest.param({}, {"server_port": 8422}, "8422", "data", id="port-recorded-at-creation"),
+        pytest.param(None, {"server_port": 8422}, "8422", "data", id="missing-settings"),
+        pytest.param({}, {}, None, "data", id="unknown-port-stops-nothing"),
+        pytest.param(None, {}, None, "data", id="missing-settings-and-port"),
+        # Worktrees created before the sibling data root keep ~/.vbot-<name>.
+        pytest.param({"server_port": 8422}, {}, "8422", "home", id="legacy-home-data-dir"),
     ],
 )
 def test_cmd_delete_stops_managed_services_before_removing_worktree(
-    tmp_path, monkeypatch, settings, marker, port
+    tmp_path, monkeypatch, settings, marker, port, data_root
 ):
     module = _load_worktree_module()
     name = "running-worktree"
     worktree_path = tmp_path / ".worktrees" / name
-    data_dir = tmp_path / "home" / f".vbot-{name}"
+    data_dir = (
+        tmp_path / "data" / name if data_root == "data" else tmp_path / "home" / f".vbot-{name}"
+    )
     _make_checkout(worktree_path)
     (worktree_path / "scripts").mkdir()
     (worktree_path / "scripts" / "test-env.py").write_text("", encoding="utf-8")
     (worktree_path / module.WORKTREE_FILE_NAME).write_text(
-        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": False, **marker}),
+        json.dumps({"data_dir": str(data_dir), "managed_branch": False, **marker}),
         encoding="utf-8",
     )
     data_dir.mkdir(parents=True)
@@ -131,6 +138,7 @@ def test_cmd_delete_stops_managed_services_before_removing_worktree(
 
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(module, "DATA_ROOT", tmp_path / "data")
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
 
     _record_owned_data(module, worktree_path, data_dir)
@@ -173,7 +181,7 @@ def test_cmd_delete_reports_stop_failure_without_removing_anything(tmp_path, mon
     module = _load_worktree_module()
     name = "unstoppable-worktree"
     worktree_path = tmp_path / ".worktrees" / name
-    data_dir = tmp_path / "home" / f".vbot-{name}"
+    data_dir = tmp_path / "data" / name
     _make_checkout(worktree_path)
     (worktree_path / "scripts").mkdir()
     (worktree_path / "scripts" / "test-env.py").write_text("", encoding="utf-8")
@@ -183,6 +191,7 @@ def test_cmd_delete_reports_stop_failure_without_removing_anything(tmp_path, mon
 
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(module, "DATA_ROOT", tmp_path / "data")
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
 
     _record_owned_data(module, worktree_path, data_dir)
@@ -210,12 +219,13 @@ def test_cmd_delete_reports_data_directory_removal_failure(tmp_path, monkeypatch
     module = _load_worktree_module()
     name = "locked-data"
     worktree_path = tmp_path / ".worktrees" / name
-    data_dir = tmp_path / "home" / f".vbot-{name}"
+    data_dir = tmp_path / "data" / name
     _make_checkout(worktree_path)
     data_dir.mkdir(parents=True)
 
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(module, "DATA_ROOT", tmp_path / "data")
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
     monkeypatch.setattr(module, "_run_command", lambda _command, *, cwd=None: (0, ""))
     monkeypatch.setattr(module, "_remove_directory_tree", lambda _path: "locked")
@@ -233,7 +243,7 @@ def test_cmd_delete_preserves_unowned_data_without_stopping_services(
     _patch_repo_globals(monkeypatch, module, real_repo)
     name = "unowned"
     worktree_path = _create_task_worktree(module, real_repo, name)
-    data_dir = real_repo.parent / "home" / f".vbot-{name}"
+    data_dir = real_repo.parent / "data" / name
     data_dir.mkdir(parents=True)
     sentinel = data_dir / "settings.json"
     sentinel.write_text('{"server_port": 8421}', encoding="utf-8")
@@ -263,11 +273,11 @@ def test_cmd_delete_preserves_redirected_data_root_even_with_matching_records(
     _patch_repo_globals(monkeypatch, module, real_repo)
     name = "redirected"
     worktree_path = _create_task_worktree(module, real_repo, name)
-    data_dir = real_repo.parent / "home" / f".vbot-{name}"
+    data_dir = real_repo.parent / "data" / name
     data_dir.mkdir(parents=True)
     _record_owned_data(module, worktree_path, data_dir)
     (data_dir / "sentinel.txt").write_text("keep", encoding="utf-8")
-    foreign_root = data_dir.with_name(".vbot-dev")
+    foreign_root = data_dir.with_name("dev")
     data_dir.rename(foreign_root)
     if os.name == "nt":
         subprocess.run(
@@ -293,7 +303,7 @@ def test_cmd_delete_rechecks_ownership_after_git_removal(real_repo, monkeypatch,
     _patch_repo_globals(monkeypatch, module, real_repo)
     name = "replaced-root"
     worktree_path = _create_task_worktree(module, real_repo, name)
-    data_dir = real_repo.parent / "home" / f".vbot-{name}"
+    data_dir = real_repo.parent / "data" / name
     data_dir.mkdir(parents=True)
     (data_dir / "settings.json").write_text('{"server_port": 8422}', encoding="utf-8")
     _record_owned_data(module, worktree_path, data_dir)
@@ -346,6 +356,7 @@ def test_cmd_delete_deletes_only_the_branch_a_valid_marker_manages(
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(module, "DATA_ROOT", tmp_path / "data")
     worktree_path = _make_checkout(module.WORKTREES_DIR / "task")
     if marker is not None:
         (worktree_path / module.WORKTREE_FILE_NAME).write_text(marker, encoding="utf-8")
@@ -505,7 +516,8 @@ def test_cmd_delete_hands_a_held_empty_directory_to_the_background_remover(
     worktree_path = module.WORKTREES_DIR / name
     _make_checkout(worktree_path)
     (worktree_path / module.WORKTREE_FILE_NAME).write_text(
-        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": True}), encoding="utf-8"
+        json.dumps({"data_dir": str(module.DATA_ROOT / name), "managed_branch": True}),
+        encoding="utf-8",
     )
 
     commands = []
@@ -613,7 +625,7 @@ def test_cmd_delete_restores_marker_after_failed_remove_for_retry(tmp_path, monk
 
     marker_path = worktree_path / module.WORKTREE_FILE_NAME
     marker_path.write_text(
-        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": True}),
+        json.dumps({"data_dir": str(module.DATA_ROOT / name), "managed_branch": True}),
         encoding="utf-8",
     )
 
@@ -723,7 +735,7 @@ def _strip_to_marker_only(module, worktree_path: Path) -> None:
 
 
 def _seed_leftover_data_dir(repo: Path, name: str, port: int) -> Path:
-    data_dir = repo.parent / "home" / f".vbot-{name}"
+    data_dir = repo.parent / "data" / name
     data_dir.mkdir(parents=True)
     (data_dir / "settings.json").write_text(json.dumps({"server_port": port}), encoding="utf-8")
     return data_dir

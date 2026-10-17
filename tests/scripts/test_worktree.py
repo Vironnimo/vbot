@@ -32,6 +32,7 @@ def _patch_create_environment(monkeypatch, module, tmp_path: Path) -> None:
     monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(module, "DATA_ROOT", tmp_path / "data")
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
@@ -316,7 +317,7 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
     worktrees_dir = tmp_path / ".worktrees"
     worktree_path = worktrees_dir / name
     webui_path = worktree_path / "webui"
-    data_dir = tmp_path / "home" / f".vbot-{name}"
+    data_dir = tmp_path / "data" / name
 
     _patch_create_environment(monkeypatch, module, tmp_path)
 
@@ -369,7 +370,7 @@ def test_cmd_create_holds_port_lock_until_marker_and_settings_are_durable(tmp_pa
     worktrees_dir = tmp_path / ".worktrees"
     worktree_path = worktrees_dir / name
     webui_path = worktree_path / "webui"
-    data_dir = tmp_path / "home" / f".vbot-{name}"
+    data_dir = tmp_path / "data" / name
     observed = []
 
     _patch_create_environment(monkeypatch, module, tmp_path)
@@ -499,7 +500,7 @@ def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_install_failure
     worktrees_dir = tmp_path / ".worktrees"
     worktree_path = worktrees_dir / name
     webui_path = worktree_path / "webui"
-    data_dir = tmp_path / "home" / f".vbot-{name}"
+    data_dir = tmp_path / "data" / name
 
     _patch_create_environment(monkeypatch, module, tmp_path)
 
@@ -532,7 +533,7 @@ def test_cmd_create_refuses_preexisting_data_dir_before_creating_worktree(tmp_pa
     name = "preexisting-data"
     worktrees_dir = tmp_path / ".worktrees"
     worktree_path = worktrees_dir / name
-    data_dir = tmp_path / "home" / f".vbot-{name}"
+    data_dir = tmp_path / "data" / name
     data_dir.mkdir(parents=True)
     settings = data_dir / "settings.json"
     settings.write_text('{"server_port": 8421}', encoding="utf-8")
@@ -568,7 +569,7 @@ def test_iter_worktree_entries_lists_marker_backed_worktrees(tmp_path, monkeypat
     worktrees_dir = tmp_path / ".worktrees"
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda path: f"{path.name}-branch")
 
-    first_data_dir = tmp_path / "home" / ".vbot-alpha"
+    first_data_dir = tmp_path / "data" / "alpha"
     first_data_dir.mkdir(parents=True)
     (first_data_dir / "settings.json").write_text(
         json.dumps({"server_port": 8421}),
