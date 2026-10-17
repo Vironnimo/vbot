@@ -1069,6 +1069,30 @@ def _add_data_store_parsers(
     secrets_commands = secrets_parser.add_subparsers(dest="secrets_command", required=True)
     _add_command_parser(
         secrets_commands,
+        "list",
+        DATA_STORE_SECRETS_HELP["list"],
+        example="data-store secrets list",
+    )
+    set_parser = _add_command_parser(
+        secrets_commands,
+        "set",
+        DATA_STORE_SECRETS_HELP["set"],
+        example="data-store secrets set GITHUB_TOKEN",
+    )
+    set_parser.add_argument(
+        "name", metavar="<NAME>", help="Environment variable name of the credential"
+    )
+    unset_parser = _add_command_parser(
+        secrets_commands,
+        "unset",
+        DATA_STORE_SECRETS_HELP["unset"],
+        example="data-store secrets unset GITHUB_TOKEN",
+    )
+    unset_parser.add_argument(
+        "name", metavar="<NAME>", help="Environment variable name of the credential"
+    )
+    _add_command_parser(
+        secrets_commands,
         "status",
         DATA_STORE_SECRETS_HELP["status"],
         example="data-store secrets status",

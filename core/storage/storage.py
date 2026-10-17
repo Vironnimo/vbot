@@ -177,10 +177,11 @@ class StorageManager:
 
         return fold_credential_names(self.secrets.entries(CREDENTIALS))
 
-    def set_data_dir_credential(self, key: str, value: str) -> None:
+    def set_data_dir_credential(self, key: str, value: str) -> bool:
         """Write or replace one data-directory credential in the Secret Store.
 
         On Windows the write replaces every stored spelling of the name.
+        Returns whether the store changed.
         """
 
         if not ENV_KEY_PATTERN.fullmatch(key):
@@ -192,14 +193,15 @@ class StorageManager:
 
         self.ensure_directories()
 
-        def change(transaction: SecretTransaction) -> None:
+        def change(transaction: SecretTransaction) -> bool:
             for name in _spellings(transaction, key):
                 if name != key:
                     transaction.remove(CREDENTIALS, name)
             transaction.set(CREDENTIALS, key, value)
+            return transaction.changed
 
         # SecretStoreError is a StorageError: an unavailable store is never written.
-        self.secrets.update(change)
+        return self.secrets.update(change)
 
     def remove_data_dir_credential(self, key: str) -> bool:
         """Remove one data-directory credential, on Windows every spelling of it.

@@ -6,7 +6,7 @@ import argparse
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from cli._input import _read_stdin_utf8
+from cli._input import _read_secret, _read_stdin_utf8
 from cli.agent_management import agent_reorder
 from cli.archive_management import archive_list, archive_purge, archive_restore, archive_show
 from cli.chat_management import ChatRequest, chat
@@ -16,8 +16,11 @@ from cli.data_store_management import (
     data_store_config_backup_show,
     data_store_incident_acknowledge,
     data_store_secrets_convert,
+    data_store_secrets_list,
     data_store_secrets_reset,
+    data_store_secrets_set,
     data_store_secrets_status,
+    data_store_secrets_unset,
     data_store_snapshot_create,
     data_store_snapshot_list,
     data_store_snapshot_restore,
@@ -428,6 +431,10 @@ def dispatch_data_store_command(
         [ServerInstance, bool], CommandResult
     ] = data_store_secrets_convert,
     secrets_reset_fn: Callable[[ServerInstance, bool], CommandResult] = data_store_secrets_reset,
+    secrets_list_fn: Callable[[ServerInstance], CommandResult] = data_store_secrets_list,
+    secrets_set_fn: Callable[[ServerInstance, str, str], CommandResult] = data_store_secrets_set,
+    secrets_unset_fn: Callable[[ServerInstance, str], CommandResult] = data_store_secrets_unset,
+    read_secret_fn: Callable[[str], str] = _read_secret,
 ) -> CommandResult:
     """Dispatch operator controls for the canonical databases, configuration backups
     and the Secret Store."""
@@ -464,6 +471,18 @@ def dispatch_data_store_command(
     if args.command == "unregister":
         return unregister_fn(instance, args.name, args.yes)
     if args.command == "secrets":
+        if args.secrets_command == "list":
+            return secrets_list_fn(instance)
+        if args.secrets_command == "set":
+            try:
+                value = read_secret_fn(f"Value of {args.name} (not shown): ")
+            except (OSError, UnicodeError, EOFError) as exc:
+                return CommandResult(
+                    ok=False, message=f"cannot read the value: {exc}", instance=instance
+                )
+            return secrets_set_fn(instance, args.name, value)
+        if args.secrets_command == "unset":
+            return secrets_unset_fn(instance, args.name)
         if args.secrets_command == "status":
             return secrets_status_fn(instance)
         if args.secrets_command == "convert":

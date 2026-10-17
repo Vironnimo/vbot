@@ -8,9 +8,10 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from cli.rpc_client import rpc_call
+from cli.rpc_client import RpcPayload, rpc_call
 from cli.server_management import (
     CommandResult,
+    HealthProbeResult,
     ServerInstance,
     classify_server,
     probe_health,
@@ -40,6 +41,7 @@ from core.utils.server_control import live_server_ports
 
 if TYPE_CHECKING:
     from core.database import DatabaseSpec
+    from core.storage import StorageManager
 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", "::"})
 _LOCAL_ONLY_MESSAGE = (
@@ -104,6 +106,30 @@ def data_store_unregister(instance: ServerInstance, name: str, confirm: bool) ->
     payload = rpc_call(instance, "data_store.unregister", {"name": name})
     if payload.ok:
         return _json_result(instance, payload.data)
+    health = _stopped_server_health(instance, payload)
+    if isinstance(health, CommandResult):
+        return health
+    try:
+        released = unregister_database(instance.data_dir, name)
+    except (OSError, ValueError, DatabaseError) as exc:
+        return CommandResult(ok=False, message=str(exc), instance=instance, health=health)
+    return CommandResult(
+        ok=True,
+        message=_dump({"unregistered": _released_projection(released), "source": "local"}),
+        instance=instance,
+        health=health,
+    )
+
+
+def _stopped_server_health(
+    instance: ServerInstance, payload: RpcPayload
+) -> HealthProbeResult | CommandResult:
+    """After ``payload`` failed: the health of a stopped loopback target, or why not local.
+
+    A local change is allowed only when the target is a loopback address that
+    does not answer and no other server runs on its data directory; otherwise
+    the result is the server's error or a refusal.
+    """
     health = probe_health(instance)
     if health.reachable or instance.host not in _LOOPBACK_HOSTS:
         return payload.to_command_result()
@@ -127,16 +153,7 @@ def data_store_unregister(instance: ServerInstance, name: str, confirm: bool) ->
             instance=instance,
             health=health,
         )
-    try:
-        released = unregister_database(instance.data_dir, name)
-    except (OSError, ValueError, DatabaseError) as exc:
-        return CommandResult(ok=False, message=str(exc), instance=instance, health=health)
-    return CommandResult(
-        ok=True,
-        message=_dump({"unregistered": _released_projection(released), "source": "local"}),
-        instance=instance,
-        health=health,
-    )
+    return health
 
 
 def _released_projection(released: UnregisteredDatabase) -> dict[str, Any]:
@@ -382,6 +399,137 @@ def data_store_secrets_status(instance: ServerInstance) -> CommandResult:
         message=_dump(projection),
         instance=instance,
     )
+
+
+def data_store_secrets_list(instance: ServerInstance) -> CommandResult:
+    """List the stored credential names with their state and source; never a value.
+
+    The running server answers with the source its Runtime resolves (its process
+    environment first). When a loopback target is stopped and no server runs on
+    the data directory, the store is read directly: ``source`` then names only
+    the store (``data_dir`` or ``null``), since the server's environment is unknown.
+    """
+    payload = rpc_call(instance, "secrets.list", {})
+    if payload.ok:
+        return _json_result(instance, payload.data)
+    health = _stopped_server_health(instance, payload)
+    if isinstance(health, CommandResult):
+        return health
+    from core.secrets import CREDENTIALS, SecretStore
+
+    store = SecretStore(instance.data_dir)
+    status = store.status()
+    values = store.entries(CREDENTIALS)
+    damaged = {
+        entry.partition("/")[2] for entry in status.damaged if entry.startswith(f"{CREDENTIALS}/")
+    }
+    projection = {
+        "state": status.state,
+        "reason": status.reason,
+        "credentials": [
+            {
+                "name": name,
+                "configured": bool(values.get(name, "").strip()),
+                "source": "data_dir" if name in values else None,
+                "damaged": name in damaged,
+            }
+            for name in store.entry_names(CREDENTIALS)
+        ],
+        "local": True,
+    }
+    return CommandResult(
+        ok=status.state != "unavailable",
+        message=_dump(projection),
+        instance=instance,
+        health=health,
+    )
+
+
+def data_store_secrets_set(instance: ServerInstance, name: str, value: str) -> CommandResult:
+    """Store ``value`` as the credential ``name``; the value never appears in output.
+
+    The running server stores it and reloads its credentials. When a loopback
+    target is stopped and no server runs on the data directory, the Secret
+    Store is written directly and the next start loads it.
+    """
+    problem = _credential_name_problem(name) or _credential_value_problem(value)
+    if problem is not None:
+        return CommandResult(ok=False, message=f"{problem}; nothing was changed", instance=instance)
+    payload = rpc_call(instance, "secrets.set", {"name": name, "value": value})
+    if payload.ok:
+        return _json_result(instance, payload.data)
+    health = _stopped_server_health(instance, payload)
+    if isinstance(health, CommandResult):
+        return health
+
+    def write(storage: StorageManager) -> dict[str, Any]:
+        return {"name": name, "changed": storage.set_data_dir_credential(name, value)}
+
+    return _change_credential_locally(instance, health, write)
+
+
+def data_store_secrets_unset(instance: ServerInstance, name: str) -> CommandResult:
+    """Remove the stored credential ``name``; a process-environment value stays.
+
+    Like ``set``, through the running server or, while none runs, directly.
+    """
+    problem = _credential_name_problem(name)
+    if problem is not None:
+        return CommandResult(ok=False, message=f"{problem}; nothing was changed", instance=instance)
+    payload = rpc_call(instance, "secrets.unset", {"name": name})
+    if payload.ok:
+        return _json_result(instance, payload.data)
+    health = _stopped_server_health(instance, payload)
+    if isinstance(health, CommandResult):
+        return health
+
+    def remove(storage: StorageManager) -> dict[str, Any]:
+        return {"name": name, "removed": storage.remove_data_dir_credential(name)}
+
+    return _change_credential_locally(instance, health, remove)
+
+
+def _change_credential_locally(
+    instance: ServerInstance,
+    health: HealthProbeResult,
+    change: Callable[[StorageManager], dict[str, Any]],
+) -> CommandResult:
+    from core.storage import StorageManager
+
+    if not instance.data_dir.is_dir():
+        return CommandResult(
+            ok=False,
+            message=f"the data directory {instance.data_dir.as_posix()} does not exist",
+            instance=instance,
+            health=health,
+        )
+    try:
+        result = change(StorageManager(instance.data_dir))
+    except (OSError, StorageError) as exc:
+        return CommandResult(ok=False, message=str(exc), instance=instance, health=health)
+    return CommandResult(
+        ok=True, message=_dump({**result, "local": True}), instance=instance, health=health
+    )
+
+
+def _credential_name_problem(name: str) -> str | None:
+    """Why ``name`` is no credential name; never repeats it (it may be a pasted value)."""
+    from core.storage.storage import ENV_KEY_PATTERN
+
+    if len(name) > 200 or ENV_KEY_PATTERN.fullmatch(name) is None:
+        return (
+            "a credential name is an environment variable name: letters, digits and "
+            "underscores, not starting with a digit, at most 200 characters"
+        )
+    return None
+
+
+def _credential_value_problem(value: str) -> str | None:
+    if not value:
+        return "no value was given"
+    if "\n" in value or "\r" in value:
+        return "the value must be a single line"
+    return None
 
 
 def data_store_secrets_convert(instance: ServerInstance, confirm: bool) -> CommandResult:
