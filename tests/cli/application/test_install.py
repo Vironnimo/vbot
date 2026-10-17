@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from cli.application import install
 from cli.application.install import install_payload
 from cli.application.state import CHANNEL_URLS, ApplicationError, current_platform
+from core.access.config import AccessConfig, access_config
 
 
 def _payload(root: Path, shape: str = "server") -> Path:
@@ -147,3 +149,88 @@ def test_install_rejects_overlapping_data_before_mutations(
 
     assert not root.exists()
     assert not (tmp_path / "outside").exists()
+
+
+@pytest.mark.parametrize(
+    ("options", "host", "access"),
+    [
+        pytest.param([], "127.0.0.1", access_config("local"), id="default"),
+        pytest.param(["--access", "lan"], "0.0.0.0", access_config("lan"), id="lan"),
+        pytest.param(
+            ["--access", "lan", "--host", "192.168.1.5", "--allow-network", "100.64.0.0/10"],
+            "192.168.1.5",
+            access_config("lan", allow_networks=["100.64.0.0/10"]),
+            id="lan-with-vpn",
+        ),
+        pytest.param(
+            [
+                "--access",
+                "authenticated",
+                "--public-url",
+                "https://vbot.example.org",
+                "--trusted-proxy",
+                "127.0.0.1",
+            ],
+            "127.0.0.1",
+            access_config(
+                "authenticated",
+                public_url="https://vbot.example.org",
+                trusted_proxies=["127.0.0.1"],
+            ),
+            id="behind-proxy",
+        ),
+    ],
+)
+def test_installers_record_the_server_access_mode_and_its_bind_address(
+    tmp_path: Path, options: list[str], host: str, access: AccessConfig
+) -> None:
+    root = tmp_path / "application"
+    common = ["--root", str(root), "--payload", str(_payload(tmp_path)), "--shape", "server"]
+
+    install.main([*common, "--data-dir", str(tmp_path / "data"), *options])
+
+    saved = json.loads((root / "application.json").read_text(encoding="utf-8"))
+    assert saved["server_host"] == host
+    assert saved["server_access"] == access.to_record()
+
+
+@pytest.mark.parametrize(
+    ("shape", "options", "message"),
+    [
+        pytest.param(
+            "server", ["--access", "local", "--host", "0.0.0.0"], "loopback", id="local-network"
+        ),
+        pytest.param("server", ["--access", "authenticated"], "--public-url", id="no-public-url"),
+        pytest.param(
+            "server",
+            [
+                "--access",
+                "authenticated",
+                "--public-url",
+                "https://vbot.example.org",
+                "--tls-cert",
+                "missing-cert.pem",
+                "--tls-key",
+                "missing-key.pem",
+            ],
+            "does not exist",
+            id="missing-certificate",
+        ),
+        pytest.param("desktop-client", ["--access", "lan"], "Desktop Client", id="client"),
+    ],
+)
+def test_installers_refuse_an_access_mode_the_server_could_not_start_with(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    options: list[str],
+    message: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "application"
+    common = ["--root", str(root), "--payload", str(_payload(tmp_path, shape)), "--shape", shape]
+
+    with pytest.raises(ApplicationError, match=message):
+        install.main([*common, "--data-dir", str(tmp_path / "data"), *options])
+
+    assert not root.exists()

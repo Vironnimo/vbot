@@ -3,12 +3,19 @@ from __future__ import annotations
 import base64
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-from cli.application.autostart import UNIT_NAME, CommandRun, autostart, owned_unit
+from cli.application.autostart import (
+    UNIT_NAME,
+    CommandRun,
+    autostart,
+    owned_unit,
+    refresh_unit,
+)
 from cli.application.state import ApplicationError, Installation
 
 
@@ -119,6 +126,14 @@ def test_linux_autostart_owns_one_systemd_user_unit_that_runs_the_bootstrap_serv
     assert enabled["enabled"] is True and enabled["linger"] is lingering
     assert ("attention" in enabled) is not lingering
     assert autostart(install, "status", platform="linux", runner=runner, unit_dir=units)["enabled"]
+
+    # A changed bind address (vbot application access set) rewrites the unit once.
+    commands.clear()
+    moved = replace(install, server_host="0.0.0.0")
+    assert refresh_unit(moved, runner, unit_dir=units) is True
+    assert refresh_unit(moved, runner, unit_dir=units) is False
+    assert '"--host" "0.0.0.0"' in (units / UNIT_NAME).read_text(encoding="utf-8")
+    assert commands == [["systemctl", "--user", "daemon-reload"]]
 
     commands.clear()
     disabled = autostart(install, "disable", platform="linux", runner=runner, unit_dir=units)

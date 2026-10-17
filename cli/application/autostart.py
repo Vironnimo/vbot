@@ -401,6 +401,24 @@ def owned_unit(install: Installation, *, unit_dir: Path | None = None) -> Path |
     return path if launcher is not None and same_path(launcher, install.bootstrap) else None
 
 
+def refresh_unit(
+    install: Installation, run: Runner = run_command, *, unit_dir: Path | None = None
+) -> bool:
+    """Rewrite this installation's systemd unit after its server target changed.
+
+    Returns whether a unit was rewritten. Without an owned unit nothing happens.
+    """
+    path = owned_unit(install, unit_dir=unit_dir)
+    if path is None:
+        return False
+    content = unit_content(install)
+    if path.read_text(encoding="utf-8") == content:
+        return False
+    atomic_write_text(path, content)
+    _systemctl(run, "daemon-reload")
+    return True
+
+
 def _systemctl(run: Runner, *arguments: str) -> CommandRun:
     return run(["systemctl", "--user", *arguments])
 

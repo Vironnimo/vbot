@@ -7,11 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from cli.application import command, operations, processes
+from cli.application import autostart, command, operations, processes
 from cli.application.state import ApplicationError, Installation, Operation, load_installation
 from cli.main import run
 from cli.parser import parse_args
 from cli.server_management import CommandResult, HealthProbeResult, WebUIProbeResult
+from core.access.config import access_config
 from core.utils.logging import resolve_daily_log_path
 
 
@@ -379,3 +380,52 @@ def test_packaged_uninstall_reuses_guided_scope_and_confirmation(
     monkeypatch.setattr("cli.application.integration.uninstall", remove)
     assert run(["uninstall"]) == 0
     assert called == ([] if expected is None else [expected])
+
+
+def test_access_mode_change_is_recorded_for_the_next_server_start(tmp_path, monkeypatch, capsys):
+    install = _install(tmp_path)
+    install.save()
+    monkeypatch.setattr(command, "discover", lambda: install)
+    refreshed: list[str | None] = []
+    monkeypatch.setattr(
+        autostart, "refresh_unit", lambda changed: refreshed.append(changed.server_host)
+    )
+
+    assert run(["application", "access", "show", "--output", "plain"]) == 0
+    shown = json.loads(capsys.readouterr().out)
+    set_lan = ["application", "access", "set", "lan", "--allow-network", "100.64.0.0/10"]
+    assert run([*set_lan, "--output", "plain"]) == 0
+    changed = json.loads(capsys.readouterr().out)
+
+    assert (shown["mode"], shown["host"]) == ("local", "127.0.0.1")
+    loaded = load_installation(install.root)
+    # A mode that serves the network binds every interface unless told otherwise.
+    assert loaded.server_host == "0.0.0.0"
+    assert loaded.access == access_config("lan", allow_networks=["100.64.0.0/10"])
+    assert changed["applies"] == "on the next server start"
+    assert refreshed == ["0.0.0.0"]
+    log = resolve_daily_log_path(install.root).read_text(encoding="utf-8")
+    assert "Server access mode changed (from=local to=lan host=0.0.0.0)" in log
+
+
+@pytest.mark.parametrize(
+    ("argv", "pending"),
+    [
+        pytest.param(["local", "--host", "0.0.0.0"], False, id="local-on-the-network"),
+        pytest.param(["authenticated", "--trusted-proxy", "127.0.0.1"], False, id="no-url"),
+        pytest.param(["lan"], True, id="pending-update"),
+    ],
+)
+def test_access_mode_change_refuses_what_the_server_could_not_start_with(
+    tmp_path, monkeypatch, argv: list[str], pending: bool
+):
+    install = _install(tmp_path)
+    install.save()
+    if pending:
+        Operation(id="upd_pending", phase="queued").save(install)
+    monkeypatch.setattr(command, "discover", lambda: install)
+
+    with pytest.raises(ApplicationError):
+        command.dispatch(parse_args(["application", "access", "set", *argv]))
+
+    assert load_installation(install.root).server_access is None

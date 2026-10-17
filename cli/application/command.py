@@ -24,6 +24,7 @@ def add_parsers(subparsers) -> None:
         "channel", help="Select whether updates install releases or the newest main build"
     )
     channel.add_argument("update_channel", choices=("main", "release"))
+    _add_access_parsers(commands)
     commands.add_parser("tray", help="Run the vBot tray application")
     commands.add_parser("exit", help="Stop the owned tray application cleanly")
     commands.add_parser("removal-begin", help="Guard the native uninstaller's removal phase")
@@ -33,6 +34,43 @@ def add_parsers(subparsers) -> None:
     dependencies.add_argument(
         "--requirements", type=Path, help="Complete replacement requirements recipe"
     )
+
+
+def _add_access_parsers(commands) -> None:
+    from cli.application.install import add_access_arguments
+    from core.access.config import ACCESS_MODE_LABELS, ACCESS_MODES
+
+    access = commands.add_parser(
+        "access",
+        help="Show or change who may connect to this installation's server",
+        description=(
+            "The access mode decides who may connect to the server: "
+            + "; ".join(f"{mode} = {ACCESS_MODE_LABELS[mode]}" for mode in ACCESS_MODES)
+            + ". A change applies when the server starts next."
+        ),
+    )
+    actions = access.add_subparsers(dest="access_action", required=True)
+    actions.add_parser("show", help="Show the recorded access mode and its options")
+    setter = actions.add_parser(
+        "set",
+        help="Change the access mode; applies when the server starts next",
+        description=(
+            "Record a new access mode with all of its options; options not given are "
+            "cleared. Example: vbot application access set authenticated "
+            "--public-url https://vbot.example.org --trusted-proxy 127.0.0.1"
+        ),
+    )
+    setter.add_argument("mode", choices=ACCESS_MODES)
+    setter.add_argument(
+        "--host",
+        dest="bind_host",
+        metavar="<address>",
+        help=(
+            "Bind address; omitted keeps the current one while the mode and its transport "
+            "stay, else 127.0.0.1 (local, authenticated behind a proxy) or 0.0.0.0"
+        ),
+    )
+    add_access_arguments(setter)
 
 
 # Commands that manage an installed application, and what a development checkout,
@@ -146,6 +184,8 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
                 lines=[f"Updates now install {label}.", "Apply an update with: vbot update"],
             )
             return 0
+        if args.command == "access":
+            return _access_command(args, install)
         if args.command in {"removal-begin", "removal-reset"}:
             from cli.application.integration import begin_removal, reset_removal
 
@@ -348,6 +388,83 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
         if getattr(args, "host", None) in {None, "127.0.0.1"}:
             args.host = install.server_host
     return None
+
+
+def _access_command(args: argparse.Namespace, install: Installation) -> int:
+    from cli.application.install import access_from_arguments
+    from core.access.config import (
+        AccessConfigError,
+        check_bind_host,
+        default_host,
+        load_tls_context,
+    )
+
+    current = install.access
+    if current is None:
+        raise ApplicationError(
+            "A Desktop Client has no server; change the access mode on the server's computer"
+        )
+    if args.access_action == "show":
+        _print(
+            _access_summary(install.server_host, current),
+            lines=_access_lines(install.server_host, current),
+        )
+        return 0
+    selected = access_from_arguments(args.mode, args)
+    keeps_transport = selected.mode == current.mode and selected.direct_tls == current.direct_tls
+    host = args.bind_host or (
+        install.server_host if keeps_transport and install.server_host else default_host(selected)
+    )
+    try:
+        check_bind_host(selected, host)
+        if selected.tls_cert is not None and selected.tls_key is not None:
+            load_tls_context(selected.tls_cert, selected.tls_key)
+    except AccessConfigError as exc:
+        raise ApplicationError(str(exc)) from exc
+    from cli.application.state import operations as saved_operations
+
+    with exclusive(install.root, "dispatch"), exclusive(install.root):
+        if any(not item.terminal for item in saved_operations(install)):
+            raise ApplicationError("Wait for the pending update before changing the access mode")
+        changed = dataclasses.replace(install, server_host=host, server_access=selected)
+        changed.save()
+        from cli.application.autostart import refresh_unit
+
+        refresh_unit(changed)
+        logging.getLogger("vbot.application.integration").info(
+            "Server access mode changed (from=%s to=%s host=%s)",
+            current.mode,
+            selected.mode,
+            host,
+        )
+    summary = _access_summary(host, selected)
+    summary["applies"] = "on the next server start"
+    _print(
+        summary,
+        lines=[
+            *_access_lines(host, selected),
+            "The change applies when the server starts next: vbot server restart",
+        ],
+    )
+    return 0
+
+
+def _access_summary(host: str | None, access) -> dict:
+    return {"host": host, "label": access.label, **access.to_record()}
+
+
+def _access_lines(host: str | None, access) -> list[str]:
+    lines = [f"Access: {access.label} ({access.mode})", f"Bind address: {host}"]
+    if access.allow_networks:
+        lines.append(f"Also admitted networks: {', '.join(access.allow_networks)}")
+    if access.public_url:
+        lines.append(f"Public URL: {access.public_url}")
+    if access.trusted_proxies:
+        lines.append(f"Trusted proxies: {', '.join(access.trusted_proxies)}")
+    if access.direct_tls:
+        lines.append(f"TLS certificate: {access.tls_cert}")
+        lines.append(f"TLS key: {access.tls_key}")
+    return lines
 
 
 def _answer(prompt: str) -> str | None:
