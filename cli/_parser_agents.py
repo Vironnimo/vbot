@@ -1019,8 +1019,9 @@ def _add_data_store_parsers(
         "--all",
         action="store_true",
         help=(
-            "Restore every file of the backup; files created after it and files whose "
-            "folder no longer exists or is a link stay as they are"
+            "Restore every file of the backup; files created after it, files whose "
+            "folder no longer exists or is a link, and secrets.json (restored only with "
+            "--file) stay as they are"
         ),
     )
     config_restore_parser.add_argument(

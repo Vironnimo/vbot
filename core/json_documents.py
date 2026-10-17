@@ -106,6 +106,23 @@ _SNAPSHOT_PATTERNS: tuple[tuple[str, ...], ...] = tuple(
     tuple(pattern.split("/")) for pattern in SNAPSHOT_DOCUMENTS.values()
 )
 
+#: Snapshot kinds that data snapshots and configuration backups copy but that
+#: restoring a document set, or every file of a configuration backup, keeps as
+#: they are: neither replaced nor removed. The Secret Store holds credentials and
+#: OAuth tokens set, rotated or converted from plaintext files after the copy was
+#: taken, and those plaintext files are gone; an older copy, or none, would lose
+#: them. A configuration backup restores it only when it is named.
+DOCUMENTS_KEPT_BY_RESTORES: frozenset[str] = frozenset({"secrets"})
+
+
+def is_kept_by_restores(path: str) -> bool:
+    """Whether relative POSIX ``path`` is a document that whole-set restores keep."""
+
+    return path_matches_patterns(
+        path, (SNAPSHOT_DOCUMENTS[kind] for kind in DOCUMENTS_KEPT_BY_RESTORES)
+    )
+
+
 ShapeKind = Literal["object", "map", "list", "opaque"]
 DocumentValidator = Callable[[Any], list[JsonDiagnostic]]
 

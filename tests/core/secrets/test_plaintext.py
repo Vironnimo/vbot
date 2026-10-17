@@ -377,3 +377,29 @@ def test_an_unopenable_store_keeps_every_plaintext_file(
     assert health["state"] == "unavailable"
     assert health["plaintext_files"] == []
     assert "the Secret Store is unavailable" in str(health["degraded_reason"])
+
+
+def test_a_store_in_quarantine_is_reported_while_secrets_json_is_missing(tmp_path: Path) -> None:
+    data_dir = _data_dir(tmp_path)
+    store = open_store(tmp_path)
+    store.set_entry(CREDENTIALS, "OPENAI_API_KEY", "sk-openai")
+    # Where the document-set restore of an older vBot moved it.
+    batch = data_dir / "quarantine" / "json-documents" / "20260101T000000-0a1b2c3d"
+    batch.mkdir(parents=True)
+    store.path.replace(batch / "secrets.json")
+
+    health = secret_store_health(open_store(tmp_path))
+    assert health["state"] == "absent"
+    assert health["quarantined_stores"] == [
+        "quarantine/json-documents/20260101T000000-0a1b2c3d/secrets.json"
+    ]
+    assert "move it back to <data-dir>/secrets.json" in str(health["degraded_reason"])
+    [report] = credential_file_reports(data_dir)
+    assert report.file_path == store.path
+    assert "a Secret Store lies in quarantine" in report.diagnostics[0].message
+
+    (batch / "secrets.json").replace(store.path)
+    restored = open_store(tmp_path)
+    assert restored.entries(CREDENTIALS) == {"OPENAI_API_KEY": "sk-openai"}
+    assert secret_store_health(restored)["degraded_reason"] is None
+    assert credential_file_reports(data_dir) == []
