@@ -33,7 +33,12 @@ from core.tools.web_fetch import find_local_browser
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
-from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS, RESOURCE_KIND_SKILLS
+from server.events import (
+    RESOURCE_KIND_COMMANDS,
+    RESOURCE_KIND_DATA_STORE,
+    RESOURCE_KIND_EXTENSIONS,
+    RESOURCE_KIND_SKILLS,
+)
 from server.rpc._mutations import serialized_mutation, serialized_read
 from server.rpc.connection_methods import custom_provider_items
 from server.rpc.dispatcher import RpcMethodHandler
@@ -783,6 +788,8 @@ async def _set_service_key(state: Any, params: JsonObject) -> JsonObject:
             variable,
             runtime.environment_credential_source(variable),
         )
+        # The Secret Store's status is part of the data store status.
+        publish_resource_changed(state, RESOURCE_KIND_DATA_STORE)
     try:
         return await _settings_response(state)
     except Exception as exc:

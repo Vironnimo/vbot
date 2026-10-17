@@ -9,7 +9,12 @@ from core.extensions import ExtensionRecord, ExtensionRegistrationIdentity, Sett
 from core.runs import Run
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
-from server.events import RESOURCE_KIND_COMMANDS, RESOURCE_KIND_EXTENSIONS, RESOURCE_KIND_SKILLS
+from server.events import (
+    RESOURCE_KIND_COMMANDS,
+    RESOURCE_KIND_DATA_STORE,
+    RESOURCE_KIND_EXTENSIONS,
+    RESOURCE_KIND_SKILLS,
+)
 from server.file_delivery import FILE_PREVIEW_WORKERS
 from server.rpc._mutations import serialized_mutation, serialized_read
 from server.rpc.dispatcher import RpcMethodHandler
@@ -282,6 +287,8 @@ async def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:
             name,
             key,
         )
+        # The Secret Store's status is part of the data store status.
+        publish_resource_changed(state, RESOURCE_KIND_DATA_STORE)
     return {"name": name, "key": key, "set": new_state}
 
 

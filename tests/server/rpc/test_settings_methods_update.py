@@ -310,6 +310,8 @@ async def test_settings_set_service_key_saves_replaces_and_removes_one_shared_ke
     assert "TAVILY_API_KEY" not in state.runtime.storage.load_environment()
     assert removed == await rpc_result(state, "settings.get")
     assert len(reloads) == 3
+    # Each change reaches the Secret Store's part of the data store status.
+    assert resource_changes(state, "data_store") == [{"kind": "data_store"}] * 3
     messages = [record.getMessage() for record in caplog.records if record.name == _SETTINGS_LOGGER]
     assert len(messages) == 3
     assert all("TAVILY_API_KEY" in message for message in messages)
