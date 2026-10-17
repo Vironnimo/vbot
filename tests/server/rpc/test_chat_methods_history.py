@@ -977,7 +977,7 @@ async def test_reflection_runs_restore_running_and_durable_reviews(
         history.state.runtime.memory.add_entry(
             tmp_path / "agents" / "coder" / "workspace",
             "user",
-            "Prefers short answers.",
+            f"Saved by review {review.id}.",
             writer=MemoryWriter(agent_id="coder", actor="tool", run_id=review.id),
         )
         return "done"
@@ -1031,6 +1031,12 @@ async def test_reflection_runs_restore_running_and_durable_reviews(
         assert (row["run_id"], row["status"]) == (run.id, "completed")
         assert (row["agent_id"], row["project_id"]) == ("coder", None)
         assert row["outcome"] == {"memory": 1, "skills": 0, "undone": False}
+    nested_result = await call(
+        history.state, "chat.reflections", agent_id="coder", session_id=fork.id
+    )
+    [nested_row] = nested_result["result"]["reflection_runs"]
+    assert nested_row["run_id"] == nested_run.id
+    assert nested_row["outcome"] == {"memory": 1, "skills": 0, "undone": False}
     history.session("unrelated")
     unrelated = await call(
         history.state, "chat.reflections", agent_id="coder", session_id="unrelated"

@@ -45,7 +45,6 @@ from core.tools.command_manager import (
 )
 from core.tools.process_tree import (
     KillNotConfirmedError,
-    ProcessTree,
     ProgramExit,
     RunningProcess,
     track_process_tree,
@@ -1316,7 +1315,7 @@ async def real_manager(tmp_path: Path) -> AsyncIterator[tuple[CommandManager, Fa
     manager = CommandManager(
         sink,
         temporary_files=TemporaryFileManager(tmp_path / "data"),
-        process_tracker=_tracked_suspended,
+        process_tracker=track_process_tree,
         monotonic=lambda: time.monotonic() * 10,
         sleep=lambda seconds: asyncio.sleep(seconds / 10),
     )
@@ -1324,13 +1323,6 @@ async def real_manager(tmp_path: Path) -> AsyncIterator[tuple[CommandManager, Fa
         yield manager, sink
     finally:
         await manager.aclose()
-
-
-def _tracked_suspended(pid: int) -> ProcessTree:
-    if sys.platform == "win32":
-        # The root runs nothing before it is in the Job: nothing can escape it.
-        assert psutil.Process(pid).status() == psutil.STATUS_STOPPED
-    return track_process_tree(pid)
 
 
 # A virtual environment's python.exe on Windows is a launcher that starts the base

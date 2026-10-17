@@ -15,11 +15,13 @@ import shutil
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from core.storage.temp_files import TemporaryFileManager
+from core.tools import _command_launch as launch_module
 from core.tools._command_launch import (
     WARM_SHELL_IDLE_SECONDS,
     PipeCommandProcess,
@@ -45,6 +47,39 @@ from tests.core.tools.command_manager_helpers import (
 
 ARGV = ("shell", "--bootstrap")
 BASE = {"PATH": "/bin"}
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows suspended process creation")
+@pytest.mark.asyncio
+async def test_the_command_is_contained_before_its_primary_thread_resumes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    process = FakeProcess(123)
+    order: list[str] = []
+
+    async def create(*argv: str, **options: Any) -> Any:
+        # CREATE_SUSPENDED is the launch guarantee; a sampled process status
+        # need not have reached STOPPED yet when the tracker is called.
+        assert options["creationflags"] & 0x00000004
+        order.append("created suspended")
+        options["on_created"](process.pid)
+        return process
+
+    def track(pid: int) -> ProcessTree:
+        assert pid == process.pid
+        order.append("contained")
+        return process.tree
+
+    def opened(pid: int) -> SimpleNamespace:
+        assert pid == process.pid
+        return SimpleNamespace(resume=lambda: order.append("resumed"))
+
+    monkeypatch.setattr(launch_module, "create_subprocess_exec", create)
+    monkeypatch.setattr(launch_module.psutil, "Process", opened)
+    shell = await launch_pipe_process(["shell"], tmp_path, {}, track)
+
+    assert shell.tree is process.tree
+    assert order == ["created suspended", "contained", "resumed"]
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper ownership")

@@ -12,6 +12,7 @@ from pathlib import Path
 import psutil  # type: ignore[import-untyped]
 import pytest
 
+from cli.application import server_exit
 from cli.application.server_exit import ServerExitWatch
 from cli.server_management import ServerInstance, resolve_instance
 from core.utils.logging import resolve_daily_log_path
@@ -66,14 +67,18 @@ def test_report_names_the_ended_process_with_its_exit_code_and_exit_time(tmp_pat
     assert (fields["pid"], fields["exit_code"]) == (str(child.pid), "7")
 
 
-def test_a_reused_pid_is_never_taken_for_the_server(tmp_path: Path):
+def test_a_reused_pid_is_never_taken_for_the_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     target = _target(tmp_path)
-    # The record's pid now names another process: this one, created at another time.
+    # The same PID now names a newer process. Small fixed identities also cover
+    # Linux just after boot, where subtracting a minute would make one invalid.
+    monkeypatch.setattr(server_exit, "process_started", lambda process: 1.0)
     create_server_control(
         target.data_dir,
         target.port,
         pid=os.getpid(),
-        process_create_time=process_started(psutil.Process()) - 60,
+        process_create_time=0.5,
         token="t",
     )
     now = datetime(2026, 10, 16, 13, 5, tzinfo=UTC)
