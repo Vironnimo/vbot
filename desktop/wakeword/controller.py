@@ -56,6 +56,7 @@ from desktop.speech.cues import (
 )
 from desktop.speech.server_client import (
     DEFAULT_UPLOAD_BUDGET_BYTES,
+    ServerAuthorization,
     SpeechRequestCancelled,
     SpeechServerError,
 )
@@ -268,8 +269,9 @@ class VoiceController:
     imports; it runs once, lazily, on a background thread when a real
     listener first starts. ``cues`` is the Desktop's shared player (its owner
     closes it); events with a cue play it, and without a player Voice is
-    silent. The listener starts with :meth:`start` (after the window is shown)
-    and ends with :meth:`close`.
+    silent. ``authorization`` signs the server requests in
+    (``desktop.access.ServerAccess``). The listener starts with :meth:`start`
+    (after the window is shown) and ends with :meth:`close`.
     """
 
     def __init__(
@@ -285,9 +287,11 @@ class VoiceController:
         cues: CuePlayer | None = None,
         catalog: WakewordModelCatalog | None = None,
         runtime: VoiceRuntime | None = None,
+        authorization: ServerAuthorization | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings_path = settings_path
+        self._authorization = authorization
         self._microphone = microphone
         self._sink = sink
         self._live_requests = live_requests
@@ -711,7 +715,12 @@ class VoiceController:
             runtime.speech_detector_factory or _speech_detection.SpeechDetector.create
         )
         stop_event = threading.Event()
-        client = VoiceServerClient(server_url, cancel=stop_event, transport=runtime.transport)
+        client = VoiceServerClient(
+            server_url,
+            cancel=stop_event,
+            authorization=self._authorization,
+            transport=runtime.transport,
+        )
         session = _Session(generation, stop_event, client)
         capture = self._microphone.create_capture(
             on_status=lambda status: self._on_capture_status(generation, status),

@@ -196,9 +196,13 @@ class FakeWindow:
         self.height = 800
         self.events = FakeWindowEvents()
         self.focus_calls: list[str] = []
+        self.current_url: str | None = None
 
     def load_url(self, url: str) -> None:
         self.loaded_urls.append(url)
+
+    def get_current_url(self) -> str | None:
+        return self.current_url
 
     def load_html(self, content: str) -> None:
         self.loaded_html.append(content)
@@ -235,6 +239,7 @@ class FakeWindowEvents:
     def __init__(self) -> None:
         self.before_show = FakeEvent()
         self.shown = FakeEvent()
+        self.loaded = FakeEvent()
         self.closing = FakeEvent()
         self.minimized = FakeEvent()
         self.maximized = FakeEvent()
@@ -376,18 +381,28 @@ SAVED_PI = {"servers": [{"host": "pi.lan", "port": 9000}]}
 
 
 @pytest.mark.parametrize(
-    ("argv", "host", "port", "open_session", "mock_wakeword"),
+    ("argv", "host", "port", "open_session", "mock_wakeword", "server_data_dir"),
     [
-        ([], None, None, None, False),
-        (["--host", "192.168.1.50", "--port", "9000"], "192.168.1.50", 9000, None, False),
+        ([], None, None, None, False, None),
+        (["--host", "192.168.1.50", "--port", "9000"], "192.168.1.50", 9000, None, False, None),
+        (
+            ["--host", "https://vbot.example.com"],
+            "https://vbot.example.com",
+            None,
+            None,
+            False,
+            None,
+        ),
         (
             ["--open-session", "builder@project", "session-1", "--port", "9000"],
             None,
             9000,
             ["builder@project", "session-1"],
             False,
+            None,
         ),
-        (["--mock-wakeword"], None, None, None, True),
+        (["--mock-wakeword"], None, None, None, True, None),
+        (["--server-data-dir", "data"], None, None, None, False, Path("data")),
     ],
 )
 def test_parse_args_reads_the_target_the_session_and_the_mock_wakeword_flag(
@@ -396,15 +411,17 @@ def test_parse_args_reads_the_target_the_session_and_the_mock_wakeword_flag(
     port: int | None,
     open_session: list[str] | None,
     mock_wakeword: bool,
+    server_data_dir: Path | None,
 ) -> None:
     args = desktop_main.parse_args(argv)
 
-    assert (args.host, args.port, args.open_session, args.mock_wakeword) == (
-        host,
-        port,
-        open_session,
-        mock_wakeword,
-    )
+    assert (
+        args.host,
+        args.port,
+        args.open_session,
+        args.mock_wakeword,
+        args.server_data_dir,
+    ) == (host, port, open_session, mock_wakeword, server_data_dir)
 
 
 @pytest.mark.parametrize(
@@ -610,35 +627,52 @@ def test_real_wakeword_availability_requires_the_complete_voice_stack(
 PROBE_TARGET = DesktopTarget("vbot.lan", 9000, "http://vbot.lan:9000/")
 HEALTH_URL = "http://vbot.lan:9000/health"
 ROOT_URL = "http://vbot.lan:9000/"
+STATUS_URL = "http://vbot.lan:9000/api/auth/status"
 HEALTH_OK = FakeResponse(200, {"status": "ok"})
+AUTHENTICATED = FakeResponse(200, {"mode": "authenticated", "authenticated": False})
+ACCESS_DENIED = FakeResponse(
+    403, {"ok": False, "error": {"code": "access_denied", "message": "Access denied"}}
+)
+AVAILABLE = desktop_main.PROBE_WEBUI_AVAILABLE
+UNAVAILABLE = desktop_main.PROBE_WEBUI_UNAVAILABLE
+NOT_VBOT = desktop_main.PROBE_NOT_VBOT_SERVER
 
 
 @pytest.mark.parametrize(
-    ("health", "root", "status"),
+    ("health", "root", "auth_status", "status", "access_mode"),
     [
-        (HEALTH_OK, FakeResponse(200), desktop_main.PROBE_WEBUI_AVAILABLE),
-        (HEALTH_OK, FakeResponse(399), desktop_main.PROBE_WEBUI_AVAILABLE),
-        (HEALTH_OK, FakeResponse(400), desktop_main.PROBE_WEBUI_UNAVAILABLE),
-        (HEALTH_OK, FakeResponse(500), desktop_main.PROBE_WEBUI_UNAVAILABLE),
-        (HEALTH_OK, httpx.ConnectError("closed"), desktop_main.PROBE_WEBUI_UNAVAILABLE),
-        (httpx.ConnectError("refused"), None, desktop_main.PROBE_SERVER_UNREACHABLE),
-        (FakeResponse(503, {"status": "ok"}), None, desktop_main.PROBE_NOT_VBOT_SERVER),
-        (FakeResponse(200, {"status": "starting"}), None, desktop_main.PROBE_NOT_VBOT_SERVER),
-        (
-            FakeResponse(200, {"status": "ok", "version": "dev"}),
-            None,
-            desktop_main.PROBE_NOT_VBOT_SERVER,
+        pytest.param(HEALTH_OK, FakeResponse(200), AUTHENTICATED, AVAILABLE, "authenticated"),
+        # A server from before access modes has no status route.
+        pytest.param(HEALTH_OK, FakeResponse(399), FakeResponse(404), AVAILABLE, None),
+        pytest.param(
+            HEALTH_OK, FakeResponse(200), FakeResponse(200, {"mode": "x"}), AVAILABLE, None
         ),
-        (FakeResponse(200, ValueError("no json")), None, desktop_main.PROBE_NOT_VBOT_SERVER),
-        (FakeResponse(200, ["ok"]), None, desktop_main.PROBE_NOT_VBOT_SERVER),
+        pytest.param(HEALTH_OK, FakeResponse(400), None, UNAVAILABLE, None),
+        pytest.param(HEALTH_OK, FakeResponse(500), None, UNAVAILABLE, None),
+        pytest.param(HEALTH_OK, httpx.ConnectError("closed"), None, UNAVAILABLE, None),
+        pytest.param(
+            httpx.ConnectError("refused"), None, None, desktop_main.PROBE_SERVER_UNREACHABLE, None
+        ),
+        pytest.param(ACCESS_DENIED, None, None, desktop_main.PROBE_ACCESS_DENIED, None),
+        pytest.param(FakeResponse(403, {"status": "ok"}), None, None, NOT_VBOT, None),
+        pytest.param(FakeResponse(503, {"status": "ok"}), None, None, NOT_VBOT, None),
+        pytest.param(FakeResponse(200, {"status": "starting"}), None, None, NOT_VBOT, None),
+        pytest.param(
+            FakeResponse(200, {"status": "ok", "version": "dev"}), None, None, NOT_VBOT, None
+        ),
+        pytest.param(FakeResponse(200, ValueError("no json")), None, None, NOT_VBOT, None),
+        pytest.param(FakeResponse(200, ["ok"]), None, None, NOT_VBOT, None),
     ],
     ids=[
-        "webui-200",
-        "webui-399",
+        "webui-200-authenticated",
+        "webui-399-without-access-modes",
+        "webui-unknown-access-mode",
         "webui-400",
         "webui-500",
         "webui-request-error",
         "health-request-error",
+        "health-access-denied",
+        "health-403",
         "health-503",
         "health-starting",
         "health-extra-keys",
@@ -649,9 +683,11 @@ HEALTH_OK = FakeResponse(200, {"status": "ok"})
 def test_probe_target_classifies_the_server_with_one_request_per_step(
     health: FakeResponse | httpx.RequestError,
     root: FakeResponse | httpx.RequestError | None,
+    auth_status: FakeResponse | None,
     status: str,
+    access_mode: str | None,
 ) -> None:
-    replies = {HEALTH_URL: health, ROOT_URL: root}
+    replies = {HEALTH_URL: health, ROOT_URL: root, STATUS_URL: auth_status}
     requested: list[str] = []
 
     def get(url: str, *, timeout: httpx.Timeout | float, trust_env: bool) -> FakeResponse:
@@ -665,9 +701,11 @@ def test_probe_target_classifies_the_server_with_one_request_per_step(
 
     result = desktop_main.probe_target(PROBE_TARGET, get=get)
 
-    assert result.status == status
-    # No retry loop: /health once, then the WebUI root once when /health is vBot's.
-    assert requested == ([HEALTH_URL] if root is None else [HEALTH_URL, ROOT_URL])
+    assert (result.status, result.access_mode) == (status, access_mode)
+    # No retry loop: /health once, the WebUI root once when /health is vBot's,
+    # and the access status once when the WebUI is there.
+    expected = [HEALTH_URL] if root is None else [HEALTH_URL, ROOT_URL]
+    assert requested == (expected if auth_status is None else [*expected, STATUS_URL])
 
 
 def test_probe_target_reports_a_configuration_error_without_a_request() -> None:
@@ -719,33 +757,14 @@ def test_probe_reuses_one_unproxied_client_and_closes_it(
     )
     assert len(clients) == 1
     assert clients[0].is_closed
-    assert [request.url.path for request in requests] == ["/health", "/"]
+    assert [request.url.path for request in requests] == (
+        ["/health", "/"] if root_fails else ["/health", "/", "/api/auth/status"]
+    )
     assert all(
         request.extensions["timeout"]
         == {"connect": connect, "read": 0.75, "write": 0.75, "pool": 0.75}
         for request in requests
     )
-
-
-# -- Host/port validation and URL building ---------------------------------------
-
-
-@pytest.mark.parametrize("host", ["", "   ", "http://localhost", "bad host", "host/path", None])
-def test_validate_host_rejects_non_host_values_naming_their_source(host: object) -> None:
-    with pytest.raises(ValueError, match="^settings.host "):
-        desktop_main.validate_host(host, source="settings.host")
-
-
-@pytest.mark.parametrize("port", [0, 65536, "not-a-port", None])
-def test_validate_port_rejects_out_of_range_and_non_numeric(port: object) -> None:
-    with pytest.raises(ValueError):
-        desktop_main.validate_port(port)
-
-
-def test_build_target_url_formats_local_and_lan_targets_as_plain_http() -> None:
-    assert desktop_main.build_target_url("127.0.0.1", 8420) == "http://127.0.0.1:8420/"
-    assert desktop_main.build_target_url("192.168.1.44", 9000) == "http://192.168.1.44:9000/"
-    assert desktop_main.build_target_url("vbot.lan", 8500) == "http://vbot.lan:8500/"
 
 
 # -- Window layout -----------------------------------------------------------------
@@ -1020,7 +1039,13 @@ def test_voice_starts_after_the_window_is_shown_and_follows_its_server(
     voice = RecordingVoice(events, on_start=window_shown_first)
 
     def create_voice(
-        _args: Any, _settings: Any, _microphone: Any, url: str, _page_events: Any, _cues: Any
+        _args: Any,
+        _settings: Any,
+        _microphone: Any,
+        url: str,
+        _page_events: Any,
+        _cues: Any,
+        _access: Any,
     ) -> RecordingVoice:
         created_for.append(url)
         return voice
@@ -1201,7 +1226,13 @@ def test_launch_makes_every_known_server_a_secure_origin_before_webview_starts(
         tmp_path,
         ["--host", "pi.lan", "--port", "9000"],
         webview=fake_webview,
-        settings={"servers": [{"host": "a.lan", "port": 8420}]},
+        settings={
+            "servers": [
+                {"host": "a.lan", "port": 8420},
+                # A secure context already: it needs no switch.
+                {"host": "vbot.example.com", "port": 443, "scheme": "https"},
+            ]
+        },
     )
 
     assert launch_seams.secure_origin_targets == [[("a.lan", 8420), ("pi.lan", 9000)]]
@@ -1394,10 +1425,18 @@ def test_page_pushes_reach_the_window_page_until_it_closes(
     original_create_voice = desktop_main._create_voice
 
     def create_voice(
-        args: Any, settings: Any, microphone: Any, server_url: str, page_events: Any, cues: Any
+        args: Any,
+        settings: Any,
+        microphone: Any,
+        server_url: str,
+        page_events: Any,
+        cues: Any,
+        access: Any,
     ) -> Any:
         voice_sinks.append(page_events)
-        return original_create_voice(args, settings, microphone, server_url, page_events, cues)
+        return original_create_voice(
+            args, settings, microphone, server_url, page_events, cues, access
+        )
 
     monkeypatch.setattr(desktop_main, "_create_voice", create_voice)
 

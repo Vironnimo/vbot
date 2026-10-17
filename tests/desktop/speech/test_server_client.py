@@ -349,3 +349,95 @@ def test_cancellation_closes_an_in_flight_request_without_waiting_for_a_reply(
             cancel.set()
             client.close()
             worker.join(1)
+
+
+# -- Sign-in ---------------------------------------------------------------------------
+
+
+class FakeAuthorization:
+    """Hands out ``headers`` in turn; ``rejected`` answers whether a new one exists."""
+
+    def __init__(self, *headers: str | None, renewable: bool) -> None:
+        self._headers = list(headers)
+        self.renewable = renewable
+        self.rejections: list[tuple[str, str | None]] = []
+
+    def header(self, server_url: str) -> str | None:
+        return self._headers[0]
+
+    def rejected(self, server_url: str, header: str | None) -> bool:
+        self.rejections.append((server_url, header))
+        if self.renewable and len(self._headers) > 1:
+            self._headers.pop(0)
+            return True
+        return False
+
+
+def _auth_required() -> httpx.Response:
+    return httpx.Response(
+        401, json={"ok": False, "error": {"code": "auth_required", "message": "Sign in"}}
+    )
+
+
+def _signed_in_client(
+    server: ScriptedServer, authorization: FakeAuthorization, cancel: threading.Event
+) -> SpeechServerClient:
+    return SpeechServerClient(
+        f"{SERVER}/",
+        cancel=cancel,
+        authorization=authorization,
+        transport=httpx.MockTransport(server),
+    )
+
+
+def test_requests_carry_the_servers_credential(cancel: threading.Event) -> None:
+    server = ScriptedServer(rpc_ok({"value": 1024}), httpx.Response(200, json={"text": "hi"}))
+    authorization = FakeAuthorization("Bearer vbt_device", renewable=False)
+
+    with _signed_in_client(server, authorization, cancel) as client:
+        client.upload_budget_bytes()
+        client.transcribe(b"audio")
+
+    assert [request.headers.get("Authorization") for request in server.requests] == [
+        "Bearer vbt_device",
+        "Bearer vbt_device",
+    ]
+
+
+def test_a_refused_credential_is_replaced_once(cancel: threading.Event) -> None:
+    server = ScriptedServer(_auth_required(), httpx.Response(200, json={"text": "hi"}))
+    authorization = FakeAuthorization("Bearer vbl_old", "Bearer vbl_new", renewable=True)
+
+    with _signed_in_client(server, authorization, cancel) as client:
+        assert client.transcribe(b"audio") == "hi"
+
+    assert authorization.rejections == [(SERVER, "Bearer vbl_old")]
+    assert [request.headers.get("Authorization") for request in server.requests] == [
+        "Bearer vbl_old",
+        "Bearer vbl_new",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("headers", "renewable", "requests"),
+    [
+        pytest.param(("Bearer vbt_device",), False, 1, id="no-other-credential"),
+        pytest.param(("Bearer vbl_old", "Bearer vbl_new"), True, 2, id="also-refused"),
+    ],
+)
+def test_a_refusal_without_a_working_credential_fails_the_request(
+    cancel: threading.Event, headers: tuple[str, ...], renewable: bool, requests: int
+) -> None:
+    server = ScriptedServer(*(_auth_required() for _ in range(requests)))
+    authorization = FakeAuthorization(*headers, renewable=renewable)
+
+    with (
+        _signed_in_client(server, authorization, cancel) as client,
+        pytest.raises(SpeechServerRejected) as raised,
+    ):
+        client.transcribe(b"audio")
+
+    assert (raised.value.status_code, raised.value.rpc_code) == (401, "auth_required")
+    assert len(server.requests) == requests
+    # Every refusal is reported, so a lost sign-in reaches the window.
+    assert [header for _url, header in authorization.rejections] == list(headers)

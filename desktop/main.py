@@ -11,10 +11,10 @@ auto-connects to the last-used server after the GUI loop starts, or shows the
 connection screen on first run / any unreachable target.
 
 This module still owns the shared probing primitives (``probe_target`` /
-``validate_host`` / ``validate_port`` / ``build_target_url`` and the ``PROBE_*``
-classifications) that the connection controller reuses; it no longer owns the
-old static fallback page or pre-loop target resolution — the controller subsumes
-both.
+``build_target_url`` and the ``PROBE_*`` classifications) that the connection
+controller reuses; server addresses and their validation live in
+:mod:`desktop.server_address`, the sign-in to a server in the access mode
+``authenticated`` in :mod:`desktop.access`.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import faulthandler
 import importlib
-import ipaddress
 import logging
 import os
 import sys
@@ -38,6 +37,13 @@ from typing import TYPE_CHECKING, Any, Protocol, override
 import httpx
 
 from desktop import _http, _windows, restart
+from desktop.server_address import (
+    Scheme,
+    ServerAddress,
+    is_loopback_host,
+    parse_server_address,
+    validate_port,
+)
 from desktop.settings import (
     config_dir,
     read_window_size,
@@ -45,6 +51,7 @@ from desktop.settings import (
 )
 
 if TYPE_CHECKING:
+    from desktop.access import ServerAccess
     from desktop.connection import ConnectionController
     from desktop.page_events import PageEventDispatcher
     from desktop.speech.cues import CuePlayer
@@ -77,10 +84,12 @@ PROBE_WEBUI_UNAVAILABLE = "webui_unavailable"
 PROBE_SERVER_UNREACHABLE = "server_unreachable"
 PROBE_NOT_VBOT_SERVER = "not_vbot_server"
 PROBE_INVALID_TARGET = "invalid_target"
-# Block URL-structure characters plus HTML/JS metacharacters: none appear in a
-# valid host name or IPv4 literal, and barring them keeps a stored host from
-# ever carrying a markup/script payload into the connection screen.
-INVALID_HOST_CHARACTERS = frozenset("/\\:?#@[]'\"`<>&();")
+# The server refused this computer at its access guard (wrong network, or
+# plain HTTP from another computer in the access mode ``authenticated``).
+PROBE_ACCESS_DENIED = "access_denied"
+AUTH_STATUS_PATH = "/api/auth/status"
+ACCESS_MODE_AUTHENTICATED = "authenticated"
+_ACCESS_MODES = frozenset({"local", "lan", ACCESS_MODE_AUTHENTICATED})
 ACCESSOR_QUERY_PARAM = "accessor=desktop"
 SESSION_LINK_PART_MAX_LENGTH = 512
 DESKTOP_LOG_DIRECTORY_NAME = "logs"
@@ -133,12 +142,36 @@ class WebviewModule(Protocol):
 
 @dataclass(frozen=True)
 class DesktopTarget:
-    """Resolved Desktop server target."""
+    """Resolved Desktop server target.
+
+    ``host`` is the plain host name (also for an HTTPS server); ``url`` its base
+    URL. A target that could not be validated carries the attempted values and
+    its ``configuration_error``.
+    """
 
     host: str
     port: int
     url: str
     configuration_error: str | None = None
+    scheme: Scheme = "http"
+
+    @classmethod
+    def for_address(cls, address: ServerAddress) -> DesktopTarget:
+        """The target of a validated address."""
+        return cls(address.host, address.port, address.url, scheme=address.scheme)
+
+    @property
+    def address(self) -> ServerAddress | None:
+        """The validated address, or ``None`` for a target with a configuration error."""
+        if self.configuration_error is not None:
+            return None
+        return ServerAddress(self.scheme, self.host, self.port)
+
+    @property
+    def display(self) -> str:
+        """How the user sees the target: ``host:port`` or the HTTPS address."""
+        address = self.address
+        return address.display if address is not None else f"{self.host}:{self.port}"
 
 
 @dataclass(frozen=True)
@@ -152,10 +185,17 @@ class SessionLink:
 
 @dataclass(frozen=True)
 class DesktopProbeResult:
-    """Result of probing a target vBot server and its WebUI root."""
+    """Result of probing a target vBot server and its WebUI root.
+
+    ``access_mode`` is the server's access mode (``local``, ``lan`` or
+    ``authenticated``) when its WebUI is available and it reported one; a
+    server from before access modes, or one whose status could not be read,
+    leaves it ``None`` and needs no sign-in.
+    """
 
     status: str
     target: DesktopTarget
+    access_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -325,6 +365,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--server-data-dir",
+        type=Path,
+        help=(
+            "The data directory of the vBot server this installation runs. The "
+            "Desktop then signs in to that server on this computer with its local "
+            "access token instead of pairing."
+        ),
+    )
+    parser.add_argument(
         "--mock-wakeword",
         action="store_true",
         help="Use a mock wakeword engine for UI validation without a real microphone.",
@@ -346,9 +395,9 @@ def icon_path(base_dir: Path | None = None, *, platform: str = sys.platform) -> 
 
 
 def build_target_url(host: str, port: int) -> str:
-    """Build the HTTP WebUI root URL for a resolved Desktop target."""
+    """Build the WebUI root URL of a target (``host`` may be an ``https://`` URL)."""
 
-    return f"http://{validate_host(host)}:{port}/"
+    return parse_server_address(host, port).url
 
 
 def probe_target(
@@ -367,7 +416,7 @@ def probe_target(
         return DesktopProbeResult(status=PROBE_INVALID_TARGET, target=target)
 
     budget: httpx.Timeout | float = timeout
-    if _is_loopback_host(target.host):
+    if is_loopback_host(target.host):
         budget = httpx.Timeout(timeout, connect=min(timeout, LOOPBACK_CONNECT_TIMEOUT_SECONDS))
     if get is not None:
         return _probe_target(target, lambda url: get(url, timeout=budget, trust_env=False))
@@ -375,24 +424,15 @@ def probe_target(
         return _probe_target(target, client.get)
 
 
-def _is_loopback_host(host: str) -> bool:
-    """Return whether a validated Desktop host names this machine's loopback interface."""
-
-    if host.casefold() == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
 def _probe_target(target: DesktopTarget, get: Callable[[str], HttpResponse]) -> DesktopProbeResult:
-    health_url = f"{target.url.rstrip('/')}/health"
+    base_url = target.url.rstrip("/")
     try:
-        health_response = get(health_url)
+        health_response = get(f"{base_url}/health")
     except httpx.RequestError:
         return DesktopProbeResult(status=PROBE_SERVER_UNREACHABLE, target=target)
 
+    if health_response.status_code == 403 and _error_code(health_response) == "access_denied":
+        return DesktopProbeResult(status=PROBE_ACCESS_DENIED, target=target)
     if health_response.status_code != 200 or not _is_vbot_health_response(health_response):
         return DesktopProbeResult(status=PROBE_NOT_VBOT_SERVER, target=target)
 
@@ -401,9 +441,45 @@ def _probe_target(target: DesktopTarget, get: Callable[[str], HttpResponse]) -> 
     except httpx.RequestError:
         return DesktopProbeResult(status=PROBE_WEBUI_UNAVAILABLE, target=target)
 
-    if 200 <= webui_response.status_code <= 399:
-        return DesktopProbeResult(status=PROBE_WEBUI_AVAILABLE, target=target)
-    return DesktopProbeResult(status=PROBE_WEBUI_UNAVAILABLE, target=target)
+    if not 200 <= webui_response.status_code <= 399:
+        return DesktopProbeResult(status=PROBE_WEBUI_UNAVAILABLE, target=target)
+    return DesktopProbeResult(
+        status=PROBE_WEBUI_AVAILABLE,
+        target=target,
+        access_mode=_access_mode(get, f"{base_url}{AUTH_STATUS_PATH}"),
+    )
+
+
+def _access_mode(get: Callable[[str], HttpResponse], status_url: str) -> str | None:
+    """Return the access mode the server reports, or ``None`` when it reports none.
+
+    Asked without a credential: the mode is public. A server from before access
+    modes answers 404; an unreadable answer is treated the same, so the WebUI's
+    own sign-in gate stays the fallback.
+    """
+    try:
+        response = get(status_url)
+    except httpx.RequestError:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    mode = payload.get("mode") if isinstance(payload, dict) else None
+    return mode if mode in _ACCESS_MODES else None
+
+
+def _error_code(response: HttpResponse) -> str | None:
+    """Return the ``error.code`` of a JSON error envelope, if the response is one."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    error = payload.get("error") if isinstance(payload, dict) else None
+    code = error.get("code") if isinstance(error, dict) else None
+    return code if isinstance(code, str) else None
 
 
 def load_webview() -> WebviewModule:
@@ -537,8 +613,11 @@ def _run_desktop(
 ) -> None:
     """Create the window and its services for the instance that owns the Desktop."""
 
+    from desktop.access import ServerAccess
     from desktop.bridge import DesktopBridge
-    from desktop.connection import ConnectionController, build_connection_html
+    from desktop.connection import ConnectionController
+    from desktop.connection_screen import build_connection_html
+    from desktop.credentials import DEVICE_TOKENS_FILE_NAME, DeviceTokenStore
     from desktop.dictation.controller import DictationController
     from desktop.hotkey import LIVE_VOICE_HOTKEY, HotkeyController, HotkeyHandlers
     from desktop.page_events import PageEventDispatcher
@@ -548,11 +627,18 @@ def _run_desktop(
     _http.prewarm_outbound_http()
     webview = webview_module if webview_module is not None else load_webview()
 
-    controller = ConnectionController(settings_file=settings_file, probe=probe)
+    # Signs the window and the native requests in to servers in the access mode
+    # ``authenticated``: the installation's own server with its local access
+    # token, any other with the device token stored when this Desktop paired.
+    access = ServerAccess(
+        store=DeviceTokenStore(desktop_config_directory / DEVICE_TOKENS_FILE_NAME),
+        server_data_dir=args.server_data_dir,
+    )
+    controller = ConnectionController(settings_file=settings_file, probe=probe, access=access)
     server_url = _resolve_launch_server_url(override, controller)
-    # Every remembered server plus the launch target becomes a secure context,
-    # so Live voice can open the microphone over plain HTTP on the LAN. The list
-    # is fixed for this process; a server added later needs a restart.
+    # Every remembered plain-HTTP server plus the launch target becomes a secure
+    # context, so Live voice can open the microphone over plain HTTP on the LAN.
+    # The list is fixed for this process; a server added later needs a restart.
     secure_origins = _windows.webview_secure_origins(_launch_targets(controller, override))
     page_events = PageEventDispatcher()
     # Built first: it moves an older microphone choice out of the Voice
@@ -565,7 +651,7 @@ def _run_desktop(
     )
     # One player for every Voice and dictation cue, so they play in order.
     cues = CuePlayer()
-    voice = _create_voice(args, settings_file, microphone, server_url, page_events, cues)
+    voice = _create_voice(args, settings_file, microphone, server_url, page_events, cues, access)
     dictation = DictationController(
         settings_path=settings_file,
         microphone=microphone,
@@ -573,6 +659,7 @@ def _run_desktop(
         page=page_events,
         wake_phrases=voice,
         cues=cues,
+        authorization=access,
     )
     window_holder: list[Any] = []
     window_state = _WindowState()
@@ -651,6 +738,8 @@ def _run_desktop(
         window, lambda: _windows.url_origin(controller.active_server_url())
     )
     controller.attach_window(window)
+    # Continues a window sign-in: ticket first, then the WebUI.
+    window.events.loaded += controller.page_loaded
     page_events.attach_window(window)
     instance.listen(
         _activation_handler(
@@ -812,11 +901,21 @@ def _launch_targets(
     controller: ConnectionController,
     override: tuple[str, int] | None,
 ) -> list[tuple[str, int]]:
-    """Return every server this launch may show: remembered ones plus the override."""
+    """Return every plain-HTTP server this launch may show: remembered ones plus the override.
 
-    targets = [(entry.host, entry.port) for entry in controller.list_servers()]
+    An HTTPS server is a secure context already and needs no WebView2 switch.
+    """
+
+    targets = [
+        (entry.host, entry.port) for entry in controller.list_servers() if entry.scheme == "http"
+    ]
     if override is not None:
-        targets.append(override)
+        try:
+            address = parse_server_address(*override)
+        except ValueError:
+            return targets
+        if address.scheme == "http":
+            targets.append((address.host, address.port))
     return targets
 
 
@@ -962,11 +1061,7 @@ def _select_launch_entry(
     if launch_target is None:
         logger.info("Desktop starting with no saved server; showing connection screen")
     else:
-        logger.info(
-            "Desktop starting; auto-connecting to %s:%s",
-            launch_target.host,
-            launch_target.port,
-        )
+        logger.info("Desktop starting; auto-connecting to %s", launch_target.address.display)
 
     def auto_connect() -> Any:
         return controller.auto_connect(open_session=session_link)
@@ -1059,33 +1154,6 @@ def _requested_session(
     return SessionLink(agent=agent, session=session)
 
 
-def validate_port(value: Any, *, source: str = "port") -> int:
-    """Validate a TCP port value."""
-
-    try:
-        port = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{source} must be an integer port") from exc
-    if port < 1 or port > 65535:
-        raise ValueError(f"{source} must be between 1 and 65535")
-    return port
-
-
-def validate_host(value: Any, *, source: str = "host") -> str:
-    """Validate a localhost or LAN host value before building an HTTP URL."""
-
-    if not isinstance(value, str):
-        raise ValueError(f"{source} must be a host name or IP address")
-    host = value.strip()
-    if not host:
-        raise ValueError(f"{source} must not be empty")
-    if any(character.isspace() for character in host):
-        raise ValueError(f"{source} must not contain whitespace")
-    if any(character in INVALID_HOST_CHARACTERS for character in host):
-        raise ValueError(f"{source} must be a host name or IP address, not a URL")
-    return host
-
-
 def _is_vbot_health_response(response: HttpResponse) -> bool:
     """Return whether /health matches the vBot server identity contract."""
 
@@ -1103,14 +1171,16 @@ def _create_voice(
     server_url: str,
     page_events: PageEventDispatcher,
     cues: CuePlayer | None = None,
+    access: ServerAccess | None = None,
 ) -> VoiceController:
     """Create Voice for the window's server; it starts listening on ``start()``.
 
     ``server_url`` is the *effective launch target* the caller resolved once
     (CLI override else last-used), so Voice sends commands to the server the
-    window opens. Mock mode is explicit through ``--mock-wakeword``. A missing
-    on-device stack is detected lazily, when a listener first starts, and
-    reported as the ``unavailable`` mode instead of simulated activity.
+    window opens, signed in through ``access``. Mock mode is explicit through
+    ``--mock-wakeword``. A missing on-device stack is detected lazily, when a
+    listener first starts, and reported as the ``unavailable`` mode instead of
+    simulated activity.
     """
 
     from desktop.wakeword.controller import VoiceController
@@ -1124,6 +1194,7 @@ def _create_voice(
         mock=bool(args.mock_wakeword),
         stack_available=_real_wakeword_available,
         cues=cues,
+        authorization=access,
     )
 
 
@@ -1192,7 +1263,7 @@ def _resolve_launch_server_url(
         entry = controller.resolve_last_used()
         if entry is None:
             return ""
-        host, port = entry.host, entry.port
+        host, port = entry.address.bridge_host, entry.port
     try:
         return build_target_url(host, port)
     except ValueError:

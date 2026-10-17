@@ -34,6 +34,7 @@ The status keeps the latest failure
 
 from __future__ import annotations
 
+import functools
 import logging
 import queue
 import threading
@@ -72,6 +73,7 @@ from desktop.speech.server_client import (
     ERROR_SERVER_UNREACHABLE,
     ERROR_SPEECH_TO_TEXT_UNAVAILABLE,
     ERROR_SPEECH_TO_TEXT_UNCONFIGURED,
+    ServerAuthorization,
     SpeechRequestCancelled,
     SpeechServerClient,
     SpeechServerError,
@@ -182,7 +184,8 @@ class DictationController:
     bound the shortcut's registration. Every public method is thread-safe. The
     shortcut handlers run on the hotkey thread and only flag the running take.
     ``cues`` is the Desktop's shared player (its owner closes it); without one
-    the takes are silent.
+    the takes are silent. ``authorization`` signs the speech requests in to the
+    server (``desktop.access.ServerAccess``).
     """
 
     def __init__(
@@ -196,6 +199,7 @@ class DictationController:
         cues: CuePlayer | None = None,
         inserter: TextInserter | None = None,
         client_factory: SpeechClientFactory | None = None,
+        authorization: ServerAuthorization | None = None,
         hotkey_supported: bool | None = None,
         hotkey_api_factory: Callable[[], HotkeyApi] | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -208,7 +212,9 @@ class DictationController:
         self._wake_phrases = wake_phrases
         self._cues = cues
         self._inserter_instance = inserter
-        self._client_factory = client_factory or _create_client
+        self._client_factory = client_factory or functools.partial(
+            _create_client, authorization=authorization
+        )
         self._clock = clock
         self._piece_target_seconds = piece_target_seconds
         self._piece_search_seconds = piece_search_seconds
@@ -623,5 +629,7 @@ def _prepare_server(take: _Take, client: SpeechServerClient) -> None:
         logger.warning("Dictation could not prepare the server", exc_info=True)
 
 
-def _create_client(server_url: str, cancel: threading.Event) -> SpeechServerClient:
-    return SpeechServerClient(server_url, cancel=cancel)
+def _create_client(
+    server_url: str, cancel: threading.Event, *, authorization: ServerAuthorization | None
+) -> SpeechServerClient:
+    return SpeechServerClient(server_url, cancel=cancel, authorization=authorization)
