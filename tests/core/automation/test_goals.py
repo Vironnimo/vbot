@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import pytest_asyncio
 
 from core.automation.goals import (
     GOAL_CONTINUE_TEXT,
@@ -65,12 +66,12 @@ class _GoalChatLoop:
 
 
 class _Harness:
-    def __init__(self, tmp_path: Path, *, work_pending: bool = False) -> None:
+    def __init__(self, tmp_path: Path) -> None:
         self.runs = ChatRunManager()
         self.sessions = ChatSessionManager(tmp_path)
         self.sessions.create("coder", session_id="session-one")
         self.loop = _GoalChatLoop(self.runs)
-        self.work_pending = work_pending
+        self.work_pending = False
         self.changes: list[SessionAddress] = []
 
         async def pending(_address: SessionAddress) -> bool:
@@ -111,7 +112,9 @@ class _Harness:
         """Wait until no Run is active and every goal decision has run."""
         while True:
             runs = self.runs.active_runs()
-            decisions = list(self.goals._tasks)  # noqa: SLF001 - drain this harness's decisions.
+            # A completed Task may still await its discard callback. Gathering
+            # only completed Tasks returns eagerly and starves that callback.
+            decisions = [task for task in self.goals._tasks if not task.done()]  # noqa: SLF001
             if not runs and not decisions:
                 return
             # A decision may start another Run, whose completion spawns another
@@ -128,6 +131,17 @@ class _Harness:
         await self.runs.start(_ADDRESS, executor)
 
 
+@pytest_asyncio.fixture
+async def harness(tmp_path: Path) -> AsyncIterator[_Harness]:
+    harness = _Harness(tmp_path)
+    try:
+        yield harness
+    finally:
+        await harness.goals.aclose()
+        await harness.runs.aclose()
+        harness.sessions.close()
+
+
 def _marks(goals: GoalService, status: Any) -> Turn:
     async def turn(run: Run) -> None:
         await goals.update_from_agent(_ADDRESS, status, run_id=run.id)
@@ -136,9 +150,8 @@ def _marks(goals: GoalService, status: Any) -> Turn:
 
 
 async def test_goal_runs_automatically_until_the_agent_marks_it_complete(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    harness = _Harness(tmp_path)
     harness.loop.turns = [_works, _works, _marks(harness.goals, "complete")]
 
     await harness.command("Ship <the> release")
@@ -174,10 +187,8 @@ async def test_goal_runs_automatically_until_the_agent_marks_it_complete(
 
 
 async def test_the_last_automatic_turn_says_so_and_the_limit_pauses_the_goal(
-    tmp_path: Path,
+    harness: _Harness,
 ) -> None:
-    harness = _Harness(tmp_path)
-
     await harness.command("Refactor the parser --max 2")
     await harness.settle()
 
@@ -202,10 +213,8 @@ async def test_the_last_automatic_turn_says_so_and_the_limit_pauses_the_goal(
     ],
 )
 async def test_the_kernel_pauses_an_automatic_turn_that_cannot_go_on(
-    tmp_path: Path, turn: Any, reason: str, note: str
+    harness: _Harness, turn: Any, reason: str, note: str
 ) -> None:
-    harness = _Harness(tmp_path)
-
     async def fails(_run: Run) -> None:
         raise RuntimeError("provider down")
 
@@ -228,9 +237,8 @@ async def test_the_kernel_pauses_an_automatic_turn_that_cannot_go_on(
 
 
 async def test_a_user_reply_reactivates_a_blocked_goal_but_background_results_do_not(
-    tmp_path: Path,
+    harness: _Harness,
 ) -> None:
-    harness = _Harness(tmp_path)
     harness.loop.turns = [_marks(harness.goals, "blocked")]
     await harness.command("Deploy the service")
     await harness.settle()
@@ -260,8 +268,8 @@ async def test_a_user_reply_reactivates_a_blocked_goal_but_background_results_do
     assert harness.goal()["turns"] == 1
 
 
-async def test_running_background_work_holds_the_next_automatic_turn(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path, work_pending=True)
+async def test_running_background_work_holds_the_next_automatic_turn(harness: _Harness) -> None:
+    harness.work_pending = True
 
     await harness.command("Run the benchmark suite")
     await harness.settle()
@@ -286,8 +294,7 @@ async def test_running_background_work_holds_the_next_automatic_turn(tmp_path: P
     assert harness.goal()["status"] == "complete"
 
 
-async def test_goal_commands_pause_resume_and_clear(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+async def test_goal_commands_pause_resume_and_clear(harness: _Harness) -> None:
     harness.loop.turns = [_marks(harness.goals, "blocked")]
     await harness.command("Write the migration")
     await harness.settle()
@@ -311,8 +318,7 @@ async def test_goal_commands_pause_resume_and_clear(tmp_path: Path) -> None:
     )
 
 
-async def test_a_goal_is_not_set_while_a_run_is_active(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
+async def test_a_goal_is_not_set_while_a_run_is_active(harness: _Harness) -> None:
     release = asyncio.Event()
 
     async def waits(_run: Run) -> None:
@@ -327,8 +333,7 @@ async def test_a_goal_is_not_set_while_a_run_is_active(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("pause", ["stop", "takeover", "restart"])
-async def test_stop_takeover_and_restart_pause_an_open_goal(tmp_path: Path, pause: str) -> None:
-    harness = _Harness(tmp_path)
+async def test_stop_takeover_and_restart_pause_an_open_goal(harness: _Harness, pause: str) -> None:
     harness.loop.turns = [_marks(harness.goals, "blocked")]
     await harness.command("Translate the docs")
     await harness.settle()
