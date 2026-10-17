@@ -129,7 +129,13 @@ The Inno installer is per-user, defaults to `%LOCALAPPDATA%/Programs/vBot`,
 registers the command path and normal Windows uninstall entry, and optionally
 starts vBot at sign-in. Server data defaults to `~/.vbot`. Silent entrypoints
 accept `/DIR`, `/VBOTDATA`, `/VBOTHOST`, `/VBOTPORT`, and `/TASKS=startup` (or an
-empty task list). A Desktop Client never controls a default local server.
+empty task list), plus the server access options `/VBOTACCESS=local|lan|authenticated`,
+`/VBOTALLOWNETWORK`, `/VBOTPUBLICURL`, `/VBOTTRUSTEDPROXY`, `/VBOTTLSCERT` and
+`/VBOTTLSKEY` (comma-separated for several networks or proxies). Options left out
+keep the defaults of `vbot application install`: access mode `local`, bound to the
+mode's default address. `install.ps1` passes them from `-HostName`, `-Access`,
+`-AllowNetwork`, `-PublicUrl`, `-TrustedProxy`, `-TlsCert` and `-TlsKey`. A Desktop
+Client never controls a default local server.
 
 Prefer the default or another short installation directory. Native bootstrap
 runtime paths must fit within 260 characters. Deep dependency paths additionally

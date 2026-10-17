@@ -101,8 +101,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ReleaseDownloads = "https://github.com/Vironnimo/vbot/releases"
 $ReleaseIdentityName = "vbot-release.json"
-$HostName = "127.0.0.1"
 $Port = 9134
+$AllowNetwork = @(); $PublicUrl = ""; $TlsCert = ""; $TlsKey = ""
 $ProgressPreference = "SilentlyContinue"
 $Functions = @(
     "Get-ReleaseDownloadBase", "Save-ReleaseDownload", "Get-ReleaseIdentity",
@@ -173,6 +173,11 @@ foreach ($Mode in ($Modes -split ",")) {
     $calls = @(); $statuses = @(); $healthCalls = 0; $trayStarts = 0; $downloads = @()
     $failure = $null
     $tag = if ($Mode -eq "version") { "v1.2.3" } else { "" }
+    # The main build passes access options and leaves the bind address to the mode.
+    $HostName = if ($Mode -eq "main") { "" } else { "127.0.0.1" }
+    $Access = if ($Mode -eq "main") { "authenticated" } else { "" }
+    $TrustedProxy = if ($Mode -eq "main") { @("127.0.0.1", "10.0.0.0/8") } else { @() }
+    $PublicUrl = if ($Mode -eq "main") { "https://vbot.example.org" } else { "" }
     try { Install-NativeRelease -Tag $tag -Shape $Shape -MainBuild ($Mode -eq "main") }
     catch { $failure = $_.Exception.Message }
     $results[$Mode] = @{ok=($null -eq $failure); error=$failure; calls=$calls
@@ -204,13 +209,22 @@ $results | ConvertTo-Json -Compress -Depth 5
             f"{installer_base}/vBot-1.2.3-windows-x86_64-{shape}.exe",
         ], mode
         starts = mode in {"release", "main", "version"}
+        server_options = (
+            [
+                '/VBOTACCESS="authenticated"',
+                '/VBOTPUBLICURL="https://vbot.example.org"',
+                '/VBOTTRUSTEDPROXY="127.0.0.1,10.0.0.0/8"',
+            ]
+            if mode == "main"
+            else ['/VBOTHOST="127.0.0.1"']
+        )
         assert payload["calls"] == [
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",
             "/NORESTART",
             f'/DIR="{install_dir}"',
             f'/VBOTDATA="{install_dir / "data"}"',
-            '/VBOTHOST="127.0.0.1"',
+            *server_options,
             "/VBOTPORT=9134",
             "/TASKS=startup" if starts else "/TASKS=",
         ], mode

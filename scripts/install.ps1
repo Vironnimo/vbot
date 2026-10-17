@@ -13,9 +13,19 @@ param(
     [switch]$Main,
     [string]$Version = "",
     [string]$DataDir = (Join-Path $HOME ".vbot"),
-    [string]$HostName = "127.0.0.1",
+    # Empty: 127.0.0.1, or 0.0.0.0 for -Access lan or direct HTTPS.
+    [string]$HostName = "",
     [ValidateRange(1, 65535)]
     [int]$Port = 8420,
+    # Who may connect: local (this computer only, the default), lan (home network
+    # without login) or authenticated (with login, from the internet).
+    [ValidateSet("local", "lan", "authenticated")]
+    [string]$Access = "",
+    [string[]]$AllowNetwork = @(),
+    [string]$PublicUrl = "",
+    [string[]]$TrustedProxy = @(),
+    [string]$TlsCert = "",
+    [string]$TlsKey = "",
     [switch]$Desktop,
     [switch]$DesktopClient,
     [switch]$NoAutostart,
@@ -218,9 +228,14 @@ function Install-NativeRelease {
         if ($signature.Status -ne "NotSigned" -and $signature.Status -ne "Valid") {
             throw "The installer contains an invalid Authenticode signature."
         }
-        foreach ($value in @($InstallDir, $DataDir, $HostName)) {
+        foreach ($value in @($InstallDir, $DataDir, $HostName, $PublicUrl, $TlsCert, $TlsKey)) {
             if ($value -match '["\r\n]') {
                 throw "Installer paths and host names cannot contain quotes or newlines."
+            }
+        }
+        foreach ($value in @($AllowNetwork) + @($TrustedProxy)) {
+            if ($value -match '["\r\n,]') {
+                throw "-AllowNetwork and -TrustedProxy take addresses or networks such as 192.168.1.0/24."
             }
         }
         Write-Step "Installing $label"
@@ -230,11 +245,25 @@ function Install-NativeRelease {
             "/SUPPRESSMSGBOXES",
             "/NORESTART",
             "/DIR=`"$InstallDir`"",
-            "/VBOTDATA=`"$DataDir`"",
-            "/VBOTHOST=`"$HostName`"",
-            "/VBOTPORT=$Port",
-            "/TASKS=$tasks"
+            "/VBOTDATA=`"$DataDir`""
         )
+        # The access options reach the application installer only when given; it
+        # defaults to local and to the bind address of the chosen mode.
+        $options = [ordered]@{
+            VBOTHOST = $HostName
+            VBOTACCESS = $Access
+            VBOTALLOWNETWORK = (@($AllowNetwork) -join ",")
+            VBOTPUBLICURL = $PublicUrl
+            VBOTTRUSTEDPROXY = (@($TrustedProxy) -join ",")
+            VBOTTLSCERT = $TlsCert
+            VBOTTLSKEY = $TlsKey
+        }
+        foreach ($option in $options.GetEnumerator()) {
+            if (-not [string]::IsNullOrWhiteSpace($option.Value)) {
+                $arguments += "/$($option.Key)=`"$($option.Value)`""
+            }
+        }
+        $arguments += @("/VBOTPORT=$Port", "/TASKS=$tasks")
         $process = Start-Process -FilePath $installer -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
         if ($process.ExitCode -ne 0) {
             throw "The vBot installer exited with code $($process.ExitCode)."
@@ -288,6 +317,13 @@ elseif (-not [System.IO.Path]::IsPathRooted($InstallDir)) {
     $InstallDir = Join-Path (Get-Location).ProviderPath $InstallDir
 }
 $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
+# The application installer runs elsewhere; certificate paths must not depend on this directory.
+if (-not [string]::IsNullOrWhiteSpace($TlsCert)) {
+    $TlsCert = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Get-Location).ProviderPath, $TlsCert))
+}
+if (-not [string]::IsNullOrWhiteSpace($TlsKey)) {
+    $TlsKey = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Get-Location).ProviderPath, $TlsKey))
+}
 
 if (Test-Path -LiteralPath $InstallDir) {
     throw "$InstallDir already exists. To update an existing installation run 'vBot.exe update' there; otherwise remove it or pass -InstallDir to choose another location."

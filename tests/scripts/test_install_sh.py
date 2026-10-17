@@ -238,5 +238,46 @@ def test_installer_refuses_a_package_it_cannot_verify_against_the_release_identi
     assert not (Path(environment["HOME"]) / ".local" / "share" / "vbot").exists()
 
 
+@pytest.mark.parametrize(
+    ("arguments", "passed"),
+    [
+        # The application installer chooses the default mode and its bind address.
+        pytest.param((), "", id="default"),
+        pytest.param(
+            ("--access", "lan", "--allow-network", "100.64.0.0/10", "--allow-network", "fd7a::/48"),
+            " --access lan --allow-network 100.64.0.0/10 --allow-network fd7a::/48",
+            id="lan",
+        ),
+        pytest.param(
+            (
+                "--host",
+                "127.0.0.1",
+                "--access",
+                "authenticated",
+                "--public-url",
+                "https://vbot.example.org",
+                "--trusted-proxy",
+                "127.0.0.1",
+            ),
+            " --access authenticated --public-url https://vbot.example.org"
+            " --trusted-proxy 127.0.0.1",
+            id="authenticated",
+        ),
+    ],
+)
+def test_installer_passes_the_access_mode_only_when_given(
+    tmp_path: Path, arguments: tuple[str, ...], passed: str
+) -> None:
+    environment = _environment(tmp_path)
+    _publish(tmp_path / "web", "latest/download", _package(tmp_path / "package.zip"))
+
+    result = _install(environment, "--no-autostart", *arguments)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    (install,) = [call for call in _calls(environment) if call.startswith("install ")]
+    assert install.endswith(f"--channel release{passed}")
+    assert ("--host" in install) is ("--host" in arguments)
+
+
 def _user() -> str:
     return subprocess.run(["id", "-un"], capture_output=True, text=True, check=True).stdout.strip()
