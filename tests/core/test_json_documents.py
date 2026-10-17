@@ -367,7 +367,7 @@ def test_snapshot_document_paths_lists_exactly_the_documents_in_scope(tmp_path: 
         "skills/policy.json",
         "terminals/launch-history.json",
         "terminals/groups.json",
-        "oauth/github-copilot-oauth.json",
+        "secrets.json",
         "extension-data/mcp/connections.json",
     ]
     others = [
@@ -377,7 +377,8 @@ def test_snapshot_document_paths_lists_exactly_the_documents_in_scope(tmp_path: 
         "agents/main/memory.json",
         "agents/.staged/agent.json",
         "agents/main/.agent.json.tmp",
-        "oauth/nested/token.json",
+        # Plaintext OAuth token files before the Secret Store.
+        "oauth/github-copilot-oauth.json",
         "workspaces/main/settings.json",
         "channels/telegram/state.json",
         # Blob sidecars are durable documents, but snapshots hold no blobs.

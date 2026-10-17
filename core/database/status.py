@@ -1,9 +1,13 @@
-"""Operator-safe data-store status: databases, snapshots, incidents and maintenance."""
+"""Operator-safe data-store status: databases, snapshots, incidents and maintenance.
+
+The Secret Store's own projection (``core.secrets.secret_store_health``) joins
+it as ``secrets`` when the caller passes it; this kernel module never opens it.
+"""
 
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import closing
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,13 +46,15 @@ def data_store_status(
     *,
     databases: Iterable[Database] = (),
     specs: Iterable[DatabaseSpec] = (),
+    secret_store: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Summarize the data directory's canonical databases for operators.
 
     ``databases`` are handles open in this process; their owner health is read
     through them. Every other registered database is checked read-only from its
-    file, with owner health when ``specs`` describes it. Nothing is created,
-    evolved or restored.
+    file, with owner health when ``specs`` describes it. ``secret_store`` is the
+    Secret Store's health projection; its ``degraded_reason`` degrades the data
+    store. Nothing is created, evolved or restored.
     """
     data_dir = Path(data_dir)
     problems: list[str] = []
@@ -108,6 +114,8 @@ def data_store_status(
         for name, member in members.items()
         if member["state"] == "degraded"
     ]
+    if secret_store is not None and secret_store.get("degraded_reason"):
+        degraded.append(f"secrets: {secret_store['degraded_reason']}")
     state: str
     reason: str | None
     if guard is not None:
@@ -138,6 +146,7 @@ def data_store_status(
         "snapshot_health": snapshot_health,
         "incidents": incidents,
         "config_backups": config_backup_summary(data_dir),
+        **({} if secret_store is None else {"secrets": dict(secret_store)}),
     }
 
 

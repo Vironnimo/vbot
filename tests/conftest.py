@@ -54,14 +54,15 @@ def _isolated_home(_home_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     ``Path.home()`` and ``~`` read HOME on POSIX and USERPROFILE on Windows,
     so no test reads or writes the real home: its ``~/.vbot`` data, the
-    ``~/.vbot-dev`` data a worktree checkout resolves, or Git configuration.
-    Tests reach the directory through ``Path.home()``.
+    ``~/.vbot-dev`` data a worktree checkout resolves, Secret Store key files,
+    or Git configuration. Tests reach the directory through ``Path.home()``.
     """
     home = _home_root / str(next(_HOME_NUMBERS))
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("VBOT_SECRET_KEY_FILE", raising=False)
 
 
 _REAL_FSYNC = os.fsync

@@ -33,6 +33,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+# A module import: ``core.json_documents`` imports the kernel's snapshot freeze in turn.
+import core.json_documents as json_documents
 from core.database._connections import (
     classify_unavailable,
     classify_write_error,
@@ -41,6 +43,7 @@ from core.database._connections import (
     sqlite_source_id,
 )
 from core.database._documents import (
+    DOCUMENTS_DIRECTORY_NAME,
     DocumentMember,
     capture_documents,
     documents_payload,
@@ -1032,6 +1035,44 @@ def remove_interrupted_staging(data_dir: Path) -> None:
     data_dir = Path(data_dir)
     with operation_lock(data_dir):
         remove_staging_locked(data_dir, snapshot_root=snapshot_root(data_dir))
+
+
+def remove_retired_document_copies(data_dir: Path, patterns: Iterable[str]) -> int:
+    """Delete the copies of documents this vBot no longer keeps from every data snapshot.
+
+    For plaintext credentials an older vBot captured (``oauth/*.json`` before the
+    Secret Store). A reader leaves out documents it does not know, so such a
+    copy is neither verified nor restored any more and every snapshot stays
+    usable; a pattern of the current document set is refused. Returns how many
+    copies were deleted. Raises ``DatabaseUnavailableError`` while the operation
+    lock is busy or a snapshot cannot be listed.
+    """
+    selected = tuple(patterns)
+    if not selected or any(
+        pattern in json_documents.SNAPSHOT_DOCUMENTS.values() for pattern in selected
+    ):
+        raise ValueError("only documents outside the snapshot document set can be removed")
+    data_dir = Path(data_dir)
+    removed = 0
+    with operation_lock(data_dir):
+        for child in _published_children(data_dir):
+            documents = child / DOCUMENTS_DIRECTORY_NAME
+            try:
+                paths = json_documents.matching_data_paths(documents, selected)
+            except OSError as exc:
+                raise DatabaseUnavailableError(f"snapshot {child.name} cannot be listed") from exc
+            directories: set[Path] = set()
+            for path in paths:
+                copy = documents.joinpath(*path.split("/"))
+                copy.unlink(missing_ok=True)
+                directories.add(copy.parent)
+                removed += 1
+            for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+                with suppress(OSError):
+                    directory.rmdir()
+    if removed:
+        _LOGGER.info("Deleted retired document copies from data snapshots (copies=%d)", removed)
+    return removed
 
 
 def _make_room(data_dir: Path, needed: int) -> bool:

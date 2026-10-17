@@ -58,6 +58,23 @@ def test_owner_health_is_reported_for_open_and_closed_databases(data_dir: Path) 
         assert status["databases"]["notes"]["details"] == {"indexed": 3}
 
 
+def test_a_secret_store_problem_degrades_the_data_store(data_dir: Path) -> None:
+    snapshot_with_notes(data_dir, "saved")
+
+    healthy = data_store_status(
+        data_dir, secret_store={"state": "available", "degraded_reason": None}
+    )
+    degraded = data_store_status(
+        data_dir,
+        secret_store={"state": "unavailable", "degraded_reason": "the key file is missing"},
+    )
+
+    assert (healthy["state"], healthy["secrets"]["state"]) == ("healthy", "available")
+    assert degraded["state"] == "degraded"
+    assert degraded["reason"] == "secrets: the key file is missing"
+    assert "secrets" not in data_store_status(data_dir)
+
+
 def test_a_missing_or_foreign_registered_database_is_unavailable(data_dir: Path) -> None:
     snapshot_with_notes(data_dir, "saved")
     path = notes_spec(data_dir).path

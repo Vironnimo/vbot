@@ -349,6 +349,8 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     """Validate every durable JSON document in a data directory.
 
     ``settings.json`` is always reported; every other document only when present.
+    Plaintext credential files, which vBot no longer reads, are reported with a
+    warning each.
     """
 
     # Settings owns bundle orchestration, while each persisted format is validated
@@ -371,7 +373,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     from core.extensions.config_validation import validate_extension_documents
     from core.model_tasks.artifacts import validate_task_artifact_metadata_file
     from core.projects import validate_project_file
-    from core.providers.token_store import validate_oauth_token_file
+    from core.secrets import plaintext_credential_reports, validate_secret_store_file
     from core.skills import validate_skill_policy_file
     from core.storage.prompt_blocks import validate_prompt_layout_file
     from core.tools.terminal_store import (
@@ -397,7 +399,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         "skill_policy": validate_skill_policy_file,
         "terminal_launch_history": validate_terminal_launch_history_file,
         "terminal_groups": validate_terminal_groups_file,
-        "oauth_token": validate_oauth_token_file,
+        "secrets": validate_secret_store_file,
         "attachment_metadata": validate_attachment_metadata_file,
         "speech_artifact_metadata": validate_task_artifact_metadata_file,
     }
@@ -422,6 +424,8 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         settings = {}
     directories = [Path(path).expanduser() for path in settings.get("extension_directories", [])]
     reports.extend(validate_extension_documents(root, directories))
+    # The plaintext credential files the Secret Store replaced: vBot ignores them.
+    reports.extend(plaintext_credential_reports(root))
     reported = {report.file_path for report in reports}
     for pattern in DURABLE_DOCUMENTS.values():
         if pattern.startswith("extension-data/"):

@@ -4,8 +4,9 @@ A data snapshot copies every canonical database and is therefore taken rarely.
 The configuration of a data directory is small and changes often, so it is
 backed up on its own: the JSON document set of data snapshots
 (``core.json_documents.SNAPSHOT_DOCUMENTS``) plus
-:data:`CONFIGURATION_FILE_PATTERNS` (the data-directory ``.env``, the identity
-files of Workspaces in their default location, and prompt overrides).
+:data:`CONFIGURATION_FILE_PATTERNS` (the identity files of Workspaces in their
+default location and prompt overrides). Credentials are backed up only as
+ciphertext, with the Secret Store document (``secrets.json``).
 
 Layout under ``<data-dir>/config-backups/``:
 
@@ -25,6 +26,11 @@ never one whose folder no longer exists, never one a backup cannot read because
 it or a folder on its path is a link), leaves files created after the backup
 alone, and first backs up the current state, so a restore can be taken back by
 restoring that backup.
+
+Manifests are written once, with one exception: :func:`purge_config_backup_files`
+rewrites them without files a vBot no longer keeps, such as the plaintext
+credential files the Secret Store replaced, and deletes the contents no backup
+references any more.
 """
 
 from __future__ import annotations
@@ -80,7 +86,6 @@ CONFIG_BACKUP_MANIFEST_VERSION = 1
 CONFIG_RESTORE_OPERATION = "config restore"
 #: Configuration files beside the JSON document set, relative to the data directory.
 CONFIGURATION_FILE_PATTERNS: tuple[str, ...] = (
-    ".env",
     "agents/*/workspace/SOUL.md",
     "agents/*/workspace/USER.md",
     "agents/*/workspace/MEMORY.md",
@@ -154,6 +159,19 @@ class ConfigBackup:
             "files": len(self.files),
             "damaged": list(self.damaged()),
         }
+
+
+@dataclass(frozen=True)
+class ConfigBackupPurge:
+    """What :func:`purge_config_backup_files` removed.
+
+    ``complete`` is false while a manifest could not be read: it may reference
+    a purged content, so no content was deleted and the purge must be repeated.
+    """
+
+    removed_entries: int = 0
+    rewritten_backups: int = 0
+    complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -548,7 +566,7 @@ def _store_object(root: Path, digest: str, content: bytes) -> None:
         pass
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f".{digest}.{uuid.uuid4().hex}.tmp")
-    # Objects can hold credentials (.env, OAuth tokens): owner-only from creation.
+    # Objects held plaintext credentials before the Secret Store: owner-only from creation.
     descriptor = os.open(
         temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o600
     )
@@ -604,9 +622,13 @@ def _prune(root: Path, backups: list[ConfigBackup], *, unreadable: int, now: dat
             _manifest_path(root, backup.backup_id).unlink(missing_ok=True)
     if unreadable:
         return
-    referenced = {
-        digest for backup in backups if backup.backup_id in keep for digest in backup.objects()
-    }
+    _delete_unreferenced_objects(
+        root,
+        {digest for backup in backups if backup.backup_id in keep for digest in backup.objects()},
+    )
+
+
+def _delete_unreferenced_objects(root: Path, referenced: set[str]) -> None:
     try:
         with os.scandir(root / _OBJECTS_DIRECTORY) as listing:
             directories = [entry for entry in listing if entry.is_dir()]
@@ -617,6 +639,89 @@ def _prune(root: Path, backups: list[ConfigBackup], *, unreadable: int, now: dat
             for entry in entries:
                 if entry.name not in referenced:
                     Path(entry.path).unlink(missing_ok=True)
+
+
+def purge_config_backup_files(data_dir: Path, patterns: Iterable[str]) -> ConfigBackupPurge:
+    """Remove every file matching ``patterns`` from every configuration backup.
+
+    For files this vBot no longer backs up, such as the plaintext credential
+    files the Secret Store replaced: each readable manifest that names one is
+    rewritten without it, and every stored content no manifest references any
+    more is deleted. A pattern of the current configuration set is refused.
+    Raises ``DatabaseFormatError`` while data maintenance is incomplete,
+    :class:`OperationLockBusyError` while another data-store operation runs,
+    and ``DatabaseUnavailableError`` when the backups cannot be listed.
+    """
+    selected = tuple(patterns)
+    current = set(_patterns())
+    if not selected or any(pattern in current for pattern in selected):
+        raise ValueError("only files outside the configuration set can be purged")
+    data_dir = Path(data_dir)
+    require_no_maintenance(data_dir)
+    lock = acquire_operation_lock(data_dir, CONFIG_BACKUP_LOCK_SECONDS)
+    if lock is None:
+        raise OperationLockBusyError("another data-store operation holds the operation lock")
+    try:
+        require_no_maintenance(data_dir)
+        return _purge_locked(data_dir, selected)
+    finally:
+        lock.release()
+
+
+def _purge_locked(data_dir: Path, patterns: tuple[str, ...]) -> ConfigBackupPurge:
+    root = config_backup_root(data_dir)
+    directory = root / _BACKUPS_DIRECTORY
+    try:
+        names = sorted(entry.name for entry in os.scandir(directory) if entry.is_file())
+    except FileNotFoundError:
+        return ConfigBackupPurge()
+    except OSError as exc:
+        raise DatabaseUnavailableError("the configuration backups cannot be listed") from exc
+    removed = rewritten = unreadable = 0
+    for name in names:
+        backup_id = name.removesuffix(".json")
+        if name == backup_id or _BACKUP_ID_PATTERN.fullmatch(backup_id) is None:
+            continue
+        manifest = directory / name
+        try:
+            payload = json.loads(manifest.read_bytes().decode("utf-8"))
+        except FileNotFoundError:
+            continue
+        except OSError, UnicodeDecodeError, json.JSONDecodeError:
+            unreadable += 1
+            continue
+        files = payload.get("files") if isinstance(payload, dict) else None
+        if not isinstance(files, dict):
+            unreadable += 1
+            continue
+        doomed = [
+            path
+            for path in files
+            if isinstance(path, str) and json_documents.path_matches_patterns(path, patterns)
+        ]
+        if not doomed:
+            continue
+        for path in doomed:
+            del files[path]
+        atomic_write_text(manifest, json.dumps(payload, indent=2) + "\n")
+        removed += len(doomed)
+        rewritten += 1
+    if rewritten:
+        fsync_dir(directory)
+    backups, still_unreadable = _scan(data_dir)
+    complete = unreadable == 0 and still_unreadable == 0
+    if complete:
+        _delete_unreferenced_objects(
+            root, {digest for backup in backups for digest in backup.objects()}
+        )
+    if removed or not complete:
+        _LOGGER.info(
+            "Purged files from configuration backups (entries=%d backups=%d complete=%s)",
+            removed,
+            rewritten,
+            complete,
+        )
+    return ConfigBackupPurge(removed, rewritten, complete)
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.config_validation import JsonDiagnostic
+from core.secrets import CREDENTIALS, KeyFileProtection, SecretStore
 from core.settings import (
     SettingsValidationError,
     load_runtime_settings_json,
@@ -126,7 +127,8 @@ _DATA_DIR_DOCUMENTS: dict[str, tuple[str, dict[str, object]]] = {
     "skills/policy.json": ('{"version": 2}', {}),
     "terminals/launch-history.json": ('{"version": 1, "entries": []}', {"entries": []}),
     "terminals/groups.json": ('{"version": 1, "groups": []}', {"groups": []}),
-    "oauth/github-copilot-oauth.json": ('{"access_token": "token"}', {"access_token": "token"}),
+    # A current Secret Store is written through the store (it needs a key).
+    "secrets.json": ("{}", {}),
     "extension-data/mcp/connections.json": ("[]", {"connections": []}),
     "artifacts/attachments/att_000000000001.json": (
         json.dumps(_ATTACHMENT_METADATA),
@@ -145,6 +147,9 @@ _FORMAT_VERSIONS = {"calendar/events.json": 2}
 
 def _write_data_dir_documents(root: Path, *, current: bool) -> None:
     for relative_path, (legacy, fields) in _DATA_DIR_DOCUMENTS.items():
+        if relative_path == "secrets.json" and current:
+            SecretStore(root).set_entry(CREDENTIALS, "OPENAI_API_KEY", "secret")
+            continue
         path = root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         version = _FORMAT_VERSIONS.get(relative_path, 1)
@@ -185,6 +190,35 @@ def test_validate_data_dir_config_reports_invalid_attachment_media_type(
         ("error", "$.media_type")
     ]
     assert path.read_text(encoding="utf-8") == original
+
+
+def test_validate_data_dir_config_reports_an_unopenable_store_and_plaintext_credentials(
+    tmp_path: Path,
+) -> None:
+    key_file = tmp_path / "keys" / "store.key"
+    store = SecretStore(tmp_path, protections=(KeyFileProtection(path=key_file),))
+    store.set_entry(CREDENTIALS, "OPENAI_API_KEY", "secret")
+    key_file.unlink()
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=sk-env-value\n", encoding="utf-8")
+    token = tmp_path / "oauth" / "github-copilot-oauth.json"
+    token.parent.mkdir()
+    token.write_text('{"format_version": 1, "access_token": "oauth-value"}', encoding="utf-8")
+
+    reports = {
+        report.file_path.relative_to(tmp_path).as_posix(): report
+        for report in validate_data_dir_config(tmp_path)
+    }
+
+    store_report = reports["secrets.json"]
+    assert not store_report.ok
+    assert [item.path for item in store_report.diagnostics] == ["$.key"]
+    assert "vbot data-store secrets reset --yes" in store_report.diagnostics[0].message
+    for plaintext in (".env", "oauth/github-copilot-oauth.json"):
+        assert reports[plaintext].ok
+        assert [item.severity for item in reports[plaintext].diagnostics] == ["warning"]
+        assert "vbot data-store secrets convert --yes" in reports[plaintext].diagnostics[0].message
+    assert "sk-env-value" not in repr(reports)
+    assert "oauth-value" not in repr(reports)
 
 
 def test_validate_data_dir_config_refuses_documents_before_generation_1(tmp_path: Path) -> None:
