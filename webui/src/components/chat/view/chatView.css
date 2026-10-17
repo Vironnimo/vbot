@@ -41,13 +41,15 @@
   container: chat-area / inline-size;
 }
 
-/* The open Session-info panel pushes the chat the same way: timeline and
-   composer keep its width plus its edge gaps free and center in the rest.
-   A chat too narrow for both keeps the panel over it instead. */
+/* The open Session-info panel pushes the chat the same way: the timeline's
+   content and the composer keep its width plus its edge gaps free
+   (`--chat-activity-reserve`) and center in the rest, while the timeline's
+   scrollbar stays at the edge. A chat too narrow for both keeps the panel
+   over it instead. */
 @container chat-surface (min-width: 740px) {
   .chat-view__content-shell--activity-open .chat-view__timeline-shell,
   .chat-view__content-shell--activity-open .chat-view__footer-stack {
-    margin-right: calc(var(--chat-activity-width) + 16px);
+    --chat-activity-reserve: calc(var(--chat-activity-width) + 16px);
   }
 }
 
@@ -98,7 +100,9 @@
   position: absolute;
   /* Ends before the timeline's scrollbar column so the scrollbar stays
       visible over its full height instead of disappearing behind us. */
-  right: var(--chat-scrollbar-width, 0px);
+  right: calc(
+    var(--chat-scrollbar-width, 0px) + var(--chat-activity-reserve, 0px)
+  );
   bottom: 0;
   left: 0;
   z-index: 3;
