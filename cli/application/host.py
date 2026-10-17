@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -53,6 +54,8 @@ _FAILED_UPDATE_PHASES = frozenset({"failed", "rolled_back", "needs_attention"})
 _SUCCESSOR_GRACE_SECONDS = 2.0
 #: How long a successor waits for its predecessor to release the host lock.
 _SUCCESSOR_LOCK_SECONDS = 30.0
+#: The sign-in link ``auth.login_ticket`` answers with; nothing else is opened.
+_TICKET_PATH = re.compile(r"/auth/ticket/[A-Za-z0-9_-]{16,256}")
 
 
 class ApplicationFacade:
@@ -312,7 +315,7 @@ class ApplicationFacade:
                 return f"{target.url}{page}"
             raise ApplicationError(f"Could not sign the browser in: {result.message}")
         path = result.data.get("path")
-        if not isinstance(path, str) or not path.startswith("/auth/ticket/"):
+        if not isinstance(path, str) or not _TICKET_PATH.fullmatch(path):
             raise ApplicationError("Could not sign the browser in: the server sent no sign-in link")
         return f"{access.public_url}{path}"
 

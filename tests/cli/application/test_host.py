@@ -768,7 +768,8 @@ def test_main_keeps_tray_running_when_recovery_fails(
     assert start_server is False
 
 
-_TICKET = {"ticket": "T1", "path": "/auth/ticket/T1", "expires_in": 60}
+_TICKET_ID = "T" * 43
+_TICKET = {"ticket": _TICKET_ID, "path": f"/auth/ticket/{_TICKET_ID}", "expires_in": 60}
 _BROWSER_TICKET = ("auth.login_ticket", {"name": "Browser on desk"})
 
 
@@ -778,7 +779,7 @@ _BROWSER_TICKET = ("auth.login_ticket", {"name": "Browser on desk"})
         pytest.param(
             "browser",
             _TICKET,
-            "https://vbot.example.com/auth/ticket/T1",
+            f"https://vbot.example.com/auth/ticket/{_TICKET_ID}",
             [_BROWSER_TICKET],
             id="browser-signed-in",
         ),
@@ -786,7 +787,7 @@ _BROWSER_TICKET = ("auth.login_ticket", {"name": "Browser on desk"})
         pytest.param(
             "session",
             _TICKET,
-            "https://vbot.example.com/auth/ticket/T1",
+            f"https://vbot.example.com/auth/ticket/{_TICKET_ID}",
             [
                 (
                     "auth.login_ticket",
@@ -806,6 +807,14 @@ _BROWSER_TICKET = ("auth.login_ticket", {"name": "Browser on desk"})
             id="login-turned-off",
         ),
         pytest.param("browser", "auth_required", ApplicationError, [_BROWSER_TICKET], id="refused"),
+        # Only a sign-in link of the server's own shape is opened.
+        pytest.param(
+            "browser",
+            {**_TICKET, "path": f"/auth/ticket/{_TICKET_ID}/../../@evil.example"},
+            ApplicationError,
+            [_BROWSER_TICKET],
+            id="foreign-link",
+        ),
         # An Agent's Run never mints a sign-in link.
         pytest.param("run", _TICKET, ApplicationError, [], id="inside-a-run"),
     ],
