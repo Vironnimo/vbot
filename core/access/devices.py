@@ -14,6 +14,9 @@ The server looks devices up in memory on the Event Loop. Writes block on disk
 and run in worker threads; they are serialized, and a removal takes effect in
 memory before it is written. A device not used for 90 days expires. Last use is
 kept in memory and written at most once an hour per device, and on close.
+
+A device records how it was created (``via``): by claiming an approved pairing
+or by redeeming a login ticket. Records written before ``via`` existed have none.
 """
 
 from __future__ import annotations
@@ -54,6 +57,9 @@ from core.utils.timestamps import format_canonical_timestamp, parse_canonical_ti
 
 DeviceKind = Literal["browser", "desktop", "cli"]
 DEVICE_KINDS: tuple[DeviceKind, ...] = get_args(DeviceKind)
+#: How a device came to be: an approved pairing it claimed, or a login ticket.
+DeviceOrigin = Literal["pairing", "ticket"]
+DEVICE_ORIGINS: tuple[DeviceOrigin, ...] = get_args(DeviceOrigin)
 DEVICE_NAME_MAX_CHARS = 80
 DEVICE_IDLE_EXPIRY = timedelta(days=90)
 LAST_USE_WRITE_INTERVAL = timedelta(hours=1)
@@ -82,8 +88,11 @@ _DEVICE_FIELDS = frozenset(
         "approved_by",
     )
 )
+#: Fields a record may lack: they came after the first records were written.
+_OPTIONAL_DEVICE_FIELDS = frozenset(("via",))
 DEVICES_SHAPE = json_document(
-    {"devices"}, {"devices": json_list(json_object(_DEVICE_FIELDS), key="id")}
+    {"devices"},
+    {"devices": json_list(json_object(_DEVICE_FIELDS | _OPTIONAL_DEVICE_FIELDS), key="id")},
 )
 
 LookupOutcome = Literal["valid", "expired", "invalid"]
@@ -109,6 +118,8 @@ class Device:
     last_used_at: datetime
     last_client: str | None
     approved_by: str
+    #: ``None`` for a device stored before its origin was recorded.
+    via: DeviceOrigin | None = None
 
     def describe(self) -> dict[str, Any]:
         """The device as clients see it: everything except its token hash."""
@@ -120,15 +131,24 @@ class Device:
             "last_used_at": format_canonical_timestamp(self.last_used_at),
             "last_client": self.last_client,
             "approved_by": self.approved_by,
+            "via": self.via,
         }
 
 
 def new_device(
-    *, name: str, kind: str, approved_by: str, client: str | None, now: datetime
+    *,
+    name: str,
+    kind: str,
+    approved_by: str,
+    client: str | None,
+    now: datetime,
+    via: DeviceOrigin | None = None,
 ) -> tuple[Device, str]:
     """Create a device and its token; the token is returned once and never stored."""
     if kind not in DEVICE_KINDS:
         raise ValueError(f"device kind must be one of {', '.join(DEVICE_KINDS)}")
+    if via is not None and via not in DEVICE_ORIGINS:
+        raise ValueError(f"via must be one of {', '.join(DEVICE_ORIGINS)}")
     if not _APPROVER_PATTERN.fullmatch(approved_by):
         raise ValueError("approved_by must name the host or a device")
     device_id = new_id("dev")
@@ -142,6 +162,7 @@ def new_device(
         last_used_at=now,
         last_client=client,
         approved_by=approved_by,
+        via=via,
     )
     return device, f"vbt_{device_id}_{secret}"
 
@@ -427,6 +448,9 @@ def _parse_device(entry: Any) -> Device:
     approver = entry["approved_by"]
     if not isinstance(approver, str) or not _APPROVER_PATTERN.fullmatch(approver):
         raise ValueError("approved_by must name the host or a device")
+    via = entry.get("via")
+    if via is not None and via not in DEVICE_ORIGINS:
+        raise ValueError(f"via must be one of {', '.join(DEVICE_ORIGINS)}")
     return Device(
         id=entry["id"],
         name=name,
@@ -436,11 +460,12 @@ def _parse_device(entry: Any) -> Device:
         last_used_at=last_used_at,
         last_client=client,
         approved_by=approver,
+        via=via,
     )
 
 
 def _device_record(device: Device) -> dict[str, Any]:
-    return {
+    record: dict[str, Any] = {
         "id": device.id,
         "name": device.name,
         "kind": device.kind,
@@ -450,6 +475,9 @@ def _device_record(device: Device) -> dict[str, Any]:
         "last_client": device.last_client,
         "approved_by": device.approved_by,
     }
+    if device.via is not None:
+        record["via"] = device.via
+    return record
 
 
 # The whole document must load: an entry this vBot cannot read refuses every write.

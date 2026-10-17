@@ -8,11 +8,12 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Any
 
 from server.access._principal import PRINCIPAL_SCOPE_KEY, Principal
-from server.access._rules import RouteClass, classify_route, request_host
+from server.access._rules import AUTH_STATUS_PATH, RouteClass, classify_route, request_host
 from server.access._service import (
     ACCESS_DENIED,
     AUTH_REQUIRED,
     DEVICE_COOKIE,
+    DEVICES_UNAVAILABLE,
     RATE_LIMITED,
     AccessService,
 )
@@ -25,6 +26,10 @@ Send = Callable[[Message], Awaitable[None]]
 #: WebSocket close codes accessors act on: stop reconnecting, show pairing or refusal.
 WEBSOCKET_AUTH_REQUIRED = 4401
 WEBSOCKET_ACCESS_DENIED = 4403
+#: The device store is unavailable: the credential could not be checked. Keep it
+#: and try again later; never treat it as a sign-out.
+WEBSOCKET_DEVICES_UNAVAILABLE = 4503
+_WEBSOCKET_CLOSE_CODES = {403: WEBSOCKET_ACCESS_DENIED, 503: WEBSOCKET_DEVICES_UNAVAILABLE}
 
 #: The WebUI shell's Content-Security-Policy. Styles stay inline-capable: Svelte
 #: templates and xterm.js set style attributes. Images allow remote http(s) URLs
@@ -49,7 +54,8 @@ class AccessGuard:
     not admit (403 ``access_denied``, WebSocket 4403), authenticates, refuses
     protected routes without a principal in ``authenticated`` mode (401
     ``auth_required``, WebSocket 4401, 429 ``rate_limited`` once a client keeps
-    presenting bad credentials) and attaches the principal to the scope. A
+    presenting bad credentials; 503 ``devices_unavailable``, WebSocket 4503, when
+    a device token cannot be checked) and attaches the principal to the scope. A
     device's requests are tracked so that revoking the device ends its
     WebSockets and streams and refuses answers not yet started. Every HTTP
     response gets the security headers.
@@ -82,6 +88,19 @@ class AccessGuard:
             await _refuse(scope, receive, send, 403, ACCESS_DENIED, "Access denied")
             return
         authentication = service.authenticate(list(scope.get("headers") or ()), facts)
+        if authentication.unavailable and (route == "protected" or path == AUTH_STATUS_PATH):
+            # Neither signed in nor signed out: the accessor keeps its credential.
+            # The status endpoint answers the same, so no accessor offers pairing.
+            service.refused(DEVICES_UNAVAILABLE, facts, path)
+            await _refuse(
+                scope,
+                receive,
+                send,
+                503,
+                DEVICES_UNAVAILABLE,
+                "The device store is unavailable; see the server log",
+            )
+            return
         wait = None
         if authentication.failure is not None:
             service.refused(authentication.failure, facts, path)
@@ -200,7 +219,7 @@ async def _refuse(
         await send(
             {
                 "type": "websocket.close",
-                "code": WEBSOCKET_ACCESS_DENIED if status == 403 else WEBSOCKET_AUTH_REQUIRED,
+                "code": _WEBSOCKET_CLOSE_CODES.get(status, WEBSOCKET_AUTH_REQUIRED),
                 "reason": message,
             }
         )
@@ -213,6 +232,8 @@ async def _refuse(
     ]
     if status == 401:
         headers.append((b"www-authenticate", b"Bearer"))
+    if status == 503:
+        headers.append((b"retry-after", b"30"))
     if retry_after is not None:
         headers.append((b"retry-after", str(max(1, round(retry_after))).encode("ascii")))
     await send({"type": "http.response.start", "status": status, "headers": headers})
@@ -240,12 +261,22 @@ def _with_security_headers(send: Send, *, route: RouteClass, secure: bool) -> Se
 
 
 def _with_cleared_cookie(send: Send) -> Send:
+    """Drop the request's dead device cookie, unless the response sets a new one.
+
+    A ticket redemption or a browser's pairing claim answers a request that may
+    still carry a dead cookie; clearing after it would delete the new device.
+    """
+    prefix = f"{DEVICE_COOKIE}=".encode("latin-1")
+
     async def clearing(message: Message) -> None:
         if message.get("type") == "http.response.start":
-            message = {
-                **message,
-                "headers": [*(message.get("headers") or ()), (b"set-cookie", CLEAR_DEVICE_COOKIE)],
-            }
+            headers = list(message.get("headers") or ())
+            if not any(
+                name.lower() == b"set-cookie" and value.startswith(prefix)
+                for name, value in headers
+            ):
+                headers.append((b"set-cookie", CLEAR_DEVICE_COOKIE))
+            message = {**message, "headers": headers}
         await send(message)
 
     return clearing

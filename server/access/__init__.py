@@ -7,6 +7,7 @@ applies them to HTTP and WebSocket requests. See the ``access`` domain map.
 from server.access._guard import (
     WEBSOCKET_ACCESS_DENIED,
     WEBSOCKET_AUTH_REQUIRED,
+    WEBSOCKET_DEVICES_UNAVAILABLE,
     AccessGuard,
 )
 from server.access._principal import (
@@ -40,6 +41,7 @@ __all__ = [
     "RATE_LIMITED",
     "WEBSOCKET_ACCESS_DENIED",
     "WEBSOCKET_AUTH_REQUIRED",
+    "WEBSOCKET_DEVICES_UNAVAILABLE",
     "AccessError",
     "AccessGuard",
     "AccessService",

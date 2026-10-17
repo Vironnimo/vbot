@@ -7,11 +7,16 @@ import secrets
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from core.utils.ids import new_id
 
 PAIRING_TTL_SECONDS = 600.0
+#: How long a decided request keeps answering its device after the first answer
+#: that told it the outcome: a device whose answer got lost polls again and gets
+#: the same outcome (an approved one with the same token) instead of ``expired``.
+#: The outcome, and with it a native device's token, stays in memory that long.
+CLAIM_GRACE_SECONDS = 60.0
 LOGIN_TICKET_TTL_SECONDS = 60.0
 #: Unambiguous characters: no 0/O, 1/I/L or U/V look-alikes. 30^8 codes.
 PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -58,6 +63,11 @@ class PairingRequest:
     #: The rate limit key of the client that asked, and whether it is this computer.
     client_key: str = ""
     local: bool = False
+    #: Whether a poll has learned the decision; the grace period runs from then.
+    handed_out: bool = False
+    #: The device's claim of the approval once started: opaque to the registry,
+    #: owned by the access service. A claimed approval is never withdrawn here.
+    claim: Any = field(default=None, repr=False)
 
 
 class PairingRegistry:
@@ -130,7 +140,11 @@ class PairingRegistry:
         """Deny the unclaimed requests these approvers approved; returns how many."""
         withdrawn = 0
         for request in self._requests.values():
-            if request.state == "approved" and request.approved_by in approvers:
+            if (
+                request.state == "approved"
+                and request.claim is None
+                and request.approved_by in approvers
+            ):
                 request.state = "denied"
                 request.approved_by = None
                 withdrawn += 1
@@ -157,7 +171,8 @@ class PairingRegistry:
     def poll(self, request_id: str, poll_secret: str) -> PairingRequest | None:
         """The request a device polls for, or ``None`` when unknown, expired or not its own.
 
-        A decided request is handed out once and then forgotten.
+        A decided request keeps answering for ``CLAIM_GRACE_SECONDS`` after the
+        first poll that learned the decision, then it is forgotten.
         """
         self.sweep()
         request = self._requests.get(request_id)
@@ -165,8 +180,9 @@ class PairingRegistry:
             request.poll_secret_hash, _digest(poll_secret)
         ):
             return None
-        if request.state != "pending":
-            del self._requests[request_id]
+        if request.state != "pending" and not request.handed_out:
+            request.handed_out = True
+            request.expires_at = self._clock() + CLAIM_GRACE_SECONDS
         return request
 
     def expires_in(self, request: PairingRequest) -> int:
@@ -180,11 +196,15 @@ class PairingRegistry:
 
 @dataclass(frozen=True)
 class LoginTicket:
-    """What redeeming one ticket creates: a browser device approved by ``issued_by``."""
+    """What redeeming one ticket creates: a browser device approved by ``issued_by``.
+
+    ``next`` is the validated same-origin path (with query) the browser lands on.
+    """
 
     issued_by: str
     name: str
     expires_at: float
+    next: str = "/"
 
 
 class LoginTickets:
@@ -194,13 +214,16 @@ class LoginTickets:
         self._clock = clock
         self._tickets: OrderedDict[bytes, LoginTicket] = OrderedDict()
 
-    def issue(self, *, issued_by: str, name: str) -> str:
+    def issue(self, *, issued_by: str, name: str, next_path: str = "/") -> str:
         self._sweep()
         while len(self._tickets) >= MAX_LOGIN_TICKETS:
             self._tickets.popitem(last=False)
         ticket = secrets.token_urlsafe(32)
         self._tickets[_digest(ticket)] = LoginTicket(
-            issued_by=issued_by, name=name, expires_at=self._clock() + LOGIN_TICKET_TTL_SECONDS
+            issued_by=issued_by,
+            name=name,
+            expires_at=self._clock() + LOGIN_TICKET_TTL_SECONDS,
+            next=next_path,
         )
         return ticket
 

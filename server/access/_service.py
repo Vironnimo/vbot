@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import re
 import secrets
 import time
 from collections.abc import Callable, Coroutine, Mapping
@@ -18,10 +19,12 @@ from core.access.devices import (
     DEVICE_KINDS,
     Device,
     DeviceNotFoundError,
+    DeviceOrigin,
     DeviceStore,
     DeviceStoreUnavailableError,
     new_device,
     normalize_device_name,
+    parse_device_token,
 )
 from core.access.local_token import is_local_access_token
 from core.utils.logging import get_logger
@@ -30,6 +33,7 @@ from core.utils.workers import OrderedWorker
 from server.access._connections import LiveConnections
 from server.access._limits import RateLimit, RefusalLog, SlidingWindow
 from server.access._pairing import (
+    CLAIM_GRACE_SECONDS,
     LOGIN_TICKET_TTL_SECONDS,
     PAIRING_TTL_SECONDS,
     LoginTickets,
@@ -65,6 +69,11 @@ DEVICE_COOKIE_MAX_AGE = 400 * 24 * 3600
 PAIRING_POLL_INTERVAL_SECONDS = 2
 REFUSAL_LOG_INTERVAL_SECONDS = 60.0
 _MAX_SECRET_CHARS = 128
+#: Where a login ticket may send its browser: a path on this server with an
+#: optional query, from RFC 3986 path and query characters and percent escapes
+#: only. No scheme, authority, fragment, backslash or white space can pass.
+_MAX_TICKET_NEXT_CHARS = 2048
+_TICKET_NEXT = re.compile(r"/(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9A-Fa-f]{2})*")
 
 
 class AccessError(Exception):
@@ -86,11 +95,26 @@ class Authentication:
 
     ``failure`` names why a presented credential was refused (``authenticated``
     mode only); ``clear_cookie`` asks the response to drop a dead device cookie.
+    ``unavailable`` marks a well-formed device token that could not be checked
+    because the device store is unavailable: neither valid nor refused.
     """
 
     principal: Principal | None
     failure: str | None = None
     clear_cookie: bool = False
+    unavailable: bool = False
+
+
+@dataclass(frozen=True)
+class TicketRedemption:
+    """A redeemed login ticket: where the browser lands and the new device's token.
+
+    ``token`` is ``None`` when the browser was already signed in as a browser
+    device: it keeps that device instead of getting another one.
+    """
+
+    next: str
+    token: str | None
 
 
 def _limit(per_client: int, overall: int, window: float, clock: Callable[[], float]) -> RateLimit:
@@ -138,13 +162,19 @@ class AccessService:
         self._auth_failures = _limit(20, 200, 600, clock)
         self._approval_failures = _limit(10, 50, 600, clock)
         self._refusals: RefusalLog | None = None
-        self._background: set[asyncio.Task[None]] = set()
+        self._background: set[asyncio.Future[Any]] = set()
         self._flush_pending = False
+        self._on_change: Callable[[], None] | None = None
 
     # Lifecycle -------------------------------------------------------------
 
-    async def start(self, data_dir: Path) -> None:
-        """Load the device store and remove devices that expired while stopped."""
+    async def start(self, data_dir: Path, *, on_change: Callable[[], None] | None = None) -> None:
+        """Load the device store and remove devices that expired while stopped.
+
+        ``on_change`` is called on the Event Loop whenever the paired devices or
+        a pairing decision change, so that open device lists reload.
+        """
+        self._on_change = on_change
         store = DeviceStore(data_dir)
         await _DEVICE_WRITES.call_async(store.load)
         self._store = store
@@ -300,6 +330,41 @@ class AccessService:
             return {"status": "pending", "expires_in": self.pairings.expires_in(request)}, None
         if request.state == "denied":
             return {"status": "denied"}, None
+        return await self._claim(request, facts)
+
+    async def _claim(
+        self, request: PairingRequest, facts: RequestFacts
+    ) -> tuple[dict[str, Any], str | None]:
+        """Create an approved request's device once; repeated polls get the same answer.
+
+        A device whose approved answer got lost polls again within the claim
+        grace period and receives the same device and token. Concurrent polls
+        share one claim; a claim that failed on the store is tried again by the
+        next poll.
+        """
+        claim = request.claim
+        if claim is None:
+            claim = asyncio.ensure_future(self._create_claimed_device(request, facts))
+            request.claim = claim
+            self._background.add(claim)
+
+            def settled(done: asyncio.Future[Any]) -> None:
+                self._background.discard(done)
+                failed = not done.cancelled() and done.exception() is not None
+                if failed and request.claim is done:
+                    # Nothing was created; the next poll claims again.
+                    request.claim = None
+
+            claim.add_done_callback(settled)
+            # The answer holds the token; it goes with the request after the grace period.
+            asyncio.get_running_loop().call_later(CLAIM_GRACE_SECONDS, self.pairings.sweep)
+        # A poll that is cancelled (its client went away) leaves the claim running.
+        payload, cookie_token = await asyncio.shield(claim)
+        return dict(payload), cookie_token
+
+    async def _create_claimed_device(
+        self, request: PairingRequest, facts: RequestFacts
+    ) -> tuple[dict[str, Any], str | None]:
         assert request.approved_by is not None
         created = await self._create_device(
             name=request.name,
@@ -341,6 +406,7 @@ class AccessService:
             request.kind,
             principal.actor,
         )
+        self._changed()
         return {"status": "approved" if approved else "denied", "name": request.name}
 
     def _pending(self, code: Any, principal: Principal) -> PairingRequest:
@@ -365,28 +431,47 @@ class AccessService:
 
     # Login tickets -------------------------------------------------------------
 
-    def issue_ticket(self, principal: Principal, name: Any) -> dict[str, Any]:
+    def issue_ticket(
+        self, principal: Principal, name: Any, next_path: Any = None
+    ) -> dict[str, Any]:
+        """Issue a login ticket; ``next_path`` is where its browser lands (``/`` by default)."""
         self._require_authenticated_mode()
         _require_signed_in(principal)
         try:
             device_name = normalize_device_name("Browser" if name is None else name)
         except ValueError as exc:
             raise AccessError(INVALID_REQUEST, str(exc)) from None
+        landing = _ticket_next(next_path)
         self._require_store()
-        ticket = self.tickets.issue(issued_by=principal.actor, name=device_name)
+        ticket = self.tickets.issue(issued_by=principal.actor, name=device_name, next_path=landing)
         return {
             "ticket": ticket,
             "path": f"{TICKET_PATH_PREFIX}{ticket}",
             "expires_in": round(LOGIN_TICKET_TTL_SECONDS),
         }
 
-    async def redeem_ticket(self, ticket: str, facts: RequestFacts) -> str | None:
-        """Turn a valid ticket into a browser device; returns its token or ``None``."""
+    async def redeem_ticket(
+        self, ticket: str, facts: RequestFacts, principal: Principal | None = None
+    ) -> TicketRedemption | None:
+        """Redeem a valid ticket once; ``None`` when it is not valid.
+
+        A browser that is already signed in as a browser device keeps that
+        device; any other browser gets a new one. An unavailable device store
+        raises ``devices_unavailable`` before the ticket is used up.
+        """
         if self.config.mode != "authenticated":
             return None
+        self._require_store()
         redeemed = self.tickets.redeem(ticket)
         if redeemed is None:
             return None
+        current = None if principal is None else principal.device
+        if current is not None and current.kind == "browser":
+            _LOGGER.debug(
+                "Login ticket redeemed by a signed-in browser; it keeps its device (device=%s)",
+                current.id,
+            )
+            return TicketRedemption(redeemed.next, None)
         created = await self._create_device(
             name=redeemed.name,
             kind="browser",
@@ -394,7 +479,7 @@ class AccessService:
             client=_client_text(facts),
             via="ticket",
         )
-        return None if created is None else created[1]
+        return None if created is None else TicketRedemption(redeemed.next, created[1])
 
     # Device management ---------------------------------------------------------
 
@@ -423,28 +508,45 @@ class AccessService:
         except (DeviceStoreUnavailableError, OSError) as exc:
             raise _store_failure(exc) from None
         _LOGGER.info("Device renamed (device=%s actor=%s)", device.id, principal.actor)
+        self._changed()
         return {"device": device.describe()}
 
     async def revoke_devices(
-        self, device_ids: list[str], principal: Principal, *, missing_ok: bool = False
+        self,
+        device_ids: list[str],
+        principal: Principal,
+        *,
+        missing_ok: bool = False,
+        spare: frozenset[str] = frozenset(),
     ) -> list[Device]:
+        """Revoke devices and the browsers they signed in with login tickets.
+
+        A browser device created by redeeming a login ticket goes with the
+        device that issued the ticket, transitively; a device that claimed an
+        approved pairing never does. ``spare`` keeps devices out of that
+        cascade (``devices.revoke_others`` keeps the calling device).
+        """
         store = self._require_store()
         if not missing_ok and any(store.get(device_id) is None for device_id in device_ids):
             raise AccessError(DEVICE_NOT_FOUND, "No device has this id", status=404)
+        targets = _with_ticket_browsers(store.devices(), device_ids, spare=spare)
         # What these devices approved but nobody claimed yet goes with them, before
         # the store write lets anything else run.
-        self._withdraw_approvals(set(device_ids))
+        self._withdraw_approvals(set(targets))
         try:
-            removed = await _DEVICE_WRITES.call_async(lambda: store.remove(device_ids))
+            removed = await _DEVICE_WRITES.call_async(lambda: store.remove(targets))
         except (DeviceStoreUnavailableError, OSError) as exc:
             # The devices are out of memory already; only the file kept them.
-            self.connections.revoke(set(device_ids))
+            self.connections.revoke(set(targets))
+            self._changed()
             raise _store_failure(exc) from None
         closed = self.connections.revoke({device.id for device in removed})
         for device in removed:
             _LOGGER.info("Device revoked (device=%s actor=%s)", device.id, principal.actor)
         if closed:
             _LOGGER.debug("Revoked device connections closed (count=%d)", closed)
+        if removed:
+            self._changed()
         return removed
 
     def other_device_ids(self, principal: Principal) -> list[str]:
@@ -458,6 +560,10 @@ class AccessService:
         self, token: str, facts: RequestFacts, enforcing: bool, *, from_cookie: bool
     ) -> Authentication:
         store = self._store
+        if (store is None or not store.available) and parse_device_token(token) is not None:
+            # A well-formed token cannot be checked, and the device may be valid:
+            # it is neither refused nor counted, and its cookie stays.
+            return Authentication(None if enforcing else OPEN, unavailable=enforcing)
         now = self._utc_now()
         outcome, device = ("invalid", None) if store is None else store.lookup(token, now=now)
         if outcome == "valid" and device is not None and store is not None:
@@ -479,12 +585,17 @@ class AccessService:
         return Authentication(None, failure=reason, clear_cookie=clear_cookie)
 
     async def _create_device(
-        self, *, name: str, kind: str, approved_by: str, client: str | None, via: str
+        self, *, name: str, kind: str, approved_by: str, client: str | None, via: DeviceOrigin
     ) -> tuple[Device, str] | None:
         """Add the device; ``None`` when its approver is no longer a paired device."""
         store = self._require_store()
         device, token = new_device(
-            name=name, kind=kind, approved_by=approved_by, client=client, now=self._utc_now()
+            name=name,
+            kind=kind,
+            approved_by=approved_by,
+            client=client,
+            now=self._utc_now(),
+            via=via,
         )
         try:
             await _DEVICE_WRITES.call_async(lambda: store.add(device))
@@ -504,6 +615,7 @@ class AccessService:
             approved_by,
             via,
         )
+        self._changed()
         return device, token
 
     async def _expire(self, devices: list[Device]) -> None:
@@ -522,6 +634,18 @@ class AccessService:
             _LOGGER.info(
                 "Device expired (device=%s idle_days=%d)", device.id, DEVICE_IDLE_EXPIRY.days
             )
+        if removed:
+            self._changed()
+
+    def _changed(self) -> None:
+        """Tell the listener that devices or pairing decisions changed."""
+        listener = self._on_change
+        if listener is None:
+            return
+        try:
+            listener()
+        except Exception:
+            _LOGGER.warning("Announcing a device change failed", exc_info=True)
 
     def _withdraw_approvals(self, device_ids: set[str]) -> None:
         """Deny the unclaimed pairings these devices approved and drop their login tickets.
@@ -575,6 +699,45 @@ class AccessService:
                 f"'With login (internet)'; this server runs '{self.config.label}'",
                 status=409,
             )
+
+
+def _ticket_next(value: Any) -> str:
+    """Validate where a login ticket sends its browser: a same-origin path and query."""
+    if value is None:
+        return "/"
+    if (
+        not isinstance(value, str)
+        or len(value) > _MAX_TICKET_NEXT_CHARS
+        or not _TICKET_NEXT.fullmatch(value)
+        or "//" in value
+        or value.startswith(TICKET_PATH_PREFIX)
+    ):
+        raise AccessError(
+            INVALID_REQUEST,
+            "next must be a path on this server, optionally with a query, such as /?a=b; "
+            "no scheme, host, fragment, '//' or backslash",
+        )
+    return value
+
+
+def _with_ticket_browsers(
+    devices: list[Device], device_ids: list[str], *, spare: frozenset[str]
+) -> list[str]:
+    """``device_ids`` plus every ticket-created device they issued, transitively."""
+    targets = list(dict.fromkeys(device_ids))
+    issuers = set(targets)
+    while issuers:
+        issued = [
+            device.id
+            for device in devices
+            if device.via == "ticket"
+            and device.approved_by in issuers
+            and device.id not in targets
+            and device.id not in spare
+        ]
+        targets.extend(issued)
+        issuers = set(issued)
+    return targets
 
 
 def _require_signed_in(principal: Principal) -> None:

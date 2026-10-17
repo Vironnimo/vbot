@@ -29,9 +29,9 @@ _ROUTINE_CODES = frozenset({PAIRING_NOT_FOUND, DEVICE_NOT_FOUND})
 
 
 def _login_ticket(state: Any, params: JsonObject) -> JsonObject:
-    _accept(params, "auth.login_ticket", {"name"})
+    _accept(params, "auth.login_ticket", {"name", "next"})
     service, principal = _context(state)
-    return _answer(lambda: service.issue_ticket(principal, params.get("name")))
+    return _answer(lambda: service.issue_ticket(principal, params.get("name"), params.get("next")))
 
 
 def _list_devices(state: Any, params: JsonObject) -> JsonObject:
@@ -61,7 +61,9 @@ async def _revoke_other_devices(state: Any, params: JsonObject) -> JsonObject:
     _accept(params, "devices.revoke_others", set())
     service, principal = _context(state)
     others = _answer(lambda: service.other_device_ids(principal))
-    return await _revoked(service.revoke_devices(others, principal, missing_ok=True))
+    # The calling device stays, also when one of the others signed it in.
+    current = frozenset({principal.device.id}) if principal.device else frozenset()
+    return await _revoked(service.revoke_devices(others, principal, missing_ok=True, spare=current))
 
 
 async def _log_out(state: Any, params: JsonObject) -> JsonObject:

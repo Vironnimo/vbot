@@ -378,7 +378,8 @@ def test_a_browser_pairs_once_by_code_and_signs_in_with_its_cookie(
     shown = _rpc(client, "devices.pending", {"code": started["code"].replace("-", "").lower()})
     approved = _rpc(client, "devices.approve", {"code": started["code"]})
     claimed = _poll(client, started)
-    again = _poll(client, started).json()
+    # A device whose approved answer got lost asks again and gets the same one.
+    again = _poll(client, started)
     cookie = _cookie(claimed)
     signed_in = client.get(
         "/api/auth/status", headers={**_INTERNET, "Cookie": f"__Host-vbot_device={cookie}"}
@@ -407,11 +408,12 @@ def test_a_browser_pairs_once_by_code_and_signs_in_with_its_cookie(
     set_cookie = claimed.headers["set-cookie"]
     for attribute in ("HttpOnly", "Secure", "SameSite=strict", "Path=/", "Max-Age=34560000"):
         assert attribute.lower() in set_cookie.lower()
-    assert again == {"status": "expired"}
+    assert again.json() == body and _cookie(again) == cookie
     assert signed_in.json()["device"] == body["device"]
     assert signed_in.json()["principal"] == "device"
     (device,) = listed["result"]["devices"]
     assert device["current"] is True and device["approved_by"] == "host"
+    assert device["via"] == "pairing"
     assert device["last_client"] == "203.0.113.7"
     assert shadowed.json()["authenticated"] is False
     assert "set-cookie" not in shadowed.headers
@@ -472,23 +474,138 @@ def test_native_devices_get_their_token_once_and_lose_it_with_their_approvals_wh
     assert _rpc(client, "devices.list")["result"]["devices"] == []
 
 
-def test_a_login_ticket_signs_in_one_browser_once(served: Any) -> None:
+def test_a_login_ticket_signs_in_one_browser_once_and_lands_where_it_asked(served: Any) -> None:
     _app, client = served(_authenticated())
+    landing = "/?accessor=desktop&open_agent=main&open_session=s_1%2Fx"
+    dead = "__Host-vbot_device=vbt_dev_AAAAAAAAAAAAAAAA_" + "x" * 43
 
-    issued = _rpc(client, "auth.login_ticket", {"name": "Desktop browser"})["result"]
-    redeemed = client.get(issued["path"], headers=_INTERNET, follow_redirects=False)
-    reused = client.get(issued["path"], headers=_INTERNET, follow_redirects=False)
-    cookie = _cookie(redeemed)
-    status = client.get(
-        "/api/auth/status", headers={**_INTERNET, "Cookie": f"__Host-vbot_device={cookie}"}
+    issued = _rpc(client, "auth.login_ticket", {"name": "Desktop browser", "next": landing})
+    # A browser that still sends a dead cookie gets a new device, not a cleared cookie.
+    redeemed = client.get(
+        issued["result"]["path"], headers={**_INTERNET, "Cookie": dead}, follow_redirects=False
     )
+    reused = client.get(issued["result"]["path"], headers=_INTERNET, follow_redirects=False)
+    signed_in = {**_INTERNET, "Cookie": f"__Host-vbot_device={_cookie(redeemed)}"}
+    status = client.get("/api/auth/status", headers=signed_in)
+    # A browser that is signed in already keeps its device.
+    again = _rpc(client, "auth.login_ticket", {"name": "Another window"})["result"]
+    kept = client.get(again["path"], headers=signed_in, follow_redirects=False)
+    rejected = {
+        value: _rpc(client, "auth.login_ticket", {"next": value})["error"]["code"]
+        for value in (
+            "https://attacker.example/",
+            "//attacker.example",
+            "/\\attacker.example",
+            "/a//b",
+            "/#fragment",
+            "?a=b",
+            "/a b",
+            "/a\n",
+            "/caf\u00e9",
+            "/%zz",
+            "/auth/ticket/other",
+            "/" + "a" * 2048,
+            5,
+        )
+    }
 
-    assert issued["expires_in"] == 60 and issued["path"] == f"/auth/ticket/{issued['ticket']}"
-    assert redeemed.status_code == 303 and redeemed.headers["location"] == "/"
+    issued_result = issued["result"]
+    assert issued_result == {
+        "ticket": issued_result["ticket"],
+        "path": f"/auth/ticket/{issued_result['ticket']}",
+        "expires_in": 60,
+    }
+    assert redeemed.status_code == 303 and redeemed.headers["location"] == landing
+    assert redeemed.headers.get_list("set-cookie") == [redeemed.headers["set-cookie"]]
     assert redeemed.headers["cache-control"] == "no-store"
     assert redeemed.headers["referrer-policy"] == "no-referrer"
     assert reused.status_code == 400 and "not valid" in reused.text
     assert status.json()["device"]["name"] == "Desktop browser"
+    assert kept.status_code == 303 and kept.headers["location"] == "/"
+    assert "set-cookie" not in kept.headers
+    (device,) = _rpc(client, "devices.list")["result"]["devices"]
+    assert (device["via"], device["approved_by"]) == ("ticket", "host")
+    assert set(rejected.values()) == {"invalid_request"}
+
+
+def test_browsers_signed_in_by_ticket_go_with_the_device_that_issued_it(served: Any) -> None:
+    app, client = served(_authenticated())
+
+    def ticket_browser(**headers: str) -> tuple[str, dict[str, str]]:
+        """Sign a browser in with a ticket of ``headers``' principal; returns id and headers."""
+        issued = _rpc(client, "auth.login_ticket", **headers)["result"]
+        redeemed = client.get(issued["path"], headers=_INTERNET, follow_redirects=False)
+        browser = {**_INTERNET, "Cookie": f"__Host-vbot_device={_cookie(redeemed)}"}
+        return client.get("/api/auth/status", headers=browser).json()["device"]["id"], browser
+
+    def device_changes() -> int:
+        return sum(
+            event["type"] == "resource_changed" and event["payload"] == {"kind": "devices"}
+            for event in app.state.event_bus.events
+        )
+
+    desktop_id, desktop_token = _paired_token(client, kind="desktop")
+    desktop = {**_INTERNET, "Authorization": f"Bearer {desktop_token}"}
+    window_id, window = ticket_browser(**desktop)
+    nested_id, _nested = ticket_browser(**window)
+    waiting = _pair(client, kind="cli")
+    assert _rpc(client, "devices.approve", {"code": waiting["code"]}, **desktop)["ok"]
+    approved_id = _poll(client, waiting).json()["device"]["id"]
+    changes = device_changes()
+
+    revoked = _rpc(client, "devices.revoke", {"id": desktop_id})
+    announced = device_changes() - changes
+    remaining = [device["id"] for device in _rpc(client, "devices.list")["result"]["devices"]]
+    second_id, second_token = _paired_token(client, kind="desktop")
+    second_window_id, second_window = ticket_browser(
+        **_INTERNET, Authorization=f"Bearer {second_token}"
+    )
+    others = _rpc(client, "devices.revoke_others", **second_window)
+    current = client.get("/api/auth/status", headers=second_window).json()["device"]
+
+    # A pairing the revoked device approved and its device claimed stays.
+    assert revoked["result"] == {"revoked": [desktop_id, window_id, nested_id]}
+    assert announced == 1
+    assert remaining == [approved_id]
+    # Signing out every other device keeps the calling one, also when one of them signed it in.
+    assert sorted(others["result"]["revoked"]) == sorted([approved_id, second_id])
+    assert current["id"] == second_window_id
+
+
+def test_an_unavailable_device_store_answers_503_and_keeps_credentials(
+    served: Any, tmp_path: Path
+) -> None:
+    store = tmp_path / "data-0" / "access" / "devices.json"
+    store.parent.mkdir(parents=True)
+    store.write_text("{not json", encoding="utf-8")
+    _app, client = served(_authenticated())
+    token = "vbt_dev_aaaaaaaaaaaaaaaa_" + "x" * 43
+    bearer = {**_INTERNET, "Authorization": f"Bearer {token}"}
+    cookie = {**_INTERNET, "Cookie": f"__Host-vbot_device={token}"}
+
+    protected = client.get(_PROTECTED, headers=bearer)
+    status = client.get("/api/auth/status", headers=cookie)
+    ticket = client.get("/auth/ticket/" + "t" * 43, headers=cookie, follow_redirects=False)
+    with (
+        pytest.raises(WebSocketDisconnect) as closed,
+        client.websocket_connect("/ws", headers=bearer) as websocket,
+    ):
+        websocket.receive_text()
+    # Credentials that cannot be checked are no failed sign-ins: nothing throttles them.
+    for _attempt in range(25):
+        client.get(_PROTECTED, headers=bearer)
+    later = client.get(_PROTECTED, headers=bearer)
+    malformed = client.get(_PROTECTED, headers={**_INTERNET, "Authorization": "Bearer vbt_bad"})
+    host = client.get(_PROTECTED, headers=_HOST)
+
+    assert protected.status_code == 503
+    assert protected.json()["error"]["code"] == "devices_unavailable"
+    assert status.status_code == 503 and "set-cookie" not in status.headers
+    assert ticket.status_code == 503 and "set-cookie" not in ticket.headers
+    assert closed.value.code == 4503
+    assert later.status_code == 503
+    assert malformed.status_code == 401
+    assert host.status_code == 404
 
 
 def test_dead_device_cookies_are_cleared_and_repeated_failures_are_throttled(
@@ -793,6 +910,12 @@ def test_pairing_requests_and_login_tickets_expire(tmp_path: Path) -> None:
         await service.start(tmp_path)
         facts = service.inspect(_internet_scope("/api/auth/pair/start"))
         started = service.pair_start({"kind": "browser", "name": "Phone"}, facts)
+        native = service.pair_start({"kind": "cli", "name": "Laptop"}, facts)
+        service.decide_pairing(native["code"], host, approved=True)
+        # Concurrent polls share one claim: one device, one token.
+        claimed, concurrent = await asyncio.gather(
+            service.pair_poll(native, facts), service.pair_poll(native, facts)
+        )
         ticket = service.issue_ticket(host, "Desktop browser")["ticket"]
         kept = service.issue_ticket(host, None)["ticket"]
         clock[0] += 59
@@ -800,9 +923,12 @@ def test_pairing_requests_and_login_tickets_expire(tmp_path: Path) -> None:
             "ticket_in_time": await service.redeem_ticket(kept, facts) is not None,
             "ticket_reused": await service.redeem_ticket(kept, facts),
             "pending_in_time": (await service.pair_poll(started, facts))[0]["status"],
+            "claim_shared": claimed == concurrent and "token" in claimed[0],
+            "claim_repeated": await service.pair_poll(native, facts) == claimed,
         }
         clock[0] += 2
         outcomes["ticket_late"] = await service.redeem_ticket(ticket, facts)
+        outcomes["claim_late"] = (await service.pair_poll(native, facts))[0]
         clock[0] += 540
         outcomes["pairing_late"] = (await service.pair_poll(started, facts))[0]
         with pytest.raises(AccessError) as late_code:
@@ -816,10 +942,14 @@ def test_pairing_requests_and_login_tickets_expire(tmp_path: Path) -> None:
         "ticket_in_time": True,
         "ticket_reused": None,
         "pending_in_time": "pending",
+        "claim_shared": True,
+        "claim_repeated": True,
         "ticket_late": None,
+        # The claimed answer, with its token, is kept for the grace period only.
+        "claim_late": {"status": "expired"},
         "pairing_late": {"status": "expired"},
         "approve_late": "pairing_not_found",
-        "devices": 1,
+        "devices": 2,
     }
 
 

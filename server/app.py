@@ -94,10 +94,11 @@ from server.access import (
     register_access_routes,
     scope_principal,
 )
-from server.events import SERVER_STOPPING_EVENT
+from server.events import RESOURCE_KIND_DEVICES, SERVER_STOPPING_EVENT
 from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
+from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.methods import dispatch_rpc
 from server.rpc.model_methods import start_installation_catalog_restore
 
@@ -216,7 +217,10 @@ def create_app(
         )
         app.state.shutdown_event = shutdown_event if shutdown_event is not None else asyncio.Event()
         app.state.access = access_service
-        await access_service.start(app_runtime.storage.data_dir)
+        await access_service.start(
+            app_runtime.storage.data_dir,
+            on_change=lambda: publish_resource_changed(app.state, RESOURCE_KIND_DEVICES),
+        )
         oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
         if oauth_redirects is not None:
             oauth_redirects.bind(_oauth_callback_url(access_settings, resolved_server_bind))

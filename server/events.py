@@ -77,6 +77,8 @@ RESOURCE_KIND_SKILLS = "skills"
 RESOURCE_KIND_DATA_STORE = "data_store"
 RESOURCE_KIND_EXTENSIONS = "extensions"
 RESOURCE_KIND_ARCHIVE = "archive"
+#: Paired Devices or pairing decisions changed (``access`` domain).
+RESOURCE_KIND_DEVICES = "devices"
 
 ALLOWED_RESOURCE_KINDS = frozenset(
     {
@@ -98,6 +100,7 @@ ALLOWED_RESOURCE_KINDS = frozenset(
         RESOURCE_KIND_DATA_STORE,
         RESOURCE_KIND_EXTENSIONS,
         RESOURCE_KIND_ARCHIVE,
+        RESOURCE_KIND_DEVICES,
     }
 )
 
