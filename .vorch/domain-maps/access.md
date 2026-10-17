@@ -24,7 +24,7 @@ Owners:
 
 Not owned here: the browser-origin guard (`server/_origins.py`, `server.md`), which still runs after the access guard; capability URL verification (`server/file_delivery.py`); Extension OAuth (`extensions.md`); credential storage.
 
-Accessor status: the server contracts exist; no accessor signs in yet. The WebUI has no pairing or sign-in screen, the Desktop no pairing, and the CLI/TUI reach an `authenticated` server only on its own computer through the local access token. A remote browser therefore gets the public WebUI shell but 401 on every API call.
+Accessor status: the server contracts exist. The Desktop signs in (`desktop/sign-in.md`): pairing as a `desktop` Device, the local access token for the installation's own server, and its window through a login ticket. The WebUI has no pairing or sign-in screen, and the CLI/TUI reach an `authenticated` server only on its own computer through the local access token. A remote browser therefore gets the public WebUI shell but 401 on every API call.
 
 ## Terms
 
