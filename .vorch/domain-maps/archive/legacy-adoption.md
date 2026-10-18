@@ -8,6 +8,6 @@ The Session spec's named migration `sessions.0001_archive_entries` (`core/sessio
 
 ## Startup adoption
 
-Startup recovery (`archive.md` -> Recovery) runs only the Session half, `adopt_unrecorded_archived_rows`: archived Sessions an older vBot wrote after a downgrade get `session`/`owner_group` entries with the same batching. It never adopts legacy trees; those exist only from before the migration ran.
+Startup recovery (`archive/recovery.md`) runs only the Session half, `adopt_unrecorded_archived_rows`: archived Sessions an older vBot wrote after a downgrade get `session`/`owner_group` entries with the same batching. It never adopts legacy trees; those exist only from before the migration ran.
 
 Tests: `tests/core/sessions/test_archive_backfill.py`.

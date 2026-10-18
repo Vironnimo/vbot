@@ -30,8 +30,7 @@ What changed with the retirement:
 - Chat derives no Session grant from checkpoints; Session grants come only from an
   Extension's Session capability (`chat/request-building.md`). Compaction leaves the
   offered Tool list unchanged.
-- New checkpoints carry guidance without the Tool (`compaction.md` -> Agent-facing
-  text). Already persisted checkpoints keep their text that names `history`; a call
+- New checkpoints carry guidance without the Tool (`chat/agent-facing-text.md`). Already persisted checkpoints keep their text that names `history`; a call
   to it fails as an unknown Tool. Persisted Session history is not rewritten.
 - `compaction_completed` no longer carries `history_available`.
 - The Session store lost its History-only reads (`history_snapshot`,

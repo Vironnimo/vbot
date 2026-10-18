@@ -1,6 +1,6 @@
 # File-State and Mutation Coordination
 
-The per-session read stamps, per-path mutation locks, and atomic replacement shared by `read` and the file edit Tools (`apply_patch`, `edit`, `write`, which reach them through the change pipeline `_file_changes.py`). Lives in `core/tools/file_state.py`.
+The per-session read stamps, per-path mutation locks, and atomic replacement shared by `read` and the file edit Tools (`apply_patch`, `edit`, `write`, which reach them through the change pipeline `_file_changes.py`). Lives in `core/tools/file_state.py`. Also the shared path grammar of `ToolContext.resolve_path` and the link-entry tests (Path resolution, below).
 
 ## Overview
 
@@ -30,3 +30,7 @@ A single runtime-owned `FileReadState` registry remembers, per Session, the `(mt
 - **Partial reads count as full reads** - `record_read` ignores offset/limit/truncation, so a truncated read of a large file still satisfies the guard for a later full replacement; Update needs no stamp because its match is against current bytes.
 - **Locks are process-local.** They prevent interleaving among Tools using the one Runtime-owned `FileReadState`; another process or an uncoordinated external writer is still outside the lock. Stamp checks detect prior metadata drift, while same-directory atomic replacement prevents partial target contents but is not a portable filesystem compare-and-swap against an external writer racing after the check.
 - **Bounded:** at most `_MAX_TRACKED_FILES` (8192) entries; oldest insertion evicted first. A rare eviction only costs a harmless re-read.
+
+## Path resolution
+
+`ToolContext.resolve_path` follows host path grammar without filesystem-dependent fallback. Windows double quotes may wrap a path because they cannot be literal filename characters; single quotes remain literal. POSIX quotes and backslashes remain literal even when a different unquoted/slash-separated file exists. Path objects remain literal. A path containing NUL raises `ToolContractError` (`<tool> was not run: the path ... contains a NUL character ...`) before any filesystem access, whether or not the host's `Path.resolve` would raise; every caller resolves before its effect, and callers that catch `ValueError` or `ToolContractError` pass the message through (`test_read.py::test_read_refuses_invalid_arguments_before_reading`). Scope, read-state, and mutation checks still use the resolved target. `follow_final_link=False` resolves only the parent, for operations on a link entry itself (apply_patch Delete/Move); `is_link_entry` (a path) and `is_link_status` (unfollowed metadata, such as search traversal's `DirEntry` stat) in `_tool_context.py` are the shared symlink-or-junction test (`Path.is_symlink` misses junctions; reparse tags exist only on Windows, so elsewhere only symlinks count).

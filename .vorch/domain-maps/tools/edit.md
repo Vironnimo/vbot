@@ -50,7 +50,7 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   any case or separator spelling (`filePath`, `oldString`, `replaceAll`); `edits`
   or one of its items sent as JSON text, also with unescaped `"` or raw line
   breaks inside `old_string`/`new_string` (`decode_json_argument`, the shared
-  quote repair in `tools.md` -> Shared argument repair, against the schema of an
+  quote repair in `tools/call-repair.md` -> Shared argument repair, against the schema of an
   edit; 5 of 12 real stringified `edits` decoded this way, all as the reviewed
   reading; of the 6 `edits` texts that failed in the Swarm of 2026-10-12, 1
   more decodes with raw line breaks read; stray closing brackets after the

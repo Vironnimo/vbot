@@ -1,6 +1,6 @@
 # Extension Management
 
-Read this reference only for Extension discovery, manifests, records, settings schemas, secrets, visibility, lifecycle, enable/disable, or full reload work. Capability semantics live in `extensions/capabilities.md`.
+Read this reference only for Extension discovery, manifests (including `config_documents` validators), records, settings schemas, secrets, visibility, lifecycle, enable/disable, or full reload work, or for what each `API_VERSION` added. Capability semantics live in `extensions/capabilities.md`.
 
 ## Discoverable shapes and manifests
 
@@ -15,6 +15,18 @@ A registration that cancels itself fails only its Extension. Cancelling the live
 `ExtensionRecord` retains every discovered result in load order: identity and paths, `status`, load `error`, optional manifest, collected declarations, non-fatal `capability_errors`, and `overridden_by` for shadowed copies. `records()` includes all statuses; `diagnostics()` includes only failed records.
 
 The load path must preserve first-wins root shadowing before import. Overridden copies are not imported and their manifests are not read. Disabled winners are recorded without import but still shadow later roots.
+
+## API versions
+
+What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) added:
+
+- v2: Slash Command declarations. v3: Extension-owned Tool Family declarations. v4: management operations, host capabilities, and live Tool catalogs. v5: explicit opt-in Tools. v6: page declarations and explicit Tool catalog visibility.
+- v7: owner-bound Extension databases (`host.open_database`, `extensions/databases.md`). v8: Tool result payloads (`ToolContext.attach_result_payload`, `host.load_result_payload`, `extensions/host.md`). v9: Tool-gated prompt blocks (`register_prompt_block(..., requires_tool=...)`, `extensions/capabilities.md`). v10: owner group listing and archiving (`temporary_agents.groups()`, `archive_group()`). v11: OAuth browser redirects (`host.oauth_redirects`, `extensions/host.md`).
+- v12: server folder listing for pages (`extensionPageClient.listDirectory`, `webui/extension-pages.md` -> Capabilities). v13: Tool summaries (`api.register_tool(..., summary=...)`, `tools/load_tools.md` -> Tool summaries). v14: replaces `definition_change_note` with declared Tool-change announcements (`announce_changes`, `tools.md` -> Tool changes in a Session): a changed Tool definition reaches a Session mid-epoch only for the parts its Tool names. v15: asynchronous Tool-Agent resolution, canonical deferred-call receipts (`extensions/host.md` -> Deferred Tool outcomes) and manifest-declared offline document validators (below).
+
+## Offline document validation
+
+API 15 directory Extensions declare `config_documents` in `extension.json`: a mapping from owner-state-relative glob patterns to `module:function` file validators. Core `doctor config` discovers these in normal first-wins root order, even when disabled, then loads only the named module under an isolated package path; it never runs the Extension's `__init__`, `register` or startup. The callable receives the absolute Path and returns `JsonValidationReport`. Patterns cannot escape the owner's state directory. Declaration/import/validation failures become diagnostics; an in-scope known document without its owner's validator also reports an error. Implementation: `core/extensions/config_validation.py`; evidence: `tests/core/settings/test_validation.py`.
 
 ## Settings schemas and live values
 
@@ -47,7 +59,7 @@ Successful explicit reload and Settings mutations that reload/enable/disable Ext
 
 ## Full reload sequence
 
-`Runtime.reload_extensions()` runs on the serving loop under the ExtensionRuntime mutation lock: read fresh roots/settings; quiesce the old registry and retire it (Hooks, interaction handlers, owner hosts, page/management operations and Session capabilities stop reaching old Extensions while the replacement loads; page RPCs fail with a refresh-the-page error, Hooks simply do not fire); detach old Extension Tools and Commands; await old shutdown; purge all `vbot_ext` modules; load a fresh registry; swap it in; reapply Tools and Commands to their stable owners; rebuild Recall, Prompt blocks, and Skills against the new loaded set; archive the owner-managed Sessions of Extensions no longer installed (`extensions.md` -> Owner-managed Session lifetime); then await new startup.
+`Runtime.reload_extensions()` runs on the serving loop under the ExtensionRuntime mutation lock: read fresh roots/settings; quiesce the old registry and retire it (Hooks, interaction handlers, owner hosts, page/management operations and Session capabilities stop reaching old Extensions while the replacement loads; page RPCs fail with a refresh-the-page error, Hooks simply do not fire); detach old Extension Tools and Commands; await old shutdown; purge all `vbot_ext` modules; load a fresh registry; swap it in; reapply Tools and Commands to their stable owners; rebuild Recall, Prompt blocks, and Skills against the new loaded set; archive the owner-managed Sessions of Extensions no longer installed (`extensions/host.md` -> Owner-managed Session lifetime); then await new startup.
 
 While the runtime is closing, reload and enable/disable changes, like a lookup of an unbound owner host, raise `ExtensionUnavailableError`, an expected `VBotError`: RPC reports it as `domain_error`, and `GET /api/extension-runs/{token}/events` answers 404 for it like an unknown token, instead of an internal error.
 
@@ -61,11 +73,11 @@ The rebuild is restart-equivalent for the Extension layer, not atomic Run draini
 
 ## Startup and shutdown
 
-For packaged installs, the application owner resolves one explicit local requirements recipe into a data-dir managed site. It constrains every distribution to the immutable runtime inventory, removes same-version runtime duplicates from the target, and records the complete recipe with its compatibility-scoped site. Runtime appends that site only during normal startup, never through `.pth` execution; its full inventory plus Python ABI fingerprint must match. A changed recipe is effective after restart, not an Extension Reload. Invalid optional dependencies leave unrelated Extensions loadable.
+For packaged installs, the application owner resolves one explicit local requirements recipe into a data-dir managed site. It constrains every distribution to the immutable runtime inventory, removes same-version runtime duplicates from the target, and records the complete recipe with its compatibility-scoped site. Runtime appends that site only during normal startup, never through `.pth` execution; its full inventory plus Python ABI fingerprint must match. A changed recipe is effective after restart, not an Extension Reload. Invalid optional dependencies leave unrelated Extensions loadable. A development checkout has neither the release manifest nor the runtime inventory and loads Extensions without that site (`core/extensions/dependencies.py::activate`).
 
 Authoring convention: keep imports and `register(api)` free of resource acquisition; acquire connections, tasks and file handles in startup, release them in shutdown, and make both handlers idempotent because reload cycles every loaded owner. This guidance is also part of the bundled `vbot-docs` authoring reference.
 
-Loaded Extensions fire startup in load order after runtime capability application; initial startup, like reload, first archives the owner-managed Sessions of Extensions no longer installed. Runtime stop fires shutdown for loaded records; live reload awaits old shutdown and new startup on the serving loop; live disable fires only that record's shutdown. After each owner's shutdown handlers, the registry releases that registration through the root host's `release_owner`, closing the databases it opened with `host.open_database` (`extensions.md`). Synchronous and asynchronous lifecycle handlers share fail-open logging and do not prevent remaining handlers from running; a failed release is logged the same way.
+Loaded Extensions fire startup in load order after runtime capability application; initial startup, like reload, first archives the owner-managed Sessions of Extensions no longer installed. Runtime stop fires shutdown for loaded records; live reload awaits old shutdown and new startup on the serving loop; live disable fires only that record's shutdown. After each owner's shutdown handlers, the registry releases that registration through the root host's `release_owner`, closing the databases it opened with `host.open_database` (`extensions/databases.md`). Synchronous and asynchronous lifecycle handlers share fail-open logging and do not prevent remaining handlers from running; a failed release is logged the same way.
 
 Lifecycle waits are bounded like registration, because reload, disable and shutdown hold the ExtensionRuntime mutation lock (and a Settings save that triggered them keeps the Settings mutation lock for them, `settings.md` -> Constraints & Gotchas). Each shutdown path drains an owner (`quiesce`) before its shutdown handlers run, so shutdown handlers need not drain again; Swarm's `close()` relies on it. `invoke_lifecycle_handler` in `_callbacks.py` stops waiting after `_LIFECYCLE_HANDLER_TIMEOUT_SECONDS` (30 s) and logs an ERROR `... timed out after 30 seconds`:
 

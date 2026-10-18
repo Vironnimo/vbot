@@ -1,0 +1,17 @@
+# Block Editing and Preview
+
+The manager's block-edit facade behind the `prompt.*` RPCs (block text, layout, `user:` blocks, scopes) and `prompt.preview`. This facade is the only prompt-edit surface; there is no fragment-edit facade.
+
+## Block-edit facade
+
+`list_scopes()` reports each custom-prompt Agent scope with `has_customizations` (saved layout or any override) so the editor can confirm before disabling custom prompts. `list_blocks(scope)` gives static metadata in layout order including effective text, `is_modified`, and inheritance layer for editable blocks - owner-active status deliberately excluded (preview's job). `update_block` accepts overrides on editable blocks only (data/dynamic reject); `reset_block` drops to inherited/default (a `user:` block has no default - delete instead). `set_layout` tolerates contributor-gone ids (store prunes them on write); `reset_layout` restores the bundled default leaving text overrides untouched. `create_block`/`remove_block` manage `user:<slug>` blocks only - core/tool/extension blocks toggle off, never delete. `create_block` rejects a slug that matches an existing `user:` block case-insensitively on every platform (`PromptError`), because the override file is named after the slug and a case-insensitive filesystem would give both spellings one file; a slug must also pass the reserved-name rule (PROJECT.md -> Object IDs). A layout that already holds case variants keeps every entry (never pruned or rewritten), see `storage.md` for how their files behave.
+
+Every `prompt.*` handler does its catalog, scope, Agent, and Skill work on the `prompt-rpc` worker pool, never on the Event Loop; that includes `prompt.preview`'s scope validation, which reads the Agent for an Agent scope. Coverage: `tests/server/rpc/test_operations_methods.py`.
+
+RPC error split: block edit/layout/preview validation maps `PromptError` -> `invalid_request`; assembly/storage/runtime failures during preview use the normal domain-error path.
+
+## Preview
+
+`prompt.preview` returns rendered `text`, token counts including the Tool-definition footprint (corrected by the Agent's Model input estimate factor, `chat/usage.md` -> One Context rule), and `estimated`. While the Agent loads Tools on demand, `tool_tokens` and `tool_count` cover only the Tool list (the always-loaded Tools and `load_tools`); the On-demand Tools count in `tokens` through the `tool:load_tools` block. Optional boolean `include_tools` adds the same effective Provider definitions with individual token estimates for inspection, each On-demand Tool's entry marked `on_demand: true`; it does not mutate definitions or Prompt context. Deferred Tools remain excluded, and omission keeps the compact response.
+
+Preview uses the live manager (current registries, extensions, layout, overrides), renders the Working Project frame prospectively without persisting a snapshot, uses no Session pins and therefore no Session-scoped Tools: an optional `session_id` applies only that Session's Agent overrides and Working Project, and `working_project_id` (without `session_id`) names the Project a new Session would work in (omitted: the Agent's default Project; `null`: the Workspace); no scope shows the Agent's baseline, `scope: {type: "default"}` previews the default scope.

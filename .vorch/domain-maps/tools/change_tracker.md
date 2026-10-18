@@ -78,20 +78,21 @@ belong to `tools/scratch.md`.
    (`core/chat/_agentic_progression.py`) -> `peek_run_stats` on a Chat worker
    -> when the value changed, first stored on the running Run
    (`ChatSession.record_change_stats_async`, best-effort with a warning), then
-   the transient `run_change_stats` Run event (`{change_stats}`) that the WebUI
-   shows while the Run executes. An all-zero object retires an earlier nonzero
+   the `run_change_stats` Run event (`{change_stats}`) that the WebUI
+   shows while the Run executes. It is not transient, so a finished Run's
+   settled ending keeps it (`runs/events.md`). An all-zero object retires an earlier nonzero
    total; `None` (nothing written yet) is neither stored nor emitted.
 3. Run end (`core/chat/_run_execution.py`, `_execute_run_impl` finally block)
    -> `take_run_stats` on a Chat worker inside the visible-boundary guard, so
    Stop cannot skip it or lose the totals -> `run.terminal_payload_extras
    ["change_stats"]` -> every terminal Run event and the persisted
    `run_summary` (`runs` columns `changed_files`/`lines_added`/`lines_removed`
-   plus `run_change_paths`, `sessions.md`).
+   plus `run_change_paths`, `sessions/runs.md` -> Change statistics).
 
 The tracker itself is in memory only. A process restart loses what a Run
 wrote after its last Tool round; the Run recovered as `interrupted` keeps the
 statistics stored up to then. Session totals are sums over the stored Run
-statistics (`sessions.md` -> Interfaces, `summary`).
+statistics (`sessions/runs.md` -> Change statistics, `summary`).
 
 `read` takes no part in change statistics; it only stamps `FileReadState` for
 the read-before-write guard.

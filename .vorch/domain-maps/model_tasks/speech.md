@@ -193,7 +193,7 @@ microphone Sessions.
 (`LocalSpeechExecutor.setups`, reached through `SpeechService.local_setup_for(target)`):
 the target's engine environment, then its pinned Model.
 It extends `LocalSetup` (`local_setup.py`), which local embeddings share: status,
-job lifecycle, receipts, the Model fetch (`model_tasks.md` -> Overview) and the uv
+job lifecycle, receipts, the Model fetch (`model_tasks/local-engines.md`) and the uv
 recipe installer (`_install_recipe`) live there;
 the server-interpreter STT path and the TTS verification stay in `speech_setup.py`.
 Targets of one engine share its environment under `DataDirectoryLayout.speech_engines`
@@ -221,7 +221,7 @@ during installation, failure and the verified restart-required state. Developmen
 rechecks package metadata; managed STT/TTS require the environment interpreter, the base
 Python its `pyvenv.cfg` names (`python_missing` once that is gone, e.g. after the application
 was installed again) with the `major.minor` the environment requires (`python_changed`
-otherwise; `model_tasks.md` -> Overview): for STT the server's (it has no recipe: its worker
+otherwise; `model_tasks/local-engines.md` -> Installation job): for STT the server's (it has no recipe: its worker
 imports vBot source), for TTS its recipe's `python`, else also the server's. They also
 require a
 `verified.json` completion receipt, written atomically only after successful verification
@@ -315,7 +315,7 @@ setup isolation, sizes sharing an environment with their own Models, and availab
 
 ## Provider Wire Behavior
 
-Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient` subclasses `core.providers.task_client.ProviderTaskClient`, which owns the shared plumbing (constructor tuple, `from_runtime` target resolution, auth headers, POST/classify/parse cycle, retry policy - see `providers.md`); `core/model_tasks/speech_providers.py` owns only the speech payload shapes and response parsing.
+Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient` subclasses `core.providers.task_client.ProviderTaskClient`, which owns the shared plumbing (constructor tuple, `from_runtime` target resolution, auth headers, POST/classify/parse cycle, retry policy - see `providers/request-policy.md` -> Provider-backed task clients); `core/model_tasks/speech_providers.py` owns only the speech payload shapes and response parsing.
 
 `ProviderSpeechClient.transcription_input_policy()` supplies the supported source
 formats and vBot request ceilings to preparation. OpenAI's format allowlist follows
@@ -381,12 +381,12 @@ PCM artifacts retain all samples, and failed/cancelled streams release workers.
 
 - `POST /api/speech/transcribe` accepts multipart file upload, enforces the runtime upload limit before reading into `SpeechService`, and returns `SpeechTranscriptionResult.to_dict()`.
 - With `Accept: application/x-ndjson`, the same upload streams request-local
-  progress heartbeats and one terminal result/error. `server/app.py` owns this
+  progress heartbeats and one terminal result/error. `server/_speech_routes.py` owns this
   transport and cancels/reaps work on disconnect; local worker cancellation
   waits for the running engine call, bounded for worker children (Local engines). Ordinary JSON clients remain supported.
   Coverage: `tests/server/test_speech_endpoints.py`.
 - Status and install of every local speech target go through the generic
-  `task_model.local_setup_status/install {target}` (`model_tasks.md` -> Contracts),
+  `task_model.local_setup_status/install {target}` (`model_tasks/local-engines.md` -> Generic local engine RPCs),
   as do `task_model.local_memory_status` and `local_unload`.
   `speech.local_setup_restart {target}` in `server/rpc/task_model_methods.py` requires
   one exact local speech target (missing, non-`local/` or unknown -> `invalid_request`),
@@ -413,6 +413,7 @@ PCM artifacts retain all samples, and failed/cancelled streams release workers.
   preview consumes early playback; ordinary clients still receive raw audio.
 - `POST /api/speech/synthesize` accepts JSON `{ "text": "..." }`, rejects malformed JSON or blank text before calling `SpeechService`, and returns raw audio bytes with the synthesized media type.
 - `GET /api/speech/playback/{playback_id}` streams transient framed PCM, independently of progress and Run event transports; an expired resource returns HTTP 410.
+- `server/_speech_routes.py` owns these routes. Transcription and synthesis progress streams and ordinary non-streaming speech requests cancel and drain inference when their accessor disconnects. Streaming responses, playback included, send `Cache-Control: no-store` and explicitly close their generators even when a socket send fails, releasing inference and spool readers without waiting for garbage collection (`tests/server/test_speech_endpoints.py`, `test_speech_disconnect.py`).
 - `GET /api/speech/artifacts/{artifact_id}` streams a persisted speech artifact through `FileResponse`.
 - The built-in `generate_speech` Tool accepts only `text`; it returns a tool artifact payload from `SpeechArtifact.to_dict()` and intentionally exposes no model, provider, voice, format, or speed arguments.
 
@@ -420,7 +421,7 @@ PCM artifacts retain all samples, and failed/cancelled streams release workers.
 
 TTS tool output is stored under `<data_dir>/artifacts/speech/` through the shared `TaskArtifactStore` (`core/model_tasks/artifacts.py`): one audio file and one sidecar JSON metadata file per artifact. New artifact IDs use `aud_` plus 12 lowercase base32 characters, filenames are `<artifact_id>.<extension>`, and sidecars contain `format_version` 1, `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default. Synthesis writes the complete artifact on a worker, including durable I/O; cancellation waits for that write to finish, so it cannot abandon a partial publication or block the Event Loop with file syncs.
 
-A sidecar is a durable JSON document under the Generation 1 contract (`settings.md` -> JSON Document Contract; registry kind `speech_artifact_metadata`, validated by `validate_task_artifact_metadata_file` for `doctor config`), written once and never rewritten. It is not a data-snapshot member: a snapshot holds no blobs. The store validates the sidecar (a missing, older or newer `format_version` or an invalid field is refused; unknown fields are ignored) and exact artifact identity before using metadata. Filenames must belong to that id inside the artifact directory; sidecars cannot redirect reads to other files or symlinks. Missing sidecars or blobs raise `SpeechArtifactNotFoundError`; malformed JSON/UTF-8, invalid metadata and unreadable files raise the ordinary Speech configuration error with a generic message (`test_artifacts.py`). Presence checks preserve access and I/O failures instead of treating them as missing.
+A sidecar is a durable JSON document under the Generation 1 contract (`json-documents.md`; registry kind `speech_artifact_metadata`, validated by `validate_task_artifact_metadata_file` for `doctor config`), written once and never rewritten. It is not a data-snapshot member: a snapshot holds no blobs. The store validates the sidecar (a missing, older or newer `format_version` or an invalid field is refused; unknown fields are ignored) and exact artifact identity before using metadata. Filenames must belong to that id inside the artifact directory; sidecars cannot redirect reads to other files or symlinks. Missing sidecars or blobs raise `SpeechArtifactNotFoundError`; malformed JSON/UTF-8, invalid metadata and unreadable files raise the ordinary Speech configuration error with a generic message (`test_artifacts.py`). Presence checks preserve access and I/O failures instead of treating them as missing.
 
 ## Errors
 

@@ -9,7 +9,8 @@ measured requests (Interfaces).
 
 The request lifetime differs from the Session lifetime: Task Models and background
 requests may have no Session, and archiving, deleting or purging a Session must not
-erase already incurred consumption (an archive purge imports first, `archive.md`).
+erase already incurred consumption (an archive purge imports first,
+`archive/purge-and-retention.md` -> Purge order).
 `UsageRecorder` therefore owns its canonical database independently of Sessions,
 Model catalog pricing, and Provider quota observations (`providers/usage.md`).
 Runtime constructs one recorder and injects it into the request owners and
@@ -73,9 +74,6 @@ it absent; public address or Run-id reuse never proves historical ownership.
   replay of an empty source records the new identity with cursor 0. A restore
   of `model-usage.db` itself rewinds rows and cursor together, so resuming stays
   correct.
-  The v2 cursor replays retained own audit once to enrich old exact
-  `usage_call_id` matches with missing Session generation provenance. Historical
-  auxiliary calls without such evidence remain unassociated.
   Entries without counters, costs or an embedded call id are skipped: captions and
   interrupted drafts alone do not establish a Model request. Skipped entries still
   advance the import cursor.
@@ -96,10 +94,7 @@ it absent; public address or Run-id reuse never proves historical ownership.
 `_schema.py` declares canonical Generation 1 tables through `core/database/`.
 Runtime and offline tools register `model_usage`, so snapshots, health and recovery
 include it. Every changed call receives a monotonically increasing revision;
-there is no Session-triggered deletion or retention pruning. `usage_imports`
-gained the nullable `source_restore_id` additively; a row written before it
-reads as "no restore", so the first import from a Session database with any
-recorded restore replays once.
+there is no Session-triggered deletion or retention pruning.
 
 Request producers must finish in cleanup even on validation errors and
 cancellation. Response persistence settles before repeated cancellation
@@ -119,8 +114,9 @@ POST attempts. GET polling/downloads do not create Model requests.
 
 Historical Task Model requests and deleted history with no retained Usage cannot
 be reconstructed. The import never fabricates them. Current request kinds cover
-Chat, Compaction, Session/group titles, Extension sampling, all Task Model types
-and the delegated Live Voice backend; producer details remain in their maps.
+Chat, Compaction, Session/group titles, Agent description drafts
+(`agent_description`), Extension sampling, all Task Model types and the
+delegated Live Voice backend; producer details remain in their maps.
 
 The calibration rows are derived state: losing or restoring them only changes
 how quickly estimates correct themselves, and no call record refers to them.

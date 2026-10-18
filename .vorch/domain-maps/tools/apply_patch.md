@@ -729,8 +729,14 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   copies its DACL (including its inheritance/protection state), hidden, system
   and not-content-indexed flags onto the adjacent staged file before publishing
   it (`core.utils.atomic.preserve_windows_file_metadata`); a failure to preserve
-  that metadata aborts before replacement. Atomic replacement changes only the
-  named directory entry: other hard links keep the previous file and bytes.
+  that metadata aborts before replacement. The helper never changes the
+  original: raw descriptor APIs preserve legacy DACLs, while auto-inherited
+  descriptors use the named setter to retain their modern inheritance state;
+  its caller owns staging, mode bits and cleanup
+  (`tests/core/tools/test_file_state.py`: protected/unprotected and
+  legacy/modern DACLs, flags, failure before replacement). Atomic replacement
+  changes only the named directory entry: other hard links keep the previous
+  file and bytes.
   Preserving shared hard-link content would require in-place writes, contrary
   to the unchanged-original-on-write-failure contract. Its `before_replace` callback rechecks all
   current operation paths before each bounded retry of Windows replacement

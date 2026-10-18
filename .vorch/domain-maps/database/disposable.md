@@ -1,0 +1,10 @@
+# Disposable databases
+
+The runtime API for disposable owners (`core/database/disposable.py`), today the Statistics index and the Recall Passage index. What the disposable profile discards and logs is the Term in `../database.md` -> Canonical / disposable profile.
+
+- Discards: a version mismatch is the designed upgrade path and logs INFO after the discard; a foreign/newer file, corruption or a missing projection version logs WARNING.
+- `DisposableDatabase(spec)` opens lazily (`get()`, `get_async()` opens off the Event Loop), `discard()` closes the handle and deletes the files so the next `get()` rebuilds empty (refused while another handle in this process has the file open; `discard_async()` runs it off the Event Loop), `close()` ends it.
+- It keeps one worker pool for its whole life: `run_async`, `get_async`, `discard_async` and every handle `get()` opens (rebuilds included) share it, and `close()` shuts it down, so later async work raises `DatabaseUnavailableError` (`is_closed()` reports it).
+- `projection_failure(error)` classifies an operation failure as `busy` (contention; retry later), `unavailable` (permission, disk, I/O, closed or still-open handle), `rebuild` (classified corruption, identity/format/schema failures, and any other SQLite failure of the owner's own statements such as a missing table or violated constraint) or `None` (API misuse, non-SQLite exceptions: propagate). Only `rebuild` grounds `discard()`.
+
+Tests: `tests/core/database/test_database_profiles.py`.
