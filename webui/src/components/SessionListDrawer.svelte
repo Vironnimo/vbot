@@ -205,7 +205,8 @@
         null,
       ).map((session) => ({
         ...session,
-        agent_name:
+        // Named in the row's details card, not on the row.
+        owner_name:
           agentNames[session.agent_address] ||
           parseAgentAddress(session.agent_address).agentId,
       }));

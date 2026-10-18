@@ -649,10 +649,9 @@ describe('SessionListDrawer by Project', () => {
         name,
     );
   const groupRows = (name) =>
-    [...group(name).querySelectorAll('.session-row')].map((row) => [
-      row.querySelector('.session-row__name').textContent.trim(),
-      row.querySelector('.session-row__agent')?.textContent.trim() ?? '',
-    ]);
+    [...group(name).querySelectorAll('.session-row__name')].map((row) =>
+      row.textContent.trim(),
+    );
   const newSessionButton = (name) =>
     group(name).querySelector('.session-group__new');
   const menuItems = () =>
@@ -709,10 +708,19 @@ describe('SessionListDrawer by Project', () => {
       'Idle',
       t('sessions.projects.other'),
     ]);
-    expect(groupRows('vBot')).toEqual([
-      ['Planning', 'Alpha'],
-      ['Build', 'Builder'],
-    ]);
+    expect(groupRows('vBot')).toEqual(['Planning', 'Build']);
+    // The row names its Agent only in its details card.
+    expect(document.querySelector('.session-group .session-row__agent')).toBe(
+      null,
+    );
+    vi.useFakeTimers();
+    sessionRowButton('Build').focus();
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    flushSync();
+    const agentTerm = [
+      ...document.getElementById('app-tooltip').querySelectorAll('dt'),
+    ].find((term) => term.textContent === t('sessions.details.agent'));
+    expect(agentTerm.nextElementSibling.textContent).toBe('Builder');
     expect(group('Idle').textContent).toContain(t('sessions.projects.empty'));
     expect(
       sessionRowButton('Planning').classList.contains(
