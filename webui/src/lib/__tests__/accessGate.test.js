@@ -34,6 +34,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const gate of gates) gate.destroy();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -132,6 +133,7 @@ describe('createAccessGate()', () => {
   });
 
   it('retries an unreachable server after a loss with a backoff', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const f = gateFixture(
       SIGNED_IN,
       failure('network_error'),
@@ -142,13 +144,15 @@ describe('createAccessGate()', () => {
 
     await f.lose();
     expect(f.gate.state.screen).toBe(GATE_UNREACHABLE);
-    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(f.getAuthStatus).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
     expect(f.getAuthStatus).toHaveBeenCalledTimes(3);
     expect(f.gate.state.screen).toBe(GATE_UNREACHABLE);
-    // The second wait doubles (2 s ± 25 %).
-    await vi.advanceTimersByTimeAsync(1_400);
+    // With centered jitter, the second wait doubles from 1 s to 2 s.
+    await vi.advanceTimersByTimeAsync(1_999);
     expect(f.getAuthStatus).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(1_200);
+    await vi.advanceTimersByTimeAsync(1);
 
     expect(f.getAuthStatus).toHaveBeenCalledTimes(4);
     expect(f.gate.state.screen).toBe(GATE_APP);
