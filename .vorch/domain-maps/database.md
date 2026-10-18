@@ -6,9 +6,9 @@ The shared SQLite kernel (`core/database/`): how every vBot database opens, evol
 
 `core/database/` owns connection policy, schema evolution, the canonical and disposable profiles, the data-store marker and maintenance guard, data snapshots and their consistency, recovery (quarantine, incidents, automatic and operator restores, the update rollback), configuration backups and operator-safe status. An owner declares a `DatabaseSpec` and calls `open_database`; it keeps its own DDL, queries, domain errors and domain semantics. The kernel knows no Session, Channel or Provider concept.
 
-Canonical owners: the Session store (`sessions.md`), the Provider usage history (`providers/usage.md`), the Channel state (`channels.md`), the Model Usage recorder (`usage.md`) and Extension databases opened through `host.open_database` (`extensions.md`; the bundled Swarm Extension is one). Disposable owners: the Statistics index (`statistics.md`) and the one Recall Passage index (`recall.md`). Each declares its spec beside its schema (`*_database_spec`).
+Canonical owners: the Session store (`sessions.md`), the Provider usage history (`providers/usage.md`), the Channel state (`channels.md`), the Model Usage recorder (`usage.md`) and Extension databases opened through `host.open_database` (`extensions/databases.md`; the bundled Swarm Extension is one). Disposable owners: the Statistics index (`statistics.md`) and the one Recall Passage index (`recall.md`). Each declares its spec beside its schema (`*_database_spec`).
 
-Not owned here: data-directory placement and creation (`storage.md`; initialization only writes the bootstrap marker through `write_bootstrap_marker`), the Extension database lifecycle (when an Extension opens, restores or releases its databases, `extensions.md` -> Extension databases) and the operator surfaces (`cli.md`, `server.md`, `webui.md`).
+Not owned here: data-directory placement and creation (`storage.md`; initialization only writes the bootstrap marker, `write_bootstrap_marker`), the lifecycle of Extension databases (when an Extension opens, restores or releases them, `extensions/databases.md`) and the operator surfaces (`cli/data-store.md`, `server.md`, `webui.md`).
 
 ## Terms
 

@@ -25,7 +25,7 @@ Responses validate matching ids, types, labels, finite ranges, supplied distribu
 
 ## Retired database
 
-The former `decisions` database (`<data-dir>/decisions.db`) is listed in `core/runtime/databases.RETIRED_CANONICAL_DATABASES`. A normal Runtime start quarantines and unregisters it through `retire_core_databases` (`../database.md`); an update's verification start does not, because its rollback needs every registration unchanged. Keep the entry while installations may still carry the file.
+The former `decisions` database (`<data-dir>/decisions.db`) is listed in `core/runtime/databases.RETIRED_CANONICAL_DATABASES`. A normal Runtime start quarantines and unregisters it through `retire_core_databases` (`../database/snapshots-and-recovery.md` -> Unregister and retire); an update's verification start does not, because its rollback needs every registration unchanged. Keep the entry while installations may still carry the file.
 
 ## Verification owners
 

@@ -8,6 +8,8 @@ An Extension is the unit of discovery, identity, configuration, enable/disable, 
 
 Extensions execute arbitrary code in the vBot process on the normal asyncio runtime. They are inside the kernel trust boundary, not sandboxed plugins. Agent authoring guidance lives in the bundled `vbot-docs` Skill at `resources/skills/vbot-docs/references/extensions.md`; runnable examples live in `resources/skills/vbot-docs/assets/extensions/`.
 
+The bundled `vbot-docs` Extension references each fit one `skill` Tool read (`tests/resources/skills/test_bundled_skills.py` reads each whole). Its `assets/extensions/` templates are recursively readable Skill resources, not Extension scan roots: the nested `workflow` Skill becomes separately discoverable only after its containing Extension is installed and loaded (`tests/core/extensions/test_examples.py`).
+
 ## Terms
 
 Core cross-cutting terms live in `.vorch/GLOSSARY.md`; these terms are specific to the Extensions domain.
@@ -88,6 +90,6 @@ Read these only when your task matches - not by default.
 - Restoring the archived Browser Use Extension or locating its replacement -> `extensions/browser-use.md`
 - Changing the bundled Home Assistant Extension, its four Tools, settings, readiness, retry behavior, or security constraints -> `extensions/homeassistant.md`
 - Changing the bundled MCP client, transports, Tool opt-ins, callbacks, media preservation, or protocol compatibility -> `extensions/mcp.md`
-- Adding or changing an Extension-owned page or configuration editor -> `webui.md`; editable settings, existing-record forms, and save/navigation behavior also require `webui/autosave.md`
+- Adding or changing an Extension-owned page or configuration editor -> `webui.md` and `webui/extension-pages.md`; editable settings, existing-record forms, and save/navigation behavior also require `webui/autosave.md`
 - Changing Swarm profiles, peer coordination, participant delivery/completion, or the Swarms page -> `extensions/swarm.md`
 - Informing the Model about a background event or state change -> `model-communication.md`

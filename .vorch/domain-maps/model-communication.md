@@ -21,11 +21,11 @@ These ten channels describe canonical vBot Agent/Chat communication. A Live voic
 | Tool-change announcement | Persisted note, once per change within a Prompt Epoch | `chat/request-building.md` -> Tool catalog per prompt epoch - `[tool-change]` note when a Tool is enabled, removed or changes its parameters while the Tool list stays pinned |
 | Prompt-block change announcement | Persisted note, at most one per Run within a Prompt Epoch | `chat/request-building.md` -> Dynamic prompt blocks per prompt epoch - `[prompt-block-change]` note at Run start when a contributed Tool/Extension block, temporary Session block or Channel list is added, removed or renders differently |
 | Interruption notice | Request-time only, derived from a persisted `run_summary` | `chat/run-execution.md` -> Interruption - one sentence naming why the previous turn stopped, before the next input |
-| Continuation checkpoint reminder | Request-time only | `compaction.md` - ContinuationStrategy appends it to the active request |
+| Continuation checkpoint reminder | Request-time only | `compaction/strategies-and-checkpoints.md` - ContinuationStrategy appends it to the active request |
 | System Prompt blocks | Rendered per request; contributed/temporary block membership, text and positions pinned per Prompt Epoch | `prompts.md`; Tool-owned dynamic blocks via `ToolPromptBlockRegistry` (`tools.md`) |
 | Tool definitions and results | Per call | `tools.md` - description plus structured result data |
 
-Deliberately **not** a reminder channel: Channel-observed group chatter persists as attributed `[channel-message]` text and renders as explicitly untrusted JSON-quoted background context (`channels.md`). Never route untrusted third-party content through reminder framing.
+Deliberately **not** a reminder channel: Channel-observed group chatter persists as attributed `[channel-message]` text and renders as explicitly untrusted JSON-quoted background context (`channels/groups.md` -> Observed and quoted context). Never route untrusted third-party content through reminder framing.
 
 ## Decision rules
 
@@ -44,4 +44,4 @@ Deliberately **not** a reminder channel: Channel-observed group chatter persists
 - Provider adapters never receive `role: "note"`; embedding happens before wire translation (`providers.md`).
 - Reminders are synthetic user messages: content must be kernel-authored constants, never raw external or user data without its domain's quoting rules. Chat-rendered reminders quote such text through `core/chat/wire_shaping.py::_quote_external_json` (JSON with escaped angle brackets; `quote_external_value` is the same encoding for one value, used outside Chat by Session Goals), including Model-visible Run errors.
 - Notes are invisible in UI and public history - they are not a user-notification mechanism. The only exception is the Model fallback note, whose separate display-only record the Chat History shows as the switch notice without the note text (`chat.md`).
-- Extension-owned delivery uses the existing persisted-note or Tool-result channel. Chat commits the complete carrier and canonical receipt atomically before owner acknowledgment; the Extension supplies attributed data, never wrapper tags or Provider roles. Delivery and completion continuations enter only after the preceding whole Tool batch is durable (`chat.md`, `extensions.md`).
+- Extension-owned delivery uses the existing persisted-note or Tool-result channel. Chat commits the complete carrier and canonical receipt atomically before owner acknowledgment; the Extension supplies attributed data, never wrapper tags or Provider roles. Delivery and completion continuations enter only after the preceding whole Tool batch is durable (`chat/run-execution.md`, `extensions/host.md` -> Deferred Tool outcomes).

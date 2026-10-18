@@ -33,7 +33,7 @@ Update sections are sparse or full per their semantics; notable contracts:
 
 ## Sub-Agent limits
 
-Sub-Agent limits are flat raw keys exposed as `subagents.*` paths: `max_subagent_depth` (default 2), `max_active_subagents` (default 8, the Sub-Agents of one Session working at the same time; its own only, not theirs) and `max_active_subagents_total` (default 50, Sub-Agents working at the same time across the app). `settings.update` writes all three together. The former `max_subagents_per_turn` and `subagent_timeout_minutes` were removed; stored values only warn as unknown keys, are left out on load and kept in the file by writes. How the limits refuse a `run`: `subagents.md`.
+Sub-Agent limits are flat raw keys exposed as `subagents.*` paths: `max_subagent_depth` (default 2), `max_active_subagents` (default 8, the Sub-Agents of one Session working at the same time; its own only, not theirs) and `max_active_subagents_total` (default 50, Sub-Agents working at the same time across the app). `settings.update` writes all three together. The former `max_subagents_per_turn` and `subagent_timeout_minutes` were removed; stored values only warn as unknown keys, are left out on load and kept in the file by writes. How the limits refuse a `run`: `subagents/delegation.md` -> Limits.
 
 ## `base` plumbing
 
@@ -41,4 +41,4 @@ The `base` contract itself is in `settings.md` -> Public surface. `settings.upda
 
 ## Installer seed of `defaults.agent`
 
-The installer (`cli/application/install.py`, `FRESH_AGENT_DEFAULTS`) seeds the `settings.json` of a data directory it creates with thinking effort "high" only and leaves temperature and top_p unset, so Chat sends neither and the Provider's own default applies (`chat.md`). Install-time seed only - existing instances keep their configured default until it is cleared; this is not a runtime fallback.
+The installer (`cli/application/install.py`, `FRESH_AGENT_DEFAULTS`) seeds the `settings.json` of a data directory it creates with thinking effort "high" only and leaves temperature and top_p unset, so Chat sends neither and the Provider's own default applies (`chat/run-execution.md` -> Model and Connection resolution). Install-time seed only - existing instances keep their configured default until it is cleared; this is not a runtime fallback.

@@ -18,7 +18,7 @@ The owner-bound host is bound only when `ExtensionRuntime.startup` fires startup
 
 `Runtime.canonical_databases()` includes the open handles, so data snapshots copy them online; registered but unopened ones are copied from their files. Offline tools (CLI data-store status/restore, updater snapshot) never declare Extension specs, because that would execute Extension code: they verify Extension members by kernel identity and integrity only, without owner facts or schema compatibility checks.
 
-Automatic restore of a missing or corrupt Extension database happens at that open; the operator path is `vbot data-store snapshot restore <id> --database ext.<owner>.<name> --yes`, which checks only kernel identity and integrity and leaves reconcile, migrations and any refusal to the Extension's next open after the restart (`database.md` -> Conventions).
+Automatic restore of a missing or corrupt Extension database happens at that open; the operator path is `vbot data-store snapshot restore <id> --database ext.<owner>.<name> --yes`, which checks only kernel identity and integrity and leaves reconcile, migrations and any refusal to the Extension's next open after the restart (`database/snapshots-and-recovery.md` -> Snapshot creation and retention).
 
 ## Removal and unregister
 

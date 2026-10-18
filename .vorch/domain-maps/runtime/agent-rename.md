@@ -21,4 +21,4 @@ Runtime owns this order because it alone owns every referencing service: AgentSt
 
 ## `agent_references`
 
-`agent_references(agent_id)` (async), which the `agent.delete` guard awaits, names only what would still start Runs or answer as the Agent: its Channels, whose configs it reads off the Event Loop (`list_channels_async`), plus `AutomationReferences.agent_references` (`automation.md`); delegation allow-lists do not count, because the archive records and removes the Agent from them (`archive.md`).
+`agent_references(agent_id)` (async), which the `agent.delete` guard awaits, names only what would still start Runs or answer as the Agent: its Channels, whose configs it reads off the Event Loop (`list_channels_async`), plus `AutomationReferences.agent_references` (`automation.md`); delegation allow-lists do not count, because the archive records and removes the Agent from them (`archive/operations.md` -> Archive order).

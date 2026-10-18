@@ -49,7 +49,7 @@ The core Skill term lives in `.vorch/GLOSSARY.md`.
 **Not:** A write lock - people and attended Agents still change it; not the `PinnedSkillCatalog`.
 
 ### Background Writer
-**Definition:** A Skill write by a background actor (`BACKGROUND_ACTORS`): `reflection` for a Reflection Run, `librarian` for the Librarian's aging, its consolidation Run and every call in a Librarian Session (`automation/librarian.md`); `core/tools/skill.py::skill_writer` names the writer. It never changes, deletes or absorbs a pinned Skill, never reverts, never changes a global Skill and never publishes (user requirement 2026-10-05); an unreadable history fails closed. Origin, sharing and automation triggers do not limit it (user decision 2026-10-03: the pin is the one hands-off the user sets). Background Sessions are not Skill use (`statistics.md`).
+**Definition:** A Skill write by a background actor (`BACKGROUND_ACTORS`): `reflection` for a Reflection Run, `librarian` for the Librarian's aging, its consolidation Run and every call in a Librarian Session (`automation/librarian.md`); `core/tools/skill.py::skill_writer` names the writer. It never changes, deletes or absorbs a pinned Skill, never reverts, never changes a global Skill and never publishes (user requirement 2026-10-05); an unreadable history fails closed. Origin, sharing and automation triggers do not limit it (user decision 2026-10-03: the pin is the one hands-off the user sets). Background Sessions are not Skill use (`statistics/skill-usage.md`).
 **Not:** An attended Agent, which writes with actor `agent` under the ordinary write scope.
 
 ### Prompt-Epoch Catalog
@@ -76,7 +76,7 @@ Write scope (v1 is data-dir only - vBot never writes the repo as runtime state):
 
 - `SkillMetadata`: normalized `name`/`description`, internal `path`, optional license/compatibility/metadata/`allowed_tools`, parsed vBot requirements (`metadata.vbot.requirements`, `skills/loading.md`).
 - Three availability states: `invalid` (malformed/non-loadable), `unavailable` (loadable, unmet required requirements), `available`; optional requirements never gate. Metadata problems are loadable warnings, never gates.
-- The live registry stamps each Skill with its exact `SkillPackageRef` (source, package-directory name, location); activation persists it as internal `skill_package` metadata on the trigger Note or Tool Result, never in Provider or Compaction requests or public payloads. Statistics counts exact package use (`statistics.md`); Skill Policy selectors keep visible-name semantics.
+- The live registry stamps each Skill with its exact `SkillPackageRef` (source, package-directory name, location); activation persists it as internal `skill_package` metadata on the trigger Note or Tool Result, never in Provider or Compaction requests or public payloads. Statistics counts exact package use (`statistics/skill-usage.md`); Skill Policy selectors match visible names.
 
 ## Interfaces
 

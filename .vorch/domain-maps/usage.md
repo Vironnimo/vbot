@@ -9,7 +9,8 @@ measured requests (Interfaces).
 
 The request lifetime differs from the Session lifetime: Task Models and background
 requests may have no Session, and archiving, deleting or purging a Session must not
-erase already incurred consumption (an archive purge imports first, `archive.md`).
+erase already incurred consumption (an archive purge imports first,
+`archive/purge-and-retention.md` -> Purge order).
 `UsageRecorder` therefore owns its canonical database independently of Sessions,
 Model catalog pricing, and Provider quota observations (`providers/usage.md`).
 Runtime constructs one recorder and injects it into the request owners and

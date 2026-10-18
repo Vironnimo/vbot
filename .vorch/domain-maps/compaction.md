@@ -50,3 +50,4 @@ Read these only when your task matches - not by default.
 
 - Changing a Strategy, Tail selection, checkpoint content, the User quote, summary acceptance, the Compaction Model call or Compaction Usage -> `compaction/strategies-and-checkpoints.md`
 - Changing when automatic Compaction runs, manual Compaction Runs, the context card, commit staleness, failures, limits, logging, the prompt refresh of temporary Agents or the Compaction Run events -> `compaction/run-coordination.md`
+- Choosing how Compaction informs the Model (checkpoint content, notes, System Reminders) or adding a kernel-to-Model channel -> `model-communication.md`

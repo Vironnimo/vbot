@@ -18,7 +18,7 @@ Stream draft rows (`sessions.md` -> Terms -> Stream draft) live in `run_stream_d
 
 ## Tool result payloads
 
-`ChatSessionManager.tool_result_payload_async(address, payload_id, *, owner_name)` returns the decoded payload only when one with that id and owner belongs to a Tool call whose result entry is in the address's current view (own, inherited or materialized), else `None` (also for an unknown Session). It is one statement driven by `tool_result_payloads_by_id` (`test_store_query_plans.py`); its caller is the Extension host (`extensions.md`); coverage `tests/core/sessions/test_tool_result_payloads.py`.
+`ChatSessionManager.tool_result_payload_async(address, payload_id, *, owner_name)` returns the decoded payload only when one with that id and owner belongs to a Tool call whose result entry is in the address's current view (own, inherited or materialized), else `None` (also for an unknown Session). It is one statement driven by `tool_result_payloads_by_id` (`test_store_query_plans.py`); its caller is the Extension host (`extensions/host.md` -> Tool result payloads); coverage `tests/core/sessions/test_tool_result_payloads.py`.
 
 ## Change statistics
 

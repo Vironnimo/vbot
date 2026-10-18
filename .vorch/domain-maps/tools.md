@@ -23,7 +23,7 @@ Domain vocabulary. The core Tool term lives in `.vorch/GLOSSARY.md`.
 **Not:** The canonical contract, a per-Run schema, readiness, or an execution-time fallback.
 
 ### On-demand Tool
-**Definition:** A Tool an Agent may use whose definition its Tool list leaves out while the Agent's `tool_loading` switch is on (`agent.md` -> Data Model): the System Prompt lists it by name and summary, and the Agent loads its definition with `load_tools` before the first call. `core/tools/on_demand.py::on_demand_tools` is the one classification Chat, `prompt.preview` and `scripts/tool_lab` share (`tools/load_tools.md`).
+**Definition:** A Tool an Agent may use whose definition its Tool list leaves out while the Agent's `tool_loading` switch is on (`agent/configuration.md` -> Fields): the System Prompt lists it by name and summary, and the Agent loads its definition with `load_tools` before the first call. `core/tools/on_demand.py::on_demand_tools` is the one classification Chat, `prompt.preview` and `scripts/tool_lab` share (`tools/load_tools.md`).
 **Not:** A permission or a deferred Tool (`deferred=True`): an On-demand Tool is allowed and callable, only its definition is not shown until loaded.
 
 ### Failure modes F1-F6
@@ -73,8 +73,9 @@ Read these only when your task matches - not by default.
 - The retired `history` Tool and its restoration boundary -> `tools/history.md`
 - V4A patches, the shared change pipeline and edit engine, tolerant patch parsing, patch results -> `tools/apply_patch.md`
 - The replacement dialect (`edit`, `write`), its follower activation, or the edit dialect per Model family -> `tools/edit.md`, `tools/write.md`
-- Changing one concrete built-in Tool -> its per-tool spec (read only the one you change): `tools/read.md`, `tools/file_state.md` (read stamps, mutation locks, atomic replace, `resolve_path`), `tools/change_tracker.md` (run-delta statistics), `tools/search_files.md`, `tools/web_fetch.md`, `tools/web_search.md`, `tools/shell.md` (`bash`/`powershell`, `CommandManager`, `background_tasks`; its Sub-Agent branch: `tools/subagent.md`), `tools/terminal.md` (interactive PTY sessions), `tools/status.md`, `tools/memory.md`, `tools/image.md`, `tools/generated-media.md`, `tools/session_search.md`, `tools/project.md`, `tools/skill.md` (`skill_manage`: `skills.md`), `tools/subagent.md`, `tools/cron.md`, `tools/calendar.md`, `tools/channel_send.md`, `tools/speech.md`
+- Changing one concrete built-in Tool -> its per-tool spec (read only the one you change): `tools/read.md`, `tools/file_state.md` (read stamps, mutation locks, atomic replace, `resolve_path`), `tools/change_tracker.md` (run-delta statistics), `tools/search_files.md`, `tools/web_fetch.md`, `tools/web_search.md`, `tools/shell.md` (`bash`/`powershell`, `CommandManager`, `background_tasks`; its Sub-Agent branch: `tools/subagent.md`), `tools/terminal.md` (interactive PTY sessions), `tools/status.md`, `tools/memory.md`, `tools/image.md`, `tools/generated-media.md`, `tools/session_search.md`, `tools/project.md`, `tools/skill.md` (`skill_manage`: `skills/skill-manage.md`), `tools/subagent.md`, `tools/cron.md`, `tools/calendar.md`, `tools/channel_send.md`, `tools/speech.md`
 - Launching or killing OS child processes (`core/utils/processes.py`) -> `tools/os-processes.md`
 - Classifying texts through the configured Decision Model (`classify`) -> `tools/classify.md`
 - The `update_goal` Tool of a Session Goal: its grant, results and texts -> `tools/update_goal.md`
 - On-demand Tools: the `load_tools` Tool, which Tools are on demand, loadable-Tool inputs, and the `summary` every loadable Tool must declare -> `tools/load_tools.md`
+- Choosing how a Tool informs the Model beyond its own Result (notes, System Reminders, announcements) -> `model-communication.md`

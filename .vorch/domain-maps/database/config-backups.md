@@ -17,7 +17,7 @@ The JSON document set (`secrets.json` included) plus `CONFIGURATION_FILE_PATTERN
 - `restore_config_backup(data_dir, backup_id, *, paths=None, check_only=False) -> ConfigRestore(backup_id, restored, unchanged, skipped, created_after, before_restore)`.
 - `configuration_fingerprint` (path, size, mtime) for cheap change checks.
 - `purge_config_backup_files(data_dir, patterns) -> ConfigBackupPurge(removed_entries, rewritten_backups, complete)` removes files outside the current configuration set (the plaintext `.env` and `oauth/*.json` older backups hold) from every readable manifest and deletes the objects no manifest references any more - the one rewrite of an existing manifest; `complete` is false while a manifest cannot be read, and the Secret Store retries at a later start (`secrets.md`).
-- The Runtime's schedule is `core/runtime/_config_backups.ConfigBackupSchedule` (`runtime.md`); the CLI is `vbot data-store config-backup list|show|restore` (`cli.md`); `data_store_status` reports `config_backups` (`snapshots-and-recovery.md` -> Status).
+- The Runtime's schedule is `core/runtime/_config_backups.ConfigBackupSchedule` (`runtime.md`); the CLI is `vbot data-store config-backup list|show|restore` (`cli/data-store.md`); `data_store_status` reports `config_backups` (`snapshots-and-recovery.md` -> Status).
 
 ## Capture, retention and restore
 

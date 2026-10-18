@@ -381,7 +381,7 @@ PCM artifacts retain all samples, and failed/cancelled streams release workers.
 
 - `POST /api/speech/transcribe` accepts multipart file upload, enforces the runtime upload limit before reading into `SpeechService`, and returns `SpeechTranscriptionResult.to_dict()`.
 - With `Accept: application/x-ndjson`, the same upload streams request-local
-  progress heartbeats and one terminal result/error. `server/app.py` owns this
+  progress heartbeats and one terminal result/error. `server/_speech_routes.py` owns this
   transport and cancels/reaps work on disconnect; local worker cancellation
   waits for the running engine call, bounded for worker children (Local engines). Ordinary JSON clients remain supported.
   Coverage: `tests/server/test_speech_endpoints.py`.
@@ -413,6 +413,7 @@ PCM artifacts retain all samples, and failed/cancelled streams release workers.
   preview consumes early playback; ordinary clients still receive raw audio.
 - `POST /api/speech/synthesize` accepts JSON `{ "text": "..." }`, rejects malformed JSON or blank text before calling `SpeechService`, and returns raw audio bytes with the synthesized media type.
 - `GET /api/speech/playback/{playback_id}` streams transient framed PCM, independently of progress and Run event transports; an expired resource returns HTTP 410.
+- `server/_speech_routes.py` owns these routes. Transcription and synthesis progress streams and ordinary non-streaming speech requests cancel and drain inference when their accessor disconnects. Streaming responses, playback included, send `Cache-Control: no-store` and explicitly close their generators even when a socket send fails, releasing inference and spool readers without waiting for garbage collection (`tests/server/test_speech_endpoints.py`, `test_speech_disconnect.py`).
 - `GET /api/speech/artifacts/{artifact_id}` streams a persisted speech artifact through `FileResponse`.
 - The built-in `generate_speech` Tool accepts only `text`; it returns a tool artifact payload from `SpeechArtifact.to_dict()` and intentionally exposes no model, provider, voice, format, or speed arguments.
 
@@ -420,7 +421,7 @@ PCM artifacts retain all samples, and failed/cancelled streams release workers.
 
 TTS tool output is stored under `<data_dir>/artifacts/speech/` through the shared `TaskArtifactStore` (`core/model_tasks/artifacts.py`): one audio file and one sidecar JSON metadata file per artifact. New artifact IDs use `aud_` plus 12 lowercase base32 characters, filenames are `<artifact_id>.<extension>`, and sidecars contain `format_version` 1, `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default. Synthesis writes the complete artifact on a worker, including durable I/O; cancellation waits for that write to finish, so it cannot abandon a partial publication or block the Event Loop with file syncs.
 
-A sidecar is a durable JSON document under the Generation 1 contract (`settings.md` -> JSON Document Contract; registry kind `speech_artifact_metadata`, validated by `validate_task_artifact_metadata_file` for `doctor config`), written once and never rewritten. It is not a data-snapshot member: a snapshot holds no blobs. The store validates the sidecar (a missing, older or newer `format_version` or an invalid field is refused; unknown fields are ignored) and exact artifact identity before using metadata. Filenames must belong to that id inside the artifact directory; sidecars cannot redirect reads to other files or symlinks. Missing sidecars or blobs raise `SpeechArtifactNotFoundError`; malformed JSON/UTF-8, invalid metadata and unreadable files raise the ordinary Speech configuration error with a generic message (`test_artifacts.py`). Presence checks preserve access and I/O failures instead of treating them as missing.
+A sidecar is a durable JSON document under the Generation 1 contract (`json-documents.md`; registry kind `speech_artifact_metadata`, validated by `validate_task_artifact_metadata_file` for `doctor config`), written once and never rewritten. It is not a data-snapshot member: a snapshot holds no blobs. The store validates the sidecar (a missing, older or newer `format_version` or an invalid field is refused; unknown fields are ignored) and exact artifact identity before using metadata. Filenames must belong to that id inside the artifact directory; sidecars cannot redirect reads to other files or symlinks. Missing sidecars or blobs raise `SpeechArtifactNotFoundError`; malformed JSON/UTF-8, invalid metadata and unreadable files raise the ordinary Speech configuration error with a generic message (`test_artifacts.py`). Presence checks preserve access and I/O failures instead of treating them as missing.
 
 ## Errors
 

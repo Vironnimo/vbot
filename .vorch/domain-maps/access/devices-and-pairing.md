@@ -4,7 +4,7 @@ The server-side lifecycle of Devices, pairing requests and login tickets: the de
 
 ## Device store
 
-- Generation 1 document `access/devices.json` (kind `access_devices`, `settings.md` -> JSON Document Contract), entries `{id, name, kind, token_hash, created_at, last_used_at, last_client, approved_by, via?}` keyed by `id` (`dev_<16>`). `via` (`pairing` or `ticket`) is optional: records written before it existed lack it, and such a Device is never revoked as a ticket browser. Only the SHA-256 of a token's secret part is stored; the token is returned once.
+- Generation 1 document `access/devices.json` (kind `access_devices`, `json-documents.md`), entries `{id, name, kind, token_hash, created_at, last_used_at, last_client, approved_by, via?}` keyed by `id` (`dev_<16>`). `via` (`pairing` or `ticket`) is optional: records written before it existed lack it, and such a Device is never revoked as a ticket browser. Only the SHA-256 of a token's secret part is stored; the token is returned once.
 - A removal (revoke, expiry) takes effect in memory before it is written; a failed write leaves the Device revoked for this process and answers `devices_unavailable`.
 - A Device unused for 90 days expires: at start, and on its next use. Last use is kept in memory and written at most once an hour per Device, and at shutdown.
 - Device names are shown to approvers in the WebUI, the Desktop and terminals: a new name (`normalize_device_name`, pairing start, `devices.rename`, a ticket's `name`) refuses characters of the Unicode categories Cc, Cf, Zl and Zp (escape sequences, bidirectional overrides, zero-width marks); names stored earlier keep loading under the older rule (no ASCII controls).

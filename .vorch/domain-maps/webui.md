@@ -46,6 +46,7 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 ## Constraints & gotchas
 
 - Vitest aliases exactly `svelte/reactivity` to its client implementation: the default Node export has plain, non-reactive `Set`/`Map`. Component tests use this shared resolution instead of per-file mocks.
+- In WebUI code, eslint forbids a mutable `Map` in Svelte derived contexts (`svelte/prefer-svelte-reactivity`, enabled by the Svelte plugin's recommended config in `webui/eslint.config.js`) - group with plain objects.
 - Debug UI/RPC access is development-only and gated - production browsers expose no tracing or probe surfaces.
 - Only the Chat timeline scrolls Chat; native `title` attributes are not product help; `reasoning_meta` never leaks into rendering or client persistence; untrusted content renders only through safe text/Markdown/media paths, and attachment paths never become filesystem addressing.
 - Production builds minify with **Terser**, not Vite's default esbuild, which breaks xterm 6 at runtime (`tools/terminal.md`); changing the minifier requires a real built-browser TUI check, not just Vitest.

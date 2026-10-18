@@ -11,7 +11,7 @@ Read when changing how vBot creates its built-in Agents and reports their proble
 
 The Librarian (GLOSSARY -> Librarian, id `librarian`, `builtin: "librarian"`) curates the other Identity Agents' own Skills in passes (`automation/librarian.md`); its Tools are only `skill` and `skill_manage`.
 
-- **Skill subject:** a Session of the Librarian whose metadata holds `skill_agent_id` (`SKILL_AGENT_ID_KEY`) works on that Agent's Skills; the resolver applies the binding (`projects/resolution.md` -> Librarian Skill subject) and `skill_subject_id(agent)` names the Agent whose Skills any resolved Agent works on. `Agent.skill_agent_id` carries it on that runtime view only and is never persisted. An Agent rename moves the bindings that name the old id (`AgentStore._apply_rename`, `sessions.md`); an archived or deleted subject leaves them, and such a Session cannot run.
+- **Skill subject:** a Session of the Librarian whose metadata holds `skill_agent_id` (`SKILL_AGENT_ID_KEY`) works on that Agent's Skills; the resolver applies the binding (`projects/resolution.md` -> Librarian Skill subject) and `skill_subject_id(agent)` names the Agent whose Skills any resolved Agent works on. `Agent.skill_agent_id` carries it on that runtime view only and is never persisted. An Agent rename moves the bindings that name the old id (`AgentStore._apply_rename`, `sessions/ownership.md` -> Identity-rename retargeting); an archived or deleted subject leaves them, and such a Session cannot run.
 
 ## Live Agents
 

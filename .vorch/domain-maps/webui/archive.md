@@ -1,6 +1,6 @@
 # WebUI Archive
 
-Read this reference only for work on the Archive page of Settings (the retention setting and the archived items), or the Archive option of the Agent, Project and Session delete dialogs. The archive itself (entries, kinds, states, restore checks, purge, retention) is owned by the server: `archive.md`; the RPC shapes are in `server.md` -> `archive_methods.py`.
+Read this reference only for work on the Archive page of Settings (the retention setting and the archived items), or the Archive option of the Agent, Project and Session delete dialogs. The archive itself (entries, kinds, states, restore checks, purge, retention) is owned by the server: `archive.md`; the RPC shapes are in `archive/rpcs.md`.
 
 ## Ownership
 

@@ -4,6 +4,8 @@ The former `browser_use` Extension and `browser` Tool are no longer bundled. Bro
 
 `archive/browser-use.zip` preserves the complete Extension, focused tests, prior domain map/documentation, and original probe/installer files. It is outside discovery roots and excluded from source distributions. Restore only in a worktree and reconcile shared files with current source. The archived implementation is frozen, not a supported runtime capability.
 
+The archived Extension previously owned `artifacts/browser-use/` (including its `refs.db` counter) and `~/.agent-browser/browsers`. Removal from bundled discovery does not delete these existing files or make them Storage temporary-file cleanup categories (`../storage.md` -> Temporary files).
+
 `tests/core/runtime/test_runtime_wiring.py::test_playwright_replaces_archived_browser_extension` verifies that bundled startup has the replacement Skill and neither the old Extension nor Tool/Skill. No migration or deletion of user settings, grants, browser downloads or artifacts accompanies the removal.
 
 A running server needs Extension Reload or restart to retire an already loaded copy. Existing Session history retains old mentions; pinned Skill catalogs refresh at Compaction, while live activation uses the current Skill pool. See `extensions/management.md` and `skills.md` for these lifecycle contracts (paths relative to the domain-maps root).

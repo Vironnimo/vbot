@@ -14,7 +14,7 @@ Every directory the pipeline writes daily files to (`<data_dir>/logs/`, and `<in
 - Several processes (server, CLI, Windows application) may sweep one directory. A file another process removed counts as gone; one that cannot be deleted (on Windows, held open elsewhere) stays and is retried by the next sweep, at the next process start or day.
 - A sweep that deleted files logs one INFO line (`count`, `bytes`, `reason=age|size|age,size`, `oldest`/`newest` deleted day). A failing sweep warns once per streak and the streak's end logs one INFO (`LoggedConditions`).
 - Closing a `DailyFileHandler` or `LogManager` waits for the sweep it started (at most 5 s); the manager waits before detaching its outputs, so even a short CLI command writes the outcome into its log.
-- Open Logs views drop a deleted file through the directory watcher's catalog event (`logs.md`). The standalone Desktop's own daily files (`desktop.md`) are not covered.
+- Open Logs views drop a deleted file through the directory watcher's catalog event (`logs.md`). The standalone Desktop's own daily files (`desktop/window.md` -> Standalone logging) are not covered.
 - Tests: `tests/core/utils/test_logging.py` (age, size cap, unrelated files, undeletable and vanishing files, streak warnings).
 
 ## Crash logs
@@ -32,11 +32,13 @@ A server process killed from outside (`TerminateProcess`, a Job that ends its pr
 
 ## uvicorn
 
-uvicorn is routed into `vbot.server.uvicorn` by `build_uvicorn_log_config`: its own INFO lifecycle lines drop to DEBUG, routine lifecycle lines of every server websocket route are filtered, handshake rejections stay visible, and a Live path is written without its call id (`logs.md`). The proxy suppresses a traceback for the same exception Runtime already marked as logged during failed startup; unrelated server failures remain visible.
+uvicorn is routed into `vbot.server.uvicorn` by `build_uvicorn_log_config`: `ManagedLoggerProxyHandler` forwards its own INFO lines at DEBUG, keeps a websocket handshake answered without accepting it (for example 403) at its level, and writes a Live path as `/ws/live/{call_id}` (`redact_live_websocket_path`), because its segment is a Provider call id. The proxy suppresses a traceback for the same exception Runtime already marked as logged during failed startup; unrelated server failures remain visible.
+
+Routine lifecycle lines of every server websocket route (`/ws`, `/ws/logs`, `/ws/terminals/{terminal_id}`, `/ws/live/{call_id}`: INFO `connection open`/`connection closed` and `"WebSocket <path>" [accepted]`) never reach the daily files: the proxy's `QuietLogsWebSocketLifecycleFilter` drops each record `is_logs_websocket_lifecycle_record` matches. Genuine websocket transport failures stay visible. The predicate behind it, `is_routine_websocket_lifecycle_message`, is shared with the log viewer, which hides matching rows written before the filter existed (`logs.md` -> Conventions).
 
 ## Console logging of managed servers
 
-Server processes launched by the CLI or the Windows application run with console logging off (`VBOT_LOG_STDIO=0`): their log lines go only to the daily file, and the captured stdout/stderr (`server-startup.log`) keeps only crash output. The CLI logs a start outcome and any stop that bypassed the server's shutdown into the target's daily file (`cli.md`); the tray uses the same path (`cli.server_management.log_bypassed_stop`, a briefly nested `LogManager` on the target's data directory) for a server end it observed.
+Server processes launched by the CLI or the Windows application run with console logging off (`VBOT_LOG_STDIO=0`): their log lines go only to the daily file, and the captured stdout/stderr (`server-startup.log`) keeps only crash output. The CLI logs a start outcome and any stop that bypassed the server's shutdown into the target's daily file (`cli/server-lifecycle.md`); the tray uses the same path (`cli.server_management.log_bypassed_stop`, a briefly nested `LogManager` on the target's data directory) for a server end it observed.
 
 ## Pseudonymized Session ids
 

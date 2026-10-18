@@ -24,7 +24,7 @@ A removed queued Run admission ends only that inbound turn with the cancellation
 
 ## Commands and navigation
 
-Slash Commands execute the shared live Chat-owned set through `prepare`/`execute` - neither transport has a command-name switch. `/new` creates no Session and returns `new_session` navigation; the engine repoints the conversation at a fresh `ses_` id (`sessions.md` -> `new_session_id()`), not an id derived from the anchor, and replies that a new Session started. `/handoff` and Extension follow-up Runs relay generically without changing `ChannelConfig.agent_id` or the source anchor. Every `/agent` form is refused before execution with `The /agent command is not available through <Platform>.` - permanent wording, never implying future implementation.
+Slash Commands execute the shared live Chat-owned set through `prepare`/`execute` - neither transport has a command-name switch. `/new` creates no Session and returns `new_session` navigation; the engine repoints the conversation at a fresh `ses_` id (`sessions/lists-and-metadata.md` -> Creation and lookup, `new_session_id()`), not an id derived from the anchor, and replies that a new Session started. `/handoff` and Extension follow-up Runs relay generically without changing `ChannelConfig.agent_id` or the source anchor. Every `/agent` form is refused before execution with `The /agent command is not available through <Platform>.` - permanent wording, never implying future implementation.
 
 ## Platform chat-id migration
 

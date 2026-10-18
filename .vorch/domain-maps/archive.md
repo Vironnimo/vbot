@@ -14,7 +14,7 @@ Every delete path archives: `agent.delete` -> `archive_agent`, `project.rm` -> `
 
 A delete with `permanent: true` archives the same way, then purges exactly the entry it created, after the archive released the reference lock; there is no separate erase path. The archive has succeeded by then, so the purge never fails the delete: the result names the entry and says whether it was purged (`archive/purge-and-retention.md` -> Permanent delete).
 
-`archive.list`, `archive.show`, `archive.restore` and `archive.purge` (`server/rpc/archive_methods.py`) reach the service; the CLI `vbot archive` area calls them (`cli.md`), and so does the WebUI's Settings -> Archive page, while its delete dialogs also offer `permanent: true` (`webui/archive.md`).
+`archive.list`, `archive.show`, `archive.restore` and `archive.purge` (`server/rpc/archive_methods.py`) reach the service; the CLI `vbot archive` area calls them (`cli/archive-commands.md`), and so does the WebUI's Settings -> Archive page, while its delete dialogs also offer `permanent: true` (`webui/archive.md`).
 
 ## Terms
 
@@ -96,3 +96,4 @@ Read these only when your task matches - not by default.
 - Changing purge, permanent delete, the retention setting, due computation or the retention sweep -> `archive/purge-and-retention.md`
 - Changing startup recovery, interrupted archive or restore states, or restore provenance warnings -> `archive/recovery.md`
 - Changing the archive migration or the startup adoption of archived Sessions without an entry, or reasoning about `backfill` entries and legacy archive layouts -> `archive/legacy-adoption.md`
+- Changing the archive RPCs (`archive.list`, `archive.show`, `archive.restore`, `archive.purge`), their error codes and `data`, or the archive fields of the `agent.delete`, `project.rm` and `session.delete` results -> `archive/rpcs.md`

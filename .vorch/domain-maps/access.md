@@ -21,9 +21,9 @@ Owners:
 - `core/utils/owner_only.py`: owner-only file permissions (POSIX `0600`; on Windows a protected DACL for the current user and `SYSTEM`), applied by the atomic writers' `owner_only=True` before any content is written; used for the local access token, the device store, the access record and the server control record.
 - `server/access/`: the ASGI `AccessGuard` (`_guard.py`), `AccessService` (`_service.py`), pure peer/transport/route rules (`_rules.py`), pairing and login tickets (`_pairing.py`), rate limits and refusal logging (`_limits.py`), live connections (`_connections.py`), the principal (`_principal.py`), the unauthenticated endpoints (`_routes.py`) and direct TLS (`tls.py`).
 - `server/rpc/access_methods.py`: `auth.login_ticket` and the `devices.*` RPCs.
-- CLI: `vbot devices ...` (`cli/device_management.py`, pairing and logout in `cli/device_pairing.py`, `cli.md`), `vbot application access show|set` and the installer options (`cli/application.md`); `cli/server_client.py` attaches the credential (Invariants).
+- CLI: `vbot devices ...` (`cli/device_management.py`, pairing and logout in `cli/device_pairing.py`, `cli/server-access.md`), `vbot application access show|set` and the installer options (`cli/application.md`); `cli/server_client.py` attaches the credential (Invariants).
 
-Not owned here: the browser-origin guard (`server/_origins.py`, `server.md`), which still runs after the access guard and also accepts the configured public origin; capability URL verification (`server/file_delivery.py`); Extension OAuth (`extensions.md`) and its callback URL (`server/browser-capabilities.md`); credential storage.
+Not owned here: the browser-origin guard (`server/_origins.py`, `server.md`), which still runs after the access guard and also accepts the configured public origin; capability URL verification (`server/file_delivery.py`); Extension OAuth (`extensions/host.md` -> OAuth browser redirects) and its callback URL (`server/browser-capabilities.md`); credential storage.
 
 How each accessor signs in: `access/accessor-contracts.md` -> Accessor notes.
 
@@ -81,7 +81,7 @@ A browser Device created by redeeming a login ticket (`via: "ticket"`, `approved
 - Device tokens and pairing travel only over `https://` (CLI and Desktop). A plain `http://` server in `authenticated` mode is reachable for credentials only from its own computer, through the local access token. Decision: an SSH or other tunnel to a remote server that requires login does not sign in; the user connects to the server's `https://` address or runs `vbot` on the server's computer (`USAGE.md` -> Server access).
 - Never log or return tokens, token hashes, poll secrets, tickets or pairing codes. Refusal logs cut the path to two segments (`/api/files/...`), because deeper segments can carry capabilities or tickets.
 - `access/devices.json` and `access/server.json` are outside data snapshots and configuration backups (`DOCUMENTS_OUTSIDE_SNAPSHOTS`): a restore must never revive a revoked Device or a weaker access mode. Deleting `devices.json` revokes every Device.
-- Pairing requests, login tickets and rate-limit windows live in memory only, bounded; a restart drops them. Claims, rate limits, revocation, ticket browsers and expiry: `access/devices-and-pairing.md`.
+- Pairing requests, login tickets and rate-limit windows live in memory only, bounded; a restart drops them.
 - No RPC changes the access mode; `vbot application access set` records a change that applies at the next start.
 - Device management needs a principal. Approving requires a signed-in principal (`host` or `device`), never `open`.
 - Actions that hand out access refuse inside an Agent's Run (`VBOT_RUN_AGENT_ID`, `cli.device_management.run_refusal`): `vbot devices approve`, the tray's login ticket minting, and `vbot application access set`. The guard lives in the CLI only. The server has no reliable signal that a request comes from a Run (an Agent runs as the same user as the host, can unset the variable and read the local access token, and the CLI forwards no marker), so `devices.approve`/`devices.deny` do not check one; do not add a weaker one.

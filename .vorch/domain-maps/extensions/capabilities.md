@@ -66,7 +66,7 @@ Every tap must be acknowledged exactly once from the user's perspective. The cha
 
 ## Page declarations
 
-Page declarations resolve once per registration at load; an entry outside its Extension root becomes a capability diagnostic, not a page. `current_page(identity, page_id)` answers page-scoped validation from memory: another or retired epoch, an owner no longer loaded, or an undeclared page yields `None`, and the entry file is not consulted. `page_declarations()` also requires the entry file on disk, so its callers (page listing, asset delivery) run it off the Event Loop (`tests/core/extensions/test_registration.py`, `test_runtime.py`). Page bridge and rendering: `webui.md`.
+Page declarations resolve once per registration at load; an entry outside its Extension root becomes a capability diagnostic, not a page. `current_page(identity, page_id)` answers page-scoped validation from memory: another or retired epoch, an owner no longer loaded, or an undeclared page yields `None`, and the entry file is not consulted. `page_declarations()` also requires the entry file on disk, so its callers (page listing, asset delivery) run it off the Event Loop (`tests/core/extensions/test_registration.py`, `test_runtime.py`). Page bridge and rendering: `webui/extension-pages.md`.
 
 ## Capability teardown
 

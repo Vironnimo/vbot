@@ -22,7 +22,7 @@ Why the development interpreter must run the SQLite the packages bundle: `.vorch
 
 ## Dependencies
 
-A change to the base dependencies or the `server`, `cli`, `application`, or `desktop` extras also regenerates the hashed package runtime locks: Windows (`scripts/windows/requirements.md`) and Linux (`scripts/linux/README.md`). The `desktop` Voice stack: `desktop.md` -> External Dependencies; optional local speech setup: `model_tasks/speech.md`; the local embedding engine's managed environment recipe (`[tool.vbot.local-embeddings.onnx]`, never a base or extra dependency): `model_tasks/embeddings.md` -> Local Engine.
+A change to the base dependencies or the `server`, `cli`, `application`, or `desktop` extras also regenerates the hashed package runtime locks: Windows (`scripts/windows/requirements.md`) and Linux (`scripts/linux/README.md`). The `desktop` Voice stack: `desktop/voice.md` -> Dependencies; optional local speech setup: `model_tasks/speech.md`; the local embedding engine's managed environment recipe (`[tool.vbot.local-embeddings.onnx]`, never a base or extra dependency): `model_tasks/embeddings.md` -> Local Engine.
 
 `sniffio` stays a direct dependency although vBot never imports it: httpcore probes it on every connection and stream, and each failed probe costs an import and `sys.path` scan (~0.4 ms of GIL time).
 

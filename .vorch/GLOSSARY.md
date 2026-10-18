@@ -33,7 +33,7 @@ Curated durable facts about the user and the work, kept as Markdown in an Identi
 One Session execution with a durable identity and lifecycle: an initiating request, any User messages explicitly steered into it, and all Model output, visible thinking blocks, Tool calls/results, and follow-up assistant output until completion, failure, interruption, or cancellation (`runs.md`). Can span multiple Model/Tool steps; not an Agent, Session, or single Provider HTTP request.
 
 ## Agent Takeover
-Moving the current Session, with its id and full history, to another Agent via `/agent <addr> [task]`; the target owns it from then on and runs the optional task (`subagents.md`). Not Handoff (`/handoff`), which writes a summary into a fresh Session.
+Moving the current Session, with its id and full history, to another Agent via `/agent <addr> [task]`; the target owns it from then on and runs the optional task (`chat/commands.md`). Not Handoff (`/handoff`), which writes a summary into a fresh Session.
 
 ## Accessor
 A client-facing interface to vBot (WebUI, Desktop, CLI including its TUI, or Channels), communicating with the server, not directly with Providers. Not a Provider or Adapter.
@@ -55,6 +55,9 @@ A reusable Agent playbook: a `SKILL.md` that teaches a task, domain workflow or 
 
 ## System Reminder
 A note vBot adds to a Session to inform the Model without a visible user message; the Model receives it as a user message in `<system-reminder>` tags (`model-communication.md`). Not a System Prompt, a real user turn, a server or UI notification, or the coding agent's own system reminders.
+
+## Prompt epoch
+The stretch of a Session from its start or a successful Compaction checkpoint to the next one, during which the System Prompt and the Tool list stay pinned so the Provider prompt cache holds. Tool and prompt-block changes within it reach the Model as System Reminders, other prompt inputs change at the next epoch (`chat/request-building.md`). Not a Run, which is one turn inside an epoch.
 
 ## Tool
 A function vBot offers its Agents, with a name, description and JSON Schema parameters, callable during a Run when the Agent's Tool access allows it (`tools.md`). Not a tool of the coding agent's own harness.
@@ -84,4 +87,4 @@ An Identity Agent vBot creates and keeps itself, hidden from the roster and refu
 vBot's built-in hidden Identity Agent that keeps other Identity Agents' own Skills small and current, in passes the user can open as Sessions (`agent.md`, `automation.md` -> Librarian). Not a Tool, a Reflection, or a user's Agent that happens to be named "librarian".
 
 ## Default Project
-The Project in which an Identity Agent's new Sessions work unless their creator names another Project or the Workspace ("Default project" in the WebUI). Changing it moves no existing Session and changes nothing else about the Agent (`agent.md`, `sessions.md` -> Terms -> Working Project). Not Team membership. Code and stored names keep the older term Rooting (`root_project_id`, `agents_rooted_in`, `unrooted_agents`, `--copy-rooted-agent-files`).
+The Project in which an Identity Agent's new Sessions work unless their creator names another Project or the Workspace ("Default project" in the WebUI). Changing it moves no existing Session and changes nothing else about the Agent (`agent.md`, `sessions.md` -> Terms -> Working Project). Not Team membership; code names it Rooting (`agent.md` -> Terms -> Rooting).

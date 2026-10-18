@@ -16,7 +16,7 @@ Directory creation does not transfer ownership: Agents own their trees, Channels
 
 Current code reads only the canonical paths; there is no dual-read of an older layout, and an existing data directory without `data-store.json` is refused (`database.md` -> Evolution contract, item 6). A data directory converted from vBot 0.4.4 or earlier can still hold `pre-generation-1/`: the old files the conversion replaced, old credential copies included; vBot never reads it.
 
-Runtime creates `<data-dir>/extension-data/<owner>/` for a loaded Extension's persistent host state. It is separate from `extensions/`, which contains executable overrides, and is not temporary-file cleanup data. Databases an Extension opens through `host.open_database` live there as canonical kernel databases `<name>.db` (`database.md`, `extensions.md`). The Extension owns its format; canonical temporary Session bindings, delivery receipts and Run ownership remain in `sessions.db` (`extensions.md`, `sessions.md`).
+Runtime creates `<data-dir>/extension-data/<owner>/` for a loaded Extension's persistent host state. It is separate from `extensions/`, which contains executable overrides, and is not temporary-file cleanup data. Databases an Extension opens through `host.open_database` live there as canonical kernel databases `<name>.db` (`database.md`, `extensions/databases.md`). The Extension owns its format; canonical temporary Session bindings, delivery receipts and Run ownership remain in `sessions.db` (`extensions/host.md`, `sessions.md`).
 
 ## Temporary files
 
