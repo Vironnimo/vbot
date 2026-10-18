@@ -54,28 +54,35 @@ class TerminalScopes:
         """
         key = (extension, group_id, epoch)
         self._closed_execution_groups.add(key)
-        pending = [
-            task
-            for task, owner in self._pending_execution_spawns.items()
-            if (owner.extension, owner.group_id, owner.epoch) == key
-        ]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        sessions = [
-            session
-            for session in self._sessions.values()
-            if session.execution_owner is not None
-            and (
-                session.execution_owner.extension,
-                session.execution_owner.group_id,
-                session.execution_owner.epoch,
+
+        async def drain() -> None:
+            pending = [
+                task
+                for task, owner in self._pending_execution_spawns.items()
+                if (owner.extension, owner.group_id, owner.epoch) == key
+            ]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            sessions = [
+                session
+                for session in self._sessions.values()
+                if session.execution_owner is not None
+                and (
+                    session.execution_owner.extension,
+                    session.execution_owner.group_id,
+                    session.execution_owner.epoch,
+                )
+                == key
+            ]
+            results = await asyncio.gather(
+                *(session.terminate(suppress_attention=True) for session in sessions),
+                return_exceptions=True,
             )
-            == key
-        ]
+            if failures := [result for result in results if isinstance(result, BaseException)]:
+                raise failures[0]
+
         try:
-            await asyncio.gather(
-                *(session.terminate(suppress_attention=True) for session in sessions)
-            )
+            await settle_before_cancelling(drain())
         finally:
             # The group owner settles every Run of the group before closing its
             # resources, and each epoch key is used only once. With the launches
