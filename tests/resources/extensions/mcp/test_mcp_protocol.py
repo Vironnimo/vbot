@@ -9,9 +9,11 @@ import re
 import socket
 import sys
 import warnings
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import override
 from urllib.parse import urlparse
 from urllib.request import url2pathname
@@ -1122,6 +1124,7 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
     listen = ListenHandler(bus)
     # The server's subscribe and unsubscribe requests, in order; legacy sessions to notify.
     requests: list[tuple[str, str]] = []
+    remote_subscriptions = set()
     sessions = []
     pending_started = asyncio.Event()
     release_pending = asyncio.Event()
@@ -1132,23 +1135,27 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
             await release_pending.wait()
 
     async def listened(server_context, params):
-        for uri in params.notifications.resource_subscriptions or ():
-            requests.append(("subscribe", uri))
-            await pending(uri)
         try:
+            for uri in params.notifications.resource_subscriptions or ():
+                requests.append(("subscribe", uri))
+                remote_subscriptions.add(uri)
+                await pending(uri)
             return await listen(server_context, params)
         finally:
             for uri in params.notifications.resource_subscriptions or ():
                 requests.append(("unsubscribe", uri))
+                remote_subscriptions.discard(uri)
 
     async def subscribe(server_context, params):
         requests.append(("subscribe", str(params.uri)))
+        remote_subscriptions.add(str(params.uri))
         await pending(str(params.uri))
         sessions.append(server_context.session)
         return types.EmptyResult()
 
     async def unsubscribe(server_context, params):
         requests.append(("unsubscribe", str(params.uri)))
+        remote_subscriptions.discard(str(params.uri))
         return types.EmptyResult()
 
     async def list_resources(server_context, params):
@@ -1233,6 +1240,8 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
             with pytest.raises(ValueError):
                 await subscribing
         assert "test://pending" not in runner._protocol._resource_subscriptions
+        if legacy:
+            assert "test://pending" not in remote_subscriptions
         # Both calls are admitted together: unsubscribe can cancel the watch
         # before its coroutine has started at all.
         async with asyncio.timeout(2):
@@ -1252,6 +1261,97 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
             subscribing.cancel()
             await asyncio.gather(subscribing, return_exceptions=True)
         await runner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True], ids=["listen", "legacy-subscribe"])
+@pytest.mark.parametrize("cancel_unsubscribe", [False, True])
+async def test_resource_resubscribe_waits_for_the_admitted_unsubscribe(
+    host, server, monkeypatch, legacy, cancel_unsubscribe
+):
+    # Control the exact protocol operation boundary: the old unsubscribe has
+    # started but has not applied its remote effect when the later subscribe
+    # arrives. SDK transport timing cannot deterministically hold this point.
+    remote = set()
+    operations = []
+    unsubscribe_started = asyncio.Event()
+    release_unsubscribe = asyncio.Event()
+    uri = "test://ordered"
+
+    async def subscribe_resource(value):
+        operations.append("subscribe")
+        remote.add(value)
+        return types.EmptyResult()
+
+    async def unsubscribe_resource(value):
+        operations.append("unsubscribe")
+        unsubscribe_started.set()
+        await release_unsubscribe.wait()
+        remote.discard(value)
+        return types.EmptyResult()
+
+    async def events():
+        await asyncio.Event().wait()
+        yield None
+
+    @asynccontextmanager
+    async def listen(*, resource_subscriptions):
+        value = resource_subscriptions[0]
+        await subscribe_resource(value)
+        try:
+            yield events()
+        finally:
+            await unsubscribe_resource(value)
+
+    runner = runner_for(host, server, monkeypatch)
+    monkeypatch.setattr(
+        runner,
+        "client",
+        SimpleNamespace(
+            protocol_version="2025-11-25" if legacy else "2026-07-28",
+            subscribe_resource=subscribe_resource,
+            unsubscribe_resource=unsubscribe_resource,
+            listen=listen,
+        ),
+    )
+    protocol = runner._protocol
+
+    async def perform(operation):
+        return await protocol._perform(operation, {"uri": uri}, None)
+
+    unsubscribing = None
+    resubscribing = None
+    try:
+        await perform("resources/subscribe")
+        unsubscribing = asyncio.create_task(perform("resources/unsubscribe"))
+        await unsubscribe_started.wait()
+        resubscribing = asyncio.create_task(perform("resources/subscribe"))
+        # The operation and its fake watch need one turn each to start. A later
+        # subscribe must remain behind the incomplete unsubscribe on both turns.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        if cancel_unsubscribe:
+            unsubscribing.cancel()
+            await asyncio.sleep(0)
+        assert not unsubscribing.done()
+        assert not resubscribing.done()
+        assert operations == ["subscribe", "unsubscribe"]
+        release_unsubscribe.set()
+        if cancel_unsubscribe:
+            with pytest.raises(asyncio.CancelledError):
+                await unsubscribing
+        else:
+            assert await unsubscribing == {"unsubscribed": uri}
+        assert await resubscribing == {"subscribed": uri}
+        assert operations == ["subscribe", "unsubscribe", "subscribe"]
+        assert remote == protocol._resource_subscriptions == {uri}
+    finally:
+        release_unsubscribe.set()
+        tasks = [task for task in (unsubscribing, resubscribing) if task is not None]
+        tasks.extend(watch[0] for watch in protocol._resource_watches.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.mark.asyncio

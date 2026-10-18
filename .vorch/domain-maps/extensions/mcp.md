@@ -26,7 +26,14 @@ Elicitation, sampling approvals and OAuth sign-ins are resumable pending inputs 
 Unsubscribing also settles a subscription still awaiting its acknowledgement;
 one removed after acknowledgement but before its caller resumes cannot become a
 retained subscription again. The same URI can be subscribed explicitly afterwards.
-Coverage: `test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed`.
+Watch creation and unsubscribe are ordered per URI, but subscribe releases that
+lock before awaiting acknowledgement. An admitted unsubscribe settles before
+releasing the lock even when its caller is cancelled. On legacy connections it
+sends the remote unsubscribe for a pending watch too: its subscribe can already
+have acted before acknowledgement. A later subscribe therefore follows that
+remote unsubscribe instead of being undone by it. Locks have weak retention.
+Coverage: `test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed`
+and `test_resource_resubscribe_waits_for_the_admitted_unsubscribe`.
 
 Admission: `ConnectionRunner.invoke` waits for the connection at most its configured `timeout` (`_connected`), starting it when it is not running; a call that waited that long gets `InvocationNotSentError` `MCP connection did not connect within <timeout> seconds`, followed by `: its sign-in is waiting for the user` while an OAuth input of that connection is pending, else by `; last error: <error>` when one is known. Calls then wait in the connection's bounded queue (`CONNECTION_QUEUE_LIMIT` 64; a full queue makes callers wait for room) and run concurrently, up to `CONNECTION_CONCURRENCY` (8) per connection, each in its own task. A call is re-authorized when it leaves the queue (`_serve`); a refusal is `InvocationNotSentError(denied=True)`, which returns `mcp_access_denied`. An unexpected authorization failure ends the connection but still settles the dequeued call as unsent. Each connection task has its own queue, shut down when that connection ends: a call still waiting for room is refused (`InvocationNotSentError`), never admitted after the final drain or served by a later connection. Coverage: `test_a_call_waits_for_its_connection_only_until_the_timeout` and `test_calls_run_concurrently_and_server_requests_belong_to_their_call` (`test_mcp_protocol.py`), `test_queued_call_rechecks_access_before_remote_effect` (`test_mcp_access.py`), `test_full_queue_producers_settle_with_their_connection` (`test_mcp_oauth_and_cancellation.py`).
 
