@@ -35,7 +35,6 @@ from core.agents._config import (
     _apply_defaults,
     _normalize_agent_description,
     _normalize_agent_name,
-    _normalize_agent_tools,
     _replace_list_item_once,
     _validate_agent_id,
     _validate_allowed_items,
@@ -54,6 +53,7 @@ from core.agents._config import (
     _validated_agent_data,
     _with_builtin_capabilities,
     load_validated_agent_json,
+    normalize_agent_tools,
     validate_agent_data,
     validate_agent_file,
     validate_agent_order_data,
@@ -175,6 +175,7 @@ __all__ = [
     "AgentRename",
     "AgentRenameResult",
     "AgentStore",
+    "normalize_agent_tools",
     "AgentUpdateResult",
     "DEFAULT_ALLOWED_ITEMS",
     "DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED",
@@ -401,7 +402,7 @@ class AgentStore:
             validated_tool_access = _validate_tool_access(tool_access)
             validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
             validated_excluded_skills = _validate_excluded_skills(excluded_skills)
-            validated_tools = _normalize_agent_tools(tools)
+            validated_tools = normalize_agent_tools(tools)
             validated_custom_system_prompt_enabled = _validate_bool_field(
                 "custom_system_prompt_enabled", custom_system_prompt_enabled
             )
@@ -870,7 +871,7 @@ class AgentStore:
             if "excluded_skills" in changes:
                 changes["excluded_skills"] = _validate_excluded_skills(changes["excluded_skills"])
             if "tools" in changes:
-                changes["tools"] = _normalize_agent_tools(changes["tools"])
+                changes["tools"] = normalize_agent_tools(changes["tools"])
             for bool_field in ("custom_system_prompt_enabled", "librarian_enabled"):
                 if bool_field in changes:
                     changes[bool_field] = _validate_bool_field(bool_field, changes[bool_field])

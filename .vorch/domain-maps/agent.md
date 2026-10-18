@@ -47,6 +47,8 @@ Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_
 - The only seeded template is `SOUL.md`; USER.md/MEMORY.md belong to the memory system (`memory.md` -> Overview). How to write a SOUL: the bundled `vbot-docs` Skill's `references/soul.md` (`cli.md`).
 - Run-local model fallback never mutates persisted model/fallback fields (Chat owns runtime eligibility, `chat/run-execution.md`).
 
+`normalize_agent_tools()` is the canonical normalizer for per-Tool Agent settings; Runtime Extension validation uses the same rules as Agent configuration.
+
 ## Store Operations
 
 - `agents.py` keeps catalog mutation, Session coordination, compensation and the rename record. Internal `_types.py` holds records/errors and the built-in Agent constants, `_config.py` owns JSON validation and normalization, `_workspace.py` owns paths, template seeding and reversible file relocation, `_archive.py` owns the archive and restore file moves and their cross-Agent grant and roster steps, `_delegation.py` owns explicit target identity bindings and their retirement history, and `temporary.py` owns temporary Agents. Model fallback validation reuses Settings' `validate_fallback_chain`; Agent diagnostics and mutation errors retain their surface-specific wording.

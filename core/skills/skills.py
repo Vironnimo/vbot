@@ -935,3 +935,22 @@ def _log_validation_warnings(skill_name: str, skill_path: Path, warnings: list[s
                 skill_path,
                 warning,
             )
+
+
+def resolve_package_resource(root: Path, resource: str) -> Path:
+    """Resolve a portable resource path within one Skill package.
+
+    Internal/generated paths and redirects outside the package are refused.
+    Existence and content handling belong to the reader using the resource.
+    """
+    from core.skills._packages import PackageError, excluded, package_path
+
+    normalized = package_path(resource.replace("\\", "/"))
+    if excluded(normalized):
+        raise PackageError("Internal or generated package files are not Skill resources.")
+    directory = root.resolve()
+    candidate = directory.joinpath(*normalized.split("/")).resolve()
+    relative = candidate.relative_to(directory).as_posix()
+    if excluded(relative):
+        raise PackageError("Internal or generated package files are not Skill resources.")
+    return candidate

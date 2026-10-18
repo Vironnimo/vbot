@@ -7,7 +7,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, cast
 
-from core.agents.agents import AgentStore, _normalize_agent_tools
+from core.agents import AgentStore, normalize_agent_tools
 from core.agents.temporary import (
     ExecutionResources,
     TemporaryAgentConfig,
@@ -89,7 +89,7 @@ def _validate_temporary_tool_configuration(
     """Apply the shared Identity-Agent settings grammar to temporary profiles."""
 
     try:
-        _normalize_agent_tools(config.tools)
+        normalize_agent_tools(config.tools)
     except ValueError as error:
         raise RuntimeError("temporary Tool settings are invalid") from error
 

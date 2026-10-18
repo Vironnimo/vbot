@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.automation._cron_projection import CronProjection
+from core.automation import CronProjection
 from core.calendar import CalendarProjection, CalendarService, parse_occurrence_id
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_CALENDAR

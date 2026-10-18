@@ -619,7 +619,7 @@ def _validate_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolA
         raise AgentError(str(error)) from error
 
 
-def _normalize_agent_tools(tools: Mapping[str, Any] | None) -> dict[str, Any]:
+def normalize_agent_tools(tools: Mapping[str, Any] | None) -> dict[str, Any]:
     """Validate and copy the optional Tool-settings blocks from agent.json."""
     if tools is None:
         return {}
@@ -729,7 +729,7 @@ def _agent_from_dict(
         tool_access=_validate_tool_access(data.get("tool_access")),
         allowed_skills=_validate_allowed_items("allowed_skills", data.get("allowed_skills")),
         excluded_skills=_validate_excluded_skills(data.get("excluded_skills")),
-        tools=_normalize_agent_tools(data.get("tools")),
+        tools=normalize_agent_tools(data.get("tools")),
         delegation_bindings=dict(data.get("delegation_bindings", {})),
         custom_system_prompt_enabled=bool(
             data.get("custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED)

@@ -108,7 +108,6 @@ from core.skills import (
     SkillRegistry,
     SkillWriter,
 )
-from core.skills._history import EXTERNAL_ACTOR
 from core.skills.skills import scan_skill_resources
 from core.statistics.skills import SkillActivationUse, SkillUse
 from core.utils.errors import VBotError
@@ -129,8 +128,6 @@ _LIBRARIAN_WORKERS = BoundedWorkerPool(name="librarian", max_workers=2)
 FIRST_CHECK_DELAY_SECONDS = 300.0
 CHECK_INTERVAL_SECONDS = 3600.0
 
-# Writers whose changes count as activity for aging: background Runs' do not.
-_ATTENDED_ACTORS = frozenset({"human", "agent", EXTERNAL_ACTOR})
 _LIBRARIAN_WRITER = SkillWriter(actor="librarian", run_kind=RunKind.LIBRARIAN.value)
 
 LIBRARIAN_STATE_FILENAME = "librarian.json"
@@ -1256,7 +1253,7 @@ def _attended_changes(history: Sequence[SkillRevision]) -> dict[str, str]:
     """The time of each Skill's newest file change by an attended writer."""
     changed: dict[str, str] = {}
     for revision in history:
-        if revision.files and revision.kind != "baseline" and revision.actor in _ATTENDED_ACTORS:
+        if revision.files and revision.kind != "baseline" and revision.attended:
             changed.setdefault(revision.skill, revision.at)
     return changed
 
