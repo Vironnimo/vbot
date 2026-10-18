@@ -76,6 +76,7 @@ Runtime preserves `get_adapter(ConnectionRef)`, token getter/extra access, Reaso
 Read these only when your task matches - not by default.
 
 - Using or changing `core/utils/workers.py` (`BoundedWorkerPool`, `OrderedWorker`, `settle_before_cancelling`, `finish_despite_cancel`, `cancel_and_wait`) or running blocking work off the Event Loop in any domain -> `runtime/workers.md`
+- Using or changing `core/utils/tls.py` (`shared_ssl_context`, `ssl_context_for`, `prewarm_outbound_http`) or creating an outbound HTTP or `wss://` client in any domain -> `runtime/outbound-tls.md`
 - Changing a live reload path (`apply_settings_change`, Provider/local catalog/Skill/Recall/credential/Keep Awake/Channel Tool/Extension reloads) -> `runtime/hot-reload.md`
 - Changing Runtime's Extension host side (`ExtensionHostFactory`, temporary execution groups, editor catalogs, `inspect_prompt`, `_prompt_blocks.py`, Extension sampling, `resolve_tool_agent`) -> `runtime/extension-host.md`
 - Changing the Identity Agent rename or `agent_references` -> `runtime/agent-rename.md`
