@@ -80,7 +80,7 @@ async def test_installations_share_a_queue_and_stop_on_cancel_or_close(tmp_path,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["environment", "download", "publication"])
+@pytest.mark.parametrize("phase", ["environment", "download", "download_failure", "publication"])
 async def test_cancelled_installation_keeps_its_queue_until_worker_settles(
     tmp_path, monkeypatch, phase
 ):
@@ -100,13 +100,15 @@ async def test_cancelled_installation_keeps_its_queue_until_worker_settles(
 
     def block(*args, **kwargs):
         loop.call_soon_threadsafe(entered.set)
-        if phase == "download":
+        if phase.startswith("download"):
             # Cancellation must reach the cooperative downloader before it settles.
             assert kwargs["cancelled"].wait(2)
             signalled.set()
         assert release.wait(2)
+        if phase == "download_failure":
+            raise ModelFilesError("download_failed")
 
-    if phase == "download":
+    if phase.startswith("download"):
         monkeypatch.setattr(local_setup, "fetch_model_files", block)
         operation = first._fetch_model
     else:
@@ -135,7 +137,8 @@ async def test_cancelled_installation_keeps_its_queue_until_worker_settles(
         await second._task
         next_install.assert_awaited_once()
         assert not (first.model_directory / "verified.json").exists()
-        if phase == "download":
+        assert first.status()["error"] == "interrupted"
+        if phase.startswith("download"):
             assert signalled.is_set()
     finally:
         release.set()

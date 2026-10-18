@@ -48,7 +48,7 @@ from core.model_tasks.model_files import (
 )
 from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool, cancel_and_wait, settle_before_cancelling
+from core.utils.workers import BoundedWorkerPool, cancel_and_wait, finish_despite_cancel
 
 _LOGGER = get_logger("local_engines.setup")
 _SETUP_WORKERS = BoundedWorkerPool(name="local-setup", max_workers=2)
@@ -326,7 +326,7 @@ class LocalSetup:
         except asyncio.CancelledError:
             # The thread stops within one chunk; its files stay for a retry.
             cancelled.set()
-            await settle_before_cancelling(_settle_download(work))
+            await finish_despite_cancel(self._settle_download(work))
             raise
         except ModelFilesCancelledError:
             self._fail("interrupted")
@@ -335,6 +335,26 @@ class LocalSetup:
             self._fail(error.code)
             return False
         return True
+
+    async def _settle_download(self, work: asyncio.Task[None]) -> None:
+        """Join a cancelled download; late failures cannot replace cancellation."""
+        try:
+            await work
+        except ModelFilesCancelledError:
+            pass
+        except ModelFilesError as error:
+            self._logger.warning(
+                "Local model download failed after cancellation (engine=%s code=%s)",
+                self._name,
+                error.code,
+            )
+        except Exception as error:
+            self._logger.error(
+                "Local model download failed after cancellation (engine=%s error=%s)",
+                self._name,
+                type(error).__name__,
+                exc_info=error,
+            )
 
     async def _publish_model(self) -> None:
         """Remove revisions this release no longer pins, then write the model's receipt.
@@ -557,12 +577,6 @@ class LocalSetup:
         self.close()
         if self._task is not None:
             await cancel_and_wait(self._task)
-
-
-async def _settle_download(work: asyncio.Task[None]) -> None:
-    """Join a cooperatively stopped download; cancellation is its expected result."""
-    with suppress(ModelFilesCancelledError):
-        await work
 
 
 def environment_error(directory: Path, python: Path, python_version: str) -> str:
