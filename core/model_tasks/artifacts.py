@@ -276,17 +276,20 @@ class OutputWriteError(TaskError):
 def ensure_output_dir(output_dir: str | Path) -> Path:
     """Create the caller-selected output folder before a billed request is sent.
 
-    A folder that cannot be created or is a file fails here, so no provider
-    request is paid for media that could not be saved.
+    Exclusively create a write-only empty probe, matching artifact permissions.
+    Remove it when allowed; a create-only output folder may retain the probe.
     """
 
     directory = Path(output_dir)
     try:
         directory.mkdir(parents=True, exist_ok=True)
+        probe = write_id_file(directory, ".vb", ".tmp", b"")
     except FileExistsError:
         raise OutputDirectoryError(directory, "a file with that name exists") from None
     except OSError as exc:
         raise OutputDirectoryError(directory, os_error_reason(exc)) from exc
+    with suppress(OSError):
+        probe.unlink()
     return directory
 
 

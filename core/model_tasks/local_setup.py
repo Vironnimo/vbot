@@ -48,7 +48,12 @@ from core.model_tasks.model_files import (
 )
 from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool, cancel_and_wait, finish_despite_cancel
+from core.utils.workers import (
+    BoundedWorkerPool,
+    cancel_and_wait,
+    finish_despite_cancel,
+    settle_before_cancelling,
+)
 
 _LOGGER = get_logger("local_engines.setup")
 _SETUP_WORKERS = BoundedWorkerPool(name="local-setup", max_workers=2)
@@ -544,6 +549,7 @@ class LocalSetup:
             },
         )
         self._process = process
+        command_cancelled = False
         try:
             assert process.stdout is not None
             async with asyncio.timeout(SETUP_TIMEOUT_S):
@@ -557,12 +563,37 @@ class LocalSetup:
                     if on_line is not None:
                         on_line(line)
                 return await process.wait()
+        except asyncio.CancelledError:
+            command_cancelled = True
+            raise
         finally:
-            if process.returncode is None:
-                with suppress(ProcessLookupError):
-                    await kill_process_tree_async(process)
-                await process.wait()
-            self._process = None
+
+            async def reap() -> None:
+                try:
+                    if process.returncode is None:
+                        try:
+                            with suppress(ProcessLookupError):
+                                await kill_process_tree_async(process)
+                        finally:
+                            # Even a failed native termination must not abandon
+                            # the child or admit another installer while it runs.
+                            await process.wait()
+                finally:
+                    self._process = None
+
+            # A second cancel or shutdown must not release the install lock
+            # while this command's process tree is still being terminated.
+            try:
+                await settle_before_cancelling(reap())
+            except Exception as error:
+                if not command_cancelled:
+                    raise
+                self._logger.error(
+                    "Local setup command cleanup failed after cancellation (engine=%s error=%s)",
+                    self._name,
+                    type(error).__name__,
+                    exc_info=error,
+                )
 
     def close(self) -> None:
         if self._closed:

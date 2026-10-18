@@ -1233,24 +1233,75 @@ async def test_request_progress_survives_worker_boundary_and_clears_between_reco
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("repeated", [False, True])
+@pytest.mark.parametrize("reap_failure", [False, True])
+@pytest.mark.parametrize("kill_failure", [False, True])
 async def test_setup_command_reaps_cancelled_child_without_exposing_output(
     monkeypatch: pytest.MonkeyPatch,
+    repeated: bool,
+    reap_failure: bool,
+    kill_failure: bool,
 ) -> None:
     process = MagicMock(returncode=None)
     process.stdout = asyncio.StreamReader()
     process.stdout.feed_data(b"Downloading https://secret:password@example.invalid/pkg.whl\n")
-    process.wait = AsyncMock(return_value=0)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
-    kill_tree = AsyncMock()
+    killing, release, reaping, exited = (asyncio.Event() for _ in range(4))
+
+    async def wait() -> int:
+        reaping.set()
+        await exited.wait()
+        process.returncode = 0
+        if reap_failure:
+            raise OSError("reaping failed after exit")
+        return 0
+
+    process.wait = AsyncMock(side_effect=wait)
+
+    async def kill(_process: Any) -> None:
+        killing.set()
+        await release.wait()
+        if kill_failure:
+            raise OSError("process tree termination could not be confirmed")
+
+    kill_tree = AsyncMock(side_effect=kill)
     monkeypatch.setattr("core.utils.processes.kill_process_tree_async", kill_tree)
     setup = LocalSpeechSetup()
-    task = asyncio.create_task(setup._command(["python", "-m", "pip"], progress=True))
+
+    async def perform() -> None:
+        await setup._command(["python", "-m", "pip"], progress=True)
+
+    monkeypatch.setattr(setup, "_availability_error", lambda: "missing")
+    monkeypatch.setattr(setup, "_perform", perform)
+    setup.install()
     await asyncio.sleep(0)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    cancelling = [asyncio.create_task(setup.cancel())]
+    try:
+        await killing.wait()
+        if repeated:
+            cancelling.append(asyncio.create_task(setup.cancel()))
+            await asyncio.sleep(0)
+        assert setup._install_lock.locked()
+        assert setup.status()["state"] == "installing"
+        assert not process.wait.await_count
+        release.set()
+        await reaping.wait()
+        if repeated:
+            cancelling.append(asyncio.create_task(setup.cancel()))
+            await asyncio.sleep(0)
+        assert setup._install_lock.locked()
+        assert setup._process is process
+        assert setup.status()["state"] == "installing"
+    finally:
+        release.set()
+        exited.set()
+        await asyncio.gather(*cancelling)
+        assert setup.status()["state"] == "missing"
+        await setup.aclose()
     kill_tree.assert_awaited_once_with(process)
     process.wait.assert_awaited_once()
+    assert not setup._install_lock.locked()
+    assert setup._process is None
     assert "password" not in str(setup.status())
 
 

@@ -122,24 +122,29 @@ async def test_generate_artifacts_stores_each_image_in_the_caller_owned_director
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("denied", "reason"),
+    ("failure", "reason"),
     [
-        pytest.param(False, "a file with that name exists", id="file-in-the-way"),
+        pytest.param("existing-file", "a file with that name exists", id="file-in-the-way"),
         # The host's own message is localized; the reason comes from the error number.
-        pytest.param(True, "access is denied", id="access-denied"),
+        pytest.param("mkdir", "access is denied", id="access-denied"),
+        pytest.param("file-creation", "access is denied", id="existing-unwritable-folder"),
     ],
 )
 async def test_unusable_output_folder_fails_before_generating(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, denied: bool, reason: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str, reason: str
 ) -> None:
     service = ImageService(_MissingModelTasks(), cast(Any, object()))
     folder = tmp_path / "notes.txt"
-    if denied:
+    if failure != "existing-file":
 
         def deny(*_args: Any, **_kwargs: Any) -> None:
             raise PermissionError(errno.EACCES, "Zugriff verweigert")
 
-        monkeypatch.setattr(Path, "mkdir", deny)
+        if failure == "mkdir":
+            monkeypatch.setattr(Path, "mkdir", deny)
+        else:
+            folder.mkdir()
+            monkeypatch.setattr(Path, "open", deny)
     else:
         folder.write_text("a file, not a folder", encoding="utf-8")
 
