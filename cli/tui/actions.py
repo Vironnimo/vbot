@@ -50,7 +50,7 @@ def _tools(view: Conversation) -> list[JsonObject]:
 def _saved_edits(app: ConversationApp, view: Conversation | None = None) -> list[JsonObject]:
     return [
         record
-        for record in app.saved_drafts
+        for record in app.submissions.saved_drafts
         if record.get("operation") == "chat.edit"
         and (view is None or (record["agent"], record.get("session")) == (view.agent, view.session))
     ]
@@ -61,10 +61,10 @@ async def menu(app: ConversationApp) -> None:
     view = app.conversation
     key = view.key if view else None
     if view and view.session and view.available:
-        if id(view) in app.pending:
+        if id(view) in app.submissions.pending:
             app._notice("Wait for the current submission before opening Actions.")
             return
-        await app._refresh(view)
+        await app.navigation.refresh(view)
         if not _current(app, view, key):
             return
     choices: list[tuple[str, object]] = []
@@ -96,9 +96,9 @@ async def menu(app: ConversationApp) -> None:
     if _saved_edits(app):
         choices.append(("Recover an earlier edit…", "recover_edit"))
     if (
-        any(record.get("operation") != "chat.edit" for record in app.saved_drafts)
-        or app.recovered_drafts
-        or any(draft_record(candidate) is not None for candidate in app.views.values())
+        any(record.get("operation") != "chat.edit" for record in app.submissions.saved_drafts)
+        or app.submissions.recovered_drafts
+        or any(draft_record(candidate) is not None for candidate in app.navigation.views.values())
     ):
         choices.append(("Restore a saved draft…", "restore_draft"))
     if not choices:
@@ -108,7 +108,7 @@ async def menu(app: ConversationApp) -> None:
     if not action or app.conversation is not view or (view and view.key != key):
         return
     if action == "restore_draft":
-        await app._restore_draft()
+        await app.submissions.restore()
         return
     if action == "recover_edit":
         record = await app.push_screen_wait(
@@ -147,14 +147,14 @@ async def menu(app: ConversationApp) -> None:
             return
         await app.client.rpc("session.rename", {**view.params(), "title": title})
         if _current(app, view, key):
-            await app._refresh(view)
+            await app.navigation.refresh(view)
         return
     if action == "fork":
         result = await app.client.rpc("session.fork", view.params())
         if not _current(app, view, key):
             return
         fork = result["session"]
-        await app._open(Conversation(view.agent, session=fork["id"]))
+        await app.navigation.open(Conversation(view.agent, session=fork["id"]))
         return
     if isinstance(action, tuple):
         await _run_action(app, view, action)
@@ -163,8 +163,8 @@ async def menu(app: ConversationApp) -> None:
 async def _run_action(app: ConversationApp, view: Conversation, action: tuple) -> None:
     key = view.key
     operation, run_id, tool_id = action
-    await app._refresh(view)
-    if not _current(app, view, key) or id(view) in app.pending:
+    await app.navigation.refresh(view)
+    if not _current(app, view, key) or id(view) in app.submissions.pending:
         return
     active = view.facts.get("active_run") or {}
     if active.get("run_id") != run_id:
@@ -176,7 +176,7 @@ async def _run_action(app: ConversationApp, view: Conversation, action: tuple) -
             "chat.stream", {**view.params(), "content": "/compact", "reply_surface": "tui"}
         )
         if _current(app, view, key) and result.get("command_handled"):
-            await app._command_result(view, result)
+            await app.submissions.command_result(view, result)
     elif operation == "compact" and controls.get("compaction") == "idle":
         await app.client.rpc(
             "chat.control_run", {**view.params(), "run_id": run_id, "action": "compact"}
@@ -200,7 +200,7 @@ async def _run_action(app: ConversationApp, view: Conversation, action: tuple) -
         app._notice("This action is no longer available. Open Actions again for current controls.")
         return
     if _current(app, view, key):
-        await app._refresh(view)
+        await app.navigation.refresh(view)
 
 
 def _retain_edit(
@@ -229,8 +229,8 @@ def _retain_edit(
         previous.clear()
         previous.update(record)
     else:
-        app.saved_drafts.append(record)
-    app._view_changed(view)
+        app.submissions.saved_drafts.append(record)
+    app.submissions.changed(view)
     return previous if previous is not None else record
 
 
@@ -268,23 +268,23 @@ async def _edit(
         app._notice("An edited message cannot be empty. The text is saved in Actions.")
         return
     try:
-        await app._refresh(view)
+        await app.navigation.refresh(view)
     except ClientError:
         _retain_edit(app, view, request, uncertain=False, previous=recovery)
         raise
     if (
         not _current(app, view, key)
-        or id(view) in app.pending
+        or id(view) in app.submissions.pending
         or not any(message["id"] == message_id for message in _editable(view))
     ):
         _retain_edit(app, view, request, uncertain=False, previous=recovery)
         app._notice("This message is no longer editable. The edited text is saved in Actions.")
         return
-    app.pending.add(id(view))
+    app.submissions.pending.add(id(view))
     recovery = _retain_edit(app, view, request, uncertain=True, previous=recovery)
     mutation_started = False
     try:
-        await app.persist_drafts()
+        await app.submissions.persist()
         if not _current(app, view, key) or not any(
             message["id"] == message_id for message in _editable(view)
         ):
@@ -301,12 +301,14 @@ async def _edit(
     finally:
         if not mutation_started:
             recovery["uncertain"] = False
-            app._view_changed(view)
-        app.pending.discard(id(view))
-    app.saved_drafts = [item for item in app.saved_drafts if item is not recovery]
-    app._view_changed(view)
+            app.submissions.changed(view)
+        app.submissions.pending.discard(id(view))
+    app.submissions.saved_drafts = [
+        item for item in app.submissions.saved_drafts if item is not recovery
+    ]
+    app.submissions.changed(view)
     if _current(app, view, key):
-        await app._refresh(view)
+        await app.navigation.refresh(view)
         app._notice("Edited message accepted.")
 
 
@@ -333,20 +335,22 @@ async def _recover_edit(app: ConversationApp, record: JsonObject) -> None:
             )
             return
         if choice == "accepted":
-            app.saved_drafts = [item for item in app.saved_drafts if item is not record]
+            app.submissions.saved_drafts = [
+                item for item in app.submissions.saved_drafts if item is not record
+            ]
             if view:
-                app._view_changed(view)
+                app.submissions.changed(view)
             app._notice("Edit recovery cleared. Later drafts are preserved.")
             return
         if choice != "restore":
             return
         record["uncertain"] = False
         if view:
-            app._view_changed(view)
+            app.submissions.changed(view)
     if app.conversation is not view:
         return
     if view is None or (view.agent, view.session) != (record["agent"], record.get("session")):
-        await app._open(
+        await app.navigation.open(
             Conversation(
                 record["agent"],
                 session=record["session"],

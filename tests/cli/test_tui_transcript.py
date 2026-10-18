@@ -14,14 +14,10 @@ from tests.cli.test_tui import Server
 
 
 @pytest.mark.asyncio
-async def test_long_run_viewport_keeps_disclosures_and_reading_position() -> None:
+async def test_long_run_viewport_keeps_disclosures_and_reading_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ready = asyncio.Event()
-
-    class ReadyApp(ConversationApp):
-        @override
-        async def _bootstrap(self) -> None:
-            await super()._bootstrap()
-            ready.set()
 
     server = Server()
     server.items = [
@@ -41,7 +37,14 @@ async def test_long_run_viewport_keeps_disclosures_and_reading_position() -> Non
             ],
         }
     ]
-    app = ReadyApp(server, agent_id="main")
+    app = ConversationApp(server, agent_id="main")
+    bootstrap = app.navigation.bootstrap
+
+    async def signal_ready() -> None:
+        await bootstrap()
+        ready.set()
+
+    monkeypatch.setattr(app.navigation, "bootstrap", signal_ready)
     async with app.run_test(size=(100, 35)) as pilot:
         await ready.wait()
         await pilot.pause()
@@ -134,7 +137,7 @@ async def test_cached_session_is_visible_while_its_authoritative_refresh_waits()
         assert view is not None
         app.query_one(TextArea).load_text("Keep this draft")
         server.delay = True
-        worker = app._start(lambda: app._open(view))
+        worker = app._start(lambda: app.navigation.open(view))
         await blocked.wait()
         assert app.transcript.displays("cached-text")
         assert app.query_one(TextArea).text == "Keep this draft"
@@ -151,25 +154,25 @@ def test_history_cache_evicts_content_without_losing_drafts_or_navigation() -> N
         for i in range(12)
     ]
     for view in views:
-        app.views[view.key] = view
-        app._cache_history(view)
-    assert len(app.history_cache) == 8
+        app.navigation.views[view.key] = view
+        app.navigation.cache_history(view)
+    assert len(app.navigation.history_cache) == 8
     assert not views[0].items
     assert views[0].draft == "draft-0"
-    assert app.views[views[0].key] is views[0]
+    assert app.navigation.views[views[0].key] is views[0]
     assert views[-1].items
 
 
 def test_background_events_target_only_the_displayed_address() -> None:
     app = ConversationApp(Server())
     app.conversation = Conversation("coder@project", session="one")
-    assert app._event_targets_view(
+    assert app.navigation.event_targets_view(
         {"agent_id": "coder", "project_id": "project", "session_id": "one"}
     )
-    assert not app._event_targets_view(
+    assert not app.navigation.event_targets_view(
         {"agent_id": "coder", "project_id": "other", "session_id": "one"}
     )
-    assert not app._event_targets_view(
+    assert not app.navigation.event_targets_view(
         {"agent_id": "coder", "project_id": "project", "session_id": "two"}
     )
 

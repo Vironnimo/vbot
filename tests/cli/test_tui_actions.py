@@ -136,7 +136,7 @@ async def test_session_actions_use_the_selected_address_and_keep_its_draft(opera
                 {"agent_id": "main", "session_id": "session-one"},
             ) in server.calls
             assert app.conversation is not None and app.conversation.session == "forked"
-            assert original in app.backstack
+            assert original in app.navigation.backstack
         assert original.draft == "Unsent original draft"
 
 
@@ -228,7 +228,7 @@ async def test_uncertain_edit_retains_exact_request_and_requires_explicit_reconc
         app.screen.query_one(TextArea).load_text("Edited request")
         await pilot.press("ctrl+s")
         await pilot.pause()
-        [saved] = app.saved_drafts
+        [saved] = app.submissions.saved_drafts
         assert saved["text"] == "Edited request"
         assert saved["agent"] == "main" and saved["session"] == "session-one"
         assert saved["project_selected"] is False and saved["draft_id"]
@@ -249,19 +249,19 @@ async def test_uncertain_edit_retains_exact_request_and_requires_explicit_reconc
             "mentions": [],
             "draft_id": "later",
         }
-        app.saved_drafts.append(later)
+        app.submissions.saved_drafts.append(later)
         await open_actions(app, pilot)
         await choose(app, pilot, "edit")
         await choose(app, pilot, resolution)
         if resolution == "accepted":
-            assert app.saved_drafts == [later]
+            assert app.submissions.saved_drafts == [later]
         else:
             assert isinstance(app.screen, TextDialog)
             assert "Edited request" in app.screen.query_one(TextArea).text
             assert app.screen.read_only is (resolution == "review")
             await pilot.press("escape")
             await pilot.pause()
-            assert saved in app.saved_drafts and later in app.saved_drafts
+            assert saved in app.submissions.saved_drafts and later in app.submissions.saved_drafts
         assert sum(method == "chat.edit" for method, _ in server.calls) == 1
         assert original.draft == "Later unsent draft"
 
@@ -280,7 +280,7 @@ async def test_delayed_edit_retains_the_sessions_address_without_submission(chan
             app.conversation = Conversation("another", session="another-session")
         elif change == "rename":
             expected_agent = "renamed"
-            await app._resource_changed(
+            await app.navigation.resource_changed(
                 {
                     "kind": "agents",
                     "scope": {
@@ -291,7 +291,7 @@ async def test_delayed_edit_retains_the_sessions_address_without_submission(chan
             )
         else:
             expected_agent = "worker@project"
-            await app._resource_changed(
+            await app.navigation.resource_changed(
                 {
                     "kind": "sessions",
                     "scope": {
@@ -305,7 +305,7 @@ async def test_delayed_edit_retains_the_sessions_address_without_submission(chan
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert not any(method == "chat.edit" for method, _ in server.calls)
-        [saved] = app.saved_drafts
+        [saved] = app.submissions.saved_drafts
         assert (saved["agent"], saved["session"], saved["text"], saved["uncertain"]) == (
             expected_agent,
             "session-one",
@@ -331,9 +331,11 @@ async def test_edit_retains_input_during_admission_and_only_clears_known_success
     checkpoints = []
 
     async def persist() -> None:
-        checkpoints.append((server.edit_started.is_set(), copy.deepcopy(app.saved_drafts)))
+        checkpoints.append(
+            (server.edit_started.is_set(), copy.deepcopy(app.submissions.saved_drafts))
+        )
 
-    monkeypatch.setattr(app, "persist_drafts", persist)
+    monkeypatch.setattr(app.submissions, "persist", persist)
     async with app.run_test(size=(100, 35)) as pilot:
         await pilot.pause()
         worker = await edit_dialog(app, pilot)
@@ -344,10 +346,10 @@ async def test_edit_retains_input_during_admission_and_only_clears_known_success
         assert checkpoints[0][0] is False
         assert checkpoints[0][1][0]["text"] == "Preserved while sending"
         assert checkpoints[0][1][0]["uncertain"] is True
-        [record] = app.saved_drafts
+        [record] = app.submissions.saved_drafts
         assert record["uncertain"] is True
         if outcome == "moved_unknown":
-            await app._resource_changed(
+            await app.navigation.resource_changed(
                 {
                     "kind": "sessions",
                     "scope": {
@@ -362,12 +364,12 @@ async def test_edit_retains_input_during_admission_and_only_clears_known_success
         else:
             server.release_edit.set()
         await pilot.pause()
-        assert not app.pending
+        assert not app.submissions.pending
         assert sum(method == "chat.edit" for method, _ in server.calls) == 1
         if outcome == "accepted":
-            assert app.saved_drafts == []
+            assert app.submissions.saved_drafts == []
         else:
-            assert app.saved_drafts == [record]
+            assert app.submissions.saved_drafts == [record]
             assert record["uncertain"] is (outcome in {"cancelled", "moved_unknown"})
             if outcome == "moved_unknown":
                 assert record["agent"] == "worker@project"
@@ -379,7 +381,7 @@ async def test_actions_reaches_an_unselected_restored_draft() -> None:
     server = ActionServer()
     app = ConversationApp(server, agent_id="main")
     dormant = Conversation("other", draft="Recovered unfinished first message")
-    app.views[dormant.key] = dormant
+    app.navigation.views[dormant.key] = dormant
     async with app.run_test(size=(100, 35)) as pilot:
         await pilot.pause()
         await open_actions(app, pilot)

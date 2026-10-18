@@ -80,7 +80,7 @@ async def files(app: ConversationApp) -> None:
         if path and app.conversation is view:
             attachment = await app.client.upload(Path(path))
             view.attachments.append(attachment)
-            app._view_changed(view)
+            app.submissions.changed(view)
             app._notice("Local file uploaded and attached to the draft.")
     elif action == "mention":
         await server_file(
@@ -115,7 +115,7 @@ async def files(app: ConversationApp) -> None:
             view.attachments = [
                 value for value in view.attachments if value["attachment_id"] != choice
             ]
-            app._view_changed(view)
+            app.submissions.changed(view)
     app._header()
 
 
@@ -173,7 +173,7 @@ async def server_file(app, query: str = "", *, replace: tuple[int, int, int] | N
         else:
             editor.insert(text)
         editor.focus()
-        app._view_changed(view)
+        app.submissions.changed(view)
         app._header()
 
 
@@ -247,10 +247,10 @@ async def input_history(app: ConversationApp) -> None:
 
     choices: list[tuple[str, Any]] = [
         (f"Unsent draft · {where(value)} · {one_line(value['text'], 60)}", value)
-        for value in reversed(app.saved_drafts)
+        for value in reversed(app.submissions.saved_drafts)
         if value.get("operation") != "chat.edit"
     ]
-    choices.extend((one_line(text), text) for text in reversed(app.history))
+    choices.extend((one_line(text), text) for text in reversed(app.submissions.history))
     selected = await app.push_screen_wait(
         Picker(
             "Input history",
@@ -270,7 +270,7 @@ async def input_history(app: ConversationApp) -> None:
                 app.conversation.mentions.extend(
                     path for path in selected["mentions"] if path not in app.conversation.mentions
                 )
-                app._view_changed(app.conversation)
+                app.submissions.changed(app.conversation)
                 app._header()
         else:
             app.query_one("#composer", TextArea).insert(selected)

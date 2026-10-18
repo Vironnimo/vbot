@@ -39,4 +39,4 @@ async def run_tui(
         try:
             return await app.run_async() or 0
         finally:
-            await app.persist_drafts()
+            await app.submissions.persist()

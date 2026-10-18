@@ -14,7 +14,7 @@ from textual.widgets import TextArea
 from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close
 
-import cli.tui.app as app_module
+import cli.tui.conversation as conversation_module
 import cli.tui.transport as transport_module
 from cli._server_target import resolve_instance
 from cli.tui.app import ConversationApp
@@ -320,8 +320,8 @@ async def test_pending_submission_preserves_later_input_and_never_replays(unknow
             assert editor.text == "First input @first.txt"
             assert app.conversation.attachments == [first_attachment]
             assert app.conversation.mentions == ["first.txt"]
-            assert len(app.saved_drafts) == 1
-            saved = app.saved_drafts[0]
+            assert len(app.submissions.saved_drafts) == 1
+            saved = app.submissions.saved_drafts[0]
             assert saved["text"] == "Next input @later.txt"
             assert saved["attachments"] == [first_attachment, later_attachment]
             assert saved["mentions"] == ["later.txt"]
@@ -410,18 +410,24 @@ async def test_project_drafts_keep_distinct_text_and_working_directory() -> None
         editor = app.query_one("#composer", TextArea)
         editor.load_text("First Project draft")
         await pilot.pause()
-        await app._open(Conversation("main", project="project-two", project_selected=True))
+        await app.navigation.open(
+            Conversation("main", project="project-two", project_selected=True)
+        )
         editor.load_text("Second Project draft")
         await pilot.pause()
-        await app._open(Conversation("main", project_selected=True))
+        await app.navigation.open(Conversation("main", project_selected=True))
         assert editor.text == ""
-        await app._open(Conversation("main", project="project-one", project_selected=True))
+        await app.navigation.open(
+            Conversation("main", project="project-one", project_selected=True)
+        )
         assert editor.text == "First Project draft"
         assert (
             app.conversation.submission(editor.text)["new_session"]["working_project_id"]
             == "project-one"
         )
-        await app._open(Conversation("main", project="project-two", project_selected=True))
+        await app.navigation.open(
+            Conversation("main", project="project-two", project_selected=True)
+        )
         assert editor.text == "Second Project draft"
 
 
@@ -466,7 +472,7 @@ async def test_stale_refresh_does_not_replace_stream_and_next_run_resets_sequenc
         assert view is not None
         view.event(snapshot())
         server.delay = True
-        refresh = asyncio.create_task(app._refresh(view))
+        refresh = asyncio.create_task(app.navigation.refresh(view))
         await captured.wait()
         view.event(
             {
@@ -501,10 +507,10 @@ async def test_stale_refresh_does_not_replace_stream_and_next_run_resets_sequenc
         captured.clear()
         release.clear()
         server.active = True
-        refresh = asyncio.create_task(app._refresh(view))
+        refresh = asyncio.create_task(app.navigation.refresh(view))
         await captured.wait()
         server.recovering = True
-        await app._follow(view, "/closed-stream")
+        await app.navigation.follow(view, "/closed-stream")
         release.set()
         await refresh
         assert (view.stream_run, view.sequence) == ("run-three", 1)
@@ -536,7 +542,7 @@ async def test_delayed_completion_cannot_edit_another_conversation(token: str, m
         editor.move_cursor((0, len(token)))
         worker = app.action_complete()
         await captured.wait()
-        await app._open(Conversation("main", project="other", project_selected=True))
+        await app.navigation.open(Conversation("main", project="other", project_selected=True))
         editor.load_text("Other conversation draft")
         release.set()
         await worker.wait()
@@ -578,7 +584,7 @@ async def test_delayed_conversation_reads_cannot_change_a_new_selection(action: 
         server.delay = True
         worker = app.action_older() if action == "older" else app.action_queue()
         await captured.wait()
-        await app._open(Conversation("main", project="another", project_selected=True))
+        await app.navigation.open(Conversation("main", project="another", project_selected=True))
         release.set()
         await worker.wait()
         assert app.conversation is not previous
@@ -691,7 +697,7 @@ async def test_events_stop_after_a_repeated_access_refusal(monkeypatch: pytest.M
     async def no_delay(_seconds: float) -> None:
         return
 
-    monkeypatch.setattr(app_module, "_sleep", no_delay)
+    monkeypatch.setattr(conversation_module, "_sleep", no_delay)
     app = ConversationApp(RefusingServer(), agent_id="main")
     async with app.run_test(size=(100, 35)) as pilot:
         await pilot.pause()
@@ -699,7 +705,7 @@ async def test_events_stop_after_a_repeated_access_refusal(monkeypatch: pytest.M
 
         # One immediate retry reads the credential again; then the stream stays closed.
         assert RefusingServer.attempts == 2
-        assert not app.connected
+        assert not app.navigation.connected
         assert "vbot devices pair" in app.last_notice
 
 
@@ -785,7 +791,7 @@ async def test_catch_up_drains_all_pages_before_completion_is_acknowledged(
     async def no_delay(_seconds: float) -> None:
         return
 
-    monkeypatch.setattr(app_module, "_sleep", no_delay)
+    monkeypatch.setattr(conversation_module, "_sleep", no_delay)
     server = CatchUpServer()
     app = ConversationApp(server, agent_id="main")
     async with app.run_test(size=(100, 35)) as pilot:
@@ -795,11 +801,11 @@ async def test_catch_up_drains_all_pages_before_completion_is_acknowledged(
         server.catching_up = True
         server.calls.clear()
         if reconnect:
-            await app._follow(view, "/closed")
+            await app.navigation.follow(view, "/closed")
             assert [row["id"] for row in view.items] == ["earlier", "latest"]
             # The normal refresh also owns Session metadata and read receipts.
             view.facts["next_after"] = "zero"
-        await app._refresh(view)
+        await app.navigation.refresh(view)
         assert view.facts["has_newer"] is False
         assert [row["id"] for row in view.items] == ["earlier", "latest"]
         assert [
@@ -814,7 +820,7 @@ async def test_catch_up_drains_all_pages_before_completion_is_acknowledged(
         modal.dismiss(None)
         app.app_focus = True
         await pilot.pause()
-        app._completion_if_visible()
+        app.navigation.completion_if_visible()
         await pilot.pause()
         assert [
             (method, params) for method, params in server.calls if method == "session.mark_read"
@@ -862,7 +868,7 @@ async def test_lost_first_response_recovers_exact_session_without_resending(
         assert app.conversation.uncertain_submission is not None
         checkpoints.append(copy.deepcopy(app.conversation.uncertain_submission["request"]))
 
-    monkeypatch.setattr(app, "persist_drafts", checkpoint)
+    monkeypatch.setattr(app.submissions, "persist", checkpoint)
     async with app.run_test(size=(100, 35)) as pilot:
         await pilot.pause()
         editor = app.query_one("#composer", TextArea)
@@ -876,7 +882,7 @@ async def test_lost_first_response_recovers_exact_session_without_resending(
         editor.load_text("Following request")
         await pilot.pause()
         server.reveal = True
-        await app._refresh(view)
+        await app.navigation.refresh(view)
         assert view.session == server.admitted
         assert not view.uncertain and view.pending_session_id is None
         assert editor.text == "Following request"
@@ -894,7 +900,7 @@ async def test_send_checkpoint_failure_keeps_input_without_admitting_it(
     async def failing_checkpoint() -> None:
         raise OSError("Unavailable local draft storage")
 
-    monkeypatch.setattr(app, "persist_drafts", failing_checkpoint)
+    monkeypatch.setattr(app.submissions, "persist", failing_checkpoint)
     async with app.run_test(size=(100, 35)) as pilot:
         await pilot.pause()
         app.query_one("#composer", TextArea).load_text("Retain this request")
@@ -936,23 +942,26 @@ async def test_scoped_rename_move_and_deletion_keep_local_drafts() -> None:
         await pilot.pause()
         displaced = draft_record(view)
         assert displaced is not None
-        app.recovered_drafts["displaced"] = displaced
-        app.recovered_drafts["other-session"] = {**displaced, "session": "other-session"}
+        app.submissions.recovered_drafts["displaced"] = displaced
+        app.submissions.recovered_drafts["other-session"] = {
+            **displaced,
+            "session": "other-session",
+        }
         saved_edit = {
-            **app._saved_input(view),
+            **app.submissions.snapshot(view),
             "operation": "chat.edit",
             "message_id": "message-one",
             "uncertain": True,
             "request": {"agent_id": "main", "session_id": "session-one"},
         }
-        app.saved_drafts.append(saved_edit)
+        app.submissions.saved_drafts.append(saved_edit)
         old_key = view.key
-        await app._resource_changed(
+        await app.navigation.resource_changed(
             {"kind": "agents", "scope": {"old_agent_id": "main", "new_agent_id": "renamed"}}
         )
-        assert view.agent == "renamed" and old_key not in app.views
+        assert view.agent == "renamed" and old_key not in app.navigation.views
         assert displaced["agent"] == saved_edit["agent"] == "renamed"
-        await app._resource_changed(
+        await app.navigation.resource_changed(
             {
                 "kind": "sessions",
                 "scope": {
@@ -965,9 +974,9 @@ async def test_scoped_rename_move_and_deletion_keep_local_drafts() -> None:
         assert app.conversation is view and view.agent == "worker@project"
         assert view.draft == "Unsent context"
         assert displaced["agent"] == saved_edit["agent"] == "worker@project"
-        assert app.recovered_drafts["other-session"]["agent"] == "renamed"
+        assert app.submissions.recovered_drafts["other-session"]["agent"] == "renamed"
         assert saved_edit["request"]["agent_id"] == "main"
-        await app._resource_changed(
+        await app.navigation.resource_changed(
             {
                 "kind": "sessions",
                 "scope": {
@@ -978,7 +987,7 @@ async def test_scoped_rename_move_and_deletion_keep_local_drafts() -> None:
             }
         )
         assert view.available
-        await app._resource_changed(
+        await app.navigation.resource_changed(
             {
                 "kind": "sessions",
                 "scope": {
@@ -990,7 +999,7 @@ async def test_scoped_rename_move_and_deletion_keep_local_drafts() -> None:
             }
         )
         assert not view.available and app.conversation is not view
-        saved = app.saved_drafts[-1]
+        saved = app.submissions.saved_drafts[-1]
         assert (saved["agent"], saved["session"], saved["text"]) == (
             "worker@project",
             "session-one",
