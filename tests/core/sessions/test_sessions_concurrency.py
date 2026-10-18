@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from weakref import ref
 
 import pytest
 
@@ -95,7 +96,9 @@ def test_write_lock_is_reentrant_for_child_tasks(manager) -> None:
 
     async def scenario() -> None:
         original_context = set(contextvars.copy_context())
-        async with manager.write_lock(address):
+        lock = manager.write_lock(address)
+        retained = ref(lock)
+        async with lock:
 
             async def child() -> None:
                 async with manager.write_lock(address):
@@ -103,7 +106,8 @@ def test_write_lock_is_reentrant_for_child_tasks(manager) -> None:
 
             await asyncio.create_task(child())
         assert set(contextvars.copy_context()) == original_context
-        assert not manager._write_locks
+        del lock
+        assert retained() is None
 
     asyncio.run(scenario())
     assert [message.content for message in manager.get(address).load()] == ["child"]

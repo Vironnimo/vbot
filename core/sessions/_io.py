@@ -7,10 +7,34 @@ import base64
 import contextvars
 import hashlib
 import json
+import threading
 from dataclasses import dataclass
 from typing import Self
+from weakref import WeakValueDictionary
 
-from core.sessions._types import _CHAT_HISTORY_CURSOR_PREFIX
+from core.sessions._metadata import _validate_session_id
+from core.sessions._types import _CHAT_HISTORY_CURSOR_PREFIX, SessionAddress
+
+
+class _SessionWriteLocks:
+    """Retain one write lock per address only while callers still use it."""
+
+    def __init__(self) -> None:
+        self._locks: WeakValueDictionary[SessionAddress, _SessionWriteLock] = WeakValueDictionary()
+        self._guard = threading.Lock()
+
+    def clear(self) -> None:
+        with self._guard:
+            self._locks.clear()
+
+    def get(self, address: SessionAddress) -> _SessionWriteLock:
+        _validate_session_id(address.session_id)
+        with self._guard:
+            lock = self._locks.get(address)
+            if lock is None:
+                lock = _SessionWriteLock()
+                self._locks[address] = lock
+            return lock
 
 
 class SessionWriteLeaseScope:

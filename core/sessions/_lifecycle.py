@@ -120,6 +120,35 @@ class SessionLifecycle:
         )
         return ChatSession(self._store, address, generation_id=generation_id)
 
+    def get(self, address: SessionAddress) -> ChatSession:
+        """Resolve the live generation that later Run admission must still match."""
+        _validate_session_id(address.session_id)
+        generation_id = self._store.require_live(address)
+        return ChatSession(self._store, address, generation_id=generation_id)
+
+    def get_or_create(self, address: SessionAddress) -> ChatSession:
+        _validate_creatable_address(address)
+        self._store.ensure_live(
+            address, lambda: self._new_working_project(address, AGENT_DEFAULT_PROJECT)
+        )
+        return ChatSession(self._store, address)
+
+    def ensure_metadata(
+        self,
+        address: SessionAddress,
+        mutation: Callable[[JsonObject], None],
+        *,
+        create_missing: bool = False,
+    ) -> tuple[JsonObject, JsonObject]:
+        if create_missing:
+            _validate_creatable_address(address)
+        return self._store.ensure_metadata(
+            address,
+            mutation,
+            create_missing=create_missing,
+            new_working_project=lambda: self._new_working_project(address, AGENT_DEFAULT_PROJECT),
+        )
+
     async def move(self, source: SessionAddress, target: SessionAddress) -> ChatSession:
         """Give a Session a new address; history, forks and relations stay attached.
 

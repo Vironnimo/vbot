@@ -1,6 +1,6 @@
 # Session history API
 
-Task-gated detail for `sessions.md`: history appends and reads, the `ChatSession` handle, read cursors, the Chat History snapshot, the Compaction commit, Sub-Agent reply targets, deferred Notes, the Skill activation cache and the Session write lock. Source: `core/sessions/session.py`, `sessions.py`, `_store_history.py`, `_store_timeline.py`, `_store_operations.py`, `history.py`. Tests: `tests/core/sessions/test_sessions_history.py`, `test_timeline_snapshot.py`. History edits: `sessions/lineage.md` -> History edit.
+Task-gated detail for `sessions.md`: history appends and reads, the `ChatSession` handle, read cursors, the Chat History snapshot, the Compaction commit, Sub-Agent reply targets, deferred Notes, the Skill activation cache and the Session write lock. Source: `core/sessions/session.py`, `sessions.py`, `_io.py`, `_store_history.py`, `_store_timeline.py`, `_store_operations.py`, `history.py`. Tests: `tests/core/sessions/test_sessions_history.py`, `test_timeline_snapshot.py`. History edits: `sessions/lineage.md` -> History edit.
 
 ## Appends
 
