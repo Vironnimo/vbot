@@ -743,6 +743,7 @@ async def test_extension_page_history_projects_only_bound_visible_history(
         "has_more": before_cursor is not None,
         "session_usage": {"input_tokens": 5000},
         "context_usage": _CONTEXT_USAGE,
+        "last_usage": None,
         "file_urls": ["/api/files/capability.signature"],
     }
 
