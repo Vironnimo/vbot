@@ -13,13 +13,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.tools._search_execution import (
-    ALWAYS_EXCLUDED,
-    CACHES_EXCLUDED,
-    DEFAULT_ARGUMENTS,
-    NativeOutcome,
-    native_lines,
-)
+from core.tools._search_execution import ALWAYS_EXCLUDED, CACHES_EXCLUDED, DEFAULT_ARGUMENTS
+from core.tools._search_native import NativeOutcome, native_lines
 from core.utils.paths import model_path
 
 if TYPE_CHECKING:

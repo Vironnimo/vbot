@@ -7,6 +7,14 @@ prompt epoch (`edit.md` -> Dialect helpers). It also runs calls shaped for other
 harnesses' edit/write Tools.
 Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 `core/tools/apply_patch.py` owns the Tool's definition, request failures, display and registration. Its internal `_patch_requests.py` turns other harnesses' argument shapes into canonical fields and parsed operations; `_patch_syntax.py` owns V4A parsing and parsed operation values; `_file_changes.py` owns the change pipeline all three file edit Tools share (resolving and locking paths, planning steps in memory, the read guard, atomic commits, rechecks, read stamps, change statistics and file reports; this map's Contract and Mutation invariants describe it); `_edit_engine.py` owns locating and splicing one file's hunks and `old_string` replacements in current text (a fixed sequence of matching steps per kind of change); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_patch_report.py` owns the Model-facing result text; `_change_preview.py` owns bounded preview regions.
+The edit engine coordinates focused internal units: `_edit_replacement.py` owns
+replacement interpretation, `_edit_hunks.py` line-hunk placement and splicing,
+`_edit_locations.py` common location/poststate rules, and `_edit_diagnostics.py`
+bounded matching failures. `copy_match.py` retains passage/hunk placement while
+`_copy_tokens.py` owns token alignment and merging. `fuzzy_match.py` retains
+precise matching/replacement; `_fuzzy_text.py` owns normalization and indentation,
+`_fuzzy_candidates.py` candidate search, `_fuzzy_differences.py` difference
+diagnostics, and `_fuzzy_types.py` shared result records.
 A step is the pipeline's unit that is written at once: `apply_patch` runs each
 hunk, Add, Delete and Move as its own step (partial success below), `edit` runs its
 whole call as one step that writes the file once (`run_operations(...,
@@ -335,7 +343,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   copied lines and from distinctive copied lines (at most 3 occurrences) the file
   holds exactly; a window at least 2 such lines place is shown even below the
   0.60 similarity floor (`find_closest_candidates`). The line-by-line comparison
-  (`fuzzy_match.first_difference`; Swarm Wiki edits name every differing line
+  (`_fuzzy_differences.first_difference`; Swarm Wiki edits name every differing line
   with `line_differences`, which aligns the same way) starts at the
   first copied line with a word the file holds near the window, because a window starts wherever its best-matching lines
   put it, shifted by every line the copy added or dropped before them. Closing

@@ -2,7 +2,7 @@
 
 Searches the public web through the configured first-party search provider and returns numbered plain-text results.
 
-`core/tools/web_search.py` owns registration, configuration, result-age resolution, dispatch, and the Model-facing result. Its private siblings keep argument dialects in `_web_search_arguments.py` (spelling-insensitive aliases via `core/tools/call_syntax.py`, shared with `web_fetch`), bounded HTTP and provider failure wording in `_web_search_transport.py`, domain restrictions, `site:` splitting and plain-text normalization in `_web_search_common.py`, and vendor request/result shaping in `_web_search_providers.py`. These remain one Tool implementation; callers use the public registration/handler.
+`core/tools/web_search.py` owns registration, configuration, result-age resolution, dispatch, and the Model-facing result. Its private siblings keep argument dialects in `_web_search_arguments.py` (spelling-insensitive aliases via `core/tools/call_syntax.py`, shared with `web_fetch`), bounded HTTP and provider failures in `_web_search_transport.py`, and plain-text normalization plus `WebSearchRequest` in `_web_search_common.py`. That request owns site-operator resolution, operator-query construction and hard output restrictions and crosses every vendor adapter through a typed callable. `_web_search_providers.py` retains vendor shaping and each engine's ordering of paging and filtering, including DuckDuckGo slicing before filtering. These remain one Tool implementation; callers use the public registration/handler.
 
 ## Interfaces
 

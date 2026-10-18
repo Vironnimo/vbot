@@ -7,10 +7,9 @@ from typing import Any
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 from core.tools._web_search_common import (
-    _build_search_query,
+    WebSearchRequest,
     _clean_snippet,
     _normalize_text,
-    _restrict_results_to_domains,
 )
 from core.tools._web_search_transport import (
     _request_bounded,
@@ -228,24 +227,23 @@ def _standardize_searxng_results(raw_results: Any) -> list[dict[str, Any]]:
 
 
 async def _search_brave(
+    request: WebSearchRequest,
     *,
     api_key: str,
-    query: str,
-    domains: list[str],
-    exclude: list[str],
-    count: int,
-    page: int,
-    recency: str,
 ) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
-    search_query = _build_search_query(query, domains, exclude)
+    search_query = request.operator_query()
 
     # text_decorations off: Brave otherwise wraps snippets in highlight markup.
-    params: dict[str, Any] = {"q": search_query, "count": count, "text_decorations": "false"}
-    if page > 1:
+    params: dict[str, Any] = {
+        "q": search_query,
+        "count": request.count,
+        "text_decorations": "false",
+    }
+    if request.page > 1:
         # Brave paginates with a zero-based page offset in units of `count`.
-        params["offset"] = page - 1
-    if recency:
-        params["freshness"] = _BRAVE_RECENCY_MAP[recency]
+        params["offset"] = request.page - 1
+    if request.recency:
+        params["freshness"] = _BRAVE_RECENCY_MAP[request.recency]
 
     payload, failure = await _request_json(
         "GET",
@@ -264,16 +262,14 @@ async def _search_brave(
         if isinstance(web_payload, dict):
             raw_results = web_payload.get("results")
 
-    results = _restrict_results_to_domains(
-        await run_tool_worker(_standardize_results, raw_results), domains, count, exclude
-    )
+    results = request.restrict(await run_tool_worker(_standardize_results, raw_results))
     normalized_payload: dict[str, Any] = {"results": results}
-    if recency:
-        normalized_payload["recency"] = recency
+    if request.recency:
+        normalized_payload["recency"] = request.recency
     # more_results_available describes Brave's unfiltered result space: with
     # site filters the filtered page can be empty while it is still true, so
     # it would lure the Agent into paging through empty pages.
-    if not domains and not exclude and isinstance(payload, dict):
+    if not request.domains and not request.exclude and isinstance(payload, dict):
         query_info = payload.get("query")
         if isinstance(query_info, dict) and query_info.get("more_results_available") is True:
             normalized_payload["more_results_available"] = True
@@ -336,14 +332,9 @@ def _log_engine_health(raw_results: Any, unresponsive: list[tuple[str, str]]) ->
 
 
 async def _search_searxng(
+    request: WebSearchRequest,
     *,
     base_url: str,
-    query: str,
-    domains: list[str],
-    exclude: list[str],
-    count: int,
-    page: int,
-    recency: str,
 ) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
     endpoint, endpoint_error = _build_searxng_endpoint(base_url)
     if endpoint_error is not None:
@@ -351,16 +342,16 @@ async def _search_searxng(
     if endpoint is None:
         return None, HttpRequestFailure("SearXNG endpoint could not be built")
 
-    search_query = _build_search_query(query, domains, exclude)
+    search_query = request.operator_query()
     params: dict[str, Any] = {
         "q": search_query,
         "format": "json",
-        "pageno": page,
+        "pageno": request.page,
         "safesearch": 0,
         "categories": "general",
     }
-    if recency:
-        params["time_range"] = recency
+    if request.recency:
+        params["time_range"] = request.recency
 
     payload, failure = await _request_json(
         "GET",
@@ -382,22 +373,20 @@ async def _search_searxng(
         return None, failure
 
     raw_results = payload.get("results") if isinstance(payload, dict) else None
-    results = _restrict_results_to_domains(
-        await run_tool_worker(_standardize_searxng_results, raw_results), domains, count, exclude
-    )
+    results = request.restrict(await run_tool_worker(_standardize_searxng_results, raw_results))
     normalized_payload: dict[str, Any] = {"results": results}
     unresponsive = _unresponsive_engines(payload)
     _log_engine_health(raw_results, unresponsive)
     if unresponsive:
         normalized_payload["unresponsive_engines"] = unresponsive
-    if recency:
-        normalized_payload["recency"] = recency
+    if request.recency:
+        normalized_payload["recency"] = request.recency
     warnings: list[str] = []
-    if domains:
+    if request.domains:
         warnings.append(_SEARXNG_DOMAIN_WARNING)
-    if recency:
+    if request.recency:
         warnings.append(_SEARXNG_RECENCY_WARNING)
-    if page > 1:
+    if request.page > 1:
         warnings.append(_SEARXNG_PAGINATION_WARNING)
     if warnings:
         normalized_payload["warnings"] = warnings
@@ -405,18 +394,12 @@ async def _search_searxng(
 
 
 async def _search_duckduckgo(
-    *,
-    query: str,
-    domains: list[str],
-    exclude: list[str],
-    count: int,
-    page: int,
-    recency: str,
+    request: WebSearchRequest,
 ) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
     # DuckDuckGo has no search API: one html response is fetched and parsed,
     # then sliced into count/page windows client-side. Like Brave, domain
     # scoping rides on the site: operator with a post-filter guarantee.
-    search_query = _build_search_query(query, domains, exclude)
+    search_query = request.operator_query()
     params: dict[str, Any] = {"q": search_query, "kp": _DUCKDUCKGO_SAFE_SEARCH}
     response, failure = await _request_bounded(
         "GET",
@@ -451,21 +434,18 @@ async def _search_duckduckgo(
     if _PROVIDER_CONDITIONS.ended(_DUCKDUCKGO_BLOCKED):
         _LOGGER.info("DuckDuckGo web search answers again")
 
-    start = (page - 1) * count
-    results = _restrict_results_to_domains(
+    start = (request.page - 1) * request.count
+    results = request.restrict(
         [{"rank": index, **row} for index, row in enumerate(parsed, start=1)][
-            start : start + count
-        ],
-        domains,
-        count,
-        exclude,
+            start : start + request.count
+        ]
     )
     envelope: dict[str, Any] = {"results": results}
     # recency is echoed nowhere: DuckDuckGo cannot filter by age at all.
     warnings: list[str] = []
-    if recency:
-        warnings.append(_duckduckgo_recency_warning(recency))
-    if page > 1:
+    if request.recency:
+        warnings.append(_duckduckgo_recency_warning(request.recency))
+    if request.page > 1:
         warnings.append(_DUCKDUCKGO_PAGINATION_WARNING)
     if warnings:
         envelope["warnings"] = warnings
@@ -517,30 +497,25 @@ def _standardize_exa_results(raw_results: Any) -> list[dict[str, Any]]:
 
 
 async def _search_exa(
+    request: WebSearchRequest,
     *,
     api_key: str,
-    query: str,
-    domains: list[str],
-    exclude: list[str],
-    count: int,
-    page: int,
-    recency: str,
 ) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
     # Exa filters domains natively (its docs prefer includeDomains over a
     # site: operator), so the raw query is sent and the post-filter below
     # only guarantees the contract.
     payload: dict[str, Any] = {
-        "query": query,
-        "numResults": count,
+        "query": request.query,
+        "numResults": request.count,
         "contents": {"highlights": True},
     }
-    if domains:
-        payload["includeDomains"] = domains
-    elif exclude:
+    if request.domains:
+        payload["includeDomains"] = request.domains
+    elif request.exclude:
         # Exclusions inside included domains rely on the post-filter below.
-        payload["excludeDomains"] = exclude
-    if recency:
-        payload["startPublishedDate"] = _exa_start_published_date(recency)
+        payload["excludeDomains"] = request.exclude
+    if request.recency:
+        payload["startPublishedDate"] = _exa_start_published_date(request.recency)
 
     response_payload, failure = await _request_json(
         "POST",
@@ -554,17 +529,15 @@ async def _search_exa(
         return None, failure
 
     raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
-    results = _restrict_results_to_domains(
-        await run_tool_worker(_standardize_exa_results, raw_results), domains, count, exclude
-    )
+    results = request.restrict(await run_tool_worker(_standardize_exa_results, raw_results))
     envelope: dict[str, Any] = {"results": results}
-    if recency:
-        envelope["recency"] = recency
+    if request.recency:
+        envelope["recency"] = request.recency
     warnings: list[str] = []
-    if recency:
+    if request.recency:
         warnings.append(_EXA_RECENCY_WARNING)
-    if page > 1:
-        warnings.append(_no_paging_warning("Exa", page))
+    if request.page > 1:
+        warnings.append(_no_paging_warning("Exa", request.page))
     if warnings:
         envelope["warnings"] = warnings
     return envelope, None
@@ -635,22 +608,17 @@ def _standardize_firecrawl_results(raw_results: Any) -> list[dict[str, Any]]:
 
 
 async def _search_firecrawl(
+    request: WebSearchRequest,
     *,
     api_key: str,
-    query: str,
-    domains: list[str],
-    exclude: list[str],
-    count: int,
-    page: int,
-    recency: str,
 ) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
     # Firecrawl filters domains natively, so the raw query is sent and the
     # post-filter below only guarantees the contract.
-    payload: dict[str, Any] = {"query": query, "limit": count, "sources": ["web"]}
-    if domains:
-        payload["includeDomains"] = domains
-    if recency:
-        payload["tbs"] = _FIRECRAWL_RECENCY_MAP[recency]
+    payload: dict[str, Any] = {"query": request.query, "limit": request.count, "sources": ["web"]}
+    if request.domains:
+        payload["includeDomains"] = request.domains
+    if request.recency:
+        payload["tbs"] = _FIRECRAWL_RECENCY_MAP[request.recency]
 
     response_payload, failure = await _request_json(
         "POST",
@@ -678,19 +646,16 @@ async def _search_firecrawl(
             f"Firecrawl could not run the search: {detail}", retryable=False
         )
 
-    results = _restrict_results_to_domains(
+    results = request.restrict(
         await run_tool_worker(
             _standardize_firecrawl_results, _resolve_firecrawl_items(response_payload)
-        ),
-        domains,
-        count,
-        exclude,
+        )
     )
     envelope: dict[str, Any] = {"results": results}
-    if recency:
-        envelope["recency"] = recency
-    if page > 1:
-        envelope["warnings"] = [_no_paging_warning("Firecrawl", page)]
+    if request.recency:
+        envelope["recency"] = request.recency
+    if request.page > 1:
+        envelope["warnings"] = [_no_paging_warning("Firecrawl", request.page)]
     return envelope, None
 
 
@@ -724,33 +689,28 @@ def _standardize_serper_results(raw_results: Any) -> list[dict[str, Any]]:
 
 
 async def _search_serper(
+    request: WebSearchRequest,
     *,
     api_key: str,
-    query: str,
-    domains: list[str],
-    exclude: list[str],
-    count: int,
-    page: int,
-    recency: str,
 ) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
     # Serper serves one 10-result Google page per request, so count/page
     # slices are assembled by fanning out over the minimal covering pages.
     # Like Brave, domain scoping rides on Google's site: operator.
-    search_query = _build_search_query(query, domains, exclude)
+    search_query = request.operator_query()
     headers = {"X-API-KEY": api_key}
-    start = (page - 1) * count
+    start = (request.page - 1) * request.count
     collected: list[Any] = []
     serper_page = start // _SERPER_PAGE_SIZE + 1
     skip = start % _SERPER_PAGE_SIZE
     fetched = 0
-    while len(collected) < count and fetched < _SERPER_MAX_PAGES_PER_CALL:
+    while len(collected) < request.count and fetched < _SERPER_MAX_PAGES_PER_CALL:
         payload: dict[str, Any] = {
             "q": search_query,
-            "num": min(_SERPER_PAGE_SIZE, count - len(collected) + skip),
+            "num": min(_SERPER_PAGE_SIZE, request.count - len(collected) + skip),
             "page": serper_page,
         }
-        if recency:
-            payload["tbs"] = _SERPER_RECENCY_MAP[recency]
+        if request.recency:
+            payload["tbs"] = _SERPER_RECENCY_MAP[request.recency]
         response_payload, failure = await _request_json(
             "POST",
             _SERPER_ENDPOINT,
@@ -764,21 +724,18 @@ async def _search_serper(
         organic = response_payload.get("organic") if isinstance(response_payload, dict) else None
         if not isinstance(organic, list) or not organic:
             break
-        collected.extend(organic[skip : skip + (count - len(collected))])
+        collected.extend(organic[skip : skip + (request.count - len(collected))])
         skip = 0
         fetched += 1
         serper_page += 1
         if len(organic) < _SERPER_PAGE_SIZE:
             break
-    results = _restrict_results_to_domains(
-        await run_tool_worker(_standardize_serper_results, collected[:count]),
-        domains,
-        count,
-        exclude,
+    results = request.restrict(
+        await run_tool_worker(_standardize_serper_results, collected[: request.count])
     )
     envelope: dict[str, Any] = {"results": results}
-    if recency:
-        envelope["recency"] = recency
+    if request.recency:
+        envelope["recency"] = request.recency
     return envelope, None
 
 
@@ -814,33 +771,28 @@ def _standardize_tavily_results(raw_results: Any) -> list[dict[str, Any]]:
 
 
 async def _search_tavily(
+    request: WebSearchRequest,
     *,
     api_key: str,
-    query: str,
-    domains: list[str],
-    exclude: list[str],
-    count: int,
-    page: int,
-    recency: str,
 ) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
     # Tavily filters domains natively, so the raw query is sent and the
     # post-filter below only guarantees the contract.
     payload: dict[str, Any] = {
-        "query": query,
+        "query": request.query,
         "search_depth": "basic",
-        "max_results": count,
+        "max_results": request.count,
         "include_answer": False,
         "include_images": False,
         "include_raw_content": False,
     }
-    if recency:
+    if request.recency:
         # Tavily's time_range accepts day/week/month/year directly.
-        payload["time_range"] = recency
-    if domains:
-        payload["include_domains"] = domains
+        payload["time_range"] = request.recency
+    if request.domains:
+        payload["include_domains"] = request.domains
         payload["include_domains_mode"] = "filter"
-    if exclude:
-        payload["exclude_domains"] = exclude
+    if request.exclude:
+        payload["exclude_domains"] = request.exclude
 
     response_payload, failure = await _request_json(
         "POST",
@@ -854,14 +806,12 @@ async def _search_tavily(
         return None, failure
 
     raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
-    results = _restrict_results_to_domains(
-        await run_tool_worker(_standardize_tavily_results, raw_results), domains, count, exclude
-    )
+    results = request.restrict(await run_tool_worker(_standardize_tavily_results, raw_results))
     envelope: dict[str, Any] = {"results": results}
-    if recency:
-        envelope["recency"] = recency
-    if page > 1:
-        envelope["warnings"] = [_no_paging_warning("Tavily", page)]
+    if request.recency:
+        envelope["recency"] = request.recency
+    if request.page > 1:
+        envelope["warnings"] = [_no_paging_warning("Tavily", request.page)]
     return envelope, None
 
 
@@ -895,24 +845,19 @@ def _standardize_perplexity_results(raw_results: Any) -> list[dict[str, Any]]:
 
 
 async def _search_perplexity(
+    request: WebSearchRequest,
     *,
     api_key: str,
-    query: str,
-    domains: list[str],
-    exclude: list[str],
-    count: int,
-    page: int,
-    recency: str,
 ) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
     # Perplexity's Search API filters domains and recency natively, and its
     # web-search maximum (20) matches the tool schema cap, so count, domains,
     # and recency pass through directly; the post-filter guarantees the
     # contract and applies exclusions.
-    payload: dict[str, Any] = {"query": query, "max_results": count}
-    if domains:
-        payload["search_domain_filter"] = domains
-    if recency:
-        payload["search_recency_filter"] = recency
+    payload: dict[str, Any] = {"query": request.query, "max_results": request.count}
+    if request.domains:
+        payload["search_domain_filter"] = request.domains
+    if request.recency:
+        payload["search_recency_filter"] = request.recency
 
     response_payload, failure = await _request_json(
         "POST",
@@ -926,15 +871,10 @@ async def _search_perplexity(
         return None, failure
 
     raw_results = response_payload.get("results") if isinstance(response_payload, dict) else None
-    results = _restrict_results_to_domains(
-        await run_tool_worker(_standardize_perplexity_results, raw_results),
-        domains,
-        count,
-        exclude,
-    )
+    results = request.restrict(await run_tool_worker(_standardize_perplexity_results, raw_results))
     envelope: dict[str, Any] = {"results": results}
-    if recency:
-        envelope["recency"] = recency
-    if page > 1:
-        envelope["warnings"] = [_no_paging_warning("Perplexity", page)]
+    if request.recency:
+        envelope["recency"] = request.recency
+    if request.page > 1:
+        envelope["warnings"] = [_no_paging_warning("Perplexity", request.page)]
     return envelope, None

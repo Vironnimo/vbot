@@ -4,7 +4,7 @@ Tool contracts and registry, Tool Access Policy resolution, provider definitions
 
 ## Overview
 
-`core/tools/` owns Tool contracts, the registry and its metadata, the Tool Access Policy resolver, dispatch, scheduling, display metadata and the prompt-block seam; built-in Tools have per-Tool maps under `tools/`. Chat, not this domain, pins a Session's Tool list per prompt epoch and announces its changes (`chat/request-building.md`), and applies route-specific visibility filters after definitions are built (`tools/image.md`, `tools/edit.md`) without touching registration or permissions.
+`core/tools/` owns contracts, registry metadata, Tool Access Policy resolution, dispatch, scheduling, display and the prompt-block seam; built-ins have per-Tool maps under `tools/`. Package exports load on first access. Chat pins and announces a Session's Tool list per prompt epoch (`chat/request-building.md`) and applies route-specific visibility filters after definition building (`tools/image.md`, `tools/edit.md`), preserving registration and permissions.
 
 ## Terms
 

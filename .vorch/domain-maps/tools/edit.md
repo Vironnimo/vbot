@@ -7,8 +7,9 @@ unadvertised batch dialect accepts explicit per-item file paths. `edit` and
 file edit Tools; `apply_patch` (`apply_patch.md`) is the patch dialect. Chat offers
 one dialect per prompt epoch, chosen by the primary route's Model family
 (`chat/request-building.md` -> Tool catalog per prompt epoch).
-`core/tools/edit.py` owns both Tools' definitions, argument repair, result and
-failure wording, registration, and the dialect helpers. The shared change pipeline
+`core/tools/edit.py` owns registration, dispatch, result and failure wording, and
+the dialect helpers; `_edit_arguments.py` owns both Tools' input contracts and
+argument interpretation, re-exported through the public owner. The shared change pipeline
 (`_file_changes.py`: locks, planning, read guard, atomic writes, reports) and the
 engine (`_edit_engine.py`, `copy_match.py`, `fuzzy_match.py`) are shared with
 `apply_patch`; their canonical description is `apply_patch.md`.

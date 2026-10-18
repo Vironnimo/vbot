@@ -15,7 +15,7 @@ from typing import override
 import psutil  # type: ignore[import-untyped]
 import pytest
 
-from core.tools._search_execution import (
+from core.tools._search_native import (
     MAX_CHILD_MEMORY,
     NativeOutcome,
     SearchBoundError,
@@ -54,7 +54,7 @@ async def test_native_process_finalizes_in_worker_with_cancel_callback_retained(
         weakref.finalize(process, lambda: finalized.append(threading.get_ident()))
         return process
 
-    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", launch)
     result = await dispatch(tmp_path, arguments, cancel_registration_hook=hooks.append)
 
     assert result["ok"] is success, result
@@ -73,7 +73,7 @@ async def test_cancellation_before_native_launch_starts_no_process(tmp_path, mon
     def unexpected_launch(*args, **kwargs):
         pytest.fail("A cancelled native search must not launch a child")
 
-    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", unexpected_launch)
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", unexpected_launch)
     ctx = context(tmp_path, cancel_registration_hook=lambda callback: callback())
     assert (
         await run_tool_worker(
@@ -100,7 +100,7 @@ async def test_retained_generator_or_error_does_not_retain_native_process(
         weakref.finalize(process, lambda: finalized.append(threading.get_ident()))
         return process
 
-    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", launch)
     ctx = context(tmp_path)
 
     def search():
@@ -175,7 +175,7 @@ async def test_native_cancellation_kills_in_worker(tmp_path, monkeypatch, when):
 
     monkeypatch.setattr(original, "kill", kill)
     monkeypatch.setattr(original, "wait", wait)
-    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", launch)
     ctx = context(tmp_path, cancel_registration_hook=hooks.append)
 
     def search():
@@ -242,9 +242,9 @@ async def test_native_setup_failure_terminates_and_releases_child(tmp_path, monk
         start_thread(reader)
 
     monkeypatch.setattr(original, "wait", wait)
-    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", launch)
     if failure == "monitor":
-        monkeypatch.setattr("core.tools._search_execution.psutil.Process", failed_monitor)
+        monkeypatch.setattr("core.tools._search_native.psutil.Process", failed_monitor)
     else:
         monkeypatch.setattr(threading.Thread, "start", start)
     ctx = context(tmp_path)
@@ -291,7 +291,7 @@ async def test_stdout_eof_does_not_disable_search_timeout(tmp_path, monkeypatch)
         return process
 
     monkeypatch.setattr(original, "wait", wait)
-    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", launch)
     ctx = context(tmp_path)
     with pytest.raises(RuntimeError, match="Search timed out"):
         await run_tool_worker(
@@ -312,7 +312,7 @@ def test_a_user_cancellation_kills_a_silent_child(tmp_path, monkeypatch):
         children.append(child)
         return child
 
-    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", launch)
     polls_while_running = []
 
     def cancelled_after_a_silent_wait():
@@ -359,10 +359,8 @@ def test_finished_child_is_drained_when_process_monitor_misses_it(
         assert pid == child.pid
         raise psutil.NoSuchProcess(pid)
 
-    monkeypatch.setattr(
-        "core.tools._search_execution.subprocess.Popen", lambda *_args, **_kw: child
-    )
-    monkeypatch.setattr("core.tools._search_execution.psutil.Process", gone)
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", lambda *_args, **_kw: child)
+    monkeypatch.setattr("core.tools._search_native.psutil.Process", gone)
     ctx = context(tmp_path)
     lines = native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx))
     assert next(lines).strip() == b"found"
@@ -403,10 +401,8 @@ def test_skip_reports_keep_a_name_with_a_line_break_whole(tmp_path, monkeypatch)
     def gone(pid):
         raise psutil.NoSuchProcess(pid)
 
-    monkeypatch.setattr(
-        "core.tools._search_execution.subprocess.Popen", lambda *_args, **_kw: child
-    )
-    monkeypatch.setattr("core.tools._search_execution.psutil.Process", gone)
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", lambda *_args, **_kw: child)
+    monkeypatch.setattr("core.tools._search_native.psutil.Process", gone)
     outcome = NativeOutcome()
     lines = native_lines(
         Path(sys.executable), [], None, SearchBudget(None), cwd=tmp_path, outcome=outcome
@@ -434,8 +430,8 @@ def test_child_memory_is_bounded_and_polled_at_an_interval(tmp_path, monkeypatch
     def launch(_command, **kwargs):
         return original([sys.executable, "-c", "for i in range(2000): print(i)"], **kwargs)
 
-    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
-    monkeypatch.setattr("core.tools._search_execution.psutil.Process", Monitored)
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_native.psutil.Process", Monitored)
     ctx = context(tmp_path)
     assert len(list(native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx)))) == 2000
     # Polls follow elapsed time, not output volume.

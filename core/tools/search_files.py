@@ -43,16 +43,10 @@ from core.tools._search_execution import (
     ScanResult,
     Scope,
     SearchBoundError,
+    SearchExecution,
     SearchRefusedError,
-    count_scan,
     explain_failure,
-    ignored_scan,
-    line_events,
-    list_scan,
-    match_names,
     pattern_retry,
-    reference_text,
-    widen_type_case,
 )
 from core.tools._search_hints import (
     can_miss_literal_text,
@@ -231,13 +225,7 @@ class _Found:
 
 
 def _list_directories(
-    context: ToolContext,
-    query: SearchQuery,
-    roots: list[Path],
-    cwd: Path,
-    binary: Path,
-    budget: SearchBudget,
-    found: _Found,
+    execution: SearchExecution, query: SearchQuery, roots: list[Path], found: _Found
 ) -> None:
     """List the directories below the roots that ripgrep's walker enters, empty ones too.
 
@@ -257,9 +245,9 @@ def _list_directories(
     query.rg_args = selection
     files = _Found()
     skipped: set[str] = set()
-    for index, scope in enumerate(_scopes(roots, cwd)):
-        result = list_scan(binary, query, scope, context, budget, cwd, directories=True)
-        files.take(index, scope, result, cwd)
+    for index, scope in enumerate(_scopes(roots, execution.cwd)):
+        result = execution.list_scan(query, scope, directories=True)
+        files.take(index, scope, result, execution.cwd)
         skipped.update(os.path.normcase(path) for path in result.skipped)
     found.warnings, found.complete, found.ignored = files.warnings, files.complete, files.ignored
     holding: set[str] | None = None
@@ -281,7 +269,7 @@ def _list_directories(
     bases = [root for root in roots if root.is_dir()]
     directories: dict[str, Path] = {}
     for root in bases:
-        for path in _walk_directories(root, skipped, depth, follow, budget):
+        for path in _walk_directories(root, skipped, depth, follow, execution.budget):
             key = os.path.normcase(path)
             if holding is None or key in holding:
                 directories.setdefault(key, path)
@@ -292,30 +280,26 @@ def _list_directories(
                 )
                 found.complete = False
                 break
-    if budget.stopped:
+    if execution.budget.stopped:
         found.complete = False
     selected = [
         path
         for path in directories.values()
-        if _directory_selected(path, bases, query.globs, cwd, case_sensitive)
+        if _directory_selected(path, bases, query.globs, execution.cwd, case_sensitive)
     ]
     if query.name_patterns:
-        names = _matching_names(context, query, [path.name for path in selected], binary, budget)
+        names = _matching_names(execution, query, [path.name for path in selected])
         selected = [path for path in selected if path.name in names]
-    found.entries = [Entry(path, path_label(path, cwd), directory=True) for path in selected]
+    found.entries = [
+        Entry(path, path_label(path, execution.cwd), directory=True) for path in selected
+    ]
 
 
-def _matching_names(
-    context: ToolContext,
-    query: SearchQuery,
-    names: list[str],
-    binary: Path,
-    budget: SearchBudget,
-) -> set[str]:
+def _matching_names(execution: SearchExecution, query: SearchQuery, names: list[str]) -> set[str]:
     """Match listed names as a content search matches lines, with the same pattern repairs."""
     unique = list(dict.fromkeys(names))
     try:
-        return match_names(binary, query, query.name_patterns, unique, context, budget)
+        return execution.match_names(query, query.name_patterns, unique)
     except SearchRefusedError as error:
         retry = None if query.literal else pattern_retry(str(error), query.name_patterns, query)
         if retry is None:
@@ -324,7 +308,7 @@ def _matching_names(
         if pcre2:
             query.rg_args.append("--pcre2")
         try:
-            matched = match_names(binary, query, patterns, unique, context, budget)
+            matched = execution.match_names(query, patterns, unique)
         except SearchRefusedError:
             raise error from None
         query.notes.append(note)
@@ -419,13 +403,7 @@ class _Outcome:
 
 
 def _names_matching(
-    context: ToolContext,
-    query: SearchQuery,
-    scopes: list[Scope],
-    patterns: list[str],
-    cwd: Path,
-    binary: Path,
-    budget: SearchBudget,
+    execution: SearchExecution, query: SearchQuery, scopes: list[Scope], patterns: list[str]
 ) -> tuple[list[Entry], _Found]:
     """Return the searched files whose name or shown path the patterns match.
 
@@ -434,12 +412,12 @@ def _names_matching(
     """
     listed = _Found()
     for index, scope in enumerate(scopes):
-        listed.take(index, scope, list_scan(binary, query, scope, context, budget, cwd), cwd)
+        listed.take(index, scope, execution.list_scan(query, scope), execution.cwd)
     listed.finish(query)
     names = [entry.label for entry in listed.entries]
     names += [entry.path.name for entry in listed.entries]
     try:
-        matched = match_names(binary, query, patterns, names, context, budget)
+        matched = execution.match_names(query, patterns, names)
     except SearchRefusedError:
         # Unmatched names were not checked, so no claim about them holds.
         listed.complete = False
@@ -454,14 +432,7 @@ def _names_matching(
 _NAMED_FILES_SHOWN = 5
 
 
-def _note_named_files(
-    context: ToolContext,
-    query: SearchQuery,
-    scopes: list[Scope],
-    cwd: Path,
-    binary: Path,
-    budget: SearchBudget,
-) -> None:
+def _note_named_files(execution: SearchExecution, query: SearchQuery, scopes: list[Scope]) -> None:
     """Name the files a file-list search's pattern matches by name, as the Agent may mean them.
 
     Without such files, a pattern naming an extension the searched files have
@@ -473,8 +444,8 @@ def _note_named_files(
     extensions = file_name_extensions(patterns[0])
     if extensions is None:
         return
-    named, listed = _names_matching(context, query, scopes, patterns, cwd, binary, budget)
-    if budget.stopped or not listed.complete:
+    named, listed = _names_matching(execution, query, scopes, patterns)
+    if execution.budget.stopped or not listed.complete:
         return
     if named:
         shown = ", ".join(entry.label for entry in named[:_NAMED_FILES_SHOWN])
@@ -493,37 +464,28 @@ def _note_named_files(
 
 
 def _recount(
-    context: ToolContext,
-    query: SearchQuery,
-    scopes: list[Scope],
-    patterns: list[str],
-    cwd: Path,
-    binary: Path,
-    budget: SearchBudget,
+    execution: SearchExecution, query: SearchQuery, scopes: list[Scope], patterns: list[str]
 ) -> _Found | None:
     """Count a variant of the query for a note; ``None`` when that count did not finish."""
     found = _Found()
     try:
         for index, scope in enumerate(scopes):
-            result = count_scan(binary, query, patterns, scope, context, budget, cwd)
-            found.take(index, scope, result, cwd)
+            result = execution.count_scan(query, patterns, scope)
+            found.take(index, scope, result, execution.cwd)
     except SearchRefusedError, SearchBoundError:
         return None
-    if not found.complete or budget.stopped:
+    if not found.complete or execution.budget.stopped:
         return None
     found.finish(query)
     return found
 
 
 def _note_no_match(
-    context: ToolContext,
+    execution: SearchExecution,
     query: SearchQuery,
     scopes: list[Scope],
     patterns: list[str],
     listed: _Found,
-    cwd: Path,
-    binary: Path,
-    budget: SearchBudget,
     repair_note: str | None = None,
 ) -> None:
     """Point a pattern that matched neither contents nor names to what it may mean.
@@ -540,7 +502,7 @@ def _note_no_match(
         and query.mode in {"content", "files_with_matches"}
         and not (query.before or query.after or query.only_matching)
         and listed.complete
-        and not budget.stopped
+        and not execution.budget.stopped
     ):
         filtered = bool(query.globs) or any(arg.startswith("--iglob=") for arg in query.rg_args)
         note = repaired_glob_note(query.patterns[0], patterns[0], filtered=filtered)
@@ -550,21 +512,21 @@ def _note_no_match(
     # A repaired pattern's note already says how it was read.
     if patterns is query.patterns and not query.literal and can_miss_literal_text(patterns[0]):
         literal = replace(query, rg_args=[*query.rg_args, "--fixed-strings"], literal=True)
-        found = _recount(context, literal, scopes, patterns, cwd, binary, budget)
+        found = _recount(execution, literal, scopes, patterns)
         files = sum(1 for entry in found.entries if entry.count) if found else 0
         if files:
             query.notes.append(literal_text_note(patterns[0], files))
             return
     if patterns is query.patterns and not query.multiline and can_span_lines(patterns[0]):
         spanning = replace(query, rg_args=[*query.rg_args, "--multiline"])
-        found = _recount(context, spanning, scopes, patterns, cwd, binary, budget)
+        found = _recount(execution, spanning, scopes, patterns)
         files = sum(1 for entry in found.entries if entry.count) if found else 0
         if files:
             query.notes.append(spanning_note(files))
             return
     if query.mode not in {"content", "files_with_matches"} or not listed.complete:
         return
-    if budget.stopped:
+    if execution.budget.stopped:
         return
     note = unnamed_files_note(
         patterns[0],
@@ -576,14 +538,11 @@ def _note_no_match(
 
 
 def _note_match_count(
-    context: ToolContext,
+    execution: SearchExecution,
     query: SearchQuery,
     scopes: list[Scope],
     patterns: list[str],
     lines: int,
-    cwd: Path,
-    binary: Path,
-    budget: SearchBudget,
 ) -> None:
     """Say how many matches the counted lines hold when some line holds several.
 
@@ -595,33 +554,26 @@ def _note_match_count(
     if not query.literal and not all(finds_fixed_text(pattern) for pattern in patterns):
         return
     matching = replace(query, count_matches=True)
-    found = _recount(context, matching, scopes, patterns, cwd, binary, budget)
+    found = _recount(execution, matching, scopes, patterns)
     matches = sum(entry.count for entry in found.entries) if found else 0
     if matches > lines:
         query.notes.append(match_count_note(matches))
 
 
-def _search(
-    context: ToolContext,
-    query: SearchQuery,
-    roots: list[Path],
-    cwd: Path,
-    binary: Path,
-    budget: SearchBudget,
-) -> _Outcome:
-    widen_type_case(binary, query, context, budget)
+def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -> _Outcome:
+    execution.widen_type_case(query)
     found = _Found()
     if query.mode == "list_dirs":
-        _list_directories(context, query, roots, cwd, binary, budget, found)
-    scopes = _scopes(roots, cwd)
+        _list_directories(execution, query, roots, found)
+    scopes = _scopes(roots, execution.cwd)
     if query.mode == "list_files":
         for index, scope in enumerate(scopes):
-            found.take(index, scope, list_scan(binary, query, scope, context, budget, cwd), cwd)
+            found.take(index, scope, execution.list_scan(query, scope), execution.cwd)
         if query.name_patterns:
             # Like a content search's name fallback, a pattern matches a name or a shown path.
             names = [entry.label for entry in found.entries]
             names += [entry.path.name for entry in found.entries]
-            matched = _matching_names(context, query, names, binary, budget)
+            matched = _matching_names(execution, query, names)
             found.entries = [
                 entry
                 for entry in found.entries
@@ -636,9 +588,7 @@ def _search(
     patterns = query.patterns
     repair_note = None
     try:
-        results = [
-            count_scan(binary, query, patterns, scope, context, budget, cwd) for scope in scopes
-        ]
+        results = [execution.count_scan(query, patterns, scope) for scope in scopes]
     except SearchRefusedError as error:
         retry = None if query.literal else pattern_retry(str(error), patterns, query)
         if retry is None:
@@ -647,25 +597,23 @@ def _search(
         if pcre2:
             query.rg_args.append("--pcre2")
         try:
-            results = [
-                count_scan(binary, query, patterns, scope, context, budget, cwd) for scope in scopes
-            ]
+            results = [execution.count_scan(query, patterns, scope) for scope in scopes]
         except SearchRefusedError:
             raise error from None
         query.notes.append(note)
         repair_note = note
     for index, (scope, result) in enumerate(zip(scopes, results, strict=True)):
-        found.take(index, scope, result, cwd)
+        found.take(index, scope, result, execution.cwd)
     found.finish(query)
     lines_total = sum(entry.count for entry in found.entries)
     if (
         not lines_total
         and query.mode in {"content", "files_with_matches", "count"}
         and found.complete
-        and not budget.stopped
+        and not execution.budget.stopped
     ):
         # No content matches, so a pattern that matches file names was meant for them.
-        named, listed = _names_matching(context, query, scopes, patterns, cwd, binary, budget)
+        named, listed = _names_matching(execution, query, scopes, patterns)
         found.ignored = listed.ignored
         if named:
             query.mode = "list_files"
@@ -675,20 +623,18 @@ def _search(
             found.entries = named
             _restart_past_the_end(query, len(named))
             return _Outcome(entry_page(named, query), found, len(named), len(named))
-        _note_no_match(context, query, scopes, patterns, listed, cwd, binary, budget, repair_note)
+        _note_no_match(execution, query, scopes, patterns, listed, repair_note)
     elif not found.entries:
         # Only a result without entries names the paths ignore files excluded.
         for scope in scopes:
-            found.ignored.extend(ignored_scan(binary, query, scope, context, budget))
+            found.ignored.extend(execution.ignored_scan(query, scope))
     if query.mode != "content":
         _restart_past_the_end(query, len(found.entries))
-        if lines_total and not query.offset and found.complete and not budget.stopped:
+        if lines_total and not query.offset and found.complete and not execution.budget.stopped:
             if query.mode == "files_with_matches":
-                _note_named_files(context, query, scopes, cwd, binary, budget)
+                _note_named_files(execution, query, scopes)
             elif query.mode == "count":
-                _note_match_count(
-                    context, query, scopes, patterns, lines_total, cwd, binary, budget
-                )
+                _note_match_count(execution, query, scopes, patterns, lines_total)
         page = entry_page(found.entries, query)
         return _Outcome(page, found, len(found.entries), lines_total)
     _restart_past_the_end(query, lines_total)
@@ -698,16 +644,12 @@ def _search(
         selected = [(entry, skip) for entry, skip in window if entry.scope == index]
         if not selected:
             continue
-        scope_events, warnings = line_events(
-            binary,
+        scope_events, warnings = execution.line_events(
             query,
             patterns,
             scope,
             [entry.native for entry, _ in selected],
             max(skip for _, skip in selected) + query.limit,
-            context,
-            budget,
-            cwd,
         )
         found.warnings.extend(warnings)
         events.update(((index, path), value) for path, value in scope_events.items())
@@ -723,8 +665,9 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             return tool_success({"content": help_text()})
         budget = SearchBudget(context)
         cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
+        execution = SearchExecution(binary, context, budget, cwd)
         if query.mode == "reference":
-            text = reference_text(binary, query.reference_args, context, budget)
+            text = execution.reference_text(query.reference_args)
             return tool_success({"content": text})
         try:
             roots = _resolve_roots(query, cwd)
@@ -739,7 +682,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         if not roots.paths:
             return tool_failure("path_not_found", _nothing_searched(missing, roots, query))
         _directory_globs(query, roots.paths, cwd)
-        outcome = _search(context, query, roots.paths, cwd, binary, budget)
+        outcome = _search(execution, query, roots.paths)
     except (SearchArgumentError, ToolContractError, ValueError) as error:
         return tool_failure("invalid_arguments", str(error))
     except SearchRefusedError as error:

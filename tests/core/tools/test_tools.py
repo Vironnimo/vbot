@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 import asyncio
 import logging
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -558,3 +560,33 @@ def test_every_builtin_registration_has_an_explicit_display_profile() -> None:
                 missing.append(f"{source_path.name}:{node.lineno}")
 
     assert missing == []
+
+
+def test_public_facade_loads_exports_and_implicit_modules_on_demand() -> None:
+    # Import isolation needs a fresh interpreter: this test module already uses Tools.
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import importlib
+import sys
+import core.tools as tools
+
+assert not any(name.startswith("core.tools.") for name in sys.modules)
+policy = tools.ToolAccess
+assert policy is importlib.import_module("core.tools.availability").ToolAccess
+assert "core.tools.image" not in sys.modules
+assert "core.tools.shell" not in sys.modules
+for name in tools.__all__:
+    assert getattr(tools, name) is getattr(tools, name), name
+assert tools.Tool is importlib.import_module("core.tools.tools").Tool
+assert tools.copy_match is importlib.import_module("core.tools.copy_match")
+assert tools._file_changes is importlib.import_module("core.tools._file_changes")
+""",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
