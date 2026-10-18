@@ -83,7 +83,7 @@ Tooltip content earns its place by telling the reader something the anchor does 
 2. **Complete values, not previews.** The tooltip receives the full value; layout does the shortening. Text shortened by characters and text clipped by layout both count as truncated.
 3. **Names lead.** Ids follow as a secondary Mono row, never in place of a name.
 4. **Moments are absolute and relative** (`lib/timeText.js` `formatMoment`: `Sep 29, 2026, 3:04 PM · 12 minutes ago`); states add their duration.
-5. **Numbers carry their basis.** A share names numerator and denominator ("4 of 125 Runs"), a total its breakdown, a rounded value its exact figure.
+5. **Numbers carry their basis.** A share names numerator and denominator ("4 of 125 Runs"), a total its breakdown, a rounded value its exact figure. Labels keep an absent value apart from zero and mark a derived heuristic as such.
 6. **Color-only signals are explained in words.** Every status dot, chip, or bar states what it means, since when, and why when a reason exists.
 7. **Mono only for code-like values** (paths, commands, opaque ids, URLs); names, Model ids included, and prose stay Sans. Long or multi-line values a user copies go into a hover card with Copy.
 8. **Definitions once, facts at the value.** What a metric means is an InfoHint on its label or column header; facts about one value go into that value's tooltip.
@@ -120,7 +120,7 @@ Opening a Skill drills in: its page replaces the collection page in the same con
 
 Skill rows have context menus (right click, ContextMenu key or Shift+F10) through the shared `ContextMenu.svelte`: every row with a package ends in the same package items: Open (Open skill in a collection), Edit instructions, Copy name | Turn this skill off or Turn this skill on | Delete... (danger). Edit and Delete appear for every package wherever it is listed (user requirement 2026-10-05: a Skill is managed where it is seen); for a read-only package both stay disabled with a short hint saying why ("Ships with vBot", "Comes with the <name> extension", "From skill folder <name>", "Lives in the project repository", "Cannot be loaded"). An Agent collection row starts with Turn on/off for <Agent> (disabled with the hint "Managed in project <name>" for a Project grant), a Project collection row and a row of the Projects editor's Skill ceilings with Activate/Deactivate in <Project>; an Archived row (whose name-part click opens the same menu, since an archived package has no page) offers Restore, Copy name | Delete permanently... (danger). Copy name confirms with a toast. Every Agent and Project Skill row, in the Skills manager and in the Agents and Projects editors, also ends in a 28px tertiary three-dot icon button (accessible name "Actions for <name>", tooltip "More actions", which replaces the row's description card while the button is hovered or focused, `aria-haspopup="menu"`) that opens the same menu below itself; it stays invisible until the row is hovered or a control in it has focus, and is always shown on touch screens (`.s-check-item__menu` in `styles/settings/sections.css`).
 
-Behavior, ownership, and source-package policy are in `settings.md` -> Skill manager and `../skills.md`. Rendered coverage: `components/skills/__tests__/skillsView.test.js`.
+Behavior, ownership, and source-package policy are in `webui/settings.md` -> Skill manager and `skills.md`. Rendered coverage: `components/skills/__tests__/skillsView.test.js`.
 
 ### Settings, Agents, Projects, and Schedules
 

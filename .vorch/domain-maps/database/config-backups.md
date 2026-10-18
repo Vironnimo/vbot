@@ -1,6 +1,6 @@
 # Configuration backups
 
-The format, API, capture, retention and restore of configuration backups (`core/database/config_backups.py`); what they cover is the Term in `../database.md` -> Configuration backup.
+The format, API, capture, retention and restore of configuration backups (`core/database/config_backups.py`); the Term is `../database.md` -> Configuration backup, and Coverage below is what they cover.
 
 ## Coverage
 
