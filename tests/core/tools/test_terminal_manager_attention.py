@@ -12,9 +12,11 @@ from typing import Any
 
 import pytest
 
+import core.tools._terminal_output as terminal_output
 import core.tools._terminal_session as terminal_session
 import core.tools._terminal_state as terminal_state
 from core.runs import RunAdmissionBlockedError
+from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.tools._terminal_activity import PROCESS_SAMPLE_SECONDS
 from core.tools._terminal_render_host import TerminalScreen
@@ -84,7 +86,7 @@ async def test_operator_activity_wakes_the_attached_agent_session(
     assert settled.attention is not None
     assert settled.attention.kind == "idle"
     await eventually(lambda: len(trigger.submissions) == 1)
-    assert trigger.submissions[0][0] == ("agent-a", "session-a")
+    assert trigger.submissions[0][0] == (owner().address,)
 
 
 @pytest.mark.asyncio
@@ -117,9 +119,8 @@ async def test_attention_auto_delivers_and_manual_ack_cancels_exactly_once(
     await eventually(lambda: len(trigger.submissions) == 1)
 
     args, kwargs = trigger.submissions[0]
-    assert args == ("agent-a", "session-a")
+    assert args == (owner().address,)
     assert kwargs["origin_run_id"] == "run-b"
-    assert kwargs["project_id"] == "project-a"
     terminal_id = started.terminal_id
     body = kwargs["body"]
     assert body.startswith(f"Terminal {terminal_id} (Anna, fake-tui) went idle")
@@ -210,9 +211,8 @@ async def test_session_move_reroutes_pending_attention_to_new_owner(
     assert await manager.transfer_scope(owner(), target) == 1
     await eventually(lambda: len(trigger.submissions) == 2)
 
-    assert trigger.submissions[0][0] == ("agent-a", "session-a")
-    assert trigger.submissions[1][0] == ("agent-b", "session-a")
-    assert trigger.submissions[1][1]["project_id"] == "project-b"
+    assert trigger.submissions[0][0] == (owner().address,)
+    assert trigger.submissions[1][0] == (SessionAddress("project-b", "agent-b", "session-a"),)
     assert len(trigger.cancellations) == 1
     assert manager.terminal(started.terminal_id, target).attachment == target
 
@@ -448,7 +448,7 @@ async def test_operator_terminal_attach_delivers_activity_and_detach_preserves_l
     await manager.send_operator_input(terminal_id, "echo ready\r")
     factory.adapters[0].emit("ready\r\n")
     await eventually(lambda: len(trigger.submissions) == 1)
-    assert trigger.submissions[0][0] == ("agent-a", "session-a")
+    assert trigger.submissions[0][0] == (owner().address,)
     assert trigger.submissions[0][1]["origin_run_id"] == "attach-run-2"
 
     detached = manager.detach(terminal_id, owner())
@@ -1011,10 +1011,10 @@ async def test_a_stuck_final_redraw_does_not_delay_exit_delivery(
             return False
 
         monkeypatch.setattr(TerminalScreen, "feed", broken_feed)
-        monkeypatch.setattr(terminal_session.TerminalSession, "_redraw_once", blocked_replay)
+        monkeypatch.setattr(terminal_output.TerminalOutput, "_redraw_once", blocked_replay)
         # Exercise the timeout branch without adding one second to the suite.
-        assert terminal_session._FINAL_REDRAW_SECONDS <= 1
-        monkeypatch.setattr(terminal_session, "_FINAL_REDRAW_SECONDS", 0.01)
+        assert terminal_output._FINAL_REDRAW_SECONDS <= 1
+        monkeypatch.setattr(terminal_output, "_FINAL_REDRAW_SECONDS", 0.01)
         factory.adapters[0].emit("kept in the log")
         await replay_started.wait()
         factory.adapters[0].finish(0)

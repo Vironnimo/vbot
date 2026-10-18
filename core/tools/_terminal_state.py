@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
+from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
+
+from core.utils.log_conditions import LoggedConditions
+
+if TYPE_CHECKING:
+    from ._command_types import CompletionSink
+    from ._terminal_render_host import TerminalScreen
+
+
+import asyncio
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -10,10 +22,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from core.event_stream import ReplayEventStream
+from core.sessions import SessionAddress
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.terminal_manager")
+_CONDITIONS = LoggedConditions()
 
 TERMINAL_DEFAULT_COLUMNS = 80
 TERMINAL_DEFAULT_ROWS = 24
@@ -198,6 +212,10 @@ class TerminalOwner:
     agent_id: str
     session_id: str
 
+    @property
+    def address(self) -> SessionAddress:
+        return SessionAddress(self.project_id, self.agent_id, self.session_id)
+
 
 @dataclass(frozen=True, slots=True)
 class TerminalSessionView:
@@ -305,3 +323,58 @@ def _validate_dimensions(columns: int, rows: int) -> None:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalSessionServices:
+    """What every Terminal Session of one manager shares."""
+
+    trigger_service: CompletionSink | None
+    reader_executor: ThreadPoolExecutor
+    activity_quiet_seconds: float
+    idle_seconds: float
+    monotonic: Callable[[], float]
+    sleep: Callable[[float], Awaitable[None]]
+    program_probe: Callable[[int, str], bool]
+    # The operator summary of a Terminal (owned by the catalog, which knows groups).
+    operator_summary: Callable[[TerminalInfo], dict[str, Any]]
+    # Operator-visible Terminal state changed.
+    changed: Callable[[str], None]
+    # A new screen of this size, for one drawn anew from the log.
+    open_screen: Callable[[int, int], Awaitable[TerminalScreen]]
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalObservation:
+    """The screen a screen-bearing result showed, remembered once it is durable."""
+
+    screen_revision: int
+    resize_count: int
+    columns: int
+    rows: int
+    # Visible-cell signature: the Agent saw this screen, so its idle boundary wakes nobody.
+    signature: str
+    # The history line number just below the last screen line shown: the
+    # Agent has seen every line above it that scrolls into history.
+    seen_line: int
+    # Clears of the screen before it was shown; a later clear erased what it
+    # showed from the clear's first line on.
+    clears: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalLaunch:
+    """How the Session's process was started, as callers see it."""
+
+    command: str
+    arguments: tuple[str, ...]
+    cwd: Path
+    # A manual start that runs a program inside the interactive shell.
+    launch_command: str | None = None
+    launch_arguments: tuple[str, ...] = ()
+
+
+def _log_task_failure(task: asyncio.Task[Any], message: str) -> None:
+    if task.cancelled() or (error := task.exception()) is None:
+        return
+    _LOGGER.error("%s: %s", message, error, exc_info=(type(error), error, error.__traceback__))

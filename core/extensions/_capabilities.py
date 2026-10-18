@@ -5,6 +5,12 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
+from core.extensions._declarations import RegisteredHandler
+from core.extensions.interactions import (
+    RESERVED_INTERACTION_PREFIXES,
+    InteractionHandlerDeclaration,
+)
+
 if TYPE_CHECKING:
     from core.chat.commands import CommandDispatcher
     from core.recall.recall import RecallBackendRegistry
@@ -376,3 +382,61 @@ class ExtensionCapabilityInstaller:
                 self._extension_tool_family_id(extension_name, declaration.id.strip()),
                 extension=extension_name,
             )
+
+
+def install_interaction_handlers(records: list[ExtensionRecord]) -> dict[str, RegisteredHandler]:
+    """Build the prefix → (extension, handler) map from every loaded record.
+
+    Called by the registry after hook declarations are applied. Load order
+    is deterministic, so a collision must not silently decide behavior: a
+    prefix already claimed by an earlier-loaded extension is **skipped** and
+    diagnosed on the loser's record, and the first claimant is diagnosed
+    naming the skipped extension(s) — the same first-wins policy as
+    Tool capability installation. A runtime-reserved prefix
+    (:data:`RESERVED_INTERACTION_PREFIXES`, e.g. ``run``) is skipped before
+    that so no extension can claim it.
+    """
+    handlers: dict[str, RegisteredHandler] = {}
+    loaded = [record for record in records if record.status == "loaded"]
+    declarers: dict[str, list[str]] = defaultdict(list)
+    for record in loaded:
+        for declaration in record.declarations.interaction_handlers:
+            declarers[declaration.prefix].append(record.name)
+
+    for record in loaded:
+        for declaration in record.declarations.interaction_handlers:
+            _install_interaction_handler(handlers, record, declaration, declarers)
+
+    return handlers
+
+
+def _install_interaction_handler(
+    handlers: dict[str, RegisteredHandler],
+    record: ExtensionRecord,
+    declaration: InteractionHandlerDeclaration,
+    declarers: dict[str, list[str]],
+) -> None:
+    prefix = declaration.prefix
+    if prefix in RESERVED_INTERACTION_PREFIXES:
+        _diagnose_capability(
+            record,
+            f"interaction handler {prefix!r} skipped: prefix is reserved by the runtime",
+        )
+        return
+    other_declarers = [other for other in declarers[prefix] if other != record.name]
+    if prefix in handlers:
+        winner = repr(other_declarers[0]) if other_declarers else "another extension"
+        _diagnose_capability(
+            record,
+            f"interaction handler {prefix!r} skipped: prefix already declared "
+            f"by extension {winner}",
+        )
+        return
+    handlers[prefix] = (record.name, declaration.handler)
+    if other_declarers:
+        joined = ", ".join(repr(other) for other in other_declarers)
+        _diagnose_capability(
+            record,
+            f"interaction handler {prefix!r} registered; also declared by "
+            f"extension(s) {joined} (skipped there)",
+        )

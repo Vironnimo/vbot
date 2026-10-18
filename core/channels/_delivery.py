@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -18,6 +17,7 @@ from core.extensions import InteractionButton
 from core.sessions import SessionAddress
 from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
+from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.runs import Run
@@ -160,7 +160,7 @@ async def send(
     saved: list[RunButtonBinding] = []
     sending = False
     try:
-        adapter = service._active_adapter(normalized_id)
+        adapter = service._connections.active_adapter(normalized_id)
         outbound_buttons = normalized_buttons
         if run_origin is not None and normalized_buttons is not None:
             # One hop per database: the origin check on the Session database's
@@ -205,30 +205,21 @@ async def _discard_unsent_binding(
     service: ChannelService, channel_id: str, binding: RunButtonBinding
 ) -> None:
     """Remove a binding whose message was not sent, even under repeated cancellation."""
-    cleanup = asyncio.create_task(
-        service._state.run_async(service._state.discard_run_button_binding, channel_id, binding.id)
-    )
-    cancelled = False
-    try:
-        while not cleanup.done():
-            try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                cancelled = True
-        cleanup.result()
-    except Exception as cleanup_error:
-        _LOGGER.warning(
-            "Could not discard unsent Run-button binding (channel=%s): %s",
-            channel_id,
-            cleanup_error,
-            exc_info=(
-                type(cleanup_error),
+
+    async def discard() -> None:
+        try:
+            await service._state.run_async(
+                service._state.discard_run_button_binding, channel_id, binding.id
+            )
+        except Exception as cleanup_error:
+            _LOGGER.warning(
+                "Could not discard unsent Run-button binding (channel=%s): %s",
+                channel_id,
                 cleanup_error,
-                cleanup_error.__traceback__,
-            ),
-        )
-    if cancelled:
-        raise asyncio.CancelledError from None
+                exc_info=(type(cleanup_error), cleanup_error, cleanup_error.__traceback__),
+            )
+
+    await settle_before_cancelling(discard())
 
 
 async def relay_completion_run(
@@ -265,7 +256,7 @@ async def relay_completion_run(
     config = service._storage.get(channel_id)
     if config.agent_id != run.agent_id or config.platform != reply_surface.platform:
         raise ChannelConfigError(f"Session reply surface no longer matches Channel {channel_id}")
-    engine = service._active_engine(channel_id)
+    engine = service._connections.active_engine(channel_id)
     await engine.relay_run(
         run,
         ReplyPlanFacts(

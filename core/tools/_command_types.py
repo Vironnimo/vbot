@@ -208,24 +208,21 @@ class CompletionSink(Protocol):
 
     def submit_completion(
         self,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         *,
         notice_id: str,
         origin_run_id: str,
         body: str,
-        project_id: str | None = None,
+        on_persisted: Callable[[], None] | None = None,
         execution_owner: RunExecutionOwner | None = None,
         wake: bool = True,
     ) -> Awaitable[None]: ...
 
     def cancel_completion(
         self,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         *,
         notice_id: str,
-        project_id: str | None = None,
     ) -> bool: ...
 
 

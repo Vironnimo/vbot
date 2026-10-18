@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from core.tools._terminal_control import _EmulatorStream
 from core.tools.terminal_emulator import (
     HIGHLIGHT_END,
     HIGHLIGHT_START,
@@ -13,7 +14,6 @@ from core.tools.terminal_emulator import (
     SUGGESTION_START,
     TERMINAL_TITLE_MAX_CHARS,
     TerminalEmulator,
-    _EmulatorStream,
 )
 from core.tools.terminal_manager import TerminalRenderHost
 

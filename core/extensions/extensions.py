@@ -21,12 +21,17 @@ from core.extensions._api import (
     ExtensionAPI,
 )
 from core.extensions._callbacks import (
+    HANDLER_FAILED as _HANDLER_FAILED,
+)
+from core.extensions._callbacks import (
     ExtensionHandlerTimeoutError,
     _log_slow_extension_handler,
     invoke_extension_handler,
+    invoke_hook_fail_open,
+    invoke_lifecycle_fail_open,
     invoke_lifecycle_handler,
 )
-from core.extensions._capabilities import ExtensionCapabilityInstaller
+from core.extensions._capabilities import ExtensionCapabilityInstaller, install_interaction_handlers
 from core.extensions._declarations import (
     API_VERSION,
     CommandDeclaration,
@@ -68,11 +73,10 @@ from core.extensions._loading import (
     _register_extension,
     _run_coroutine_to_completion,
     purge_extension_modules,
+    resolve_pages,
 )
 from core.extensions.interactions import (
-    RESERVED_INTERACTION_PREFIXES,
     InteractionEvent,
-    InteractionHandlerDeclaration,
     InteractionResponder,
 )
 from core.extensions.operations import ExtensionHost, ExtensionOperations
@@ -88,7 +92,6 @@ _LOGGER = get_logger("extensions")
 
 # Sentinel distinguishing "handler raised and was skipped" from a handler that
 # legitimately returned ``None``.
-_HANDLER_FAILED = object()
 
 
 class ExtensionRegistry:
@@ -166,29 +169,6 @@ class ExtensionRegistry:
             )
         return pages
 
-    def _resolve_pages(self) -> None:
-        """Resolve every loaded page entry once for this registration.
-
-        An entry outside its Extension root is diagnosed here and never becomes
-        a page of this registration.
-        """
-        pages: dict[tuple[str, str], tuple[ExtensionRecord, PageDeclaration, Path]] = {}
-        for record in self._records:
-            if record.status != "loaded":
-                continue
-            root = record.root_path.resolve()
-            for declaration in record.declarations.pages:
-                entry = (record.root_path / declaration.entry).resolve()
-                try:
-                    entry.relative_to(root)
-                except ValueError:
-                    _diagnose_capability(
-                        record, f"page {declaration.page_id!r} skipped: entry escapes root"
-                    )
-                    continue
-                pages[(record.name, declaration.page_id)] = (record, declaration, entry)
-        self._pages = pages
-
     def retire_registration(self) -> None:
         """Invalidate owner capabilities before their declarations are removed.
 
@@ -233,8 +213,8 @@ class ExtensionRegistry:
         )
         _await_pending_registers(pending)
         registry._apply_declarations()
-        registry._apply_interaction_handlers()
-        registry._resolve_pages()
+        registry._interaction_handlers = install_interaction_handlers(registry._records)
+        registry._pages = resolve_pages(registry._records)
         return registry
 
     @classmethod
@@ -268,8 +248,8 @@ class ExtensionRegistry:
         )
         await _await_pending_registers_async(pending)
         registry._apply_declarations()
-        registry._apply_interaction_handlers()
-        registry._resolve_pages()
+        registry._interaction_handlers = install_interaction_handlers(registry._records)
+        registry._pages = resolve_pages(registry._records)
         return registry
 
     @classmethod
@@ -349,59 +329,6 @@ class ExtensionRegistry:
             for event, handlers in record.declarations.hooks.items():
                 for handler in handlers:
                     self.install_handler(record.name, event, handler)
-
-    def _apply_interaction_handlers(self) -> None:
-        """Build the prefix → (extension, handler) map from every loaded record.
-
-        Called by :meth:`load` right after :meth:`_apply_declarations`. Load order
-        is deterministic, so a collision must not silently decide behavior: a
-        prefix already claimed by an earlier-loaded extension is **skipped** and
-        diagnosed on the loser's record, and the first claimant is diagnosed
-        naming the skipped extension(s) — the same first-wins policy as
-        :meth:`_apply_one_tool`. A runtime-reserved prefix
-        (:data:`RESERVED_INTERACTION_PREFIXES`, e.g. ``run``) is skipped before
-        that so no extension can claim it.
-        """
-        loaded = [record for record in self._records if record.status == "loaded"]
-        declarers: dict[str, list[str]] = defaultdict(list)
-        for record in loaded:
-            for declaration in record.declarations.interaction_handlers:
-                declarers[declaration.prefix].append(record.name)
-
-        for record in loaded:
-            for declaration in record.declarations.interaction_handlers:
-                self._apply_one_interaction_handler(record, declaration, declarers)
-
-    def _apply_one_interaction_handler(
-        self,
-        record: ExtensionRecord,
-        declaration: InteractionHandlerDeclaration,
-        declarers: dict[str, list[str]],
-    ) -> None:
-        prefix = declaration.prefix
-        if prefix in RESERVED_INTERACTION_PREFIXES:
-            _diagnose_capability(
-                record,
-                f"interaction handler {prefix!r} skipped: prefix is reserved by the runtime",
-            )
-            return
-        other_declarers = [other for other in declarers[prefix] if other != record.name]
-        if prefix in self._interaction_handlers:
-            winner = repr(other_declarers[0]) if other_declarers else "another extension"
-            _diagnose_capability(
-                record,
-                f"interaction handler {prefix!r} skipped: prefix already declared "
-                f"by extension {winner}",
-            )
-            return
-        self._interaction_handlers[prefix] = (record.name, declaration.handler)
-        if other_declarers:
-            joined = ", ".join(repr(other) for other in other_declarers)
-            _diagnose_capability(
-                record,
-                f"interaction handler {prefix!r} registered; also declared by "
-                f"extension(s) {joined} (skipped there)",
-            )
 
     def bind_host(self, host: ExtensionHost) -> None:
         self._host = host
@@ -666,7 +593,7 @@ class ExtensionRegistry:
         if command_dispatcher is not None:
             command_dispatcher.unregister_extension_commands(name)
         for handler in declarations.shutdown:
-            await self._invoke_lifecycle("shutdown", name, handler)
+            await invoke_lifecycle_fail_open("shutdown", name, handler)
         await self._release_owner(name)
 
         record.status = "disabled"
@@ -812,9 +739,11 @@ class ExtensionRegistry:
                 identity = self.registration_identity(record.name)
                 owner_host = self.host_for(identity)
                 for start in operations.startup:
-                    await self._invoke_lifecycle("startup", record.name, partial(start, owner_host))
+                    await invoke_lifecycle_fail_open(
+                        "startup", record.name, partial(start, owner_host)
+                    )
             for handler in record.declarations.startup:
-                await self._invoke_lifecycle("startup", record.name, handler)
+                await invoke_lifecycle_fail_open("startup", record.name, handler)
 
     async def fire_shutdown(self) -> None:
         """Fire every loaded extension's shutdown handlers in load order, fail-open."""
@@ -826,82 +755,18 @@ class ExtensionRegistry:
                 record.declarations.operations.retire()
             self._retire_owner_host(record.name)
             for handler in record.declarations.shutdown:
-                await self._invoke_lifecycle("shutdown", record.name, handler)
+                await invoke_lifecycle_fail_open("shutdown", record.name, handler)
             await self._release_owner(record.name)
 
     def fire_shutdown_blocking(self) -> None:
         """Run :meth:`fire_shutdown` to completion from synchronous shutdown paths."""
         _run_coroutine_to_completion(self.fire_shutdown())
 
-    async def _invoke_lifecycle(
-        self, phase: str, extension_name: str, handler: LifecycleHandler
-    ) -> None:
-        """Call one lifecycle handler with fail-open isolation (logs at ``error``).
-
-        A handler that exceeds the lifecycle deadline is asked to cancel and
-        detached, so it cannot hold startup, shutdown, reload or disable.
-        """
-        try:
-            await invoke_lifecycle_handler(
-                handler,
-                extension_name=extension_name,
-                description=f"{phase} handler",
-                cancel_on_timeout=True,
-            )
-        except ExtensionHandlerTimeoutError as exc:
-            _LOGGER.error(
-                "Extension %r %s handler %s; continuing without it",
-                extension_name,
-                phase,
-                exc,
-            )
-        except Exception as exc:
-            _LOGGER.error(
-                "Extension %r %s handler raised: %s",
-                extension_name,
-                phase,
-                exc,
-                exc_info=True,
-            )
-
-    async def _invoke(
-        self,
-        event: str,
-        extension_name: str,
-        handler: HookHandler,
-        ctx: HookContext,
-        payload: dict[str, Any],
-    ) -> Any:
-        """Call one handler with per-handler exception isolation.
-
-        Awaits async handlers. On failure logs at ``warning`` and returns the
-        ``_HANDLER_FAILED`` sentinel so callers can skip the handler without
-        confusing a raised handler with one that returned ``None``.
-        """
-        started_at = time.perf_counter()
-        try:
-            return await invoke_extension_handler(handler, ctx, **payload)
-        except Exception as exc:
-            _LOGGER.warning(
-                "Extension %r %s handler raised: %s",
-                extension_name,
-                event,
-                exc,
-                exc_info=True,
-            )
-            return _HANDLER_FAILED
-        finally:
-            _log_slow_extension_handler(
-                extension_name=extension_name,
-                handler_kind=event,
-                started_at=started_at,
-            )
-
     async def dispatch_run_start(self, ctx: HookContext, *, session_id: str, agent_id: str) -> None:
         """Observer event: run all ``run_start`` handlers; ignore return values."""
         payload = {"session_id": session_id, "agent_id": agent_id}
         for extension_name, handler in self._handlers.get("run_start", []):
-            await self._invoke("run_start", extension_name, handler, ctx, payload)
+            await invoke_hook_fail_open("run_start", extension_name, handler, ctx, payload)
 
     async def dispatch_run_end(
         self, ctx: HookContext, *, session_id: str, agent_id: str, outcome: str
@@ -909,7 +774,7 @@ class ExtensionRegistry:
         """Observer event: run all ``run_end`` handlers; ignore return values."""
         payload = {"session_id": session_id, "agent_id": agent_id, "outcome": outcome}
         for extension_name, handler in self._handlers.get("run_end", []):
-            await self._invoke("run_end", extension_name, handler, ctx, payload)
+            await invoke_hook_fail_open("run_end", extension_name, handler, ctx, payload)
 
     async def dispatch_context(self, ctx: HookContext, *, messages: list) -> list:
         """Pipeline event: each handler may replace the running message list.
@@ -929,7 +794,7 @@ class ExtensionRegistry:
         current = [dict(message) for message in messages]
         for extension_name, handler in handlers:
             payload = {"messages": current}
-            result = await self._invoke("context", extension_name, handler, ctx, payload)
+            result = await invoke_hook_fail_open("context", extension_name, handler, ctx, payload)
             if result is _HANDLER_FAILED:
                 continue
             if isinstance(result, list):
@@ -962,7 +827,9 @@ class ExtensionRegistry:
                 "tool_call_id": tool_call_id,
                 "input": current_input,
             }
-            decision = await self._invoke("tool_call", extension_name, handler, ctx, payload)
+            decision = await invoke_hook_fail_open(
+                "tool_call", extension_name, handler, ctx, payload
+            )
             if decision is _HANDLER_FAILED or decision is None:
                 continue
             if isinstance(decision, Modify):
@@ -1018,7 +885,9 @@ class ExtensionRegistry:
                 "input": input,
                 "result": current,
             }
-            hook_result = await self._invoke("tool_result", extension_name, handler, ctx, payload)
+            hook_result = await invoke_hook_fail_open(
+                "tool_result", extension_name, handler, ctx, payload
+            )
             if hook_result is _HANDLER_FAILED or hook_result is None:
                 continue
             if isinstance(hook_result, dict):

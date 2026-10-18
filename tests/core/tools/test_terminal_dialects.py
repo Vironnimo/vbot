@@ -14,7 +14,7 @@ from typing import Any, cast
 import pytest
 
 from core.providers._tool_result_text import render_tool_result_envelope
-from core.tools import terminal as terminal_module
+from core.tools import _terminal_results as terminal_results
 from core.tools._terminal_arguments import normalize_terminal_arguments, terminal_key_name
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import JsonObject, ToolContext, tool_failure
@@ -670,7 +670,7 @@ async def test_fields_that_only_shape_a_result_are_dropped_where_unused(
 async def test_wait_caps_a_long_timeout_and_says_so(
     terminal: Terminal, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(terminal_module, "TERMINAL_WAIT_MAX_SECONDS", 0.2)
+    monkeypatch.setattr(terminal_results, "TERMINAL_WAIT_MAX_SECONDS", 0.2)
     terminal_id = await terminal.start()
 
     waited = await terminal({"action": "wait", "terminal_id": terminal_id, "timeout": 90})

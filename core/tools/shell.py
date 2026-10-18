@@ -1,63 +1,40 @@
-"""The shell Tool: one command per call, in a new process without input or terminal.
-
-Every call starts the host shell (PowerShell 7 on Windows, bash elsewhere) on
-the command through ``CommandManager`` and waits for it: until it ends, or until
-the call's wait passes (``timeout``, else ``SHELL_DEFAULT_WAIT_SECONDS``, at most
-``SHELL_MAX_WAIT_SECONDS``). No timer stops a command: one still running when
-the wait passes continues in the background and delivers its result as a new
-message when it ends, as does a command started with ``run_in_background`` or
-moved to the background by the user. The Agent lists, checks and stops its
-background commands with ``background_tasks``.
-
-The result is the command's clean output with the shell's exit code and the
-facts that exit code hides: programs that failed inside the command, processes
-it left running, why vBot stopped it when vBot did, and a hint for well-known
-failures (``_shell_results``).
-"""
+"""The shell Tool: one command per call, without input or a terminal."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import errno
 import shutil
 import sys
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
 from typing import Any
 
 from core.projects import ProjectStore
 from core.runs import TOOL_CALL_OUTPUT_EVENT
 from core.sessions import SessionAddress
-from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
-    PowerShellCulture,
     PowerShellRequest,
     powershell_bootstrap,
-    powershell_culture,
     powershell_request,
 )
 from core.tools._shell_arguments import (
-    NO_EFFECT_FIELDS,
     SHELL_UNADVERTISED_PARAMETERS,
-    inherited_env_keys_note,
-    no_effect_notes,
+    _parse_call,
+    _ShellCall,
     normalize_shell_arguments,
-    resolve_timeout,
     shell_display_parts,
-    split_env_object,
-    unknown_env_keys_message,
 )
 from core.tools._shell_results import (
-    BACKGROUND_TASKS_TOOL_NAME,
     COMMAND_STATUS_NOTE_MARKER,
     COMMAND_STATUS_TOOL_NAMES,
-    RUN_AGAIN,
     SHELL_TOOL_NAME,
     TERMINAL_TOOL_NAME,
     ToolNames,
+    _cannot_start,
+    _NotStartedError,
+    _start_failure,
     background_command_statuses,
     command_output_text,
     delivery_names,
@@ -73,29 +50,21 @@ from core.tools._shell_results import (
     stop_with,
 )
 from core.tools._tool_display import display_notice, display_text
-from core.tools._workdir import ProjectWorkdirError, is_project_workdir, project_workdir
-from core.tools.arguments import optional_number, optional_string
-from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.command_manager import (
-    CommandCapacityError,
     CommandCheckpointError,
-    CommandLaunchError,
     CommandManager,
     CommandManagerError,
     CommandNotFoundError,
-    CommandNotStartedError,
     CommandOwner,
     CommandReport,
     StopReason,
 )
-from core.tools.contracts import ToolContractError
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.scratch_areas import ScratchAreas, ScratchUnavailableError
 from core.tools.shell_environment import (
     CommandEnvironment,
     RunIdentity,
     command_environment,
-    inherited_value,
 )
 from core.tools.tools import (
     JsonObject,
@@ -108,407 +77,25 @@ from core.tools.tools import (
 )
 from core.tools.update_handoff import UpdateHandoffGrant, UpdateHandoffs
 from core.utils.logging import get_logger
-from core.utils.paths import model_path
+
+from ._shell_definition import (
+    SHELL_DEFAULT_WAIT_SECONDS,
+    SHELL_MAX_WAIT_SECONDS,
+    SHELL_TOOL_DESCRIPTION,
+    SHELL_TOOL_PARAMETERS,
+    _render_env_prompt_block,
+)
+from ._shell_definition import (
+    format_shell_env_usage as format_shell_env_usage,
+)
 
 _LOGGER = get_logger("tools.shell")
 
 CredentialResolver = Callable[[str], str]
-
-# How long a call waits for its command when it names no timeout, and at most.
-SHELL_DEFAULT_WAIT_SECONDS = 120.0
-SHELL_MAX_WAIT_SECONDS = 600.0
 # On Windows a command's processes have a hidden console whose input nothing
 # writes: a program that reads it directly instead of stdin (Python's getpass,
 # $Host.UI.RawUI.ReadKey()) waits silently until stopped instead of failing.
 _CONSOLE_READS_WAIT = sys.platform == "win32"
-
-
-# Definition
-
-
-if sys.platform == "win32":
-    _OPENING = (
-        "Run a PowerShell 7 command in a new process and return its output and exit code. "
-        "Write PowerShell, not bash or cmd: $env:NAME for environment variables, $null instead "
-        "of /dev/null, Select-String instead of grep for command output, and single quotes or a "
-        "here-string (@'...'@) instead of \\\" escapes and heredocs."
-    )
-    # How Agents start a program in the background without the Tool.
-    _DETACHED_START = "Start-Process or a trailing &"
-    # How Agents cut a command's output themselves.
-    _TRIMMING = "Select-Object -First or -Last, or with head and tail, which PowerShell lacks"
-else:
-    _OPENING = (
-        "Run a bash command in a new process and return its output and exit code. Use bash syntax."
-    )
-    _DETACHED_START = "nohup or a trailing &"
-    _TRIMMING = "head or tail"
-
-
-def _culture_sentence(culture: PowerShellCulture | None) -> str:
-    """Name the user's format for numbers and dates where it is not the one Models assume."""
-    if culture is None or culture.name in ("", "en-US"):
-        return ""
-    return (
-        f" PowerShell prints and parses numbers and dates in the user's {culture.name} format, "
-        f"such as {culture.number} and {culture.date}."
-    )
-
-
-# The same for every Tool set: what happens to a long command, and the calls
-# that follow it up, the results say when it happens. The culture is read once
-# per process, so the definition stays the same for the Provider's cache.
-SHELL_TOOL_DESCRIPTION = (
-    f"{_OPENING}{_culture_sentence(powershell_culture())} Long output keeps its first and last "
-    f"lines, and the result names a file with all of it, so there is no need to trim it with "
-    f"{_TRIMMING}. Calls in one message run at the same time; chain dependent commands in one "
-    "call. When another tool covers the task, use it instead of a shell command."
-)
-
-_COMMAND_PARAMETER: JsonObject = {"type": "string", "minLength": 1}
-_DESCRIPTION_PARAMETER: JsonObject = {
-    "type": "string",
-    "description": (
-        "Title of what the command does, in 3–5 words, shown to the user instead of the "
-        "command. Send one with every call."
-    ),
-}
-_WORKDIR_PARAMETER: JsonObject = {
-    "type": "string",
-    "description": (
-        "Directory to run in, absolute or relative to the working directory. Omit to use the "
-        "working directory."
-    ),
-}
-# No schema maximum: the handler caps the wait, and some Provider adapters
-# reject extra keywords.
-_TIMEOUT_PARAMETER: JsonObject = {
-    "type": "number",
-    "minimum": 0,
-    "default": int(SHELL_DEFAULT_WAIT_SECONDS),
-    "description": (
-        "Seconds to wait for the command before it continues in the background, at most "
-        f"{SHELL_MAX_WAIT_SECONDS:g}. Omit for {SHELL_DEFAULT_WAIT_SECONDS:g}."
-    ),
-}
-_RUN_IN_BACKGROUND_PARAMETER: JsonObject = {
-    "type": "boolean",
-    "description": (
-        "Use for servers, watchers and other commands whose result your next step does not "
-        f"need, instead of {_DETACHED_START}. Omit to wait for the command."
-    ),
-}
-_ENV_KEYS_PARAMETER: JsonObject = {
-    "type": "array",
-    "description": (
-        "Exact names of granted environment credentials to make available to the command. "
-        "Omit when no credential is needed."
-    ),
-    "items": {"type": "string", "minLength": 1},
-    "minItems": 1,
-    "uniqueItems": True,
-}
-
-SHELL_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "properties": {
-        "command": _COMMAND_PARAMETER,
-        "description": _DESCRIPTION_PARAMETER,
-        "workdir": _WORKDIR_PARAMETER,
-        "timeout": _TIMEOUT_PARAMETER,
-        "run_in_background": _RUN_IN_BACKGROUND_PARAMETER,
-        "env_keys": _ENV_KEYS_PARAMETER,
-    },
-    "required": ["command"],
-}
-
-
-# Granted credentials
-
-
-def format_shell_env_usage(env_keys: Sequence[str], *, intro: str) -> str:
-    """Render the shared model-facing contract for granted shell credentials."""
-    keys = list(dict.fromkeys(env_keys))
-    if not keys:
-        return ""
-    key_lines = "\n".join(f"- `{key}`" for key in keys)
-    return (
-        f"{intro}\n\n"
-        f"Available environment keys:\n{key_lines}\n\n"
-        f"To use one, include its exact name in the `env_keys` array of every "
-        f"`{SHELL_MODEL_NAME}` call "
-        "that needs it. vBot resolves the value server-side and injects it only into that "
-        "process environment; put the name, never the credential value, in the Tool call. "
-        "Refer to the variable with the current host shell's environment syntax and do not "
-        "print or otherwise expose its value."
-    )
-
-
-def _render_env_prompt_block(context: Any) -> str:
-    env_keys = bash_allowed_env_keys(getattr(context.agent, "tools", None))
-    if not env_keys:
-        return ""
-    guidance = format_shell_env_usage(
-        env_keys,
-        intro="This Agent has permanent permission to use these credentials in shell commands.",
-    )
-    return f"## Shell Environment Access\n\n{guidance}"
-
-
-# Calls
-
-
-@dataclass(frozen=True)
-class _ShellCall:
-    command: str
-    description: str | None
-    workdir: Path
-    # How long the call waits; *timeout_given* when the Agent chose it.
-    wait_seconds: float
-    timeout_given: bool
-    background: bool
-    variables: dict[str, str]
-    credential_names: tuple[str, ...]
-    notes: tuple[str, ...]
-
-
-def _not_run(problem: str) -> ToolContractError:
-    return ToolContractError(f"{SHELL_MODEL_NAME} was not run: {problem}")
-
-
-class _NotStartedError(Exception):
-    """The shell could not be started for a reason other than the call; nothing ran."""
-
-    def __init__(self, result: JsonObject) -> None:
-        super().__init__(result["error"]["message"])
-        self.result = result
-
-
-def _cannot_start(problem: str) -> _NotStartedError:
-    """The shell cannot be started on this host for this command; a retry fails the same way."""
-    return _NotStartedError(
-        tool_failure(
-            "command_not_started", f"{SHELL_MODEL_NAME} was not run: {problem}", retryable=False
-        )
-    )
-
-
-def _start_failure(
-    error: Exception, call: _ShellCall, context: ToolContext, names: ToolNames
-) -> JsonObject:
-    """The failure for a command the manager did not start."""
-    if isinstance(error, CommandCapacityError):
-        message = (
-            f"{SHELL_MODEL_NAME} was not run: vBot already runs {error.limit} commands, the "
-            "most it runs at once."
-        )
-        if names(BACKGROUND_TASKS_TOOL_NAME):
-            message += (
-                f' Find your background commands with {BACKGROUND_TASKS_TOOL_NAME} {{"action": '
-                '"list"}, stop the ones you no longer need with action "stop", then run the '
-                "command again."
-            )
-        else:
-            message += " Run the command again once one of your background commands has exited."
-        return tool_failure("command_limit", message, retryable=True)
-    if isinstance(error, CommandNotStartedError):
-        return tool_failure(
-            "command_not_started",
-            f"{SHELL_MODEL_NAME} was not run: this turn was cancelled, or vBot is shutting down.",
-            retryable=False,
-        )
-    if not call.workdir.is_dir():
-        # The directory was removed after the call was checked.
-        given = call.workdir != context.effective_cwd
-        return tool_failure(
-            "command_not_started",
-            f"{SHELL_MODEL_NAME} was not run: {_missing_workdir(call.workdir, given=given)}",
-            retryable=False,
-        )
-    _LOGGER.warning("Starting a shell command failed", exc_info=error)
-    problem, retryable = _launch_problem(error, call, names)
-    return tool_failure(
-        "command_not_started", f"{SHELL_MODEL_NAME} was not run: {problem}", retryable=retryable
-    )
-
-
-# Operating system errors a start can meet, by errno and by Windows error code.
-_NO_RESOURCES_ERRNOS = frozenset({errno.ENOMEM, errno.EAGAIN, errno.EMFILE, errno.ENFILE})
-_NO_RESOURCES_WINERRORS = frozenset({4, 8, 14, 1450, 1455})
-_DISK_FULL_ERRNOS = frozenset({errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)})
-_DISK_FULL_WINERRORS = frozenset({39, 112})
-
-
-def _launch_problem(error: Exception, call: _ShellCall, names: ToolNames) -> tuple[str, bool]:
-    """What kept the command from starting and what to do, and whether a retry can help.
-
-    The operating system's own message is in the host's language and names no
-    next step: the text names the state it reports instead.
-    """
-    os_error = _os_error(error)
-    # A launch error is the shell process's; any other is the output file's.
-    process = isinstance(error, CommandLaunchError)
-    if os_error is None:
-        return f"vBot could not start the shell. {RUN_AGAIN} vBot's log has the details.", True
-    winerror = getattr(os_error, "winerror", None)
-    if os_error.errno in _NO_RESOURCES_ERRNOS or winerror in _NO_RESOURCES_WINERRORS:
-        problem = "the system is out of memory or process resources, so the shell could not start."
-        if names(BACKGROUND_TASKS_TOOL_NAME):
-            return (
-                f"{problem} Stop the background commands you no longer need (find them with "
-                f'{BACKGROUND_TASKS_TOOL_NAME} {{"action": "list"}}), then run the command again; '
-                "if it fails the same way, tell the user.",
-                True,
-            )
-        return f"{problem} {RUN_AGAIN}", True
-    if os_error.errno in _DISK_FULL_ERRNOS or winerror in _DISK_FULL_WINERRORS:
-        return (
-            "the disk is full, so vBot could not write the command's output. Tell the user that "
-            "the disk is full.",
-            False,
-        )
-    if isinstance(os_error, PermissionError):
-        if process:
-            return (
-                f"access was denied when vBot started the shell in {model_path(call.workdir)}. "
-                "If the command can run in another directory, pass that directory as workdir; "
-                "otherwise tell the user.",
-                False,
-            )
-        return (
-            "access was denied to vBot's data directory, where the command's output is written. "
-            "Tell the user.",
-            False,
-        )
-    code = winerror if winerror is not None else os_error.errno
-    detail = f" (operating system error {code})" if code is not None else ""
-    if process:
-        problem = f"the operating system could not start the shell{detail}."
-    else:
-        problem = f"vBot could not create the file for the command's output{detail}."
-    return f"{problem} {RUN_AGAIN}", True
-
-
-def _os_error(error: BaseException) -> OSError | None:
-    """The operating system error *error* is or was caused by, if any."""
-    seen: set[int] = set()
-    current: BaseException | None = error
-    while current is not None and id(current) not in seen:
-        if isinstance(current, OSError):
-            return current
-        seen.add(id(current))
-        current = current.__cause__
-    return None
-
-
-def _parse_call(
-    context: ToolContext, arguments: JsonObject, projects: ProjectStore | None, names: ToolNames
-) -> _ShellCall:
-    notes: list[str] = []
-    command = arguments.get("command")
-    if not isinstance(command, str) or not command.strip():
-        raise _not_run("command is required; pass the command line to run as a string.")
-    description = optional_string(arguments.get("description"), field_name="description")
-    background = arguments.get("run_in_background") is True
-    timeout, note = resolve_timeout(
-        optional_number(arguments.get("timeout"), field_name="timeout"),
-        optional_number(arguments.get("timeout_ms"), field_name="timeout_ms"),
-    )
-    if note is not None:
-        notes.append(note)
-    if timeout is not None and timeout < 0:
-        raise _not_run("timeout must be 0 or more seconds.")
-    wait_seconds, timeout_given = SHELL_DEFAULT_WAIT_SECONDS, False
-    # A call in the background does not wait: its timeout has nothing to bound.
-    if timeout is not None and not background:
-        if timeout == 0:
-            notes.append(
-                f"timeout 0 was read as omitted, so the call waits up to "
-                f"{SHELL_DEFAULT_WAIT_SECONDS:g} seconds."
-            )
-        elif timeout > SHELL_MAX_WAIT_SECONDS:
-            notes.append(
-                f"timeout {timeout:g} is more than {SHELL_MAX_WAIT_SECONDS:g} seconds, the "
-                f"longest a call waits, so it was read as {SHELL_MAX_WAIT_SECONDS:g}."
-            )
-            wait_seconds, timeout_given = SHELL_MAX_WAIT_SECONDS, True
-        else:
-            wait_seconds, timeout_given = timeout, True
-    no_effect = arguments.get(NO_EFFECT_FIELDS)
-    if isinstance(no_effect, dict):
-        notes.extend(no_effect_notes(no_effect, terminal=names(TERMINAL_TOOL_NAME)))
-
-    workdir = _workdir(context, arguments, projects)
-
-    granted = frozenset(bash_allowed_env_keys(context.tool_settings)) | frozenset(
-        context.skill_env_keys
-    )
-    env = arguments.get("env")
-    if env is not None and not isinstance(env, dict):
-        raise _not_run("env must be an object of variable names and values.")
-    try:
-        variables, env_credentials = split_env_object(env, granted)
-    except ValueError as error:
-        raise ToolContractError(str(error)) from error
-    raw_keys = arguments.get("env_keys")
-    try:
-        requested = normalize_env_keys(raw_keys, field_name="env_keys") if raw_keys else []
-    except ValueError as error:
-        raise _not_run(f"env_keys is invalid: {error}") from error
-    credential_names = list(dict.fromkeys([*requested, *env_credentials]))
-    ungranted = [name for name in credential_names if name not in granted]
-    if ungranted:
-        unknown = [name for name in ungranted if inherited_value(name) is None]
-        if unknown:
-            raise ToolContractError(unknown_env_keys_message(unknown, granted))
-        notes.append(inherited_env_keys_note(ungranted))
-    return _ShellCall(
-        command=command,
-        description=description.strip() if description and description.strip() else None,
-        workdir=workdir,
-        wait_seconds=wait_seconds,
-        timeout_given=timeout_given,
-        background=background,
-        variables=variables,
-        credential_names=tuple(name for name in credential_names if name in granted),
-        notes=tuple(notes),
-    )
-
-
-def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore | None) -> Path:
-    raw = optional_string(arguments.get("workdir"), field_name="workdir")
-    if not raw:
-        workdir = context.effective_cwd
-    elif is_project_workdir(raw):
-        # Not advertised; the Projects block names each Project's directory path.
-        try:
-            return project_workdir(projects, raw)
-        except ProjectWorkdirError as error:
-            raise _not_run(str(error)) from error
-    else:
-        workdir = context.resolve_path(raw)
-    if not workdir.is_dir():
-        raise _not_run(_missing_workdir(workdir, given=bool(raw)))
-    return workdir
-
-
-def _missing_workdir(workdir: Path, *, given: bool) -> str:
-    """The failure for a missing directory; *given* when the call named it as workdir."""
-    if not given:
-        return (
-            f"the working directory {model_path(workdir)} is not an existing directory. Pass an "
-            "existing directory as workdir."
-        )
-    if workdir.exists():
-        return (
-            f"workdir {model_path(workdir)} is a file, not a directory. Pass the directory it "
-            "is in, or omit workdir to use the working directory."
-        )
-    message = f"workdir {model_path(workdir)} is not an existing directory."
-    nearby = similar_entries(workdir, kind="dirs")
-    if nearby:
-        message += f" Similar directories: {', '.join(model_path(path) for path in nearby)}."
-    return f"{message} Pass an existing directory, or omit workdir to use the working directory."
 
 
 @dataclass(frozen=True)
@@ -603,7 +190,9 @@ class ShellTool:
 
     async def __call__(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         names = named_tools(context)
-        call = _parse_call(context, arguments, self._projects, names)
+        call = _parse_call(
+            context, arguments, self._projects, terminal_available=names(TERMINAL_TOOL_NAME)
+        )
         handoff = _issue_update_handoff(self._update_handoffs, context)
         try:
             command_id = await self._start(context, call, handoff, names)

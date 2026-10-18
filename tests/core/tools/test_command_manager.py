@@ -831,7 +831,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
             submission_count = int(expected_delivery)
             if expected_delivery:
                 await eventually(lambda: bool(restored.sink.submissions))
-                assert restored.sink.submissions[0]["agent_id"] == restored_owner.agent_id
+                assert restored.sink.submissions[0]["address"] == restored_owner
                 if outcome == "running":
                     body = restored.sink.bodies[0]
                     assert "was stopped after at least 2 minutes 5 seconds: " in body
@@ -852,7 +852,7 @@ async def test_background_checkpoint_recovers_once_after_restart(
                         restored_owner = target
                         await eventually(lambda: len(restored.sink.submissions) == 2)
                         assert restored.sink.futures[0].cancelled()
-                        assert restored.sink.submissions[-1]["agent_id"] == target.agent_id
+                        assert restored.sink.submissions[-1]["address"] == target
                         submission_count = 2
                     await sessions.get(restored_owner).add_note_async(restored.sink.bodies[-1])
                     restored.sink.futures[-1].set_result(None)
@@ -974,12 +974,10 @@ async def test_a_background_result_is_delivered_once_when_the_command_ends(
 
     assert harness.sink.submissions == [
         {
-            "agent_id": "sub-agent",
-            "session_id": "session-child",
+            "address": CHILD,
             "notice_id": f"command:{command_id}",
             "origin_run_id": "run-a",
             "body": format_report(report),
-            "project_id": "project-a",
             "execution_owner": None,
             "wake": True,
         }
@@ -1078,10 +1076,10 @@ async def test_transferred_commands_deliver_to_their_new_session(harness: Harnes
     await harness.finish(command_id)
     await harness.finish(identity_id)
 
-    assert [(s["notice_id"], s["agent_id"], s["session_id"]) for s in harness.sink.submissions] == [
-        (f"command:{submitted_id}", "agent-a", "session-a"),
-        (f"command:{submitted_id}", "agent-b", "session-b"),
-        (f"command:{command_id}", "agent-b", "session-b"),
+    assert [(s["notice_id"], s["address"]) for s in harness.sink.submissions] == [
+        (f"command:{submitted_id}", OWNER),
+        (f"command:{submitted_id}", OTHER),
+        (f"command:{command_id}", OTHER),
     ]
     assert harness.sink.futures[0].cancelled()
     assert harness.sink.submissions[0]["body"] == harness.sink.submissions[1]["body"]

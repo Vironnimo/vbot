@@ -579,7 +579,7 @@ async def test_stop_stops_a_command_and_tells_its_session_when_an_ancestor_stopp
     else:
         # The Sub-Agent did not see the stop: its Session gets the result.
         (submission,) = tasks.commands.sink.submissions
-        assert (report.stop_reason, submission["session_id"]) == ("parent", CHILD.session_id)
+        assert (report.stop_reason, submission["address"]) == ("parent", CHILD)
         assert "sub_child" in stopped["notes"][0]
         await _later_reads_speak_to_their_reader(tasks, command_id, stopped)
 

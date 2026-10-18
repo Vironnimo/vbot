@@ -836,12 +836,10 @@ class CommandRecord:
                 return
             await self._await_delivery(
                 sink.submit_completion(
-                    self.owner.agent_id,
-                    self.owner.session_id,
+                    self.owner,
                     notice_id=self.notice_id,
                     origin_run_id=self.origin_run_id,
                     body=body,
-                    project_id=self.owner.project_id,
                     execution_owner=self.execution_owner,
                     wake=True,
                 )
@@ -871,10 +869,8 @@ class CommandRecord:
         target = self._delivered_to
         try:
             return sink.cancel_completion(
-                target.agent_id,
-                target.session_id,
+                target,
                 notice_id=self.notice_id,
-                project_id=target.project_id,
             )
         except Exception:
             _LOGGER.warning(

@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import core.channels._conversation_content as content_module
-import core.channels.engine as engine_module
+from core.channels import _conversation_replies as replies_module
 from core.channels.adapter import RunButtonBinding, bound_run_callback_data
 from core.channels.engine import ChannelConversationEngine
 from core.chat import ChatMessage
@@ -339,16 +339,16 @@ async def test_work_an_ended_engine_never_answered_gets_notices_and_usable_tap_r
 
     retry_available = restoration == "restored"
     tap_notice = (
-        engine_module._UNANSWERED_TAP_ONLY_REPLY
+        replies_module._UNANSWERED_TAP_ONLY_REPLY
         if retry_available
-        else engine_module._UNANSWERED_TAP_UNAVAILABLE_REPLY
+        else replies_module._UNANSWERED_TAP_UNAVAILABLE_REPLY
     )
     assert sorted(transport.sent) == sorted(
         [
             ("-100", content_module._INTERRUPTED_REPLY),
-            ("-100", engine_module._UNANSWERED_MESSAGE_REPLY),
+            ("-100", replies_module._UNANSWERED_MESSAGE_REPLY),
             ("-100", tap_notice),
-            ("-100", engine_module._UNANSWERED_TAP_ONLY_REPLY),
+            ("-100", replies_module._UNANSWERED_TAP_ONLY_REPLY),
         ]
     )
     retry_targets = {

@@ -15,6 +15,7 @@ import pytest
 import pytest_asyncio
 
 import core.tools.terminal_manager as terminal_manager_module
+from core.sessions import SessionAddress
 from core.tools.process_tree import ProcessTreeFacts, RunningProcess
 from core.tools.terminal_manager import (
     TerminalInfo,
@@ -145,8 +146,8 @@ class PendingTriggerService:
         # Set to fail every delivery terminally with this error.
         self.error: BaseException | None = None
 
-    def submit_completion(self, *args: Any, **kwargs: Any) -> Any:
-        self.submissions.append((args, kwargs))
+    def submit_completion(self, address: SessionAddress, **kwargs: Any) -> Any:
+        self.submissions.append(((address,), kwargs))
         error = self.error
 
         async def pending() -> None:
@@ -156,8 +157,9 @@ class PendingTriggerService:
 
         return pending()
 
-    def cancel_completion(self, *args: Any, **kwargs: Any) -> None:
-        self.cancellations.append((args, kwargs))
+    def cancel_completion(self, address: SessionAddress, *, notice_id: str) -> bool:
+        self.cancellations.append(((address,), {"notice_id": notice_id}))
+        return True
 
 
 class FakeClock:

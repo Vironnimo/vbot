@@ -8,7 +8,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from core.channels._state_schema import channel_database_spec
+    from core.channels._state_schema import CHANNEL_DATABASE_NAME, channel_database_spec
     from core.channels.adapter import (
         ChannelAdapter,
         ConversationFacts,
@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 
 
 _EXPORT_MODULES = {
+    "CHANNEL_DATABASE_NAME": "core.channels._state_schema",
     "ALLOWED_CHANNEL_DM_SCOPES": "core.channels.config",
     "ALLOWED_CHANNEL_PLATFORMS": "core.channels.config",
     "ALLOWED_CHANNEL_RESPONSE_MODES": "core.channels.config",
@@ -85,6 +86,7 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "CHANNEL_DATABASE_NAME",
     "ALLOWED_CHANNEL_DM_SCOPES",
     "ALLOWED_CHANNEL_PLATFORMS",
     "ALLOWED_CHANNEL_RESPONSE_MODES",

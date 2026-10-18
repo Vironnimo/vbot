@@ -287,10 +287,8 @@ class CommandCheckpoints:
             target = entry.submitted_to
             try:
                 self._sink.cancel_completion(
-                    target.agent_id,
-                    target.session_id,
+                    target,
                     notice_id=f"command:{entry.report.command_id}",
-                    project_id=target.project_id,
                 )
             except Exception:
                 _LOGGER.warning(
@@ -413,12 +411,10 @@ class CommandCheckpoints:
             try:
                 await asyncio.shield(
                     sink.submit_completion(
-                        target.agent_id,
-                        target.session_id,
+                        target,
                         notice_id=f"command:{entry.report.command_id}",
                         origin_run_id=entry.origin_run_id,
                         body=entry.body,
-                        project_id=target.project_id,
                         execution_owner=entry.execution_owner,
                         wake=True,
                     )

@@ -77,7 +77,7 @@ from core.utils.paths import model_path
 
 from ._command_checkpoint import CommandCheckpoints, CommandCheckpointStore
 from ._command_launch import PipeLauncher
-from ._command_output import CommandOutput, command_output_host, read_log
+from ._command_output import CommandOutput, command_output_host, open_log, read_log
 from ._command_record import BlockingRunner, CommandRecord, CommandServices
 from ._command_types import (
     COMMAND_DRAIN_SECONDS,
@@ -774,7 +774,7 @@ class CommandManager:
             if not await self._run_blocking(cwd.is_dir):
                 raise CommandLaunchError(f"The workdir is not a directory: {model_path(cwd)}")
             if self._temporary_files is not None:
-                lease, log_fd = await self._run_blocking(_open_log, self._temporary_files)
+                lease, log_fd = await self._run_blocking(open_log, self._temporary_files)
             # Starts an output worker for this command when one more may run.
             await self._run_blocking(self._output_host.prepare)
             try:
@@ -934,19 +934,6 @@ class CommandManager:
                 _LOGGER.warning(
                     "A command change callback failed (command=%s)", command_id, exc_info=True
                 )
-
-
-def _open_log(temporary_files: TemporaryFileManager) -> tuple[TemporaryFileLease, int]:
-    """Create the command's private log file and open it for writing (blocking)."""
-    lease = temporary_files.create(COMMAND_TEMPORARY_CATEGORY, ".log")
-    try:
-        if os.name != "nt":
-            lease.path.chmod(0o600)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
-        return lease, os.open(lease.path, flags, 0o600)
-    except BaseException:
-        lease.finish()
-        raise
 
 
 def _raise_unconfirmed(records: list[CommandRecord]) -> None:

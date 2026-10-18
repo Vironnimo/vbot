@@ -17,7 +17,8 @@ from pathlib import Path
 
 from core.database import APPLICATION_IDS, CANONICAL, DatabaseSpec, SnapshotFacts
 
-DATABASE_NAME = "channels"
+CHANNEL_DATABASE_NAME = "channels"
+DATABASE_NAME = CHANNEL_DATABASE_NAME
 APPLICATION_ID = APPLICATION_IDS[DATABASE_NAME]
 # The physical format generation, not a counter for additive changes: those
 # reconcile in place. Raise it only for a change a converter must perform.
