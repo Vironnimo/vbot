@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import stat
 import sys
@@ -1143,3 +1144,39 @@ def test_replace_failure_is_bounded_and_keeps_other_operations(
     assert sorted(p.name for p in tmp_path.iterdir()) == (
         ["file.txt", "other.txt"] if other_file else ["file.txt"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["write", "apply_patch"])
+async def test_parent_file_obstruction_is_reported_without_changing_it(tmp_path, monkeypatch, tool):
+    obstruction = tmp_path / "parent"
+    obstruction.write_bytes(b"keep")
+    requested = obstruction / "child.txt"
+    # Windows reaches mkdir after observing the child as missing; POSIX can
+    # report ENOTDIR while observing it. Exercise the Windows failure on both.
+    snapshot = file_changes_module._snapshot
+
+    def missing_child(path):
+        return file_changes_module._ABSENT if path == requested else snapshot(path)
+
+    mkdir = Path.mkdir
+
+    def obstructed(path, *args, **kwargs):
+        if path == obstruction:
+            raise FileExistsError(errno.EEXIST, "already exists", str(obstruction))
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(file_changes_module, "_snapshot", missing_child)
+    monkeypatch.setattr(Path, "mkdir", obstructed)
+    arguments = (
+        {"path": "parent/child.txt", "content": "new"}
+        if tool == "write"
+        else {"patch": "*** Add File: parent/child.txt\n+new"}
+    )
+    result = await call(tmp_path, arguments, name=tool)
+
+    assert result["error"]["code"] == "file_write_error"
+    assert "parent is a file, not a directory" in text(result)
+    assert "it already exists" not in text(result)
+    assert obstruction.read_bytes() == b"keep"
+    assert not requested.exists()

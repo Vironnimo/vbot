@@ -758,7 +758,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   checks plus atomic replace are not a portable filesystem compare-and-swap.
   Filesystem failures name their reason in English without the absolute path
   (`file_state.os_error_reason`, e.g. `another program is using it`), not the
-  localized Windows message. A write, delete or rename that another program
+  localized Windows message. A failed parent-directory creation names the parent
+  that is a file, rather than claiming the requested child already exists.
+  A write, delete or rename that another program
   blocks (Windows 32/33) says the file is unchanged and to send the change again
   after that program finishes, instead of asking to check the path; exhausted
   retries add `The write was attempted N times.` Swarm Agents met a file held
@@ -803,6 +805,7 @@ replacements still went through Delete File plus Add File (agent-eval
 
 | Text | Reason |
 |---|---|
+| `Could not change X: Y is a file, not a directory. Check this path before resending this change.` (shared with `write`) | A Windows parent-directory creation can report that the parent already exists; saying the requested child already exists invents an obstruction at the wrong path (review probe, 2026-10-18). Names the actual parent so the Agent can correct the target without changing its contents (F5). |
 | `Edit, create, replace, delete or move files with a patch.` | Names every effect, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). `replace`: GPT-6 Luna replaced a README with Delete File and then Add File in two calls plus a verification read (agent-eval 2026-10-10). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
 | Syntax warning excerpt (shared with `edit` and `write`): `Warning: Syntax check failed after this edit: SyntaxError: '(' was never closed (line 2, column 12)` followed by `1| ...`, `2| ...`, a caret line and `3| ...` | Real Sessions (2026-10) read 30-45 lines after a warning to find the line the error names; the excerpt shows it in the result. Only the error's own lines are shown, not more, so a result stays short. |
