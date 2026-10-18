@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
+
 from . import _command_cleaning, _command_decoding
 from ._command_cleaning import OutputCleaner, OutputLines
 from ._command_decoding import CommandOutputDecoder, DecoderState
@@ -40,6 +42,7 @@ from ._command_types import (
     COMMAND_HEAD_CHARS,
     COMMAND_RECENT_LINES,
     COMMAND_TAIL_CHARS,
+    COMMAND_TEMPORARY_CATEGORY,
     CommandTranscript,
     LogLoss,
 )
@@ -375,3 +378,16 @@ class _Uncleaned:
 
 
 __all__ = ["CommandLog", "CommandOutput", "LogSnapshot", "command_output_host", "read_log"]
+
+
+def open_log(temporary_files: TemporaryFileManager) -> tuple[TemporaryFileLease, int]:
+    """Create the command's private log file and open it for writing (blocking)."""
+    lease = temporary_files.create(COMMAND_TEMPORARY_CATEGORY, ".log")
+    try:
+        if os.name != "nt":
+            lease.path.chmod(0o600)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+        return lease, os.open(lease.path, flags, 0o600)
+    except BaseException:
+        lease.finish()
+        raise

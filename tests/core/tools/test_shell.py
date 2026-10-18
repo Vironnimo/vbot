@@ -30,8 +30,9 @@ import pytest_asyncio
 from core.projects import ProjectNotFoundError
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
+from core.tools import _shell_definition as shell_definition
+from core.tools import _shell_hint_common as shell_hint_common
 from core.tools import shell as shell_module
-from core.tools import shell_hints
 from core.tools._command_launch import PipeLauncher
 from core.tools._powershell import (
     REQUEST_UNREADABLE_EXIT_CODE,
@@ -879,7 +880,7 @@ async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(
     exit_code: int,
     expected: str,
 ) -> None:
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
     call = shell.call({"command": command})
     process = await shell.started()
     process.write(output)
@@ -1241,13 +1242,13 @@ def test_the_definition_names_the_users_number_and_date_format(
     culture: PowerShellCulture | None, named: bool
 ) -> None:
     # The definition is fixed when the module loads; the sentence comes from this culture.
-    sentence = shell_module._culture_sentence(culture)
+    sentence = shell_definition._culture_sentence(culture)
 
     assert bool(sentence) is named
     if culture is not None and named:
         for text in (culture.name, culture.number, culture.date):
             assert text in sentence
-    assert shell_module._culture_sentence(powershell_culture()) in SHELL_TOOL_DESCRIPTION
+    assert shell_definition._culture_sentence(powershell_culture()) in SHELL_TOOL_DESCRIPTION
 
 
 # --- Real shells -------------------------------------------------------------------

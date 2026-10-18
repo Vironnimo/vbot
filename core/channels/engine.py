@@ -16,10 +16,9 @@ this engine or, after it ended, by the Channel's next one.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from collections import OrderedDict, deque
-from collections.abc import AsyncIterator, Coroutine, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
@@ -30,7 +29,6 @@ from core.channels.adapter import (
     ConversationFacts,
     ConversationPointerStore,
     MessageFacts,
-    PendingReply,
     PendingReplyStore,
     QuotedMessageFacts,
     ReplyPlanFacts,
@@ -39,7 +37,6 @@ from core.channels.adapter import (
     RunButtonClaim,
     parse_bound_run_callback_data,
 )
-from core.channels.config import ChannelError
 from core.chat.commands import (
     CommandDispatcher,
     CommandExecutionContext,
@@ -48,45 +45,32 @@ from core.chat.commands import (
     PreparedCommand,
 )
 from core.chat.content_blocks import ContentBlock, TextBlock
-from core.chat.messages import MessageSender, ReplySurface
 from core.runs import (
-    ASSISTANT_OUTPUT_EVENT,
-    COMPACTION_COMPLETED_EVENT,
-    USER_MESSAGE_EVENT,
-    RunCancelledError,
-    RunKind,
-    WaitingWorkAdmission,
     WaitingWorkLimitError,
 )
 from core.utils.logging import get_logger
-from core.utils.retry import retry_async
-from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
     from core.channels.config import ChannelConfig
-    from core.extensions.interactions import InteractionButton, InteractionEvent
+    from core.extensions.interactions import InteractionEvent
     from core.runs import Run
     from core.sessions import ChatSessionManager
 
 from ._conversation_access import ChannelAccessPolicy
 from ._conversation_content import (
-    _CANCELLED_REPLY,
     _FAILED_REPLY,
-    _INTERRUPTED_REPLY,
-    RunReply,
     _format_interaction_note,
     _format_observed_message,
     _interaction_retry_keyboard,
     _media_failure_reply,
     _restore_bound_interaction_event,
-    _retry_buttons,
     _sender_tag,
 )
+from ._conversation_replies import ChannelReplies
 from ._conversation_routing import ChannelSessionRouting, _session_address
 from ._conversation_work import (
     ConversationTransport,
-    _PendingItem,
     _QueuedInboundMedia,
     _QueuedInboundMessage,
     _QueuedInternalPrompt,
@@ -99,18 +83,8 @@ from ._observations import ChannelObservationInbox
 _LOGGER = get_logger("channels.engine")
 
 # Sent for admitted work that an ended engine left before any Run took it over.
-_UNANSWERED_MESSAGE_REPLY = (
-    "Sorry, I was interrupted before I could answer your last message. Please send it again."
-)
-_UNANSWERED_MESSAGES_REPLY = (
-    "Sorry, I was interrupted before I could answer your last messages. Please send them again."
-)
-_UNANSWERED_TAP_ONLY_REPLY = (
-    "Sorry, I was interrupted before I could act on your button tap. Please tap it again."
-)
-_UNANSWERED_TAP_UNAVAILABLE_REPLY = (
-    "Sorry, I was interrupted before I could act on your button tap. Please send the request again."
-)
+
+
 _BUSY_REPLY = "I'm busy with earlier messages. Please try again shortly."
 _QUOTED_MESSAGE_PREFIX = "[quoted-message]"
 _QUOTED_MESSAGE_UNAVAILABLE = "[quoted-message unavailable]"
@@ -153,9 +127,6 @@ class ChannelConversationEngine:
         self._chat_sessions = chat_sessions
         # The running adapter's transport, and whether its platform connection is
         # up; replies wait for a connected transport.
-        self._transport: ConversationTransport | None = None
-        self._connected = asyncio.Event()
-        self._pending_replies = pending_replies
         self._observation_inbox = observation_inbox
         self._previous_observations = previous_observations
         self._observation_recordings: set[asyncio.Task[None]] = set()
@@ -166,15 +137,23 @@ class ChannelConversationEngine:
         self._started = False
         self._stopped = False
         # Relays and deliveries that outlive the call that started them.
-        self._tasks: set[asyncio.Task[Any]] = set()
         # Durable records of admitted work and the Runs that answer it; stop
         # lets them finish instead of cancelling either write.
-        self._recordings: set[asyncio.Task[bool]] = set()
         self._command_dispatcher = command_dispatcher
         self._run_button_binding_registry = run_button_binding_registry
         self._access = ChannelAccessPolicy(config, access_registry)
         self._conversation_pointers = conversation_pointers
         self._routing = ChannelSessionRouting(config, chat_sessions, conversation_pointers)
+        self._replies = ChannelReplies(
+            config,
+            trigger_service,
+            chat_sessions,
+            pending_replies=pending_replies,
+            run_button_binding_registry=run_button_binding_registry,
+            access=self._access,
+            owner=self._owner,
+        )
+
         # One FIFO and worker per conversation while it has work; an idle
         # conversation retires both and the next item creates them again.
         self._ingress_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
@@ -195,22 +174,18 @@ class ChannelConversationEngine:
 
     def attach(self, transport: ConversationTransport) -> None:
         """Use ``transport`` for this Channel's platform I/O; replies wait until it connects."""
-        self._transport = transport
-        self._connected.clear()
+        self._replies.attach(transport)
 
     def set_connected(self, connected: bool) -> None:
         """Record whether the attached transport's platform connection is up."""
-        if connected and self._transport is not None and not self._stopped:
-            self._connected.set()
-        else:
-            self._connected.clear()
+        self._replies.set_connected(connected)
 
     def start(self) -> None:
         """Begin sending the replies the Channel's earlier engines left owed."""
         if self._started or self._stopped:
             return
         self._started = True
-        self._spawn(self._resume_pending_replies())
+        self._replies.start()
 
     async def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure an outbound Channel target has its routed Session."""
@@ -257,7 +232,7 @@ class ChannelConversationEngine:
                 return False
             reply_plan = self._routing._reply_plan_for(conversation)
             unavailable = self._command_dispatcher.unavailability(
-                prepared_command, self._reply_surface(conversation.kind)
+                prepared_command, self._replies.reply_surface(conversation.kind)
             )
             if unavailable is not None:
                 await self._send_command_unavailability(reply_plan, unavailable)
@@ -318,7 +293,7 @@ class ChannelConversationEngine:
         normalized_companion = companion_text.strip() if companion_text is not None else None
         if normalized_companion == "":
             normalized_companion = None
-        transport = self._require_transport()
+        transport = self._replies.require_transport()
         caption_texts = tuple(transport.caption_text(message) for message in raw_messages)
         gating_texts = (
             *((normalized_companion,) if normalized_companion is not None else ()),
@@ -602,7 +577,13 @@ class ChannelConversationEngine:
             queue = deque()
             self._chat_queues[platform_target] = queue
 
-        pending = None if isinstance(queued, _QueuedObservedMessage) else self._owe_admitted(queued)
+        pending = (
+            None
+            if isinstance(queued, _QueuedObservedMessage)
+            else self._replies.owe_admitted(
+                queued, self._routing._reply_plan_for(queued.conversation)
+            )
+        )
         queue.append(replace(queued, admission=admission, pending=pending))
 
         worker = self._chat_workers.get(platform_target)
@@ -644,7 +625,7 @@ class ChannelConversationEngine:
                     self._trigger_service.release_waiting_work(queued.admission)
                 # Handled without a Run taking the item over: its notice is not owed.
                 # A cancelled worker leaves it owed for the Channel's next engine.
-                await self._settle_admitted(queued.pending)
+                await self._replies.settle_admitted(queued.pending)
         finally:
             if self._chat_workers.get(platform_target) is asyncio.current_task():
                 self._chat_workers.pop(platform_target, None)
@@ -693,7 +674,7 @@ class ChannelConversationEngine:
                     _session_address(route.agent_id, route.session_id),
                 )
                 if not exists:
-                    await self._send_reply(reply_plan, _FAILED_REPLY)
+                    await self._replies.send(reply_plan, _FAILED_REPLY)
                     return
                 await self._chat_sessions.run_async(
                     self._routing._update_session_metadata,
@@ -701,7 +682,7 @@ class ChannelConversationEngine:
                     queued.conversation,
                     reply_plan,
                 )
-            await self._trigger_and_relay(
+            await self._replies.trigger_and_relay(
                 route,
                 reply_plan,
                 queued.prompt,
@@ -725,7 +706,7 @@ class ChannelConversationEngine:
         content: str | list[ContentBlock] = queued.message.content
         if queued.conversation.kind == "group" and queued.raw_message is not None:
             try:
-                transport = await self._ready_transport()
+                transport = await self._replies.ready_transport()
                 quoted = await transport.build_quoted_message(queued.raw_message)
             except Exception as error:
                 _LOGGER.warning(
@@ -742,7 +723,7 @@ class ChannelConversationEngine:
             if quoted is not None:
                 content = await self._content_with_quoted_message(queued, quoted)
 
-        await self._trigger_and_relay(
+        await self._replies.trigger_and_relay(
             route,
             reply_plan,
             content,
@@ -795,7 +776,7 @@ class ChannelConversationEngine:
         failure_replies: list[str] = []
         for message in queued.messages:
             try:
-                transport = await self._ready_transport()
+                transport = await self._replies.ready_transport()
                 content_blocks.extend(await transport.build_media_blocks(message))
             except Exception as error:
                 _LOGGER.warning(
@@ -807,12 +788,12 @@ class ChannelConversationEngine:
                 failure_replies.append(_media_failure_reply(error))
 
         for reply in dict.fromkeys(failure_replies):
-            await self._send_reply(reply_plan, reply)
+            await self._replies.send(reply_plan, reply)
 
         if not content_blocks:
             return
 
-        await self._trigger_and_relay(
+        await self._replies.trigger_and_relay(
             route,
             reply_plan,
             content_blocks,
@@ -824,479 +805,13 @@ class ChannelConversationEngine:
 
     # -- Trigger / relay --------------------------------------------------------------
 
-    async def _trigger_and_relay(
-        self,
-        route: RouteFacts,
-        reply_plan: ReplyPlanFacts,
-        content: str | list[ContentBlock],
-        *,
-        conversation: ConversationFacts,
-        sender: MessageSender | None = None,
-        internal: bool = False,
-        waiting_work_admission: WaitingWorkAdmission | None,
-        pending: _PendingItem | None = None,
-    ) -> None:
-        tool_restriction, tool_denial_resolver = self._access._tool_access_for(conversation)
-        tool_access_kwargs: dict[str, Any] = {}
-        if tool_restriction is not None:
-            tool_access_kwargs["tool_restriction"] = tool_restriction
-        if tool_denial_resolver is not None:
-            tool_access_kwargs["tool_denial_resolver"] = tool_denial_resolver
-        reply_surface = self._reply_surface(conversation.kind, reply_plan)
-        try:
-            # An internal run persists the content as a kernel note instead of a
-            # visible user message; it never carries a sender.
-            if internal:
-                run = await self._trigger_service.trigger_run(
-                    route.agent_id,
-                    content,
-                    route.session_id,
-                    internal=True,
-                    reply_surface=reply_surface,
-                    run_kind=RunKind.CHANNEL,
-                    **tool_access_kwargs,
-                    waiting_work_admission=waiting_work_admission,
-                )
-            else:
-                run = await self._trigger_service.trigger_run(
-                    route.agent_id,
-                    content,
-                    route.session_id,
-                    sender=sender,
-                    reply_surface=reply_surface,
-                    run_kind=RunKind.CHANNEL,
-                    **tool_access_kwargs,
-                    waiting_work_admission=waiting_work_admission,
-                )
-        except RunCancelledError:
-            # The queued turn was removed (for example from the WebUI Queue) or
-            # its Run was cancelled before it started.
-            await self._answer_admitted(pending, reply_plan, _CANCELLED_REPLY)
-            return
-        except Exception as error:
-            _LOGGER.error(
-                "Channel trigger run failed (channel=%s agent=%s): %s",
-                reply_plan.channel_id,
-                route.agent_id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-            await self._answer_admitted(pending, reply_plan, _FAILED_REPLY)
-            return
-
-        await self._relay_run(run, reply_plan, pending)
-
-    async def _answer_admitted(
-        self, pending: _PendingItem | None, reply_plan: ReplyPlanFacts, text: str
-    ) -> None:
-        """Send the reply an admitted item gets without a Run, in place of its owed record."""
-        reply_id: str | None = None
-        if pending is not None:
-            pending.taken = True
-            if await asyncio.shield(pending.recorded):
-                reply_id = pending.reply_id
-        await self._deliver((reply_id,), reply_plan, text)
-
-    async def _relay_run(
-        self, run: Run, reply_plan: ReplyPlanFacts, pending: _PendingItem | None = None
-    ) -> None:
-        """Owe the Run's answer durably, wait for it, and send it once."""
-        reply_id = await self._owe_run_reply(run, reply_plan, pending)
-        reply = await self._await_run_reply(run, reply_plan)
-        await self._deliver((reply_id,), reply_plan, reply)
-
     async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
-        """Relay an admitted background Run with the normal Channel reply semantics.
-
-        Returns once the Run ended. Its answer is owed durably first, so it reaches
-        the chat once the Channel is connected, by this engine or its successor.
-        """
-        reply_id = await self._owe_run_reply(run, reply_plan, None)
-        reply = await self._await_run_reply(run, reply_plan)
-        if not self._spawn(self._deliver((reply_id,), reply_plan, reply)):
-            _LOGGER.debug(
-                "Channel engine ended before a background reply; its next engine sends it "
-                "(channel=%s run=%s)",
-                self._config.id,
-                run.id,
-            )
-
-    async def _await_run_reply(self, run: Run, reply_plan: ReplyPlanFacts) -> str:
-        """Follow the Run to its end, then project its complete durable history."""
-        projection = RunReply()
-        async with self._activity(reply_plan):
-            async for event in run.subscribe():
-                if event.type == ASSISTANT_OUTPUT_EVENT:
-                    projection.observe_output(event.payload.get("message"))
-                elif event.type == USER_MESSAGE_EVENT:
-                    projection.observe_input()
-                elif event.type == COMPACTION_COMPLETED_EVENT:
-                    projection.observe_compaction()
-            # Replay is bounded, and a lagging subscription may end before the
-            # Run does. Neither can decide which parts of its answer survived.
-            with contextlib.suppress(Exception):
-                await run.wait()
-        status, reason = run.status.value, run.cancel_reason
-        return await self._history_reply(
-            RouteFacts(agent_id=run.agent_id, session_id=run.session_id),
-            run.id,
-            fallback=projection.settle(status, reason),
-            status=status,
-            reason=reason,
-        )
-
-    async def _history_reply(
-        self,
-        route: RouteFacts | None,
-        run_id: str | None,
-        *,
-        fallback: str = _INTERRUPTED_REPLY,
-        status: str = "interrupted",
-        reason: str | None = None,
-    ) -> str:
-        """Project exact Run history; observed live output is the unavailable-history fallback."""
-        if route is None or run_id is None:
-            return fallback
-        try:
-            session = await self._chat_sessions.get_async(
-                _session_address(route.agent_id, route.session_id)
-            )
-            messages = await session.load_run_messages_async(run_id)
-        except Exception as error:
-            _LOGGER.warning(
-                "Channel reply history unavailable (channel=%s run=%s): %s",
-                self._config.id,
-                run_id,
-                error,
-            )
-            return fallback
-        if not messages:
-            # A standalone in-memory Run has no Session history. A storage
-            # failure may also have prevented any of its output from persisting.
-            return fallback
-        projection = RunReply()
-        for message in messages:
-            if message.role == "assistant":
-                projection.observe_output(message.to_dict())
-            elif message.role == "user":
-                projection.observe_input()
-            elif message.role == "compaction_checkpoint":
-                projection.observe_compaction()
-            elif message.role == "run_summary" and message.run_id == run_id:
-                status, reason = message.status or status, message.completion_reason
-        # Without a summary use the known live outcome, or interruption when
-        # the process that ran it is gone.
-        return projection.settle(status, reason)
+        """Relay a background Run through the durable Channel reply lifecycle."""
+        await self._replies.relay_background(run, reply_plan)
 
     # -- Owed replies -----------------------------------------------------------------
 
-    def _owe_admitted(self, queued: _QueuedWork) -> _PendingItem:
-        """Record durably that an admitted item is owed an answer, without blocking ingress."""
-        reply = PendingReply(
-            id=uuid4().hex,
-            reply_plan=self._routing._reply_plan_for(queued.conversation),
-            owner=self._owner,
-            created_at=utc_now_timestamp(),
-            binding_id=queued.binding_id if isinstance(queued, _QueuedInternalPrompt) else None,
-            retry_keyboard=(
-                queued.retry_keyboard if isinstance(queued, _QueuedInternalPrompt) else None
-            ),
-        )
-        recorded = self._record_reply(reply)
-        return _PendingItem(reply_id=reply.id, created_at=reply.created_at, recorded=recorded)
-
-    async def _owe_run_reply(
-        self, run: Run, reply_plan: ReplyPlanFacts, pending: _PendingItem | None
-    ) -> str | None:
-        """Record the Run's answer as owed; an admitted item's notice becomes that answer."""
-        reply_id = uuid4().hex
-        created_at = utc_now_timestamp()
-        if pending is not None:
-            pending.taken = True
-            reply_id, created_at = pending.reply_id, pending.created_at
-        reply = PendingReply(
-            id=reply_id,
-            reply_plan=reply_plan,
-            owner=self._owner,
-            created_at=created_at,
-            route=RouteFacts(agent_id=run.agent_id, session_id=run.session_id),
-            run_id=run.id,
-        )
-        recorded = self._record_reply(reply, after=pending.recorded if pending else None)
-        return reply_id if await asyncio.shield(recorded) else None
-
-    def _record_reply(
-        self, reply: PendingReply, *, after: asyncio.Task[bool] | None = None
-    ) -> asyncio.Task[bool]:
-        """Keep admission and Run writes ordered and alive until stop drains them."""
-
-        async def record() -> bool:
-            if after is not None and not await after:
-                return False
-            return await self._owe(reply)
-
-        recorded = asyncio.create_task(record(), name=f"channel:{self._config.id}:owe-reply")
-        self._recordings.add(recorded)
-        recorded.add_done_callback(self._recordings.discard)
-        return recorded
-
-    async def _owe(self, reply: PendingReply) -> bool:
-        try:
-            await self._pending_replies.run_async(
-                self._pending_replies.owe_reply, self._config.id, reply
-            )
-        except Exception as error:
-            # The reply is still sent while this engine runs, only not after it ends.
-            _LOGGER.warning(
-                "Channel reply not recorded (channel=%s): %s",
-                self._config.id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-            return False
-        return True
-
-    async def _settle_admitted(self, pending: _PendingItem | None) -> None:
-        if pending is None or pending.taken:
-            return
-        if await asyncio.shield(pending.recorded):
-            await self._update_pending(self._pending_replies.settle_reply, pending.reply_id)
-
-    async def _resume_pending_replies(self) -> None:
-        """Send the replies the Channel's earlier engines left owed, each at most once."""
-        try:
-            replies, dropped = await self._pending_replies.run_async(
-                self._pending_replies.take_pending_replies, self._config.id, self._owner
-            )
-        except Exception as error:
-            _LOGGER.error(
-                "Channel owed replies unavailable (channel=%s): %s",
-                self._config.id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-            return
-        if dropped:
-            _LOGGER.warning(
-                "Channel replies dropped: a send was in flight when vBot stopped, or they "
-                "were owed too long (channel=%s count=%d)",
-                self._config.id,
-                dropped,
-            )
-        unanswered: dict[tuple[str, str | None], list[PendingReply]] = {}
-        for reply in replies:
-            if reply.run_id is None:
-                plan = reply.reply_plan
-                unanswered.setdefault((plan.platform_target, plan.thread_id), []).append(reply)
-            else:
-                self._spawn(self._resume_run_reply(reply))
-        for group in unanswered.values():
-            self._spawn(self._resume_unanswered(group))
-
-    async def _resume_run_reply(self, reply: PendingReply) -> None:
-        run_id = reply.run_id
-        assert run_id is not None
-        run = self._trigger_service.running_run(run_id)
-        text = (
-            await self._await_run_reply(run, reply.reply_plan)
-            if run is not None
-            else await self._history_reply(reply.route, reply.run_id)
-        )
-        await self._deliver((reply.id,), reply.reply_plan, text)
-
-    async def _resume_unanswered(self, replies: list[PendingReply]) -> None:
-        """Reissue each interrupted tap's keyboard; group ordinary messages into one notice."""
-        messages = []
-        registry = self._run_button_binding_registry
-        for reply in replies:
-            if reply.binding_id is None and reply.retry_keyboard is None:
-                messages.append(reply)
-                continue
-            restored = reply.binding_id is None
-            if registry is not None and reply.binding_id is not None:
-                try:
-                    restored = await registry.run_async(
-                        registry.restore_run_button_binding, self._config.id, reply.binding_id
-                    )
-                except Exception as error:
-                    _LOGGER.warning(
-                        "Run-button binding not restored (channel=%s): %s",
-                        self._config.id,
-                        error,
-                    )
-            buttons = _retry_buttons(reply.retry_keyboard, reply.binding_id) if restored else None
-            # Telegram removed the accepted keyboard. Releasing its binding alone
-            # cannot make it usable; each retry message carries its own keyboard.
-            text = _UNANSWERED_TAP_ONLY_REPLY if buttons else _UNANSWERED_TAP_UNAVAILABLE_REPLY
-            await self._deliver((reply.id,), reply.reply_plan, text, buttons=buttons)
-        if messages:
-            text = _UNANSWERED_MESSAGE_REPLY if len(messages) == 1 else _UNANSWERED_MESSAGES_REPLY
-            await self._deliver(
-                tuple(reply.id for reply in messages), messages[-1].reply_plan, text
-            )
-
-    async def _update_pending(self, update: Any, reply_id: str) -> bool:
-        try:
-            await self._pending_replies.run_async(update, self._config.id, reply_id)
-        except Exception as error:
-            _LOGGER.warning(
-                "Channel owed reply not updated (channel=%s): %s",
-                self._config.id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-            return False
-        return True
-
-    async def _claim(self, reply_ids: tuple[str | None, ...]) -> tuple[str, ...] | None:
-        """Claim the recorded replies for one send; None when none of them is still owed."""
-        recorded = tuple(reply_id for reply_id in reply_ids if reply_id is not None)
-        if not recorded:
-            return ()
-        claimed: list[str] = []
-        for reply_id in recorded:
-            try:
-                if await self._pending_replies.run_async(
-                    self._pending_replies.claim_reply, self._config.id, reply_id
-                ):
-                    claimed.append(reply_id)
-            except Exception as error:
-                # Without a claim the reply is still sent once by this engine.
-                _LOGGER.warning(
-                    "Channel owed reply not claimed (channel=%s): %s", self._config.id, error
-                )
-                return ()
-        # Gone: the Channel was deleted or reset, or the reply was sent already.
-        return tuple(claimed) if claimed else None
-
     # -- Sending ----------------------------------------------------------------------
-
-    async def _deliver(
-        self,
-        reply_ids: tuple[str | None, ...],
-        reply_plan: ReplyPlanFacts,
-        text: str | None,
-        *,
-        buttons: list[list[InteractionButton]] | None = None,
-    ) -> None:
-        """Send one reply at most once over the connected transport, then forget it.
-
-        The send waits while the Channel is disconnected. A failure that shows the
-        reply did not leave because the adapter went away waits for the next
-        connection; any other failure loses the reply, logged. A send cut off
-        mid-flight leaves its claim, so no later engine sends it again.
-        """
-        if text is None:
-            for reply_id in reply_ids:
-                if reply_id is not None:
-                    await self._update_pending(self._pending_replies.settle_reply, reply_id)
-            return
-        while True:
-            transport = await self._ready_transport()
-            claimed = await self._claim(reply_ids)
-            if claimed is None:
-                return
-            try:
-                send_kwargs: dict[str, Any] = {
-                    "reply_to_message_id": reply_plan.reply_to_message_id,
-                    "thread_id": reply_plan.thread_id,
-                }
-                if buttons is not None:
-                    send_kwargs["buttons"] = buttons
-                await retry_async(
-                    transport.send_text,
-                    reply_plan.platform_target,
-                    text,
-                    **send_kwargs,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                unsent = isinstance(error, ChannelError) and not error.possibly_delivered
-                if unsent and not self._is_connected(transport) and not self._stopped:
-                    for reply_id in claimed:
-                        await self._update_pending(self._pending_replies.release_reply, reply_id)
-                    continue
-                _log_failed_reply(reply_plan, error)
-            for reply_id in claimed:
-                await self._update_pending(self._pending_replies.settle_reply, reply_id)
-            return
-
-    async def _send_reply(self, reply_plan: ReplyPlanFacts, text: str) -> None:
-        """Send a reply that is not owed durably, waiting while the Channel is disconnected."""
-        await self._deliver((None,), reply_plan, text)
-
-    async def _send_ingress_reply(self, reply_plan: ReplyPlanFacts, text: str) -> None:
-        """Send a reply from the adapter's own inbound handling, without waiting.
-
-        The handling adapter is the attached transport; waiting for a later one
-        would hold the adapter's shutdown.
-        """
-        transport = self._transport
-        if transport is None or self._stopped:
-            return
-        try:
-            await retry_async(
-                transport.send_text,
-                reply_plan.platform_target,
-                text,
-                reply_to_message_id=reply_plan.reply_to_message_id,
-                thread_id=reply_plan.thread_id,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            _log_failed_reply(reply_plan, error)
-
-    def _require_transport(self) -> ConversationTransport:
-        transport = self._transport
-        if transport is None:
-            raise ChannelError(f"Channel has no running adapter: {self._config.id}")
-        return transport
-
-    async def _ready_transport(self) -> ConversationTransport:
-        """Wait until the attached transport is connected and return it."""
-        while True:
-            await self._connected.wait()
-            transport = self._transport
-            if transport is not None and self._connected.is_set():
-                return transport
-
-    def _is_connected(self, transport: ConversationTransport) -> bool:
-        return self._transport is transport and self._connected.is_set()
-
-    @contextlib.asynccontextmanager
-    async def _activity(self, reply_plan: ReplyPlanFacts) -> AsyncIterator[None]:
-        """Show the connected transport's activity indicator; nothing while disconnected."""
-        transport = self._transport
-        if transport is None or not self._connected.is_set():
-            yield
-            return
-        async with transport.activity_indicator(reply_plan.platform_target, reply_plan.thread_id):
-            yield
-
-    def _spawn(self, work: Coroutine[Any, Any, Any]) -> bool:
-        """Run engine-owned work that stop cancels; refused once the engine stopped."""
-        if self._stopped:
-            work.close()
-            return False
-        task = asyncio.create_task(work, name=f"channel:{self._config.id}:reply")
-        self._tasks.add(task)
-        task.add_done_callback(self._on_task_done)
-        return True
-
-    def _on_task_done(self, task: asyncio.Task[Any]) -> None:
-        self._tasks.discard(task)
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is not None:
-            _LOGGER.error(
-                "Channel reply work failed (channel=%s): %s",
-                self._config.id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
 
     def _waiting_scope(self, platform_target: str) -> str:
         return f"{self._config.id}:{platform_target}"
@@ -1309,7 +824,7 @@ class ChannelConversationEngine:
         )
         if self._stopped or not self._should_send_busy_reply(conversation.chat_id):
             return
-        await self._send_ingress_reply(self._routing._reply_plan_for(conversation), _BUSY_REPLY)
+        await self._replies.send_ingress(self._routing._reply_plan_for(conversation), _BUSY_REPLY)
 
     def _should_send_busy_reply(self, platform_target: str) -> bool:
         now = time.monotonic()
@@ -1334,9 +849,9 @@ class ChannelConversationEngine:
         else:
             text = (
                 f"The {unavailable.command} command is not available through "
-                f"{self._platform_display_name()}."
+                f"{self._replies.platform_display_name()}."
             )
-        await self._send_ingress_reply(reply_plan, text)
+        await self._replies.send_ingress(reply_plan, text)
 
     async def _execute_prepared_command(
         self,
@@ -1353,17 +868,17 @@ class ChannelConversationEngine:
         From the adapter's inbound handling (``from_ingress``) replies do not wait
         for a connection and Command Runs relay in the background.
         """
-        send = self._send_ingress_reply if from_ingress else self._send_reply
+        send = self._replies.send_ingress if from_ingress else self._replies.send
         context = CommandExecutionContext(
             agent_id=route.agent_id,
             session_id=route.session_id,
             project_id=None,
-            reply_surface=self._reply_surface(conversation.kind, reply_plan),
+            reply_surface=self._replies.reply_surface(conversation.kind, reply_plan),
             sender=self._access._sender_for(conversation),
         )
         try:
             if prepared.execution_mode == "serialized":
-                async with self._activity(reply_plan):
+                async with self._replies.activity(reply_plan):
                     outcome = await self._command_dispatcher.execute(prepared, context)
             else:
                 outcome = await self._command_dispatcher.execute(prepared, context)
@@ -1387,7 +902,7 @@ class ChannelConversationEngine:
         *,
         from_ingress: bool,
     ) -> None:
-        send = self._send_ingress_reply if from_ingress else self._send_reply
+        send = self._replies.send_ingress if from_ingress else self._replies.send
         continued = False
         navigation = outcome.navigation
         if navigation is not None and navigation.kind in {"continue_in_session", "new_session"}:
@@ -1413,27 +928,9 @@ class ChannelConversationEngine:
             await send(reply_plan, outcome.feedback.text)
         for command_run in outcome.runs:
             if from_ingress:
-                self._spawn(self._relay_run(command_run.run, reply_plan))
+                self._replies.spawn(self._replies.relay(command_run.run, reply_plan))
             else:
-                await self._relay_run(command_run.run, reply_plan)
-
-    def _reply_surface(
-        self,
-        conversation_kind: Literal["direct", "group"],
-        reply_plan: ReplyPlanFacts | None = None,
-    ) -> ReplySurface:
-        return ReplySurface.channel(
-            platform=self._config.platform,
-            platform_display_name=self._platform_display_name(),
-            channel_id=self._config.id,
-            conversation_kind=conversation_kind,
-            platform_target=reply_plan.platform_target if reply_plan is not None else None,
-            thread_id=reply_plan.thread_id if reply_plan is not None else None,
-        )
-
-    def _platform_display_name(self) -> str:
-        transport = self._transport
-        return transport.platform_display_name if transport is not None else self._config.platform
+                await self._replies.relay(command_run.run, reply_plan)
 
     def _log_command_failure(
         self,
@@ -1461,7 +958,6 @@ class ChannelConversationEngine:
         over) stays recorded for the Channel's next engine.
         """
         self._stopped = True
-        self._connected.clear()
         workers = list(self._chat_workers.values())
         self._chat_workers.clear()
         for queue in self._chat_queues.values():
@@ -1469,13 +965,12 @@ class ChannelConversationEngine:
                 self._trigger_service.release_waiting_work(queue.popleft().admission)
         self._chat_queues.clear()
         self._busy_reply_times.clear()
-        tasks = [*workers, *self._tasks]
+        tasks = [*workers, *self._replies.begin_stop()]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        if self._recordings:
-            await asyncio.gather(*self._recordings, return_exceptions=True)
+        await self._replies.finish_stop()
         if self._observation_recordings:
             await asyncio.gather(*self._observation_recordings)
             self._observation_recordings.clear()
@@ -1487,21 +982,6 @@ class ChannelConversationEngine:
     async def recover_observations(self) -> None:
         """Finish this ended engine's Notes after stop returned."""
         await self._observation_inbox.recover(self._owner)
-
-
-def _log_failed_reply(reply_plan: ReplyPlanFacts, error: Exception) -> None:
-    """Log a reply whose send failed for good, saying whether part of it reached the chat."""
-    if isinstance(error, ChannelError) and error.possibly_delivered:
-        message = "Channel reply incomplete: part of it may have reached the chat"
-    else:
-        message = "Channel reply lost after retries"
-    _LOGGER.error(
-        "%s (channel=%s attempts=%s): %s",
-        message,
-        reply_plan.channel_id,
-        getattr(error, "attempts_made", None),
-        error,
-    )
 
 
 __all__ = ["ChannelConversationEngine", "ConversationTransport"]

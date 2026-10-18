@@ -503,7 +503,7 @@ def make_engine(
 
 async def settle_replies(engine: ChannelConversationEngine) -> None:
     """Wait until the replies the engine sends on its own, such as background relays, finished."""
-    while pending := [task for task in engine._tasks if not task.done()]:
+    while pending := [task for task in engine._replies._tasks if not task.done()]:
         await asyncio.wait_for(
             asyncio.gather(*pending, return_exceptions=True),
             timeout=QUEUE_DRAIN_TIMEOUT_SECONDS,

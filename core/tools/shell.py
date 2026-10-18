@@ -1,19 +1,4 @@
-"""The shell Tool: one command per call, in a new process without input or terminal.
-
-Every call starts the host shell (PowerShell 7 on Windows, bash elsewhere) on
-the command through ``CommandManager`` and waits for it: until it ends, or until
-the call's wait passes (``timeout``, else ``SHELL_DEFAULT_WAIT_SECONDS``, at most
-``SHELL_MAX_WAIT_SECONDS``). No timer stops a command: one still running when
-the wait passes continues in the background and delivers its result as a new
-message when it ends, as does a command started with ``run_in_background`` or
-moved to the background by the user. The Agent lists, checks and stops its
-background commands with ``background_tasks``.
-
-The result is the command's clean output with the shell's exit code and the
-facts that exit code hides: programs that failed inside the command, processes
-it left running, why vBot stopped it when vBot did, and a hint for well-known
-failures (``_shell_results``).
-"""
+"""The shell Tool: one command per call, without input or a terminal."""
 
 from __future__ import annotations
 
@@ -22,7 +7,7 @@ import contextlib
 import errno
 import shutil
 import sys
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -33,10 +18,8 @@ from core.runs import TOOL_CALL_OUTPUT_EVENT
 from core.sessions import SessionAddress
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
-    PowerShellCulture,
     PowerShellRequest,
     powershell_bootstrap,
-    powershell_culture,
     powershell_request,
 )
 from core.tools._shell_arguments import (
@@ -110,149 +93,24 @@ from core.tools.update_handoff import UpdateHandoffGrant, UpdateHandoffs
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
+from ._shell_definition import (
+    SHELL_DEFAULT_WAIT_SECONDS,
+    SHELL_MAX_WAIT_SECONDS,
+    SHELL_TOOL_DESCRIPTION,
+    SHELL_TOOL_PARAMETERS,
+    _render_env_prompt_block,
+)
+from ._shell_definition import (
+    format_shell_env_usage as format_shell_env_usage,
+)
+
 _LOGGER = get_logger("tools.shell")
 
 CredentialResolver = Callable[[str], str]
-
-# How long a call waits for its command when it names no timeout, and at most.
-SHELL_DEFAULT_WAIT_SECONDS = 120.0
-SHELL_MAX_WAIT_SECONDS = 600.0
 # On Windows a command's processes have a hidden console whose input nothing
 # writes: a program that reads it directly instead of stdin (Python's getpass,
 # $Host.UI.RawUI.ReadKey()) waits silently until stopped instead of failing.
 _CONSOLE_READS_WAIT = sys.platform == "win32"
-
-
-# Definition
-
-
-if sys.platform == "win32":
-    _OPENING = (
-        "Run a PowerShell 7 command in a new process and return its output and exit code. "
-        "Write PowerShell, not bash or cmd: $env:NAME for environment variables, $null instead "
-        "of /dev/null, Select-String instead of grep for command output, and single quotes or a "
-        "here-string (@'...'@) instead of \\\" escapes and heredocs."
-    )
-    # How Agents start a program in the background without the Tool.
-    _DETACHED_START = "Start-Process or a trailing &"
-    # How Agents cut a command's output themselves.
-    _TRIMMING = "Select-Object -First or -Last, or with head and tail, which PowerShell lacks"
-else:
-    _OPENING = (
-        "Run a bash command in a new process and return its output and exit code. Use bash syntax."
-    )
-    _DETACHED_START = "nohup or a trailing &"
-    _TRIMMING = "head or tail"
-
-
-def _culture_sentence(culture: PowerShellCulture | None) -> str:
-    """Name the user's format for numbers and dates where it is not the one Models assume."""
-    if culture is None or culture.name in ("", "en-US"):
-        return ""
-    return (
-        f" PowerShell prints and parses numbers and dates in the user's {culture.name} format, "
-        f"such as {culture.number} and {culture.date}."
-    )
-
-
-# The same for every Tool set: what happens to a long command, and the calls
-# that follow it up, the results say when it happens. The culture is read once
-# per process, so the definition stays the same for the Provider's cache.
-SHELL_TOOL_DESCRIPTION = (
-    f"{_OPENING}{_culture_sentence(powershell_culture())} Long output keeps its first and last "
-    f"lines, and the result names a file with all of it, so there is no need to trim it with "
-    f"{_TRIMMING}. Calls in one message run at the same time; chain dependent commands in one "
-    "call. When another tool covers the task, use it instead of a shell command."
-)
-
-_COMMAND_PARAMETER: JsonObject = {"type": "string", "minLength": 1}
-_DESCRIPTION_PARAMETER: JsonObject = {
-    "type": "string",
-    "description": (
-        "Title of what the command does, in 3–5 words, shown to the user instead of the "
-        "command. Send one with every call."
-    ),
-}
-_WORKDIR_PARAMETER: JsonObject = {
-    "type": "string",
-    "description": (
-        "Directory to run in, absolute or relative to the working directory. Omit to use the "
-        "working directory."
-    ),
-}
-# No schema maximum: the handler caps the wait, and some Provider adapters
-# reject extra keywords.
-_TIMEOUT_PARAMETER: JsonObject = {
-    "type": "number",
-    "minimum": 0,
-    "default": int(SHELL_DEFAULT_WAIT_SECONDS),
-    "description": (
-        "Seconds to wait for the command before it continues in the background, at most "
-        f"{SHELL_MAX_WAIT_SECONDS:g}. Omit for {SHELL_DEFAULT_WAIT_SECONDS:g}."
-    ),
-}
-_RUN_IN_BACKGROUND_PARAMETER: JsonObject = {
-    "type": "boolean",
-    "description": (
-        "Use for servers, watchers and other commands whose result your next step does not "
-        f"need, instead of {_DETACHED_START}. Omit to wait for the command."
-    ),
-}
-_ENV_KEYS_PARAMETER: JsonObject = {
-    "type": "array",
-    "description": (
-        "Exact names of granted environment credentials to make available to the command. "
-        "Omit when no credential is needed."
-    ),
-    "items": {"type": "string", "minLength": 1},
-    "minItems": 1,
-    "uniqueItems": True,
-}
-
-SHELL_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "properties": {
-        "command": _COMMAND_PARAMETER,
-        "description": _DESCRIPTION_PARAMETER,
-        "workdir": _WORKDIR_PARAMETER,
-        "timeout": _TIMEOUT_PARAMETER,
-        "run_in_background": _RUN_IN_BACKGROUND_PARAMETER,
-        "env_keys": _ENV_KEYS_PARAMETER,
-    },
-    "required": ["command"],
-}
-
-
-# Granted credentials
-
-
-def format_shell_env_usage(env_keys: Sequence[str], *, intro: str) -> str:
-    """Render the shared model-facing contract for granted shell credentials."""
-    keys = list(dict.fromkeys(env_keys))
-    if not keys:
-        return ""
-    key_lines = "\n".join(f"- `{key}`" for key in keys)
-    return (
-        f"{intro}\n\n"
-        f"Available environment keys:\n{key_lines}\n\n"
-        f"To use one, include its exact name in the `env_keys` array of every "
-        f"`{SHELL_MODEL_NAME}` call "
-        "that needs it. vBot resolves the value server-side and injects it only into that "
-        "process environment; put the name, never the credential value, in the Tool call. "
-        "Refer to the variable with the current host shell's environment syntax and do not "
-        "print or otherwise expose its value."
-    )
-
-
-def _render_env_prompt_block(context: Any) -> str:
-    env_keys = bash_allowed_env_keys(getattr(context.agent, "tools", None))
-    if not env_keys:
-        return ""
-    guidance = format_shell_env_usage(
-        env_keys,
-        intro="This Agent has permanent permission to use these credentials in shell commands.",
-    )
-    return f"## Shell Environment Access\n\n{guidance}"
 
 
 # Calls

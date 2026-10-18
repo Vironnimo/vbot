@@ -20,6 +20,8 @@ from core.extensions._declarations import (
     API_VERSION,
     ExtensionManifest,
     ExtensionRecord,
+    PageDeclaration,
+    _diagnose_capability,
 )
 from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.logging import get_logger
@@ -453,3 +455,29 @@ def _import_extension_module(discovered: _DiscoveredExtension) -> types.ModuleTy
     if parent_module is not None:
         setattr(parent_module, name, module)
     return module
+
+
+def resolve_pages(
+    records: list[ExtensionRecord],
+) -> dict[tuple[str, str], tuple[ExtensionRecord, PageDeclaration, Path]]:
+    """Resolve every loaded page entry once for this registration.
+
+    An entry outside its Extension root is diagnosed here and never becomes
+    a page of this registration.
+    """
+    pages: dict[tuple[str, str], tuple[ExtensionRecord, PageDeclaration, Path]] = {}
+    for record in records:
+        if record.status != "loaded":
+            continue
+        root = record.root_path.resolve()
+        for declaration in record.declarations.pages:
+            entry = (record.root_path / declaration.entry).resolve()
+            try:
+                entry.relative_to(root)
+            except ValueError:
+                _diagnose_capability(
+                    record, f"page {declaration.page_id!r} skipped: entry escapes root"
+                )
+                continue
+            pages[(record.name, declaration.page_id)] = (record, declaration, entry)
+    return pages

@@ -14,6 +14,7 @@ from typing import Any
 from core.tools import terminal_emulator
 from core.tools.terminal_emulator import EmulatorUpdate, ScreenObservation, TerminalEmulator
 
+from . import _terminal_cells, _terminal_control, _terminal_vt_screen, _terminal_vt_types
 from ._interpreter_host import DEFAULT_WORKERS, HostedObject, InterpreterHost
 from ._terminal_state import TERMINAL_MAX_ROWS
 
@@ -74,7 +75,16 @@ class TerminalRenderHost:
 
     def __init__(self, *, workers: int = DEFAULT_WORKERS, inline: bool = False) -> None:
         self._host = InterpreterHost(
-            (terminal_emulator,), name="terminal render", workers=workers, inline=inline
+            (
+                _terminal_vt_types,
+                _terminal_cells,
+                _terminal_control,
+                _terminal_vt_screen,
+                terminal_emulator,
+            ),
+            name="terminal render",
+            workers=workers,
+            inline=inline,
         )
 
     @classmethod

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from core.tools import shell_hints
+from core.tools import _shell_hint_common as shell_hint_common
 from core.tools.shell_hints import annotate_failure
 
 _NOT_RECOGNIZED = (
@@ -280,7 +280,7 @@ def test_platform_specific_hints_follow_the_host_shell(
     output: str,
     posix_expected: str,
 ) -> None:
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", powershell)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", powershell)
 
     hint = annotate_failure("run", exit_code, output)
 
@@ -422,7 +422,7 @@ def test_platform_specific_hints_follow_the_host_shell(
 def test_bash_habits_in_powershell_name_the_powershell_form(
     monkeypatch: pytest.MonkeyPatch, command: str, output: str, expected: str | None
 ) -> None:
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
 
     hint = annotate_failure(command, 1, output)
 
@@ -432,7 +432,7 @@ def test_bash_habits_in_powershell_name_the_powershell_form(
         assert hint is not None and hint.startswith(expected)
     if "*" in command:
         # Bash expands wildcards before a program starts.
-        monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+        monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
         assert annotate_failure(command, 1, output) is None
 
 
@@ -682,7 +682,7 @@ def test_bash_syntax_and_quoting_that_break_powershell_are_named(
         output = f'  File "<string>", line 1\n    code\n    ^\n{output}'
     else:
         output = f"ParserError:\nLine |\n   1 |  x\n     |  ~\n     | {output}"
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
 
     hint = annotate_failure(command, 1, output)
 
@@ -692,7 +692,7 @@ def test_bash_syntax_and_quoting_that_break_powershell_are_named(
         assert hint is not None and hint.startswith(expected)
     if output.lstrip().startswith("File"):
         # In bash, \" is an escape, so a SyntaxError there is the code's own.
-        monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+        monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
         assert annotate_failure(command, 1, output) is None
 
 
@@ -783,7 +783,7 @@ def test_an_escaped_quote_that_ended_a_powershell_string_is_named(
     failed: tuple[str, ...],
     named: str | None,
 ) -> None:
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
 
     hint = annotate_failure(command, exit_code, output, failed_programs=failed)
 
@@ -792,7 +792,7 @@ def test_an_escaped_quote_that_ended_a_powershell_string_is_named(
     else:
         assert hint is not None and hint.startswith(_ESCAPED_QUOTE) and named in hint
     # In bash, \" is an escape.
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
     hint = annotate_failure(command, exit_code, output, failed_programs=failed)
     assert hint is None or not hint.startswith(_ESCAPED_QUOTE)
 
@@ -831,7 +831,7 @@ def test_an_escaped_quote_that_ended_a_powershell_string_is_named(
 def test_python_source_expansion_names_only_unescaped_literal_variables(
     monkeypatch: pytest.MonkeyPatch, command: str, names: tuple[str, ...]
 ) -> None:
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
 
     hint = annotate_failure(command, 0, "")
 
@@ -846,7 +846,7 @@ def test_python_source_expansion_names_only_unescaped_literal_variables(
     # Failure-specific hints win, and running commands have no outcome yet.
     assert annotate_failure(command, 1, "") is None
     assert annotate_failure(command, None, "") is None
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
     assert annotate_failure(command, 0, "") is None
 
 
@@ -869,7 +869,7 @@ def test_python_source_expansion_names_only_unescaped_literal_variables(
 def test_nested_powershell_code_names_the_variables_this_shell_expanded(
     monkeypatch: pytest.MonkeyPatch, command: str, names: tuple[str, ...], exit_code: int
 ) -> None:
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
 
     hint = annotate_failure(command, exit_code, "")
 
@@ -879,7 +879,7 @@ def test_nested_powershell_code_names_the_variables_this_shell_expanded(
             assert f"`{name}`" in hint
     else:
         assert hint is None
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
     assert annotate_failure(command, exit_code, "") is None
 
 
@@ -897,7 +897,7 @@ def test_a_for_loop_over_values_names_foreach(
         "ParserError:\nLine |\n   1 |  for ($z in 12,31) { python harvest.py $z }\n"
         "     |          ~~\n     | Unexpected token 'in' in expression or statement."
     )
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
 
     hint = annotate_failure(command, 1, output)
 
@@ -930,7 +930,7 @@ def test_typographic_quotes_that_end_a_powershell_string_are_named(
     monkeypatch: pytest.MonkeyPatch, command: str, doubled: str | None, exit_code: int
 ) -> None:
     output = "ParserError: Unexpected token in expression or statement." if exit_code else ""
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
 
     hint = annotate_failure(command, exit_code, output)
 
@@ -940,7 +940,7 @@ def test_typographic_quotes_that_end_a_powershell_string_are_named(
         # The hint names the fix: the quote written twice.
         assert hint is not None and doubled in hint
     # Bash takes typographic quotes as text.
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
     assert annotate_failure(command, 0, output) is None
 
 
@@ -1129,7 +1129,7 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
     names: tuple[str, ...] | None,
     exit_code: int,
 ) -> None:
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
 
     hint = annotate_failure(
         command, exit_code, output, failed_programs=failed, output_lines=printed
@@ -1145,7 +1145,7 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
         # Exit code 0 does not show the failure; the hint says so.
         assert ("code 0" in hint) is (exit_code == 0)
     # Select-Object is PowerShell's.
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
     assert annotate_failure(command, 0, output, failed_programs=failed) is None
 
 
@@ -1178,7 +1178,7 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
 def test_a_statement_powershell_could_not_run_behind_exit_code_0_is_named(
     monkeypatch: pytest.MonkeyPatch, command: str, output: str, names: tuple[str, ...] | None
 ) -> None:
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
 
     hint = annotate_failure(command, 0, output)
 
@@ -1189,7 +1189,7 @@ def test_a_statement_powershell_could_not_run_behind_exit_code_0_is_named(
         for name in names:
             assert name in hint
     # Only PowerShell runs commands this way.
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
     assert annotate_failure(command, 0, output) is None
 
 
@@ -1226,7 +1226,7 @@ def test_a_failed_program_in_a_pipeline_names_what_and_and_skipped(
     failed: tuple[str, ...],
     names: tuple[str, ...] | None,
 ) -> None:
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", True)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
 
     hint = annotate_failure(command, exit_code, "checked 4 files", failed_programs=failed)
 
@@ -1237,7 +1237,7 @@ def test_a_failed_program_in_a_pipeline_names_what_and_and_skipped(
         for name in names:
             assert name in hint
     # In bash, && follows the pipeline's last command.
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", False)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
     assert annotate_failure(command, exit_code, "checked", failed_programs=failed) is None
 
 
@@ -1341,7 +1341,7 @@ def test_module_not_found_from_script_run_by_path_names_module_run(
     module: str,
     call: str,
 ) -> None:
-    monkeypatch.setattr(shell_hints, "_POWERSHELL", powershell)
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", powershell)
     workdir = _project(tmp_path)
     scratch = ".scratch" in command
     script = workdir / (".scratch/probe.py" if scratch else "tests/test_cart.py")

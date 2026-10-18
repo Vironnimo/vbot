@@ -160,7 +160,7 @@ async def send(
     saved: list[RunButtonBinding] = []
     sending = False
     try:
-        adapter = service._active_adapter(normalized_id)
+        adapter = service._connections.active_adapter(normalized_id)
         outbound_buttons = normalized_buttons
         if run_origin is not None and normalized_buttons is not None:
             # One hop per database: the origin check on the Session database's
@@ -256,7 +256,7 @@ async def relay_completion_run(
     config = service._storage.get(channel_id)
     if config.agent_id != run.agent_id or config.platform != reply_surface.platform:
         raise ChannelConfigError(f"Session reply surface no longer matches Channel {channel_id}")
-    engine = service._active_engine(channel_id)
+    engine = service._connections.active_engine(channel_id)
     await engine.relay_run(
         run,
         ReplyPlanFacts(

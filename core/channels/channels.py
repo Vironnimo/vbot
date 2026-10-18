@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass, replace
-from functools import partial
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.attachments import AttachmentStore
 from core.channels import _delivery
+from core.channels._adapters import create_adapter
+from core.channels._connections import ChannelConnections
 from core.channels._observations import ChannelObservationInbox
 from core.channels.adapter import (
     ChannelAdapter,
@@ -50,33 +50,6 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels")
-
-_ADAPTER_RESTART_INITIAL_DELAY_SECONDS = 1.0
-_ADAPTER_RESTART_MAX_DELAY_SECONDS = 30.0
-# Fast-retry budget before a channel is marked failed. Exhausting it does NOT
-# stop recovery: the channel keeps retrying at the capped backoff interval for
-# as long as it is enabled — a channel is the operator's lifeline (e.g. Telegram
-# control of the whole server), so a transient network blip at startup must
-# never require manual intervention.
-_ADAPTER_RESTART_MAX_RETRIES = 3
-# An adapter that stayed up at least this long was healthy: its next crash
-# starts a fresh restart cycle instead of counting toward chronic failure.
-_ADAPTER_HEALTHY_RUN_RESET_SECONDS = 300.0
-# Telegram caps an inline button's callback_data at 64 UTF-8 bytes; validated on
-# send so an over-long payload fails cleanly rather than at the Bot API.
-
-
-@dataclass
-class _AdapterOutage:
-    """A supervised outage: since when the Channel is down and how many restarts ran.
-
-    It starts with the first failure of a running Channel and ends with its next
-    connection or its stop. Only that first failure logs a WARNING; the failures
-    and restarts that follow while it lasts log at DEBUG.
-    """
-
-    since: float
-    restarts: int = 0
 
 
 class ChannelService:
@@ -123,22 +96,6 @@ class ChannelService:
         self._whatsapp_setup_tasks: dict[str, asyncio.Task[None]] = {}
         self._whatsapp_setup_states: dict[str, dict[str, Any]] = {}
         self._whatsapp_operations: dict[str, asyncio.Lock] = {}
-        # One conversation engine per started Channel. It outlives the Channel's
-        # adapter restarts, so queued work and running relays survive them, and
-        # ends with stop_channel.
-        self._engines: dict[str, ChannelConversationEngine] = {}
-        self._adapters: dict[str, ChannelAdapter] = {}
-        self._adapter_tasks: dict[str, asyncio.Task[None]] = {}
-        self._adapter_task_created: dict[str, float] = {}
-        self._adapter_stop_tasks: dict[str, asyncio.Task[None]] = {}
-        self._adapter_restart_attempts: dict[str, int] = {}
-        self._adapter_restart_tasks: dict[str, asyncio.Task[None]] = {}
-        # A failure opens an outage; the next adapter that connects closes it
-        # with one recovery line. Operator stops end it silently.
-        self._adapter_outages: dict[str, _AdapterOutage] = {}
-        # Channels whose current adapter connected at least once.
-        self._connected_channels: set[str] = set()
-        self._pending_start_requests: dict[str, tuple[bool, ChannelConfig | None]] = {}
         # Channel ids whose config change (create, update, enable, disable,
         # delete, or the config read of a restart) is in flight off the Event
         # Loop; every other change of such a Channel is refused meanwhile.
@@ -151,68 +108,52 @@ class ChannelService:
         # A drained Telegram migration must leave a replacement platform alone,
         # but its new chat id still belongs in Telegram if the switch rolls back.
         self._rollback_chat_migrations: dict[str, list[tuple[str, str]]] = {}
-        self._failed_channels: set[str] = set()
-        self._failure_reasons: dict[str, str] = {}
-        self._started = False
+        self._connections = ChannelConnections(
+            self._storage,
+            get_channel=self.get_channel,
+            validate_agent=self._validate_agent_exists,
+            new_engine=self._new_engine,
+            create_adapter=lambda config: self._create_adapter(config),
+            recover_observations=self._recover_observations,
+        )
         self._notify_tool_registration_changed_hook: Callable[[], None] = lambda: None
 
     def start(self) -> None:
-        """Start the channel service and launch enabled channel adapter tasks."""
-        if self._started:
-            return
-
-        self._started = True
-        self._recover_observations()
-        for config in self._storage.snapshot():
-            if config.enabled:
-                try:
-                    self.start_channel(config.id)
-                except Exception as error:
-                    reason = str(error) or type(error).__name__
-                    self._mark_channel_failed(config.id, reason)
-                    self._schedule_restart(config.id)
-                    if isinstance(error, ChannelError):
-                        # Expected, such as a missing credential: recovery retries it.
-                        _LOGGER.warning(
-                            "Cannot start channel adapter during service startup "
-                            "(channel=%s error_type=%s): %s",
-                            config.id,
-                            type(error).__name__,
-                            error,
-                        )
-                    else:
-                        _LOGGER.error(
-                            "Cannot start channel adapter during service startup (channel=%s): %s",
-                            config.id,
-                            error,
-                            exc_info=(type(error), error, error.__traceback__),
-                        )
+        self._connections.start()
 
     def stop(self) -> None:
-        """Stop all active channel adapter tasks. Idempotent."""
         for setup_task in self._whatsapp_setup_tasks.values():
             setup_task.cancel()
-        if (
-            not self._started
-            and not self._adapter_tasks
-            and not self._adapter_restart_tasks
-            and not self._adapter_stop_tasks
-            and not self._engines
-        ):
-            return
+        self._connections.stop()
 
-        self._pending_start_requests.clear()
-        for channel_id in list(self._adapter_restart_tasks):
-            self._cancel_restart_task(channel_id)
-        for channel_id in list(dict.fromkeys([*self._adapter_tasks, *self._engines])):
-            self.stop_channel(channel_id)
-        self._adapter_restart_attempts.clear()
-        self._adapter_outages.clear()
-        self._connected_channels.clear()
-        self._adapter_task_created.clear()
-        self._failed_channels.clear()
-        self._failure_reasons.clear()
-        self._started = False
+    def start_channel(
+        self,
+        channel_id: str,
+        *,
+        reset_backoff: bool = True,
+        config_override: ChannelConfig | None = None,
+    ) -> None:
+        self._connections.start_channel(
+            channel_id, reset_backoff=reset_backoff, config_override=config_override
+        )
+
+    def stop_channel(self, channel_id: str) -> None:
+        self._connections.stop_channel(channel_id)
+
+    def has_active_channels(self) -> bool:
+        return self._connections.has_active_channels()
+
+    def is_running(self, channel_id: str) -> bool:
+        return self._connections.is_running(_normalize_channel_id(channel_id))
+
+    def is_failed(self, channel_id: str) -> bool:
+        return self._connections.is_failed(channel_id)
+
+    def failure_reason(self, channel_id: str) -> str | None:
+        return self._connections.failure_reason(channel_id)
+
+    def denied_chats(self, channel_id: str) -> list[DeniedChatFacts]:
+        return self._connections.denied_chats(channel_id)
 
     @property
     def database(self) -> Database:
@@ -225,10 +166,10 @@ class ChannelService:
 
     async def aclose(self) -> None:
         """Stop all channel tasks and await their cancellation/shutdown paths."""
-        tasks = [*self._adapter_stop_tasks.values(), *self._adapter_restart_tasks.values()]
+        tasks = self._connections.pending_tasks()
         tasks.extend(self._whatsapp_setup_tasks.values())
         self.stop()
-        tasks.extend(self._adapter_stop_tasks.values())
+        tasks.extend(self._connections.pending_tasks())
 
         pending_tasks = _unique_pending_tasks(tasks)
         if pending_tasks:
@@ -241,128 +182,6 @@ class ChannelService:
         if observations:
             await asyncio.gather(*observations, return_exceptions=True)
         self._observation_tasks.clear()
-
-    def start_channel(
-        self,
-        channel_id: str,
-        *,
-        reset_backoff: bool = True,
-        config_override: ChannelConfig | None = None,
-    ) -> None:
-        """Start one enabled channel adapter task when not already running."""
-        normalized_id = _normalize_channel_id(channel_id)
-
-        if config_override is not None:
-            if config_override.id != normalized_id:
-                raise ChannelConfigError(
-                    f"config_override.id mismatch: {config_override.id} != {normalized_id}"
-                )
-            config = replace(config_override)
-            config.validate()
-        else:
-            config = self._storage.cached(normalized_id)
-
-        self._validate_agent_exists(config.agent_id)
-        self._cancel_restart_task(normalized_id)
-        if reset_backoff:
-            self._adapter_restart_attempts.pop(normalized_id, None)
-            self._failed_channels.discard(normalized_id)
-            self._failure_reasons.pop(normalized_id, None)
-
-        if self._is_stop_in_progress(normalized_id):
-            # The old adapter can still persist a Telegram chat-id migration
-            # while draining. Resolve its replacement from the config after
-            # shutdown, rather than retaining this pre-drain snapshot.
-            self._schedule_pending_start(
-                normalized_id,
-                reset_backoff=reset_backoff,
-                config_override=None,
-            )
-            return
-
-        existing_task = self._adapter_tasks.get(normalized_id)
-        if existing_task is not None and not existing_task.done():
-            return
-        if existing_task is not None and existing_task.done():
-            self._adapter_tasks.pop(normalized_id, None)
-            self._adapters.pop(normalized_id, None)
-
-        if not config.enabled:
-            return
-
-        loop = _get_running_loop_or_none()
-        if loop is None:
-            _LOGGER.warning(
-                "Cannot start channel adapter without a running event loop (channel=%s)",
-                normalized_id,
-            )
-            return
-
-        engine = self._engines.get(normalized_id)
-        if engine is not None and engine.config != config:
-            # The configuration changed while no adapter ran. The old engine ends
-            # first, so its owed replies pass to the new one exactly once.
-            self.stop_channel(normalized_id)
-            self._schedule_pending_start(
-                normalized_id, reset_backoff=reset_backoff, config_override=config_override
-            )
-            return
-        if engine is None:
-            engine = self._new_engine(config)
-            self._engines[normalized_id] = engine
-            engine.start()
-
-        adapter = self._create_adapter(config)
-        adapter.observe_connection(partial(self._on_adapter_connected, normalized_id, adapter))
-        task = loop.create_task(
-            self._run_adapter(normalized_id, adapter, engine), name=f"channel:{normalized_id}"
-        )
-        self._adapters[normalized_id] = adapter
-        self._connected_channels.discard(normalized_id)
-        self._adapter_tasks[normalized_id] = task
-        self._adapter_task_created[normalized_id] = time.monotonic()
-
-        def on_done(completed_task: asyncio.Task[None], channel: str = normalized_id) -> None:
-            self._on_adapter_task_done(channel, completed_task)
-
-        task.add_done_callback(on_done)
-
-    def stop_channel(self, channel_id: str) -> None:
-        """Stop one running channel adapter task when active."""
-        normalized_id = _normalize_channel_id(channel_id)
-
-        self._pending_start_requests.pop(normalized_id, None)
-        self._cancel_restart_task(normalized_id)
-        self._adapter_restart_attempts.pop(normalized_id, None)
-        self._adapter_outages.pop(normalized_id, None)
-        self._failed_channels.discard(normalized_id)
-        self._failure_reasons.pop(normalized_id, None)
-
-        task = self._adapter_tasks.pop(normalized_id, None)
-        self._adapters.pop(normalized_id, None)
-        self._connected_channels.discard(normalized_id)
-        self._adapter_task_created.pop(normalized_id, None)
-        engine = self._engines.pop(normalized_id, None)
-        running = task is not None and not task.done()
-
-        if running or engine is not None:
-            if task is not None and running:
-                task.cancel()
-            loop = _get_running_loop_or_none()
-            if loop is not None:
-                stop_task = loop.create_task(
-                    self._await_adapter_shutdown(normalized_id, task if running else None, engine),
-                    name=f"channel:{normalized_id}:stop",
-                )
-                self._adapter_stop_tasks[normalized_id] = stop_task
-
-                def on_stop_done(
-                    completed_task: asyncio.Task[None],
-                    channel: str = normalized_id,
-                ) -> None:
-                    self._on_stop_task_done(channel, completed_task)
-
-                stop_task.add_done_callback(on_stop_done)
 
     async def restart_channel(self, channel_id: str) -> bool:
         """Rebuild one enabled channel adapter from its current config and credentials.
@@ -426,7 +245,7 @@ class ChannelService:
         normalized_id = _normalize_channel_id(channel_id)
         if not isinstance(platform_target, str) or not platform_target:
             raise ChannelConfigError("platform_target must be a non-empty string")
-        adapter = self._active_adapter(normalized_id)
+        adapter = self._connections.active_adapter(normalized_id)
         return await adapter.ensure_outbound_session(platform_target, thread_id=thread_id)
 
     def list_channels(self) -> list[ChannelConfig]:
@@ -562,7 +381,7 @@ class ChannelService:
         their config; :meth:`retarget_agent_async` then changes each Channel
         through :meth:`update_channel`. Returns the ids of the changed Channels.
         """
-        if self._started:
+        if self._connections.started:
             raise ChannelError("Retarget running Channels through update_channel")
         changed: list[str] = []
         for config in self._storage.load_all():
@@ -587,7 +406,7 @@ class ChannelService:
         which rebuilds a running adapter for its new Agent. Returns the ids of the
         changed Channels.
         """
-        if not self._started:
+        if not self._connections.started:
             return await self._state.database.run_async(self.retarget_agent, agent_id, new_agent_id)
         changed: list[str] = []
         for config in await self.list_channels_async():
@@ -628,16 +447,17 @@ class ChannelService:
             with self._config_change(normalized_id):
                 config = await self.get_channel(normalized_id)
                 if config.platform in {"whatsapp", "slack", "mattermost"} and (
-                    self._is_running(normalized_id) or self._is_stop_in_progress(normalized_id)
+                    self._connections.is_running(normalized_id)
+                    or self._connections.is_stopping(normalized_id)
                 ):
                     raise ChannelError(
                         "Disable the Channel and wait for shutdown or setup "
                         "to finish before removing it"
                     )
                 self.stop_channel(normalized_id)
-                self._pending_start_requests.pop(normalized_id, None)
+                self._connections.cancel_pending_start(normalized_id)
                 self._release_config_lease(normalized_id)
-                stopping = self._adapter_stop_tasks.get(normalized_id)
+                stopping = self._connections.stopping(normalized_id)
                 if stopping is not None:
                     await asyncio.shield(stopping)
                 await self._state.database.run_async(remove)
@@ -705,10 +525,6 @@ class ChannelService:
         # Both chat ids are Telegram-owned; the allowlist itself shows them.
         _LOGGER.info("Channel allowlist migrated (channel=%s)", normalized_id)
 
-    def has_active_channels(self) -> bool:
-        """Return whether at least one channel adapter task is currently running."""
-        return any(not task.done() for task in self._adapter_tasks.values())
-
     def has_enabled_channels(self) -> bool:
         """Return whether a valid Agent owns at least one enabled Channel config."""
         for config in self._storage.snapshot():
@@ -721,50 +537,11 @@ class ChannelService:
             return True
         return False
 
-    def is_running(self, channel_id: str) -> bool:
-        """Return whether one channel's adapter task is currently running."""
-        return self._is_running(_normalize_channel_id(channel_id))
-
-    def is_failed(self, channel_id: str) -> bool:
-        """Return whether one channel is currently marked failed.
-
-        A running adapter is never reported failed: after a failed cycle the
-        recovery loop keeps retrying, and a successful attempt must show as
-        healthy immediately (the raw marker stays for the next crash).
-        """
-        normalized_id = _normalize_channel_id(channel_id)
-        if self._is_running(normalized_id):
-            return False
-        return normalized_id in self._failed_channels
-
-    def failure_reason(self, channel_id: str) -> str | None:
-        """Return the latest failure reason for one failed channel, if any."""
-        normalized_id = _normalize_channel_id(channel_id)
-        if self._is_running(normalized_id):
-            return None
-        return self._failure_reasons.get(normalized_id)
-
-    def denied_chats(self, channel_id: str) -> list[DeniedChatFacts]:
-        """Return one channel's recently allowlist-denied inbound chats.
-
-        Empty when the channel is not running: the log lives on the adapter
-        instance, so there is nothing to report without an active adapter.
-        """
-        normalized_id = _normalize_channel_id(channel_id)
-        adapter = self._adapters.get(normalized_id)
-        if adapter is None:
-            return []
-        return adapter.denied_chats()
-
     def _notify_tool_registration_changed(self) -> None:
         try:
             self._notify_tool_registration_changed_hook()
         except Exception:
             _LOGGER.exception("Channel tool-registration hook failed")
-
-    def _mark_channel_failed(self, channel_id: str, reason: str) -> None:
-        self._failed_channels.add(channel_id)
-        self._failure_reasons[channel_id] = reason
 
     def _notify_tool_registration_if_changed(self, had_enabled_channels: bool) -> None:
         if had_enabled_channels == self.has_enabled_channels():
@@ -785,65 +562,22 @@ class ChannelService:
             access_registry=self._state,
         )
 
-    def _engine_for(self, config: ChannelConfig) -> ChannelConversationEngine:
-        """The started Channel's engine for its configuration, else an unstarted one.
-
-        An adapter built only to validate a configuration gets an engine of its own.
-        """
-        engine = self._engines.get(config.id)
-        if engine is not None and engine.config == config:
-            return engine
-        return self._new_engine(config)
-
     def _create_adapter(self, config: ChannelConfig) -> ChannelAdapter:
-        if config.platform in {"slack", "mattermost", "whatsapp"}:
-            from core.channels.mattermost import MattermostChannelAdapter
-            from core.channels.slack import SlackChannelAdapter
-            from core.channels.whatsapp import WhatsAppChannelAdapter
-
-            adapter_type: Any = {
-                "slack": SlackChannelAdapter,
-                "mattermost": MattermostChannelAdapter,
-                "whatsapp": WhatsAppChannelAdapter,
-            }[config.platform]
-            adapter: ChannelAdapter = adapter_type(
-                config,
-                self._engine_for(config),
-                self._credential_resolver,
-                attachment_store=self._attachment_store,
-                received_messages=self._state,
-                state_dir=self._channel_root / config.id,
-            )
-            return adapter
-        if config.platform == "discord":
-            from core.channels.discord import DiscordChannelAdapter
-
-            return DiscordChannelAdapter(
-                config,
-                self._engine_for(config),
-                self._credential_resolver,
-                attachment_store=self._attachment_store,
-            )
-
-        if config.platform == "telegram":
-            from core.channels.telegram import TelegramChannelAdapter
-
-            return TelegramChannelAdapter(
-                config,
-                self._engine_for(config),
-                self._credential_resolver,
-                attachment_store=self._attachment_store,
-                chat_migration_persister=partial(self.record_chat_id_migration, config.id),
-                interaction_dispatcher=self._interaction_dispatcher,
-                update_offset_store=self._state,
-            )
-
-        raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")
+        return create_adapter(
+            config,
+            engine_for=self._connections.engine_for,
+            credential_resolver=self._credential_resolver,
+            attachment_store=self._attachment_store,
+            state=self._state,
+            channel_root=self._channel_root,
+            chat_migration_persister=self.record_chat_id_migration,
+            interaction_dispatcher=self._interaction_dispatcher,
+        )
 
     def connection_status(self, channel_id: str) -> dict[str, Any]:
         from core.channels._network_adapter import NetworkChannelAdapter
 
-        adapter = self._adapters.get(_normalize_channel_id(channel_id))
+        adapter = self._connections.adapter(_normalize_channel_id(channel_id))
         return adapter.connection_status() if isinstance(adapter, NetworkChannelAdapter) else {}
 
     async def whatsapp_status(self, channel_id: str) -> dict[str, Any]:
@@ -854,7 +588,7 @@ class ChannelService:
         config = await self.get_channel(channel_id)
         if config.platform != "whatsapp":
             raise ChannelConfigError("This operation requires a WhatsApp Channel")
-        adapter = self._adapters.get(config.id)
+        adapter = self._connections.adapter(config.id)
         return {
             "id": config.id,
             "installed": await channel_io(bridge_ready, self._channel_root / config.id),
@@ -903,8 +637,8 @@ class ChannelService:
                 return status
             if (
                 (await self.get_channel(channel_id)).enabled
-                or self._is_running(channel_id)
-                or self._is_stop_in_progress(channel_id)
+                or self._connections.is_running(channel_id)
+                or self._connections.is_stopping(channel_id)
             ):
                 raise ChannelConfigError("Disable this WhatsApp Channel before installing support")
             self._whatsapp_setup_states[channel_id] = {"setup": "installing", "error": None}
@@ -944,7 +678,7 @@ class ChannelService:
                 from core.channels._whatsapp_setup import reset_pairing
 
                 self.stop_channel(channel_id)
-                stopping = self._adapter_stop_tasks.get(channel_id)
+                stopping = self._connections.stopping(channel_id)
                 if stopping is not None:
                     await asyncio.shield(stopping)
                 await channel_io(reset_pairing, self._channel_root / channel_id)
@@ -1020,7 +754,9 @@ class ChannelService:
             had_enabled_channels, has_enabled_channels = await self._state.database.run_async(
                 persist
             )
-            was_running = self._is_running(channel_id) or self._is_stop_in_progress(channel_id)
+            was_running = self._connections.is_running(channel_id) or self._connections.is_stopping(
+                channel_id
+            )
             if platform_changed and previous.platform == "telegram":
                 self._rollback_chat_migrations[channel_id] = []
             if was_running or not updated.enabled or platform_changed or agent_changed:
@@ -1030,7 +766,7 @@ class ChannelService:
                 # They leave the replacement platform alone while retaining id
                 # rewrites for rollback. Release before waiting for shutdown.
                 self._release_config_lease(channel_id)
-                stopping = self._adapter_stop_tasks.get(channel_id)
+                stopping = self._connections.stopping(channel_id)
                 if stopping is not None:
                     await asyncio.shield(stopping)
                 if platform_changed and await self._state.database.run_async(
@@ -1051,8 +787,8 @@ class ChannelService:
                     # The Agent and its Sessions already moved. Missing platform
                     # credentials cannot undo that identity change: retain the
                     # new config and expose/retry the adapter failure normally.
-                    self._mark_channel_failed(channel_id, str(error) or type(error).__name__)
-                    self._schedule_restart(channel_id)
+                    self._connections.mark_failed(channel_id, str(error) or type(error).__name__)
+                    self._connections.schedule_restart(channel_id)
                     _LOGGER.error(
                         "Cannot restart channel adapter after Agent rename (channel=%s): %s",
                         channel_id,
@@ -1135,7 +871,7 @@ class ChannelService:
         so a deferred start can safely reload the persisted configuration.
         """
         channel_id = previous.id
-        self._pending_start_requests.pop(channel_id, None)
+        self._connections.cancel_pending_start(channel_id)
         cancelled = False
         if rebind_state:
             try:
@@ -1183,362 +919,18 @@ class ChannelService:
         if cancelled:
             raise asyncio.CancelledError
 
-    def _schedule_pending_start(
-        self,
-        channel_id: str,
-        *,
-        reset_backoff: bool,
-        config_override: ChannelConfig | None,
-    ) -> None:
-        if not self._started:
-            return
-        self._pending_start_requests[channel_id] = (reset_backoff, config_override)
-
-    def _is_stop_in_progress(self, channel_id: str) -> bool:
-        task = self._adapter_stop_tasks.get(channel_id)
-        return task is not None and not task.done()
-
-    async def _await_adapter_shutdown(
-        self,
-        channel_id: str,
-        task: asyncio.Task[None] | None,
-        engine: ChannelConversationEngine | None,
-    ) -> None:
-        """Wait for the adapter to stop, then end the Channel's engine."""
-        if task is not None:
-            try:
-                await task
-            except asyncio.CancelledError:
-                _LOGGER.info("Channel adapter stopped (channel=%s)", channel_id)
-            except Exception:
-                # The task was already popped from _adapter_tasks before this runs, so its
-                # own done-callback returns early without logging: log the shutdown failure
-                # here or it surfaces nowhere.
-                _LOGGER.error(
-                    "Channel adapter shutdown raised during stop (channel=%s)",
-                    channel_id,
-                    exc_info=True,
-                )
-            else:
-                _LOGGER.info("Channel adapter stopped (channel=%s)", channel_id)
-        if engine is not None:
-            # After the adapter: its last inbound handling still reached the engine.
-            try:
-                await engine.stop()
-                if self._started:
-                    self._recover_observations(engine)
-            except Exception:
-                _LOGGER.error(
-                    "Channel conversation engine stop failed (channel=%s)",
-                    channel_id,
-                    exc_info=True,
-                )
-
-        self._adapter_stop_tasks.pop(channel_id, None)
-
-        pending = self._pending_start_requests.pop(channel_id, None)
-        if pending is None or not self._started:
-            return
-
-        reset_backoff, config_override = pending
-        if config_override is None and not self._can_restart_channel(channel_id):
-            return
-
-        try:
-            if config_override is None:
-                config_override = await self.get_channel(channel_id)
-            self.start_channel(
-                channel_id,
-                reset_backoff=reset_backoff,
-                config_override=config_override,
-            )
-        except Exception as error:
-            self._mark_channel_failed(channel_id, str(error) or type(error).__name__)
-            self._schedule_restart(channel_id)
-            _LOGGER.error(
-                "Cannot start queued channel adapter after stop completed (channel=%s): %s",
-                channel_id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-
     def _recover_observations(self, engine: ChannelConversationEngine | None = None) -> None:
         loop = _get_running_loop_or_none()
         if loop is None:
             return
         task = loop.create_task(
-            self._observations.recover(
-                exclude_owners=lambda: {
-                    active.observation_owner for active in self._engines.values()
-                }
-            )
+            self._observations.recover(exclude_owners=self._connections.observation_owners)
             if engine is None
             else engine.recover_observations(),
             name="channels:observed-context",
         )
         self._observation_tasks.add(task)
         task.add_done_callback(self._observation_tasks.discard)
-
-    def _on_stop_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
-        if self._adapter_stop_tasks.get(channel_id) is task:
-            self._adapter_stop_tasks.pop(channel_id, None)
-
-        if task.cancelled():
-            return
-
-        error = task.exception()
-        if error is None:
-            return
-
-        _LOGGER.error(
-            "Channel adapter stop task failed for channel=%s: %s",
-            channel_id,
-            error,
-            exc_info=(type(error), error, error.__traceback__),
-        )
-
-    def _active_engine(self, channel_id: str) -> ChannelConversationEngine:
-        """The engine of a started Channel, also while its adapter reconnects."""
-        engine = self._engines.get(channel_id)
-        if engine is None:
-            raise ChannelNotFoundError(f"Channel not active: {channel_id}")
-        return engine
-
-    def _active_adapter(self, channel_id: str) -> ChannelAdapter:
-        task = self._adapter_tasks.get(channel_id)
-        adapter = self._adapters.get(channel_id)
-        if task is None or adapter is None or task.done():
-            raise ChannelNotFoundError(f"Channel not active: {channel_id}")
-        return adapter
-
-    def _is_running(self, channel_id: str) -> bool:
-        task = self._adapter_tasks.get(channel_id)
-        return task is not None and not task.done()
-
-    async def _run_adapter(
-        self, channel_id: str, adapter: ChannelAdapter, engine: ChannelConversationEngine
-    ) -> None:
-        try:
-            await adapter.start()
-        finally:
-            # Replies wait for the next adapter instead of failing on this one.
-            engine.set_connected(False)
-            try:
-                await adapter.stop()
-            except Exception as error:
-                _LOGGER.error(
-                    "Channel adapter stop failed for channel=%s: %s",
-                    channel_id,
-                    error,
-                    exc_info=(type(error), error, error.__traceback__),
-                )
-
-    def _on_adapter_connected(self, channel_id: str, adapter: ChannelAdapter) -> None:
-        """Log the current adapter's first connection as its start or its recovery."""
-        if self._adapters.get(channel_id) is not adapter:
-            return
-        engine = self._engines.get(channel_id)
-        if engine is not None:
-            engine.set_connected(True)
-        if channel_id in self._connected_channels:
-            _LOGGER.debug("Channel adapter reconnected (channel=%s)", channel_id)
-            return
-        self._connected_channels.add(channel_id)
-        outage = self._adapter_outages.pop(channel_id, None)
-        if outage is None:
-            _LOGGER.info(
-                "Channel adapter started (channel=%s platform=%s)", channel_id, adapter.platform
-            )
-            return
-        _LOGGER.info(
-            "Channel adapter recovered (channel=%s platform=%s attempts=%d down_for=%.1fs)",
-            channel_id,
-            adapter.platform,
-            outage.restarts,
-            time.monotonic() - outage.since,
-        )
-
-    def _on_adapter_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
-        if self._adapter_tasks.get(channel_id) is not task:
-            return
-
-        self._adapter_tasks.pop(channel_id, None)
-        self._adapters.pop(channel_id, None)
-        created_at = self._adapter_task_created.pop(channel_id, None)
-
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is None:
-            self._adapter_restart_attempts.pop(channel_id, None)
-            self._failed_channels.discard(channel_id)
-            self._failure_reasons.pop(channel_id, None)
-            return
-
-        if created_at is not None:
-            runtime_seconds = time.monotonic() - created_at
-            if runtime_seconds >= _ADAPTER_HEALTHY_RUN_RESET_SECONDS:
-                # The adapter was up long enough to count as healthy: treat the
-                # crash as a fresh incident instead of chronic failure.
-                self._adapter_restart_attempts.pop(channel_id, None)
-                self._failed_channels.discard(channel_id)
-                self._failure_reasons.pop(channel_id, None)
-
-        self._failure_reasons[channel_id] = str(error)
-
-        if channel_id in self._adapter_outages:
-            _LOGGER.debug(
-                "Channel adapter failed again; restart scheduled (channel=%s attempts=%d error=%s)",
-                channel_id,
-                self._adapter_restart_attempts.get(channel_id, 0),
-                error,
-            )
-        else:
-            _LOGGER.warning(
-                "Channel adapter failed; restart scheduled (channel=%s error=%s)",
-                channel_id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-        self._schedule_restart(channel_id)
-
-    def _schedule_restart(self, channel_id: str) -> None:
-        if not self._started:
-            return
-
-        if self._is_stop_in_progress(channel_id):
-            return
-
-        existing_task = self._adapter_restart_tasks.get(channel_id)
-        if existing_task is not None and not existing_task.done():
-            return
-
-        self._adapter_outages.setdefault(channel_id, _AdapterOutage(since=time.monotonic()))
-        loop = _get_running_loop_or_none()
-        if loop is None:
-            _LOGGER.error(
-                "Cannot restart channel adapter without a running event loop (channel=%s)",
-                channel_id,
-            )
-            return
-
-        restart_task = loop.create_task(
-            self._restart_with_backoff(channel_id),
-            name=f"channel:{channel_id}:restart",
-        )
-        self._adapter_restart_tasks[channel_id] = restart_task
-
-        def on_done(completed_task: asyncio.Task[None], channel: str = channel_id) -> None:
-            self._on_restart_task_done(channel, completed_task)
-
-        restart_task.add_done_callback(on_done)
-
-    async def _restart_with_backoff(self, channel_id: str) -> None:
-        attempt = self._adapter_restart_attempts.get(channel_id, 0)
-        if attempt >= _ADAPTER_RESTART_MAX_RETRIES:
-            reason = self._failure_reasons.get(channel_id, "adapter restart attempts exhausted")
-            self._mark_channel_failed(channel_id, reason)
-            if attempt == _ADAPTER_RESTART_MAX_RETRIES:
-                _LOGGER.warning(
-                    "Channel adapter exceeded max restart attempts and is marked failed; "
-                    "recovery attempts continue at the capped backoff interval "
-                    "(channel=%s retries=%d)",
-                    channel_id,
-                    _ADAPTER_RESTART_MAX_RETRIES,
-                )
-
-        next_attempt = attempt + 1
-        self._adapter_restart_attempts[channel_id] = next_attempt
-
-        delay_seconds = self._restart_delay_seconds(next_attempt)
-        _LOGGER.debug(
-            "Channel adapter restart scheduled (channel=%s attempt=%d fast_retries=%d delay=%.1fs)",
-            channel_id,
-            next_attempt,
-            _ADAPTER_RESTART_MAX_RETRIES,
-            delay_seconds,
-        )
-        await asyncio.sleep(delay_seconds)
-
-        if not self._can_restart_channel(channel_id):
-            return
-
-        outage = self._adapter_outages.get(channel_id)
-        if outage is not None:
-            outage.restarts += 1
-        config = await self.get_channel(channel_id)
-        self.start_channel(channel_id, reset_backoff=False, config_override=config)
-
-    def _restart_delay_seconds(self, attempt: int) -> float:
-        # Cap the exponent before converting to float, even after years offline.
-        delay = _ADAPTER_RESTART_INITIAL_DELAY_SECONDS * (2.0 ** min(max(attempt - 1, 0), 30))
-        return float(min(_ADAPTER_RESTART_MAX_DELAY_SECONDS, delay))
-
-    def _can_restart_channel(self, channel_id: str) -> bool:
-        if not self._started:
-            return False
-
-        if self._is_running(channel_id):
-            return False
-
-        if self._is_stop_in_progress(channel_id):
-            return False
-
-        try:
-            config = self._storage.cached(channel_id)
-        except ChannelNotFoundError:
-            return False
-        except ChannelError:
-            _LOGGER.exception(
-                "Cannot load channel config while checking restart eligibility (channel=%s)",
-                channel_id,
-            )
-            return False
-
-        return config.enabled
-
-    def _cancel_restart_task(self, channel_id: str) -> None:
-        task = self._adapter_restart_tasks.get(channel_id)
-        if task is None:
-            return
-
-        if task is asyncio.current_task():
-            return
-
-        self._adapter_restart_tasks.pop(channel_id, None)
-        if not task.done():
-            task.cancel()
-
-    def _on_restart_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
-        owns_restart = self._adapter_restart_tasks.get(channel_id) is task
-        if owns_restart:
-            self._adapter_restart_tasks.pop(channel_id, None)
-
-        if task.cancelled():
-            return
-
-        error = task.exception()
-        if error is None:
-            return
-
-        # A restart runs inside an outage whose first failure was logged already.
-        if channel_id in self._adapter_outages:
-            _LOGGER.debug(
-                "Channel adapter restart failed (channel=%s attempts=%d error=%s)",
-                channel_id,
-                self._adapter_restart_attempts.get(channel_id, 0),
-                error,
-            )
-        else:
-            _LOGGER.error(
-                "Channel adapter restart failed (channel=%s error=%s)",
-                channel_id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-        if owns_restart:
-            self._mark_channel_failed(channel_id, str(error) or type(error).__name__)
-            self._schedule_restart(channel_id)
 
 
 def _with_migrated_chat_id(
@@ -1573,13 +965,6 @@ async def _settle(work: Awaitable[object], failure_message: str) -> None:
     await settle_before_cancelling(compensate())
 
 
-def _get_running_loop_or_none() -> asyncio.AbstractEventLoop | None:
-    try:
-        return asyncio.get_running_loop()
-    except RuntimeError:
-        return None
-
-
 def _unique_pending_tasks(tasks: list[asyncio.Task[None]]) -> list[asyncio.Task[None]]:
     seen: set[asyncio.Task[None]] = set()
     pending_tasks: list[asyncio.Task[None]] = []
@@ -1594,3 +979,10 @@ def _unique_pending_tasks(tasks: list[asyncio.Task[None]]) -> list[asyncio.Task[
 __all__ = [
     "ChannelService",
 ]
+
+
+def _get_running_loop_or_none() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None

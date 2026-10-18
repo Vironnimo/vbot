@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from core.extensions._declarations import HookContext, HookHandler, LifecycleHandler
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
@@ -119,3 +120,71 @@ def _log_slow_extension_handler(
         handler_kind,
         elapsed,
     )
+
+
+HANDLER_FAILED = object()
+
+
+async def invoke_lifecycle_fail_open(
+    phase: str, extension_name: str, handler: LifecycleHandler
+) -> None:
+    """Call one lifecycle handler with fail-open isolation (logs at ``error``).
+
+    A handler that exceeds the lifecycle deadline is asked to cancel and
+    detached, so it cannot hold startup, shutdown, reload or disable.
+    """
+    try:
+        await invoke_lifecycle_handler(
+            handler,
+            extension_name=extension_name,
+            description=f"{phase} handler",
+            cancel_on_timeout=True,
+        )
+    except ExtensionHandlerTimeoutError as exc:
+        _LOGGER.error(
+            "Extension %r %s handler %s; continuing without it",
+            extension_name,
+            phase,
+            exc,
+        )
+    except Exception as exc:
+        _LOGGER.error(
+            "Extension %r %s handler raised: %s",
+            extension_name,
+            phase,
+            exc,
+            exc_info=True,
+        )
+
+
+async def invoke_hook_fail_open(
+    event: str,
+    extension_name: str,
+    handler: HookHandler,
+    ctx: HookContext,
+    payload: dict[str, Any],
+) -> Any:
+    """Call one handler with per-handler exception isolation.
+
+    Awaits async handlers. On failure logs at ``warning`` and returns the
+    ``HANDLER_FAILED`` sentinel so callers can skip the handler without
+    confusing a raised handler with one that returned ``None``.
+    """
+    started_at = time.perf_counter()
+    try:
+        return await invoke_extension_handler(handler, ctx, **payload)
+    except Exception as exc:
+        _LOGGER.warning(
+            "Extension %r %s handler raised: %s",
+            extension_name,
+            event,
+            exc,
+            exc_info=True,
+        )
+        return HANDLER_FAILED
+    finally:
+        _log_slow_extension_handler(
+            extension_name=extension_name,
+            handler_kind=event,
+            started_at=started_at,
+        )

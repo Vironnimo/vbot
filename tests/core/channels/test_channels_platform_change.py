@@ -230,7 +230,7 @@ async def test_agent_rename_preserves_routes_when_adapter_credentials_are_unavai
         assert _state_rows(service) == _FILLED
         assert service.is_failed(_CHANNEL)
         assert service.failure_reason(_CHANNEL) == "credential unavailable"
-        assert _CHANNEL in service._adapter_restart_tasks
+        assert _CHANNEL in service._connections._adapter_restart_tasks
     finally:
         await service.aclose()
         service.close()

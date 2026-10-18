@@ -16,6 +16,7 @@ from core.channels import (
     ChannelConfig,
     ChannelConfigError,
     ChannelNotFoundError,
+    ChannelService,
     ChannelStorage,
 )
 from core.channels.adapter import FileData, RouteFacts
@@ -71,16 +72,16 @@ class CrashingAdapter(ChannelAdapter):
         raise NotImplementedError
 
 
-def _record_restart_delays(service: object, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+def _record_restart_delays(service: ChannelService, monkeypatch: pytest.MonkeyPatch) -> list[float]:
     """Record each restart delay the service chooses and restart at once instead."""
     delays: list[float] = []
-    original = service._restart_delay_seconds  # type: ignore[attr-defined]
+    original = service._connections._restart_delay_seconds
 
     def immediate(attempt: int) -> float:
         delays.append(original(attempt))
         return 0.0
 
-    monkeypatch.setattr(service, "_restart_delay_seconds", immediate)
+    monkeypatch.setattr(service._connections, "_restart_delay_seconds", immediate)
     return delays
 
 
@@ -124,12 +125,12 @@ async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers
     def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
         nonlocal constructions
         constructions += 1
-        engines.append(service._active_engine("tg-assistant"))
+        engines.append(service._connections.active_engine("tg-assistant"))
         if constructions > 1:
             failed_seen.append(service.is_failed("tg-assistant"))
         return CrashingAdapter() if constructions <= failures else recovered
 
-    original_delay = service._restart_delay_seconds
+    original_delay = service._connections._restart_delay_seconds
     service._notify_tool_registration_changed_hook = hook
     monkeypatch.setattr(service, "_create_adapter", create_adapter)
     delays = _record_restart_delays(service, monkeypatch)
@@ -174,7 +175,7 @@ async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers
         assert all(record.exc_info is not None for record in warning_records[:1])
         # Stopping the Channel ends its conversations too.
         with pytest.raises(ChannelNotFoundError):
-            service._active_engine("tg-assistant")
+            service._connections.active_engine("tg-assistant")
     finally:
         await service.aclose()
         service.close()
@@ -194,7 +195,9 @@ async def test_a_crash_after_a_healthy_run_starts_a_fresh_backoff_cycle(
 ) -> None:
     # The service measures adapter uptime on a controlled clock; nothing waits.
     now = [1000.0]
-    monkeypatch.setattr("core.channels.channels.time", SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(
+        "core.channels._connections.time", SimpleNamespace(monotonic=lambda: now[0])
+    )
 
     def run_for_uptime() -> None:
         now[0] += uptime_seconds
@@ -241,13 +244,13 @@ async def test_channel_service_ignores_stale_adapter_task_done_callback(
     current_task = asyncio.create_task(asyncio.sleep(60))
     await stale_task
 
-    service._adapters[config.id] = adapter
-    service._adapter_tasks[config.id] = current_task
+    service._connections._adapters[config.id] = adapter
+    service._connections._adapter_tasks[config.id] = current_task
 
-    service._on_adapter_task_done(config.id, stale_task)
+    service._connections._on_adapter_task_done(config.id, stale_task)
 
-    assert service._adapters[config.id] is adapter
-    assert service._adapter_tasks[config.id] is current_task
+    assert service._connections._adapters[config.id] is adapter
+    assert service._connections._adapter_tasks[config.id] is current_task
 
     current_task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -459,7 +462,7 @@ async def test_queued_construction_failure_recovers_after_old_adapter_stops(
 
     monkeypatch.setattr(service, "_create_adapter", create_adapter)
     monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
-    monkeypatch.setattr(service, "_restart_delay_seconds", lambda _attempt: 0.0)
+    monkeypatch.setattr(service._connections, "_restart_delay_seconds", lambda _attempt: 0.0)
     service.start()
     try:
         await old.started.wait()
@@ -495,10 +498,12 @@ async def test_ending_a_channel_ends_its_construction_failure_recovery(
     # Disabling must end the retry before it fires, however slowly the disable
     # runs; stopping the service must happen right after a retry has failed.
     retry_delay = 0.0 if ending == "service-stop" else 3600.0
-    monkeypatch.setattr(service, "_restart_delay_seconds", lambda _attempt: retry_delay)
+    monkeypatch.setattr(
+        service._connections, "_restart_delay_seconds", lambda _attempt: retry_delay
+    )
     service.start()
     try:
-        retry = service._adapter_restart_tasks[config.id]
+        retry = service._connections._adapter_restart_tasks[config.id]
         if ending == "disable":
             await service.disable_channel(config.id)
             await asyncio.gather(retry, return_exceptions=True)
@@ -507,7 +512,7 @@ async def test_ending_a_channel_ends_its_construction_failure_recovery(
             await wait_until(lambda: constructions == 2)
             await asyncio.gather(retry, return_exceptions=True)
             await asyncio.sleep(0)
-        assert not service._adapter_restart_tasks
+        assert not service._connections._adapter_restart_tasks
         assert constructions == (1 if ending == "disable" else 2)
         assert not service.is_running(config.id)
         assert not service.is_failed(config.id)

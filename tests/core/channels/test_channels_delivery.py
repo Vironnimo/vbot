@@ -101,7 +101,7 @@ async def test_completion_run_relays_to_persisted_channel_target(
     )
     adapter = BlockingAdapter()
     service = await start_with_adapter(tmp_path, monkeypatch, adapter, chat_sessions=sessions)
-    engine = service._active_engine("tg-assistant")
+    engine = service._connections.active_engine("tg-assistant")
     connect(engine, adapter)
     run = Run(run_id="completion-run", agent_id="assistant", session_id=session_id)
     run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": "Done."}})
