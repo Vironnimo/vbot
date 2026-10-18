@@ -128,10 +128,12 @@ def _diagnose_model_binding(diagnostics: list[JsonDiagnostic], path: str, value:
 def _diagnose_fallback_models(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
     from core.config_validation import add_error
 
-    if value is not None and (
-        not isinstance(value, list) or any(not isinstance(item, str) for item in value)
-    ):
-        add_error(diagnostics, path, "must be a string list or null")
+    if value is None:
+        return
+    try:
+        validate_fallback_chain(value)
+    except ValueError as error:
+        add_error(diagnostics, path, str(error))
 
 
 def _diagnose_temperature(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:

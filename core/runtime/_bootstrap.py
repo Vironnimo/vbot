@@ -532,6 +532,7 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._temporary_agents = TemporaryAgentRegistry(
             runtime._chat_sessions,
+            capture_delegation_bindings=runtime._agents.capture_delegation_bindings,
             prepare_config=lambda config, project_id: (
                 runtime.agent_resolver.prepare_temporary_config(config, project_id)
             ),

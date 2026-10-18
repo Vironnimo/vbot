@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -13,7 +15,7 @@ from core.skills._authoring_types import (
     SkillAuthor,
     SkillAuthoringError,
 )
-from core.skills._history import PROVENANCE_AUTHOR_KEY, document_fields
+from core.skills._history import PROVENANCE_AUTHOR_KEY, document_fields, file_state
 from core.skills._packages import is_redirect
 from core.skills.requirements import REQUIREMENTS_METADATA_KEY
 from core.skills.skill_validator import (
@@ -23,7 +25,41 @@ from core.skills.skill_validator import (
 )
 from core.skills.skills import RESOURCE_DIRECTORIES, SKILL_FILENAME
 from core.utils.atomic import atomic_write_bytes
+from core.utils.file_status import is_link_status
 from core.utils.ids import is_reserved_name, reserved_name_message
+
+type _PublicationFingerprint = dict[str, tuple[int, int, int, int, int, str | None]]
+
+
+def _publication_fingerprint(package: Path) -> _PublicationFingerprint:
+    """Identify every copied entry and its bytes without following links or hiding failures."""
+    result: _PublicationFingerprint = {}
+
+    def visit(path: Path) -> None:
+        status = path.lstat()
+        content: str | None = None
+        if is_link_status(status):
+            content = os.readlink(path)
+        elif stat.S_ISREG(status.st_mode):
+            state = file_state(path)
+            if state is None:
+                raise FileNotFoundError(path)
+            content = state.digest
+        result[path.relative_to(package).as_posix()] = (
+            status.st_dev,
+            status.st_ino,
+            status.st_mode,
+            status.st_size,
+            status.st_mtime_ns,
+            content,
+        )
+        if stat.S_ISDIR(status.st_mode) and not is_link_status(status):
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    visit(Path(entry.path))
+
+    visit(package)
+    return result
 
 
 def _declared_name(package: Path) -> str:

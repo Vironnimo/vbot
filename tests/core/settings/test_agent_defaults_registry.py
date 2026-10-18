@@ -8,6 +8,8 @@ future edit is caught here instead of by a 65-file fan-out.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,6 +22,7 @@ from core.settings import (
     agent_default_catalog,
     bake_agent_defaults,
     diagnose_agent_default_value,
+    load_runtime_settings_json,
     normalize_agent_default_value,
     parse_agent_default_value,
 )
@@ -118,7 +121,9 @@ def _bake_defaults(agent_defaults: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize("chain", _INVALID_CHAINS)
-def test_invalid_fallback_chain_is_rejected_by_every_surface(chain: list[str]) -> None:
+def test_invalid_fallback_chain_is_rejected_by_every_surface(
+    tmp_path: Path, chain: list[str]
+) -> None:
     with pytest.raises(SettingsValidationError):
         parse_agent_default_value(
             "fallback_models", chain, label="params.defaults.agent.fallback_models"
@@ -127,6 +132,21 @@ def test_invalid_fallback_chain_is_rejected_by_every_surface(chain: list[str]) -
         normalize_agent_default_value("fallback_models", chain)
     with pytest.raises(StorageError):
         _bake_defaults({"fallback_models": chain})
+    diagnostics: list[JsonDiagnostic] = []
+    diagnose_agent_default_value(diagnostics, "$.defaults.agent.fallback_models", chain)
+    assert [(item.severity, item.path) for item in diagnostics] == [
+        ("error", "$.defaults.agent.fallback_models")
+    ]
+
+    path = tmp_path / "settings.json"
+    content = json.dumps(
+        {"format_version": 1, "defaults": {"agent": {"fallback_models": chain}}, "port": 23456}
+    )
+    path.write_text(content, encoding="utf-8")
+    usable, ignored = load_runtime_settings_json(path)
+    assert usable == {"port": 23456}
+    assert ignored == tuple(diagnostics)
+    assert path.read_text(encoding="utf-8") == content
 
 
 def test_valid_fallback_chain_is_stripped_by_normalize_and_bake() -> None:

@@ -784,6 +784,16 @@ class AgentStore:
             except AgentError, OSError:
                 return False
 
+    def capture_delegation_bindings(self, tools: Mapping[str, Any]) -> dict[str, str | int]:
+        """Bind a new temporary Agent's explicit Identity targets to their incarnations."""
+        from core.tools.availability import subagent_allowed_agents
+
+        targets = subagent_allowed_agents(tools)
+        if "*" in targets:
+            return {}
+        with self._change():
+            return _delegation.capture_bindings(self, targets)
+
     def _agent_defaults(self) -> AgentDefaults:
         if self._defaults_provider is None:
             return AgentDefaults()
