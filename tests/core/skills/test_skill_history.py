@@ -299,7 +299,7 @@ def test_archived_skills_are_restored_with_their_provenance_or_purged(
 
 
 def test_publish_moves_a_skill_into_another_home_with_its_provenance(
-    service: SkillAuthoringService, tmp_path: Path
+    service: SkillAuthoringService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "agent" / "skills"
     target = tmp_path / "global" / "skills"
@@ -310,6 +310,34 @@ def test_publish_moves_a_skill_into_another_home_with_its_provenance(
 
     with pytest.raises(SkillAuthoringError, match="already exists"):
         service.publish(source, target, "taken", writer=AGENT)
+
+    rename = Path.rename
+    remove_tree = shutil.rmtree
+
+    def refuse_source_archive(path: Path, destination: Path) -> Path:
+        if path == source / "demo":
+            raise PermissionError("source is locked")
+        return rename(path, destination)
+
+    def refuse_copy_cleanup(path: Path, **kwargs: Any) -> None:
+        if path == target / "demo":
+            raise PermissionError("copy is locked")
+        remove_tree(path, **kwargs)
+
+    for cleanup_fails in (False, True):
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "rename", refuse_source_archive)
+            if cleanup_fails:
+                patch.setattr(shutil, "rmtree", refuse_copy_cleanup)
+            with pytest.raises(SkillAuthoringError if cleanup_fails else PermissionError):
+                service.publish(source, target, "demo", writer=AGENT)
+        assert (source / "demo" / "references" / "notes.md").read_text() == "notes"
+        assert (target / "demo").exists() is cleanup_fails
+        assert not any(item.skill == "demo" for item in service.recorded_revisions(target))
+        assert service.archived(source) == []
+        if cleanup_fails:
+            remove_tree(target / "demo")
+
     published = service.publish(source, target, "demo", writer=AGENT)
 
     assert (published.operation, published.path) == ("publish", target / "demo" / "SKILL.md")

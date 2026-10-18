@@ -82,6 +82,7 @@ from core.utils.atomic import atomic_write_bytes
 from core.utils.file_status import is_file_strict
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 _LOGGER = get_logger("skills.authoring")
 
@@ -377,6 +378,19 @@ class SkillAuthoringService:
                 )
                 for path in files
             )
+            try:
+                archived = self.delete(source_root, skill_name, writer=writer, reason="published")
+            except Exception:
+                try:
+                    shutil.rmtree(destination)
+                except OSError as cleanup_error:
+                    raise SkillAuthoringError(
+                        f"Skill '{skill_name}' remains at its source and at "
+                        f"{model_path(destination)}: publishing failed and the destination "
+                        "copy could not be removed. Ask the user to remove the destination copy "
+                        "in Skill controls before retrying."
+                    ) from cleanup_error
+                raise
             revision = self._revisions._commit(
                 history,
                 skill_name,
@@ -385,7 +399,6 @@ class SkillAuthoringService:
                 "create",
                 origin=record.origin if record is not None else writer.actor,
             )
-            archived = self.delete(source_root, skill_name, writer=writer, reason="published")
             return SkillWriteResult(
                 name=skill_name,
                 operation="publish",
