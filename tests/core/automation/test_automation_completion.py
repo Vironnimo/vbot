@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-import core.automation.automation as automation_module
+import core.automation._completion as automation_module
 from core.automation import TriggerService
 from core.chat import ChatSession, ChatSessionError, ChatSessionManager, ReplySurface
 from core.runs import (
@@ -139,7 +139,10 @@ def _completion_service(
 
 def _submit(service: TriggerService, notice_id: str, body: str, origin_run_id: str) -> Any:
     return service.submit_completion(
-        "coder", "session-one", notice_id=notice_id, origin_run_id=origin_run_id, body=body
+        SessionAddress(None, "coder", "session-one"),
+        notice_id=notice_id,
+        origin_run_id=origin_run_id,
+        body=body,
     )
 
 
@@ -173,8 +176,7 @@ async def test_owned_completion_for_an_inadmissible_owner_is_rejected_at_submiss
     origin_id = (await _user_cancelled_origin(manager)).id if origin_user_cancelled else "origin"
 
     delivery = service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="stale",
         origin_run_id=origin_id,
         body="stale owned result",
@@ -210,8 +212,7 @@ async def test_owned_completion_for_a_live_owner_is_delivered(
     origin_id = (await _user_cancelled_origin(manager)).id if origin_user_cancelled else "origin"
 
     delivery = service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="live",
         origin_run_id=origin_id,
         body="live owned result",
@@ -260,8 +261,7 @@ async def test_owned_completion_whose_owner_goes_stale_is_not_written_to_the_ses
     origin_id = (await _user_cancelled_origin(manager)).id if origin_user_cancelled else "origin"
 
     delivery = service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="stale-later",
         origin_run_id=origin_id,
         body="stale later result",
@@ -305,8 +305,7 @@ async def test_closing_execution_groups_leaves_no_per_group_state(tmp_path: Path
     baseline = state_sizes()
     deliveries = [
         service.submit_completion(
-            "coder",
-            "session-one",
+            SessionAddress(None, "coder", "session-one"),
             notice_id=f"owned-{owner.group_id}",
             origin_run_id="origin",
             body="owned result",
@@ -341,16 +340,14 @@ async def test_owned_completion_close_discards_only_matching_notice(tmp_path):
     admission = _OwnerAdmission(owner)
     service.set_owned_completion_validator(admission)
     owned = service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="owned",
         origin_run_id="origin",
         body="owned result",
         execution_owner=owner,
     )
     ordinary = service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="ordinary",
         origin_run_id="other",
         body="ordinary result",
@@ -363,8 +360,7 @@ async def test_owned_completion_close_discards_only_matching_notice(tmp_path):
     assert "ordinary result" in loop.messages[0]
     assert "owned result" not in loop.messages[0]
     late = service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="late",
         origin_run_id="origin",
         body="late owned result",
@@ -388,8 +384,7 @@ async def test_owned_completion_admission_failure_cannot_fallback_to_session_wri
     service.set_owned_completion_validator(_OwnerAdmission(owner))
     service.set_owned_completion_starter(AsyncMock(side_effect=ValueError("fixture rejection")))
     delivery = service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="owned",
         origin_run_id="origin",
         body="owned result",
@@ -437,8 +432,7 @@ async def test_idle_completion_relays_through_latest_channel_surface(
     trigger_service.set_completion_run_relay(relay_mock)
 
     delivered = trigger_service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="terminal:one",
         origin_run_id="origin-run",
         body="terminal finished",
@@ -472,8 +466,7 @@ async def test_idle_completion_does_not_send_webui_surface_to_channel_relay(
     trigger_service.set_completion_run_relay(relay_mock)
 
     delivered = trigger_service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="terminal:webui",
         origin_run_id="origin-run",
         body="terminal finished",
@@ -519,8 +512,7 @@ async def test_completion_delivery_aclose_persists_pending_results_and_rejects_l
     origin_id = origin_run.id if origin_run is not None else "origin"
     pending = _submit(trigger_service, "bash:pending-at-shutdown", "pending result", origin_id)
     owned = trigger_service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="owned:pending-at-shutdown",
         origin_run_id=origin_id,
         body="owned result",
@@ -632,8 +624,7 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
     )
 
     delivery = trigger_service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="bash:fallback",
         origin_run_id="origin-run",
         body="background command finished",
@@ -683,8 +674,7 @@ async def test_completion_fallback_retries_transient_persistence_failure(
     monkeypatch.setattr(automation_module, "_sleep", record_wait)
 
     delivery = trigger_service.submit_completion(
-        "coder",
-        "session-one",
+        SessionAddress(None, "coder", "session-one"),
         notice_id="bash:retry",
         origin_run_id="origin-run",
         body="retry this result",
@@ -779,7 +769,9 @@ async def test_cancelled_pending_notice_does_not_start_empty_follow_up(
     service, loop, _session = _completion_service(tmp_path, manager)
 
     delivery = _submit(service, "bash:manually-fetched", "already delivered manually", origin.id)
-    assert service.cancel_completion("coder", "session-one", notice_id="bash:manually-fetched")
+    assert service.cancel_completion(
+        SessionAddress(None, "coder", "session-one"), notice_id="bash:manually-fetched"
+    )
     assert delivery.cancelled()
     release.set()
     await origin.wait()
@@ -823,7 +815,9 @@ async def test_a_result_its_delivery_claimed_cannot_be_withdrawn(
     result = _submit(service, "bash:claimed", "claimed result", origin_id)
     await asyncio.wait_for(entered.wait(), timeout=1)
 
-    assert not service.cancel_completion("coder", "session-one", notice_id="bash:claimed")
+    assert not service.cancel_completion(
+        SessionAddress(None, "coder", "session-one"), notice_id="bash:claimed"
+    )
     release.set()
     await asyncio.wait_for(result, timeout=1)
     delivered = loop.messages if delivery == "follow_up_run" else _notes(session)
