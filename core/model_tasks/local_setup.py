@@ -238,7 +238,6 @@ class LocalSetup:
         task = self._task
         if self._state == "installing" and task is not None and not task.done():
             self._cancelled = True
-            task.cancel()
             await cancel_and_wait(task)
             # A task cancelled before it started never ran its handler.
             if self._state == "installing":
