@@ -6,6 +6,8 @@ Read when changing Extension-owned temporary Agents in `core/agents/temporary.py
 
 Temporary Agents involve no Identity creation, workspace seeding or roster operations. `TemporaryExecutionGroups.owned_run`/`owned_runs` inspect exact Run ids with one indexed read (ids without an owned record raise `RunNotFoundError` or are absent), and `start` detects a replayed input by its durable input id rather than scanning the group's Run history. A selected Project does not narrow the configured Tool and Skill selection (`projects.md`). Tests: `tests/core/agents/test_temporary.py` and `tests/core/projects/test_resolver_config_agent.py`.
 
+For new temporary Sessions outside a Project, Runtime injects `AgentStore.capture_delegation_bindings` so explicit Identity targets carry the same incarnation evidence as new Identity grants (`delegation.md`). The optional private `delegation_bindings` snapshot persists and resolves with the temporary Agent; replay of the same creation request keeps its first evidence after target replacement or repository edits. Existing snapshots without the field retain their legacy meaning. Wildcard/unrestricted and Project-qualified grants keep their scope rules, and Project-scoped temporary Agents capture no Identity evidence.
+
 ## Group deletion
 
 `TemporaryExecutionGroups.delete_group` requires a closed group and current

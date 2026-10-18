@@ -136,6 +136,7 @@ class TemporaryAgent:
     allowed_skills: list[str]
     tools: dict[str, Any]
     fallback_models: list[str]
+    delegation_bindings: dict[str, str | int] = field(default_factory=dict)
     instructions: str = ""
     prompt_blocks: list[str] | None = None
     workspace: str = ""
@@ -162,9 +163,11 @@ class TemporaryAgentRegistry:
         *,
         prepare_config: Callable[[TemporaryAgentConfig, str | None], TemporaryAgentConfig]
         | None = None,
+        capture_delegation_bindings: Callable[[dict[str, Any]], dict[str, str | int]] | None = None,
     ) -> None:
         self._sessions = sessions
         self._prepare_config = prepare_config
+        self._capture_delegation_bindings = capture_delegation_bindings
 
     def create(
         self,
@@ -180,26 +183,25 @@ class TemporaryAgentRegistry:
         # fail merely because it generated a different unused address.
         address = SessionAddress(project_id, new_id("tmp"), new_id("ses"))
         binding_config = self._config_values(config)
-        request = None
-        if config.repository_profile is not None:
-            request = deepcopy(binding_config)
-            existing = self._sessions.temporary_binding_by_participant(
-                owner_name=owner_name, group_id=group_id, participant_id=participant_id
-            )
-            if existing is not None:
-                if (
-                    existing.address.project_id != project_id
-                    or existing.config.get("repository_profile_request") != request
-                ):
-                    raise ValueError(
-                        "temporary participant configuration differs from its snapshot"
-                    )
+        request = deepcopy(binding_config)
+        existing = self._sessions.temporary_binding_by_participant(
+            owner_name=owner_name, group_id=group_id, participant_id=participant_id
+        )
+        if existing is not None:
+            if self._same_request(existing, project_id, request):
                 return existing
+            error_type = ValueError if config.repository_profile is not None else ChatSessionError
+            raise error_type("temporary participant configuration differs from its snapshot")
+        if config.repository_profile is not None:
             if self._prepare_config is None:
                 raise ValueError("repository profile resolution is unavailable")
             config = self._prepare_config(config, project_id)
             binding_config = self._config_values(config)
             binding_config["repository_profile_request"] = request
+        if project_id is None and self._capture_delegation_bindings is not None:
+            bindings = self._capture_delegation_bindings(config.tools)
+            if bindings:
+                binding_config["delegation_bindings"] = bindings
         try:
             return self._sessions.create_bound_temporary_session(
                 address,
@@ -209,19 +211,24 @@ class TemporaryAgentRegistry:
                 config=binding_config,
             )
         except ChatSessionError:
-            # Another creator may have resolved the same request before the
-            # repository changed. Its committed snapshot wins this identity.
-            if request is not None:
-                existing = self._sessions.temporary_binding_by_participant(
-                    owner_name=owner_name, group_id=group_id, participant_id=participant_id
-                )
-                if (
-                    existing is not None
-                    and existing.address.project_id == project_id
-                    and existing.config.get("repository_profile_request") == request
-                ):
-                    return existing
+            # The first committed snapshot wins even if targets or the repo changed.
+            existing = self._sessions.temporary_binding_by_participant(
+                owner_name=owner_name, group_id=group_id, participant_id=participant_id
+            )
+            if existing is not None and self._same_request(existing, project_id, request):
+                return existing
             raise
+
+    @staticmethod
+    def _same_request(
+        binding: TemporarySessionBinding, project_id: str | None, request: dict[str, Any]
+    ) -> bool:
+        stored = binding.config.get("repository_profile_request")
+        if stored is None:
+            stored = {
+                key: value for key, value in binding.config.items() if key != "delegation_bindings"
+            }
+        return binding.address.project_id == project_id and stored == request
 
     @staticmethod
     def _config_values(config: TemporaryAgentConfig) -> dict[str, Any]:
@@ -256,6 +263,11 @@ class TemporaryAgentRegistry:
         if binding is None or binding.generation_id != generation_id:
             return None
         config = binding.config
+        from core.agents._delegation import validate_bindings
+
+        bindings = config.get("delegation_bindings", {})
+        if validate_bindings(bindings):
+            raise ValueError("temporary Session binding configuration is invalid")
         compaction_policy = config.get("compaction_policy")
         if compaction_policy is not None and not isinstance(compaction_policy, dict):
             raise ValueError("temporary Session binding configuration is invalid")
@@ -272,6 +284,7 @@ class TemporaryAgentRegistry:
                 allowed_skills=list(config["allowed_skills"]),
                 tools=dict(config["tools"]),
                 fallback_models=list(config.get("fallback_models", [])),
+                delegation_bindings=dict(bindings),
                 instructions=str(config.get("instructions", "")),
                 prompt_blocks=deepcopy(config.get("prompt_blocks")),
                 temperature=config.get("temperature"),

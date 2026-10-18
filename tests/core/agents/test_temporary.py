@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.agents import TemporaryAgentConfig, TemporaryAgentRegistry
+from core.agents import AgentStore, TemporaryAgentConfig, TemporaryAgentRegistry
 from core.agents.temporary import TemporaryExecutionGroups, TemporaryRunInput
 from core.chat import ChatError, ChatMessage, ChatSessionError
 from core.database import write_bootstrap_marker
@@ -174,11 +174,19 @@ def test_temporary_agent_creation_is_race_safe_and_canonicalizes_config(tmp_path
     config = _config(
         tmp_path, allowed_skills=["shared"], tools={"nested": {"first": 1, "second": 2}}
     )
+    captures = threading.Barrier(2)
+
+    def capture(_tools: dict[str, Any]) -> dict[str, str | int]:
+        index = captures.wait(timeout=5)
+        return {"target": f"2026-01-01T00:00:00.00000{index}Z"}
+
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
             bindings = list(
                 pool.map(
-                    lambda sessions: TemporaryAgentRegistry(sessions).create(
+                    lambda sessions: TemporaryAgentRegistry(
+                        sessions, capture_delegation_bindings=capture
+                    ).create(
                         owner_name="extension",
                         group_id="group",
                         participant_id="participant",
@@ -188,6 +196,10 @@ def test_temporary_agent_creation_is_race_safe_and_canonicalizes_config(tmp_path
                 )
             )
         assert bindings[0] == bindings[1]
+        assert bindings[0].config["delegation_bindings"]["target"] in {
+            "2026-01-01T00:00:00.000000Z",
+            "2026-01-01T00:00:00.000001Z",
+        }
         assert (
             first_sessions.temporary_binding_by_participant(
                 owner_name="extension", group_id="group", participant_id="participant"
@@ -197,6 +209,77 @@ def test_temporary_agent_creation_is_race_safe_and_canonicalizes_config(tmp_path
     finally:
         second_sessions.close()
         first_sessions.close()
+
+
+@pytest.mark.parametrize("future", [False, True])
+def test_temporary_explicit_identity_grants_keep_their_first_incarnation(
+    tmp_path: Path, sessions: ChatSessionManager, future: bool
+) -> None:
+    identities = AgentStore(tmp_path, sessions=sessions)
+    if not future:
+        identities.create("target")
+    registry = TemporaryAgentRegistry(
+        sessions, capture_delegation_bindings=identities.capture_delegation_bindings
+    )
+    config = _config(tmp_path, tools={"subagent": {"allowed_agents": ["target"]}})
+
+    def create(participant: str = "peer") -> Any:
+        return registry.create(
+            owner_name="extension", group_id="group", participant_id=participant, config=config
+        )
+
+    first = create()
+    if future:
+        identities.create("target")
+    proof = first.config["delegation_bindings"]["target"]
+    assert identities.delegation_target_allowed("target", proof)
+    with identities.archive_files("target", tmp_path / "archive" / "old-target"):
+        pass
+    identities.create("target")
+    assert not identities.delegation_target_allowed("target", proof)
+    assert create() == first
+    resolved = TemporaryAgentRegistry(sessions).resolve(
+        first.address, generation_id=first.generation_id
+    )
+    assert resolved is not None and resolved.delegation_bindings == {"target": proof}
+    assert identities.delegation_target_allowed(
+        "target", create("new-peer").config["delegation_bindings"]["target"]
+    )
+
+    legacy = TemporaryAgentRegistry(sessions).create(
+        owner_name="extension", group_id="group", participant_id="legacy", config=config
+    )
+    assert create("legacy") == legacy
+    assert "delegation_bindings" not in legacy.config
+
+
+@pytest.mark.parametrize(
+    ("tools", "project_id"),
+    [
+        ({}, None),
+        ({"subagent": {"allowed_agents": []}}, None),
+        ({"subagent": {"allowed_agents": ["*", "target"]}}, None),
+        ({"subagent": {"allowed_agents": ["target@project"]}}, None),
+        ({"subagent": {"allowed_agents": ["target"]}}, "project"),
+    ],
+)
+def test_temporary_nonidentity_grants_add_no_incarnation_restriction(
+    tmp_path: Path, sessions: ChatSessionManager, tools: dict[str, Any], project_id: str | None
+) -> None:
+    identities = AgentStore(tmp_path, sessions=sessions)
+    registry = TemporaryAgentRegistry(
+        sessions, capture_delegation_bindings=identities.capture_delegation_bindings
+    )
+    binding = registry.create(
+        owner_name="extension",
+        group_id="group",
+        participant_id="peer",
+        config=_config(tmp_path, tools=tools),
+        project_id=project_id,
+    )
+    assert binding.config["tools"] == tools
+    assert "delegation_bindings" not in binding.config
+    assert not (tmp_path / "agents" / "retirements.json").exists()
 
 
 def test_temporary_agent_config_is_an_immutable_snapshot(

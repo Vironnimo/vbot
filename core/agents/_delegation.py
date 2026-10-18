@@ -193,12 +193,24 @@ def bind_changes(store: AgentStore, agent: Agent, previous: Agent | None) -> Age
     allowed = subagent_allowed_agents(agent.tools)
     before = set(subagent_allowed_agents(previous.tools)) if previous is not None else set()
     bindings = {key: value for key, value in agent.delegation_bindings.items() if key in allowed}
-    retired: _Retirements | None = None
+    newly_allowed: list[str] = []
     for target in allowed:
         if target in before or target in bindings or not is_valid_agent_id(target):
             continue
         if target == agent.id:
             bindings[target] = agent.created_at
+            continue
+        newly_allowed.append(target)
+    bindings.update(capture_bindings(store, newly_allowed))
+    return replace(agent, delegation_bindings=bindings)
+
+
+def capture_bindings(store: AgentStore, targets: list[str]) -> dict[str, str | int]:
+    """Snapshot new explicit Identity grants under the store's lifecycle lock."""
+    bindings: dict[str, str | int] = {}
+    retired: _Retirements | None = None
+    for target in targets:
+        if not is_valid_agent_id(target):
             continue
         stamp = _stamp(store, target)
         if stamp is not None:
@@ -210,7 +222,7 @@ def bind_changes(store: AgentStore, agent: Agent, previous: Agent | None) -> Age
                 # Later absence cannot silently turn it into a fresh grant.
                 _write_retirements(store, retired)
             bindings[target] = retired.origin + len(retired.retired.get(target, []))
-    return replace(agent, delegation_bindings=bindings)
+    return bindings
 
 
 def retire(store: AgentStore, target: str) -> None:
