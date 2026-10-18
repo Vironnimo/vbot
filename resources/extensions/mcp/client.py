@@ -675,7 +675,15 @@ class ConnectionRunner:
                     authorized = self._authorize(call.context)
                     if authorized is not None:
                         await authorized
-                except asyncio.CancelledError:
+                except (ValueError, VBotError) as error:
+                    if not call.result.done():
+                        call.result.set_exception(InvocationNotSentError(str(error), denied=True))
+                    slots.release()
+                    continue
+                except BaseException:
+                    # Dequeue removed this call from the queue, but it has not
+                    # joined _calls yet. Settle it even when authorization fails
+                    # unexpectedly and ends the connection.
                     if not call.result.done():
                         call.result.set_exception(
                             InvocationNotSentError(
@@ -684,11 +692,6 @@ class ConnectionRunner:
                         )
                     slots.release()
                     raise
-                except (ValueError, VBotError) as error:
-                    if not call.result.done():
-                        call.result.set_exception(InvocationNotSentError(str(error), denied=True))
-                    slots.release()
-                    continue
             if call.result.done() or self._closing or call.owner is not self._task:
                 if not call.result.done():
                     call.result.set_exception(
