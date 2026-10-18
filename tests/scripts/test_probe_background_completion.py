@@ -32,15 +32,18 @@ def test_probe_reports_targets_without_usable_credentials_as_unavailable(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     class Runtime:
-        def __init__(self, _config: object) -> None:
+        def __init__(self, _config: object, *, safe_startup_mode: str) -> None:
+            assert safe_startup_mode == "verification"
             self.provider_credentials = SimpleNamespace(is_usable=lambda *_route: False)
+
+        def start(self) -> None:
+            pass
 
         async def aclose(self) -> None:
             return None
 
     monkeypatch.setattr(PROBE, "Runtime", Runtime)
     monkeypatch.setattr(PROBE, "Config", lambda **_: None)
-    monkeypatch.setattr(PROBE, "_start_probe_runtime", lambda _runtime: None)
 
     code = asyncio.run(PROBE._run(PROBE._parser().parse_args([])))
 

@@ -11,7 +11,7 @@ import os
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from core.chat.errors import ChatError
 from core.chat.status_report import StatusWireProfile
@@ -26,9 +26,6 @@ from core.extensions.oauth_redirects import OAuthRedirects
 from core.extensions.operations import ExtensionHost
 from core.extensions.runtime import ExtensionRuntime
 from core.models.models import Model
-from core.prompts import (
-    SkillPromptRegistry,
-)
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import ConnectionRef, split_connection_id
 from core.providers.adapter import ProviderAdapter
@@ -38,6 +35,7 @@ from core.providers.token_getter import TokenGetter
 from core.providers.wire_observations import ObservedFacts
 from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
 from core.runs import RunNotFoundError
+from core.runtime import _settings
 from core.runtime._agent_description import suggest_agent_description
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
@@ -46,7 +44,7 @@ from core.runtime._agent_rename import (
 )
 from core.runtime._bootstrap import bootstrap, start_event_loop_service
 from core.runtime._config_backups import ConfigBackupSchedule
-from core.runtime._configuration import _resolve_data_dir, _resolve_resources_path
+from core.runtime._configuration import _resolve_data_dir
 from core.runtime._extension_host import ExtensionHostFactory
 from core.runtime._extension_sampling import sample_extension
 from core.runtime._prompt_blocks import refresh_prompt_blocks
@@ -55,7 +53,6 @@ from core.runtime._service_graph import RuntimeServiceGraph
 from core.runtime._settings import SettingsChangeEffects, apply_settings_change
 from core.runtime._shutdown import run_shutdown, run_shutdown_async
 from core.runtime._skill_merge import SkillMergeServices, follow_skill_merge
-from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     ConfigProtocol,
     LoggerProtocol,
@@ -70,10 +67,6 @@ from core.skills.authoring import (
 )
 from core.skills.runtime import SkillRuntime
 from core.skills.skills import SkillMetadata, SkillRegistry
-from core.tools import (
-    register_skill_manage_tool,
-    register_skill_tool,
-)
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
 
@@ -105,10 +98,14 @@ class Runtime(RuntimeServiceGraph):
         config: ConfigProtocol,
         *,
         safe_startup_mode: Literal["verification", "test"] | None = None,
+        operational_producers: Literal["enabled", "disabled"] = "enabled",
     ) -> None:
         """Prepare logging and empty service state from the injected configuration."""
         if safe_startup_mode not in {None, "verification", "test"}:
             raise ValueError("safe_startup_mode must be verification, test, or None")
+        if operational_producers not in {"enabled", "disabled"}:
+            raise ValueError("operational_producers must be enabled or disabled")
+        self._operational_producers = operational_producers
         self._config = config
         self.safe_startup_mode = safe_startup_mode
         self._data_dir = _resolve_data_dir(config)
@@ -280,7 +277,7 @@ class Runtime(RuntimeServiceGraph):
 
     def activate_bootstrap(self) -> None:
         """Start eligible Bootstrap Runs after the serving lifespan is ready."""
-        if self.safe_startup_mode is None:
+        if self.safe_startup_mode is None and self._operational_producers == "enabled":
             self.bootstrap_service.activate()
 
     def stop(self) -> None:
@@ -647,13 +644,7 @@ class Runtime(RuntimeServiceGraph):
 
     def reload_keep_awake(self, settings: Mapping[str, Any] | None = None) -> None:
         """Apply the persisted ``keep_awake`` setting to the running process."""
-
-        self._ensure_started()
-        if self._storage is None or self._keep_awake is None:
-            return
-        if settings is None:
-            settings = self._storage.load_settings()
-        self._keep_awake.set_enabled(settings.get("keep_awake") is True)
+        _settings.reload_keep_awake(self, settings)
 
     def timezone_name(self) -> str:
         """Return the effective persisted application timezone."""
@@ -663,14 +654,7 @@ class Runtime(RuntimeServiceGraph):
 
     def reload_timezone(self, settings: Mapping[str, Any] | None = None) -> None:
         """Apply the persisted timezone to all live wall-clock services."""
-        self._ensure_started()
-        timezone_name = (
-            self.timezone_name() if settings is None else effective_timezone_name(dict(settings))
-        )
-        if self._cron_service is not None:
-            self._cron_service.set_timezone(timezone_name)
-        if self._calendar_service is not None:
-            self._calendar_service.set_timezone(timezone_name)
+        _settings.reload_timezone(self, settings)
 
     def reload_recall_backend(self, settings: Mapping[str, Any] | None = None) -> None:
         """Reload Session Recall Tools from persisted settings and current Extensions."""
@@ -789,144 +773,30 @@ class Runtime(RuntimeServiceGraph):
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
-        owner = self._skill_operations()
-        self._skill_reload_required = True
-        generation = self._skill_reload_generation = object()
-        self._apply_reloaded_skills(owner.load_global_registry(), generation=generation)
+        _settings.reload_skills(self)
 
     async def reload_skills_async(self, *, only_if_changed: bool = False) -> None:
         """Read Skills off the loop; an editor refresh can preserve unchanged scopes."""
-        owner = self._skill_operations()
-        self._skill_reload_required |= not only_if_changed
-        generation = self._skill_reload_generation = object()
-        credential_snapshot = self._fallback_environment
-        skills = await _RUNTIME_WORKERS.run(owner.load_global_registry)
-        if credential_snapshot is not self._fallback_environment:
-            # A credential reload updates held registries while the scan runs.
-            # Rebase its environment without discarding newly scanned packages.
-            environment = dict(self._fallback_environment)
-            environment.update(os.environ)
-            skills.reload_environment(environment)
-        # A later editor refresh inherits any explicit reload it superseded:
-        # unchanged global metadata must not swallow that cache invalidation.
-        if (
-            not self._skill_reload_required
-            and self._skills is not None
-            and self._skills.same_catalog(skills)
-        ):
-            return
-        self._apply_reloaded_skills(skills, generation=generation)
-
-    def _apply_reloaded_skills(self, skills: SkillRegistry, *, generation: object) -> None:
-        """Install a fully built Skill registry and refresh its loop-owned consumers."""
-        if not self._started or generation is not self._skill_reload_generation:
-            return
-        self._skill_reload_required = False
-        self._skills = skills
-        self._skill_operations().replace_registry(skills)
-        invalid_skill_count = len(self._skills.invalid_diagnostics())
-        if self.logger is not None:
-            # Routine cache maintenance (fires on every project open), not an event.
-            self.logger.debug("Reloaded skill registry")
-            if invalid_skill_count > 0:
-                self.logger.warning(
-                    "Reloaded skills with %s invalid skill directories; "
-                    "see vbot.skills warnings for details",
-                    invalid_skill_count,
-                )
-        if self._tools is not None:
-            self._tools.unregister("skill")
-            register_skill_tool(
-                self._tools,
-                self.skills_for,
-                self.reload_skills_async,
-                self.archived_skill,
-                self.background_skill_protection,
-            )
-            if self._skill_authoring is not None:
-                self._tools.unregister("skill_manage")
-                register_skill_manage_tool(
-                    self._tools,
-                    self._skill_authoring,
-                    self.agent_skills_dir,
-                    self.invalidate_agent_skills,
-                    self._resolve_shared_skills_dir,
-                    self._resolve_external_skill_scope,
-                    lifecycle_guard=self.agents.lifecycle_guard,
-                    on_changed=self._notify_skills_changed,
-                    run_started_at=self.run_started_at,
-                    follow_merge=self.follow_skill_merge,
-                    resolve_global_skills_dir=lambda: self.global_skills_dir,
-                    publish_skill=self._publish_agent_skill,
-                    refresh_global_skills=self.reload_skills_async,
-                )
-        if self._system_prompts is not None:
-            self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
-            self._refresh_prompt_block_definitions()
+        await _settings.reload_skills_async(self, only_if_changed=only_if_changed)
 
     def _refresh_prompt_block_definitions(self) -> None:
         refresh_prompt_blocks(self._system_prompts, self._tool_prompt_blocks, self._extensions)
 
     def reload_environment_credentials(self) -> None:
         """Reload shared credential fallback values from the Secret Store."""
-        self._ensure_started()
-        generation = self._credential_reload_generation = object()
-        self._apply_environment_credentials(self.storage.load_environment(), generation=generation)
+        _settings.reload_environment_credentials(self)
 
     async def reload_environment_credentials_async(self) -> None:
         """Read credentials off-loop before updating the live resolver and Skill snapshots."""
-        self._ensure_started()
-        generation = self._credential_reload_generation = object()
-        load_environment = self.storage.load_environment
-        credentials = await _RUNTIME_WORKERS.run(load_environment)
-        self._apply_environment_credentials(credentials, generation=generation)
-
-    def _apply_environment_credentials(
-        self, credentials: Mapping[str, str], *, generation: object
-    ) -> None:
-        if not self._started or generation is not self._credential_reload_generation:
-            return
-        self._fallback_environment = dict(credentials)
-        self.provider_credentials.reload_fallback_credentials(credentials)
-        self._skill_operations().reload_environment(dict(credentials))
+        await _settings.reload_environment_credentials_async(self)
 
     def reload_custom_providers(self) -> None:
         """Reload Settings-owned Provider, Model and wire profile overlays in place."""
-
-        self._ensure_started()
-        self._provider_reload_generation = object()
-        resources_path = _resolve_resources_path(self.config)
-        custom_providers = self.storage.load_custom_providers_settings()
-        self.providers.reload(
-            resources_path,
-            custom_providers=custom_providers,
-            tolerate_invalid=True,
-        )
-        self.models.reload(
-            resources_path,
-            runtime_models_dir=self.storage.layout.models,
-            custom_providers=custom_providers,
-        )
-        self._provider_operations().reload_custom_wire_profiles(custom_providers)
+        _settings.reload_custom_providers(self)
 
     async def reload_custom_providers_async(self) -> None:
         """Read persisted Provider overlays off-loop and publish registries on the caller."""
-        self._ensure_started()
-        generation = self._provider_reload_generation = object()
-        storage, providers, models = self.storage, self.providers, self.models
-        provider_runtime = self._provider_operations()
-        resources_path = _resolve_resources_path(self.config)
-        custom = await _RUNTIME_WORKERS.run(storage.load_custom_providers_settings)
-        if not self._started or generation is not self._provider_reload_generation:
-            return
-        await providers.reload_async(resources_path, custom_providers=custom, tolerate_invalid=True)
-        if not self._started or generation is not self._provider_reload_generation:
-            return
-        await models.reload_async(
-            resources_path, runtime_models_dir=storage.layout.models, custom_providers=custom
-        )
-        if self._started and generation is self._provider_reload_generation:
-            provider_runtime.reload_custom_wire_profiles(custom)
+        await _settings.reload_custom_providers_async(self)
 
     # ------------------------------------------------------------------
     # Read-only registry access

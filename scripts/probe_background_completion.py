@@ -270,21 +270,6 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _start_probe_runtime(runtime: Runtime) -> None:
-    """Bootstrap Provider dependencies without starting operational services."""
-
-    def _do_not_start() -> None:
-        return None
-
-    for hook_name in (
-        "_start_channel_service",
-        "_start_cron_service",
-        "_start_provider_usage_service",
-    ):
-        setattr(runtime, hook_name, _do_not_start)
-    runtime.start()
-
-
 def _probe_agent(target: ProbeTarget, workspace: Path) -> Agent:
     timestamp = datetime.now(UTC).isoformat()
     return Agent(
@@ -543,8 +528,8 @@ async def _run(args: argparse.Namespace) -> int:
     if args.timeout <= 0:
         raise ValueError("--timeout must be positive")
 
-    source_runtime = Runtime(Config(data_dir=args.data_dir))
-    _start_probe_runtime(source_runtime)
+    source_runtime = Runtime(Config(data_dir=args.data_dir), safe_startup_mode="verification")
+    source_runtime.start()
     results: list[JsonObject] = []
     try:
         for repetition in range(1, args.repeat + 1):

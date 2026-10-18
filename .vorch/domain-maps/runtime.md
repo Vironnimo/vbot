@@ -2,7 +2,7 @@
 
 Bootstrap entry point. Wires services and manages start/stop lifecycle.
 
-`runtime.py::Runtime` owns lifecycle and the stable public access/reload surface. `_bootstrap.py` assembles its dependency-ordered service graph, `_shutdown.py` runs the dependency-ordered shutdown steps of `stop()`, `aclose()` and failed-startup cleanup, `_service_graph.py` holds the typed service references and readiness checks, and `_settings.py` coordinates live Settings effects. These and the other `core/runtime/_*.py` files are internal files of the same Runtime owner, not additional service layers.
+`runtime.py::Runtime` owns lifecycle and the stable public access/reload surface. `_bootstrap.py` assembles its dependency-ordered service graph with resource/automation composition in `_bootstrap_services.py`, `_shutdown.py` runs the dependency-ordered shutdown steps of `stop()`, `aclose()` and failed-startup cleanup, `_service_graph.py` holds the typed service references and readiness checks, and `_settings.py` coordinates live Settings effects plus reload generation/publication. These and the other `core/runtime/_*.py` files are internal files of the same Runtime owner, not additional service layers.
 
 Blocking in-process work crosses named `BoundedWorkerPool`s, and owners that must finish admitted work before honoring cancellation use the shared settling helpers (`settle_before_cancelling`, `finish_despite_cancel`, `cancel_and_wait`) rather than their own `shield` or `wait` loops; all live in `core/utils/workers.py`, documented in `runtime/workers.md`.
 
@@ -26,6 +26,8 @@ Construction order other domains rely on: the canonical `UsageRecorder` follows 
 Once startup is complete the performance monitor starts in every mode (a passive observer); normal startup then starts, in this order, the Provider usage sampler, Recall indexing, the archive retention sweep (`archive.md` -> Retention), the Scratch sweep, the configuration backup schedule (`_config_backups.py`: a backup at start, a check every 5 minutes that backs up changed configuration files, one more at shutdown; `database.md` -> Configuration backup) and the Librarian's schedule (`automation/librarian.md`).
 
 `safe_startup_mode` is only `verification` or `test`. It constructs the core graph but suppresses Extension dependency activation and Extension loading, Bootstrap activation, the Channel and Cron starts, shell-command recovery, the release of `RETIRED_CANONICAL_DATABASES` (`database.md`) and every post-startup service above except the performance monitor (`tests/core/runtime/test_runtime_lifecycle.py`). Normal startup alone activates managed Extension dependencies before Extension discovery.
+
+`Runtime(..., operational_producers="disabled")` keeps normal Extension dependency activation, loading and catalog assembly while suppressing automatic operational producers: temporary-file/Terminal/command sweepers and command recovery, Channel/Cron starts, Bootstrap activation, usage sampling, Recall indexing, Archive retention, Scratch sweeping, configuration backups and the Librarian. It leaves the passive performance monitor and lifecycle/recovery wiring intact. Disposable Eval workers use this policy so their Tool and prompt catalogs match production; source-only Provider/credential probes use `safe_startup_mode="verification"` instead. Neither policy prevents work a caller explicitly requests through a service.
 
 ## Shutdown
 

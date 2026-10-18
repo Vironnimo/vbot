@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from core.chat.wire_shaping import model_facing_request
-from core.runtime.runtime import Runtime
 from core.tools import registry_tool_name
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -113,18 +112,3 @@ def _model_facing(
     if tools is not None:
         kwargs = {**kwargs, "tools": projected}
     return messages, kwargs
-
-
-def _start_probe_runtime(runtime: Runtime) -> None:
-    """Bootstrap Provider dependencies without starting background services."""
-
-    def _do_not_start() -> None:
-        return None
-
-    for hook_name in (
-        "_start_channel_service",
-        "_start_cron_service",
-        "_start_provider_usage_service",
-    ):
-        setattr(runtime, hook_name, _do_not_start)
-    runtime.start()

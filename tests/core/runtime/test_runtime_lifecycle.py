@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import core.runtime._bootstrap as bootstrap_module
+import core.runtime._bootstrap_services as bootstrap_services
 import core.runtime._shutdown as shutdown_module
 from core.automation import CronService
 from core.automation import _cron_claims as cron_claims
@@ -87,20 +88,38 @@ def test_runtime_rejects_unknown_safe_startup_modes(config: Config) -> None:
 
 
 @pytest.mark.asyncio
-async def test_safe_startup_does_not_load_extensions_or_start_producers(
-    config: Config, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "isolated", [False, True], ids=["verification", "catalog-without-producers"]
+)
+async def test_startup_policy_keeps_catalog_loading_separate_from_producers(
+    config: Config, monkeypatch: pytest.MonkeyPatch, isolated: bool
 ) -> None:
     from core.extensions import ExtensionRegistry
 
-    monkeypatch.setattr(
-        ExtensionRegistry,
-        "load",
-        Mock(side_effect=AssertionError("safe startup must not load executable extensions")),
-    )
+    if isolated:
+        monkeypatch.setenv("HASS_TOKEN", "test-catalog-only-token")
+    else:
+        monkeypatch.setattr(
+            ExtensionRegistry,
+            "load",
+            Mock(side_effect=AssertionError("safe startup must not load executable extensions")),
+        )
     recovery = AsyncMock()
     monkeypatch.setattr(CommandCheckpoints, "recover", recovery)
     # ``verification`` and ``test`` share every safe-startup branch.
-    runtime = Runtime(config, safe_startup_mode="verification")
+    runtime = Runtime(
+        config,
+        safe_startup_mode=None if isolated else "verification",
+        operational_producers="disabled" if isolated else "enabled",
+    )
+    if isolated:
+        monkeypatch.setattr(
+            runtime, "_start_terminal_manager", Mock(side_effect=AssertionError("terminal"))
+        )
+        monkeypatch.setattr(CommandManager, "start", Mock(side_effect=AssertionError("commands")))
+        monkeypatch.setattr(
+            TemporaryFileManager, "start", Mock(side_effect=AssertionError("temporary files"))
+        )
     for name in (
         "_start_channel_service",
         "_start_cron_service",
@@ -108,6 +127,8 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
         "_start_archive_retention",
         "_start_scratch_areas",
         "_start_config_backups",
+        "_start_recall_indexing",
+        "_start_librarian",
     ):
         monkeypatch.setattr(runtime, name, Mock(side_effect=AssertionError(name)))
 
@@ -117,6 +138,20 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
         extensions = runtime.extensions
         assert extensions is not None
         assert extensions.diagnostics() == []
+        if isolated:
+            names = {tool.name for tool in runtime.tools.list_tools()}
+            assert {
+                "ha_list_entities",
+                "ha_get_state",
+                "ha_list_services",
+                "ha_call_service",
+            } <= names
+            assert any(
+                block["id"] == "extension:mcp_guidance"
+                for block in runtime.system_prompts.list_blocks()
+            )
+            runtime.activate_bootstrap()
+            assert runtime.bootstrap_service._activation_task is None
         # The passive performance monitor still observes the Event Loop.
         performance = runtime.performance
         assert performance.monitoring
@@ -644,7 +679,7 @@ async def test_loop_started_runtime_owns_background_services_until_aclose(
 ) -> None:
     # Sample the Run gauges at once instead of on the one-second production cadence.
     monkeypatch.setattr(
-        bootstrap_module,
+        bootstrap_services,
         "PerformanceService",
         partial(PerformanceService, sample_interval_s=0.0, monitor_interval_s=0.01),
     )
