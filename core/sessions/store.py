@@ -50,6 +50,7 @@ if TYPE_CHECKING:
         SessionListCursor,
         SessionListFilters,
         SessionListPage,
+        SessionProjectGrouping,
         SessionReadBatch,
         SessionReadCursor,
         SessionRunRecord,
@@ -794,6 +795,34 @@ class SessionStore:
                 cursor=cursor,
                 filters=filters,
                 required_address=required_address,
+            )
+        )
+
+    def list_project_groups(
+        self,
+        grouping: SessionProjectGrouping,
+        *,
+        limit: int,
+        filters: SessionListFilters,
+    ) -> dict[str | None, SessionListPage]:
+        return self._read_decoded(
+            lambda connection: _store_queries.list_project_groups(
+                connection, grouping, limit=limit, filters=filters
+            )
+        )
+
+    def list_project_page(
+        self,
+        grouping: SessionProjectGrouping,
+        project_id: str | None,
+        *,
+        limit: int,
+        cursor: SessionListCursor | None,
+        filters: SessionListFilters,
+    ) -> SessionListPage:
+        return self._read_decoded(
+            lambda connection: _store_queries.list_project_page(
+                connection, grouping, project_id, limit=limit, cursor=cursor, filters=filters
             )
         )
 

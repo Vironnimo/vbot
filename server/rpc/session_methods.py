@@ -8,14 +8,17 @@ resolution uses the resolver's own async API.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
+from core.agents import BUILTIN_AGENT_IDS
 from core.archive import ArchiveSubjectInUseError
 from core.channels import ChannelConfigError
 from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
 from core.projects import (
     AGENT_OVERRIDE_FIELDS,
     AgentOverrides,
+    AgentResolutionError,
     InvalidAgentAddressError,
     format_agent_address,
     parse_agent_address,
@@ -26,6 +29,8 @@ from core.sessions import (
     SessionAddress,
     SessionListCursor,
     SessionListFilters,
+    SessionListPage,
+    SessionProjectGrouping,
 )
 from core.subagents.links import descendants
 from core.utils.errors import StorageError
@@ -267,28 +272,140 @@ def _project_agent_landing(state: Any, agent_id: str, project_id: str) -> str | 
     return None if newest_session_id is None else str(newest_session_id)
 
 
+_SESSION_LIST_FILTER_PARAMS = frozenset(
+    {
+        "include_subagents",
+        "include_memory_reflections",
+        "include_skill_reflections",
+        "include_cron",
+        "include_channels",
+    }
+)
+
+# Newest Sessions each Project group of ``session.project_groups`` shows.
+SESSION_PROJECT_GROUP_DEFAULT_LIMIT = 5
+
+SESSION_PROJECT_GROUP_MAX_LIMIT = 20
+
+
+def _session_list_filters(params: JsonObject) -> SessionListFilters:
+    return SessionListFilters(
+        include_subagents=_optional_bool(params, "include_subagents", default=True),
+        include_memory_reflections=_optional_bool(
+            params, "include_memory_reflections", default=True
+        ),
+        include_skill_reflections=_optional_bool(params, "include_skill_reflections", default=True),
+        include_cron=_optional_bool(params, "include_cron", default=True),
+        include_channels=_optional_bool(params, "include_channels", default=True),
+    )
+
+
+def _session_list_rows(
+    state: Any,
+    summaries: Sequence[JsonObject],
+    agent_policy: Callable[[str | None, str], Any],
+) -> list[JsonObject]:
+    """Shape Session summaries as ``session.list`` rows.
+
+    Each row names its owner as ``agent_address`` and carries whether a Run is
+    active and its effective Compaction Policy.
+    """
+    load_global_policy = _global_compaction_policy_loader(state)
+    run_manager = state.runtime.chat_run_manager
+    sessions = [dict(summary) for summary in summaries]
+    for session in sessions:
+        session_id = session.get("id")
+        session_agent_id = session.pop("agent_id", None)
+        raw_project_id = session.pop("project_id", None)
+        if not isinstance(session_agent_id, str):
+            continue
+        session_project_id = raw_project_id if isinstance(raw_project_id, str) else None
+        session["agent_address"] = format_agent_address(session_agent_id, session_project_id)
+        session["has_active_run"] = isinstance(session_id, str) and (
+            run_manager.active_run(
+                agent_id=session_agent_id, session_id=session_id, project_id=session_project_id
+            )
+            is not None
+        )
+        override = session.pop(COMPACTION_POLICY_META_KEY, None)
+        session["compaction_policy_override"] = (
+            dict(override) if isinstance(override, dict) else None
+        )
+        session["compaction_policy_effective"] = effective_compaction_policy(
+            override, agent_policy(session_project_id, session_agent_id), load_global_policy
+        )
+    return sessions
+
+
+def _listed_agent_policies(state: Any) -> Callable[[str | None, str], Any]:
+    """Resolve the Compaction Policy of each Agent a cross-Agent list meets, once.
+
+    A Session can outlive its Agent's definition (a Team member its Project no
+    longer defines); its rows then fall back to the global policy.
+    """
+    resolver = state.runtime.agent_resolver
+    policies: dict[tuple[str | None, str], Any] = {}
+
+    def policy(project_id: str | None, agent_id: str) -> Any:
+        key = (project_id, agent_id)
+        if key not in policies:
+            try:
+                agent = resolver.resolve_agent(project_id, agent_id, require_model=False)
+            except AgentResolutionError:
+                policies[key] = None
+            else:
+                policies[key] = getattr(agent, "compaction_policy", None)
+        return policies[key]
+
+    return policy
+
+
+def _session_project_grouping(state: Any) -> SessionProjectGrouping:
+    """Group by the registered Projects; the built-in Agents' Sessions stay out."""
+    return SessionProjectGrouping(
+        project_ids=tuple(project.project_id for project in state.runtime.projects.list()),
+        excluded_agent_ids=tuple(BUILTIN_AGENT_IDS.values()),
+    )
+
+
+def _session_list_page_payload(
+    state: Any, page: SessionListPage, agent_policy: Callable[[str | None, str], Any]
+) -> JsonObject:
+    return {
+        "sessions": _session_list_rows(state, page.sessions, agent_policy),
+        "next_cursor": _session_list_cursor_payload(page.next_cursor),
+        "total_count": page.total_count,
+    }
+
+
 async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
         {
             "agent_id",
             "agent_ids",
+            "working_project_id",
             "limit",
             "cursor",
-            "include_subagents",
-            "include_memory_reflections",
-            "include_skill_reflections",
-            "include_cron",
-            "include_channels",
             "required_session",
+            *_SESSION_LIST_FILTER_PARAMS,
         },
         "session.list",
     )
-    if ("agent_id" in params) == ("agent_ids" in params):
+    if sum(key in params for key in ("agent_id", "agent_ids", "working_project_id")) != 1:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            "session.list requires exactly one of params.agent_id or params.agent_ids",
+            "session.list requires exactly one of params.agent_id, params.agent_ids "
+            "or params.working_project_id",
         )
+    limit = (
+        _optional_positive_integer(params, "limit", max_value=SESSION_LIST_MAX_LIMIT)
+        or SESSION_LIST_DEFAULT_LIMIT
+    )
+    cursor = _session_list_cursor(params.get("cursor"))
+    filters = _session_list_filters(params)
+    if "working_project_id" in params:
+        return await _list_project_sessions(state, params, limit, cursor, filters)
     requested_addresses = (
         [_required_string(params, "agent_id")]
         if "agent_id" in params
@@ -309,11 +426,6 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
         seen_addresses.add(canonical_address)
         parsed_addresses.append((canonical_address, agent_id, project_id))
 
-    limit = (
-        _optional_positive_integer(params, "limit", max_value=SESSION_LIST_MAX_LIMIT)
-        or SESSION_LIST_DEFAULT_LIMIT
-    )
-    cursor = _session_list_cursor(params.get("cursor"))
     required_address = _session_list_required_address(params.get("required_session"))
     if required_address is not None:
         required_owner = format_agent_address(
@@ -324,23 +436,13 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
                 RPC_ERROR_INVALID_REQUEST,
                 "params.required_session must belong to one of the listed Agent addresses",
             )
-    filters = SessionListFilters(
-        include_subagents=_optional_bool(params, "include_subagents", default=True),
-        include_memory_reflections=_optional_bool(
-            params, "include_memory_reflections", default=True
-        ),
-        include_skill_reflections=_optional_bool(params, "include_skill_reflections", default=True),
-        include_cron=_optional_bool(params, "include_cron", default=True),
-        include_channels=_optional_bool(params, "include_channels", default=True),
-    )
 
-    def load_sessions() -> tuple[list[JsonObject], SessionListCursor | None, int]:
+    def load_sessions() -> JsonObject:
         resolver = state.runtime.agent_resolver
         agent_policies: dict[tuple[str | None, str], Any] = {}
         for _address, agent_id, project_id in parsed_addresses:
             agent = resolver.resolve_agent(project_id, agent_id, require_model=False)
             agent_policies[(project_id, agent_id)] = getattr(agent, "compaction_policy", None)
-        load_global_policy = _global_compaction_policy_loader(state)
         page = state.runtime.chat_sessions.list_summaries_page(
             [(project_id, agent_id) for _address, agent_id, project_id in parsed_addresses],
             limit=limit,
@@ -348,55 +450,103 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
             filters=filters,
             required_address=required_address,
         )
-        sessions = [dict(session) for session in page.sessions]
-        run_manager = state.runtime.chat_run_manager
-        for session in sessions:
-            session_id = session.get("id")
-            session_agent_id = session.pop("agent_id", None)
-            session_project_id = session.pop("project_id", None)
-            if not isinstance(session_agent_id, str):
-                continue
-            session["agent_address"] = format_agent_address(
-                session_agent_id,
-                session_project_id if isinstance(session_project_id, str) else None,
-            )
-            if isinstance(session_id, str):
-                active = run_manager.active_run(
-                    agent_id=session_agent_id,
-                    session_id=session_id,
-                    project_id=(
-                        session_project_id if isinstance(session_project_id, str) else None
-                    ),
-                )
-                session["has_active_run"] = active is not None
-            else:
-                session["has_active_run"] = False
-            override = session.pop(COMPACTION_POLICY_META_KEY, None)
-            agent_policy = agent_policies[
-                (
-                    session_project_id if isinstance(session_project_id, str) else None,
-                    session_agent_id,
-                )
-            ]
-            session["compaction_policy_override"] = (
-                dict(override) if isinstance(override, dict) else None
-            )
-            session["compaction_policy_effective"] = effective_compaction_policy(
-                override, agent_policy, load_global_policy
-            )
-        return sessions, page.next_cursor, page.total_count
+        return _session_list_page_payload(
+            state, page, lambda project_id, agent_id: agent_policies[(project_id, agent_id)]
+        )
 
     try:
-        sessions, next_cursor, total_count = await state.runtime.chat_sessions.run_async(
-            load_sessions
-        )
+        return cast(JsonObject, await state.runtime.chat_sessions.run_async(load_sessions))
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {
-        "sessions": sessions,
-        "next_cursor": _session_list_cursor_payload(next_cursor),
-        "total_count": total_count,
-    }
+
+
+async def _list_project_sessions(
+    state: Any,
+    params: JsonObject,
+    limit: int,
+    cursor: SessionListCursor | None,
+    filters: SessionListFilters,
+) -> JsonObject:
+    """One page of the Sessions of every Agent that work in one Project group.
+
+    ``working_project_id`` names a registered Project, or is null for the
+    Sessions that work in none (the Workspace, or a Project no longer
+    registered); see ``session.project_groups``.
+    """
+    project_id = params["working_project_id"]
+    if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.working_project_id must be a Project id or null",
+        )
+    if "required_session" in params:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.required_session lists by Agent; it excludes params.working_project_id",
+        )
+
+    def load_sessions() -> JsonObject:
+        grouping = _session_project_grouping(state)
+        if project_id is not None and project_id not in grouping.project_ids:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.working_project_id names no registered Project: {project_id}",
+            )
+        page = state.runtime.chat_sessions.list_project_page(
+            grouping, project_id, limit=limit, cursor=cursor, filters=filters
+        )
+        return _session_list_page_payload(state, page, _listed_agent_policies(state))
+
+    try:
+        return cast(JsonObject, await state.runtime.chat_sessions.run_async(load_sessions))
+    except RpcError:
+        raise
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+async def _list_session_project_groups(state: Any, params: JsonObject) -> JsonObject:
+    """The newest Sessions of every Agent, grouped by the Project they work in.
+
+    One group per registered Project, also without Sessions, and a last group
+    with ``project_id`` null for the Sessions that work in no registered
+    Project (the Workspace, or a Project no longer registered). Groups with
+    Sessions come first, newest activity first; empty ones follow in Project
+    order. Global-scope Sessions of the built-in Agents are left out. Each
+    group is a ``session.list`` page that ``session.list`` with
+    ``working_project_id`` and its ``next_cursor`` continues.
+    """
+    _reject_unsupported(params, {"limit", *_SESSION_LIST_FILTER_PARAMS}, "session.project_groups")
+    limit = (
+        _optional_positive_integer(params, "limit", max_value=SESSION_PROJECT_GROUP_MAX_LIMIT)
+        or SESSION_PROJECT_GROUP_DEFAULT_LIMIT
+    )
+    filters = _session_list_filters(params)
+
+    def load_groups() -> JsonObject:
+        grouping = _session_project_grouping(state)
+        pages = state.runtime.chat_sessions.list_project_groups(
+            grouping, limit=limit, filters=filters
+        )
+        agent_policy = _listed_agent_policies(state)
+        project_pages = [(project_id, pages[project_id]) for project_id in grouping.project_ids]
+        active = sorted(
+            (entry for entry in project_pages if entry[1].sessions),
+            key=lambda entry: str(entry[1].sessions[0].get("last_active_at") or ""),
+            reverse=True,
+        )
+        empty = [entry for entry in project_pages if not entry[1].sessions]
+        return {
+            "groups": [
+                {"project_id": project_id, **_session_list_page_payload(state, page, agent_policy)}
+                for project_id, page in (*active, *empty, (None, pages[None]))
+            ]
+        }
+
+    try:
+        return cast(JsonObject, await state.runtime.chat_sessions.run_async(load_groups))
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 async def _get_session(state: Any, params: JsonObject) -> JsonObject:
@@ -797,6 +947,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "session.create": _create_session,
         "session.activity_list": _list_session_activity,
         "session.list": _list_sessions,
+        "session.project_groups": _list_session_project_groups,
         "session.get": _get_session,
         "session.change_stats": _session_change_stats,
         "session.mark_read": _mark_session_read,

@@ -37,6 +37,7 @@ from core.sessions._types import (
     SessionListCursor,
     SessionListFilters,
     SessionListPage,
+    SessionProjectGrouping,
     SessionReadBatch,
     SessionReadCursor,
     SessionSearchOrder,
@@ -587,6 +588,41 @@ class ChatSessionManager:
             cursor=cursor,
             filters=filters or SessionListFilters(),
             required_address=required_address,
+        )
+
+    def list_project_groups(
+        self,
+        grouping: SessionProjectGrouping,
+        *,
+        limit: int,
+        filters: SessionListFilters | None = None,
+    ) -> dict[str | None, SessionListPage]:
+        """Return the newest ``limit`` Sessions of every Agent per Working Project group.
+
+        Every Project of ``grouping`` and the ``None`` group (Sessions working
+        in no registered Project) get a page with its total count and cursor,
+        also when empty; ``list_project_page`` continues a group.
+        """
+        return self._store.list_project_groups(
+            grouping, limit=limit, filters=filters or SessionListFilters()
+        )
+
+    def list_project_page(
+        self,
+        grouping: SessionProjectGrouping,
+        project_id: str | None,
+        *,
+        limit: int,
+        cursor: SessionListCursor | None = None,
+        filters: SessionListFilters | None = None,
+    ) -> SessionListPage:
+        """Return one keyset page of one Working Project group of ``grouping``."""
+        return self._store.list_project_page(
+            grouping,
+            project_id,
+            limit=limit,
+            cursor=cursor,
+            filters=filters or SessionListFilters(),
         )
 
     def summary(self, address: SessionAddress) -> JsonObject | None:

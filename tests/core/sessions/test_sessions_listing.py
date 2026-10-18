@@ -17,6 +17,8 @@ from core.sessions import (
     SUBAGENT_SESSION_META_KEY,
     SessionAddress,
     SessionListFilters,
+    SessionListPage,
+    SessionProjectGrouping,
 )
 from core.utils.timestamps import canonical_timestamp
 from tests.core.sessions.history_fixtures import (
@@ -189,6 +191,45 @@ def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manage
     paged_ids = {summary["id"] for summary in (*first.sessions, *second.sessions)}
     assert paged_ids == {*normal_ids, hidden.session_id}
     assert second.next_cursor is None
+
+
+def test_project_groups_list_every_agents_sessions_by_working_project(manager) -> None:
+    def create(address: SessionAddress, minute: int, working_project_id: str | None) -> None:
+        manager._store.create(
+            address,
+            created_at=f"2026-08-01T12:{minute:02d}:00+00:00",
+            working_project_id=working_project_id,
+        )
+        _classify(manager, address, {"run_kinds": ["user"]})
+
+    create(_address("coder", "alpha-old"), 1, "alpha")
+    create(_address("writer", "alpha-new"), 5, "alpha")
+    # A Team member's Session works in its address Project.
+    create(_address("builder", "alpha-team", "alpha"), 3, None)
+    create(_address("coder", "workspace"), 2, None)
+    # A Project that is no longer registered counts with the Workspace.
+    create(_address("writer", "unregistered"), 4, "gone")
+    # Built-in Agents and hidden categories stay out of every group.
+    create(_address("librarian", "pass"), 6, "alpha")
+    cron = _address("coder", "alpha-cron")
+    manager._store.create(cron, created_at="2026-08-01T12:07:00+00:00", working_project_id="alpha")
+    _classify(manager, cron, {"run_kinds": ["cron"]})
+    grouping = SessionProjectGrouping(("alpha", "beta"), excluded_agent_ids=("librarian",))
+    filters = SessionListFilters(include_cron=False)
+
+    groups = manager.list_project_groups(grouping, limit=2, filters=filters)
+
+    assert list(groups) == ["alpha", "beta", None]
+    assert [summary["id"] for summary in groups["alpha"].sessions] == ["alpha-new", "alpha-team"]
+    assert groups["alpha"].total_count == 3
+    assert groups["beta"] == SessionListPage(sessions=(), next_cursor=None, total_count=0)
+    assert [summary["id"] for summary in groups[None].sessions] == ["unregistered", "workspace"]
+    assert groups[None].next_cursor is None
+    rest = manager.list_project_page(
+        grouping, "alpha", limit=5, cursor=groups["alpha"].next_cursor, filters=filters
+    )
+    assert [summary["id"] for summary in rest.sessions] == ["alpha-old"]
+    assert (rest.total_count, rest.next_cursor) == (3, None)
 
 
 def test_completion_activity_reads_completed_sessions_for_many_scopes(manager) -> None:

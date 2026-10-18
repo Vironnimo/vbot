@@ -485,3 +485,17 @@ class SessionListPage:
     sessions: tuple[JsonObject, ...]
     next_cursor: SessionListCursor | None
     total_count: int
+
+
+@dataclass(frozen=True)
+class SessionProjectGrouping:
+    """How a Session list groups live Sessions of every Agent by Working Project.
+
+    ``project_ids`` are the registered Projects. A Session working in none of
+    them (the Workspace, or a Project no longer registered) belongs to the
+    ``None`` group. Global-scope Sessions of ``excluded_agent_ids`` (the
+    built-in Agents) are left out of every group.
+    """
+
+    project_ids: tuple[str, ...]
+    excluded_agent_ids: tuple[str, ...] = ()

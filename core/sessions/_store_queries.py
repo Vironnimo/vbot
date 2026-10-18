@@ -18,6 +18,7 @@ from core.sessions._types import (
     SessionHistoryRevision,
     SessionListCursor,
     SessionListPage,
+    SessionProjectGrouping,
     SessionWorkingProject,
 )
 from core.sessions.errors import SessionNotFoundError
@@ -361,7 +362,40 @@ def list_summaries_page(
         include_cron=filters.include_cron,
         include_channels=filters.include_channels,
     )
-    base_where = f"s.state = 'live' AND {scope_sql} AND {visibility_sql}"
+    rows, total, has_more = _ordered_page(
+        connection,
+        f"s.state = 'live' AND {scope_sql} AND {visibility_sql}",
+        [*scope_params, *visibility_params],
+        limit=limit,
+        cursor=cursor,
+    )
+    required_row: sqlite3.Row | None = None
+    if required_address is not None:
+        required_scope = _store_values._scope(required_address)
+        if (required_scope[0], required_scope[1]) in normalized_scopes:
+            required_row = connection.execute(
+                f"SELECT {_store_values._SESSION_LIST_COLUMNS}, "
+                f"CASE WHEN {visibility_sql} THEN 1 ELSE 0 END AS list_visible "
+                f"{_LIST_FROM} WHERE s.state = 'live' AND s.project_id = ? "
+                "AND s.agent_id = ? AND s.session_id = ?",
+                (*visibility_params, *required_scope),
+            ).fetchone()
+    if required_row is not None and not bool(required_row["list_visible"]):
+        total += 1
+    listed_rows = [*rows, *([] if required_row is None else [required_row])]
+    changes = change_totals(connection, [int(row["session_key"]) for row in listed_rows])
+    return lambda: _summaries_page(rows, required_row, total, changes, has_more=has_more)
+
+
+def _ordered_page(
+    connection: sqlite3.Connection,
+    base_where: str,
+    base_params: Sequence[Any],
+    *,
+    limit: int,
+    cursor: SessionListCursor | None,
+) -> tuple[list[sqlite3.Row], int, bool]:
+    """Select one keyset page of ``base_where``: its rows, total count and whether more follow."""
     page_where = ""
     page_params: list[Any] = []
     if cursor is not None:
@@ -380,34 +414,128 @@ def list_summaries_page(
         )
     total = int(
         connection.execute(
-            f"SELECT COUNT(*) FROM sessions AS s WHERE {base_where}",
-            (*scope_params, *visibility_params),
+            f"SELECT COUNT(*) FROM sessions AS s WHERE {base_where}", base_params
         ).fetchone()[0]
     )
     fetched = connection.execute(
         f"SELECT {_store_values._SESSION_LIST_COLUMNS} {_LIST_FROM} "
         f"WHERE {base_where}{page_where} "
         "ORDER BY s.last_activity_at DESC, s.project_id, s.agent_id, s.session_id LIMIT ?",
-        (*scope_params, *visibility_params, *page_params, limit + 1),
+        (*base_params, *page_params, limit + 1),
     ).fetchall()
-    has_more = len(fetched) > limit
-    rows = fetched[:limit]
-    required_row: sqlite3.Row | None = None
-    if required_address is not None:
-        required_scope = _store_values._scope(required_address)
-        if (required_scope[0], required_scope[1]) in normalized_scopes:
-            required_row = connection.execute(
-                f"SELECT {_store_values._SESSION_LIST_COLUMNS}, "
-                f"CASE WHEN {visibility_sql} THEN 1 ELSE 0 END AS list_visible "
-                f"{_LIST_FROM} WHERE s.state = 'live' AND s.project_id = ? "
-                "AND s.agent_id = ? AND s.session_id = ?",
-                (*visibility_params, *required_scope),
-            ).fetchone()
-    if required_row is not None and not bool(required_row["list_visible"]):
-        total += 1
-    listed_rows = [*rows, *([] if required_row is None else [required_row])]
-    changes = change_totals(connection, [int(row["session_key"]) for row in listed_rows])
-    return lambda: _summaries_page(rows, required_row, total, changes, has_more=has_more)
+    return fetched[:limit], total, len(fetched) > limit
+
+
+def _project_group_sql(grouping: SessionProjectGrouping) -> tuple[str, str, list[Any]]:
+    """Return the ``sessions AS s`` group expression, the listed-Session predicate and its parameters.
+
+    The group is the Working Project (the address Project, else the Session's
+    own column) when it is registered, else ``''`` for the Sessions that work
+    in no registered Project. The group expression takes the first parameter,
+    the predicate the second.
+    """
+    working_project = "CASE WHEN s.project_id <> '' THEN s.project_id ELSE s.working_project_id END"
+    group = (
+        f"CASE WHEN {working_project} IN (SELECT value FROM json_each(?)) "
+        f"THEN {working_project} ELSE '' END"
+    )
+    listed = (
+        "s.state = 'live' AND NOT (s.project_id = '' AND "
+        "s.agent_id IN (SELECT value FROM json_each(?)))"
+    )
+    return (
+        group,
+        listed,
+        [json.dumps(list(grouping.project_ids)), json.dumps(list(grouping.excluded_agent_ids))],
+    )
+
+
+def _list_page_check(limit: int) -> None:
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+        raise ChatSessionError("Session list limit must be a positive integer")
+
+
+def list_project_groups(
+    connection: sqlite3.Connection,
+    grouping: SessionProjectGrouping,
+    *,
+    limit: int,
+    filters: SessionListFilters,
+) -> Callable[[], dict[str | None, SessionListPage]]:
+    """Read the newest ``limit`` listed Sessions of every Project group in one statement.
+
+    Every registered Project and the ``None`` group get a page, also when empty.
+    """
+    _list_page_check(limit)
+    group_sql, listed_sql, group_params = _project_group_sql(grouping)
+    visibility_sql, visibility_params = _store_values._session_list_visibility_sql(
+        include_subagents=filters.include_subagents,
+        include_memory_reflections=filters.include_memory_reflections,
+        include_skill_reflections=filters.include_skill_reflections,
+        include_cron=filters.include_cron,
+        include_channels=filters.include_channels,
+    )
+    projects_param, excluded_param = group_params
+    rows = connection.execute(
+        f"WITH listed AS (SELECT s.session_key, s.last_activity_at, s.project_id, "
+        f"s.agent_id, s.session_id, {group_sql} AS list_group FROM sessions AS s "
+        f"WHERE {listed_sql} AND {visibility_sql}), "
+        "ranked AS (SELECT session_key, list_group, ROW_NUMBER() OVER ("
+        "PARTITION BY list_group ORDER BY last_activity_at DESC, project_id, agent_id, "
+        "session_id) AS list_position, COUNT(*) OVER (PARTITION BY list_group) "
+        "AS list_group_total FROM listed) "
+        f"SELECT {_store_values._SESSION_LIST_COLUMNS}, r.list_group, r.list_group_total "
+        "FROM ranked AS r JOIN sessions AS s ON s.session_key = r.session_key "
+        f"{_store_values._DERIVED_METADATA_JOIN} "
+        "WHERE r.list_position <= ? ORDER BY r.list_group, r.list_position",
+        (projects_param, excluded_param, *visibility_params, limit),
+    ).fetchall()
+    changes = change_totals(connection, [int(row["session_key"]) for row in rows])
+
+    def decode() -> dict[str | None, SessionListPage]:
+        grouped: dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            grouped.setdefault(str(row["list_group"]), []).append(row)
+        pages: dict[str | None, SessionListPage] = {}
+        for project_id in (*grouping.project_ids, None):
+            group_rows = grouped.get(project_id or "", [])
+            total = int(group_rows[0]["list_group_total"]) if group_rows else 0
+            pages[project_id] = _summaries_page(
+                group_rows, None, total, changes, has_more=total > len(group_rows)
+            )
+        return pages
+
+    return decode
+
+
+def list_project_page(
+    connection: sqlite3.Connection,
+    grouping: SessionProjectGrouping,
+    project_id: str | None,
+    *,
+    limit: int,
+    cursor: SessionListCursor | None,
+    filters: SessionListFilters,
+) -> Callable[[], SessionListPage]:
+    """Read one keyset page of one Project group (``None``: no registered Project)."""
+    _list_page_check(limit)
+    group_sql, listed_sql, group_params = _project_group_sql(grouping)
+    visibility_sql, visibility_params = _store_values._session_list_visibility_sql(
+        include_subagents=filters.include_subagents,
+        include_memory_reflections=filters.include_memory_reflections,
+        include_skill_reflections=filters.include_skill_reflections,
+        include_cron=filters.include_cron,
+        include_channels=filters.include_channels,
+    )
+    rows, total, has_more = _ordered_page(
+        connection,
+        f"{listed_sql} AND {visibility_sql} AND {group_sql} = ?",
+        [group_params[1], *visibility_params, group_params[0], project_id or ""],
+        limit=limit,
+        cursor=cursor,
+    )
+    changes = change_totals(connection, [int(row["session_key"]) for row in rows])
+    return lambda: _summaries_page(rows, None, total, changes, has_more=has_more)
 
 
 def _summaries_page(

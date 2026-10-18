@@ -3,6 +3,7 @@
 from core.agents._config import AGENT_FORMAT_VERSION
 from core.agents._delegation import validate_agent_retirements_file
 from core.agents.agents import (
+    BUILTIN_AGENT_IDS,
     LIBRARIAN_AGENT_ID,
     LIBRARIAN_AGENT_NAME,
     LIBRARIAN_TOOLS,
@@ -48,6 +49,7 @@ from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, Temporar
 
 __all__ = [
     "AGENT_FORMAT_VERSION",
+    "BUILTIN_AGENT_IDS",
     "LIBRARIAN_AGENT_ID",
     "LIBRARIAN_AGENT_NAME",
     "LIBRARIAN_TOOLS",
