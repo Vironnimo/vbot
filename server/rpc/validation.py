@@ -14,7 +14,7 @@ from core.projects import (
     InvalidAgentAddressError,
     parse_agent_address,
 )
-from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
+from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 from core.settings import is_valid_agent_id, is_valid_project_id
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
@@ -90,6 +90,13 @@ def _required_agent_address(params: JsonObject, key: str) -> tuple[str, str | No
         return parse_agent_address(raw)
     except InvalidAgentAddressError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+
+def _required_session_address(params: JsonObject) -> SessionAddress:
+    """Parse one RPC Session address; internal helpers keep it intact."""
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    return SessionAddress(project_id, agent_id, session_id)
 
 
 def _optional_chat_input_origin(params: JsonObject) -> ChatInputOrigin | None:

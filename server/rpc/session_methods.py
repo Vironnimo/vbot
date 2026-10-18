@@ -59,6 +59,7 @@ from server.rpc.validation import (
     _optional_working_project,
     _reject_unsupported,
     _required_agent_address,
+    _required_session_address,
     _required_string,
     _validate_string_list,
 )
@@ -72,13 +73,6 @@ SESSION_LIST_DEFAULT_LIMIT = 100
 SESSION_LIST_MAX_LIMIT = 100
 
 SESSION_LIST_MAX_AGENT_BATCH = 100
-
-
-def _session_address(
-    agent_id: str, session_id: str, project_id: str | None = None
-) -> SessionAddress:
-    """Address one Session from RPC scalar fields."""
-    return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
 async def _create_session(state: Any, params: JsonObject) -> JsonObject:
@@ -127,7 +121,7 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
     # windows refresh their session list (and the make-current marking) for this
     # agent; they do NOT switch to the new session. Scoped to the new Session so
     # windows not listing this Agent ignore it.
-    publish_session_changed(state, project_id, agent_id, session.id)
+    publish_session_changed(state, SessionAddress(project_id, agent_id, session.id))
     response: JsonObject = {
         "agent_id": agent_id,
         "session_id": session.id,
@@ -145,15 +139,13 @@ async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonOb
         {"agent_id", "session_id", "agent_overrides", "remember"},
         "session.set_agent_overrides",
     )
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
+    address = _required_session_address(params)
     changes = _optional_agent_overrides(params, allow_clear=True)
     if not changes:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             "params.agent_overrides must name at least one of: " + ", ".join(AGENT_OVERRIDE_FIELDS),
         )
-    address = _session_address(agent_id, session_id, project_id)
     remember = _optional_bool(params, "remember", default=False)
     try:
         if remember:
@@ -166,26 +158,26 @@ async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonOb
             )
         effective = await state.runtime.chat_sessions.run_async(
             state.runtime.agent_resolver.effective_config,
-            project_id,
-            agent_id,
-            session_id=session_id,
+            address.project_id,
+            address.agent_id,
+            session_id=address.session_id,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    publish_session_changed(state, project_id, agent_id, session_id)
+    publish_session_changed(state, address)
     if remember:
         publish_resource_changed(
-            state, RESOURCE_KIND_PROJECTS if project_id else RESOURCE_KIND_AGENTS
+            state, RESOURCE_KIND_PROJECTS if address.project_id else RESOURCE_KIND_AGENTS
         )
     _LOGGER.info(
         "Session agent overrides updated (agent=%s session=%s fields=%s)",
-        format_agent_address(agent_id, project_id),
-        session_id,
+        format_agent_address(address.agent_id, address.project_id),
+        address.session_id,
         ",".join(sorted(changes)),
     )
     return {
-        "agent_id": format_agent_address(agent_id, project_id),
-        "session_id": session_id,
+        "agent_id": format_agent_address(address.agent_id, address.project_id),
+        "session_id": address.session_id,
         "agent_overrides": overrides.as_dict(),
         "effective": {name: effective[name] for name in AGENT_OVERRIDE_FIELDS if name in effective},
     }
@@ -207,14 +199,12 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"agent_id", "session_id", "permanent"}
     _reject_unsupported(params, supported_fields, "session.delete")
 
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
+    address = _required_session_address(params)
     permanent = _optional_bool(params, "permanent", default=False)
-    address = _session_address(agent_id, session_id, project_id)
     try:
         # Validate the owner, but archiving a conversation needs no runnable Model.
         await state.runtime.agent_resolver.resolve_agent_async(
-            project_id, agent_id, require_model=False
+            address.project_id, address.agent_id, require_model=False
         )
         try:
             async with _agent_reference_lock(state):
@@ -232,9 +222,9 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
                 "Wait until it finishes or stop it, then try again.",
             ) from exc
         next_session_id = outcome.next_session_id
-        if project_id is not None:
+        if address.project_id is not None:
             next_session_id = await state.runtime.chat_sessions.run_async(
-                _project_agent_landing, state, agent_id, project_id
+                _project_agent_landing, state, address.agent_id, address.project_id
             )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -244,7 +234,7 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     # scope names each archived Session and its landing so windows still
     # displaying or holding it release it and follow, like the deleting window.
     await publish_archived_sessions(
-        state, outcome.addresses, landings={(project_id, agent_id): next_session_id}
+        state, outcome.addresses, landings={(address.project_id, address.agent_id): next_session_id}
     )
     # Re-aiming the identity current pointer is an agent-config change, so refresh
     # agent state in other windows (the current marking + return-to-current path).
@@ -257,8 +247,8 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
         else {"archive_entry_id": outcome.entry_id, **not_purged()}
     )
     return {
-        "agent_id": agent_id,
-        "session_id": session_id,
+        "agent_id": address.agent_id,
+        "session_id": address.session_id,
         "next_session_id": next_session_id,
         **purge,
     }
@@ -418,13 +408,10 @@ async def _get_session(state: Any, params: JsonObject) -> JsonObject:
     active-Run fields are not resolved.
     """
     _reject_unsupported(params, {"agent_id", "session_id"}, "session.get")
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
+    address = _required_session_address(params)
     try:
         chat_sessions = state.runtime.chat_sessions
-        summary = await chat_sessions.run_async(
-            chat_sessions.summary, _session_address(agent_id, session_id, project_id)
-        )
+        summary = await chat_sessions.run_async(chat_sessions.summary, address)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     if summary is None:
@@ -433,7 +420,7 @@ async def _get_session(state: Any, params: JsonObject) -> JsonObject:
     session.pop("agent_id", None)
     session.pop("project_id", None)
     session.pop(COMPACTION_POLICY_META_KEY, None)
-    session["agent_address"] = format_agent_address(agent_id, project_id)
+    session["agent_address"] = format_agent_address(address.agent_id, address.project_id)
     return {"session": session}
 
 
@@ -448,10 +435,8 @@ async def _session_change_stats(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params, {"agent_id", "session_id", "include_subagents"}, "session.change_stats"
     )
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
+    address = _required_session_address(params)
     include_subagents = _optional_bool(params, "include_subagents", default=False)
-    address = _session_address(agent_id, session_id, project_id)
     chat_sessions = state.runtime.chat_sessions
 
     def read() -> JsonObject:
@@ -561,22 +546,19 @@ async def _list_session_activity(state: Any, params: JsonObject) -> JsonObject:
 async def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
     """Acknowledge the exact terminal Run rendered in one Session."""
     _reject_unsupported(params, {"agent_id", "session_id", "run_id"}, "session.mark_read")
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
+    address = _required_session_address(params)
     run_id = _required_string(params, "run_id")
     try:
         await state.runtime.agent_resolver.resolve_agent_async(
-            project_id, agent_id, require_model=False
+            address.project_id, address.agent_id, require_model=False
         )
-        activity = await state.runtime.chat_sessions.mark_terminal_run_read_async(
-            _session_address(agent_id, session_id, project_id), run_id
-        )
+        activity = await state.runtime.chat_sessions.mark_terminal_run_read_async(address, run_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
     return {
-        "agent_id": format_agent_address(agent_id, project_id),
-        "session_id": session_id,
+        "agent_id": format_agent_address(address.agent_id, address.project_id),
+        "session_id": address.session_id,
         **activity,
     }
 
@@ -595,6 +577,7 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
 
     source_agent_id, source_project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
+    source_address = SessionAddress(source_project_id, source_agent_id, session_id)
     target_explicit = "target_agent_id" in params
     target_agent_id, target_project_id = _optional_fork_target(
         params, source_agent_id, source_project_id
@@ -612,22 +595,21 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
                 target_project_id, target_agent_id, require_model=False
             )
         fork = await state.runtime.chat_sessions.fork(
-            _session_address(source_agent_id, session_id, source_project_id),
+            source_address,
             target_agent_id=target_agent_id if target_explicit else None,
             # Without a target the fork stays in the source's scope, which for a
             # Project Session is its Project.
             target_project_id=target_project_id,
         )
-        fork_metadata = await state.runtime.chat_sessions.get_metadata_async(
-            _session_address(target_agent_id, fork.id, target_project_id)
-        )
+        fork_address = SessionAddress(target_project_id, target_agent_id, fork.id)
+        fork_metadata = await state.runtime.chat_sessions.get_metadata_async(fork_address)
         fork_source = fork_metadata.get(FORK_SOURCE_META_KEY)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
     # Same emit point as session.create: other windows on the *target* agent
     # refresh their session list so the fork shows immediately.
-    publish_session_changed(state, target_project_id, target_agent_id, fork.id)
+    publish_session_changed(state, fork_address)
     _LOGGER.info(
         "Session forked (source_agent=%s source_session=%s target_agent=%s target_session=%s)",
         format_agent_address(source_agent_id, source_project_id),
@@ -667,6 +649,7 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
 
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
+    address = SessionAddress(None, agent_id, session_id)
     channel_id = _required_string(params, "channel_id")
     platform_conv_id = _required_string(params, "platform_conv_id")
 
@@ -695,7 +678,7 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
         chat_sessions = state.runtime.chat_sessions
         previous, _updated = await chat_sessions.run_async(
             chat_sessions.mutate_metadata_with_previous,
-            _session_address(agent_id, session_id),
+            address,
             link_channel,
         )
         previous_link = (
@@ -706,7 +689,7 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     if previous_link != (channel_id, channel_config.platform, platform_conv_id):
-        publish_session_changed(state, None, agent_id, session_id)
+        publish_session_changed(state, address)
         _LOGGER.info(
             "Session linked to Channel (agent=%s session=%s channel=%s)",
             agent_id,
@@ -727,19 +710,16 @@ async def _rename_session(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"agent_id", "session_id", "title"}
     _reject_unsupported(params, supported_fields, "session.rename")
 
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
+    address = _required_session_address(params)
     title = _session_title_param(params)
     try:
-        stored_title = await state.runtime.chat_sessions.set_title_async(
-            _session_address(agent_id, session_id, project_id), title
-        )
+        stored_title = await state.runtime.chat_sessions.set_title_async(address, title)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # A rename changes the session's list display, so other windows on this agent
     # refresh their session list — scoped to the Session like session.create.
-    publish_session_changed(state, project_id, agent_id, session_id)
-    return {"agent_id": agent_id, "session_id": session_id, "title": stored_title}
+    publish_session_changed(state, address)
+    return {"agent_id": address.agent_id, "session_id": address.session_id, "title": stored_title}
 
 
 async def _set_session_compaction_policy(state: Any, params: JsonObject) -> JsonObject:
@@ -747,15 +727,14 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
     _reject_unsupported(
         params, {"agent_id", "session_id", "policy"}, "session.set_compaction_policy"
     )
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
+    address = _required_session_address(params)
     policy = params.get("policy")
     try:
         from core.settings.normalizers import normalize_compaction_policy
 
         normalized = normalize_compaction_policy(policy) if policy is not None else None
         agent = await state.runtime.agent_resolver.resolve_agent_async(
-            project_id, agent_id, require_model=False
+            address.project_id, address.agent_id, require_model=False
         )
         chat_sessions = state.runtime.chat_sessions
 
@@ -774,9 +753,7 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
                 getattr(agent, "compaction_policy", None),
                 state.runtime.storage.load_compaction_settings,
             )
-            previous, _updated = chat_sessions.mutate_metadata_with_previous(
-                _session_address(agent_id, session_id, project_id), set_policy
-            )
+            previous, _updated = chat_sessions.mutate_metadata_with_previous(address, set_policy)
             return previous.get(COMPACTION_POLICY_META_KEY), effective
 
         previous_override, effective = await chat_sessions.run_async(apply_policy)
@@ -784,17 +761,17 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    publish_session_changed(state, project_id, agent_id, session_id)
+    publish_session_changed(state, address)
     if previous_override != normalized:
         _LOGGER.info(
             "Session compaction policy %s (agent=%s session=%s)",
             "set" if normalized is not None else "cleared",
-            format_agent_address(agent_id, project_id),
-            session_id,
+            format_agent_address(address.agent_id, address.project_id),
+            address.session_id,
         )
     return {
-        "agent_id": format_agent_address(agent_id, project_id),
-        "session_id": session_id,
+        "agent_id": format_agent_address(address.agent_id, address.project_id),
+        "session_id": address.session_id,
         "override": normalized,
         "effective": effective,
         "source": "session" if normalized is not None else "agent_or_global",

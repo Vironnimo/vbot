@@ -24,7 +24,6 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.payloads import _invalid_skill_response, _skill_response, _tool_response
-from server.rpc.runtime_access import _state_command_dispatcher
 from server.rpc.validation import (
     _chat_reply_surface,
     _draft_working_project,
@@ -146,7 +145,7 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
                 "argument": spec.argument,
                 "output": _COMMAND_CATALOG_OUTPUT[spec.catalog_result],
             }
-            for spec in _state_command_dispatcher(state).catalog()
+            for spec in state.command_dispatcher.catalog()
             if reply_surface.kind not in spec.unavailable_surfaces
         ]
         skills = await _command_skill_suggestions(state, address, session_id, working_project_id)

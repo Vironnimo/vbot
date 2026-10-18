@@ -249,9 +249,7 @@ async def publish_archived_sessions(
         )
 
 
-def session_resource_scope(
-    project_id: str | None, agent_id: str, session_id: str, **identifiers: str
-) -> JsonObject:
+def session_resource_scope(address: SessionAddress, **identifiers: str) -> JsonObject:
     """Return the ``sessions`` invalidation scope naming one exact Session.
 
     ``agent_id`` is bare and ``project_id`` is ``None`` for an identity Agent.
@@ -259,25 +257,23 @@ def session_resource_scope(
     let accessors apply what they already know instead of re-reading.
     """
     return {
-        "project_id": project_id,
-        "agent_id": agent_id,
-        "session_id": session_id,
+        "project_id": address.project_id,
+        "agent_id": address.agent_id,
+        "session_id": address.session_id,
         **identifiers,
     }
 
 
 def publish_session_changed(
     state: Any,
-    project_id: str | None,
-    agent_id: str,
-    session_id: str,
+    address: SessionAddress,
     **identifiers: str,
 ) -> None:
     """Publish ``resource_changed(sessions)`` scoped to one exact Session."""
     publish_resource_changed(
         state,
         RESOURCE_KIND_SESSIONS,
-        scope=session_resource_scope(project_id, agent_id, session_id, **identifiers),
+        scope=session_resource_scope(address, **identifiers),
     )
 
 
@@ -318,7 +314,8 @@ async def _publish_run_events(
                     {
                         "kind": RESOURCE_KIND_SESSIONS,
                         "scope": session_resource_scope(
-                            run.project_id, run.agent_id, run.session_id, run_id=run.id
+                            SessionAddress(run.project_id, run.agent_id, run.session_id),
+                            run_id=run.id,
                         ),
                     },
                 )
