@@ -3,6 +3,7 @@
 import json
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ _PORT_SETTINGS = {"format_version": 1, "server_port": 8500}
 
 # The parts that cannot import DEFAULT_PORT repeat it; each pattern captures that copy.
 _DEFAULT_PORT_COPIES = {
-    "desktop/main.py": r"^DEFAULT_PORT = (\d+)$",
+    "desktop/probe.py": r"^DEFAULT_PORT = (\d+)$",
     "scripts/install.ps1": r"\[int\]\$Port = (\d+),",
     "scripts/install.sh": r'^PORT="(\d+)"$',
     "scripts/windows/vbot.iss": r"\{param:VBOTPORT\|(\d+)\}",
@@ -79,6 +80,31 @@ def test_worktree_file_sets_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyP
     neutral_cwd.mkdir()
     monkeypatch.chdir(neutral_cwd)
     assert Config().data_dir == tmp_path / "wt-data"
+
+
+@pytest.mark.parametrize("cwd_marker", [False, True])
+def test_an_unreadable_worktree_marker_refuses_data_directory_inference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    cwd_marker: bool,
+) -> None:
+    monkeypatch.delenv("VBOT_DATA_DIR", raising=False)
+    marker = tmp_path / ".vbot-worktree"
+    marker.write_text(json.dumps({"data_dir": str(tmp_path / "wt-data")}), encoding="utf-8")
+    monkeypatch.setattr("core.utils.config._WORKTREE_FILE", marker)
+    if cwd_marker:
+        monkeypatch.chdir(tmp_path)
+    else:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        monkeypatch.chdir(outside)
+    deny_access(marker)
+
+    with pytest.raises(PermissionError):
+        Config()
+
+    assert Config(data_dir=tmp_path / "explicit").data_dir == tmp_path / "explicit"
 
 
 def test_cwd_worktree_file_used_when_module_file_path_missing(
