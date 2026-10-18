@@ -171,13 +171,7 @@ class TokenStore:
             ) from error
         if text is None:
             return None
-        data = _decode_token(text)
-        return OAuthToken(
-            access_token=data["access_token"],
-            refresh_token=data.get("refresh_token"),
-            expires_at=_parse_datetime(data.get("expires_at")),
-            extra=dict(data.get("extra", {})),
-        )
+        return _token_from_text(text)
 
     def exists(
         self,
@@ -223,14 +217,23 @@ class TokenStore:
         A network refresh may neither revive their retired token nor remove
         replacement credentials after its own exchange fails.
         """
-        with self._mutation_lock:
-            if self.load(account) != expected:
+        token_id = self._token_id(account)
+
+        def replace(transaction: SecretTransaction) -> bool:
+            text = transaction.get(OAUTH_TOKENS, token_id)
+            if text is None or _token_from_text(text) != expected:
                 return False
             if replacement is None:
-                self.delete(account)
+                transaction.remove(OAUTH_TOKENS, token_id)
             else:
-                self.save(account, replacement)
+                self._write(transaction, token_id, self._token_to_dict(replacement))
             return True
+
+        with self._mutation_lock:
+            try:
+                return self._secrets.update(replace)
+            except SecretStoreError as error:
+                raise OAuthTokenFileError(f"{error} {_RESET_HINT}") from error
 
     async def replace_if_current_async(
         self,
@@ -331,6 +334,16 @@ class TokenStore:
         if value is None:
             return None
         return value.astimezone(UTC).isoformat()
+
+
+def _token_from_text(text: str) -> OAuthToken:
+    data = _decode_token(text)
+    return OAuthToken(
+        access_token=data["access_token"],
+        refresh_token=data.get("refresh_token"),
+        expires_at=_parse_datetime(data.get("expires_at")),
+        extra=dict(data.get("extra", {})),
+    )
 
 
 def _decode_token(text: str) -> dict[str, Any]:

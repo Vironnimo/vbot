@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from core.providers.token_store import (
     OAuthTokenFileError,
     TokenStore,
 )
-from core.secrets import OAUTH_TOKENS, SecretStore
+from core.secrets import OAUTH_TOKENS, SecretStore, SecretTransaction
 
 
 def _tamper(store_path: Path, token_id: str) -> None:
@@ -63,6 +64,52 @@ def test_token_round_trips_as_a_versioned_document_without_exposing_secrets(
     rewritten = json.loads(secrets.entry(OAUTH_TOKENS, "github-copilot-oauth") or "")
     assert rewritten["access_token"] == "second"
     assert rewritten["issuer"] == "kept"
+
+    refreshed = OAuthToken(access_token="refreshed")
+    assert store.replace_if_current(
+        Account("github-copilot", "oauth"), OAuthToken(access_token="second"), refreshed
+    )
+    rewritten = json.loads(secrets.entry(OAUTH_TOKENS, "github-copilot-oauth") or "")
+    assert rewritten["access_token"] == refreshed.access_token
+    assert rewritten["issuer"] == "kept"
+    assert store.replace_if_current(Account("github-copilot", "oauth"), refreshed, None)
+    assert store.load(Account("github-copilot", "oauth")) is None
+
+
+@pytest.mark.parametrize("reconnect", [False, True], ids=["disconnect", "reconnect"])
+@pytest.mark.parametrize(
+    "replacement",
+    [OAuthToken(access_token="refreshed"), None],
+    ids=["publish-refresh", "retire-rejected-token"],
+)
+def test_delayed_refresh_preserves_changes_from_another_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reconnect: bool,
+    replacement: OAuthToken | None,
+) -> None:
+    secrets = SecretStore(tmp_path)
+    store = TokenStore(secrets)
+    other = TokenStore(SecretStore(tmp_path))
+    account = Account("github-copilot", "oauth")
+    original = OAuthToken(access_token="original")
+    newer = OAuthToken(access_token="new-login") if reconnect else None
+    store.save(account, original)
+    update = secrets.update
+
+    def intervening_update[Result](change: Callable[[SecretTransaction], Result]) -> Result:
+        # Another process finishes its mutation before this writer takes the
+        # Secret Store's lock. Comparison must read that locked snapshot too.
+        if newer is None:
+            other.delete(account)
+        else:
+            other.save(account, newer)
+        return update(change)
+
+    monkeypatch.setattr(secrets, "update", intervening_update)
+
+    assert store.replace_if_current(account, original, replacement) is False
+    assert other.load(account) == newer
 
 
 @pytest.mark.parametrize(
