@@ -220,7 +220,7 @@ async def test_expired_token_refreshes_through_the_flow_and_publishes_to_its_acc
         with caplog.at_level(logging.DEBUG, logger="vbot.providers.token_getter"):
             assert await getter() == reply["access_token"]
 
-    assert operations == ["load", "publish", "load"]
+    assert operations == ["load", "publish"]
 
     request = route.calls.last.request
     assert route.call_count == 1
