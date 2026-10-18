@@ -18,15 +18,9 @@
   import SessionKindIcon from './sessions/SessionKindIcon.svelte';
   import {
     sessionDisplayName,
-    applyProjectGroups,
-    appendProjectGroupPage,
-    applySessionList,
-    appendSessionList,
     projectGroupKey,
     createSessionListFilters,
-    createSessionListState,
     overlayLiveSessionActivity,
-    selectSession,
     visibleSessionsForSelection,
   } from '$lib/sessionListView.js';
   import ContextMenu from './ui/ContextMenu.svelte';
@@ -35,28 +29,12 @@
   import ArchiveDeleteOption from './archive/ArchiveDeleteOption.svelte';
   import Modal from './ui/Modal.svelte';
   import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
-  import { onDestroy, untrack } from 'svelte';
-  import {
-    listProjectSessions,
-    listSessionProjectGroups,
-    listSessions,
-  } from '$lib/api.js';
+  import { untrack } from 'svelte';
   import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
-  import {
-    createCoalescedRefresh,
-    sessionInvalidationListsTarget,
-    takeSessionInvalidations,
-  } from '$lib/sessionInvalidation.js';
+  import { createSessionList } from './sessions/list.svelte.js';
   import { createSessionActions } from './sessions/actions.svelte.js';
   import { createSessionMenus } from './sessions/menus.svelte.js';
   import './sessions/sessions.css';
-
-  const SESSION_INITIAL_DISPLAY_LIMIT = 35;
-  const SESSION_DISPLAY_INCREMENT = 20;
-  // The newest Sessions a Project group shows, and how many more each
-  // "Show more" adds.
-  const PROJECT_GROUP_LIMIT = 5;
-  const PROJECT_GROUP_INCREMENT = 10;
 
   let {
     agentId = '',
@@ -127,7 +105,7 @@
       return closeRowMenu;
     },
     get loadSessions() {
-      return loadSessions;
+      return list.loadSessions;
     },
     get onSessionDeleted() {
       return onSessionDeleted;
@@ -140,28 +118,10 @@
     },
   });
 
-  let sessionState = $state(createSessionListState());
   let filters = $state({
     ...createSessionListFilters(),
     ...untrack(() => initialFilters),
   });
-  let sessionsWithLiveActivity = $derived(
-    overlayLiveSessionActivity(sessionState.sessions, liveActivity, agentId),
-  );
-  let visibleSessions = $derived(
-    visibleSessionsForSelection(sessionsWithLiveActivity, {
-      filters,
-      selectedSessionId: currentSessionId,
-    }),
-  );
-  let displayedSessions = $derived(visibleSessions);
-  let nextCursor = $state(null);
-  let totalSessionCount = $state(0);
-  let loadingMore = $state(false);
-  let hasMoreToDisplay = $derived(nextCursor !== null);
-  let remainingSessionCount = $derived(
-    Math.max(totalSessionCount - visibleSessions.length, 0),
-  );
   let activeFilterCount = $derived(
     Number(filters.channels) +
       Number(filters.subagents) +
@@ -185,9 +145,32 @@
     return roster;
   });
 
-  // The by-Project view: the groups of `session.project_groups`.
-  let projectState = $state({ groups: [], loading: false, error: null });
-  let loadingMoreGroupKey = $state(null);
+  const list = createSessionList({
+    get agentId() {
+      return agentId;
+    },
+    get currentSessionId() {
+      return currentSessionId;
+    },
+    get filters() {
+      return filters;
+    },
+    get rosterAgents() {
+      return rosterAgents;
+    },
+    get reloadToken() {
+      return reloadToken;
+    },
+    get invalidations() {
+      return invalidations;
+    },
+    get liveActivity() {
+      return liveActivity;
+    },
+    get onSessionSelected() {
+      return onSessionSelected;
+    },
+  });
 
   // Names of every Agent a by-Project row can belong to: the roster's
   // Identity Agents and each Project's Team members.
@@ -215,7 +198,7 @@
   );
 
   let displayedGroups = $derived(
-    projectState.groups.map((group) => {
+    list.projectState.groups.map((group) => {
       const sessions = overlayLiveSessionActivity(
         group.sessions,
         liveActivity,
@@ -355,348 +338,6 @@
     };
   }
 
-  let loadedListKey = '';
-  let loadVersion = 0;
-
-  // The list reloads when the addressed agent changes, when the All-agents
-  // filter changes which addresses are loaded, or when the roster itself
-  // changes while that filter is on.
-  let listSourceKey = $derived(
-    [
-      filters.byProject ? '~projects' : asText(agentId),
-      filters.allAgents && !filters.byProject
-        ? rosterAgents.map((entry) => entry.address).join('|')
-        : '',
-      Number(filters.channels),
-      Number(filters.subagents),
-      Number(filters.memoryReflections),
-      Number(filters.skillReflections),
-      Number(filters.cron),
-    ].join('||'),
-  );
-
-  $effect(() => {
-    if (listSourceKey === loadedListKey) {
-      return;
-    }
-
-    loadedListKey = listSourceKey;
-
-    if (!filters.byProject && !asText(agentId)) {
-      sessionState = createSessionListState();
-      return;
-    }
-
-    loadSessions();
-  });
-
-  $effect(() => {
-    const normalizedCurrentSessionId = asText(currentSessionId);
-
-    if (!normalizedCurrentSessionId) {
-      if (sessionState.selectedSessionId !== null) {
-        sessionState = selectSession(sessionState, null);
-      }
-      return;
-    }
-
-    const hasCurrentSession = sessionState.sessions.some(
-      (session) =>
-        session.id === normalizedCurrentSessionId &&
-        session.agent_address === asText(agentId),
-    );
-
-    if (!hasCurrentSession) {
-      return;
-    }
-
-    if (
-      sessionState.selectedSessionId === normalizedCurrentSessionId &&
-      sessionState.selectedAgentAddress === asText(agentId)
-    ) {
-      return;
-    }
-
-    sessionState = selectSession(
-      sessionState,
-      normalizedCurrentSessionId,
-      asText(agentId),
-    );
-  });
-
-  // Reload the list when continuity is uncertain or another window changes a
-  // Session of a listed Agent. The viewed conversation stays put — only the
-  // list refreshes. A read acknowledgement changes only completion activity,
-  // which the live Chat overlay already shows.
-  const listReloads = createCoalescedRefresh(() => loadSessions());
-  onDestroy(() => listReloads.destroy());
-  let lastReloadToken = null;
-  $effect(() => {
-    if (lastReloadToken === null) {
-      lastReloadToken = reloadToken;
-      return;
-    }
-    if (reloadToken !== lastReloadToken) {
-      lastReloadToken = reloadToken;
-      void listReloads.run();
-    }
-  });
-
-  let lastInvalidationId = null;
-  $effect(() => {
-    const entries = invalidations;
-    untrack(() => {
-      const { targets, lastId, overflowed } = takeSessionInvalidations(
-        entries,
-        lastInvalidationId,
-      );
-      lastInvalidationId = lastId;
-      // The by-Project view lists every Agent.
-      if (
-        filters.byProject &&
-        (overflowed || targets.some((target) => !target.readRunId))
-      ) {
-        listReloads.schedule();
-        return;
-      }
-      const listedAddresses = [
-        asText(agentId),
-        ...(filters.allAgents
-          ? rosterAgents.map((entry) => entry.address)
-          : []),
-      ];
-      if (
-        overflowed ||
-        targets.some(
-          (target) =>
-            !target.readRunId &&
-            sessionInvalidationListsTarget(target, listedAddresses),
-        )
-      ) {
-        listReloads.schedule();
-      }
-    });
-  });
-
-  // Mutations may finish after selection or filters changed. Reload the
-  // drawer's current scope, while each mutation keeps its original target.
-  const loadSessions = async () => {
-    if (filters.byProject) {
-      await loadProjectGroups();
-      return;
-    }
-    const targetAgentId = asText(agentId);
-    if (!targetAgentId) {
-      sessionState = createSessionListState();
-      return;
-    }
-
-    const requestVersion = ++loadVersion;
-    nextCursor = null;
-    totalSessionCount = 0;
-    loadingMore = false;
-    sessionState = {
-      ...sessionState,
-      loading: true,
-      error: null,
-    };
-
-    try {
-      const result = await loadRawSessions(
-        targetAgentId,
-        SESSION_INITIAL_DISPLAY_LIMIT,
-      );
-      if (requestVersion !== loadVersion) {
-        return;
-      }
-
-      sessionState = applySessionList(sessionState, result.sessions);
-      nextCursor = result.nextCursor;
-      totalSessionCount = result.totalCount;
-      const normalizedCurrentSessionId = asText(currentSessionId);
-      if (normalizedCurrentSessionId) {
-        sessionState = selectSession(
-          sessionState,
-          normalizedCurrentSessionId,
-          asText(agentId),
-        );
-      }
-    } catch (error) {
-      if (requestVersion !== loadVersion) {
-        return;
-      }
-
-      sessionState = {
-        ...sessionState,
-        loading: false,
-        error: error.message,
-      };
-    }
-  };
-
-  // The server applies filtering, global ordering, and keyset pagination in
-  // SQLite for either one owner or the complete roster. The browser keeps only
-  // the pages the user has actually reached.
-  const loadRawSessions = async (targetAgentId, limit, cursor = null) => {
-    const listedAgents =
-      filters.allAgents && rosterAgents.length > 0
-        ? [
-            ...new Set([
-              targetAgentId,
-              ...rosterAgents.map((entry) => entry.address),
-            ]),
-          ]
-        : targetAgentId;
-    const requiredSessionId = asText(currentSessionId);
-    const result = await listSessions(listedAgents, {
-      limit,
-      cursor,
-      includeSubagents: filters.subagents,
-      includeMemoryReflections: filters.memoryReflections,
-      includeSkillReflections: filters.skillReflections,
-      includeCron: filters.cron,
-      includeChannels: filters.channels === true,
-      requiredSession: requiredSessionId
-        ? { agentId: asText(agentId), sessionId: requiredSessionId }
-        : null,
-    });
-    const namesByAddress = new Map(
-      rosterAgents.map((entry) => [entry.address, entry.name]),
-    );
-    const sessions = (result?.sessions ?? []).map((session) => {
-      const owner = asText(session?.agent_address) || targetAgentId;
-      return {
-        ...session,
-        agent_address: owner,
-        agent_name: filters.allAgents
-          ? namesByAddress.get(owner) || owner
-          : null,
-      };
-    });
-    return {
-      sessions,
-      nextCursor: result?.next_cursor ?? null,
-      totalCount: Number.isSafeInteger(result?.total_count)
-        ? result.total_count
-        : sessions.length,
-    };
-  };
-
-  const loadMoreSessions = async () => {
-    const targetAgentId = asText(agentId);
-    const cursor = nextCursor;
-    if (!targetAgentId || cursor === null || loadingMore) {
-      return;
-    }
-    const requestVersion = loadVersion;
-    loadingMore = true;
-    try {
-      const result = await loadRawSessions(
-        targetAgentId,
-        SESSION_DISPLAY_INCREMENT,
-        cursor,
-      );
-      if (requestVersion !== loadVersion || cursor !== nextCursor) {
-        return;
-      }
-      sessionState = appendSessionList(sessionState, result.sessions);
-      nextCursor = result.nextCursor;
-      totalSessionCount = result.totalCount;
-    } catch (error) {
-      if (requestVersion === loadVersion) {
-        sessionState = { ...sessionState, error: error.message };
-      }
-    } finally {
-      if (requestVersion === loadVersion) {
-        loadingMore = false;
-      }
-    }
-  };
-
-  const categoryQuery = () => ({
-    includeSubagents: filters.subagents,
-    includeMemoryReflections: filters.memoryReflections,
-    includeSkillReflections: filters.skillReflections,
-    includeCron: filters.cron,
-    includeChannels: filters.channels === true,
-  });
-
-  const loadProjectGroups = async () => {
-    const requestVersion = ++loadVersion;
-    loadingMoreGroupKey = null;
-    projectState = { ...projectState, loading: true, error: null };
-    try {
-      const result = await listSessionProjectGroups({
-        limit: PROJECT_GROUP_LIMIT,
-        ...categoryQuery(),
-      });
-      if (requestVersion !== loadVersion) {
-        return;
-      }
-      projectState = {
-        groups: applyProjectGroups(result),
-        loading: false,
-        error: null,
-      };
-    } catch (error) {
-      if (requestVersion === loadVersion) {
-        projectState = {
-          ...projectState,
-          loading: false,
-          error: error.message,
-        };
-      }
-    }
-  };
-
-  const loadMoreInGroup = async (group) => {
-    const cursor = group.nextCursor;
-    if (cursor === null || loadingMoreGroupKey !== null) {
-      return;
-    }
-    const requestVersion = loadVersion;
-    loadingMoreGroupKey = group.key;
-    try {
-      const page = await listProjectSessions(group.projectId, {
-        limit: PROJECT_GROUP_INCREMENT,
-        cursor,
-        ...categoryQuery(),
-      });
-      if (requestVersion !== loadVersion) {
-        return;
-      }
-      projectState = {
-        ...projectState,
-        groups: appendProjectGroupPage(
-          projectState.groups,
-          group.projectId,
-          page,
-        ),
-      };
-    } catch (error) {
-      if (requestVersion === loadVersion) {
-        projectState = { ...projectState, error: error.message };
-      }
-    } finally {
-      if (requestVersion === loadVersion) {
-        loadingMoreGroupKey = null;
-      }
-    }
-  };
-
-  const handleSelectSession = (session) => {
-    const owner = session.agent_address || asText(agentId);
-    sessionState = selectSession(sessionState, session.id, owner);
-    // The row's real sub-agent flag decides the footer banner in ChatView:
-    // a foreign agent's ordinary session is a normal override view, not a
-    // sub-agent session.
-    onSessionSelected?.(
-      session.id,
-      owner,
-      session.is_subagent_session === true,
-    );
-  };
-
   const setFilter = (key, checked) => {
     filters = { ...filters, [key]: checked };
     onFiltersChange(filters);
@@ -810,23 +451,13 @@
   });
 
   const handleListScroll = (event) => {
-    if (!hasMoreToDisplay || loadingMore) {
+    if (!list.hasMoreToDisplay || list.loadingMore) {
       return;
     }
     const el = event.currentTarget;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 60) {
-      loadMoreSessions();
+      list.loadMoreSessions();
     }
-  };
-
-  // The by-Project view marks the shown Session; the Agent list keeps its
-  // own selection.
-  const rowSelected = (session) => {
-    const owner = session.agent_address || asText(agentId);
-    return filters.byProject
-      ? session.id === asText(currentSessionId) && owner === asText(agentId)
-      : sessionState.selectedSessionId === session.id &&
-          sessionState.selectedAgentAddress === owner;
   };
 
   const sessionRowKey = (session) =>
@@ -963,19 +594,19 @@
   {/if}
 
   {#if filters.byProject}
-    {#if projectState.error}
+    {#if list.projectState.error}
       <Banner variant="error" class="session-drawer__load-error" role="alert">
-        <span>{projectState.error}</span>
+        <span>{list.projectState.error}</span>
         <Button
           variant="secondary"
-          disabled={projectState.loading}
-          onClick={() => loadSessions()}
+          disabled={list.projectState.loading}
+          onClick={() => list.loadSessions()}
         >
           {t('common.retry')}
         </Button>
       </Banner>
     {/if}
-    {#if projectState.loading && projectState.groups.length === 0}
+    {#if list.projectState.loading && list.projectState.groups.length === 0}
       <p class="session-drawer__state">
         {t('sessions.loading')}
       </p>
@@ -1055,8 +686,8 @@
                 <button
                   type="button"
                   class="session-group__more"
-                  disabled={loadingMoreGroupKey !== null}
-                  onclick={() => loadMoreInGroup(group)}
+                  disabled={list.loadingMoreGroupKey !== null}
+                  onclick={() => list.loadMoreInGroup(group)}
                 >
                   {t('sessions.projects.showMore', {
                     count: Math.max(
@@ -1071,22 +702,22 @@
         {/each}
       </div>
     {/if}
-  {:else if sessionState.error}
+  {:else if list.sessionState.error}
     <Banner variant="error" class="session-drawer__load-error" role="alert">
-      <span>{sessionState.error}</span>
+      <span>{list.sessionState.error}</span>
       <Button
         variant="secondary"
-        disabled={sessionState.loading || !agentId}
-        onClick={() => loadSessions()}
+        disabled={list.sessionState.loading || !agentId}
+        onClick={() => list.loadSessions()}
       >
         {t('common.retry')}
       </Button>
     </Banner>
-  {:else if sessionState.loading && sessionState.sessions.length === 0}
+  {:else if list.sessionState.loading && list.sessionState.sessions.length === 0}
     <p class="session-drawer__state">
       {t('sessions.loading')}
     </p>
-  {:else if sessionState.sessions.length === 0}
+  {:else if list.sessionState.sessions.length === 0}
     <EmptyState
       density="compact"
       class="session-drawer__empty-layout"
@@ -1095,7 +726,7 @@
         ? t('sessions.no_sessions_all')
         : t('sessions.no_sessions')}
     />
-  {:else if visibleSessions.length === 0}
+  {:else if list.visibleSessions.length === 0}
     <EmptyState
       density="compact"
       class="session-drawer__empty-layout"
@@ -1104,21 +735,21 @@
     />
   {:else}
     <ul class="session-drawer__list" onscroll={handleListScroll}>
-      {#each displayedSessions as session (sessionRowKey(session))}
+      {#each list.visibleSessions as session (sessionRowKey(session))}
         {@render sessionRow(session)}
       {/each}
     </ul>
-    {#if hasMoreToDisplay}
+    {#if list.hasMoreToDisplay}
       <p class="session-drawer__more-hint">
         {t('sessions.moreHint', {
-          count: remainingSessionCount,
+          count: list.remainingSessionCount,
         })}
       </p>
     {/if}
   {/if}
 </aside>
 
-{#snippet sessionRow(session, rowSessions = sessionsWithLiveActivity)}
+{#snippet sessionRow(session, rowSessions = list.sessionsWithLiveActivity)}
   {@const marker = sessionMarker(session)}
   <!-- Right click anywhere on the row opens its menu; the context menu key
          on the row's button is the keyboard path. -->
@@ -1154,9 +785,9 @@
     {:else}
       <button
         type="button"
-        class:session-row__select--active={rowSelected(session)}
+        class:session-row__select--active={list.rowSelected(session)}
         class="session-row__select"
-        onclick={() => handleSelectSession(session)}
+        onclick={() => list.handleSelectSession(session)}
         onkeydown={(event) => {
           if (isContextMenuKey(event)) openRowMenu(session, event);
         }}

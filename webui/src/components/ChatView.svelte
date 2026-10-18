@@ -365,35 +365,11 @@
       options,
     );
 
-  // The Agent and Project New Session continues in, or null for the plain
-  // New Session: no by-Project list shown, a draft shown, an unknown Project,
-  // or a displayed Agent the area cannot start (a stand-in).
-  const projectNewSessionTarget = () => {
-    const view = sessionSettings.view;
-    if (
-      !showSessionDrawer ||
-      !sessionFilters?.byProject ||
-      view?.kind !== 'session' ||
-      view.project.known !== true
-    ) {
-      return null;
-    }
-    const agentAddress = target.activeAgentAddress;
-    const { agentId, projectId: teamProjectId } =
-      parseAgentAddress(agentAddress);
-    const projectId = projects.some(
-      (project) => project.project_id === view.project.value,
-    )
-      ? view.project.value
-      : null;
-    const startable = teamProjectId
-      ? teamProjectId === projectId
-      : chatState.agents.some((agent) => agent.id === agentId);
-    return startable ? { agentAddress, projectId } : null;
-  };
-
   const handleNewSession = () => {
-    const next = projectNewSessionTarget();
+    const next =
+      showSessionDrawer && sessionFilters?.byProject
+        ? target.projectNewSessionTarget(sessionSettings.view)
+        : null;
     return next
       ? startSessionInProject(next.projectId, next.agentAddress, {
           keepEmptySession: true,
