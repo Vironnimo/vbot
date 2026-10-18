@@ -114,6 +114,20 @@ def test_cmd_delete_preserves_both_data_dirs_when_marker_is_tampered(tmp_path, m
         pytest.param(None, {"server_port": 8422}, "8422", "data", id="missing-settings"),
         pytest.param({}, {}, None, "data", id="unknown-port-stops-nothing"),
         pytest.param(None, {}, None, "data", id="missing-settings-and-port"),
+        *[
+            pytest.param(
+                {"server_port": value},
+                {"server_port": 8422},
+                "8422",
+                "data",
+                id=f"invalid-settings-{value}",
+            )
+            for value in (True, False, 0, -1, 65_536)
+        ],
+        *[
+            pytest.param(None, {"server_port": value}, None, "data", id=f"invalid-marker-{value}")
+            for value in (True, False, 0, -1, 65_536)
+        ],
         # Worktrees created before the sibling data root keep ~/.vbot-<name>.
         pytest.param({"server_port": 8422}, {}, "8422", "home", id="legacy-home-data-dir"),
     ],
