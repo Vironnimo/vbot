@@ -111,6 +111,7 @@ const COMPOSED_KEYS = {
     'session_title',
     'group_title',
     'extension_sampling',
+    'agent_description',
   ],
   // statisticsView.js STATISTICS_RANGES
   'statistics.range.*': ['24h', '7d', '30d', '90d', 'all'],

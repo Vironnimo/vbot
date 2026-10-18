@@ -68,8 +68,8 @@ def test_project_catalog_lists_only_additional_allowed_team_members() -> None:
 def test_identity_wildcard_catalog_qualifies_project_agents_and_excludes_self() -> None:
     runtime = _runtime(
         identities=[
-            SimpleNamespace(id="main", name="Main"),
-            SimpleNamespace(id="researcher", name="Researcher"),
+            SimpleNamespace(id="main", name="Main", description=""),
+            SimpleNamespace(id="researcher", name="Researcher", description="Researches sources."),
         ],
         teams={
             "vbot": [
@@ -83,9 +83,9 @@ def test_identity_wildcard_catalog_qualifies_project_agents_and_excludes_self() 
 
     targets = build_subagent_prompt_targets(runtime, agent, None)
 
-    assert [(target.agent_id, target.name) for target in targets] == [
-        ("builder@vbot", "Builder"),
-        ("researcher", "Researcher"),
+    assert [(target.agent_id, target.name, target.description) for target in targets] == [
+        ("builder@vbot", "Builder", "Builds features."),
+        ("researcher", "Researcher", "Researches sources."),
     ]
 
 
@@ -95,8 +95,8 @@ def test_identity_explicit_catalog_omits_unknown_and_calling_agent_entries(
 ) -> None:
     runtime = _runtime(
         identities=[
-            SimpleNamespace(id="main", name="Main"),
-            SimpleNamespace(id="researcher", name="Researcher"),
+            SimpleNamespace(id="main", name="Main", description=""),
+            SimpleNamespace(id="researcher", name="Researcher", description=""),
         ],
         teams={"vbot": [_member("builder", "Builder")]},
     )

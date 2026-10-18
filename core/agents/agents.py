@@ -33,6 +33,7 @@ from core.agents._config import (
     _agent_rename_from_data,
     _apply_agent_order,
     _apply_defaults,
+    _normalize_agent_description,
     _normalize_agent_name,
     _normalize_agent_tools,
     _replace_list_item_once,
@@ -323,6 +324,7 @@ class AgentStore:
         compaction_policy: dict[str, Any] | None = None,
         tool_loading: Mapping[str, Any] | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
+        description: str | None = None,
     ) -> Agent:
         """Create and persist a new Agent and its Workspace; it has no Session yet.
 
@@ -348,6 +350,7 @@ class AgentStore:
             compaction_policy=compaction_policy,
             tool_loading=tool_loading,
             librarian_enabled=librarian_enabled,
+            description=description,
         )
 
     def _create(
@@ -371,6 +374,7 @@ class AgentStore:
         compaction_policy: dict[str, Any] | None = None,
         tool_loading: Mapping[str, Any] | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
+        description: str | None = None,
     ) -> Agent:
         """:meth:`create` past the reserved-id rules; ``builtin`` marks a built-in Agent."""
         with self._snapshot_barrier.compound_mutation(), self._change():
@@ -385,6 +389,7 @@ class AgentStore:
                 )
 
             validated_name = _normalize_agent_name(agent_id, name)
+            validated_description = _normalize_agent_description(description)
             validated_model = _validate_string_field("model", model, allow_empty=True)
             validated_fallback_models = _validate_fallback_models(
                 "fallback_models", fallback_models or []
@@ -422,6 +427,7 @@ class AgentStore:
             agent = Agent(
                 id=agent_id,
                 name=validated_name,
+                description=validated_description,
                 model=validated_model,
                 fallback_models=validated_fallback_models,
                 workspace=str(workspace_path.resolve()),
@@ -818,6 +824,8 @@ class AgentStore:
 
             if "name" in changes:
                 changes["name"] = _normalize_agent_name(agent_id, changes["name"])
+            if "description" in changes:
+                changes["description"] = _normalize_agent_description(changes["description"])
             # An empty current_session_id clears the pointer: the Agent opens a new Session.
             string_fields = {"model", "current_session_id"}
             for field_name in sorted(string_fields & set(changes)):

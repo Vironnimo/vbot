@@ -144,6 +144,9 @@ class Agent:
     # Never persisted: the Agent whose Skills this Agent works on, set only on the
     # Librarian as one of its bound Sessions runs it (``SKILL_AGENT_ID_KEY``).
     skill_agent_id: str | None = None
+    # What the Agent is for, in one short line the user writes; Sub-Agent catalogs
+    # show it so other Agents pick it only for fitting work (written only when set).
+    description: str = ""
 
 
 def is_builtin_agent(agent: object) -> bool:

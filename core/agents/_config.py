@@ -139,6 +139,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "created_at",
         "delegation_bindings",
         "current_session_id",
+        "description",
         "custom_system_prompt_enabled",
         "excluded_skills",
         "fallback_models",
@@ -295,6 +296,7 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         diagnostics.extend(validate_bindings(data["delegation_bindings"]))
     _validate_agent_config_id(diagnostics, "$.id", data.get("id"))
     validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=False)
+    validate_string(diagnostics, "$.description", data.get("description"), required=False)
     validate_string(diagnostics, "$.model", data.get("model"), required=False)
     _validate_fallback_models_diagnostics(
         diagnostics, "$.fallback_models", data.get("fallback_models")
@@ -514,6 +516,28 @@ def _normalize_agent_name(agent_id: str, value: Any) -> str:
     return name
 
 
+AGENT_DESCRIPTION_MAX_LENGTH = 160
+
+
+def _normalize_agent_description(value: Any) -> str:
+    """Return a written description: trimmed, one line, empty when none is configured.
+
+    The description reaches other Agents' System Prompts as one catalog line, so a
+    write refuses line breaks and other control characters. Readers keep accepting
+    stored text.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise AgentError("description must be a string or null")
+    description = value.strip()
+    if any(not character.isprintable() for character in description):
+        raise AgentError("description must be one line without control characters")
+    if len(description) > AGENT_DESCRIPTION_MAX_LENGTH:
+        raise AgentError(f"description must be at most {AGENT_DESCRIPTION_MAX_LENGTH} characters")
+    return description
+
+
 def _validate_temperature(value: Any) -> float | None:
     try:
         return validate_temperature(value, label="temperature", allow_none=True)
@@ -685,6 +709,7 @@ def _agent_from_dict(
     agent = Agent(
         id=agent_id,
         name=data.get("name") or agent_id,
+        description=data.get("description") or "",
         model=data.get("model") or "",
         fallback_models=_validate_fallback_models(
             "fallback_models", data.get("fallback_models") or []
@@ -774,6 +799,8 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
         persisted.pop("tool_loading")
     if persisted["builtin"] is None:
         persisted.pop("builtin")
+    if not persisted["description"]:
+        persisted.pop("description")
     persisted.pop("skill_agent_id")
     persisted["workspace"] = workspace
     return persisted

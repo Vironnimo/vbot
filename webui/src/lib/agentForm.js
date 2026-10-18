@@ -41,8 +41,12 @@ export const THINKING_EFFORT_OPTIONS = Object.freeze([
   'max',
 ]);
 
+// The server's limit for the one-line description other Agents read.
+export const AGENT_DESCRIPTION_MAX_LENGTH = 160;
+
 const EDITABLE_AGENT_FIELDS = Object.freeze([
   'name',
+  'description',
   'model',
   'fallback_models',
   'temperature',
@@ -73,6 +77,7 @@ export function createAgentFormValues(agent = {}) {
   return {
     id: asText(agent.id),
     name: asText(agent.name),
+    description: asText(agent.description),
     model: asText(raw.model),
     fallback_models: normalizeArrayList(raw.fallback_models, []),
     workspace: asText(agent.workspace),
@@ -128,6 +133,9 @@ export function normalizeAgentForm(values, options = {}) {
 
   if (mode === AGENT_FORM_MODE_CREATE) {
     validateAgentId(normalized.id, errors);
+  }
+  if (normalized.description.length > AGENT_DESCRIPTION_MAX_LENGTH) {
+    errors.description = 'too_long';
   }
 
   const sampling = {};
@@ -261,6 +269,8 @@ function normalizeValues(values = {}) {
   return {
     id: asText(values.id).trim(),
     name: asText(values.name).trim(),
+    // One line: the server refuses line breaks in a description.
+    description: asText(values.description).split(/\s+/).join(' ').trim(),
     model: asText(values.model).trim(),
     fallback_models: normalizeArrayList(values.fallback_models, []),
     workspace: asText(values.workspace).trim(),
@@ -350,6 +360,10 @@ function buildAgentPayload(normalized, sampling, options = {}) {
 
   if (normalized.name || options.includeEmptyName) {
     payload.name = normalized.name;
+  }
+
+  if (normalized.description || options.includeEmptyName) {
+    payload.description = normalized.description;
   }
 
   if (options.includeWorkspace) {

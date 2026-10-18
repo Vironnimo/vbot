@@ -65,9 +65,14 @@ async def test_agent_crud_round_trip(tmp_path: Path) -> None:
     state.runtime.agents.update("coder", current_session_id="current-one")
 
     [listed] = (await rpc_result(state, "agent.list"))["agents"]
-    created = await rpc_result(state, "agent.create", id="writer")
+    created = await rpc_result(state, "agent.create", id="writer", description="Drafts texts")
     updated = await rpc_result(
-        state, "agent.update", id="writer", name="Updated Writer", librarian_enabled=False
+        state,
+        "agent.update",
+        id="writer",
+        name="Updated Writer",
+        description=None,
+        librarian_enabled=False,
     )
     deleted = await rpc_result(state, "agent.delete", id="writer")
 
@@ -79,6 +84,7 @@ async def test_agent_crud_round_trip(tmp_path: Path) -> None:
     assert created["name"] == "writer"
     assert created["custom_system_prompt_enabled"] is False
     assert created["librarian_enabled"] is True
+    assert (created["description"], updated["description"]) == ("Drafts texts", "")
     assert created["memory_prompt_mode"] == "agent_user"
     assert created["tools"] == {}
     assert created["excluded_skills"] == []
@@ -87,6 +93,30 @@ async def test_agent_crud_round_trip(tmp_path: Path) -> None:
     # The remaining Agents ride on the response; each change is a bare reload signal.
     assert [agent["id"] for agent in deleted["remaining_agents"]] == ["coder"]
     assert resource_changes(state) == [{"kind": "agents"}] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_suggested_description_comes_from_the_agent_files_and_saves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    adapter = StubAdapter([{"content": '"Reviews pull requests for correctness."\nMore text'}])
+    state = make_state(tmp_path, adapter)
+    workspace = tmp_path / "coder-workspace"
+    workspace.mkdir()
+    state.runtime.agents.update("coder", workspace=str(workspace))
+    (workspace / "SOUL.md").write_text("You review pull requests.", encoding="utf-8")
+
+    result = await rpc_result(state, "agent.suggest_description", id="coder")
+
+    assert result == {"description": "Reviews pull requests for correctness"}
+    [system, user] = adapter.requests[0]["messages"]
+    assert system["role"] == "system"
+    # The Agent's files reach the Model as delimited data.
+    assert user["content"].startswith("<agent>\n")
+    assert "You review pull requests." in user["content"]
+    assert "debugging: Debug failures." in user["content"]
+    assert state.runtime.agents.get("coder").description == ""
 
 
 @pytest.mark.asyncio
@@ -392,6 +422,7 @@ async def test_workspace_is_set_by_update_only(tmp_path: Path) -> None:
             "custom_system_prompt_enabled",
         ),
         ("agent.update", {"id": "coder", "librarian_enabled": None}, "librarian_enabled"),
+        ("agent.create", {"id": "writer", "description": ["Drafts"]}, "description"),
         ("agent.create", {"id": "writer", "tool_loading": {"on_demand": 1}}, "on_demand"),
         (
             "agent.update",

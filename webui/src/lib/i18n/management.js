@@ -461,6 +461,15 @@ export default Object.freeze({
   'agents.order.saveError': 'Agent order could not be saved.',
   'agents.form.id': 'Agent ID',
   'agents.form.name': 'Name',
+  'agents.form.description': 'Description',
+  'agents.form.descriptionHelp':
+    'What this Agent is for, in 5 to 10 words. Other Agents read it when they choose a Sub-Agent; without it they use this Agent only when it is named.',
+  'agents.form.descriptionPlaceholder':
+    'Reviews code changes for bugs and risks',
+  'agents.form.descriptionTooLong': 'At most {max} characters.',
+  'agents.form.descriptionSuggest': 'Suggest',
+  'agents.form.descriptionSuggesting': 'Suggesting…',
+  'agents.form.descriptionSuggestError': 'No suggestion: {error}',
   'agents.form.model': 'Model',
   'agents.form.fallbackModels': 'Fallback models',
   'agents.form.workspace': 'Workspace',

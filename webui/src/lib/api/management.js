@@ -62,6 +62,16 @@ export function getAgent(id, options = {}) {
   return rpc('agent.get', { id }, options);
 }
 
+// Drafts a description from the Agent's own files with its Model; saves nothing.
+export function suggestAgentDescription(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Agent id must be a non-empty string',
+    'agent.suggest_description',
+  );
+  return rpc('agent.suggest_description', { id }, options);
+}
+
 export function createAgent(params = {}, options = {}) {
   requirePlainObject(params, 'Agent payload must be an object', 'agent.create');
   return rpc('agent.create', params, options);

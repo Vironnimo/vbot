@@ -130,6 +130,7 @@ def _identity_targets(
                 targets[target_agent_id] = SubAgentPromptTarget(
                     agent_id=target_agent_id,
                     name=identity.name,
+                    description=identity.description,
                 )
             continue
 
@@ -156,7 +157,9 @@ def _all_identity_scope_targets(
     for identity in runtime.agents.list():
         if identity.id == caller_agent_id:
             continue
-        targets[identity.id] = SubAgentPromptTarget(agent_id=identity.id, name=identity.name)
+        targets[identity.id] = SubAgentPromptTarget(
+            agent_id=identity.id, name=identity.name, description=identity.description
+        )
 
     for project in runtime.projects.list():
         try:

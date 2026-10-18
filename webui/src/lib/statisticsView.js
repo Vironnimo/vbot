@@ -518,6 +518,7 @@ const MODEL_CALL_KINDS = new Set([
   'session_title',
   'group_title',
   'extension_sampling',
+  'agent_description',
 ]);
 
 const MODEL_CALL_STATUSES = new Set([

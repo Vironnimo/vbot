@@ -122,6 +122,7 @@ export {
   listAgents,
   reorderAgents,
   getAgent,
+  suggestAgentDescription,
   createAgent,
   updateAgent,
   renameAgent,

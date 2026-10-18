@@ -121,6 +121,13 @@ def _add_agent_change_arguments(
 ) -> None:
     if include_name:
         parser.add_argument("--name", help="New display name")
+    parser.add_argument(
+        "--description",
+        help=(
+            "What the agent is for, in one short line; other agents see it when they "
+            'choose a sub-agent. "" clears it'
+        ),
+    )
     parser.add_argument("--model", help="Primary model as <provider>/<model-id>")
     parser.add_argument(
         "--fallback-models",
