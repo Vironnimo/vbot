@@ -347,8 +347,8 @@ class ProviderConfig:
             section inside the models.dev catalog; the at-load canonical join
             does *not* depend on it. Read via :meth:`effective_models_dev_id`.
         catalog_exclusions: Exact wire model ids a provider's listing endpoint
-            advertises but cannot currently serve. Discovery retains them in
-            the raw inspection dump and omits them from the usable projection.
+            advertises but cannot currently serve. Discovery skips them, so
+            they never enter the usable projection.
         context_window: Optional per-provider read-side default context window,
             applied when a model on this provider has no window of its own
             (``Model.context_window is None``). This is a READ-SIDE FACT
