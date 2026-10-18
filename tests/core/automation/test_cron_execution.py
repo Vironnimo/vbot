@@ -219,7 +219,7 @@ async def test_trigger_waits_for_run_and_records_execution_health(tmp_path: Path
 
     succeeded = await service._execution._trigger_job_run(job)
 
-    assert succeeded is True
+    assert succeeded.succeeded is True
     run.wait.assert_awaited_once_with()
     updated = service.get_job(job.id)
     assert updated.last_attempt_at is not None
@@ -261,7 +261,7 @@ async def test_persistent_save_failure_does_not_hang_the_firing_task(
     with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
         succeeded = await asyncio.wait_for(service._execution._trigger_job_run(job), timeout=5)
 
-    assert succeeded is True
+    assert succeeded.succeeded is True
     assert service.get_job(job.id).last_outcome == "success"
     give_up_records = [
         record for record in caplog.records if "could not be persisted" in record.getMessage()
@@ -339,9 +339,9 @@ async def test_recurring_job_stops_after_consecutive_failures(
     )
 
     with caplog.at_level(logging.WARNING, logger="vbot.automation.cron"):
-        assert await service._execution._trigger_job_run(job) is False
+        assert (await service._execution._trigger_job_run(job)).succeeded is False
         assert service.get_job(job.id).status == "active"
-        assert await service._execution._trigger_job_run(job) is False
+        assert (await service._execution._trigger_job_run(job)).succeeded is False
 
     updated = service.get_job(job.id)
     assert updated.status == "failed"
@@ -397,7 +397,7 @@ async def test_pre_admission_trigger_failures_neither_stop_nor_consume_a_recurri
     )
 
     for _ in range(5):
-        assert await service._execution._trigger_job_run(job) is False
+        assert (await service._execution._trigger_job_run(job)).succeeded is False
 
         updated = service.get_job(job.id)
         assert updated.status == "active"
@@ -551,9 +551,22 @@ async def test_once_job_cannot_be_created_or_moved_into_the_past(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("persistent_failure", "run_fails", "rearm"),
+    [
+        (False, False, False),
+        (False, True, False),
+        (True, False, False),
+        (True, True, False),
+        (True, True, True),
+    ],
+)
 async def test_run_once_job_retries_completed_save_without_refiring(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    persistent_failure: bool,
+    run_fails: bool,
+    rearm: bool,
 ) -> None:
     # Arrange
     service, trigger_service = make_service(tmp_path)
@@ -565,6 +578,8 @@ async def test_run_once_job_retries_completed_save_without_refiring(
     )
     monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock())
     monkeypatch.setattr(cron_timing, "_sleep", AsyncMock())
+    if run_fails:
+        _admitted_run_fails(trigger_service)
     save_attempts = 0
 
     original_write_jobs = service._write_jobs
@@ -572,7 +587,7 @@ async def test_run_once_job_retries_completed_save_without_refiring(
     def fail_first_save_after_fire(jobs: list[object]) -> None:
         nonlocal save_attempts
         save_attempts += 1
-        if save_attempts == 1:
+        if persistent_failure or save_attempts == 1:
             raise CronStorageError("disk full")
         original_write_jobs(jobs)
 
@@ -590,11 +605,34 @@ async def test_run_once_job_retries_completed_save_without_refiring(
         run_kind=RunKind.CRON,
         contributes_to_agent_activity=False,
     )
-    assert save_attempts == 4
+    assert save_attempts > 1
     updated = service.get_job(job.id)
-    assert updated.status == "completed"
+    assert updated.status == ("failed" if run_fails else "completed")
     assert updated.last_fired_at is not None
-    assert not cron_claims.path_for(service._once_fire_claims_dir, job.id).exists()
+    claim = cron_claims.path_for(service._once_fire_claims_dir, job.id)
+    assert claim.exists() is persistent_failure
+    stored = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))["jobs"][0]
+    assert stored["status"] == ("active" if persistent_failure else updated.status)
+
+    if rearm:
+        monkeypatch.setattr(service, "_write_jobs", original_write_jobs)
+        await service.update_job(
+            job.id, status="active", run_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        )
+
+    restarted, restarted_trigger = make_service(tmp_path)
+    scheduled: list[str] = []
+    monkeypatch.setattr(
+        restarted._scheduler, "_start_job_task", lambda item: scheduled.append(item.id)
+    )
+    restarted.start()
+    assert scheduled == ([job.id] if rearm else [])
+    restarted_trigger.trigger_run.assert_not_awaited()
+    assert restarted.get_job(job.id).status == (
+        "active" if rearm else "completed" if persistent_failure else updated.status
+    )
+    assert claim.exists() is rearm
+    await restarted.aclose()
 
 
 @pytest.mark.asyncio
@@ -744,9 +782,9 @@ async def test_removed_queued_fire_settles_without_killing_scheduler(
         assert service.get_job(job.id).status == "failed"
         assert not list(service._once_fire_claims_dir.glob("*.json"))
     else:
-        assert await service._execution._trigger_job_run(job) is False
+        assert (await service._execution._trigger_job_run(job)).succeeded is False
         assert service.get_job(job.id).status == "active"
-        assert await service._execution._trigger_job_run(job) is False
+        assert (await service._execution._trigger_job_run(job)).succeeded is False
         assert trigger.trigger_run.await_count == 2
 
 
@@ -841,7 +879,7 @@ async def test_fire_saves_off_the_loop_and_an_edit_lands_after_them(
         writes.release.set()
 
     await asyncio.wait_for(editing, timeout=5)
-    assert await asyncio.wait_for(firing, timeout=5) is True
+    assert (await asyncio.wait_for(firing, timeout=5)).succeeded is True
     stored = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
     assert [(item["name"], item["last_outcome"]) for item in stored["jobs"]] == [
         ("Renamed", "success")
@@ -903,7 +941,7 @@ async def test_job_paused_during_the_fire_save_does_not_fire(
         writes.release.set()
 
     await asyncio.wait_for(editing, timeout=5)
-    assert await asyncio.wait_for(firing, timeout=5) is False
+    assert (await asyncio.wait_for(firing, timeout=5)).succeeded is False
     trigger_service.trigger_run.assert_not_awaited()
     assert service.get_job(job.id).status == "paused"
 
