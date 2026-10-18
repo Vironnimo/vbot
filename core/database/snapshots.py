@@ -18,17 +18,14 @@ snapshot was published.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import re
 import shutil
 import sqlite3
 import stat
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import closing, suppress
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -36,8 +33,6 @@ from typing import TYPE_CHECKING, Any
 # A module import: ``core.json_documents`` imports the kernel's snapshot freeze in turn.
 import core.json_documents as json_documents
 from core.database._connections import (
-    classify_unavailable,
-    classify_write_error,
     copy_database_file,
     readonly_sqlite_uri,
     sqlite_source_id,
@@ -46,18 +41,58 @@ from core.database._documents import (
     DOCUMENTS_DIRECTORY_NAME,
     DocumentMember,
     capture_documents,
-    documents_payload,
     documents_present,
     documents_size,
-    parse_documents,
     sync_documents,
     verify_documents,
 )
 from core.database._files import fsync_dir, fsync_file
+from core.database._snapshot_manifest import (
+    MANIFEST_VERSION as MANIFEST_VERSION,
+)
+from core.database._snapshot_manifest import (
+    SNAPSHOT_MANIFEST_NAME as SNAPSHOT_MANIFEST_NAME,
+)
+from core.database._snapshot_manifest import (
+    SNAPSHOT_ROOT_NAME as SNAPSHOT_ROOT_NAME,
+)
+from core.database._snapshot_manifest import (
+    SnapshotManifest as SnapshotManifest,
+)
+from core.database._snapshot_manifest import (
+    SnapshotMember as SnapshotMember,
+)
+from core.database._snapshot_manifest import (
+    _write_manifest,
+)
+from core.database._snapshot_manifest import (
+    member_file_name as member_file_name,
+)
+from core.database._snapshot_manifest import (
+    member_path as member_path,
+)
+from core.database._snapshot_manifest import (
+    read_manifest as read_manifest,
+)
+from core.database._snapshot_manifest import (
+    snapshot_root as snapshot_root,
+)
+from core.database._snapshot_verification import (
+    UNUSABLE_COPY_ERRORS as UNUSABLE_COPY_ERRORS,
+)
+from core.database._snapshot_verification import (
+    _sha256,
+    _SnapshotCancelledError,
+)
+from core.database._snapshot_verification import (
+    verify_database_file as verify_database_file,
+)
+from core.database._snapshot_verification import (
+    verify_member as verify_member,
+)
 from core.database._staging import remove_staging_locked, snapshot_staging_path
 from core.database.errors import (
     DatabaseCorruptError,
-    DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
 )
 from core.database.marker import (
@@ -67,7 +102,6 @@ from core.database.marker import (
     operation_lock,
     read_marker,
     require_no_maintenance,
-    valid_database_id,
 )
 from core.database.snapshot_barrier import capture_members
 from core.database.spec import (
@@ -79,7 +113,6 @@ from core.utils.atomic import atomic_write_text, replace_path
 from core.utils.file_status import exists_strict, is_file_strict, is_link_status
 from core.utils.timestamps import (
     is_canonical_timestamp,
-    parse_canonical_timestamp,
     utc_now_timestamp,
 )
 from core.utils.tree_move import remove_tree
@@ -91,8 +124,6 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger("vbot.database")
 
-SNAPSHOT_ROOT_NAME = "snapshots"
-SNAPSHOT_MANIFEST_NAME = "manifest.json"
 SNAPSHOT_HEALTH_FILE_NAME = "health.json"
 SNAPSHOT_KEEP_COUNT = 5
 #: Retention's byte budget. It never prunes below :data:`SNAPSHOT_KEEP_MINIMUM`
@@ -100,124 +131,10 @@ SNAPSHOT_KEEP_COUNT = 5
 SNAPSHOT_KEEP_BYTES = 10 * 1024 * 1024 * 1024
 SNAPSHOT_KEEP_MINIMUM = 2
 SNAPSHOT_RESERVE_BYTES = 64 * 1024 * 1024
-MANIFEST_VERSION = 1
-_SNAPSHOT_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
-_HEX64_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-_MANIFEST_KEYS = frozenset(
-    {
-        "manifest_version",
-        "snapshot_id",
-        "reason",
-        "created_at",
-        "vbot_version",
-        "sqlite_version",
-        "sqlite_source_id",
-        "members",
-        "documents",
-        "complete",
-    }
-)
-_MEMBER_KEYS = frozenset(
-    {
-        "file",
-        "database_id",
-        "application_id",
-        "format_generation",
-        "file_size",
-        "sha256",
-        "integrity",
-        "foreign_key_check",
-        "migrations",
-        "facts",
-    }
-)
-
-
-@dataclass(frozen=True)
-class SnapshotMember:
-    """One verified database copy inside a data snapshot."""
-
-    name: str
-    file: str
-    database_id: str
-    application_id: int
-    format_generation: int
-    file_size: int
-    sha256: str
-    migrations: tuple[str, ...]
-    facts: Mapping[str, int]
-
-
-@dataclass(frozen=True)
-class SnapshotManifest:
-    """Validated metadata describing one complete data snapshot."""
-
-    snapshot_id: str
-    reason: str
-    created_at: str
-    vbot_version: str
-    sqlite_version: str
-    sqlite_source_id: str
-    members: Mapping[str, SnapshotMember]
-    #: The JSON document set by relative path, limited to the documents this
-    #: vBot knows.
-    documents: Mapping[str, DocumentMember]
-
-    @property
-    def total_size(self) -> int:
-        return sum(member.file_size for member in self.members.values()) + sum(
-            document.file_size for document in self.documents.values()
-        )
-
-    def created_instant(self) -> datetime:
-        return parse_canonical_timestamp(self.created_at)
-
-
-@dataclass(frozen=True)
-class _MemberVerification:
-    database_id: str
-    application_id: int
-    format_generation: int
-    migrations: tuple[str, ...]
-    facts: Mapping[str, int]
-
-
-class _SnapshotCancelledError(Exception):
-    """Internal cooperative stop signal for an unpublished snapshot."""
-
-
-#: Failures that make a database copy unusable as a restore source without
-#: being operational: the copy is damaged or foreign, or this vBot's schema or
-#: owner facts cannot be applied to it.
-UNUSABLE_COPY_ERRORS = (DatabaseCorruptError, DatabaseSchemaMismatchError)
-
-
-def snapshot_root(data_dir: Path) -> Path:
-    return Path(data_dir) / SNAPSHOT_ROOT_NAME
-
-
-def member_file_name(name: str) -> str:
-    validate_database_name(name)
-    return f"{name}.db"
 
 
 def _new_snapshot_id() -> str:
     return f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}Z-{uuid.uuid4().hex[:8]}"
-
-
-# ---------------------------------------------------------------------------
-# File helpers
-# ---------------------------------------------------------------------------
-
-
-def _sha256(path: Path, *, cancelled: Callable[[], bool] | None = None) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            if cancelled is not None and cancelled():
-                raise _SnapshotCancelledError
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -278,325 +195,6 @@ def read_snapshot_health(data_dir: Path) -> dict[str, Any]:
             "observed_at": None,
         }
     return payload
-
-
-# ---------------------------------------------------------------------------
-# Manifest
-# ---------------------------------------------------------------------------
-
-
-def _is_count(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
-
-
-def _parse_member(name: str, payload: object) -> SnapshotMember:
-    try:
-        validate_database_name(name)
-    except ValueError as exc:
-        raise DatabaseCorruptError("snapshot manifest lists an invalid database name") from exc
-    if not isinstance(payload, dict) or not set(payload) >= _MEMBER_KEYS:
-        raise DatabaseCorruptError(f"snapshot manifest member {name} has an unexpected shape")
-    for field in ("application_id", "format_generation", "file_size"):
-        if not _is_count(payload[field]):
-            raise DatabaseCorruptError(f"snapshot manifest member {name} has an invalid {field}")
-    if payload["file"] != member_file_name(name):
-        raise DatabaseCorruptError(f"snapshot manifest member {name} names an unexpected file")
-    if not valid_database_id(payload["database_id"]):
-        raise DatabaseCorruptError(f"snapshot manifest member {name} has an invalid database_id")
-    sha256 = payload["sha256"]
-    if not isinstance(sha256, str) or _HEX64_PATTERN.fullmatch(sha256) is None:
-        raise DatabaseCorruptError(f"snapshot manifest member {name} has an invalid sha256")
-    if payload["integrity"] != "ok" or payload["foreign_key_check"] != "ok":
-        raise DatabaseCorruptError(f"snapshot manifest member {name} is not verified")
-    migrations = payload["migrations"]
-    if not isinstance(migrations, list) or not all(
-        isinstance(item, str) and item for item in migrations
-    ):
-        raise DatabaseCorruptError(f"snapshot manifest member {name} has invalid migrations")
-    facts = payload["facts"]
-    if not isinstance(facts, dict) or not all(
-        isinstance(key, str) and key and _is_count(value) for key, value in facts.items()
-    ):
-        raise DatabaseCorruptError(f"snapshot manifest member {name} has invalid facts")
-    return SnapshotMember(
-        name=name,
-        file=str(payload["file"]),
-        database_id=str(payload["database_id"]),
-        application_id=int(payload["application_id"]),
-        format_generation=int(payload["format_generation"]),
-        file_size=int(payload["file_size"]),
-        sha256=sha256,
-        migrations=tuple(sorted(migrations)),
-        facts={str(key): int(value) for key, value in facts.items()},
-    )
-
-
-def _parse_manifest(payload: object, *, child_name: str) -> SnapshotManifest:
-    if not isinstance(payload, dict) or not set(payload) >= _MANIFEST_KEYS:
-        raise DatabaseCorruptError("snapshot manifest has an unexpected shape")
-    if payload["manifest_version"] != MANIFEST_VERSION or isinstance(
-        payload["manifest_version"], bool
-    ):
-        raise DatabaseCorruptError("snapshot manifest version is unsupported")
-    snapshot_id = payload["snapshot_id"]
-    if (
-        not isinstance(snapshot_id, str)
-        or snapshot_id != child_name
-        or _SNAPSHOT_ID_PATTERN.fullmatch(snapshot_id) is None
-    ):
-        raise DatabaseCorruptError("snapshot manifest has an invalid snapshot_id")
-    for field in ("reason", "vbot_version", "sqlite_version", "sqlite_source_id"):
-        value = payload[field]
-        if not isinstance(value, str) or not value.strip():
-            raise DatabaseCorruptError(f"snapshot manifest has an invalid {field}")
-    created_at = payload["created_at"]
-    try:
-        if not isinstance(created_at, str):
-            raise ValueError("created_at is not text")
-        # A manifest is written with a canonical timestamp; any other is damage.
-        parse_canonical_timestamp(created_at)
-    except ValueError as exc:
-        raise DatabaseCorruptError("snapshot manifest has an invalid created_at") from exc
-    if payload["complete"] is not True:
-        raise DatabaseCorruptError("snapshot manifest is incomplete")
-    members = payload["members"]
-    if not isinstance(members, dict) or not members:
-        raise DatabaseCorruptError("snapshot manifest has no members")
-    return SnapshotManifest(
-        snapshot_id=snapshot_id,
-        reason=str(payload["reason"]),
-        created_at=created_at,
-        vbot_version=str(payload["vbot_version"]),
-        sqlite_version=str(payload["sqlite_version"]),
-        sqlite_source_id=str(payload["sqlite_source_id"]),
-        members={name: _parse_member(name, member) for name, member in members.items()},
-        documents=parse_documents(payload["documents"]),
-    )
-
-
-def _manifest_payload(manifest: SnapshotManifest) -> dict[str, Any]:
-    return {
-        "manifest_version": MANIFEST_VERSION,
-        "snapshot_id": manifest.snapshot_id,
-        "reason": manifest.reason,
-        "created_at": manifest.created_at,
-        "vbot_version": manifest.vbot_version,
-        "sqlite_version": manifest.sqlite_version,
-        "sqlite_source_id": manifest.sqlite_source_id,
-        "complete": True,
-        "members": {
-            name: {
-                "file": member.file,
-                "database_id": member.database_id,
-                "application_id": member.application_id,
-                "format_generation": member.format_generation,
-                "file_size": member.file_size,
-                "sha256": member.sha256,
-                "integrity": "ok",
-                "foreign_key_check": "ok",
-                "migrations": list(member.migrations),
-                "facts": dict(sorted(member.facts.items())),
-            }
-            for name, member in sorted(manifest.members.items())
-        },
-        "documents": documents_payload(manifest.documents),
-    }
-
-
-def _safe_snapshot_dir(data_dir: Path, snapshot_dir: Path) -> Path | None:
-    root = snapshot_root(data_dir)
-    candidate = Path(snapshot_dir)
-    try:
-        root_resolved = root.resolve()
-        candidate_resolved = candidate.resolve()
-    except OSError as exc:
-        raise DatabaseUnavailableError("snapshot paths are unavailable") from exc
-    if candidate.is_symlink() or candidate_resolved.parent != root_resolved:
-        return None
-    if candidate.name.startswith("."):
-        return None
-    return candidate
-
-
-def member_path(snapshot_dir: Path, member: SnapshotMember) -> Path | None:
-    """The member's file inside its snapshot, or ``None`` when it is unsafe or absent."""
-    path = Path(snapshot_dir) / member.file
-    try:
-        if path.is_symlink() or path.resolve().parent != Path(snapshot_dir).resolve():
-            return None
-        if not stat.S_ISREG(path.stat().st_mode):
-            return None
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise DatabaseUnavailableError(f"snapshot member {member.name} is unavailable") from exc
-    return path
-
-
-def read_manifest(data_dir: Path, snapshot_dir: Path) -> SnapshotManifest | None:
-    """Parse one published manifest; ``None`` for anything malformed, unsafe or newer.
-
-    Operational read failures raise ``DatabaseUnavailableError``, so a transient
-    problem is never mistaken for a bad snapshot.
-    """
-    candidate = _safe_snapshot_dir(data_dir, snapshot_dir)
-    if candidate is None:
-        return None
-    manifest_path = candidate / SNAPSHOT_MANIFEST_NAME
-    try:
-        if manifest_path.is_symlink() or not stat.S_ISREG(manifest_path.stat().st_mode):
-            return None
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return _parse_manifest(payload, child_name=candidate.name)
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise DatabaseUnavailableError("snapshot manifest is unavailable") from exc
-    except UnicodeError, json.JSONDecodeError, DatabaseCorruptError:
-        return None
-
-
-def _write_manifest(path: Path, manifest: SnapshotManifest) -> None:
-    path.write_text(
-        json.dumps(_manifest_payload(manifest), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    fsync_file(path)
-
-
-# ---------------------------------------------------------------------------
-# Verification
-# ---------------------------------------------------------------------------
-
-
-def verify_database_file(
-    path: Path,
-    *,
-    name: str,
-    spec: DatabaseSpec | None = None,
-    expected_database_id: str | None = None,
-    fact_names: Iterable[str] | None = None,
-    cancelled: Callable[[], bool] | None = None,
-) -> _MemberVerification:
-    """Verify one standalone database copy and read the facts a manifest records.
-
-    Checks the kernel identity against ``name`` (and ``expected_database_id``),
-    ``quick_check`` and ``foreign_key_check``. With a ``spec``, also its
-    application id and the owner facts it declares, limited to ``fact_names``
-    when given: a member recorded by an older vBot is checked only against the
-    facts it recorded. Damage and identity failures raise
-    ``DatabaseCorruptError``; a fact query this copy's schema cannot answer
-    raises ``DatabaseSchemaMismatchError``.
-    """
-    selected_facts = None if fact_names is None else frozenset(fact_names)
-    connection: sqlite3.Connection | None = None
-    try:
-        connection = sqlite3.connect(readonly_sqlite_uri(path), uri=True)
-        if cancelled is not None:
-            connection.set_progress_handler(lambda: int(cancelled()), 10_000)
-        application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
-        generation = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if spec is not None and application_id != spec.application_id:
-            raise DatabaseCorruptError(f"{name} copy has a foreign application_id")
-        identity = {
-            str(key): str(value)
-            for key, value in connection.execute("SELECT key, value FROM kernel_meta")
-        }
-        database_id = identity.get("database_id")
-        if (
-            identity.get("database_name") != name
-            or identity.get("format_generation") != str(generation)
-            or not valid_database_id(database_id)
-        ):
-            raise DatabaseCorruptError(f"{name} copy has an invalid kernel identity")
-        if expected_database_id is not None and database_id != expected_database_id:
-            raise DatabaseCorruptError(f"{name} copy has another database identity")
-        integrity = connection.execute("PRAGMA quick_check").fetchone()[0]
-        if integrity != "ok":
-            raise DatabaseCorruptError(f"{name} copy integrity failed: {integrity}")
-        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-            raise DatabaseCorruptError(f"{name} copy foreign_key_check failed")
-        migrations = tuple(
-            sorted(str(row[0]) for row in connection.execute("SELECT name FROM kernel_migrations"))
-        )
-        facts: dict[str, int] = {}
-        if spec is not None and spec.snapshot_facts is not None:
-            for fact, query in spec.snapshot_facts.queries.items():
-                if selected_facts is not None and fact not in selected_facts:
-                    continue
-                facts[fact] = _fact_value(connection, name, fact, query)
-        return _MemberVerification(
-            database_id=str(database_id),
-            application_id=application_id,
-            format_generation=generation,
-            migrations=migrations,
-            facts=facts,
-        )
-    except sqlite3.Error as exc:
-        if cancelled is not None and cancelled():
-            raise _SnapshotCancelledError from exc
-        if classify_unavailable(exc) or classify_write_error(exc) == "unavailable":
-            raise DatabaseUnavailableError(f"{name} copy is unavailable") from exc
-        raise DatabaseCorruptError(f"{name} copy verification failed") from exc
-    finally:
-        if connection is not None:
-            with suppress(BaseException):
-                connection.close()
-
-
-def _fact_value(connection: sqlite3.Connection, name: str, fact: str, query: str) -> int:
-    try:
-        row = connection.execute(query).fetchone()
-    except sqlite3.DatabaseError as exc:
-        if classify_unavailable(exc) or classify_write_error(exc) != "other":
-            raise
-        raise DatabaseSchemaMismatchError(
-            name, f"snapshot fact {fact}", f"cannot be computed ({exc})"
-        ) from exc
-    return int(row[0]) if row is not None and row[0] is not None else 0
-
-
-def verify_member(
-    snapshot_dir: Path,
-    member: SnapshotMember,
-    *,
-    spec: DatabaseSpec | None = None,
-    path: Path | None = None,
-) -> None:
-    """Verify a member copy and every manifest claim derived from its contents.
-
-    ``path`` verifies another file against the member's claims, such as a
-    staged restore copy.
-    """
-    target = path if path is not None else member_path(snapshot_dir, member)
-    if target is None:
-        raise DatabaseCorruptError(f"snapshot member {member.name} is missing")
-    try:
-        if target.stat().st_size != member.file_size:
-            raise DatabaseCorruptError(f"snapshot member {member.name} size mismatch")
-        if _sha256(target) != member.sha256:
-            raise DatabaseCorruptError(f"snapshot member {member.name} hash mismatch")
-        verification = verify_database_file(
-            target,
-            name=member.name,
-            spec=spec,
-            expected_database_id=member.database_id,
-            fact_names=member.facts,
-        )
-    except FileNotFoundError as exc:
-        raise DatabaseCorruptError(f"snapshot member {member.name} is missing") from exc
-    except OSError as exc:
-        raise DatabaseUnavailableError(f"snapshot member {member.name} is unavailable") from exc
-    if (
-        verification.application_id != member.application_id
-        or verification.format_generation != member.format_generation
-        or verification.migrations != member.migrations
-    ):
-        raise DatabaseCorruptError(f"snapshot member {member.name} disagrees with its manifest")
-    for fact, value in verification.facts.items():
-        if member.facts[fact] != value:
-            raise DatabaseCorruptError(f"snapshot member {member.name} fact {fact} mismatch")
 
 
 def _foreign(manifest: SnapshotManifest, expected: Mapping[str, str] | None) -> bool:

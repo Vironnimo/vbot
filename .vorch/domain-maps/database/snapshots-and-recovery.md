@@ -2,6 +2,8 @@
 
 The data-store marker and guard formats, data snapshots, canonical open with automatic restore, recovery incidents, quarantine, staging, operator restores, unregistering and retiring databases, the update rollback, data-store status and the kernel's log lines: their files, APIs and procedures. How an online capture stays consistent is `snapshot-consistency.md`; configuration backups are `config-backups.md`.
 
+`recovery.py` coordinates quarantine, probing and restores; `_incidents.py` owns incident documents, acknowledgement and restore ids. `snapshots.py` owns inventory, capture and retention; `_snapshot_manifest.py` owns snapshot records and manifest parsing, and `_snapshot_verification.py` verifies database copies and their manifest claims. The existing snapshot and recovery APIs remain available from their public modules.
+
 ## Files
 
 - The marker `<data-dir>/data-store.json`: `{"format_version": 1, "databases": {"<name>": {"database_id": "<32 hex>", "format_generation": N}}}`, written atomically; register and unregister keep unknown fields at the top level and in every entry (`DataStoreMarker.unknown_fields`, `MarkerEntry.unknown_fields`). The maintenance guard `data-maintenance.json` (`operation_id`, `operation`, `started_at`, `pid`) exists while an offline operation is incomplete. The operation lock `data-store.lock` is OS-owned: crash-released, never broken by age, exclusive across threads and processes.
