@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import pytest
@@ -29,6 +31,7 @@ from core.database import (
     snapshot_root,
     unregister_database,
 )
+from core.database import update_rollback as rollback_module
 from core.database.recovery import quarantine_root
 from core.database.update_rollback import UPDATE_ROLLBACK_CAUSE
 from tests.core.database.database_test_support import (
@@ -268,3 +271,32 @@ def test_an_interrupted_rollback_keeps_the_guard_and_completes_when_repeated(
     assert result.retired == ("journal",)
     assert read_maintenance(data_dir) is None
     assert (data_dir / "settings.json").read_text(encoding="utf-8") == _SETTINGS
+
+
+def test_automatic_rollback_keeps_admission_and_restore_under_one_lock(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = _snapshot(data_dir)
+    checked, proceed = Event(), Event()
+    real_restore = rollback_module._restore_data_snapshot_locked
+
+    def restore(*args: Any, **kwargs: Any) -> Any:
+        result = real_restore(*args, **kwargs)
+        if kwargs["check_only"]:
+            checked.set()
+            assert proceed.wait(2)
+        return result
+
+    monkeypatch.setattr(rollback_module, "_restore_data_snapshot_locked", restore)
+    monkeypatch.setattr("core.database.marker.OPERATION_LOCK_TIMEOUT_SECONDS", 0.01)
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        rolling_back = workers.submit(restore_update_snapshot, data_dir, snapshot)
+        try:
+            assert checked.wait(2)
+            with pytest.raises(DatabaseUnavailableError):
+                begin_maintenance(data_dir, "restore")
+            assert read_maintenance(data_dir) is None
+        finally:
+            proceed.set()
+        assert rolling_back.result().snapshot_id == snapshot.snapshot_id
+    assert read_maintenance(data_dir) is None
