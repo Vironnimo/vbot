@@ -87,16 +87,26 @@ def test_mypy_errors_block_unless_in_unstaged_work_in_progress() -> None:
             "core/caller.py:9: error: Missing positional argument  [call-arg]",
             "core/wip.py:1:5: error: Name 'x' is not defined  [name-defined]",
             "core/wip.py:1: note: See https://mypy.readthedocs.io",
+            "C:\\checkout\\core\\absolute.py:2: error: Missing type  [no-untyped-def]",
+            "core/wip:other.py:1: error: Missing type  [no-untyped-def]",
             "Found 3 errors in 3 files (checked 4 source files)",
         ]
     )
 
     blocking, in_progress = commit_check.split_mypy_output(
-        output, staged={"core/staged.py"}, dirty={"core/wip.py"}
+        output, staged={"core/staged.py"}, dirty={"core/wip.py", "core/wip:other.py"}
     )
 
-    assert [line.split(":")[0] for line in blocking] == ["core\\staged.py", "core/caller.py"]
-    assert [line.split(":")[0] for line in in_progress] == ["core/wip.py", "core/wip.py"]
+    assert blocking == [
+        "core\\staged.py:3: error: Incompatible return value  [return-value]",
+        "core/caller.py:9: error: Missing positional argument  [call-arg]",
+        "C:\\checkout\\core\\absolute.py:2: error: Missing type  [no-untyped-def]",
+    ]
+    assert in_progress == [
+        "core/wip.py:1:5: error: Name 'x' is not defined  [name-defined]",
+        "core/wip.py:1: note: See https://mypy.readthedocs.io",
+        "core/wip:other.py:1: error: Missing type  [no-untyped-def]",
+    ]
 
 
 @pytest.mark.parametrize(
