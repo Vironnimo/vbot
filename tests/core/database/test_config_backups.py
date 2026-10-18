@@ -454,6 +454,7 @@ def test_backup_object_collection_never_follows_directory_links(
     operator_file = bucket / "operator-file.txt"
     operator_file.write_text("must survive", encoding="utf-8")
     link_directory(link, target)
+    (root / "backups").mkdir(parents=True, exist_ok=True)
 
     purge_config_backup_files(data_dir, (".env", "oauth/*.json"))
 
