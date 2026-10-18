@@ -24,6 +24,7 @@ from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
 from core.tools import ToolContext, ToolDisplay, tool_failure, tool_success
 from core.tools.availability import resolve_tool_access
 from core.utils.ids import new_id
+from core.utils.workers import settle_before_cancelling
 
 from ._access import (
     Access,
@@ -279,13 +280,45 @@ class ComputerUseService:
         self._unready = reason
         self._checked = time.monotonic()
 
-    async def _on_worker[T](self, function: Callable[..., T], *args: Any) -> T:
-        """Run *function* on the desktop worker thread."""
+    async def _on_worker[T](
+        self, function: Callable[..., T], *args: Any, interrupt_on_cancel: bool = False
+    ) -> T:
+        """Run *function* without releasing its caller while desktop work still runs."""
         executor = self._executor
         if executor is None or self._closed:
             raise TargetError("Computer Use has stopped.", "computer_use_unavailable")
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(executor, functools.partial(function, *args))
+        pending = executor.submit(functools.partial(function, *args))
+        future = asyncio.wrap_future(pending)
+        try:
+            # Keep the executor Future intact so cancellation can distinguish
+            # queued work from a desktop operation that is already running.
+            await asyncio.wait((future,))
+        except asyncio.CancelledError:
+            if not pending.cancel():
+                if interrupt_on_cancel:
+                    self.interrupt(source="run_cancel")
+                try:
+                    await settle_before_cancelling(future)
+                except InputInterrupted:
+                    pass
+                except Exception:
+                    self.api.logger.exception("Computer Use worker failed after cancellation")
+                finally:
+                    if interrupt_on_cancel and self._target is not None:
+                        # Input can complete just before cancellation reaches
+                        # this task, before _act records a held mouse button.
+                        # The target then has no later stop checkpoint to run.
+                        try:
+                            await settle_before_cancelling(
+                                asyncio.wrap_future(executor.submit(self._target.release_all))
+                            )
+                            self._held_run = None
+                        except Exception:
+                            self.api.logger.exception(
+                                "Computer Use could not release input after cancellation"
+                            )
+            raise
+        return future.result()
 
     # Stop control
 
@@ -632,7 +665,7 @@ class ComputerUseService:
             self.api.logger.exception("Computer Use screenshot after a failed call failed")
 
     async def _act(self, context: ToolContext, desktop: Desktop, action: Action, frame: Any) -> str:
-        done = await self._on_worker(desktop.act, action, frame)
+        done = await self._on_worker(desktop.act, action, frame, interrupt_on_cancel=True)
         if action.name == "left_mouse_down":
             self._held_run = context.run_id or ""
         elif action.name == "left_mouse_up":
@@ -685,13 +718,25 @@ class ComputerUseService:
         if sent and actions[-1].name != "screenshot":
             try:
                 await self._pause(SETTLE_SECONDS)
+                lines.append(await self._on_worker(desktop.screenshot))
             except InputInterrupted:
                 raise TargetError(
                     f"{self._stopped_text()} after all {len(actions)} actions ran, before the "
                     f"final screenshot. {_STOPPED_ADVICE}\n" + "\n".join(lines),
                     "computer_use_interrupted",
                 ) from None
-            lines.append(await self._on_worker(desktop.screenshot))
+            except Exception as error:
+                code = "computer_use_failed"
+                if isinstance(error, CallRefusedError | TargetError):
+                    code = error.code
+                else:
+                    self.api.logger.exception("Computer Use final batch screenshot failed")
+                raise TargetError(
+                    f"All requested actions ran, but the final screenshot failed: {error}. "
+                    "Take a screenshot before repeating any input.\nActions that ran:\n"
+                    + "\n".join(lines),
+                    code,
+                ) from None
         return f"Ran {len(actions)} actions:\n" + "\n".join(lines)
 
     async def _step(
@@ -830,7 +875,7 @@ class ComputerUseService:
         async with self._active_call(context):
             try:
                 desktop.input_started = True
-                await self._on_worker(self._target.open, match)
+                await self._on_worker(self._target.open, match, interrupt_on_cancel=True)
                 await self._pause(OPEN_SETTLE_SECONDS)
                 shot = await self._on_worker(desktop.screenshot)
             except InputInterrupted:

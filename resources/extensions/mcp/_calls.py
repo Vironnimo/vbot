@@ -33,6 +33,10 @@ class UnsupportedOperationError(InvocationNotSentError):
     """An operation the server does not offer under the negotiated protocol; never sent."""
 
 
+class SubscriptionEndedError(ValueError):
+    """An unsubscribe ended a subscription before its caller received the outcome."""
+
+
 class InvalidToolResultError(ValueError):
     """A Tool ran, but its result does not satisfy the output schema the Tool declares.
 

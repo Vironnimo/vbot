@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
+from resources.extensions.computer_use import _desktop
 from resources.extensions.computer_use import extension as computer_use
 from tests.resources.extensions.computer_use.computer_use_test_support import (
     PAINT,
@@ -115,6 +117,37 @@ async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Har
     )
     assert len(images(context)) == 1
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
+
+
+@pytest.mark.parametrize("failure", ["target", "artifact", "unexpected"])
+async def test_batch_reports_completed_input_when_its_final_screenshot_fails(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    await computer.computer(action="screenshot", view="display")
+
+    def fail_capture(*args):
+        error = {
+            "target": computer_use.TargetError,
+            "artifact": OSError,
+            "unexpected": RuntimeError,
+        }[failure]
+        raise error("test-owned-capture-unavailable")
+
+    if failure == "artifact":
+        monkeypatch.setattr(_desktop, "publish_image", fail_capture)
+    else:
+        monkeypatch.setattr(computer.target, "capture", fail_capture)
+    context = computer.context_for("computer_batch")
+    result = await computer.call(
+        "computer_batch", {"actions": [CLICK, {"action": "key", "text": "enter"}]}, context
+    )
+    assert result["error"]["code"] == "computer_use_failed"
+    assert "test-owned-capture-unavailable" in result["error"]["message"]
+    # Each successful action keeps its evidence even though no final image exists.
+    assert "1. left_click at [200, 150]" in model_text(result)
+    assert "2. key enter" in model_text(result)
+    assert computer.target.inputs == [("click", 200, 150, "left", 1, []), ("keys", ["enter"], 1)]
+    assert context.result_media == []
 
 
 async def test_batch_rechecks_image_geometry_after_earlier_input(computer: Harness) -> None:
@@ -225,18 +258,126 @@ async def test_control_reports_and_stops_only_the_current_control(computer: Harn
     assert (await computer.api.operations.invoke("control", {}))["active"] is False
 
 
-async def test_run_cancellation_stops_the_call(computer: Harness) -> None:
+@pytest.mark.parametrize("cancellation", ["run", "task", "both"])
+async def test_run_cancellation_stops_the_call(computer: Harness, cancellation: str) -> None:
+    cancel_task = cancellation != "run"
     callbacks: list = []
     context = computer.context_for("computer", cancel_registration_hook=callbacks.append)
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
 
     def cancel(record: tuple) -> None:
-        for callback in callbacks:
-            callback()
+        if cancellation != "task":
+            for callback in callbacks:
+                callback()
+        if cancel_task:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "cancelled desktop worker was not released"
 
     computer.target.on_input = cancel
-    result = await computer.call("computer", {"action": "key", "text": "enter"}, context)
+    call = asyncio.create_task(
+        computer.call("computer", {"action": "key", "text": "enter"}, context)
+    )
+    if cancel_task:
+        try:
+            await entered.wait()
+            owner = computer.service._active
+            call.cancel()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            # Cancellation cannot release whole-call serialization while native
+            # input still runs, or lose the owner of its stop event.
+            assert not call.done()
+            assert computer.service._lock.locked()
+            assert computer.service._active == owner
+            assert computer.target.stop_event is not None and computer.target.stop_event.is_set()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        assert not computer.service._lock.locked()
+        assert computer.service._active is None
+        return
+    result = await call
     assert result["error"]["code"] == "computer_use_interrupted"
     assert result["error"]["message"].startswith("The Run was cancelled during key enter")
+
+
+async def test_cancelled_queued_call_does_not_stop_another_runs_input(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = asyncio.Event()
+    queued = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    readiness_calls = []
+    target_readiness = computer.target.readiness
+
+    def readiness() -> str | None:
+        readiness_calls.append(True)
+        return target_readiness()
+
+    def block(record: tuple) -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5), "desktop worker was not released"
+
+    monkeypatch.setattr(computer.target, "readiness", readiness)
+    computer.target.on_input = block
+    first = asyncio.create_task(computer.computer(action="key", text="enter"))
+    second = None
+    try:
+        await entered.wait()
+        executor = computer.service._executor
+        assert executor is not None
+        submit = executor.submit
+
+        def submitted(*args, **kwargs):
+            future = submit(*args, **kwargs)
+            queued.set()
+            return future
+
+        monkeypatch.setattr(executor, "submit", submitted)
+        second = asyncio.create_task(
+            computer.call(
+                "computer_apps", {"action": "list"}, computer.context_for("computer_apps")
+            )
+        )
+        await queued.wait()
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+        assert computer.service._lock.locked()
+        assert computer.target.stop_event is not None and not computer.target.stop_event.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(
+            first, *([second] if second is not None else []), return_exceptions=True
+        )
+    assert (await first)["ok"]
+    assert len(readiness_calls) == 1
+    assert computer.target.inputs == [("keys", ["enter"], 1)]
+
+
+async def test_cancellation_after_mouse_down_completes_releases_the_button(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = asyncio.get_running_loop()
+    button = computer.target.button
+
+    def cancel_after_input(*args):
+        button(*args)
+        loop.call_soon_threadsafe(call.cancel)
+
+    monkeypatch.setattr(computer.target, "button", cancel_after_input)
+    call = asyncio.create_task(computer.computer(action="left_mouse_down"))
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    assert computer.target.inputs == [("button", "left", True)]
+    # _act never received the result to set _held_run, so Run-end bookkeeping
+    # cannot be responsible for releasing this completed native input.
+    assert computer.service._held_run is None
+    assert computer.target.released >= 1
 
 
 async def test_run_end_releases_a_mouse_button_the_run_left_pressed(computer: Harness) -> None:

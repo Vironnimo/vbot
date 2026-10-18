@@ -174,8 +174,9 @@ async def test_same_name_in_other_project_does_not_inherit_opt_in(context_servic
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("policy_failure", [False, True])
 async def test_queued_call_rechecks_access_before_remote_effect(
-    context_service, host, server, monkeypatch
+    context_service, host, server, monkeypatch, policy_failure
 ):
     service, registry, _, _ = context_service
     # One call at a time, so the second waits in the queue while access changes.
@@ -192,7 +193,13 @@ async def test_queued_call_rechecks_access_before_remote_effect(
         return value
 
     runner = runner_for(host, server, monkeypatch)
-    runner._authorize = service._authorize
+
+    def authorize(call_context):
+        if policy_failure and calls:
+            raise OSError("test-owned-policy-store-unavailable")
+        return service._authorize(call_context)
+
+    runner._authorize = authorize
 
     def call(value):
         return asyncio.create_task(
@@ -214,7 +221,7 @@ async def test_queued_call_rechecks_access_before_remote_effect(
             assert (await first)["content"][0]["text"] == "first"
             with pytest.raises(InvocationNotSentError) as denied:
                 await second
-        assert denied.value.denied
+        assert denied.value.denied is not policy_failure
         assert calls == ["first"]
     finally:
         for task in (first, second):

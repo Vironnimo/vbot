@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import warnings
+import weakref
 from collections.abc import Callable, Coroutine, Mapping
 from typing import TYPE_CHECKING, Any, cast
 
@@ -20,8 +21,15 @@ from mcp.shared.exceptions import MCPDeprecationWarning
 from mcp.shared.subscriptions import SUBSCRIPTION_ID_META_KEY
 
 from core.tools.tools import ToolContext
+from core.utils.workers import settle_before_cancelling
 
-from ._calls import _CURRENT_CALL, InvalidToolResultError, UnsupportedOperationError, _Call
+from ._calls import (
+    _CURRENT_CALL,
+    InvalidToolResultError,
+    SubscriptionEndedError,
+    UnsupportedOperationError,
+    _Call,
+)
 from ._events import dump
 from ._tasks import (
     TASKS_EXTENSION,
@@ -49,6 +57,9 @@ CATALOG_REFRESH_DELAY_SECONDS = 0.5
 DISCOVERY_PROTOCOL_VERSION = "2026-07-28"
 
 RESULT_PROBLEM_CHARACTERS = 300
+_SUBSCRIPTION_ENDED = (
+    "The subscription request ended because another request unsubscribed this resource."
+)
 
 OPERATION_MODELS: dict[str, Any] = {
     "tools/call": types.CallToolRequestParams,
@@ -121,6 +132,9 @@ class ConnectionProtocol:
         self._subscriptions: dict[str, asyncio.Task[None]] = {}
         self._resource_watches: dict[str, tuple[asyncio.Task[None], asyncio.Future[None]]] = {}
         self._resource_subscriptions: set[str] = set()
+        self._resource_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         self._task_cancels: set[asyncio.Task[None]] = set()
         self._catalog_stale = False
         self._transport_warned = False
@@ -277,23 +291,26 @@ class ConnectionProtocol:
             uri = arguments["uri"]
             # Concurrent subscribers share one acknowledgement; one that is
             # cancelled leaves it to the others.
-            await asyncio.shield(self._watch(uri))
+            # Do not hold the URI lock through acknowledgement: unsubscribe
+            # must be able to end a subscription while its server still waits.
+            async with self._resource_locks.setdefault(uri, asyncio.Lock()):
+                ready = self._watch(uri)
+            await asyncio.shield(ready)
+            current = self._resource_watches.get(uri)
+            if current is None or current[1] is not ready:
+                raise SubscriptionEndedError(_SUBSCRIPTION_ENDED)
             self._resource_subscriptions.add(uri)
             return {"subscribed": uri}
         if operation == "resources/unsubscribe":
             uri = arguments["uri"]
-            self._resource_subscriptions.discard(uri)
-            watch = self._resource_watches.pop(uri, None)
-            if watch is not None:
-                watch[0].cancel()
-                await asyncio.gather(watch[0], return_exceptions=True)
-                subscribed = (
-                    watch[1].done() and not watch[1].cancelled() and not watch[1].exception()
-                )
-                if subscribed and client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
-                    await self._legacy(
-                        "resource_subscriptions", lambda: client.unsubscribe_resource(uri)
-                    )
+            async with self._resource_locks.setdefault(uri, asyncio.Lock()):
+                self._resource_subscriptions.discard(uri)
+                watch = self._resource_watches.pop(uri, None)
+                if watch is not None:
+                    watch[0].cancel()
+                    # Finish the admitted unsubscribe before a later subscribe
+                    # starts, even when its own caller stops waiting meanwhile.
+                    await settle_before_cancelling(self._unsubscribe_resource(client, uri, watch))
             return {"unsubscribed": uri}
         if operation == "logging/setLevel":
             level = arguments["level"]
@@ -595,8 +612,25 @@ class ConnectionProtocol:
                 ),
                 ready,
             )
+
+            def stopped(task: asyncio.Task[None]) -> None:
+                # An unsubscribe can cancel the watch before its coroutine
+                # starts, so its own cancellation handler is insufficient.
+                if task.cancelled() and not ready.done():
+                    ready.set_exception(SubscriptionEndedError(_SUBSCRIPTION_ENDED))
+
+            watch[0].add_done_callback(stopped)
             self._resource_watches[uri] = watch
         return watch[1]
+
+    async def _unsubscribe_resource(
+        self, client: Client, uri: str, watch: tuple[asyncio.Task[None], asyncio.Future[None]]
+    ) -> None:
+        await asyncio.gather(watch[0], return_exceptions=True)
+        if client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
+            # A pending subscribe can already have taken effect remotely before
+            # its acknowledgement; cancelling its wait does not undo that effect.
+            await self._legacy("resource_subscriptions", lambda: client.unsubscribe_resource(uri))
 
     async def _watch_resource(self, uri: str, ready: asyncio.Future[None]) -> None:
         """Subscribe to *uri* for this connection; changes become ``resource_changed`` events."""
