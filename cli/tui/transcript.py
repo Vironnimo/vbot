@@ -18,16 +18,10 @@ from __future__ import annotations
 import math
 from bisect import bisect_right
 from dataclasses import dataclass
-from time import monotonic
 from typing import Any, ClassVar, override
 
-from rich.console import RenderableType
-from rich.markdown import Markdown
 from rich.segment import Segment
 from rich.style import Style
-from rich.syntax import PygmentsSyntaxTheme, TokenType
-from rich.text import Text
-from rich.theme import Theme as RichTheme
 from textual import events
 from textual.binding import Binding, BindingType
 from textual.geometry import Offset, Size
@@ -37,13 +31,10 @@ from textual.selection import Selection
 from textual.strip import Strip
 
 from cli.tui.rendering import (
-    duration_text,
-    item_heading,
     item_text,
     tool_detail,
-    tool_time,
-    tool_title,
 )
+from cli.tui.row_painter import _DISCLOSURES, RowPainter
 from cli.tui.state import Conversation, JsonObject
 
 # Rows within this many screens of the viewport are painted before they show,
@@ -52,13 +43,7 @@ _OVERSCAN_SCREENS = 1
 _KEEP_SCREENS = 4
 # Rows measured per idle tick while the transcript converges on exact heights.
 _MEASURE_BATCH = 24
-# An expanded Tool shows at most this many detail lines; Ctrl+G copies them all.
-_DETAIL_LINES = 400
-_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-_FAILED = {"failed", "error"}
 _LIVE = {"running", "pending", "queued", "streaming"}
-# Rows the operator opens and closes: one header line, an optional body.
-_DISCLOSURES = {"tool_call", "reasoning"}
 # A double click selects up to these, as terminals and editors do; paths and
 # dotted names stay whole, trailing sentence punctuation does not.
 _WORD_BREAKS = frozenset(" 	()[]{}<>\"'`|,;│⎿▌●")
@@ -81,26 +66,6 @@ def display_rows(items: list[JsonObject]) -> list[JsonObject]:
         elif status == "completed" and isinstance(item.get("durationMs"), (int, float)):
             rows.append({**item, "id": f"{item['id']}:footer", "type": "run_footer", "items": []})
     return rows
-
-
-class _CodeTheme(PygmentsSyntaxTheme):
-    """A Pygments token palette on the accessor's own code surface."""
-
-    def __init__(self, name: str, surface: str) -> None:
-        super().__init__(name)
-        self._surface = Style(bgcolor=surface)
-
-    @override
-    def get_background_style(self) -> Style:
-        return self._surface
-
-    @override
-    def get_style_for_token(self, token_type: TokenType) -> Style:
-        # Tokens keep their colour, not the palette's own background.
-        style = super().get_style_for_token(token_type)
-        return Style(
-            color=style.color, bold=style.bold, italic=style.italic, underline=style.underline
-        )
 
 
 @dataclass(eq=False)
@@ -210,7 +175,7 @@ class Transcript(ScrollView, can_focus=True):
         self._requested_gaps: set[tuple[str, str]] = set()
         self._measure_scheduled = False
         self._painted: list[JsonObject] | None = None
-        self._markdown_styles: tuple[str, RichTheme, PygmentsSyntaxTheme] | None = None
+        self._painter = RowPainter(self)
 
     # --- Public interface -------------------------------------------------
 
@@ -377,7 +342,13 @@ class Transcript(ScrollView, can_focus=True):
         return min(len(self._rows) - 1, max(0, bisect_right(self._offsets, y) - 1))
 
     def _paint_row(self, row: _Row, width: int) -> None:
-        lines = self._render_row(row, width)
+        lines = self._painter.paint(
+            row,
+            width,
+            expanded=self.view is not None and row.key in self.view.expanded_rows,
+            highlighted=row.key in {self._hover, self._cursor},
+            cursor=row.key == self._cursor and self.has_focus,
+        )
         row.lines, row.width = lines, width
         # Without the padding Rich adds, so copied lines carry no trailing blanks.
         row.text = [line.text.rstrip() for line in lines]
@@ -550,189 +521,6 @@ class Transcript(ScrollView, can_focus=True):
 
     # --- Rendering --------------------------------------------------------
 
-    def _style(self, name: str) -> Style:
-        # Combined with the transcript's own style, so translucent theme colours
-        # such as $text-muted resolve against the background.
-        style = self.get_component_rich_style(f"transcript--{name}")
-        if name == "hover":
-            return Style(bgcolor=style.bgcolor)
-        return style
-
-    def _markdown(self, text: str, width: int, style: Style | None = None) -> list[Strip]:
-        styles, code_theme = self._markdown_theme()
-        renderable = Markdown(
-            text or " ",
-            # Rich hands the theme object to its Syntax, which accepts one.
-            code_theme=code_theme,  # type: ignore[arg-type]
-            hyperlinks=True,
-            inline_code_lexer=None,
-        )
-        with self.app.console.use_theme(styles):
-            return self._lines(renderable, width, style)
-
-    def _markdown_theme(self) -> tuple[RichTheme, PygmentsSyntaxTheme]:
-        """Rich's Markdown styles in the accessor's palette instead of its defaults."""
-        if self._markdown_styles is None or self._markdown_styles[0] != self.app.theme:
-            variables = self.app.get_css_variables()
-            accent = self._style("bar").color
-            muted = self._style("muted").color
-            # Code reads as the WebUI's: a warm token palette on the surface
-            # one step off the background, and inline code as a raised chip.
-            code_theme = _CodeTheme(
-                "gruvbox-dark" if self.app.current_theme.dark else "gruvbox-light",
-                variables["surface"],
-            )
-            styles = {
-                "markdown.code": Style(bgcolor=variables["raised"]),
-                "markdown.h1": Style(color=accent, bold=True),
-                "markdown.h1.border": Style(color=muted),
-                "markdown.h2": Style(bold=True, underline=True),
-                "markdown.h3": Style(bold=True),
-                "markdown.h4": Style(bold=True, italic=True),
-                "markdown.link": Style(color=accent, underline=True),
-                "markdown.link_url": Style(color=muted, underline=True),
-                "markdown.block_quote": Style(color=muted, italic=True),
-                "markdown.hr": Style(color=muted),
-                "markdown.item.bullet": Style(color=muted),
-                "markdown.item.number": Style(color=muted),
-                "markdown.table.border": Style(color=muted),
-            }
-            self._markdown_styles = (self.app.theme, RichTheme(styles, inherit=True), code_theme)
-        return self._markdown_styles[1], self._markdown_styles[2]
-
-    def _lines(
-        self, renderable: RenderableType, width: int, style: Style | None = None
-    ) -> list[Strip]:
-        console = self.app.console
-        options = console.options.update(width=max(1, width), highlight=False)
-        rendered = console.render_lines(renderable, options, style=style or Style(), pad=False)
-        lines = [Strip(line).simplify() for line in rendered]
-        while lines and not lines[-1].text.strip():
-            lines.pop()
-        return lines or [Strip([])]
-
-    @staticmethod
-    def _prefixed(lines: list[Strip], first: Segment, rest: Segment) -> list[Strip]:
-        return [
-            Strip.join([Strip([first if index == 0 else rest]), line])
-            for index, line in enumerate(lines)
-        ]
-
-    def _render_row(self, row: _Row, width: int) -> list[Strip]:
-        item, kind = row.item, row.kind
-        muted = self._style("muted")
-        if kind == "user" or kind == "user_message":
-            background = self._style("user")
-            bar = Segment("▌ ", self._style("bar"))
-            body = self._markdown(item_text(item), width - 3, background)
-            lines = [line.extend_cell_length(width - 2, background) for line in body]
-            lines = self._prefixed(lines, bar, bar)
-            if kind == "user_message":
-                heading = item_heading(item) or "Steer"
-                lines.insert(0, Strip([Segment(f"  {heading}", muted + Style(italic=True))]))
-            return lines
-        if kind == "text":
-            pad = Segment("  ")
-            return self._prefixed(self._markdown(item_text(item), width - 2), pad, pad)
-        if kind in _DISCLOSURES:
-            lines = [self._header(row, width)]
-            if self.view is not None and row.key in self.view.expanded_rows:
-                lines.extend(self._disclosure_body(row, width))
-            return lines
-        if kind == "history_gap":
-            return [Strip([Segment("  ⋯ earlier steps load as they come into view", muted)])]
-        if kind == "run_status":
-            status = str(item.get("status") or "")
-            style = self._style("error") if status == "failed" else self._style("warning")
-            mark = "✗" if status == "failed" else "■"
-            return [Strip([Segment(f"  {mark} Run {status}", style)])]
-        if kind == "run_footer":
-            worked = duration_text(float(item["durationMs"]))
-            return [Strip([Segment(f"  ─ Worked for {worked}", muted)])]
-        if kind == "model_fallback":
-            text = " ".join((item_text(item) or "Model fallback").split())
-            return [Strip([Segment(f"  ⚠ {text}", self._style("warning"))])]
-        if kind == "goal_event":
-            text = " ".join(item_text(item).split())
-            return [Strip([Segment(f"  ◆ {text}", muted)]).crop(0, width)]
-        if kind in {"compaction_separator", "takeover_separator"}:
-            label = f" {item_heading(item) or ''} "
-            side = max(2, (width - len(label)) // 2)
-            rule = Strip([Segment("─" * side + label + "─" * side, muted)]).crop(0, width)
-            details = item_text(item).splitlines()[1:]
-            return [rule, *[Strip([Segment(f"  {line}", muted)]) for line in details]]
-        title = item_heading(item)
-        lines = self._markdown(item_text(item), width - 2)
-        pad = Segment("  ")
-        lines = self._prefixed(lines, pad, pad)
-        style = self._style("error") if kind in {"notice", "error"} else muted
-        if title:
-            lines.insert(0, Strip([Segment(f"  {title}", style + Style(bold=True))]))
-        return lines
-
-    def _header(self, row: _Row, width: int) -> Strip:
-        item = row.item
-        muted = self._style("muted")
-        if row.kind == "reasoning":
-            if item.get("streaming"):
-                label = "Thinking…"
-            else:
-                duration = item.get("durationMs", item.get("durationEstimateMs"))
-                label = (
-                    f"Thought for {duration_text(float(duration))}"
-                    if isinstance(duration, (int, float)) and duration >= 1000
-                    else "Thought"
-                )
-            glyph = _SPINNER[int(monotonic() * 10) % len(_SPINNER)] if row.live else "∴"
-            text = Text.assemble(("  " + glyph + " ", muted), (label, muted + Style(italic=True)))
-        else:
-            status = str(item.get("status") or "")
-            if row.live:
-                mark = (_SPINNER[int(monotonic() * 10) % len(_SPINNER)], self._style("warning"))
-            elif status in _FAILED:
-                mark = ("●", self._style("error"))
-            elif status in {"cancelled", "partial", "interrupted"}:
-                mark = ("●", self._style("warning"))
-            else:
-                mark = ("●", self._style("success"))
-            name, _, summary = tool_title(item).partition(" · ")
-            if row.live:
-                # The spinner already says it runs.
-                summary = summary.removesuffix(f" · {status}").removesuffix(status)
-            text = Text.assemble(
-                ("  ", ""),
-                mark,
-                (" ", ""),
-                (name, self._style("tool")),
-                (f"  {summary}" if summary else "", muted),
-            )
-            # The time stays whole; a long summary gives way to it.
-            if elapsed := tool_time(item):
-                text.truncate(max(1, width - len(elapsed) - 2), overflow="ellipsis")
-                text.append(f"  {elapsed}", muted)
-        text.truncate(width, overflow="ellipsis")
-        if row.key in {self._hover, self._cursor}:
-            text.stylize(self._style("hover"))
-            text.pad_right(width - text.cell_len)
-            if row.key == self._cursor and self.has_focus:
-                text.stylize(Style(bold=True), 0, 3)
-        return Strip(list(text.render(self.app.console)), text.cell_len)
-
-    def _disclosure_body(self, row: _Row, width: int) -> list[Strip]:
-        muted = self._style("muted")
-        if row.kind == "reasoning":
-            body = self._markdown(item_text(row.item), width - 4, muted + Style(italic=True))
-            pad = Segment("    ")
-            return self._prefixed(body, pad, pad)
-        detail = tool_detail(row.item) or "No details."
-        source = detail.splitlines()
-        shown = source[:_DETAIL_LINES]
-        if len(source) > len(shown):
-            shown.append(f"… {len(source) - len(shown)} more lines · Ctrl+G copies everything")
-        text = Text("\n".join(shown), style=muted, no_wrap=False)
-        body = self._lines(text, width - 6, muted)
-        return self._prefixed(body, Segment("    ⎿ ", muted), Segment("      "))
-
     @override
     def render_line(self, y: int) -> Strip:
         width = self._width()
@@ -740,7 +528,7 @@ class Transcript(ScrollView, can_focus=True):
         if not self._rows:
             if self._placeholder and y == 1:
                 return Strip(
-                    [Segment(f"  {self._placeholder}", self._style("placeholder"))]
+                    [Segment(f"  {self._placeholder}", self._painter.style("placeholder"))]
                 ).extend_cell_length(width, style)
             return Strip.blank(width, style)
         line = round(self.scroll_y) + y
@@ -786,7 +574,12 @@ class Transcript(ScrollView, can_focus=True):
         if within >= len(row.lines):
             return Strip([])
         if within == 0 and (row.live or row.key in {self._hover, self._cursor}):
-            return self._header(row, width)
+            return self._painter.header(
+                row,
+                width,
+                highlighted=row.key in {self._hover, self._cursor},
+                cursor=row.key == self._cursor and self.has_focus,
+            )
         return row.lines[within]
 
     # --- Jump to latest ---------------------------------------------------
@@ -798,7 +591,7 @@ class Transcript(ScrollView, can_focus=True):
         return (self.scrollable_content_region.height or self.size.height) - 1
 
     def _jump(self) -> Strip:
-        style = self._style("jump-new" if self.view and self.view.unread_output else "jump")
+        style = self._painter.style("jump-new" if self.view and self.view.unread_output else "jump")
         if self._jump_hover:
             style += Style(bold=True, underline=True)
         return Strip([Segment(_JUMP, style)])
