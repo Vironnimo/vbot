@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from resources.extensions.computer_use import _desktop
 from resources.extensions.computer_use import extension as computer_use
 from tests.resources.extensions.computer_use.computer_use_test_support import (
     PAINT,
@@ -118,22 +119,34 @@ async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Har
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
 
 
+@pytest.mark.parametrize("failure", ["target", "artifact", "unexpected"])
 async def test_batch_reports_completed_input_when_its_final_screenshot_fails(
-    computer: Harness, monkeypatch: pytest.MonkeyPatch
+    computer: Harness, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     await computer.computer(action="screenshot", view="display")
 
     def fail_capture(*args):
-        raise computer_use.TargetError("test-owned-capture-unavailable")
+        error = {
+            "target": computer_use.TargetError,
+            "artifact": OSError,
+            "unexpected": RuntimeError,
+        }[failure]
+        raise error("test-owned-capture-unavailable")
 
-    monkeypatch.setattr(computer.target, "capture", fail_capture)
+    if failure == "artifact":
+        monkeypatch.setattr(_desktop, "publish_image", fail_capture)
+    else:
+        monkeypatch.setattr(computer.target, "capture", fail_capture)
     context = computer.context_for("computer_batch")
-    result = await computer.call("computer_batch", {"actions": [CLICK]}, context)
+    result = await computer.call(
+        "computer_batch", {"actions": [CLICK, {"action": "key", "text": "enter"}]}, context
+    )
     assert result["error"]["code"] == "computer_use_failed"
     assert "test-owned-capture-unavailable" in result["error"]["message"]
     # Each successful action keeps its evidence even though no final image exists.
     assert "1. left_click at [200, 150]" in model_text(result)
-    assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
+    assert "2. key enter" in model_text(result)
+    assert computer.target.inputs == [("click", 200, 150, "left", 1, []), ("keys", ["enter"], 1)]
     assert context.result_media == []
 
 

@@ -725,12 +725,17 @@ class ComputerUseService:
                     f"final screenshot. {_STOPPED_ADVICE}\n" + "\n".join(lines),
                     "computer_use_interrupted",
                 ) from None
-            except (CallRefusedError, TargetError) as error:
+            except Exception as error:
+                code = "computer_use_failed"
+                if isinstance(error, CallRefusedError | TargetError):
+                    code = error.code
+                else:
+                    self.api.logger.exception("Computer Use final batch screenshot failed")
                 raise TargetError(
                     f"All requested actions ran, but the final screenshot failed: {error}. "
                     "Take a screenshot before repeating any input.\nActions that ran:\n"
                     + "\n".join(lines),
-                    error.code,
+                    code,
                 ) from None
         return f"Ran {len(actions)} actions:\n" + "\n".join(lines)
 
