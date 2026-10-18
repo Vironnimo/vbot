@@ -118,7 +118,8 @@
   color: var(--accent);
 }
 
-.session-drawer__all-agents[aria-pressed='true'] {
+.session-drawer__all-agents[aria-pressed='true'],
+.session-drawer__by-project[aria-pressed='true'] {
   background: var(--accent-12);
 }
 
@@ -203,6 +204,113 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+
+/* The by-Project view: the groups scroll together, each one a header with
+   its own short list. */
+.session-drawer__groups {
+  min-height: 0;
+  flex: 1;
+  padding: 4px 0;
+  overflow: auto;
+}
+
+.session-group + .session-group {
+  margin-top: 4px;
+}
+
+.session-group__header {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.session-group__toggle {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+  height: 26px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-group__toggle:hover,
+.session-group__toggle:focus-visible {
+  outline: none;
+  color: var(--text-hi);
+}
+
+.session-group__toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.session-group__chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  transition: transform 150ms ease;
+}
+
+.session-group__toggle[aria-expanded='true'] .session-group__chevron {
+  transform: rotate(90deg);
+}
+
+.session-group__name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.session-group__new {
+  flex-shrink: 0;
+}
+
+.session-group__list {
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: visible;
+}
+
+.session-group__empty,
+.session-group__more {
+  margin: 0;
+  padding: 3px 12px 4px 26px;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
+}
+
+.session-group__more {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-group__more:hover:not(:disabled),
+.session-group__more:focus-visible {
+  outline: none;
+  color: var(--text-hi);
+}
+
+.session-group__more:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .session-drawer__more-hint {

@@ -577,3 +577,213 @@ describe('SessionListDrawer list', () => {
     expect(document.querySelector('.session-drawer__more-hint')).toBeNull();
   });
 });
+
+describe('SessionListDrawer by Project', () => {
+  const drawer = setupSessionListDrawerSuite();
+
+  const roster = [
+    { address: 'alpha', name: 'Alpha' },
+    { address: 'builder@vbot', name: 'Builder' },
+  ];
+  const projects = [
+    { project_id: 'vbot', display_name: 'vBot' },
+    { project_id: 'idle', display_name: 'Idle' },
+  ];
+  const projectTeams = [
+    {
+      projectId: 'vbot',
+      members: [{ agent_id: 'builder', display_name: 'Builder' }],
+    },
+    {
+      projectId: 'idle',
+      members: [{ agent_id: 'scout', display_name: 'Scout' }],
+    },
+  ];
+  const vbotCursor = {
+    active_sort: 2460000,
+    project_id: 'vbot',
+    agent_id: 'builder',
+    session_id: 'build-1',
+  };
+
+  const serveGroups = () =>
+    api.listSessionProjectGroups.mockResolvedValue({
+      groups: [
+        {
+          project_id: 'vbot',
+          sessions: [
+            session('plan-1', {
+              title: 'Planning',
+              agent_address: 'alpha',
+              last_active_at: '2026-05-12T00:00:00+00:00',
+            }),
+            session('build-1', {
+              title: 'Build',
+              agent_address: 'builder@vbot',
+              last_active_at: '2026-05-11T00:00:00+00:00',
+            }),
+          ],
+          next_cursor: vbotCursor,
+          total_count: 3,
+        },
+        { project_id: 'idle', sessions: [], next_cursor: null, total_count: 0 },
+        {
+          project_id: null,
+          sessions: [
+            session('chat-1', { title: 'Chat', agent_address: 'alpha' }),
+          ],
+          next_cursor: null,
+          total_count: 1,
+        },
+      ],
+    });
+
+  const groupNames = () =>
+    [...document.querySelectorAll('.session-group__name')].map((name) =>
+      name.textContent.trim(),
+    );
+  const group = (name) =>
+    [...document.querySelectorAll('.session-group')].find(
+      (section) =>
+        section.querySelector('.session-group__name').textContent.trim() ===
+        name,
+    );
+  const groupRows = (name) =>
+    [...group(name).querySelectorAll('.session-row')].map((row) => [
+      row.querySelector('.session-row__name').textContent.trim(),
+      row.querySelector('.session-row__agent')?.textContent.trim() ?? '',
+    ]);
+  const newSessionButton = (name) =>
+    group(name).querySelector('.session-group__new');
+  const menuItems = () =>
+    [...document.querySelectorAll('.context-menu [role="menuitem"]')].map(
+      (item) => item.textContent.trim(),
+    );
+
+  it('groups every Agent’s Sessions by Project and continues a group with its cursor', async () => {
+    serveGroups();
+    api.listProjectSessions.mockResolvedValue({
+      sessions: [
+        session('build-0', {
+          title: 'Older build',
+          agent_address: 'builder@vbot',
+        }),
+      ],
+      next_cursor: null,
+      total_count: 3,
+    });
+    const onFiltersChange = vi.fn();
+    drawer.mount({
+      currentSessionId: 'plan-1',
+      agents: roster,
+      projects,
+      projectTeams,
+      onFiltersChange,
+    });
+    await waitForCondition(() => api.listSessions.mock.calls.length === 1);
+
+    const toggle = document.querySelector('.session-drawer__by-project');
+    toggle.click();
+    flushSync();
+    await waitForCondition(() => groupNames().length === 3);
+
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(onFiltersChange.mock.calls.at(-1)[0]).toMatchObject({
+      byProject: true,
+    });
+    expect(api.listSessionProjectGroups).toHaveBeenCalledWith({
+      limit: 5,
+      includeSubagents: false,
+      includeMemoryReflections: false,
+      includeSkillReflections: false,
+      includeCron: false,
+      includeChannels: false,
+    });
+    expect(document.querySelector('.session-drawer__title').textContent).toBe(
+      t('sessions.projects.title'),
+    );
+    // The per-Agent "All agents" switch does not apply here.
+    expect(document.querySelector('.session-drawer__all-agents')).toBeNull();
+    expect(groupNames()).toEqual([
+      'vBot',
+      'Idle',
+      t('sessions.projects.other'),
+    ]);
+    expect(groupRows('vBot')).toEqual([
+      ['Planning', 'Alpha'],
+      ['Build', 'Builder'],
+    ]);
+    expect(group('Idle').textContent).toContain(t('sessions.projects.empty'));
+    expect(
+      sessionRowButton('Planning').classList.contains(
+        'session-row__select--active',
+      ),
+    ).toBe(true);
+
+    buttonByText(t('sessions.projects.showMore', { count: 1 })).click();
+    flushSync();
+    await waitForCondition(() => groupRows('vBot').length === 3);
+    expect(api.listProjectSessions).toHaveBeenCalledWith(
+      'vbot',
+      expect.objectContaining({ limit: 10, cursor: vbotCursor }),
+    );
+    expect(group('vBot').querySelector('.session-group__more')).toBeNull();
+
+    const vbotToggle = group('vBot').querySelector('.session-group__toggle');
+    vbotToggle.click();
+    flushSync();
+    expect(vbotToggle.getAttribute('aria-expanded')).toBe('false');
+    expect(groupRows('vBot')).toEqual([]);
+    expect(onFiltersChange.mock.calls.at(-1)[0]).toMatchObject({
+      collapsedProjects: ['vbot'],
+    });
+  });
+
+  it('starts a group’s new Session with the displayed Agent where it can work, else with a chosen one', async () => {
+    serveGroups();
+    const onNewSessionInProject = vi.fn();
+    const props = drawer.mount({
+      agents: roster,
+      projects,
+      projectTeams,
+      initialFilters: { byProject: true },
+      onNewSessionInProject,
+    });
+    await waitForCondition(() => groupNames().length === 3);
+
+    // An Identity Agent works in every Project and in none.
+    newSessionButton('Idle').click();
+    newSessionButton(t('sessions.projects.other')).click();
+    expect(onNewSessionInProject.mock.calls).toEqual([
+      ['idle', 'alpha'],
+      [null, 'alpha'],
+    ]);
+    expect(document.querySelector('.context-menu')).toBeNull();
+
+    // A Team member works only in its own Project; elsewhere the user picks
+    // an Identity Agent or one of that Project's Team.
+    props.agentId = 'builder@vbot';
+    flushSync();
+    onNewSessionInProject.mockClear();
+    newSessionButton('vBot').click();
+    expect(onNewSessionInProject).toHaveBeenCalledWith('vbot', 'builder@vbot');
+
+    const idleButton = newSessionButton('Idle');
+    expect(idleButton.getAttribute('aria-haspopup')).toBe('menu');
+    idleButton.click();
+    flushSync();
+    expect(menuItems()).toEqual(['Alpha', 'Scout']);
+    [...document.querySelectorAll('.context-menu [role="menuitem"]')]
+      .find((item) => item.textContent.trim() === 'Scout')
+      .click();
+    flushSync();
+    expect(onNewSessionInProject).toHaveBeenLastCalledWith(
+      'idle',
+      'scout@idle',
+    );
+
+    newSessionButton(t('sessions.projects.other')).click();
+    flushSync();
+    expect(menuItems()).toEqual(['Alpha']);
+  });
+});

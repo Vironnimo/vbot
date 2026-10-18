@@ -508,6 +508,14 @@ export function createSessionSettings(context) {
       updateDraft(shown.key, { workingProjectId: value || null });
       remember(shown, { workingProjectId: value || null });
     },
+    // A draft started in a Project of the by-Project Session list (null: the
+    // Workspace). Unlike `selectProject`, the Agent's default Project stays.
+    startDraftIn(draft, workingProjectId) {
+      if (!draft?.key || parseAgentAddress(draft.agentAddress).projectId) {
+        return;
+      }
+      updateDraft(draft.key, { workingProjectId: workingProjectId || null });
+    },
     // Keep the effort on the nearest level the next Model offers, saving both
     // choices in the same write.
     selectModel(value) {

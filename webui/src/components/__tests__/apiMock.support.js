@@ -124,6 +124,16 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
           : { agent_id: agentIds }),
         ...(query.limit ? { limit: query.limit } : {}),
       }),
+    listSessionProjectGroups: (query = {}) =>
+      call('session.project_groups', {
+        ...(query.limit ? { limit: query.limit } : {}),
+      }),
+    listProjectSessions: (projectId, query = {}) =>
+      call('session.list', {
+        working_project_id: projectId,
+        ...(query.limit ? { limit: query.limit } : {}),
+        ...(query.cursor ? { cursor: query.cursor } : {}),
+      }),
     getSession: (agentId, sessionId) =>
       call('session.get', { agent_id: agentId, session_id: sessionId }),
     getSessionChangeStats: (agentId, sessionId, { includeSubAgents } = {}) =>

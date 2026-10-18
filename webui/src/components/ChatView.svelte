@@ -355,6 +355,52 @@
 
   let sessionFilters = $state(untrack(() => initialSessionFilters));
 
+  // The by-Project Session list starts each new Session in a Project: a
+  // group's "+" with the Agent it chose, New Session with the displayed Agent
+  // in the Project of the shown Session.
+  const startSessionInProject = (projectId, agentAddress, options) =>
+    navigation.handleNewSessionWith(
+      agentAddress,
+      (draft) => sessionSettings.startDraftIn(draft, projectId),
+      options,
+    );
+
+  // The Agent and Project New Session continues in, or null for the plain
+  // New Session: no by-Project list shown, a draft shown, an unknown Project,
+  // or a displayed Agent the area cannot start (a stand-in).
+  const projectNewSessionTarget = () => {
+    const view = sessionSettings.view;
+    if (
+      !showSessionDrawer ||
+      !sessionFilters?.byProject ||
+      view?.kind !== 'session' ||
+      view.project.known !== true
+    ) {
+      return null;
+    }
+    const agentAddress = target.activeAgentAddress;
+    const { agentId, projectId: teamProjectId } =
+      parseAgentAddress(agentAddress);
+    const projectId = projects.some(
+      (project) => project.project_id === view.project.value,
+    )
+      ? view.project.value
+      : null;
+    const startable = teamProjectId
+      ? teamProjectId === projectId
+      : chatState.agents.some((agent) => agent.id === agentId);
+    return startable ? { agentAddress, projectId } : null;
+  };
+
+  const handleNewSession = () => {
+    const next = projectNewSessionTarget();
+    return next
+      ? startSessionInProject(next.projectId, next.agentAddress, {
+          keepEmptySession: true,
+        })
+      : navigation.handleNewSession();
+  };
+
   // A picker choice: an Identity Agent by its id, a Project Agent by its
   // `agent@project` address.
   function handleSelectPickerAgent(address) {
@@ -626,7 +672,7 @@
     sessionListDisabled={!target.activeAgent}
     onToggleSessionList={() => (showSessionDrawer = !showSessionDrawer)}
     newSessionDisabled={!target.activeAgent || chatState.loadingHistory}
-    onNewSession={navigation.handleNewSession}
+    onNewSession={handleNewSession}
     {otherArea}
     actions={workspaceActions}
     infoPanelOpen={activityPanelOpen}
@@ -685,6 +731,9 @@
           onSessionDeleted={navigation.handleSessionDeleted}
           onSessionDeleteStarted={navigation.beginSessionDeletion}
           onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
+          {projects}
+          projectTeams={target.projectGroups}
+          onNewSessionInProject={startSessionInProject}
         />
       {/if}
       <div

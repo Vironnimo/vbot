@@ -88,22 +88,9 @@ export function editChatMessage(params = {}, options = {}) {
   return rpc('chat.edit', params, options);
 }
 
-export function listSessions(agentIds, query = {}, options = {}) {
-  const addresses = Array.isArray(agentIds) ? agentIds : [agentIds];
-  if (
-    addresses.some(
-      (agentId) => typeof agentId !== 'string' || agentId.trim().length === 0,
-    )
-  ) {
-    throw new ApiClientError(
-      RPC_ERROR_INVALID_CLIENT_REQUEST,
-      'Agent ids must be non-empty strings',
-      { method: 'session.list' },
-    );
-  }
-  const params = Array.isArray(agentIds)
-    ? { agent_ids: addresses }
-    : { agent_id: agentIds };
+// The paging and category filter fields every Session-list request shares.
+function sessionListPageParams(query) {
+  const params = {};
   if (Number.isSafeInteger(query.limit) && query.limit > 0) {
     params.limit = query.limit;
   }
@@ -121,6 +108,56 @@ export function listSessions(agentIds, query = {}, options = {}) {
       params[rpcKey] = query[queryKey];
     }
   }
+  return params;
+}
+
+// The newest Sessions of every Agent per registered Project, plus a last group
+// (`project_id: null`) for those that work in no registered Project.
+export function listSessionProjectGroups(query = {}, options = {}) {
+  return rpc(
+    'session.project_groups',
+    sessionListPageParams({ ...query, cursor: null }),
+    options,
+  );
+}
+
+// One more page of one Project group: a Project id, or null for the Sessions
+// that work in no registered Project.
+export function listProjectSessions(projectId, query = {}, options = {}) {
+  if (
+    projectId !== null &&
+    (typeof projectId !== 'string' || projectId.trim().length === 0)
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'A Project id must be a non-empty string or null',
+      { method: 'session.list' },
+    );
+  }
+  return rpc(
+    'session.list',
+    { working_project_id: projectId, ...sessionListPageParams(query) },
+    options,
+  );
+}
+
+export function listSessions(agentIds, query = {}, options = {}) {
+  const addresses = Array.isArray(agentIds) ? agentIds : [agentIds];
+  if (
+    addresses.some(
+      (agentId) => typeof agentId !== 'string' || agentId.trim().length === 0,
+    )
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent ids must be non-empty strings',
+      { method: 'session.list' },
+    );
+  }
+  const params = Array.isArray(agentIds)
+    ? { agent_ids: addresses }
+    : { agent_id: agentIds };
+  Object.assign(params, sessionListPageParams(query));
   if (
     query.requiredSession &&
     typeof query.requiredSession.agentId === 'string' &&

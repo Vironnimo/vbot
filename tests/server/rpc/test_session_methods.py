@@ -463,6 +463,46 @@ async def test_session_list_pages_with_a_last_activity_cursor(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_session_project_groups_list_every_agent_by_working_project(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    runtime = state.runtime
+    runtime.chat_run_manager = state.chat_runs
+    runtime.storage = SimpleNamespace(load_compaction_settings=lambda: {})
+    repo = tmp_path / "repo"
+    _write_agent(repo, "builder.md", model="openai/unavailable")
+    runtime.projects.create("vbot", "vBot", repo)
+    runtime.projects.create("idle", "Idle", tmp_path / "idle")
+    runtime.agents.create("coder")
+    sessions = runtime.sessions
+    try:
+        sessions.create("coder", session_id="workspace", working_project_id=None)
+        sessions.create("coder", session_id="in-vbot", working_project_id="vbot")
+        sessions.create("builder", session_id="team", project_id="vbot")
+        # A built-in Agent's Session belongs to no group.
+        sessions.create("librarian", session_id="pass", working_project_id="vbot")
+
+        result = await rpc_result(state, "session.project_groups", limit=1)
+
+        assert [group["project_id"] for group in result["groups"]] == ["vbot", "idle", None]
+        vbot, idle, other = result["groups"]
+        [row] = vbot["sessions"]
+        assert (row["id"], row["agent_address"], vbot["total_count"]) == ("team", "builder@vbot", 2)
+        assert row["compaction_policy_effective"]["enabled"] is True
+        assert (idle["sessions"], idle["total_count"], idle["next_cursor"]) == ([], 0, None)
+        assert [row["id"] for row in other["sessions"]] == ["workspace"]
+        rest = await rpc_result(
+            state, "session.list", working_project_id="vbot", cursor=vbot["next_cursor"]
+        )
+        assert [(row["id"], row["agent_address"]) for row in rest["sessions"]] == [
+            ("in-vbot", "coder")
+        ]
+        unknown = await rpc_error(state, "session.list", working_project_id="gone")
+        assert "gone" in unknown["message"]
+    finally:
+        sessions.close()
+
+
+@pytest.mark.asyncio
 async def test_session_get_reads_one_summary_by_exact_address(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     sessions = state.runtime.chat_sessions

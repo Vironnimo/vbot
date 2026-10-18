@@ -13,9 +13,14 @@ const BACKGROUND_ONLY_RUN_KINDS = new Set([
 // Category toggles that reveal hidden-by-default sessions. `allAgents` is a
 // scope toggle; it changes which sessions are loaded rather
 // than how the loaded list is classified, so the view helpers ignore it.
+// `byProject` shows every Agent's Sessions grouped by the Project they work in
+// instead of one Agent's list; `collapsedProjects` names the closed groups by
+// `projectGroupKey`.
 export function createSessionListFilters() {
   return {
     allAgents: false,
+    byProject: false,
+    collapsedProjects: [],
     channels: false,
     subagents: false,
     memoryReflections: false,
@@ -103,6 +108,58 @@ export function appendSessionList(state, sessions) {
     );
   }
   return applySessionList(state, [...unique.values()]);
+}
+
+// A Project group's key: its Project id, '' for the group of Sessions that
+// work in no registered Project.
+export function projectGroupKey(projectId) {
+  return asOptionalText(projectId) ?? '';
+}
+
+// The `session.project_groups` groups in server order, each with its
+// normalized Sessions, the cursor of its next page and its total count.
+export function applyProjectGroups(result) {
+  const groups = [];
+  for (const group of Array.isArray(result?.groups) ? result.groups : []) {
+    if (!isPlainObject(group)) {
+      continue;
+    }
+    const sessions = Array.isArray(group.sessions) ? group.sessions : [];
+    groups.push({
+      projectId: asOptionalText(group.project_id),
+      sessions: normalizeSessions(sessions),
+      nextCursor: isPlainObject(group.next_cursor) ? group.next_cursor : null,
+      totalCount: Number.isSafeInteger(group.total_count)
+        ? group.total_count
+        : sessions.length,
+    });
+  }
+  return groups;
+}
+
+// Add one more `session.list` page to the group of `projectId`.
+export function appendProjectGroupPage(groups, projectId, page) {
+  const key = projectGroupKey(projectId);
+  return (Array.isArray(groups) ? groups : []).map((group) => {
+    if (projectGroupKey(group.projectId) !== key) {
+      return group;
+    }
+    const unique = new Map();
+    for (const session of [
+      ...group.sessions,
+      ...normalizeSessions(page?.sessions),
+    ]) {
+      unique.set(`${session.agent_address ?? ''}::${session.id}`, session);
+    }
+    return {
+      ...group,
+      sessions: normalizeSessions([...unique.values()]),
+      nextCursor: isPlainObject(page?.next_cursor) ? page.next_cursor : null,
+      totalCount: Number.isSafeInteger(page?.total_count)
+        ? page.total_count
+        : group.totalCount,
+    };
+  });
 }
 
 export function overlayLiveSessionActivity(
@@ -286,6 +343,15 @@ function normalizeFilters(filters) {
   }
   return {
     allAgents: filters.allAgents === true,
+    byProject: filters.byProject === true,
+    collapsedProjects: [
+      ...new Set(
+        (Array.isArray(filters.collapsedProjects)
+          ? filters.collapsedProjects
+          : []
+        ).filter((key) => typeof key === 'string'),
+      ),
+    ],
     channels: filters.channels === true,
     subagents: filters.subagents === true,
     memoryReflections: filters.memoryReflections === true,

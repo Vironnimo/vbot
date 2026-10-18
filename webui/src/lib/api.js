@@ -186,6 +186,8 @@ export {
   startChatRun,
   editChatMessage,
   listSessions,
+  listSessionProjectGroups,
+  listProjectSessions,
   getSession,
   getSessionChangeStats,
   getSubAgentTree,
