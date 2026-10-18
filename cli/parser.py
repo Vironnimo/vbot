@@ -12,7 +12,6 @@ from cli._parser_agents import (
     _add_agent_parsers,
     _add_archive_parsers,
     _add_chat_parser,
-    _add_data_store_parsers,
     _add_project_parsers,
     _add_session_parsers,
     _add_tui_parser,
@@ -35,6 +34,7 @@ from cli._parser_content import (
     _add_skill_parsers,
     _add_tool_parsers,
 )
+from cli._parser_data_store import _add_data_store_parsers
 from cli._parser_lifecycle import (
     _add_application_parsers,
     _add_autostart_parsers,

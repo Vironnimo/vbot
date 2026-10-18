@@ -1,6 +1,6 @@
 # Data Store Commands
 
-Supplementary to `cli.md`. Covers `vbot data-store` (`cli/data_store_management.py`), the operator surface of the database kernel (`database.md`): `status`, `snapshot`, `incident`, `unregister`, `config-backup` and `secrets`, including when they work on the local data directory instead of through the server.
+Supplementary to `cli.md`. The complete data-store grammar belongs to `cli/_parser_data_store.py`; `cli/parser.py` composes it with the other areas. Covers `vbot data-store` (`cli/data_store_management.py`), the operator surface of the database kernel (`database.md`): `status`, `snapshot`, `incident`, `unregister`, `config-backup` and `secrets`, including when they work on the local data directory instead of through the server.
 
 ## Status
 
