@@ -2,6 +2,12 @@
 
 Tool that exposes the live Skill catalog, activates allowed Skills, and reads their UTF-8 package files. `skill` is directly configurable through Tool Access Policy and seeded default-on in the Project Tool Whitelist (`PROJECT_DEFAULT_ALLOWED_TOOLS`).
 
+`core/tools/skill.py` retains activation, catalog policy, registration and writer/name
+helpers. `_skill_reading.py` owns package reading, paging, activation payloads and
+read diagnostics; it uses `core.skills.resolve_package_resource` for package path
+validation, excluded-resource checks and resolved containment. Public read helpers
+remain available from `skill.py`.
+
 ## Interfaces
 
 - Tool name: `skill`.
