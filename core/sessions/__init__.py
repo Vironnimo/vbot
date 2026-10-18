@@ -41,6 +41,7 @@ if TYPE_CHECKING:
         ArchiveTree,
     )
     from core.sessions._io import SessionWriteLeaseScope
+    from core.sessions._store_schema import session_database_spec
     from core.sessions._types import (
         AGENT_DEFAULT_PROJECT,
         CHANNEL_MESSAGE_NOTE_PREFIX,
@@ -128,6 +129,7 @@ if TYPE_CHECKING:
 
 
 _EXPORT_MODULES = {
+    "session_database_spec": "core.sessions._store_schema",
     "AGENT_DEFAULT_PROJECT": "core.sessions._types",
     "ARCHIVE_ENTRIES_DIR": "core.sessions._archive_types",
     "ARCHIVE_KINDS": "core.sessions._archive_types",
@@ -252,6 +254,7 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "session_database_spec",
     "ARCHIVE_ENTRIES_DIR",
     "ARCHIVE_KIND_AGENT",
     "ARCHIVE_KIND_FILES",

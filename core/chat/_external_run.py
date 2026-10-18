@@ -337,7 +337,7 @@ async def start_external_run(
     working_project_id = await resolver.resolve_working_project_async(
         None, agent, requested=AGENT_DEFAULT_PROJECT
     )
-    definitions = await requests.preview_tool_definitions(agent)
+    definitions = await requests.tool_catalog.preview_tool_definitions(agent)
     offered = {str(definition.get("name")) for definition in definitions}
     extra = [name for name in dict.fromkeys(extra_tools) if name not in offered]
     if extra:

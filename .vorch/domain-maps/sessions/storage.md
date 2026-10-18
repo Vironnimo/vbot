@@ -4,10 +4,10 @@ Task-gated detail for `sessions.md`: the store's internal modules, the Session d
 
 ## Source routing
 
-The public `core.sessions` package routes stable imports to the Session service in `sessions.py`, the buffered Session handle in `session.py`, immutable records in `_types.py`, and semantic history helpers in `history.py`. Metadata validation/cursors and bounded I/O/write leases live in `_metadata.py` and `_io.py`. Canonical timestamps come from `core/utils/timestamps.py`.
+The public `core.sessions` package routes stable imports to the Session service in `sessions.py`, the buffered Session handle in `session.py`, immutable records in `_types.py`, and semantic history helpers in `history.py`. Metadata validation/cursors and bounded I/O/write leases live in `_metadata.py` and `_io.py`. `_lifecycle.py` applies creation, address, Working Project and title policy; `_run_persistence.py` translates live Runs into stored execution records and completion notifications. Canonical timestamps come from `core/utils/timestamps.py`.
 
 `store.py` opens the Session database through the shared kernel (`database.md`) and keeps read/write admission, history/metadata operations and FTS error recovery. Its private `SessionExecutionStore` (`_execution_store.py`) groups Run admission/settlement, Stream drafts and durable owner/accessor deliveries on those same transactions; callers outside Sessions continue through `ChatSessionManager`, never the storage helper. Private `_store_*` modules receive its connection:
-- `codec` - per-role entry rows and side tables, set-wise decoding, Tool-result linking, materialized copies.
+- `codec` - per-role entry rows and side tables, set-wise decoding, Tool-result linking; `copies` - materialized entries, Runs, Tool calls and payloads during lineage detachment.
 - `lineage` - the lineage visibility predicate (`admits`, the one fragment every view read, the search candidates and the FTS membership views are built from), view ranges, fork lineage and edit truncation; every current-view read goes through `view_ranges` plus `ordered_rows` (one index range scan per range) or `view_query` (one set-wise query over a `VALUES` CTE of the ranges). It imports no other store module, so `schema.py` builds on it.
 - `history` - bounded reads over one explicit view (current view, own audit, own spend), cursors and deltas, Run lookups, Recall context.
 - `usage` - paged accounting-only own-audit export across live and archived generations, through `ChatSessionManager.usage_history`; includes entry and Message identities plus Assistant interruption state, without inherited prefixes or content decoding. The independent canonical recorder imports this evidence and repairs incomplete records after restore (`usage.md`).
@@ -20,10 +20,10 @@ The public `core.sessions` package routes stable imports to the Session service 
 - `queries` - catalog, Session-list summaries, descriptors and revisions.
 - `owned` - temporary bindings, delivery receipts and owned Runs.
 - `values` - Session row columns, the metadata facade, scope and value validation.
-- `fts` - disposable index lifecycle; `search` - bounded search. `search_content.py` owns canonical searchable roles, derived Recall-result exclusions and Content Block extraction; Recall consumes it rather than Sessions importing Recall.
+- `fts` - disposable index lifecycle; `search` - bounded search, consuming `_search_request.py` for normalization, literal matching and FTS preparation. `search_content.py` owns canonical searchable roles, derived Recall-result exclusions and Content Block extraction; Recall consumes it rather than Sessions importing Recall.
 - `external_notes` - whole-batch exactly-once Notes from durable accessor inboxes; `extension_results` - receipts bound to an original Extension Tool invocation and idempotent late outcomes; `commands` - opaque background-command checkpoints bound to the Session's immutable key. These use the execution store; their domain policy stays with Channels, Extensions and commands.
 - `attachments` - retained-entry blob reachability across live, archived and superseded history; startup attachment collection reads it through the manager (`attachments.md`).
-- `schema` - the kernel spec (`session_database_spec`: the DDL from `schema.py`, the FTS readiness hook, snapshot facts and status health). `health` keeps cheap index status separate from the last explicit coverage check (`sessions/search.md`).
+- `schema` - the kernel spec (public lazy export `core.sessions.session_database_spec`: the DDL from `schema.py`, the FTS readiness hook, snapshot facts and status health). `health` keeps cheap index status separate from the last explicit coverage check (`sessions/search.md`).
 
 Read helpers that reconstruct Messages or decode JSON columns (summaries, temporary bindings) select rows inside the read transaction and return a decoder; `store.py` (`_read_decoded`) runs it after the transaction ends, because a rollback-journal store serves reads on the serialized writer.
 

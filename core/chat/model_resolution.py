@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from core.providers.providers import ProviderRegistry
     from core.runtime.interfaces import ProviderCredentialResolverProtocol
 
+
 _LOGGER = get_logger("chat")
 
 # Every Run resolves its Model's input modalities, so an unresolvable Model logs
@@ -147,14 +148,8 @@ def _log_unresolved_modalities(model_ref: str, error: Exception) -> None:
 def _resolve_agent_connection(
     dependencies: ModelResolutionDependencies, agent: Any
 ) -> tuple[str, str]:
-    model_provider_id, model_id, connection_suffix = parse_model_with_connection(agent.model)
-    if connection_suffix:
-        return model_provider_id, f"{model_provider_id}:{connection_suffix}"
-
-    allowed_connections = _model_connection_allowlist(dependencies, model_provider_id, model_id)
-    return model_provider_id, _first_usable_connection_id(
-        dependencies, model_provider_id, allowed_connections
-    )
+    provider_id, _model_id, connection_id = resolve_model_target(dependencies, agent.model)
+    return provider_id, connection_id
 
 
 def _resolve_fallback_chain(
@@ -297,6 +292,17 @@ def resolve_agent_model_target(
     dependencies: ModelResolutionDependencies, agent: Any
 ) -> tuple[str, str, str]:
     """Resolve an Agent's exact configured Model and usable Provider Connection."""
-    provider_id, connection_id = _resolve_agent_connection(dependencies, agent)
-    _, model_id, _ = parse_model_with_connection(agent.model)
+    return resolve_model_target(dependencies, agent.model)
+
+
+def resolve_model_target(
+    dependencies: ModelResolutionDependencies, model: str
+) -> tuple[str, str, str]:
+    """Resolve an exact Model binding and its explicit or first allowed usable Connection."""
+    provider_id, model_id, connection_suffix = parse_model_with_connection(model)
+    if connection_suffix:
+        return provider_id, model_id, f"{provider_id}:{connection_suffix}"
+    connection_id = _first_usable_connection_id(
+        dependencies, provider_id, _model_connection_allowlist(dependencies, provider_id, model_id)
+    )
     return provider_id, model_id, connection_id

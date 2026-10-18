@@ -21,6 +21,8 @@ Task-gated detail for `sessions.md`: the integrated FTS indexes, their upkeep an
 
 ## `search_messages`
 
+`ChatSessionManager.search_messages` retains the public keyword interface and builds one internal `SessionSearchRequest`; the store and query executor pass that request intact. It owns whitespace normalization, literal matching, FTS expression/trigram preparation and timestamp normalization.
+
 - Returns a typed `SessionSearchResult` of exact hits (`SessionSearchHit`: address, Message id, role, timestamp, matched text, rank) plus `complete`, `method` (`fts`/`scan`) and `fallback_reason`. Results are bounded by `limit` (default 1,000).
 - Eligible Sessions (one `MATERIALIZED` CTE): live Sessions of the requested Project scope (the Identity scope for `project_id=None`) whose Recall visibility the request admits, optionally one Agent and one Session, minus excluded Session ids. Candidates are the current entries of eligible Sessions: their own non-superseded entries and the ancestor entries their lineage admits, filtered by role and time before any candidate is checked. Each stored entry is one candidate, so a fork never duplicates its origin's hits.
 - An FTS search checks only its hits against that set, each by its key (`_IS_CURRENT`: the owner is eligible and still shows the entry, or a lineage segment of an eligible Session admits it; only entries of Sessions that eligible ones inherit from reach the lineage check), so its cost follows the number of hits, not the size of the store. A scan enumerates the set (own entries `UNION` inherited ones).

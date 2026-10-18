@@ -6,6 +6,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from core.chat._effort_epoch import EffortState
     from core.chat._external_run import ExternalRun
     from core.chat._message_history import (
         checkpoint_ordinal,
@@ -69,12 +70,17 @@ if TYPE_CHECKING:
         aggregate_session_usage,
         latest_session_context_usage,
     )
+    from core.chat.wire_shaping import note_request_messages, system_reminder_request_message
     from core.sessions import (
         ChatSession,
         ChatSessionManager,
     )
 
+
 _EXPORT_MODULES = {
+    "EffortState": "core.chat._effort_epoch",
+    "note_request_messages": "core.chat.wire_shaping",
+    "system_reminder_request_message": "core.chat.wire_shaping",
     "RequestState": "core.chat._run_state",
     "compaction_projection_without_active_skills": "core.chat._message_history",
     "effective_compaction_messages": "core.chat._message_history",
@@ -125,6 +131,9 @@ _EXPORT_MODULES = {
 }
 
 __all__ = [
+    "EffortState",
+    "note_request_messages",
+    "system_reminder_request_message",
     "RequestState",
     "compaction_projection_without_active_skills",
     "effective_compaction_messages",

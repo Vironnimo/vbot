@@ -428,3 +428,8 @@ def _usage_token_count(usage: Any, key: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
     return value
+
+
+def tool_iteration_limit(maximum: int, run_limit: int | None) -> int:
+    """Narrow the loop's Tool iteration ceiling by an admitted Run limit."""
+    return maximum if run_limit is None else min(maximum, run_limit)

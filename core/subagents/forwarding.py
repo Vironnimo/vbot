@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from core.runs import ChatRunManager
     from core.runtime.interfaces import RuntimeServices
 
+
 _LOGGER = get_logger("subagents")
 
 
@@ -182,12 +183,10 @@ class SubAgentForwarding:
         )
         parent = link.parent
         delivery = self._trigger_service.submit_completion(
-            parent.agent_id,
-            parent.session_id,
+            parent,
             notice_id=f"subagent:{run.id}",
             origin_run_id=run.id,
             body=body,
-            project_id=parent.project_id,
             execution_owner=run.execution_owner,
             on_persisted=(lambda: self._mark_read(address, run.id)) if mark_read else None,
         )
@@ -252,12 +251,10 @@ class SubAgentForwarding:
             return
         parent = link.parent
         delivery = self._trigger_service.submit_completion(
-            parent.agent_id,
-            parent.session_id,
+            parent,
             notice_id=f"subagent-user-reply:{message_id}",
             origin_run_id=f"subagent-user-reply:{message_id}",
             body=REPLY_TO_USER_NOTICE_TEMPLATE.format(id=link.id, title=link.title or link.id),
-            project_id=parent.project_id,
             wake=False,
         )
         delivery.add_done_callback(lambda done: _log_delivery(done, link, None))

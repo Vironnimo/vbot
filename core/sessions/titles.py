@@ -16,9 +16,7 @@ from core.chat.content_blocks import (
     TextBlock,
 )
 from core.chat.model_resolution import (
-    _first_usable_connection_id,
-    _model_connection_allowlist,
-    parse_model_with_connection,
+    resolve_model_target,
 )
 from core.chat.streaming import stream_model_response
 from core.debug import DebugContext
@@ -39,6 +37,7 @@ from core.utils.workers import BoundedWorkerPool
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
     from core.usage import UsageRecorder
+
 
 _LOGGER = get_logger("sessions.titles")
 
@@ -417,7 +416,7 @@ class SessionTitleService:
 
         def prepare() -> tuple[str, str, str]:
             nonlocal adapter
-            provider_id, model_id, connection_id = _resolve_model_target(self._runtime, model)
+            provider_id, model_id, connection_id = resolve_model_target(self._runtime, model)
             # Keep ownership if cancellation arrives while the worker builds it.
             adapter = self._runtime.get_adapter(ConnectionRef(provider_id, connection_id))
             return provider_id, model_id, connection_id
@@ -552,18 +551,6 @@ def _group_title_candidate(
     if priced:
         return usable[min(priced)[1]]
     return usable[0] if usable else None
-
-
-def _resolve_model_target(runtime: RuntimeServices, model: str) -> tuple[str, str, str]:
-    provider_id, model_id, connection_suffix = parse_model_with_connection(model)
-    if connection_suffix:
-        return provider_id, model_id, f"{provider_id}:{connection_suffix}"
-    connection_id = _first_usable_connection_id(
-        runtime,
-        provider_id,
-        _model_connection_allowlist(runtime, provider_id, model_id),
-    )
-    return provider_id, model_id, connection_id
 
 
 def _title_source_parts(content: str | list[ContentBlock]) -> tuple[str, list[str]]:

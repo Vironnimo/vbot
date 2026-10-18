@@ -788,7 +788,7 @@ class ChatLoop:
         self, agent: Any, *, session_tool_grants: Sequence[str] = ()
     ) -> list[JsonObject]:
         """Inspect production Tool visibility without starting a Run or calling a Model."""
-        return await self._requests.preview_tool_definitions(
+        return await self._requests.tool_catalog.preview_tool_definitions(
             agent, session_tool_grants=session_tool_grants
         )
 

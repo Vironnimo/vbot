@@ -637,8 +637,7 @@ async def _probe_swarm_workflow(
     Board effects and canonical receipts. Actual Chat admission/terminal ownership
     is verified by the owning lifecycle integration tests, not simulated here.
     """
-    from core.chat import ChatMessage
-    from core.chat.wire_shaping import _notes_to_request_messages
+    from core.chat import ChatMessage, note_request_messages
     from resources.extensions.swarm.agent_text import INITIAL_MESSAGE, RESUME_REMINDER
 
     names = ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki")
@@ -731,7 +730,7 @@ async def _probe_swarm_workflow(
                     messages=[reminder],
                     receipts=[],
                 )
-                messages.extend(_notes_to_request_messages([reminder]))
+                messages.extend(note_request_messages([reminder]))
                 resumed = True
                 continue
             finished = True

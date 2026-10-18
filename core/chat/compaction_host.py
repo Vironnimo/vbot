@@ -10,8 +10,8 @@ from core.agents import skill_subject_id
 from core.chat._boundaries import _finish_visible_boundary
 from core.chat._request_builder import (
     RequestBuilder,
-    _finalize_compaction_checkpoint,
 )
+from core.chat._request_epoch import _finalize_compaction_checkpoint
 from core.chat._request_targets import _resolve_request_image_limit, _resolved_model_reference
 from core.chat._run_state import (
     ChatLoopDependencies,

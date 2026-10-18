@@ -4,28 +4,35 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from datetime import datetime
 from functools import partial
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
+from core.chat._command_types import CommandArgumentMode as CommandArgumentMode
+from core.chat._command_types import CommandCatalogResult as CommandCatalogResult
+from core.chat._command_types import CommandExecutionMode as CommandExecutionMode
+from core.chat._command_types import CommandFeedbackKind as CommandFeedbackKind
+from core.chat._command_types import CommandNavigationKind as CommandNavigationKind
+from core.chat._command_types import CommandNewSessionMode as CommandNewSessionMode
+from core.chat._command_types import CommandRunRole as CommandRunRole
+from core.chat._command_types import CommandSurfaceKind as CommandSurfaceKind
+from core.chat._extension_commands import ExtensionCommandRegistry, validate_extension_outcome
 from core.chat.content_blocks import ContentBlock, TextBlock
-from core.chat.messages import MessageSender, ReplySurface
+from core.chat.messages import ReplySurface
 from core.chat.status_report import (
     ReasoningRenderDescriber,
     WireProfileDescriber,
 )
 from core.database import SnapshotBarrier
 from core.extensions.extensions import invoke_extension_handler
-from core.projects import AgentOverrides
 from core.runs import (
     ChatRunManager,
     Run,
     RunAdmissionBlockedError,
     RunNotFoundError,
 )
-from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
-from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
+from core.sessions import SessionAddress
 from core.tools.terminal_manager import TerminalManager
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -51,22 +58,79 @@ else:
     ProviderRegistry = Any
     RuntimeAgent = Any
 
+from core.chat._command_types import (
+    AgentArgument as AgentArgument,
+)
+from core.chat._command_types import (
+    CommandChangeObserver as CommandChangeObserver,
+)
+from core.chat._command_types import (
+    CommandExecutionContext as CommandExecutionContext,
+)
+from core.chat._command_types import (
+    CommandExecutionHandler as CommandExecutionHandler,
+)
+from core.chat._command_types import (
+    CommandFeedback as CommandFeedback,
+)
+from core.chat._command_types import (
+    CommandNavigation as CommandNavigation,
+)
+from core.chat._command_types import (
+    CommandOutcome as CommandOutcome,
+)
+from core.chat._command_types import (
+    CommandResourceChange as CommandResourceChange,
+)
+from core.chat._command_types import (
+    CommandRun as CommandRun,
+)
+from core.chat._command_types import (
+    CommandSpec as CommandSpec,
+)
+from core.chat._command_types import (
+    CommandUnavailability as CommandUnavailability,
+)
+from core.chat._command_types import (
+    ExtensionCommandContext as ExtensionCommandContext,
+)
+from core.chat._command_types import (
+    ExtensionCommandHandler as ExtensionCommandHandler,
+)
+from core.chat._command_types import (
+    ExtensionRunStarter as ExtensionRunStarter,
+)
+from core.chat._command_types import (
+    HandoffArgument as HandoffArgument,
+)
+from core.chat._command_types import (
+    NewSessionCommandContext as NewSessionCommandContext,
+)
+from core.chat._command_types import (
+    NewSessionCommandResult as NewSessionCommandResult,
+)
+from core.chat._command_types import (
+    PreparedCommand as PreparedCommand,
+)
+from core.chat._command_types import (
+    SessionLessCommandHandler as SessionLessCommandHandler,
+)
+from core.chat._command_types import (
+    _RegisteredExtensionCommand as _RegisteredExtensionCommand,
+)
+from core.chat._command_types import (
+    parse_agent_argument as parse_agent_argument,
+)
+from core.chat._command_types import (
+    parse_handoff_argument as parse_handoff_argument,
+)
+
 # Argument mode drives autocomplete: ``none`` commands run immediately on
 # selection; ``optional``/``required`` insert the token and wait for text.
-CommandArgumentMode = Literal["none", "optional", "required"]
-CommandCatalogResult = Literal["notice", "detail", "state_change"]
-CommandExecutionMode = Literal["immediate", "serialized"]
-CommandFeedbackKind = Literal["notice", "detail"]
-CommandNavigationKind = Literal[
-    "continue_in_session", "offer_session", "open_extension_page", "new_session"
-]
 # How a command sent for a new Session (one the conversation has not created yet)
 # runs: ``session_less`` runs without a Session; ``create_session`` creates the
 # Session first and then runs as usual; ``needs_session`` is refused until a
 # message has created the Session.
-CommandNewSessionMode = Literal["session_less", "create_session", "needs_session"]
-CommandRunRole = Literal["primary", "follow_up"]
-CommandSurfaceKind = Literal["webui", "tui", "channel"]
 
 _LOGGER = get_logger("chat.commands")
 _COMMAND_WORKERS = BoundedWorkerPool(name="command", max_workers=4)
@@ -87,264 +151,6 @@ async def _command_session_io(
         *arguments,
         **keyword_arguments,
     )
-
-
-@dataclass(frozen=True)
-class CommandSpec:
-    """Declarative metadata for one slash command.
-
-    The spec stays surface-neutral. Accessors project ``catalog_result`` into
-    their own presentation vocabulary and honor availability/mode without
-    branching on the command name. ``new_session_mode`` decides how the
-    command runs for a new Session (:meth:`CommandDispatcher.execute_for_new_session`).
-    """
-
-    name: str
-    description: str
-    argument: CommandArgumentMode
-    catalog_result: CommandCatalogResult
-    execution_mode: CommandExecutionMode
-    argument_execution_mode: CommandExecutionMode | None = None
-    unavailable_surfaces: frozenset[CommandSurfaceKind] = frozenset()
-    new_session_mode: CommandNewSessionMode = "needs_session"
-    # False refuses the command in group conversations of every surface.
-    group_conversations: bool = True
-
-
-@dataclass(frozen=True)
-class PreparedCommand:
-    """One recognized and parsed command, ready for execution."""
-
-    name: str
-    argument: str | None
-    execution_mode: CommandExecutionMode
-    registration_id: int | None = None
-    # The command as the user wrote it, which a command-started Run shows as the
-    # user's message; empty means ``/<name> [argument]``.
-    text: str = ""
-
-
-@dataclass(frozen=True)
-class CommandUnavailability:
-    """A Chat-owned surface restriction discovered before execution."""
-
-    command: str
-    surface: CommandSurfaceKind
-    # ``group``: refused because the conversation is a group, not because of the surface.
-    conversation: Literal["group"] | None = None
-
-    def __post_init__(self) -> None:
-        if not self.command.startswith("/"):
-            raise ValueError("command unavailability token must start with '/'")
-
-
-@dataclass(frozen=True)
-class CommandFeedback:
-    """Surface-neutral user feedback from a completed command."""
-
-    kind: CommandFeedbackKind
-    text: str
-
-
-@dataclass(frozen=True)
-class CommandNavigation:
-    """A neutral Session or registered Extension page destination.
-
-    ``new_session`` names no Session: the surface opens a new conversation with
-    the Agent, and its next message creates the Session.
-    """
-
-    kind: CommandNavigationKind
-    agent_id: str = ""
-    session_id: str = ""
-    project_id: str | None = None
-    extension: str | None = None
-    page: str | None = None
-    route: str = ""
-
-
-@dataclass(frozen=True)
-class CommandRun:
-    """A Run exposed by the command and its relationship to the response."""
-
-    role: CommandRunRole
-    run: Run
-
-
-@dataclass(frozen=True)
-class CommandResourceChange:
-    """Accessor-neutral shared-resource invalidation fact."""
-
-    kind: str
-    scope: Mapping[str, str] = field(default_factory=dict)
-
-
-CommandChangeObserver = Callable[[CommandResourceChange], None]
-
-
-@dataclass(frozen=True)
-class CommandExecutionContext:
-    """Execution addressing and surface facts supplied by an accessor."""
-
-    agent_id: str
-    session_id: str
-    project_id: str | None
-    reply_surface: ReplySurface
-    on_change: CommandChangeObserver | None = None
-    # Who wrote the command in a Channel conversation.
-    sender: MessageSender | None = None
-    # The command as the user wrote it; ``execute`` supplies it from the prepared command.
-    command_text: str = ""
-
-    def report_change(self, change: CommandResourceChange) -> None:
-        if self.on_change is not None:
-            self.on_change(change)
-
-
-@dataclass(frozen=True)
-class NewSessionCommandContext:
-    """Addressing of a command sent for a new Session, which does not exist yet.
-
-    ``agent_overrides`` are the Agent overrides the new Session starts with and
-    ``working_project_id`` the working Project a Session of an Identity Agent
-    starts in (a Project id, ``None`` for the Workspace, or the Agent's default
-    Project). An optional ``session_id`` names the Session to create when the
-    Command needs a new one; Commands that run without a Session ignore it.
-    """
-
-    agent_id: str
-    project_id: str | None
-    reply_surface: ReplySurface
-    agent_overrides: AgentOverrides = field(default_factory=AgentOverrides)
-    working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
-    on_change: CommandChangeObserver | None = None
-    session_id: str | None = None
-
-    def report_change(self, change: CommandResourceChange) -> None:
-        if self.on_change is not None:
-            self.on_change(change)
-
-
-ExtensionRunStarter = Callable[[str | list[ContentBlock], bool], Awaitable[Run]]
-
-
-@dataclass(frozen=True)
-class ExtensionCommandContext:
-    """Narrow workflow surface handed to an Extension command handler."""
-
-    agent_id: str
-    session_id: str
-    project_id: str | None
-    reply_surface: ReplySurface
-    _start_run: ExtensionRunStarter = field(repr=False)
-    _on_change: CommandChangeObserver | None = field(default=None, repr=False)
-
-    async def start_run(
-        self,
-        content: str | list[ContentBlock],
-        *,
-        internal: bool = False,
-    ) -> Run:
-        """Start or enqueue a follow-up Run at this command's current address."""
-        return await self._start_run(content, internal)
-
-    def report_change(self, change: CommandResourceChange) -> None:
-        """Publish a time-sensitive neutral resource change when available."""
-        if self._on_change is not None:
-            self._on_change(change)
-
-
-@dataclass(frozen=True)
-class CommandOutcome:
-    """Complete surface-neutral result of one slash command."""
-
-    command: str
-    feedback: CommandFeedback | None = None
-    facts: Mapping[str, object] = field(default_factory=dict)
-    navigation: CommandNavigation | None = None
-    runs: tuple[CommandRun, ...] = ()
-    resource_changes: tuple[CommandResourceChange, ...] = ()
-
-
-@dataclass(frozen=True)
-class NewSessionCommandResult:
-    """A command run for a new Session; ``session_id`` names the Session it created."""
-
-    outcome: CommandOutcome
-    session_id: str | None = None
-
-
-CommandExecutionHandler = Callable[[CommandExecutionContext, str | None], Awaitable[CommandOutcome]]
-SessionLessCommandHandler = Callable[
-    [NewSessionCommandContext, str | None], Awaitable[CommandOutcome]
-]
-ExtensionCommandHandler = Callable[[ExtensionCommandContext, str | None], Any]
-
-
-@dataclass(frozen=True)
-class _RegisteredExtensionCommand:
-    spec: CommandSpec
-    extension_name: str
-    handler: ExtensionCommandHandler
-    registration_id: int
-    page_ids: frozenset[str]
-
-
-@dataclass(frozen=True)
-class HandoffArgument:
-    """Parsed ``/handoff`` argument: an optional target agent and instruction."""
-
-    target_agent_id: str | None
-    instruction: str | None
-
-
-def parse_handoff_argument(argument: str | None) -> HandoffArgument:
-    """Split a raw ``/handoff`` argument into a target agent and an instruction.
-
-    The grammar is an optional leading ``agent:<id>`` token that selects the
-    receiving agent, with everything after it (or the whole argument when the
-    token is absent) taken as a free-text instruction woven into the handoff
-    prompt. The ``agent:`` keyword is matched case-insensitively while the id
-    keeps its case. A bare ``agent:`` with no id is not a valid target, so it
-    falls through as instruction text — a stray colon in free text never
-    swallows the target slot (e.g. ``remember: call bob``).
-    """
-    text = (argument or "").strip()
-    if not text:
-        return HandoffArgument(target_agent_id=None, instruction=None)
-    first_token, _, remainder = text.partition(" ")
-    if first_token.lower().startswith("agent:"):
-        target = first_token[len("agent:") :].strip()
-        if target:
-            return HandoffArgument(
-                target_agent_id=target,
-                instruction=remainder.strip() or None,
-            )
-    return HandoffArgument(target_agent_id=None, instruction=text)
-
-
-@dataclass(frozen=True)
-class AgentArgument:
-    """Parsed ``/agent`` argument: a target address and an optional task."""
-
-    address: str
-    task: str | None
-
-
-def parse_agent_argument(argument: str) -> AgentArgument:
-    """Split a raw ``/agent`` argument into a target address and an optional task.
-
-    The grammar is ``/agent``-specific and deliberately *not*
-    ``parse_handoff_argument``: the first whitespace-separated token *is* the
-    target address, and the trimmed remainder is an optional task. Address
-    validation (the ``agent@projekt`` split) happens later through
-    ``parse_agent_address`` — the one address seam — so a stray
-    ``/agent agent:planner`` (a ``/handoff`` reflex) is rejected as a malformed
-    address rather than silently reinterpreted as task text.
-    """
-    text = argument.strip()
-    first_token, _, remainder = text.partition(" ")
-    return AgentArgument(address=first_token, task=remainder.strip() or None)
 
 
 def _extract_text(content: str | list[ContentBlock] | None) -> str:
@@ -597,8 +403,7 @@ class CommandDispatcher:
         }
         if session_less != set(self._session_less_commands):
             raise RuntimeError("every session-less Built-in Command needs a session-less handler")
-        self._extension_commands: dict[str, _RegisteredExtensionCommand] = {}
-        self._next_extension_registration_id = 1
+        self._extension_commands = ExtensionCommandRegistry(self.BUILT_IN_COMMANDS)
 
     @classmethod
     def built_in_command_names(cls) -> frozenset[str]:
@@ -609,7 +414,7 @@ class CommandDispatcher:
         """Return the active combined command catalog sorted by canonical name."""
         combined = {
             **self.BUILT_IN_COMMANDS,
-            **{name: registered.spec for name, registered in self._extension_commands.items()},
+            **self._extension_commands.specs(),
         }
         return tuple(sorted(combined.values(), key=lambda spec: spec.name))
 
@@ -632,101 +437,21 @@ class CommandDispatcher:
         unavailable_surfaces: object = (),
         page_ids: frozenset[str] = frozenset(),
     ) -> int:
-        """Validate and install one Extension-owned command.
-
-        Runtime/ExtensionRegistry owns ordering and diagnostics. This seam still
-        rejects every invalid or conflicting direct call so the dispatcher can
-        never contain an ambiguous command table.
-        """
-        if not isinstance(extension_name, str) or not extension_name:
-            raise ValueError("extension name must be a non-empty string")
-        if (
-            not isinstance(name, str)
-            or name != name.lower()
-            or SKILL_NAME_TRIGGER_PATTERN.fullmatch(name) is None
-        ):
-            raise ValueError(
-                "name must be 1-64 lowercase letters, digits, hyphens, or underscores "
-                "and start with a letter or digit"
-            )
-        if name in self.BUILT_IN_COMMANDS:
-            raise ValueError("a Built-in Command already uses this name")
-        if name in self._extension_commands:
-            owner = self._extension_commands[name].extension_name
-            raise ValueError(f"name already registered by extension {owner!r}")
-        if not isinstance(description, str) or not description.strip():
-            raise ValueError("description must be a non-empty string")
-        if not callable(handler):
-            raise ValueError("handler must be callable")
-        if not isinstance(page_ids, frozenset) or any(
-            not isinstance(page_id, str) or not page_id for page_id in page_ids
-        ):
-            raise ValueError("page_ids must contain registered page identifiers")
-        if not isinstance(argument, str) or argument not in {"none", "optional", "required"}:
-            raise ValueError("argument must be one of: none, optional, required")
-        if not isinstance(catalog_result, str) or catalog_result not in {
-            "notice",
-            "detail",
-            "state_change",
-        }:
-            raise ValueError("catalog_result must be one of: notice, detail, state_change")
-        if not isinstance(execution_mode, str) or execution_mode not in {
-            "immediate",
-            "serialized",
-        }:
-            raise ValueError("execution_mode must be one of: immediate, serialized")
-        if argument_execution_mode is not None and (
-            not isinstance(argument_execution_mode, str)
-            or argument_execution_mode not in {"immediate", "serialized"}
-        ):
-            raise ValueError(
-                "argument_execution_mode must be one of: immediate, serialized, or None"
-            )
-        if (
-            isinstance(unavailable_surfaces, (str, bytes))
-            or not isinstance(unavailable_surfaces, (tuple, list, set, frozenset))
-            or any(not isinstance(surface, str) for surface in unavailable_surfaces)
-        ):
-            raise ValueError(
-                "unavailable_surfaces must be a collection containing webui, tui or channel"
-            )
-        normalized_surfaces = frozenset(unavailable_surfaces)
-        invalid_surfaces = normalized_surfaces - {"webui", "tui", "channel"}
-        if invalid_surfaces:
-            names = ", ".join(sorted(invalid_surfaces))
-            raise ValueError(f"unavailable_surfaces contains unsupported values: {names}")
-
-        registration_id = self._next_extension_registration_id
-        self._next_extension_registration_id += 1
-        self._extension_commands[name] = _RegisteredExtensionCommand(
-            spec=CommandSpec(
-                name=name,
-                description=description.strip(),
-                argument=cast(CommandArgumentMode, argument),
-                catalog_result=cast(CommandCatalogResult, catalog_result),
-                execution_mode=cast(CommandExecutionMode, execution_mode),
-                argument_execution_mode=cast(CommandExecutionMode | None, argument_execution_mode),
-                unavailable_surfaces=cast(frozenset[CommandSurfaceKind], normalized_surfaces),
-                # Extension commands work on a Session: a new one is created for them.
-                new_session_mode="create_session",
-            ),
-            extension_name=extension_name,
+        return self._extension_commands.register(
+            extension_name,
+            name=name,
+            description=description,
             handler=handler,
-            registration_id=registration_id,
+            argument=argument,
+            catalog_result=catalog_result,
+            execution_mode=execution_mode,
+            argument_execution_mode=argument_execution_mode,
+            unavailable_surfaces=unavailable_surfaces,
             page_ids=page_ids,
         )
-        return registration_id
 
     def unregister_extension_commands(self, extension_name: str) -> int:
-        """Remove every live command owned by *extension_name*."""
-        removed_names = [
-            name
-            for name, registered in self._extension_commands.items()
-            if registered.extension_name == extension_name
-        ]
-        for name in removed_names:
-            del self._extension_commands[name]
-        return len(removed_names)
+        return self._extension_commands.unregister(extension_name)
 
     def prepare(self, content: str | list[ContentBlock]) -> PreparedCommand | None:
         """Recognize and parse one command-eligible Chat content value."""
@@ -965,7 +690,7 @@ class CommandDispatcher:
                 extension_context,
                 argument,
             )
-            self._validate_extension_outcome(
+            validate_extension_outcome(
                 result,
                 expected_command=registered.spec.name,
                 extension_name=registered.extension_name,
@@ -985,88 +710,6 @@ class CommandDispatcher:
             return _notice(
                 registered.spec.name,
                 f"The /{registered.spec.name} command failed. Check the server logs.",
-            )
-
-    @staticmethod
-    def _validate_extension_outcome(
-        result: object,
-        *,
-        expected_command: str,
-        extension_name: str,
-        page_ids: frozenset[str],
-    ) -> None:
-        """Keep malformed Extension values from escaping into surface projectors."""
-        if not isinstance(result, CommandOutcome):
-            raise TypeError("handler must return CommandOutcome")
-        if result.command != expected_command:
-            raise ValueError(
-                f"handler returned command {result.command!r}; expected {expected_command!r}"
-            )
-        if result.feedback is not None and (
-            not isinstance(result.feedback, CommandFeedback)
-            or result.feedback.kind not in {"notice", "detail"}
-            or not isinstance(result.feedback.text, str)
-        ):
-            raise TypeError("CommandOutcome.feedback must be valid CommandFeedback")
-        if not isinstance(result.facts, Mapping) or any(
-            not isinstance(key, str) for key in result.facts
-        ):
-            raise TypeError("CommandOutcome.facts must be a mapping with string keys")
-        if result.navigation is not None and (
-            not isinstance(result.navigation, CommandNavigation)
-            or result.navigation.kind
-            not in {"continue_in_session", "offer_session", "open_extension_page"}
-            or not isinstance(result.navigation.agent_id, str)
-            or not isinstance(result.navigation.session_id, str)
-            or (
-                result.navigation.project_id is not None
-                and not isinstance(result.navigation.project_id, str)
-            )
-        ):
-            raise TypeError("CommandOutcome.navigation must be valid CommandNavigation")
-        navigation = result.navigation
-        if navigation is not None:
-            if navigation.kind == "open_extension_page":
-                if (
-                    navigation.extension != extension_name
-                    or not isinstance(navigation.page, str)
-                    or navigation.page not in page_ids
-                    or not isinstance(navigation.route, str)
-                    or len(navigation.route) > 2048
-                    or navigation.route.startswith("/")
-                    or any(character in navigation.route for character in ("\\", "\0", ":"))
-                    or any(part in {".", ".."} for part in navigation.route.split("/"))
-                    or navigation.agent_id
-                    or navigation.session_id
-                    or navigation.project_id is not None
-                ):
-                    raise TypeError("CommandOutcome.navigation must be valid CommandNavigation")
-            elif (
-                navigation.extension is not None or navigation.page is not None or navigation.route
-            ):
-                raise TypeError("CommandOutcome.navigation must be valid CommandNavigation")
-        if not isinstance(result.runs, tuple) or any(
-            not isinstance(command_run, CommandRun)
-            or command_run.role not in {"primary", "follow_up"}
-            or not isinstance(command_run.run, Run)
-            for command_run in result.runs
-        ):
-            raise TypeError("CommandOutcome.runs must contain valid CommandRun values")
-        if sum(command_run.role == "primary" for command_run in result.runs) > 1:
-            raise TypeError("CommandOutcome may contain at most one primary CommandRun")
-        if not isinstance(result.resource_changes, tuple) or any(
-            not isinstance(change, CommandResourceChange)
-            or not isinstance(change.kind, str)
-            or not change.kind
-            or not isinstance(change.scope, Mapping)
-            or any(
-                not isinstance(key, str) or not isinstance(value, str)
-                for key, value in change.scope.items()
-            )
-            for change in result.resource_changes
-        ):
-            raise TypeError(
-                "CommandOutcome.resource_changes must contain valid CommandResourceChange values"
             )
 
     async def _start_extension_follow_up(

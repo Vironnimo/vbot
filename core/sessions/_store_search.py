@@ -6,23 +6,24 @@ owns the entry when that Session is eligible and still shows it; otherwise for
 the newest eligible Session that inherits it. Each entry is one candidate, so a
 fork never duplicates its origin's hits.
 """
-# ruff: noqa: E501
 
 from __future__ import annotations
 
 import builtins
 import json
-import re
 import sqlite3
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import closing
 from dataclasses import dataclass
 from typing import Any
 
 from core.sessions import _store_fts, _store_lineage, _store_values
+from core.sessions._search_request import SessionSearchRequest
 from core.sessions._types import SessionSearchHit, SessionSearchOrder, SessionSearchResult
 from core.sessions.schema import FTS_TABLE, FTS_TRIGRAM_TABLE
-from core.utils.timestamps import canonical_timestamp
+
+# ruff: noqa: E501
+
 
 # Candidates are checked in batches whose text is read by key; the first batch
 # is sized to the request so a typical page reads only the rows it returns.
@@ -106,19 +107,8 @@ class _Filter:
 
 def search(
     connection: sqlite3.Connection,
-    query: str,
+    request: SessionSearchRequest,
     *,
-    project_id: str | None,
-    agent_id: str | None,
-    session_id: str | None = None,
-    match_mode: str = "all_terms",
-    order: SessionSearchOrder = "relevance",
-    limit: int = _store_values._SEARCH_RESULT_LIMIT,
-    roles: Sequence[str] | None = None,
-    since: str | None = None,
-    until: str | None = None,
-    excluded_session_ids: Sequence[str] = (),
-    include_subagents: bool = False,
     use_fts: bool = True,
     fallback_reason: str | None = None,
 ) -> SessionSearchResult:
@@ -133,51 +123,26 @@ def search(
     ``use_fts=False``. All SQL runs in the caller's read transaction.
     """
     empty = SessionSearchResult((), True, "fts" if use_fts else "scan", fallback_reason)
-    if not query or not query.strip() or limit <= 0 or (roles is not None and not roles):
+    if request.empty:
         return empty
-    compact = re.sub(r"\s+", " ", query).strip()
-    if not compact:
-        return empty
-
-    folded = compact.casefold()
-    folded_terms = [term for term in folded.split(" ") if term]
-
-    def matches(text: str) -> bool:
-        # str.split() and the regex ``\s`` class share one whitespace definition.
-        haystack = " ".join(text.split()).casefold()
-        if match_mode == "phrase":
-            return folded in haystack
-        if match_mode == "any_term":
-            return any(term in haystack for term in folded_terms)
-        return all(term in haystack for term in folded_terms)
-
-    search_filter = _search_filter(
-        project_id=project_id,
-        agent_id=agent_id,
-        session_id=session_id,
-        roles=roles,
-        since=since,
-        until=until,
-        excluded_session_ids=excluded_session_ids,
-        include_subagents=include_subagents,
-    )
-    check = _Check(connection, search_filter, matches=matches, limit=limit)
+    search_filter = _search_filter(request)
+    check = _Check(connection, search_filter, matches=request.matches, limit=request.limit)
 
     if use_fts:
         if _store_fts._fts_health_from_connection(connection, verify_coverage=False).available:
-            tool_inclusive = roles is None or "tool" in roles
+            tool_inclusive = request.tool_inclusive
             # SQLite builds without the trigram tokenizer have no trigram index.
             trigram = (
                 not tool_inclusive
-                and _trigram_supported(compact, match_mode)
+                and request.trigram_supported
                 and _store_fts._fts_table_exists(connection, FTS_TRIGRAM_TABLE)
             )
             table = FTS_TRIGRAM_TABLE if trigram else FTS_TABLE
             hits, complete = check.run(
                 _fts_candidates(
-                    connection, table, _fts_expression(compact, match_mode), search_filter, order
+                    connection, table, request.fts_expression(), search_filter, request.order
                 ),
-                ranked=order == "relevance",
+                ranked=request.order == "relevance",
             )
             # The trigram index omits Tool rows, so a Tool-inclusive search uses
             # whole-token FTS; when that finds nothing, substrings are scanned.
@@ -186,69 +151,43 @@ def search(
             fallback_reason = "tool_inclusive"
         else:
             fallback_reason = "fts_unavailable"
-    hits, complete = check.run(_scan_candidates(connection, search_filter, order), ranked=False)
+    hits, complete = check.run(
+        _scan_candidates(connection, search_filter, request.order), ranked=False
+    )
     return SessionSearchResult(tuple(hits), complete, "scan", fallback_reason)
 
 
-def _search_filter(
-    *,
-    project_id: str | None,
-    agent_id: str | None,
-    session_id: str | None,
-    roles: Sequence[str] | None,
-    since: str | None,
-    until: str | None,
-    excluded_session_ids: Sequence[str],
-    include_subagents: bool,
-) -> _Filter:
+def _search_filter(request: SessionSearchRequest) -> _Filter:
     """Return the eligible live Sessions and the entry filter of one search."""
     eligible = (
         "eligible (session_key) AS MATERIALIZED (SELECT s.session_key FROM sessions AS s "
         "WHERE s.state = 'live' AND s.project_id = ? AND "
-        + _store_values._recall_visibility_sql(include_subagents=include_subagents)
+        + _store_values._recall_visibility_sql(include_subagents=request.include_subagents)
     )
-    eligible_params: list[Any] = [project_id if project_id is not None else ""]
-    if agent_id is not None:
+    eligible_params: list[Any] = [request.project_id if request.project_id is not None else ""]
+    if request.agent_id is not None:
         eligible += " AND s.agent_id = ?"
-        eligible_params.append(agent_id)
-    if session_id is not None:
+        eligible_params.append(request.agent_id)
+    if request.session_id is not None:
         eligible += " AND s.session_id = ?"
-        eligible_params.append(session_id)
-    if excluded_session_ids:
+        eligible_params.append(request.session_id)
+    if request.excluded_session_ids:
         eligible += " AND s.session_id NOT IN (SELECT value FROM json_each(?))"
-        eligible_params.append(_store_values._json_list(excluded_session_ids))
+        eligible_params.append(_store_values._json_list(request.excluded_session_ids))
     eligible += ")"
     clauses: list[str] = []
     entry_params: list[Any] = []
-    if roles is not None:
+    if request.roles is not None:
         clauses.append("e.role IN (SELECT value FROM json_each(?))")
-        entry_params.append(json.dumps(list(roles)))
+        entry_params.append(json.dumps(list(request.roles)))
     # Stored times are canonical, so text order is time order and exact.
-    if since is not None:
+    if request.since is not None:
         clauses.append("e.created_at >= ?")
-        entry_params.append(canonical_timestamp(since))
-    if until is not None:
+        entry_params.append(request.since_timestamp())
+    if request.until is not None:
         clauses.append("e.created_at <= ?")
-        entry_params.append(canonical_timestamp(until))
+        entry_params.append(request.until_timestamp())
     return _Filter(eligible, tuple(eligible_params), " AND ".join(clauses), tuple(entry_params))
-
-
-def _trigram_supported(compact: str, match_mode: str) -> bool:
-    if match_mode == "phrase":
-        return len(compact) >= 3
-    terms = [term for term in compact.split(" ") if term]
-    return bool(terms) and all(len(term) >= 3 for term in terms)
-
-
-def _fts_expression(compact: str, match_mode: str) -> str:
-    """Build a ``MATCH`` expression over the conversation-text columns only."""
-    if match_mode == "phrase":
-        expression = '"' + compact.replace('"', '""') + '"'
-    else:
-        expression = (" OR " if match_mode == "any_term" else " AND ").join(
-            '"' + term.replace('"', '""') + '"' for term in compact.split(" ") if term
-        )
-    return "{content search_text} : (" + expression + ")"
 
 
 def _fts_candidates(

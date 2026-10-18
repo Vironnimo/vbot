@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
@@ -11,6 +11,7 @@ from core.chat import (
     compaction_projection_without_active_skills,
     effective_compaction_messages,
     latest_compaction_checkpoint,
+    system_reminder_request_message,
 )
 from core.chat.messages import (
     COMPACTION_SKILL_NOTE_PREFIX,
@@ -23,12 +24,22 @@ from core.chat.messages import (
 from core.chat.wire_shaping import (
     SYSTEM_REMINDER_CLOSE_TAG,
     SYSTEM_REMINDER_OPEN_TAG,
-    _notes_to_request_messages,
     model_facing_request,
     notes_missing_from_request,
     route_effort,
 )
 from core.compaction._model_request import _send_streaming_model_request
+from core.compaction._tail import (
+    _is_compaction_checkpoint_note,
+    _is_compaction_summary_note,
+    _is_compaction_user_quote,
+    _plan_working_tail,
+    _tail_estimator,
+)
+from core.compaction._tail_types import COMPACTION_USER_QUOTE_PREFIX as COMPACTION_USER_QUOTE_PREFIX
+from core.compaction._tail_types import TAIL_FLOOR_PERCENT as TAIL_FLOOR_PERCENT
+from core.compaction._tail_types import TAIL_SOFT_LIMIT_PERCENT as TAIL_SOFT_LIMIT_PERCENT
+from core.compaction._tail_types import RequestTokenEstimator as RequestTokenEstimator
 from core.compaction.errors import (
     CompactionError as CompactionError,
 )
@@ -36,7 +47,6 @@ from core.compaction.errors import (
     CompactionInsufficientReclaimError as CompactionInsufficientReclaimError,
 )
 from core.models.pricing import TokenPricing, price_usage
-from core.providers.adapter import estimate_wire_request_input_tokens
 from core.sessions import (
     SessionAddress,
     current_skill_activation_contents,
@@ -47,12 +57,13 @@ from core.sessions import (
     skill_tool_activation,
 )
 from core.settings.normalizers import normalize_compaction_policy
-from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
+from core.utils.tokens import estimate_message_tokens
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
-    from core.chat._effort_epoch import EffortState
+    from core.chat import EffortState
     from core.usage import UsageRecorder
+
 
 TRIGGER_CONTEXT_RATIO = "context_ratio"
 TRIGGER_INPUT_TOKENS = "input_tokens"
@@ -69,10 +80,6 @@ COMPACTION_REFERENCE_PREFIX = (
     "User updates. Do not restart the task or repeat completed actions merely because "
     "they appear in the summary or quote:"
 )
-COMPACTION_USER_QUOTE_PREFIX = (
-    "Latest User message in the summarized history "
-    "(JSON-quoted; already received, not a new request):\n"
-)
 COMPACTION_TRIGGER_AUTO = "auto"
 COMPACTION_TRIGGER_MANUAL = "manual"
 COMPACTION_TRIGGERS = frozenset({COMPACTION_TRIGGER_AUTO, COMPACTION_TRIGGER_MANUAL})
@@ -86,8 +93,6 @@ MIN_AUTO_COMPACTION_RECLAIM_TOKENS = 4_096
 # ``tail_tokens`` is the size the Tail should reach: the first whole-step cut at
 # or above it wins up to the soft limit; without one, the largest cut down to the
 # floor; without that either, the first cut past the soft limit.
-TAIL_SOFT_LIMIT_PERCENT = 150
-TAIL_FLOOR_PERCENT = 70
 COMPACTION_WORKER_LIMIT = 4
 
 _COMPACTION_WORKERS = BoundedWorkerPool(
@@ -96,7 +101,6 @@ _COMPACTION_WORKERS = BoundedWorkerPool(
 )
 
 ModelTarget = Literal["active", "summary"]
-RequestTokenEstimator = Callable[[Sequence[Mapping[str, Any]]], int]
 
 
 def effective_compaction_policy(
@@ -206,29 +210,6 @@ class CompactionContext:
 
 
 @dataclass(frozen=True)
-class _TailPlan:
-    """One working-Tail projection, its canonical start and its request start."""
-
-    boundary_id: str
-    boundary_index: int
-    request_start: int | None
-    projected_suffix: tuple[ChatMessage, ...]
-
-    @property
-    def retained_messages(self) -> tuple[ChatMessage, ...]:
-        return self.projected_suffix
-
-
-@dataclass(frozen=True)
-class _TailCandidate:
-    """One provider-safe Tail start with its request-side size."""
-
-    start_index: int
-    request_start: int | None
-    tokens: int
-
-
-@dataclass(frozen=True)
 class _PreparedCompaction:
     plan: CompactionPlan
     effective_messages: list[ChatMessage]
@@ -283,10 +264,12 @@ class SummarizationStrategy:
             context.storage.read_prompt_fragment(_fragment_name_for_trigger(context.trigger)),
             context.instruction,
         )
+        if not prompt:
+            raise CompactionError("Compaction System Reminder must render as one request message")
         return CompactionPlan(
             model_messages=(
                 *request_prefix,
-                _system_reminder_request_message(prompt),
+                system_reminder_request_message(prompt),
             ),
             model_target="summary",
             after_summary=(*uncovered, *tail_plan.retained_messages),
@@ -325,7 +308,7 @@ class ContinuationStrategy:
         )
         model_messages = (
             *context.request_messages,
-            _system_reminder_request_message(reminder),
+            system_reminder_request_message(reminder),
         )
         messages = list(context.messages)
         uncovered = _notes_outside_request(messages, context.request_messages)
@@ -751,171 +734,6 @@ def _append_compaction_skill_guidance(
     return guided
 
 
-def _tail_estimator(
-    adapter: Any | None, model_id: str | None, factor: float
-) -> RequestTokenEstimator:
-    """Count a Tail candidate as the active route serializes it, corrected for its Model."""
-
-    def estimate(request: Sequence[Mapping[str, Any]]) -> int:
-        if adapter is None or model_id is None:
-            return round(estimate_request_input_tokens(request)[0] * factor)
-        return round(
-            estimate_wire_request_input_tokens(adapter, request, model_id=model_id) * factor
-        )
-
-    return estimate
-
-
-def _plan_working_tail(
-    messages: list[ChatMessage],
-    tail_tokens: int,
-    *,
-    request_messages: tuple[JsonObject, ...] | None = None,
-    estimate_tail_tokens: RequestTokenEstimator | None = None,
-) -> _TailPlan:
-    """Choose a chronological suffix of whole steps that reaches ``tail_tokens``.
-
-    The first cut at or above ``tail_tokens`` wins while it stays within the
-    soft limit; otherwise the largest cut down to the floor; otherwise the first
-    cut past the soft limit (for example one oversized step). Notes immediately
-    before a step belong to that step, so the input a response reacted to stays
-    with the response. Retained steps are never edited. Live request slices
-    include replayed reasoning and request-only Tool media; the selected Adapter
-    counts the representation it will actually serialize.
-    """
-    if not messages:
-        raise CompactionError("Cannot find tail boundary for an empty message list")
-    if tail_tokens <= 0:
-        raise CompactionError("tail_tokens must be positive")
-    safe_boundaries = _safe_tail_boundary_indices(messages)
-    if not safe_boundaries:
-        raise CompactionError("Cannot find a provider-safe tail boundary")
-
-    request_indices = (
-        {message.get("id"): index for index, message in enumerate(request_messages)}
-        if request_messages is not None
-        else {}
-    )
-    candidates: list[_TailCandidate] = []
-    for boundary_index in reversed(safe_boundaries):
-        start_index, request_start = _tail_step_start(
-            messages, boundary_index, request_messages, request_indices
-        )
-        if request_messages is None or request_start is None:
-            candidate = [message.to_dict() for message in messages[start_index:]]
-        else:
-            candidate = list(request_messages[request_start:])
-        tokens = (
-            estimate_tail_tokens(candidate)
-            if estimate_tail_tokens is not None
-            else estimate_request_input_tokens(candidate)[0]
-        )
-        candidates.append(
-            _TailCandidate(start_index=start_index, request_start=request_start, tokens=tokens)
-        )
-        # Older starts only grow the Tail: the first one reaching the target
-        # is either the choice or, past the soft limit, the upward fallback.
-        if tokens >= tail_tokens:
-            break
-
-    selected = _select_tail_candidate(candidates, tail_tokens)
-    return _TailPlan(
-        boundary_id=messages[selected.start_index].id,
-        boundary_index=selected.start_index,
-        request_start=selected.request_start,
-        projected_suffix=tuple(messages[selected.start_index :]),
-    )
-
-
-def _select_tail_candidate(candidates: list[_TailCandidate], tail_tokens: int) -> _TailCandidate:
-    """Pick from newest-first candidates ending at the first one reaching the target.
-
-    That last candidate is also the largest. It wins within the soft limit (or
-    when the whole history stays below the target); past the soft limit, the
-    largest earlier candidate down to the floor; without one, the last after all.
-    """
-
-    last = candidates[-1]
-    if last.tokens <= _tail_soft_limit(tail_tokens):
-        return last
-    floor = tail_tokens * TAIL_FLOOR_PERCENT // 100
-    below = [candidate for candidate in candidates[:-1] if candidate.tokens >= floor]
-    return max(below, key=lambda candidate: candidate.tokens) if below else last
-
-
-def _tail_soft_limit(tail_tokens: int) -> int:
-    return (tail_tokens * TAIL_SOFT_LIMIT_PERCENT + 99) // 100
-
-
-def _tail_step_start(
-    messages: list[ChatMessage],
-    boundary_index: int,
-    request_messages: tuple[JsonObject, ...] | None,
-    request_indices: Mapping[Any, int],
-) -> tuple[int, int | None]:
-    """Return the canonical and request start of the step at ``boundary_index``.
-
-    The step includes the notes directly before its User or Assistant message.
-    Against a live request that holds only when those notes render as exactly
-    the request messages before the boundary; otherwise (for example notes
-    deferred past a Tool batch and merged with earlier ones) the step starts at
-    the boundary message so the request slice and the canonical suffix agree.
-    """
-
-    lead_in_start = boundary_index
-    while lead_in_start > 0 and _is_tail_lead_in_note(messages[lead_in_start - 1]):
-        lead_in_start -= 1
-    if request_messages is None:
-        return lead_in_start, None
-    request_index = request_indices.get(messages[boundary_index].id)
-    if request_index is None:
-        raise CompactionError("Tail boundary was not found in the active request Context")
-    if lead_in_start == boundary_index:
-        return boundary_index, request_index
-    rendered = _notes_to_request_messages(list(messages[lead_in_start:boundary_index]))
-    lead_in_request_start = request_index - len(rendered)
-    if lead_in_request_start >= 0 and (
-        list(request_messages[lead_in_request_start:request_index]) == rendered
-    ):
-        return lead_in_start, lead_in_request_start
-    return boundary_index, request_index
-
-
-def _is_tail_lead_in_note(message: ChatMessage) -> bool:
-    return message.role == "note" and not _is_compaction_checkpoint_note(message)
-
-
-def _safe_tail_boundary_indices(messages: list[ChatMessage]) -> list[int]:
-    """Find every valid suffix in one reverse pass through messages and Tool Calls.
-
-    This is ``_validate_projection`` read backwards: Results accumulate until
-    their immediately preceding Assistant declares exactly those Call ids.
-    An invalid completed block cannot be repaired by extending the suffix to
-    the left, but boundaries already found to its right remain valid.
-    """
-    boundaries: list[int] = []
-    results: set[str | None] = set()
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        if message.role in {"note", "run_summary", "agent_takeover", "error"}:
-            continue
-        if message.role == "tool":
-            if message.tool_call_id in results:
-                break  # A repeated Result is orphaned after its first occurrence.
-            results.add(message.tool_call_id)
-            continue
-        if message.role == "assistant":
-            if {call.id for call in message.tool_calls or []} != results:
-                break  # Missing or foreign Results make every earlier cut unsafe.
-            results.clear()
-        elif results:
-            break  # Results cannot cross a User or another visible message.
-        if _can_start_tail(message):
-            boundaries.append(index)
-    boundaries.reverse()
-    return boundaries
-
-
 def _summary_user_quote(
     head: list[ChatMessage], tail: tuple[ChatMessage, ...]
 ) -> ChatMessage | None:
@@ -960,34 +778,6 @@ def _summarized_messages(
         for message in messages
         if message.id not in carried and not _is_compaction_checkpoint_note(message)
     ]
-
-
-def _is_compaction_user_quote(message: ChatMessage) -> bool:
-    return (
-        message.role == "note"
-        and isinstance(message.content, str)
-        and message.content.startswith(COMPACTION_USER_QUOTE_PREFIX)
-    )
-
-
-def _is_compaction_summary_note(message: ChatMessage) -> bool:
-    return (
-        message.role == "note"
-        and isinstance(message.content, str)
-        and message.content.startswith(COMPACTION_SUMMARY_NOTE_PREFIX)
-    )
-
-
-def _is_compaction_checkpoint_note(message: ChatMessage) -> bool:
-    return (
-        _is_compaction_summary_note(message)
-        or _is_compaction_user_quote(message)
-        or (
-            message.role == "note"
-            and isinstance(message.content, str)
-            and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
-        )
-    )
 
 
 def _plan_model_target(
@@ -1039,14 +829,6 @@ def _validate_projection(messages: list[ChatMessage]) -> None:
         raise CompactionError("Compaction projection ends inside a Tool cycle")
 
 
-def _can_start_tail(message: ChatMessage) -> bool:
-    """Return whether a canonical message has a stable provider-visible boundary."""
-
-    if message.role == "user":
-        return True
-    return message.role == "assistant" and (message.content is not None or bool(message.tool_calls))
-
-
 def _estimate_token_span(messages: list[ChatMessage], factor: float = 1.0) -> int:
     return round(sum(_estimate_message_tokens(message) for message in messages) * factor)
 
@@ -1065,15 +847,6 @@ def _request_prefix_before_tail(
     if not request_messages or request_start is None:
         raise CompactionError("Summary+Tail compaction requires an active request Context")
     return tuple(dict(item) for item in request_messages[:request_start])
-
-
-def _system_reminder_request_message(content: str) -> JsonObject:
-    """Render through Chat's canonical System Reminder request channel."""
-
-    rendered = _notes_to_request_messages([ChatMessage.note(content)])
-    if len(rendered) != 1:
-        raise CompactionError("Compaction System Reminder must render as one request message")
-    return rendered[0]
 
 
 def _summary_body(summary: str) -> str:

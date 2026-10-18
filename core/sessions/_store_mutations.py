@@ -1,5 +1,4 @@
 """Session lifecycle, metadata and plain history appends in a supplied transaction."""
-# ruff: noqa: E501
 
 from __future__ import annotations
 
@@ -13,6 +12,7 @@ from typing import TYPE_CHECKING
 from core.chat.errors import ChatSessionError
 from core.sessions import (
     _store_codec,
+    _store_copies,
     _store_fts,
     _store_lineage,
     _store_prompts,
@@ -34,6 +34,8 @@ from core.utils.timestamps import utc_now_timestamp
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
     from core.sessions._types import SessionAddress
+
+# ruff: noqa: E501
 
 
 def _new_working_project(address: SessionAddress, working_project_id: str | None) -> str | None:
@@ -518,7 +520,7 @@ def _detach_session(connection: sqlite3.Connection, session_key: int) -> None:
         (session_key,),
     ).fetchall():
         descendant_key, from_seq, upto_seq, as_of_seq = (int(value) for value in segment)
-        copies = _store_codec.copy_entries(
+        copies = _store_copies.copy_entries(
             connection,
             target_key=descendant_key,
             view_range=_store_lineage.ViewRange(session_key, from_seq, upto_seq, as_of_seq),

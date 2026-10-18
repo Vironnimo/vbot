@@ -10,9 +10,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from core.chat import ChatMessage
+from core.chat import ChatMessage, note_request_messages
 from core.chat.messages import ToolCall
-from core.chat.wire_shaping import _notes_to_request_messages
 from core.extensions._declarations import SessionRequestContext
 from core.providers.adapter import terminal_outcome_from_response
 from core.tools import tool_failure
@@ -156,7 +155,7 @@ async def communication_trial(
                         ],
                     )
                     await service._acknowledge_delivery(owner_context, delivery)
-                    visible = _notes_to_request_messages(notes)
+                    visible = note_request_messages(notes)
                     messages.extend(visible)
                     record["deliveries"].append({"wake": wake, "step": step, "messages": visible})
                 async with asyncio.timeout(args.total_timeout):
