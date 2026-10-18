@@ -419,9 +419,12 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
                 )
 
             def begin() -> ModelDatabaseRefresh:
-                return begin_system_model_database_refresh(system_resources_dir)
+                return begin_system_model_database_refresh(
+                    system_resources_dir,
+                    provider_ids=_refresh_provider_ids(runtime, include_instance_catalogs=False),
+                )
 
-        include_custom = target == _MODEL_REFRESH_TARGET_RUNTIME
+        include_instance_catalogs = target == _MODEL_REFRESH_TARGET_RUNTIME
         refresh: Callable[[Path], Awaitable[_RefreshOutcome]]
         if "provider_id" in params:
             provider_id = _required_string(params, "provider_id")
@@ -431,7 +434,7 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
                     runtime,
                     provider_id,
                     resources_dir,
-                    include_custom=include_custom,
+                    include_instance_catalogs=include_instance_catalogs,
                 )
 
             scope = provider_id
@@ -441,7 +444,7 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
                 return await _refresh_global_model_db(
                     runtime,
                     resources_dir,
-                    include_custom=include_custom,
+                    include_instance_catalogs=include_instance_catalogs,
                 )
 
             scope = "all"
@@ -636,10 +639,12 @@ async def _refresh_global_model_db(
     runtime: Any,
     resources_dir: Path,
     *,
-    include_custom: bool,
+    include_instance_catalogs: bool,
 ) -> _RefreshOutcome:
     catalog = await _fetch_catalog_for_refresh()
-    provider_ids = _refresh_provider_ids(runtime, include_custom=include_custom)
+    provider_ids = _refresh_provider_ids(
+        runtime, include_instance_catalogs=include_instance_catalogs
+    )
     refreshed_providers, refresh_errors = await _refresh_providers(
         runtime, provider_ids, resources_dir, catalog
     )
@@ -721,22 +726,28 @@ async def _refresh_canonical_layer_if_possible(
     )
 
 
-def _refresh_provider_ids(runtime: Any, *, include_custom: bool) -> list[str]:
+def _refresh_provider_ids(runtime: Any, *, include_instance_catalogs: bool) -> list[str]:
     """Return the Providers one refresh covers.
 
-    Custom Providers exist only in this installation's Settings, so a system
-    refresh, which writes the shipped Model DB, leaves them out.
+    The shipped Model DB excludes instance inventories, including local
+    servers and Custom Providers, independently of credentials or reachability.
     """
 
     return [
         provider_id
         for provider_id in runtime.providers.list_ids()
-        if include_custom or not _is_custom_provider(runtime.providers.get(provider_id))
+        if include_instance_catalogs or not _is_instance_catalog(runtime.providers.get(provider_id))
     ]
 
 
 def _is_custom_provider(provider: Any) -> bool:
     return bool(getattr(provider, "custom", False))
+
+
+def _is_instance_catalog(provider: Any) -> bool:
+    return (
+        _is_custom_provider(provider) or getattr(provider, "catalog_scope", "shared") == "instance"
+    )
 
 
 def _existing_provider_ids(runtime: Any) -> set[str]:
@@ -754,16 +765,17 @@ async def _refresh_provider_model_db(
     provider_id: str,
     resources_dir: Path,
     *,
-    include_custom: bool,
+    include_instance_catalogs: bool,
 ) -> _RefreshOutcome:
     try:
         provider = runtime.providers.get(provider_id)
     except KeyError as exc:
         raise RpcError(RPC_ERROR_DOMAIN, f"unknown provider: {provider_id}") from exc
-    if not include_custom and _is_custom_provider(provider):
+    if not include_instance_catalogs and _is_instance_catalog(provider):
         raise RpcError(
             RPC_ERROR_DOMAIN,
-            f"Custom Provider '{provider_id}' can only be refreshed into the runtime Model DB",
+            f"Provider '{provider_id}' has an instance-specific catalog; "
+            "refresh it into the runtime Model DB",
         )
     if not _provider_supports_refresh(provider):
         raise RpcError(
@@ -796,7 +808,7 @@ async def _refresh_provider_model_db(
         catalog,
         resources_dir,
         runtime,
-        _refresh_provider_ids(runtime, include_custom=include_custom),
+        _refresh_provider_ids(runtime, include_instance_catalogs=include_instance_catalogs),
     )
     result = dict(successes[0])
     if errors:

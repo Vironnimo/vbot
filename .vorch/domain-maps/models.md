@@ -9,7 +9,7 @@
 
 The rule tying them: **Refresh records which catalogs it fetched; Load takes each generated catalog from the root that fetched it last and applies current bundled Overrides.** Overrides apply at Load, never baked into generated files; generated files are not a manual edit surface, while bundled `resources/models/*.overrides.json` files are the hand-correction surface discovered by filename without registration.
 
-Roots: the tracked system root `resources/models/` is complete (every generated catalog, all bundled Overrides, `manifest.json`); the runtime root `<data_dir>/artifacts/models/` holds only the catalogs this installation fetched plus its manifest. So a vBot update's newer bundled catalogs win over older runtime copies, while catalogs only this installation produces (Custom Providers, local servers) keep coming from the runtime root. Refresh stages and validates before atomic directory replacement; a failure leaves the previous root intact (`models/refresh.md`).
+Roots: the tracked system root `resources/models/` is complete for shared Providers (their generated catalogs, all bundled Overrides, `manifest.json`); the runtime root `<data_dir>/artifacts/models/` holds only the catalogs this installation fetched plus its manifest. So a vBot update's newer bundled catalogs win over older runtime copies, while catalogs only this installation produces (Custom Providers, local servers) keep coming from the runtime root. Refresh stages and validates before atomic directory replacement; a failure leaves the previous root intact (`models/refresh.md`).
 
 ## Terms
 

@@ -310,9 +310,9 @@ async def test_provider_refresh_reloads_the_shared_registry_and_signals_models(
 @pytest.mark.parametrize(
     ("target", "refreshed"),
     [
-        ("runtime", ["custom", "openrouter", "secondary"]),
-        # The system Model DB ships with vBot; Custom Providers exist only in Settings.
-        ("system", ["openrouter", "secondary"]),
+        ("runtime", ["custom", "lmstudio", "ollama", "ollama-cloud", "openrouter", "secondary"]),
+        # Local inventories and Custom Providers belong only to the instance.
+        ("system", ["ollama-cloud", "openrouter", "secondary"]),
     ],
 )
 async def test_global_refresh_covers_only_eligible_providers(
@@ -335,6 +335,14 @@ async def test_global_refresh_covers_only_eligible_providers(
     state.runtime.providers.add(_api_key_provider("missing-credentials", "MISSING_REFRESH_API_KEY"))
     state.runtime.providers.add(_api_key_provider("secondary", "SECONDARY_API_KEY"))
     state.runtime.providers.add(_custom_provider("custom", "CUSTOM_API_KEY"))
+    bundled = ProviderRegistry.load(_REPO_RESOURCES)
+    for provider_id in ("lmstudio", "ollama"):
+        credential_key = f"{provider_id.upper()}_API_KEY"
+        monkeypatch.setenv(credential_key, f"{provider_id}-key")
+        provider = _api_key_provider(provider_id, credential_key)
+        provider.catalog_scope = bundled.get(provider_id).catalog_scope
+        state.runtime.providers.add(provider)
+    state.runtime.providers.add(bundled.get("ollama-cloud"))
     registry = state.runtime.models
     params: JsonObject = {"target": target}
     if target == "system":
@@ -376,7 +384,9 @@ async def test_global_refresh_covers_only_eligible_providers(
     assert manifest is not None
     assert set(manifest.catalogs) == {"models.json", *(f"{p}.json" for p in refreshed)}
     assert refreshed == FAKE_REFRESH_MODEL_PROVIDER_IDS
-    assert [f"{provider_id}-key" for provider_id in refreshed] == FAKE_REFRESH_MODEL_CALLS
+    assert [
+        "" if provider_id == "ollama-cloud" else f"{provider_id}-key" for provider_id in refreshed
+    ] == FAKE_REFRESH_MODEL_CALLS
     assert state.runtime.models is registry
     assert registry.get("openrouter", "fresh-model").name == "Fresh Model"
     assert registry.get("secondary", "fresh-model").name == "Fresh Model"
@@ -789,15 +799,19 @@ async def test_global_refresh_continues_when_one_provider_fails(
             "the serving checkout does not match",
         ),
         ({"provider_id": "missing"}, "domain_error", "unknown provider: missing"),
-        (
-            {
-                "provider_id": "custom",
-                "target": "system",
-                "expected_resources_dir": _SERVING_RESOURCES,
-            },
-            "domain_error",
-            "Custom Provider 'custom' can only be refreshed into the runtime Model DB",
-        ),
+        *[
+            (
+                {
+                    "provider_id": provider_id,
+                    "target": "system",
+                    "expected_resources_dir": _SERVING_RESOURCES,
+                },
+                "domain_error",
+                f"Provider '{provider_id}' has an instance-specific catalog; "
+                "refresh it into the runtime Model DB",
+            )
+            for provider_id in ("custom", "ollama", "lmstudio")
+        ],
         # Neither the Provider nor its Connection declares a catalog endpoint.
         ({"provider_id": "openai"}, "domain_error", "does not support model refresh"),
         (
@@ -822,6 +836,8 @@ async def test_refused_model_refreshes_change_nothing(
     _serve_resources_from(state, resources_dir)
     state.runtime.providers.add(openrouter_provider())
     state.runtime.providers.add(_custom_provider("custom", "CUSTOM_API_KEY"))
+    for provider_id in ("ollama", "lmstudio"):
+        state.runtime.providers.add(ProviderRegistry.load(_REPO_RESOURCES).get(provider_id))
     if params.get("expected_resources_dir") == _SERVING_RESOURCES:
         params = {**params, "expected_resources_dir": str(resources_dir)}
 

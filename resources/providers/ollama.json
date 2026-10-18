@@ -4,6 +4,7 @@
   "adapter": "ollama",
   "base_url": "http://localhost:11434",
   "models_endpoint": "/api/tags",
+  "catalog_scope": "instance",
   "connections": [
     {
       "id": "local",

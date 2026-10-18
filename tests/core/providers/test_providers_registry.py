@@ -123,6 +123,7 @@ _EVERY_OPTIONAL_FIELD = {
     "models_dev_id": "gateway-dev",
     "context_window": 128_000,
     "catalog_exclusions": ["broken-preview", "legacy-model"],
+    "catalog_scope": "instance",
 }
 
 _KEYLESS_AUTH = AuthConfig(header="", prefix="", credential_key="")
@@ -184,6 +185,7 @@ _KEYLESS_AUTH = AuthConfig(header="", prefix="", credential_key="")
                 models_dev_id="gateway-dev",
                 context_window=128_000,
                 catalog_exclusions=frozenset({"broken-preview", "legacy-model"}),
+                catalog_scope="instance",
             ),
             id="every-optional-field",
         ),
@@ -254,6 +256,7 @@ def test_direct_construction_leaves_optional_facts_unset() -> None:
         config.catalog_exclusions,
         config.custom,
     ) == ([], None, None, frozenset(), False)
+    assert config.catalog_scope == "shared"
     assert (
         connection.mode,
         connection.models_endpoint,
@@ -307,6 +310,7 @@ def test_auth_config_carries_only_credential_centric_fields() -> None:
         pytest.param([[]], ConfigError, id="root-not-an-object"),
         pytest.param([_provider(id="open:ai")], ConfigError, id="provider-id-with-colon"),
         pytest.param([_provider(), _provider()], KeyError, id="duplicate-provider-id"),
+        pytest.param([_provider(catalog_scope="local")], ConfigError, id="unknown-catalog-scope"),
         pytest.param([_provider(connections=_DROP)], ConfigError, id="missing-connections"),
         # '--' and ':' would break token filenames and Connection id parsing.
         pytest.param(
@@ -582,6 +586,7 @@ def test_custom_provider_materializes_one_default_connection(
         connections=[connection],
         defaults={},
         models_endpoint=custom["models_endpoint"],
+        catalog_scope="instance",
         custom=True,
     )
 

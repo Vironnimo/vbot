@@ -10,7 +10,7 @@ A discovery target is one Connection with an effective `models_endpoint`. By def
 
 RPC callers (`model.refresh_db` and the Debug `debug.model_probe`) resolve the discovery Connection and credential through `server/rpc/provider_access._discovery_credential`: it applies the credential policy above, honors an explicit Account suffix in an OAuth Connection id (otherwise the first usable Account), and points GitHub Copilot at the Account's exchanged API endpoint.
 
-An OpenAI-compatible Custom Provider participates without a separate discovery path: its implicit `default` Connection, optional Settings `models_endpoint`, Adapter selector, and credential resolver feed this same pipeline. Manual Custom Model facts are applied later by `ModelRegistry` and therefore override a discovered Model with the same wire id without deleting discovered-only Models. Only runtime-target refreshes discover Custom Providers; a system-target refresh skips them (`models/refresh.md` -> Staging and publication).
+An OpenAI-compatible Custom Provider participates without a separate discovery path: its implicit `default` Connection, optional Settings `models_endpoint`, Adapter selector, and credential resolver feed this same pipeline. Manual Custom Model facts are applied later by `ModelRegistry` and therefore override a discovered Model with the same wire id without deleting discovered-only Models. Only runtime-target refreshes discover instance-scoped catalogs, including Custom Providers and local Ollama/LM Studio; a system-target refresh skips them regardless of reachability. Ollama Cloud remains included (`models/refresh.md` -> Staging and publication).
 
 ## Fetch and normalization
 

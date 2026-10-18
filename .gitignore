@@ -52,7 +52,8 @@ coverage/
 *.timestamp-*.mjs
 
 # Local model catalogs reflect machine-installed models — machine state, not
-# shippable data. Auto-refresh regenerates them when the local Provider runs.
+# shippable data. Runtime refresh writes them to the instance data directory;
+# ignore legacy source-tree copies as well.
 resources/models/ollama.json
 resources/models/lmstudio.json
 

@@ -349,6 +349,9 @@ class ProviderConfig:
         catalog_exclusions: Exact wire model ids a provider's listing endpoint
             advertises but cannot currently serve. Discovery skips them, so
             they never enter the usable projection.
+        catalog_scope: Whether the catalog is shared across installations or
+            belongs to this instance. Only shared catalogs may ship with vBot;
+            local inventories and Custom Providers are instance-scoped.
         context_window: Optional per-provider read-side default context window,
             applied when a model on this provider has no window of its own
             (``Model.context_window is None``). This is a READ-SIDE FACT
@@ -371,6 +374,7 @@ class ProviderConfig:
     models_dev_id: str | None = None
     context_window: int | None = None
     catalog_exclusions: frozenset[str] = frozenset()
+    catalog_scope: str = "shared"
     custom: bool = False
 
     def effective_models_dev_id(self) -> str:
@@ -770,6 +774,11 @@ class ProviderRegistry:
                 f"Provider '{provider_id}' catalog_exclusions must be a list "
                 "of non-empty model-id strings"
             )
+        catalog_scope = "instance" if custom else data.get("catalog_scope", "shared")
+        if catalog_scope not in ("shared", "instance"):
+            raise ConfigError(
+                f"Provider '{provider_id}' catalog_scope must be 'shared' or 'instance'"
+            )
         return ProviderConfig(
             id=provider_id,
             name=data["name"],
@@ -782,6 +791,7 @@ class ProviderRegistry:
             models_dev_id=models_dev_id,
             context_window=context_window,
             catalog_exclusions=frozenset(model_id.strip() for model_id in raw_catalog_exclusions),
+            catalog_scope=catalog_scope,
             custom=custom,
         )
 
