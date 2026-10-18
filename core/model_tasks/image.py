@@ -15,7 +15,7 @@ from typing import Any, Protocol, cast
 from PIL import Image as PILImage
 
 from core.attachments import sniff_media_type
-from core.attachments.images import ImageConversionError, ImageConverter, PreparedImage
+from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget, PreparedImage
 from core.debug import DebugContext
 from core.model_tasks.artifacts import (
     OutputWriteError,
@@ -616,8 +616,7 @@ class ImageService:
                         await self._image_converter.convert(
                             image.data,
                             image.media_type,
-                            wire_media_types,
-                            max_output_bytes=ceiling,
+                            ImageTarget(wire_media_types, max_output_bytes=ceiling),
                         )
                     )
                 except ImageConversionError as exc:

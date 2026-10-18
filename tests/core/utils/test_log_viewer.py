@@ -14,12 +14,13 @@ from typing import Any, Literal, override
 import pytest
 from watchfiles import Change
 
+from core.utils import _log_reader as log_reader_module
 from core.utils import log_viewer as log_viewer_module
+from core.utils._log_reader import _read_tail
 from core.utils.log_viewer import (
     LogViewer,
     _cancel_watcher_task,
     _log_watcher_task_result,
-    _read_tail,
     _WatcherState,
     parse_log_entries,
 )
@@ -239,9 +240,9 @@ async def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
 async def test_read_file_pages_from_the_newest_entries_to_the_file_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_max_bytes: int
 ) -> None:
-    monkeypatch.setattr(log_viewer_module, "LOG_PAGE_ENTRIES", 2)
-    monkeypatch.setattr(log_viewer_module, "_PAGE_CHUNK_BYTES", 32)
-    monkeypatch.setattr(log_viewer_module, "LOG_READ_MAX_BYTES", read_max_bytes)
+    monkeypatch.setattr(log_reader_module, "LOG_PAGE_ENTRIES", 2)
+    monkeypatch.setattr(log_reader_module, "_PAGE_CHUNK_BYTES", 32)
+    monkeypatch.setattr(log_reader_module, "LOG_READ_MAX_BYTES", read_max_bytes)
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     lines = [
@@ -285,14 +286,14 @@ async def test_read_file_parses_the_log_off_the_event_loop(
     viewer = LogViewer(tmp_path)
     entered = threading.Event()
     release = threading.Event()
-    parse = log_viewer_module._parse_lines
+    parse = log_reader_module._parse_lines
 
     def slow_parse(*args: Any, **kwargs: Any) -> Any:
         entered.set()
         release.wait(timeout=5)
         return parse(*args, **kwargs)
 
-    monkeypatch.setattr(log_viewer_module, "_parse_lines", slow_parse)
+    monkeypatch.setattr(log_reader_module, "_parse_lines", slow_parse)
     reading = asyncio.create_task(viewer.read_file("2026-05-11"))
     try:
         assert await asyncio.to_thread(entered.wait, 5)
@@ -442,8 +443,8 @@ class _LiveFile:
 async def test_subscribe_replays_what_each_read_missed_from_its_own_cursor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(log_viewer_module, "_CURSOR_WINDOW_BYTES", 128)
-    monkeypatch.setattr(log_viewer_module, "_PAGE_CHUNK_BYTES", 128)
+    monkeypatch.setattr(log_reader_module, "_CURSOR_WINDOW_BYTES", 128)
+    monkeypatch.setattr(log_reader_module, "_PAGE_CHUNK_BYTES", 128)
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     log_file = logs_dir / "2026-05-11"
@@ -463,7 +464,7 @@ async def test_subscribe_replays_what_each_read_missed_from_its_own_cursor(
         (history + _text(_line(0, "Ready"), _line(1, "Failed"), _line(2, "Retried"))).encode()
     )
     read_starts: list[int] = []
-    read_range = log_viewer_module._read_range
+    read_range = log_reader_module._read_range
 
     def record_range(handle: Any, start: int, end: int) -> bytes:
         read_starts.append(start)
@@ -479,7 +480,7 @@ async def test_subscribe_replays_what_each_read_missed_from_its_own_cursor(
     live_event = asyncio.create_task(_next_event(live))
     try:
         await _until(lambda: viewer.subscriber_count(log_file.name) == 1)
-        monkeypatch.setattr(log_viewer_module, "_read_range", record_range)
+        monkeypatch.setattr(log_reader_module, "_read_range", record_range)
         second_replay = await replay(second_read["cursor"])
         first_replay = await replay(first_read["cursor"])
         first_again = await replay(first_read["cursor"])
@@ -573,13 +574,13 @@ async def test_subscribe_tails_only_the_open_entry_and_the_appended_bytes(
     prefix = _text(_line(0, "Ready"), _line(1, "Serving"))
     live = _LiveFile(tmp_path, monkeypatch, prefix)
     reads: list[tuple[int, int]] = []
-    read_range = log_viewer_module._read_range
+    read_range = log_reader_module._read_range
 
     def record_range(handle: Any, start: int, end: int) -> bytes:
         reads.append((start, end))
         return read_range(handle, start, end)
 
-    monkeypatch.setattr(log_viewer_module, "_read_range", record_range)
+    monkeypatch.setattr(log_reader_module, "_read_range", record_range)
     serving_at = _offset(prefix, _line(1, "Serving"))
     failed_at = len(prefix)
 
@@ -747,8 +748,8 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
     file_reads = 0
     catalog_reads = 0
     read_threads: list[threading.Thread] = []
-    advance_tails = log_viewer_module._advance_tails
-    original_list_files = viewer._list_files
+    advance_tails = log_reader_module._advance_tails
+    original_list_files = viewer._reader.list_files
     awatch_kwargs: dict[str, object] = {}
 
     def count_file_reads(*args: Any) -> Any:
@@ -772,8 +773,8 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
         )
         yield set()
 
-    monkeypatch.setattr(log_viewer_module, "_advance_tails", count_file_reads)
-    monkeypatch.setattr(viewer, "_list_files", count_catalog_reads)
+    monkeypatch.setattr(log_reader_module, "_advance_tails", count_file_reads)
+    monkeypatch.setattr(viewer._reader, "list_files", count_catalog_reads)
     monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
 
     await viewer._watch_file(watcher)
@@ -1002,8 +1003,8 @@ async def test_watch_file_skips_polls_it_cannot_read_and_catches_up_after(
         subscribers=[subscriber],
     )
     denied = PermissionError(13, "The process cannot access the file", str(log_file))
-    metadata_changes = log_viewer_module._metadata_changes
-    advance_tails = log_viewer_module._advance_tails
+    metadata_changes = viewer._reader.metadata_changes
+    advance_tails = log_reader_module._advance_tails
     metadata_failures = [denied]
     read_failures = [denied]
 
@@ -1026,8 +1027,8 @@ async def test_watch_file_skips_polls_it_cannot_read_and_catches_up_after(
         yield {(Change.modified, str(log_file))}
         yield set()
 
-    monkeypatch.setattr(log_viewer_module, "_metadata_changes", locked_metadata_changes)
-    monkeypatch.setattr(log_viewer_module, "_advance_tails", locked_advance_tails)
+    monkeypatch.setattr(viewer._reader, "metadata_changes", locked_metadata_changes)
+    monkeypatch.setattr(log_reader_module, "_advance_tails", locked_advance_tails)
     monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
     caplog.set_level(logging.INFO, logger="vbot.log_viewer")
 

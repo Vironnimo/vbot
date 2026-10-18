@@ -7,7 +7,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
-from core.attachments.images import ImageConversionError, ImageConverter
+from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget
 from core.chat._message_history import (
     _last_user_message,
     _session_has_any_content_blocks,
@@ -215,8 +215,7 @@ async def _restore_in_run_tool_result_content(
             prepared = await image_converter.convert(
                 raw,
                 block["media_type"],
-                wire_media_types,
-                max_output_bytes=max_image_bytes,
+                ImageTarget(wire_media_types, max_output_bytes=max_image_bytes),
             )
         except ImageConversionError as exc:
             content[index : index + 1] = [{"type": "text", "text": f"[Image not shown: {exc}]"}]
