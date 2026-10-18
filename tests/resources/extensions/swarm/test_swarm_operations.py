@@ -22,7 +22,7 @@ async def test_editor_catalog_delivers_default_without_replacing_saved_instructi
         {**profile, "instructions": "saved-instructions-sentinel"},
         expected_revision=profile["revision"],
     )
-    catalog = (await board.service.operation("catalog", {}))["catalog"]
+    catalog = (await board.service.management.operation("catalog", {}))["catalog"]
     assert catalog["prompt_defaults"]["instructions"] == DEFAULT_INSTRUCTIONS
     assert (await board.store.get_profile(saved["id"]))[
         "instructions"
@@ -49,20 +49,26 @@ async def test_swarm_get_projects_canonical_run_activity(board, monkeypatch):
     )
     running = SimpleNamespace(status=SimpleNamespace(value="running"))
     monkeypatch.setattr(board.groups, "owned_runs", inspections(running))
-    projected = await board.service.operation("swarms.get", {"swarm_id": board.swarm["id"]})
+    projected = await board.service.management.operation(
+        "swarms.get", {"swarm_id": board.swarm["id"]}
+    )
     assert projected["swarm"]["participants"][0]["run_active"] is True
     # All participants resolve through one batched ownership read.
     assert lookups == [(board.swarm["id"], ["run-active"])]
 
     monkeypatch.setattr(board.groups, "owned_runs", inspections(None))
-    projected = await board.service.operation("swarms.get", {"swarm_id": board.swarm["id"]})
+    projected = await board.service.management.operation(
+        "swarms.get", {"swarm_id": board.swarm["id"]}
+    )
     assert projected["swarm"]["participants"][0]["run_active"] is False
 
     async def unknown(_swarm_id, _run_ids):
         return {}
 
     monkeypatch.setattr(board.groups, "owned_runs", unknown)
-    projected = await board.service.operation("swarms.get", {"swarm_id": board.swarm["id"]})
+    projected = await board.service.management.operation(
+        "swarms.get", {"swarm_id": board.swarm["id"]}
+    )
     assert projected["swarm"]["participants"][0]["run_active"] is False
 
 
@@ -177,7 +183,9 @@ async def test_resume_recovers_after_missing_binding_creation_failure(board, mon
     monkeypatch.setattr(board.groups, "list", no_bindings)
     monkeypatch.setattr(board.groups, "create", fail_create)
     with pytest.raises(RuntimeError, match="fixture binding failure"):
-        await board.service.operation("swarms.resume", {"swarm_id": swarm_id, "request_id": "bad"})
+        await board.service.management.operation(
+            "swarms.resume", {"swarm_id": swarm_id, "request_id": "bad"}
+        )
     assert (await board.store.get_swarm(swarm_id))["state"] == "needs_attention"
     monkeypatch.setattr(board.groups, "list", original_list)
     monkeypatch.setattr(board.groups, "create", original_create)
@@ -186,7 +194,7 @@ async def test_resume_recovers_after_missing_binding_creation_failure(board, mon
         return SimpleNamespace(run_id=f"resumed-{participant_id}")
 
     monkeypatch.setattr(board.groups, "start", admit)
-    resumed = await board.service.operation(
+    resumed = await board.service.management.operation(
         "swarms.resume", {"swarm_id": swarm_id, "request_id": "good"}
     )
     assert len(resumed["runs"]) == len(board.bindings)
@@ -225,7 +233,7 @@ async def test_resume_admits_inactive_participants_or_only_the_selected_one(
 async def test_delete_rejects_open_swarm_without_touching_data(board):
     sid = board.swarm["id"]
     with pytest.raises(ValueError, match="swarm_not_stopped"):
-        await board.service.operation("swarms.delete", {"swarm_id": sid})
+        await board.service.management.operation("swarms.delete", {"swarm_id": sid})
     assert (await board.store.get_swarm(sid))["state"] == "preparing"
     with pytest.raises(ValueError, match="group_not_closed"):
         await board.groups.delete_group(sid)
@@ -269,10 +277,10 @@ async def test_delete_removes_board_and_bound_sessions_but_keeps_profile_and_oth
     )
     await board.store.post_human(sid, text="Delete this Board post", request_id="post")
     await board.store.prepare_inbox_delivery(sid, binding.participant_id)
-    await board.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
-    result = await board.service.operation("swarms.delete", {"swarm_id": sid})
+    await board.service.management.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
+    result = await board.service.management.operation("swarms.delete", {"swarm_id": sid})
     assert result == {"swarm_id": sid, "deleted": True}
-    assert await board.service.operation("swarms.delete", {"swarm_id": sid}) == result
+    assert await board.service.management.operation("swarms.delete", {"swarm_id": sid}) == result
     assert not any(board.sessions.exists(item.address) for item in board.bindings)
     assert board.sessions.exists(ordinary) and board.sessions.exists(foreign.address)
     assert await board.store.get_profile(profile["id"]) == profile
@@ -293,7 +301,9 @@ async def test_delete_removes_board_and_bound_sessions_but_keeps_profile_and_oth
         assert not connection.execute("PRAGMA foreign_key_check").fetchall()
         assert connection.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
     with pytest.raises(ValueError, match="swarm_not_found"):
-        await board.service.operation("swarms.resume", {"swarm_id": sid, "request_id": "resume"})
+        await board.service.management.operation(
+            "swarms.resume", {"swarm_id": sid, "request_id": "resume"}
+        )
 
 
 @pytest.mark.asyncio
@@ -338,9 +348,9 @@ async def test_startup_archives_participant_sessions_of_swarms_missing_from_the_
 @pytest.mark.parametrize("stage", ["sessions", "board"])
 async def test_interrupted_delete_remains_retryable_and_cannot_resume(board, monkeypatch, stage):
     sid = board.swarm["id"]
-    await board.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
+    await board.service.management.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
     await board.store.begin_resume(sid, request_id="resume", actor="user")
-    await board.service.operation(
+    await board.service.management.operation(
         "swarms.stop", {"swarm_id": sid, "request_id": "stop-after-resume"}
     )
     target, method = (
@@ -353,23 +363,23 @@ async def test_interrupted_delete_remains_retryable_and_cannot_resume(board, mon
 
     monkeypatch.setattr(target, method, fail)
     with pytest.raises(OSError, match="Deletion interrupted"):
-        await board.service.operation("swarms.delete", {"swarm_id": sid})
+        await board.service.management.operation("swarms.delete", {"swarm_id": sid})
     await board.store.recover_interrupted()
     assert (await board.store.get_swarm(sid))["state"] == "deleting"
     for operation, request in (("resume", "resume"), ("stop", "stop")):
         with pytest.raises(ValueError, match="swarm_closed"):
-            await board.service.operation(
+            await board.service.management.operation(
                 f"swarms.{operation}", {"swarm_id": sid, "request_id": request}
             )
     monkeypatch.setattr(target, method, original)
-    assert (await board.service.operation("swarms.delete", {"swarm_id": sid}))["deleted"]
+    assert (await board.service.management.operation("swarms.delete", {"swarm_id": sid}))["deleted"]
     assert not any(board.sessions.exists(item.address) for item in board.bindings)
 
 
 @pytest.mark.asyncio
 async def test_resume_waits_for_delete_and_cannot_recreate_sessions(board, monkeypatch):
     sid = board.swarm["id"]
-    await board.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
+    await board.service.management.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
     entered, release = asyncio.Event(), asyncio.Event()
     original = board.groups.delete_group
 
@@ -379,10 +389,14 @@ async def test_resume_waits_for_delete_and_cannot_recreate_sessions(board, monke
         return await original(group_id)
 
     monkeypatch.setattr(board.groups, "delete_group", delayed)
-    deletion = asyncio.create_task(board.service.operation("swarms.delete", {"swarm_id": sid}))
+    deletion = asyncio.create_task(
+        board.service.management.operation("swarms.delete", {"swarm_id": sid})
+    )
     await entered.wait()
     resume = asyncio.create_task(
-        board.service.operation("swarms.resume", {"swarm_id": sid, "request_id": "resume"})
+        board.service.management.operation(
+            "swarms.resume", {"swarm_id": sid, "request_id": "resume"}
+        )
     )
     release.set()
     assert (await deletion)["deleted"]
@@ -394,13 +408,13 @@ async def test_resume_waits_for_delete_and_cannot_recreate_sessions(board, monke
 @pytest.mark.asyncio
 async def test_post_survives_resume_preparation_failure(board, monkeypatch):
     sid = board.swarm["id"]
-    await board.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
+    await board.service.management.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
 
     async def fail_open(*args, **kwargs):
         raise RuntimeError("test-owned preparation failure")
 
     monkeypatch.setattr(board.groups, "open_group", fail_open)
-    result = await board.service.operation(
+    result = await board.service.management.operation(
         "board.post", {"swarm_id": sid, "text": "retained followup", "request_id": "post"}
     )
     assert result["resume_failed"] is True

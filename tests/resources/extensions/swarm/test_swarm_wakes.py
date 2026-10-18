@@ -97,14 +97,14 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         await adapter.started.wait()
         await asyncio.gather(
             *(
-                lifecycle.service.operation(
+                lifecycle.service.management.operation(
                     "board.post",
                     {
                         "swarm_id": started["swarm_id"],
@@ -185,7 +185,7 @@ async def test_automatic_delivery_updates_pending_during_each_running_iteration(
         {**profile, "delivery": {**profile["delivery"], "batch_messages": 4}},
         expected_revision=profile["revision"],
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     sid = started["swarm_id"]
@@ -193,7 +193,7 @@ async def test_automatic_delivery_updates_pending_during_each_running_iteration(
     async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         await adapter.started[0].wait()
         for index in range(12):
-            await lifecycle.service.operation(
+            await lifecycle.service.management.operation(
                 "board.post",
                 {
                     "swarm_id": sid,
@@ -251,7 +251,7 @@ async def test_wake_failure_retains_pending_and_reports_attention(
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
@@ -260,7 +260,7 @@ async def test_wake_failure_retains_pending_and_reports_attention(
         raise RuntimeError("private-exception-content-sentinel")
 
     monkeypatch.setattr(lifecycle.groups, "start", fail_admission)
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "board.post",
         {"swarm_id": started["swarm_id"], "text": "pending-sentinel", "request_id": "post"},
     )
@@ -311,13 +311,13 @@ async def test_human_post_wakes_idle_participant_with_delivery_policy(
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
     swarm = await lifecycle.service.store.get_swarm(started["swarm_id"])
     delivery = {**swarm["delivery"], "coalesce_ms": 0, "main": {"mode": mode, "wake_idle": wake}}
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "swarms.settings",
         {
             "swarm_id": started["swarm_id"],
@@ -326,7 +326,7 @@ async def test_human_post_wakes_idle_participant_with_delivery_policy(
             "request_id": "settings",
         },
     )
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "board.post",
         {"swarm_id": started["swarm_id"], "text": "wake message", "request_id": "post"},
     )
@@ -354,11 +354,11 @@ async def test_automatic_wake_publishes_running_state(lifecycle, tmp_path):
         lifecycle.service.host, publish_change=lambda *args: changes.append(args)
     )
     profile = await single_participant_profile(lifecycle, tmp_path)
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "board.post", {"swarm_id": started["swarm_id"], "text": "wake", "request_id": "post"}
     )
     changes.clear()
@@ -405,17 +405,17 @@ async def test_delivery_mode_after_wake(lifecycle, tmp_path, mode):
     adapter = PausedSwarmAdapter()
     lifecycle.runtime.adapter = adapter
     profile = await single_participant_profile(lifecycle, tmp_path, mode=mode)
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "board.post",
         {"swarm_id": started["swarm_id"], "text": "first-wake-sentinel", "request_id": "post-1"},
     )
     await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     assert "first-wake-sentinel" in str(adapter.requests[1]["messages"])
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "board.post",
         {"swarm_id": started["swarm_id"], "text": "deferred-sentinel", "request_id": "post-2"},
     )
@@ -468,7 +468,7 @@ async def test_runs_without_tools_pace_wakes_until_addressed_or_quiet_ends(
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     sid = started["swarm_id"]

@@ -40,7 +40,7 @@ async def test_participants_become_idle_without_closing_the_swarm(
         expected_revision=None,
     )
 
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start",
         {"profile_id": profile["id"], "prompt": "shared goal", "request_id": "initial"},
     )
@@ -93,7 +93,7 @@ async def test_run_directory_override_survives_resume_without_changing_profile(
         "request_id": "override-start",
         "working_directory": str(override),
     }
-    started = await lifecycle.service.operation("swarms.start", arguments)
+    started = await lifecycle.service.management.operation("swarms.start", arguments)
     await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
     snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
     assert snapshot["effective_configuration"] == {"cwd": str(override), "project_id": None}
@@ -105,17 +105,17 @@ async def test_run_directory_override_survives_resume_without_changing_profile(
     )
     assert agent.cwd == override
     assert binding.address.project_id is None
-    replayed = await lifecycle.service.operation("swarms.start", arguments)
+    replayed = await lifecycle.service.management.operation("swarms.start", arguments)
     assert replayed["replayed"] is True
     assert replayed["runs"] == started["runs"]
     with pytest.raises(ValueError, match="^request_conflict$"):
-        await lifecycle.service.operation(
+        await lifecycle.service.management.operation(
             "swarms.start", {**arguments, "working_directory": str(tmp_path)}
         )
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "swarms.stop", {"swarm_id": started["swarm_id"], "request_id": "stop"}
     )
-    resumed = await lifecycle.service.operation(
+    resumed = await lifecycle.service.management.operation(
         "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "resume"}
     )
     await lifecycle.runtime.chat_run_manager.get(resumed["runs"][0]["run_id"]).wait()
@@ -152,7 +152,7 @@ async def test_run_rejects_invalid_directory_before_creating_sessions(lifecycle,
     ]
     for index, (value, code) in enumerate(cases):
         with pytest.raises(ValueError, match=f"^{code}$"):
-            await lifecycle.service.operation(
+            await lifecycle.service.management.operation(
                 "swarms.start",
                 {
                     "profile_id": saved["id"],
@@ -181,14 +181,14 @@ async def test_run_leaves_out_vanished_skills_and_tools_but_not_models(lifecycle
     kept = await lifecycle.service.store.save_profile(
         profile("fixture/model"), expected_revision=None
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": kept["id"], "prompt": "goal", "request_id": "kept"}
     )
     assert started["swarm_id"]
     # A Model it no longer offers cannot run.
     gone = await lifecycle.service.store.save_profile(profile("gone/model"), expected_revision=None)
     with pytest.raises(ValueError, match="^model_unavailable$"):
-        await lifecycle.service.operation(
+        await lifecycle.service.management.operation(
             "swarms.start", {"profile_id": gone["id"], "prompt": "goal", "request_id": "gone"}
         )
     assert len((await lifecycle.service.store.list_swarms()).entries) == 1
@@ -223,7 +223,7 @@ async def test_profile_compaction_policy_reaches_every_participant(lifecycle, tm
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start",
         {"profile_id": saved["id"], "prompt": "compaction-goal", "request_id": "start"},
     )
@@ -289,7 +289,7 @@ async def test_profile_prompt_selection_reaches_model_without_hidden_orientation
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start",
         {
             "profile_id": saved["id"],
@@ -364,12 +364,12 @@ async def test_replaying_start_preserves_the_active_run(lifecycle, tmp_path, con
     arguments = {"profile_id": profile["id"], "prompt": "review goal", "request_id": "same-start"}
     if concurrent:
         first, replay = await asyncio.gather(
-            lifecycle.service.operation("swarms.start", arguments),
-            lifecycle.service.operation("swarms.start", arguments),
+            lifecycle.service.management.operation("swarms.start", arguments),
+            lifecycle.service.management.operation("swarms.start", arguments),
         )
     else:
-        first = await lifecycle.service.operation("swarms.start", arguments)
-        replay = await lifecycle.service.operation("swarms.start", arguments)
+        first = await lifecycle.service.management.operation("swarms.start", arguments)
+        replay = await lifecycle.service.management.operation("swarms.start", arguments)
     await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     run = lifecycle.runtime.chat_run_manager.get(first["runs"][0]["run_id"])
     assert replay == {**first, "replayed": True}
@@ -395,7 +395,7 @@ async def test_start_replay_uses_admitted_snapshot(lifecycle, tmp_path, change, 
     arguments = {"profile_id": profile["id"], "prompt": "saved goal", "request_id": "saved-start"}
     if pinned_revision:
         arguments["expected_profile_revision"] = profile["revision"]
-    started = await lifecycle.service.operation("swarms.start", arguments)
+    started = await lifecycle.service.management.operation("swarms.start", arguments)
     await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
     requests_before = len(lifecycle.runtime.adapter.requests)
 
@@ -421,7 +421,7 @@ async def test_start_replay_uses_admitted_snapshot(lifecycle, tmp_path, change, 
 
         lifecycle.service.host = replace(lifecycle.service.host, catalog=empty_catalog)
 
-    replay = await lifecycle.service.operation("swarms.start", arguments)
+    replay = await lifecycle.service.management.operation("swarms.start", arguments)
     assert replay == {**started, "replayed": True}
     assert len(lifecycle.runtime.adapter.requests) == requests_before
     for changed in (
@@ -431,7 +431,7 @@ async def test_start_replay_uses_admitted_snapshot(lifecycle, tmp_path, change, 
         {"working_directory": str(tmp_path)},
     ):
         with pytest.raises(ValueError, match="^request_conflict$"):
-            await lifecycle.service.operation("swarms.start", {**arguments, **changed})
+            await lifecycle.service.management.operation("swarms.start", {**arguments, **changed})
 
 
 @pytest.mark.asyncio
@@ -446,7 +446,7 @@ async def test_started_run_is_titled_in_the_background_and_listed_by_title(lifec
     )
     profile = await single_participant_profile(lifecycle, tmp_path)
 
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start",
         {"profile_id": profile["id"], "prompt": "Review the parser", "request_id": "titled"},
     )
@@ -454,7 +454,7 @@ async def test_started_run_is_titled_in_the_background_and_listed_by_title(lifec
     async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         while not lifecycle.titled or lifecycle.service._title_tasks:  # noqa: SLF001
             await asyncio.sleep(0.01)
-    listed = await lifecycle.service.operation("swarms.list", {})
+    listed = await lifecycle.service.management.operation("swarms.list", {})
 
     assert lifecycle.titled == [(swarm_id, "Review the parser")]
     assert [entry["title"] for entry in listed["entries"]] == ["Generated Run title"]
@@ -490,7 +490,7 @@ async def test_disabled_swarm_tools_stay_unavailable_on_start_and_resume(
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start",
         {
             "profile_id": profile["id"],
@@ -505,10 +505,10 @@ async def test_disabled_swarm_tools_stay_unavailable_on_start_and_resume(
     assert {tool["name"] for tool in first["kwargs"].get("tools", [])} == names - set(denied)
     if "swarm_board" in denied:
         assert "original-request-sentinel" in json.dumps(first["messages"])
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "swarms.stop", {"swarm_id": started["swarm_id"], "request_id": "stop-selective"}
     )
-    resumed = await lifecycle.service.operation(
+    resumed = await lifecycle.service.management.operation(
         "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "resume-selective"}
     )
     for run in resumed["runs"]:

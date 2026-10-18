@@ -4,7 +4,12 @@ import {
 } from '../../../../webui/src/lib/timeText.js';
 import { activeLocaleTag, t } from '../../../../webui/src/lib/i18n.js';
 import { modelIdParts } from '../../../../webui/src/lib/modelSelection.js';
-import { participantCount, participantTotal } from './pagePresentation.js';
+import {
+  participantCount,
+  participantTotal,
+  participantState,
+  resumableParticipantState,
+} from './pagePresentation.js';
 
 // How the navigation pane, the Run header and the Run dialogs present Runs
 // and Swarms (profiles): titles, states in words and colour, summaries,
@@ -365,4 +370,53 @@ export function deliveryChanges(before, after, invalid = []) {
     });
   }
   return lines;
+}
+
+export const workingRunStates = ['preparing', 'running', 'stopping'];
+
+export function runGroups(swarms) {
+  return [
+    {
+      id: 'active',
+      label: t('swarm.runs.active'),
+      empty: t('swarm.runs.noActive'),
+      entries: swarms.filter((swarm) => openRunStates.includes(swarm.state)),
+    },
+    {
+      id: 'inactive',
+      label: t('swarm.runs.inactive'),
+      empty: t('swarm.runs.noInactive'),
+      entries: swarms.filter((swarm) => !openRunStates.includes(swarm.state)),
+    },
+  ];
+}
+
+export function selectedRun(swarms, selectedSwarm) {
+  return selectedSwarm
+    ? {
+        ...swarms.find((item) => item.id === selectedSwarm.id),
+        ...selectedSwarm,
+      }
+    : null;
+}
+
+export function working(selectedSwarm) {
+  return (
+    Boolean(selectedSwarm) &&
+    (workingRunStates.includes(selectedSwarm.state) ||
+      (selectedSwarm.participants ?? []).some(
+        (participant) => participantState(participant) === 'running',
+      ))
+  );
+}
+
+export function canResume(selectedSwarm) {
+  return (
+    selectedSwarm &&
+    !['stopping', 'preparing', 'deleting'].includes(selectedSwarm.state) &&
+    (selectedSwarm.participants ?? []).some(
+      (participant) =>
+        !participant.run_active && resumableParticipantState(participant.state),
+    )
+  );
 }

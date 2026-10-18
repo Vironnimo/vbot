@@ -4,23 +4,23 @@
   import { runTarget, runTitle } from './runPresentation.js';
   import './runDialogs.css';
 
-  // Confirms deleting the Run in `model.swarmDeleteCandidate`, named by its
+  // Confirms deleting the Run in `model.runActions.swarmDeleteCandidate`, named by its
   // title, start and size. The dialog stays open while the deletion runs and
   // shows its failure for another try.
   let { model } = $props();
 </script>
 
-{#if model.swarmDeleteCandidate}<ConfirmDialog
+{#if model.runActions.swarmDeleteCandidate}<ConfirmDialog
     title={t('swarm.deleteRun.title')}
     body={t('swarm.deleteRun.body', {
-      title: runTitle(model.swarmDeleteCandidate),
+      title: runTitle(model.runActions.swarmDeleteCandidate),
     })}
     confirmLabel={t('common.delete')}
     busy={model.pending === 'delete'}
-    error={model.deleteError}
-    onConfirm={model.deleteSwarm}
-    onCancel={model.cancelDelete}
+    error={model.runActions.deleteError}
+    onConfirm={model.runActions.deleteSwarm}
+    onCancel={model.runActions.cancelDelete}
     >{#snippet bodyExtra()}<p class="swarm-dialog__meta">
-        {runTarget(model.swarmDeleteCandidate, model.now)}
+        {runTarget(model.runActions.swarmDeleteCandidate, model.now)}
       </p>{/snippet}</ConfirmDialog
   >{/if}

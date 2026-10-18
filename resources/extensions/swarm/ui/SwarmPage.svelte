@@ -61,7 +61,7 @@
           bridgeClient={model.client}
           onSave={model.saveProfile}
           onCancel={model.openStart}
-          onDelete={model.confirmProfileDelete}
+          onDelete={model.runActions.confirmProfileDelete}
           onDraftChange={(next) => (model.newProfileDraft = next)}
         />
       {/key}
