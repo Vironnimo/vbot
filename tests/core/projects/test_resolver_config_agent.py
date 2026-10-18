@@ -119,6 +119,14 @@ def test_config_agent_session_overrides_change_only_the_runtime_view(
             )
             if asyncio.iscoroutine(result):
                 asyncio.run(result)
+        result = resolve(
+            project.project_id,
+            "builder",
+            new_session_overrides=AgentOverrides(model="openai/missing"),
+            require_model=False,
+        )
+        inspected = asyncio.run(result) if asyncio.iscoroutine(result) else result
+        assert inspected.model == "openai/missing"
 
 
 def test_temporary_profile_keeps_its_selection_inside_a_narrower_project(

@@ -233,9 +233,9 @@ class AgentResolver:
         exist yet runs it with these overrides (the first Run of a new Session);
         it excludes ``session_id``.
 
-        ``require_model=False`` lets Session administration inspect an existing
-        Agent's configuration even when its default Model chain is exhausted.
-        A Session Model override is always checked and wins before that chain.
+        ``require_model=False`` lets administration and catalogs inspect an
+        Agent's configuration without checking Model availability, including a
+        Session override. Run admission keeps the default availability checks.
         """
         _require_one_override_source(session_id, new_session_overrides)
         address = None if session_id is None else _session_address(project_id, agent_id, session_id)
@@ -250,7 +250,9 @@ class AgentResolver:
             agent = self._resolve_config_agent(
                 project_id, agent_id, model_override=overrides.model, require_model=require_model
             )
-        agent = self._session_resolution._apply_overrides(agent, overrides)
+        agent = self._session_resolution._apply_overrides(
+            agent, overrides, require_model=require_model
+        )
         if address is None:
             return agent
         key = _skill_binding_key(agent) if project_id is None else None
@@ -319,7 +321,10 @@ class AgentResolver:
                 raise _identity_resolution_error(error) from error
         if not overrides.is_empty:
             agent = await _RESOLUTION_WORKERS.run(
-                self._session_resolution._apply_overrides, agent, overrides
+                self._session_resolution._apply_overrides,
+                agent,
+                overrides,
+                require_model=require_model,
             )
         key = _skill_binding_key(agent) if project_id is None else None
         if address is not None and key is not None:
@@ -638,7 +643,8 @@ class AgentResolver:
         # never reads the settings file three times (model + temp + thinking).
         global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         if model_override is not None:
-            self.require_model_configured(model_override)
+            if require_model:
+                self.require_model_configured(model_override)
             resolved_model = model_override
         elif not require_model:
             resolved_model = str(
