@@ -24,6 +24,8 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 
+from core.model_tasks import _speech_context
+from core.model_tasks._speech_engines import _audio_chunks
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
 from core.model_tasks.model_files import ModelFile, PinnedModel
@@ -35,7 +37,6 @@ from core.model_tasks.speech_local import (
     LocalSpeechExecutor,
     LocalSpeechSetup,
     SpeechEngineDefinition,
-    _audio_chunks,
     builtin_speech_engines,
 )
 from core.model_tasks.speech_types import (
@@ -238,7 +239,7 @@ async def test_digital_silence_and_invalid_audio(monkeypatch: pytest.MonkeyPatch
 def test_long_audio_chunks_cover_every_sample_once_and_use_quiet_boundary(
     frame_samples: int | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from core.model_tasks import speech_local
+    from core.model_tasks import _speech_engines as speech_local
 
     samples = (1000 + np.arange(65 * 16_000) % 100).astype(np.int16)
     samples[29 * 16_000 + 640 : 29 * 16_000 + 960] = 0
@@ -321,7 +322,7 @@ async def test_cancellation_finishes_running_call_skips_the_rest_and_shutdown_re
     phase: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from core.model_tasks import speech_local
+    from core.model_tasks import _speech_engines as speech_local
 
     events: list[Any] = []
     started: Future[int] = Future()
@@ -396,7 +397,7 @@ def test_native_transformers_adapter_contracts_without_weights(
 ) -> None:
     # Stand-in torch and transformers modules: the adapters import them lazily, and
     # the real native imports cost several seconds without adding adapter coverage.
-    from core.model_tasks.speech_local import (
+    from core.model_tasks._speech_engines import (
         _PROGRESS,
         _NemotronEngine,
         _ParakeetEngine,
@@ -498,7 +499,7 @@ def _pad(chunk: Any, padding: tuple[int, int, int, int]) -> Any:
     + [(3000, "de-DE")],
 )
 def test_nemotron_keeps_every_streaming_frame_and_language_prompt(frames, language):
-    from core.model_tasks.speech_local import _NemotronEngine
+    from core.model_tasks._speech_engines import _NemotronEngine
 
     engine = _NemotronEngine.__new__(_NemotronEngine)
     engine._torch = SimpleNamespace(
@@ -916,7 +917,7 @@ def _fake_stt_app(root: Path) -> tuple[Any, Path]:
 def test_managed_stt_worker_loads_before_transcribing_and_forwards_progress(
     tmp_path: Path,
 ) -> None:
-    from core.model_tasks.speech_local import _PROGRESS, _ManagedSttEngine, _WaitingWorkers
+    from core.model_tasks._speech_engines import _PROGRESS, _ManagedSttEngine, _WaitingWorkers
 
     setup, app = _fake_stt_app(tmp_path)
     progress = SpeechProgress()
@@ -938,7 +939,7 @@ def test_managed_stt_worker_loads_before_transcribing_and_forwards_progress(
 
 @pytest.mark.asyncio
 async def test_shutdown_during_managed_preload_ends_the_loading_worker(tmp_path: Path) -> None:
-    from core.model_tasks.speech_local import _ManagedSttEngine
+    from core.model_tasks._speech_engines import _ManagedSttEngine
 
     setup, app = _fake_stt_app(tmp_path)
     marker = tmp_path / "loading"
@@ -971,10 +972,10 @@ async def test_shutdown_during_managed_preload_ends_the_loading_worker(tmp_path:
 async def test_managed_stt_worker_that_stops_answering_is_ended(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str
 ) -> None:
-    from core.model_tasks import speech_local
+    from core.model_tasks import _speech_engines as speech_local
 
     monkeypatch.setattr(speech_local, "_INFERENCE_DEADLINE_S", 0.2 if ending == "deadline" else 60)
-    monkeypatch.setattr(speech_local, "_CANCEL_GRACE_S", 0.2)
+    monkeypatch.setattr(_speech_context, "_CANCEL_GRACE_S", 0.2)
     setup, app = _fake_stt_app(tmp_path)
     marker = tmp_path / "transcribing"
     workers: list[Any] = []
@@ -1196,7 +1197,7 @@ async def test_setup_blocks_catalog_and_inference_until_a_new_runtime(
 
 @pytest.mark.asyncio
 async def test_request_progress_survives_worker_boundary_and_clears_between_recordings() -> None:
-    from core.model_tasks.speech_local import _PROGRESS
+    from core.model_tasks._speech_context import _PROGRESS
 
     progress = SpeechProgress()
     observed: list[str] = []

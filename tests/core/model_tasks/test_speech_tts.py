@@ -16,20 +16,18 @@ from unittest.mock import AsyncMock, Mock
 import numpy as np
 import pytest
 
-from core.model_tasks import local_setup, speech_worker
+from core.model_tasks import _speech_context, local_setup, speech_worker
+from core.model_tasks._speech_context import _AUDIO, _PROGRESS
+from core.model_tasks._speech_engines import _TtsEngine, _WaitingWorkers
 from core.model_tasks.constants import TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
 from core.model_tasks.model_files import ModelFilesError, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
-    _AUDIO,
-    _PROGRESS,
     LocalSpeechError,
     LocalSpeechExecutionError,
     LocalSpeechExecutor,
     SpeechEngineDefinition,
-    _TtsEngine,
-    _WaitingWorkers,
 )
 from core.model_tasks.speech_models import SPEECH_MODELS
 from core.model_tasks.speech_setup import LocalSpeechSetup
@@ -504,7 +502,7 @@ def test_worker_generates_playable_wav_and_keeps_every_text_chunk(tmp_path, engi
 def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(
     tmp_path, monkeypatch, delivery
 ):
-    from core.model_tasks import speech_local
+    from core.model_tasks import _speech_engines as speech_local
 
     streaming = delivery != "buffered"
     failed = delivery == "consumer_failure"
@@ -602,7 +600,7 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(
 @pytest.mark.parametrize("ending", ["deadline", "cancellation", "shutdown"])
 @pytest.mark.parametrize("phase", ["loading", "synthesizing"])
 async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, ending, phase):
-    from core.model_tasks import speech_local
+    from core.model_tasks import _speech_engines as speech_local
 
     monkeypatch.setattr(
         speech_local, "_LOAD_DEADLINE_S", 0.05 if (ending, phase) == ("deadline", "loading") else 60
@@ -612,7 +610,7 @@ async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, e
         "_SYNTHESIS_DEADLINE_S",
         0.05 if (ending, phase) == ("deadline", "synthesizing") else 60,
     )
-    monkeypatch.setattr(speech_local, "_CANCEL_GRACE_S", 0.05)
+    monkeypatch.setattr(_speech_context, "_CANCEL_GRACE_S", 0.05)
     asked, killed = threading.Event(), threading.Event()
     armed = Future()
 
@@ -633,6 +631,7 @@ async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, e
             self.function(*self.args)
 
     monkeypatch.setattr(speech_local, "Timer", Timer)
+    monkeypatch.setattr(_speech_context, "Timer", Timer)
 
     def kill_tree(*_arguments):
         killed.set()
