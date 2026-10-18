@@ -410,10 +410,10 @@ export function sessionHasTerminalRun(sessionState, runId) {
   if (!sessionState || !runId) {
     return false;
   }
+  // The loaded History page lists its finished Runs in `historyRuns`; its
+  // windowed `messages` carry no Run summaries.
   return (
-    (sessionState.messages ?? []).some(
-      (message) => message?.role === 'run_summary' && message?.run_id === runId,
-    ) ||
+    sessionState.historyRuns?.[runId]?.complete === true ||
     (sessionState.runEvents ?? []).some(
       (event) =>
         event?.run_id === runId && TERMINAL_RUN_EVENTS.has(event?.type),

@@ -251,7 +251,18 @@ export function createChatRpcMock({
           : sourceMessages;
         const response = {
           session_id: params.session_id,
-          messages: pageMessages,
+          // Like the server, a windowed read (`child_limit`) carries no Run
+          // summaries in `messages`; finished Runs arrive in `runs`.
+          messages: params.child_limit
+            ? pageMessages.filter((entry) => entry.role !== 'run_summary')
+            : pageMessages,
+          runs: pageMessages
+            .filter((entry) => entry.role === 'run_summary')
+            .map((entry) => ({
+              run_id: entry.run_id,
+              status: entry.status,
+              complete: true,
+            })),
           // Plain, independent message rows have no reconstruction semantics.
           // Tests with Runs, Tools or separators supply their authoritative
           // server items explicitly through sessionItems.
