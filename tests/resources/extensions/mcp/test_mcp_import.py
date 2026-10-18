@@ -290,7 +290,7 @@ async def test_preview_reads_each_client_format_without_saving(host, monkeypatch
         replace(host, resolve_credential=lambda key: os.environ.get(key, ""))
     )
     try:
-        preview = await service.manage("import", {"source": source})
+        preview = await service.management.manage("import", {"source": source})
 
         assert {item["name"]: _shape(item) for item in preview["servers"]} == expected
         assert service.store is not None and service.store.load() == {}
@@ -314,20 +314,20 @@ async def test_import_stores_secrets_as_credentials_and_never_replaces_a_connect
     monkeypatch.setattr(ConnectionRunner, "start", lambda runner: started.append(runner.id))
     service, _registry = await start_service(host)
     try:
-        await service.manage(
+        await service.management.manage(
             "save", {"connection": {"id": "notion", "transport": "stdio", "command": "kept"}}
         )
         started.clear()
-        preview = await service.manage("import", {"source": _CLAUDE_DESKTOP})
+        preview = await service.management.manage("import", {"source": _CLAUDE_DESKTOP})
         notion = _server(preview, "notion")
         assert (notion["conflict"], notion["selected"]) == (True, False)
         with pytest.raises(ValueError, match="notion: connection notion already exists"):
-            await service.manage(
+            await service.management.manage(
                 "import", {"source": _CLAUDE_DESKTOP, "apply": True, "servers": ["notion"]}
             )
 
         with caplog.at_level(logging.INFO):
-            result = await service.manage(
+            result = await service.management.manage(
                 "import",
                 {
                     "source": _CLAUDE_DESKTOP,
@@ -377,6 +377,6 @@ async def test_unreadable_setup_text_names_the_problem(host, source, message):
     service, _registry = await start_service(host)
     try:
         with pytest.raises(ValueError, match=message):
-            await service.manage("import", {"source": source})
+            await service.management.manage("import", {"source": source})
     finally:
         await service.close()

@@ -13,7 +13,7 @@ from mcp.server import Server
 
 from core.attachments import AttachmentTooLargeError
 from core.tools.availability import ToolAccess
-from resources.extensions.mcp.client import ConnectionRunner
+from resources.extensions.mcp._transport import ConnectionTransport
 from resources.extensions.mcp.content import (
     READ_TOO_LARGE,
     RESULT_DENIED,
@@ -290,10 +290,10 @@ async def test_a_result_that_fails_its_output_schema_reads_as_the_servers_proble
     async def in_memory(runner, stack):
         return server
 
-    monkeypatch.setattr(ConnectionRunner, "_transport", in_memory)
+    monkeypatch.setattr(ConnectionTransport, "open", in_memory)
     service, registry = await start_service(host)
     try:
-        await service.manage(
+        await service.management.manage(
             "save", {"connection": {"id": "example", "transport": "stdio", "command": "unused"}}
         )
         async with asyncio.timeout(10):

@@ -15,7 +15,8 @@ from core.tools.availability import ToolAccess
 from core.tools.tools import ToolDefinitionProfileContext
 from resources.extensions.mcp import _discovery as discovery
 from resources.extensions.mcp._tasks import TASKS_EXTENSION
-from resources.extensions.mcp.client import TASK_OPERATIONS, ConnectionRunner
+from resources.extensions.mcp._transport import ConnectionTransport
+from resources.extensions.mcp.client import TASK_OPERATIONS
 from resources.extensions.mcp.extension import MCP_GUIDANCE, register, remote_tool_name
 from tests.core.prompts.prompts_test_support import _agent, _manager
 from tests.resources.extensions.mcp.mcp_test_support import (
@@ -98,7 +99,7 @@ async def test_connection_target_lists_remote_tool_names_through_disconnects(
     ]
 
     # A disconnect keeps the names; only a new catalog changes them.
-    await service.manage("disconnect", {"id": "example"})
+    await service.management.manage("disconnect", {"id": "example"})
 
     assert _definitions(registry) == after
 
@@ -143,7 +144,7 @@ async def test_tool_selection_shows_connection_and_inspector_keeps_remote_names(
     assert selection[0].requires_opt_in is True
     assert registry.get(remote_tool_name("example", remote_name)) is not None
 
-    inspection = await service.manage("inspect", {"id": "example"})
+    inspection = await service.management.manage("inspect", {"id": "example"})
     assert [tool["name"] for tool in inspection["tools"]] == [remote_name]
     # The inspector names each Tool by the target the connection Tool's search lists.
     assert inspection["tools"][0]["target"] == await tool_target(registry, host)
@@ -583,10 +584,10 @@ async def test_fixed_entry_point_uses_real_tools_resources_and_prompts(host, ser
     async def in_memory(runner, stack):
         return server
 
-    monkeypatch.setattr(ConnectionRunner, "_transport", in_memory)
+    monkeypatch.setattr(ConnectionTransport, "open", in_memory)
     service, registry = await start_service(host)
     try:
-        await service.manage(
+        await service.management.manage(
             "save", {"connection": {"id": "example", "transport": "stdio", "command": "unused"}}
         )
         async with asyncio.timeout(10):
@@ -647,13 +648,15 @@ async def test_cli_explore_and_invoke_return_the_complete_payload_inline(context
 
     async def finished(job):
         await service.jobs.wait(job["job_id"])
-        return (await service.manage("job", {"job_id": job["job_id"]}))["result"]
+        return (await service.management.manage("job", {"job_id": job["job_id"]}))["result"]
 
     search = await finished(
-        await service.manage("explore", {"id": "example", "agent": "alice", "action": "search"})
+        await service.management.manage(
+            "explore", {"id": "example", "agent": "alice", "action": "search"}
+        )
     )
     invoke = await finished(
-        await service.manage(
+        await service.management.manage(
             "invoke",
             {
                 "id": "example",

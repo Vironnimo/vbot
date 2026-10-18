@@ -4,7 +4,7 @@ Read for work on the MCP `import` management operation, `resources/extensions/mc
 
 ## Parsing (`_importer.parse_setup`)
 
-`parse_setup(text, ids)` turns setup text written for other MCP clients into `ImportDraft`s. It is pure: it reads no saved connection and no credential, so a clash with a saved connection appears only as the preview's `conflict`. Text over `MAX_SETUP_CHARACTERS` (200000) or empty text is refused; a leading BOM is ignored.
+`_setup_syntax.py` owns document and command-line syntax; `_importer.py` owns draft normalization, naming and credential separation. `parse_setup(text, ids)` turns setup text written for other MCP clients into `ImportDraft`s. It is pure: it reads no saved connection and no credential, so a clash with a saved connection appears only as the preview's `conflict`. Text over `MAX_SETUP_CHARACTERS` (200000) or empty text is refused; a leading BOM is ignored.
 
 Recognized input:
 - TOML when a `[mcp_servers` table or `mcp_servers = ...` assignment appears (Codex `config.toml`, including inline tables).
@@ -24,7 +24,7 @@ A secret never enters a connection; it becomes a credential reference, and the d
 
 Warnings are `{code, message}`: `env_file_ignored`, `ignored_fields`, `directory_ignored`, `default_ignored`, `unresolved_placeholder` (a `${...}` left in the command, an argument, a value or the URL; sets `unresolved`), `placeholder_argument` (sets `unresolved`), `secret_in_arguments` and `secret_in_url` (a secret that stays in plain configuration; both set `exposes_secret`), and `remote_bridge` (an `mcp-remote` bridge whose URL vBot can reach directly). Accessors show the English `message`.
 
-## The `import` operation (`MCPService._import`)
+## The `import` operation (`ConnectionManagement._import`)
 
 Arguments: `source` (string with `contentMediaType: text/plain`, at most 200000 characters), optional `apply`, `servers` (names) and `ids` (name -> connection id).
 
