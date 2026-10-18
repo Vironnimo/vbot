@@ -127,7 +127,7 @@ async def test_detach_restores_drafts_and_edit_recovery_without_sending(tmp_path
         await pilot.pause()
         app.query_one("#composer", TextArea).load_text("Keep this draft after detach")
         await pilot.pause()
-        app.saved_drafts.append(copy.deepcopy(saved_edit))
+        app.submissions.saved_drafts.append(copy.deepcopy(saved_edit))
         await pilot.press("ctrl+q")
         await pilot.pause()
     next_server = Server()
@@ -143,7 +143,7 @@ async def test_detach_restores_drafts_and_edit_recovery_without_sending(tmp_path
     async with reopened.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         assert reopened.query_one("#composer", TextArea).text == "Keep this draft after detach"
-        assert reopened.saved_drafts == [saved_edit]
+        assert reopened.submissions.saved_drafts == [saved_edit]
         assert not any(method in {"chat.stream", "chat.edit"} for method, _ in next_server.calls)
 
 
@@ -161,13 +161,15 @@ async def test_restore_draft_keeps_input_and_follows_rename_during_picker(
     store.save({current.draft_id: first, other.draft_id: second})
     app = ConversationApp(server, agent_id="main", draft_store=store, restored_drafts=store.load())
     if source == "displaced":
-        app.recovered_drafts.pop(other.draft_id)
-        app.saved_drafts.append({**app._saved_input(other), "draft_id": other.draft_id})
+        app.submissions.recovered_drafts.pop(other.draft_id)
+        app.submissions.saved_drafts.append(
+            {**app.submissions.snapshot(other), "draft_id": other.draft_id}
+        )
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        worker = app._start(app._restore_draft)
+        worker = app._start(app.submissions.restore)
         await pilot.pause()
-        await app._resource_changed(
+        await app.navigation.resource_changed(
             {
                 "kind": "agents",
                 "scope": {
@@ -180,8 +182,8 @@ async def test_restore_draft_keeps_input_and_follows_rename_during_picker(
         await worker.wait()
         assert app.query_one("#composer", TextArea).text == "Second draft"
         assert app.conversation is not None and app.conversation.agent == "renamed"
-        assert app.recovered_drafts[current.draft_id]["draft"] == "First draft"
-        assert app.recovered_drafts[current.draft_id]["agent"] == "renamed"
-        await app.persist_drafts()
+        assert app.submissions.recovered_drafts[current.draft_id]["draft"] == "First draft"
+        assert app.submissions.recovered_drafts[current.draft_id]["agent"] == "renamed"
+        await app.submissions.persist()
         assert len(store.load()) == 2
         assert not any(method == "chat.stream" for method, _ in server.calls)

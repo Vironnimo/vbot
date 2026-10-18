@@ -11,6 +11,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -158,11 +159,18 @@ def _normalized_removal_installation(install: Installation) -> Installation:
     )
 
 
+class RemovalMode(Enum):
+    """The three supported application/data removal operations."""
+
+    APPLICATION = "app-only"
+    DATA = "data-only"
+    ALL = "all"
+
+
 def uninstall(
     install: Installation,
     *,
-    remove_data: bool = False,
-    data_only: bool = False,
+    mode: RemovalMode = RemovalMode.APPLICATION,
     platform: str = sys.platform,
     runner: Runner | None = None,
     stop: Callable[[Installation], Any] = processes.stop,
@@ -181,8 +189,6 @@ def uninstall(
     """
     if platform != "win32" and not platform.startswith("linux"):
         raise ApplicationError(f"Packaged application removal is not supported on {platform}")
-    if remove_data and data_only:
-        raise ApplicationError("Choose application-and-data removal or data-only reset")
     # Check before locks, process stops or uninstaller launch: application-only
     # removal must not erase data recorded inside the application either.
     install = _normalized_removal_installation(install)
@@ -191,7 +197,7 @@ def uninstall(
         if install.owns_server and install.server_data_directory is not None
         else None
     )
-    if remove_data or data_only:
+    if mode in {RemovalMode.DATA, RemovalMode.ALL}:
         if data is None:
             raise ApplicationError("This Desktop Client does not own server data")
         if data in {data.parent, Path.home().resolve()} or Path.cwd().resolve().is_relative_to(
@@ -199,7 +205,9 @@ def uninstall(
         ):
             raise ApplicationError("Refusing to remove an unsafe application data directory")
     uninstaller = (
-        registered_uninstaller(install.root) if platform == "win32" and not data_only else None
+        registered_uninstaller(install.root)
+        if platform == "win32" and mode is not RemovalMode.DATA
+        else None
     )
     if Path.cwd().resolve().is_relative_to(install.root.resolve()):
         raise ApplicationError("Change to a directory outside the application before uninstalling")
@@ -212,11 +220,11 @@ def uninstall(
             raise ApplicationError(
                 f"Update {pending[0].id} is still active; wait for it before removing vBot"
             )
-        if not data_only:
+        if mode is not RemovalMode.DATA:
             exit_host(install)
         with exclusive(install.root, "operation", timeout=5):
             was_running = False
-            if install.owns_server and data_only:
+            if install.owns_server and mode is RemovalMode.DATA:
                 # A reset keeps the server's prior state, so a busy server must never
                 # be taken for a stopped one and have its data deleted underneath it.
                 state = server_state(install)
@@ -231,7 +239,7 @@ def uninstall(
                         "so vBot data was not reset"
                     )
                 was_running = state == "running"
-            if install.owns_server and (was_running or not data_only):
+            if install.owns_server and (was_running or mode is not RemovalMode.DATA):
                 result = stop(install)
                 if not result.ok:
                     raise ApplicationError(
@@ -239,7 +247,7 @@ def uninstall(
                         f"{result.message}"
                     )
             removed_data = False
-            if remove_data or data_only:
+            if mode in {RemovalMode.DATA, RemovalMode.ALL}:
                 assert data is not None  # Validated before any changes above.
                 try:
                     claims = live_server_ports(data)
@@ -254,7 +262,7 @@ def uninstall(
                 if exists_strict(data):
                     remove_tree(data)
                     removed_data = True
-            if data_only:
+            if mode is RemovalMode.DATA:
                 restarted = False
                 if was_running:
                     result = start(install)
@@ -286,7 +294,7 @@ def uninstall(
                     "completed": True,
                     "removed": True,
                     "data_removed": removed_data,
-                    "data_preserved": not remove_data,
+                    "data_preserved": mode is RemovalMode.APPLICATION,
                 }
             launcher(uninstaller)
             return {
@@ -295,7 +303,7 @@ def uninstall(
                 "launched": True,
                 "uninstaller": str(uninstaller),
                 "data_removed": removed_data,
-                "data_preserved": not remove_data,
+                "data_preserved": mode is RemovalMode.APPLICATION,
             }
 
 

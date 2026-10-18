@@ -373,9 +373,9 @@ def test_packaged_uninstall_reuses_guided_scope_and_confirmation(
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     called = []
 
-    def remove(_install, *, remove_data, data_only):
-        called.append("data-only" if data_only else "all" if remove_data else "app-only")
-        return {"data_removed": remove_data, "server_restarted": False}
+    def remove(_install, *, mode):
+        called.append(mode.value)
+        return {"data_removed": mode.value == "all", "server_restarted": False}
 
     monkeypatch.setattr("cli.application.integration.uninstall", remove)
     assert run(["uninstall"]) == 0

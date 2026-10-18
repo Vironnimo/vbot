@@ -1,10 +1,10 @@
 # Data Store Commands
 
-Supplementary to `cli.md`. Covers `vbot data-store` (`cli/data_store_management.py`), the operator surface of the database kernel (`database.md`): `status`, `snapshot`, `incident`, `unregister`, `config-backup` and `secrets`, including when they work on the local data directory instead of through the server.
+Supplementary to `cli.md`. The complete data-store grammar belongs to `cli/_parser_data_store.py`; `cli/parser.py` composes it with the other areas. Covers `vbot data-store` (`cli/data_store_management.py`), the operator surface of the database kernel (`database.md`): `status`, `snapshot`, `incident`, `unregister`, `config-backup` and `secrets`, including when they work on the local data directory instead of through the server.
 
 ## Status
 
-`status` prefers the live `data_store.status` projection and falls back to an explicitly labeled local projection (`source: "local"`, kernel `data_store_status` with this vBot's specs from `core/runtime/databases.canonical_database_specs`) only for an unreachable loopback target; `maintenance` and `unavailable` exit non-zero. Ordinary status reads Session search lifecycle markers plus the latest process-local coverage check when known. `status --verify-search` requests a current full coverage check through `data_store.status {verify_search: true}` with unbounded read timeout; the local fallback uses the Session spec's explicit coverage mode read-only.
+`status` prefers the live `data_store.status` projection and falls back to an explicitly labeled local projection (`source: "local"`, kernel `data_store_status` with this vBot's specs from `core/runtime/databases.canonical_database_specs`) only for an unreachable loopback target; `maintenance` and `unavailable` exit non-zero. Ordinary status reads Session search lifecycle markers plus the latest process-local coverage check when known. `status --verify-search` requests a current full coverage check through `data_store.status {verify_search: true}` with unbounded read timeout; the local fallback requests the same read-only coverage mode from `canonical_database_specs(data_dir, verify_search=True)`, without constructing an owner spec or database path itself.
 
 ## Snapshots and incidents
 

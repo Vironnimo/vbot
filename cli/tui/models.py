@@ -22,12 +22,14 @@ def configured_value(app: ConversationApp, view: Conversation, field: str) -> An
     """Read the Agent/Team Agent's effective value from the loaded roster."""
     if "@" in view.agent:
         agent_id, _separator, project_id = view.agent.partition("@")
-        project = next((row for row in app.projects if row.get("project_id") == project_id), None)
+        project = next(
+            (row for row in app.navigation.projects if row.get("project_id") == project_id), None
+        )
         scan = (project or {}).get("scan") or {}
         team = scan.get("team", [])
         row = next((item for item in team if item.get("agent_id") == agent_id), None)
     else:
-        row = next((item for item in app.agents if item.get("id") == view.agent), None)
+        row = next((item for item in app.navigation.agents if item.get("id") == view.agent), None)
     value = ((row or {}).get("effective") or {}).get(field) or {}
     return value.get("value")
 
@@ -227,5 +229,5 @@ async def menu(app: ConversationApp) -> None:
                 view.overrides.pop(field, None)
             else:
                 view.overrides[field] = replacement
-    app._view_changed(view)
+    app.submissions.changed(view)
     app._notice("Session setting saved" if view.session else "Draft setting selected")
