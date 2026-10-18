@@ -18,6 +18,7 @@ from core.providers.tool_schema import render_tool_definitions
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.subagents import SubAgentState, SubAgentStopOutcome
+from core.tools import _terminal_scopes as terminal_scopes
 from core.tools import terminal as terminal_module
 from core.tools import terminal_manager as manager_module
 from core.tools.model_names import BASH_TOOL_NAME, model_tool_name
@@ -431,8 +432,8 @@ async def test_launch_failure_is_reported_and_releases_capacity(
     failure_phase: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(manager_module, "TERMINAL_MAX_LIVE_PER_SESSION", 1)
-    monkeypatch.setattr(manager_module, "TERMINAL_MAX_LIVE_GLOBAL", 1)
+    monkeypatch.setattr(terminal_scopes, "TERMINAL_MAX_LIVE_PER_SESSION", 1)
+    monkeypatch.setattr(terminal_scopes, "TERMINAL_MAX_LIVE_GLOBAL", 1)
 
     class RecoveringFactory(AdapterFactory):
         failing = True
@@ -506,7 +507,7 @@ async def test_capacity_refusal_names_the_terminals_to_stop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(manager_module, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
+    monkeypatch.setattr(terminal_scopes, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
     terminal_manager, factory = manager
     context = make_context(tmp_path)
     started = [

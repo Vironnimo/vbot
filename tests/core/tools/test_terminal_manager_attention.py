@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+import core.tools._terminal_output as terminal_output
 import core.tools._terminal_session as terminal_session
 import core.tools._terminal_state as terminal_state
 from core.runs import RunAdmissionBlockedError
@@ -1011,10 +1012,10 @@ async def test_a_stuck_final_redraw_does_not_delay_exit_delivery(
             return False
 
         monkeypatch.setattr(TerminalScreen, "feed", broken_feed)
-        monkeypatch.setattr(terminal_session.TerminalSession, "_redraw_once", blocked_replay)
+        monkeypatch.setattr(terminal_output.TerminalOutput, "_redraw_once", blocked_replay)
         # Exercise the timeout branch without adding one second to the suite.
-        assert terminal_session._FINAL_REDRAW_SECONDS <= 1
-        monkeypatch.setattr(terminal_session, "_FINAL_REDRAW_SECONDS", 0.01)
+        assert terminal_output._FINAL_REDRAW_SECONDS <= 1
+        monkeypatch.setattr(terminal_output, "_FINAL_REDRAW_SECONDS", 0.01)
         factory.adapters[0].emit("kept in the log")
         await replay_started.wait()
         factory.adapters[0].finish(0)

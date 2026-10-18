@@ -1,6 +1,6 @@
 # Channels
 
-Messaging-platform accessors for vBot. Owns channel configuration, adapter lifecycle, outbound delivery, and routing platform inbound messages into normal agent Sessions.
+Messaging-platform accessors: configuration, adapters, outbound delivery and inbound routing into normal Agent Sessions.
 
 ## Overview
 

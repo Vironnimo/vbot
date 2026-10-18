@@ -19,6 +19,7 @@ import core.tools.terminal_manager as terminal_module
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
+from core.tools import _terminal_scopes as terminal_scopes
 from core.tools.terminal_manager import (
     TerminalAlreadyAttachedError,
     TerminalCapacityError,
@@ -201,8 +202,8 @@ async def test_live_terminal_capacity_is_owner_scoped_and_globally_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager, _factory = terminal_manager
-    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
-    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_GLOBAL", 3)
+    monkeypatch.setattr(terminal_scopes, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
+    monkeypatch.setattr(terminal_scopes, "TERMINAL_MAX_LIVE_GLOBAL", 3)
 
     await spawn(manager, tmp_path, command="owner-a-1")
     await spawn(manager, tmp_path, command="owner-a-2")
@@ -229,8 +230,8 @@ async def test_pending_starts_reserve_owner_and_global_capacity(
         assert release.wait(5)
         return adapter
 
-    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
-    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_GLOBAL", 3)
+    monkeypatch.setattr(terminal_scopes, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
+    monkeypatch.setattr(terminal_scopes, "TERMINAL_MAX_LIVE_GLOBAL", 3)
     manager = _manager(factory)
     tasks = [asyncio.create_task(spawn(manager, tmp_path)) for _ in range(2)]
     try:
@@ -337,7 +338,7 @@ async def test_cancelled_start_waits_for_child_cleanup(
         temporary_files=temporary_files,
         sweep_interval_seconds=3600,
     )
-    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_PER_SESSION", 1)
+    monkeypatch.setattr(terminal_scopes, "TERMINAL_MAX_LIVE_PER_SESSION", 1)
 
     async def start() -> Any:
         return await spawn(manager, tmp_path)
@@ -430,8 +431,8 @@ async def test_scope_close_drains_pending_launches_without_closing_other_scopes(
     adapter = FakeTerminalAdapter()
     factory = AdapterFactory()
     manager = _manager(factory)
-    start_process = manager._start_process  # noqa: SLF001
-    open_screen = manager._open_screen  # noqa: SLF001
+    start_process = manager._factory._start_process  # noqa: SLF001
+    open_screen = manager._factory.open_screen  # noqa: SLF001
     process_started = False
 
     async def blocked_screen(columns, rows):
@@ -450,8 +451,8 @@ async def test_scope_close_drains_pending_launches_without_closing_other_scopes(
             return adapter
         return await start_process(argv, *args)
 
-    monkeypatch.setattr(manager, "_start_process", blocked_start)
-    monkeypatch.setattr(manager, "_open_screen", blocked_screen)
+    monkeypatch.setattr(manager._factory, "_start_process", blocked_start)
+    monkeypatch.setattr(manager._factory, "open_screen", blocked_screen)
     launch = asyncio.create_task(spawn(manager, tmp_path, command="pending"))
     close = None
     try:

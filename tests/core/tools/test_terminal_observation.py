@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-import core.tools._terminal_session as terminal_session
+import core.tools._terminal_output as terminal_output
 from core.storage.temp_files import TemporaryFileManager
+from core.tools._terminal_log import TerminalLog
 from core.tools._terminal_render_host import TerminalScreen
 from core.tools.terminal_manager import (
     TerminalInfo,
@@ -301,7 +304,7 @@ async def test_a_screen_that_cannot_be_drawn_says_so_and_catches_up_later(
     feed = TerminalScreen.feed
     # Multibyte text crosses replay pieces; only the final handover flushes
     # an incomplete byte sequence, as the live reader does at EOF.
-    monkeypatch.setattr(terminal_session, "_REPLAY_PIECE_BYTES", 5)
+    monkeypatch.setattr(terminal_output, "_REPLAY_PIECE_BYTES", 5)
 
     async def broken_feed(_screen: TerminalScreen, _text: str) -> Any:
         raise RuntimeError("renderer broke")
@@ -692,3 +695,71 @@ async def test_only_a_persisted_current_screen_acknowledges_resize_and_attention
         callbacks.pop()()
     assert await terminal_manager.wait(terminal_id, OWNER, seconds=0.2) == "timeout"
     assert info().attention_revision == shown
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["natural", "emergency"])
+async def test_output_persistence_stays_off_loop_ordered_and_owned_until_closed(
+    manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ending: str,
+) -> None:
+    terminal_manager, factory = manager
+    context = make_context(tmp_path)
+    started = await call(terminal_manager, context, {"action": "start", "command": "fake"})
+    terminal_id = started["data"]["terminal_id"]
+    session = terminal_manager._sessions[terminal_id]
+    raw_log = session._output.log
+    log_path = raw_log.path
+    assert log_path is not None
+    before = terminal_manager.terminal(terminal_id, OWNER).screen_revision
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    entered = asyncio.Event()
+    release = threading.Event()
+    events: list[str] = []
+    write, close = TerminalLog._write, TerminalLog._close
+
+    def held_write(log: TerminalLog, data: bytes) -> bool:
+        assert threading.get_ident() != loop_thread
+        assert threading.current_thread().name.startswith("vbot-terminal_log")
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        result = write(log, data)
+        events.append("written")
+        return result
+
+    def observed_close(log: TerminalLog) -> None:
+        events.append("closed")
+        close(log)
+
+    monkeypatch.setattr(TerminalLog, "_write", held_write)
+    monkeypatch.setattr(TerminalLog, "_close", observed_close)
+    factory.adapters[0].emit("retained output")
+    await entered.wait()
+    snapshot = asyncio.create_task(terminal_manager.snapshot(terminal_id, OWNER))
+    await asyncio.sleep(0)
+    try:
+        assert not snapshot.done()
+        assert terminal_manager.terminal(terminal_id, OWNER).screen_revision == before
+        if ending == "emergency":
+            terminal_manager.stop()
+            reader = session._reader_task
+            assert reader is not None
+            for _ in range(2):
+                reader.cancel()
+                await asyncio.sleep(0)
+            assert not reader.done()
+            assert "closed" not in events
+    finally:
+        release.set()
+    observed = await snapshot
+    if ending == "natural":
+        assert observed["screen"] == "retained output"
+        factory.adapters[0].finish(0)
+        await eventually(lambda: terminal_manager.terminal(terminal_id, OWNER).state == "exited")
+    await terminal_manager.aclose()
+    assert log_path.read_bytes() == b"retained output"
+    assert events.index("written") < events.index("closed")
+    assert not raw_log.pending_tasks()

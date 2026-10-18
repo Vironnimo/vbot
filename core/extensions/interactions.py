@@ -36,7 +36,7 @@ from typing import Any, Protocol
 # data is ``run:<payload>`` is routed by the channel adapter to the conversation
 # engine (which enqueues an internal Run carrying the tap context), never to an
 # extension. The registry skips any extension declaration for a reserved prefix
-# (see ``ExtensionRegistry._apply_one_interaction_handler``).
+# (see ``_capabilities.install_interaction_handlers``).
 RUN_TRIGGER_PREFIX = "run"
 # Callback-data prefix of a Channel checklist's item buttons (``core.channels.checklist``):
 # the channel adapter toggles such a tap in the message itself.

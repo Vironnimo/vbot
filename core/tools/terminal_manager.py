@@ -19,12 +19,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any
 
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
-from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
-from core.tools import terminal_backend
+from core.storage.temp_files import TemporaryFileManager
 from core.tools.shell_environment import terminal_environment
 from core.tools.terminal_backend import (
     TerminalAdapter,
@@ -41,9 +40,7 @@ from core.tools.terminal_store import (
 )
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
-from core.utils.paths import model_path
 from core.utils.processes import process_tree_runs
-from core.utils.workers import settle_before_cancelling
 
 from ._terminal_catalog import (
     TERMINAL_CALL_NAMES,
@@ -52,16 +49,17 @@ from ._terminal_catalog import (
     resolve_root_view,
     session_group_id,
 )
-from ._terminal_launch import ShellLaunch, interactive_shell, shell_launch
-from ._terminal_render_host import TerminalRenderHost, TerminalScreen
+from ._terminal_launch import shell_launch
+from ._terminal_notices import screen_behind_note, unseen_lines_note
+from ._terminal_render_host import TerminalRenderHost
+from ._terminal_scopes import TerminalScopes
 from ._terminal_session import (
     TerminalLaunch,
     TerminalObservation,
     TerminalSession,
     TerminalSessionServices,
-    screen_behind_note,
-    unseen_lines_note,
 )
+from ._terminal_spawning import TerminalSessionFactory
 from ._terminal_state import (
     TERMINAL_ACTIVITY_QUIET_SECONDS,
     TERMINAL_DEFAULT_COLUMNS,
@@ -72,7 +70,6 @@ from ._terminal_state import (
     TERMINAL_INPUT_MAX_CHARS,
     TERMINAL_MAX_COLUMNS,
     TERMINAL_MAX_LIVE_GLOBAL,
-    TERMINAL_MAX_LIVE_PER_SESSION,
     TERMINAL_MAX_ROWS,
     TERMINAL_MIN_COLUMNS,
     TERMINAL_MIN_ROWS,
@@ -101,10 +98,9 @@ from ._terminal_state import (
     TerminalStreamEvent,
     WaitEnded,
     _utc_now,
-    _validate_dimensions,
     _validate_owner,
 )
-from .process_tree import ProcessTree, ProcessTreeTracker, observe_process_tree
+from .process_tree import ProcessTreeTracker, observe_process_tree
 
 _LOGGER = get_logger("tools.terminal_manager")
 
@@ -157,28 +153,25 @@ class TerminalManager:
             raise ValueError("Terminal idle period must not be shorter than its quiet period")
         if start_wait_seconds <= 0:
             raise ValueError("Terminal start wait must be positive")
-        self._temporary_files = temporary_files
         self._operator_store = TerminalOperatorStore(
             launch_history_path=launch_history_path,
             groups_path=groups_path,
             data_dir=data_dir,
         )
-        self._adapter_factory: TerminalAdapterFactory = adapter_factory or spawn_terminal_adapter
         # A host passed in belongs to the caller, which closes it.
         self._owns_render_host = render_host is None
         self._render_host = render_host or TerminalRenderHost()
-        self._scrollback_lines = scrollback_lines
         self._finished_session_ttl = finished_session_ttl
         self._sweep_interval_seconds = sweep_interval_seconds
         self._start_wait_seconds = start_wait_seconds
         self._sessions: dict[str, TerminalSession] = {}
         self._pending_spawns: dict[asyncio.Task[TerminalSession], TerminalOwner | None] = {}
         self._pending_execution_spawns: dict[asyncio.Task[TerminalSession], RunExecutionOwner] = {}
-        self._closing_scopes: list[Callable[[TerminalOwner], bool]] = []
-        self._closed_execution_groups: set[tuple[str, str, str]] = set()
+        self._scopes = TerminalScopes(
+            self._sessions, self._pending_spawns, self._pending_execution_spawns
+        )
         self._closed = False
         self._program_probe = program_probe
-        self._process_observer = process_observer
         self._reader_executor = ThreadPoolExecutor(
             max_workers=TERMINAL_MAX_LIVE_GLOBAL,
             thread_name_prefix="vbot-terminal-read",
@@ -190,6 +183,13 @@ class TerminalManager:
             session_view=session_view,
             reserved_names=reserved_call_names,
         )
+        self._factory = TerminalSessionFactory(
+            temporary_files=temporary_files,
+            adapter_factory=adapter_factory or spawn_terminal_adapter,
+            render_host=self._render_host,
+            scrollback_lines=scrollback_lines,
+            process_observer=process_observer,
+        )
         self._services = TerminalSessionServices(
             trigger_service=trigger_service,
             reader_executor=self._reader_executor,
@@ -200,7 +200,7 @@ class TerminalManager:
             program_probe=program_probe,
             operator_summary=self._catalog.summary,
             changed=self._catalog.notify_changed,
-            open_screen=self._open_screen,
+            open_screen=self._factory.open_screen,
         )
         self._sweeper_task: asyncio.Task[None] | None = None
 
@@ -445,21 +445,11 @@ class TerminalManager:
         **kwargs: Any,
     ) -> TerminalSession:
         """Reserve capacity before starting work and retain ownership through cancellation."""
-        if self._closed or (
-            owner is not None and any(matches(owner) for matches in self._closing_scopes)
-        ):
+        if self._closed or (self._scopes.closing(owner)):
             raise TerminalClosedError("Terminal Session is no longer running")
-        if (
-            execution_owner is not None
-            and (
-                execution_owner.extension,
-                execution_owner.group_id,
-                execution_owner.epoch,
-            )
-            in self._closed_execution_groups
-        ):
+        if execution_owner is not None and self._scopes.execution_closed(execution_owner):
             raise TerminalClosedError("Terminal Session is no longer running")
-        self._enforce_capacity(owner)
+        self._scopes.enforce_capacity(owner)
         task = asyncio.create_task(
             self._spawn_admitted(owner, argv, execution_owner=execution_owner, **kwargs)
         )
@@ -494,145 +484,37 @@ class TerminalManager:
         owner: TerminalOwner | None,
         argv: Sequence[str],
         *,
-        launch: TerminalLaunch,
-        env: Mapping[str, str] | None,
-        columns: int,
-        rows: int,
-        origin_run_id: str | None,
         group_id: str | None = None,
-        execution_owner: RunExecutionOwner | None = None,
-        command_line: str | None = None,
-        cleanup: Callable[[], None] | None = None,
-        integrate_shell: bool = False,
+        **options: Any,
     ) -> TerminalSession:
-        """Start one process behind PTY/ConPTY and its Terminal Session.
-
-        With *integrate_shell*, an interactive shell starts with shell integration.
-        """
-        _validate_dimensions(columns, rows)
-        cwd = launch.cwd
-        if not cwd.is_dir():
-            raise ValueError(f"Terminal workdir is not a directory: {model_path(cwd)}")
         self._catalog.validate_pin(group_id)
-
-        log_path: Path | None = None
-        log_handle: BinaryIO | None = None
-        log_lease: TemporaryFileLease | None = None
-        screen = None
-        adapter: TerminalAdapter | None = None
-        observer: ProcessTree | None = None
-        integration: ShellLaunch | None = None
-        try:
-            screen = await self._open_screen(columns, rows)
-            log_path, log_handle, log_lease = await asyncio.to_thread(self._open_raw_log)
-            process_env = await asyncio.to_thread(terminal_environment, env)
-            if integrate_shell:
-                integration = await asyncio.to_thread(
-                    interactive_shell, argv, environment=process_env
-                )
-                if integration is not None:
-                    argv = integration.argv
-                    command_line = integration.command_line
-                    process_env.update(integration.environment)
-                    if integration.scratch is not None:
-                        cleanup = integration.remove_scratch
-            if self._closed or (
-                owner is not None and any(matches(owner) for matches in self._closing_scopes)
-            ):
-                raise TerminalClosedError("Terminal Session is no longer running")
-            adapter = await self._start_process(argv, cwd, process_env, rows, columns, command_line)
-            observer = await self._observe(adapter.pid)
-        except Exception as error:
-            if adapter is not None:
-                with contextlib.suppress(OSError, ProcessLookupError):
-                    await asyncio.to_thread(terminal_backend.terminate_process_tree, adapter)
-                with contextlib.suppress(OSError):
-                    await asyncio.to_thread(adapter.close)
-            if observer is not None:
-                with contextlib.suppress(Exception):
-                    observer.close()
-            if integration is not None:
-                integration.remove_scratch()
-            if screen is not None:
-                screen.close()
-            if log_handle is not None:
-                log_handle.close()
-            if log_lease is not None:
-                log_lease.finish()
-            if isinstance(error, TerminalClosedError):
-                raise
-            raise TerminalLaunchError(f"Terminal process could not be started: {error}") from error
-
-        terminal_id = new_id("term", claim=lambda candidate: candidate not in self._sessions)
-        session = TerminalSession(
-            terminal_id,
-            owner=owner,
-            adapter=adapter,
-            screen=screen,
-            launch=launch,
-            call_name=self._catalog.allocate_call_name(),
+        session = await self._factory.start(
+            owner,
+            argv,
             group_id=group_id,
-            origin_run_id=origin_run_id,
-            execution_owner=execution_owner,
-            log_path=log_path,
-            log_handle=log_handle,
-            log_lease=log_lease,
-            cleanup=cleanup,
             services=self._services,
-            observer=observer,
+            can_start=lambda: not self._closed and not (self._scopes.closing(owner)),
+            allocate_id=lambda: new_id(
+                "term", claim=lambda candidate: candidate not in self._sessions
+            ),
+            allocate_call_name=self._catalog.allocate_call_name,
+            **options,
         )
-        if self._closed or (
-            owner is not None and any(matches(owner) for matches in self._closing_scopes)
-        ):
+        if self._closed or (self._scopes.closing(owner)):
             try:
                 await session.terminate(suppress_attention=True)
             except Exception:
                 # An unconfirmed stop must retain the process and captured
                 # descendant identities under the normal retryable owner.
-                self._sessions[terminal_id] = session
+                self._sessions[session.terminal_id] = session
                 session.start()
                 raise
             session.release()
             raise TerminalClosedError("Terminal Session is no longer running")
-        self._catalog.pinned(group_id, terminal_id)
-        self._sessions[terminal_id] = session
+        self._catalog.pinned(group_id, session.terminal_id)
+        self._sessions[session.terminal_id] = session
         session.start()
         return session
-
-    async def _observe(self, pid: int) -> ProcessTree | None:
-        """Observe a program's process tree; None when that failed."""
-        if self._process_observer is None:
-            return None
-        try:
-            return await asyncio.to_thread(self._process_observer, pid)
-        except Exception:
-            _LOGGER.warning(
-                "Could not observe the processes of terminal program pid=%s; its activity "
-                "relies on output and declared signals",
-                pid,
-                exc_info=True,
-            )
-            return None
-
-    async def _start_process(
-        self,
-        argv: Sequence[str],
-        cwd: Path,
-        process_env: Mapping[str, str],
-        rows: int,
-        columns: int,
-        command_line: str | None,
-    ) -> TerminalAdapter:
-        """Start the process in exactly *process_env*."""
-        return await asyncio.to_thread(
-            self._adapter_factory,
-            list(argv),
-            cwd,
-            process_env,
-            rows,
-            columns,
-            command_line=command_line,
-        )
 
     # Finding and attaching terminals
 
@@ -936,43 +818,7 @@ class TerminalManager:
         )
 
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
-        """Drain exact execution-owned terminals without changing attachment authority.
-
-        Callers close a group only after every Run of the group has settled.
-        Admission stays closed while pending launches drain and owned terminals
-        are terminated; a launch racing the drain is rejected. After the drain
-        the admission marker is released.
-        """
-        key = (extension, group_id, epoch)
-        self._closed_execution_groups.add(key)
-        pending = [
-            task
-            for task, owner in self._pending_execution_spawns.items()
-            if (owner.extension, owner.group_id, owner.epoch) == key
-        ]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        sessions = [
-            session
-            for session in self._sessions.values()
-            if session.execution_owner is not None
-            and (
-                session.execution_owner.extension,
-                session.execution_owner.group_id,
-                session.execution_owner.epoch,
-            )
-            == key
-        ]
-        try:
-            await asyncio.gather(
-                *(session.terminate(suppress_attention=True) for session in sessions)
-            )
-        finally:
-            # The group owner settles every Run of the group before closing its
-            # resources, and each epoch key is used only once. With the launches
-            # drained above, no launch for this key can arrive any more, so the
-            # closed marker is released instead of accumulating for the server life.
-            self._closed_execution_groups.discard(key)
+        await self._scopes.close_execution_group(extension, group_id, epoch)
 
     async def close_scope(self, owner: TerminalOwner) -> int:
         """Stop a Session's live and launching terminals, and detach its other bindings.
@@ -986,21 +832,21 @@ class TerminalManager:
     async def close_scopes(self, owners: Collection[TerminalOwner]) -> int:
         """Close a captured Session tree under one fence, counting each terminal once."""
         scopes = frozenset(owners)
-        return await self._close_matching(scopes.__contains__)
+        return await self._scopes.close_matching(scopes.__contains__)
 
     async def close_agent_scope(self, agent_id: str, project_id: str | None) -> int:
         """Apply Terminal lifecycle and attachment cleanup for a removed Agent scope."""
-        return await self._close_matching(
+        return await self._scopes.close_matching(
             lambda scope: scope.agent_id == agent_id and scope.project_id == project_id
         )
 
     async def close_project_scope(self, project_id: str) -> int:
         """Apply Terminal lifecycle and attachment cleanup for a removed Project."""
-        return await self._close_matching(lambda scope: scope.project_id == project_id)
+        return await self._scopes.close_matching(lambda scope: scope.project_id == project_id)
 
     async def transfer_scope(self, source: TerminalOwner, target: TerminalOwner) -> int:
         """Transfer lifecycle and attachment scopes after a successful Session move."""
-        await self._settle_transfers(lambda owner: owner == source)
+        await self._scopes.settle_transfers(lambda owner: owner == source)
         return sum(session.transfer(source, target) for session in self._sessions.values())
 
     async def transfer_agent_scope(self, agent_id: str, new_agent_id: str) -> int:
@@ -1010,7 +856,7 @@ class TerminalManager:
         attachment; immutable provenance keeps the old id. Returns how many
         Terminal Sessions changed.
         """
-        await self._settle_transfers(
+        await self._scopes.settle_transfers(
             lambda owner: owner.project_id is None and owner.agent_id == agent_id
         )
         moved = 0
@@ -1024,63 +870,6 @@ class TerminalManager:
                 session.transfer(scope, replace(scope, agent_id=new_agent_id))
             moved += bool(scopes)
         return moved
-
-    async def _settle_transfers(self, matches: Callable[[TerminalOwner], bool]) -> None:
-        while pending := [
-            task
-            for task, owner in self._pending_spawns.items()
-            if not task.done() and owner is not None and matches(owner)
-        ]:
-            await asyncio.gather(
-                *(asyncio.shield(task) for task in pending), return_exceptions=True
-            )
-
-    async def _close_matching(self, matches: Callable[[TerminalOwner], bool]) -> int:
-        """Fence matching launches, drain them and stop only matching lifecycle owners."""
-        self._closing_scopes.append(matches)
-        try:
-            pending = [
-                task
-                for task, owner in self._pending_spawns.items()
-                if not task.done() and owner is not None and matches(owner)
-            ]
-            terminating = [
-                session
-                for session in self._sessions.values()
-                if session.lifecycle_owner is not None and matches(session.lifecycle_owner)
-            ]
-            stopped = len(pending) + sum(not session.finished for session in terminating)
-            for session in self._sessions.values():
-                attachment = session.attachment
-                if session not in terminating and attachment is not None and matches(attachment):
-                    stopped += not session.finished
-                    session.detach()
-
-            async def drain() -> None:
-                # A native launch cannot be cancelled safely. Its publication
-                # check sees the fence and disposes the child before returning.
-                # Published terminals can stop while those launches are settling.
-                results = await asyncio.gather(
-                    asyncio.gather(*pending, return_exceptions=True),
-                    *(session.terminate(suppress_attention=True) for session in terminating),
-                    return_exceptions=True,
-                )
-                pending_results = results[0]
-                failures = [result for result in results[1:] if isinstance(result, BaseException)]
-                if isinstance(pending_results, list):
-                    failures.extend(
-                        result
-                        for result in pending_results
-                        if isinstance(result, BaseException)
-                        and not isinstance(result, (TerminalClosedError, TerminalLaunchError))
-                    )
-                if failures:
-                    raise failures[0]
-
-            await settle_before_cancelling(drain())
-            return stopped
-        finally:
-            self._closing_scopes.remove(matches)
 
     # Retention
 
@@ -1124,54 +913,6 @@ class TerminalManager:
                 f"(id: {terminal_id})"
             )
         return session
-
-    def _enforce_capacity(self, owner: TerminalOwner | None) -> None:
-        pending = [
-            pending_owner for task, pending_owner in self._pending_spawns.items() if not task.done()
-        ]
-        live = [session for session in self._sessions.values() if not session.finished]
-        # The live terminals the caller started: the ones it can stop.
-        mine = tuple(
-            session.info()
-            for session in sorted(live, key=lambda item: item.started_at)
-            if owner is not None and session.lifecycle_owner == owner
-        )
-        if len(live) + len(pending) >= TERMINAL_MAX_LIVE_GLOBAL:
-            raise TerminalCapacityError(
-                f"Live Terminal Session limit reached ({TERMINAL_MAX_LIVE_GLOBAL})",
-                scope="global",
-                limit=TERMINAL_MAX_LIVE_GLOBAL,
-                terminals=mine,
-            )
-        owned = len(mine)
-        owned += sum(1 for pending_owner in pending if owner is not None and pending_owner == owner)
-        if owner is not None and owned >= TERMINAL_MAX_LIVE_PER_SESSION:
-            raise TerminalCapacityError(
-                "Live Terminal Session limit reached for this vBot Session "
-                f"({TERMINAL_MAX_LIVE_PER_SESSION})",
-                scope="session",
-                limit=TERMINAL_MAX_LIVE_PER_SESSION,
-                terminals=mine,
-            )
-
-    async def _open_screen(self, columns: int, rows: int) -> TerminalScreen:
-        """Open a rendered screen; raises RuntimeError once the render host is closed."""
-        await asyncio.to_thread(self._render_host.prepare)
-        return self._render_host.open_screen(columns, rows, scrollback_lines=self._scrollback_lines)
-
-    def _open_raw_log(
-        self,
-    ) -> tuple[Path | None, BinaryIO | None, TemporaryFileLease | None]:
-        """Open the log that receives the output as the terminal receives it."""
-        if self._temporary_files is None:
-            return None, None, None
-        lease = self._temporary_files.create(TERMINAL_TEMPORARY_CATEGORY, ".log")
-        try:
-            handle = lease.path.open("ab")
-        except BaseException:
-            lease.finish()
-            raise
-        return lease.path, handle, lease
 
 
 def _launch_program(command: str | None) -> str:

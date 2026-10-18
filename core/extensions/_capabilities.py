@@ -387,12 +387,12 @@ class ExtensionCapabilityInstaller:
 def install_interaction_handlers(records: list[ExtensionRecord]) -> dict[str, RegisteredHandler]:
     """Build the prefix → (extension, handler) map from every loaded record.
 
-    Called by :meth:`load` right after :meth:`_apply_declarations`. Load order
+    Called by the registry after hook declarations are applied. Load order
     is deterministic, so a collision must not silently decide behavior: a
     prefix already claimed by an earlier-loaded extension is **skipped** and
     diagnosed on the loser's record, and the first claimant is diagnosed
     naming the skipped extension(s) — the same first-wins policy as
-    :meth:`_apply_one_tool`. A runtime-reserved prefix
+    Tool capability installation. A runtime-reserved prefix
     (:data:`RESERVED_INTERACTION_PREFIXES`, e.g. ``run``) is skipped before
     that so no extension can claim it.
     """

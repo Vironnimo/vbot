@@ -1016,7 +1016,7 @@ async def test_stop_all_drains_terminals_of_the_complete_tree(
     harness.runtime.terminal_manager = manager
     entered, release, closing = asyncio.Event(), asyncio.Event(), asyncio.Event()
     adapters: list[FakeTerminalAdapter] = []
-    start_process = manager._start_process  # noqa: SLF001
+    start_process = manager._factory._start_process  # noqa: SLF001
     close_scopes = manager.close_scopes
 
     async def blocked_start(argv, *args):
@@ -1033,7 +1033,7 @@ async def test_stop_all_drains_terminals_of_the_complete_tree(
         closing.set()
         return await close_scopes(owners)
 
-    monkeypatch.setattr(manager, "_start_process", blocked_start)
+    monkeypatch.setattr(manager._factory, "_start_process", blocked_start)
     monkeypatch.setattr(manager, "close_scopes", observed_close)
     command_ids = [
         await _background_command(commands, target, "Serve")
