@@ -1,5 +1,4 @@
 """The Session store: typed reads and transactional writes on the Session database."""
-# ruff: noqa: E501
 
 from __future__ import annotations
 
@@ -29,6 +28,7 @@ from core.sessions import (
 )
 from core.sessions._archive_types import ArchiveEntryRef
 from core.sessions._execution_store import TRANSCRIPT_WRITE_PATIENCE_S, SessionExecutionStore
+from core.sessions._search_request import SessionSearchRequest
 from core.sessions._store_health import SessionHealth
 from core.sessions._store_schema import session_database_spec
 from core.sessions._types import (
@@ -36,7 +36,6 @@ from core.sessions._types import (
     SessionChatHistorySnapshot,
     SessionDescriptorSource,
     SessionHistoryRevision,
-    SessionSearchOrder,
     SessionSearchResult,
 )
 from core.sessions.errors import FtsHealth, SessionNotFoundError
@@ -57,6 +56,8 @@ if TYPE_CHECKING:
         SessionWorkingProject,
         ToolResultFacts,
     )
+
+# ruff: noqa: E501
 
 
 WRITE_PATIENCE_S = 20.0
@@ -855,45 +856,18 @@ class SessionStore:
         except Exception:
             return False
 
-    def search_messages(
-        self,
-        query: str,
-        *,
-        project_id: str | None,
-        agent_id: str | None,
-        session_id: str | None = None,
-        match_mode: str = "all_terms",
-        order: SessionSearchOrder = "relevance",
-        limit: int = _store_values._SEARCH_RESULT_LIMIT,
-        roles: Sequence[str] | None = None,
-        since: str | None = None,
-        until: str | None = None,
-        excluded_session_ids: Sequence[str] = (),
-        include_subagents: bool = False,
-        use_fts: bool = True,
-    ) -> SessionSearchResult:
+    def search_messages(self, request: SessionSearchRequest) -> SessionSearchResult:
         def select(*, use_fts: bool, fallback_reason: str | None = None) -> SessionSearchResult:
             return self._read(
                 lambda connection: _store_search.search(
                     connection,
-                    query,
-                    project_id=project_id,
-                    agent_id=agent_id,
-                    session_id=session_id,
-                    match_mode=match_mode,
-                    order=order,
-                    limit=limit,
-                    roles=roles,
-                    since=since,
-                    until=until,
-                    excluded_session_ids=excluded_session_ids,
-                    include_subagents=include_subagents,
+                    request,
                     use_fts=use_fts,
                     fallback_reason=fallback_reason,
                 )
             )
 
-        if not use_fts:
+        if not request.use_fts:
             return select(use_fts=False)
         try:
             return select(use_fts=True)

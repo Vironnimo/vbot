@@ -39,6 +39,7 @@ from core.sessions import (
     _store_timeline,
     _store_values,
 )
+from core.sessions._search_request import SessionSearchRequest
 from core.sessions._types import (
     SessionAddress,
     SessionListFilters,
@@ -216,12 +217,8 @@ def test_scoped_search_pushes_the_eligible_sessions_into_every_branch(
         recorder, statements = _recording(connection)
         result = _store_search.search(
             recorder,
-            query,
-            project_id="project",
+            SessionSearchRequest(query, project_id="project", order=order, **scope, **filters),
             use_fts=use_fts,
-            order=order,
-            **scope,
-            **filters,
         )
         if query == "absent":
             assert result.hits == ()
@@ -232,15 +229,20 @@ def test_inherited_search_hits_are_reported_once_for_the_eligible_fork(history) 
     address, anchor, connection = history
     scoped = _store_search.search(
         connection,
-        "needle answer",
-        project_id="project",
-        agent_id="agent",
-        session_id=address.session_id,
-        match_mode="phrase",
+        SessionSearchRequest(
+            "needle answer",
+            project_id="project",
+            agent_id="agent",
+            session_id=address.session_id,
+            match_mode="phrase",
+        ),
     )
     assert [(hit.message_id, hit.address) for hit in scoped.hits] == [(anchor, address)]
     everywhere = _store_search.search(
-        connection, "needle answer", project_id="project", agent_id="agent", match_mode="phrase"
+        connection,
+        SessionSearchRequest(
+            "needle answer", project_id="project", agent_id="agent", match_mode="phrase"
+        ),
     )
     # The origin still shows its own entry, so the fork never duplicates it.
     assert sorted(hit.address.session_id for hit in everywhere.hits) == ["one", "two"]

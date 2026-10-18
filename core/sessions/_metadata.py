@@ -21,6 +21,7 @@ from core.sessions._types import (
 )
 from core.sessions.errors import SessionPageCursorError
 from core.settings import is_valid_agent_id
+from core.utils.ids import new_id
 
 _RUN_KIND_VALUES = frozenset(kind.value for kind in RunKind)
 
@@ -126,3 +127,14 @@ def _decode_chat_history_cursor(value: str) -> tuple[str, int] | None:
         return generation_id, sequence
     except (binascii.Error, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as error:
         raise SessionPageCursorError("before cursor is invalid") from error
+
+
+def new_session_id() -> str:
+    """Return a fresh id for a Session that is created later, under that id.
+
+    Without a store claim the id carries 80 random bits, so it is unused in
+    practice; creating a Session at an id that does exist fails instead of
+    reusing it. A caller names the Session before it exists: a Channel
+    conversation that ``/new`` moves to a Session its next message creates.
+    """
+    return new_id("ses")
