@@ -45,6 +45,13 @@ if sys.path[:1] != [str(_checkout_root)]:
 
 from cli.application.runtime_sqlite import interpreter_problem  # noqa: E402
 from core.utils.processes import activate_process_containment  # noqa: E402
+from scripts.perf_load_suite.config import (  # noqa: E402
+    DEFAULT_LEVELS,
+    DEFAULT_OUTPUT_ROOT,
+    QUICK_LEVELS,
+    SCENARIOS,
+    LoadConfig,
+)
 from scripts.perf_load_suite.directive import DEFAULT_TOOLS  # noqa: E402
 from scripts.perf_load_suite.profiling import py_spy_unavailable_reason  # noqa: E402
 from scripts.perf_load_suite.report import (  # noqa: E402
@@ -52,15 +59,7 @@ from scripts.perf_load_suite.report import (  # noqa: E402
     load_result,
     render_console,
 )
-from scripts.perf_load_suite.runner import (  # noqa: E402
-    DEFAULT_LEVELS,
-    DEFAULT_OUTPUT_ROOT,
-    QUICK_LEVELS,
-    SCENARIOS,
-    LoadConfig,
-    failed_levels,
-    run_load,
-)
+from scripts.perf_load_suite.runner import failed_levels, run_load  # noqa: E402
 from scripts.perf_load_suite.swarm_script import DEFAULT_SWARM_TOOLS  # noqa: E402
 from scripts.perf_load_suite.timeline import DEFAULT_SNAPSHOT_INTERVAL_SECONDS  # noqa: E402
 
