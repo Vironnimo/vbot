@@ -1216,7 +1216,8 @@
     flex-direction: column;
     gap: 8px;
     overflow-y: auto;
-    padding: 8px;
+    /* Close to the chat's scrollbar at its right. */
+    padding: 8px 4px 8px 8px;
     background: var(--bg);
     box-shadow: var(--floating-elevation);
     scrollbar-width: thin;
@@ -1487,6 +1488,19 @@
     line-height: 1.3;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Finished work steps back so running work stands out; it lights up
+     again under the pointer or focus. */
+  .chat-activity__group--finished .chat-activity__task-title {
+    color: var(--text-med);
+  }
+  .chat-activity__group--finished
+    .chat-activity__task-row:has(:global(button:hover))
+    .chat-activity__task-title,
+  .chat-activity__group--finished
+    .chat-activity__task-row:focus-within
+    .chat-activity__task-title {
+    color: var(--text-hi);
   }
   .chat-activity__task-command {
     font-family: var(--font-mono);
