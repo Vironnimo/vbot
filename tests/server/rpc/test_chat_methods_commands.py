@@ -49,7 +49,13 @@ WEBUI = ReplySurface.webui()
 
 def test_transport_layers_do_not_own_command_workflows() -> None:
     root = Path(__file__).parents[3]
-    chat_source = (root / "server" / "rpc" / "chat_methods.py").read_text(encoding="utf-8")
+    chat_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            root / "server" / "rpc" / "chat_methods.py",
+            root / "server" / "rpc" / "_chat_input.py",
+        )
+    )
     channel_source = (root / "core" / "channels" / "engine.py").read_text(encoding="utf-8")
     combined = f"{chat_source}\n{channel_source}"
 

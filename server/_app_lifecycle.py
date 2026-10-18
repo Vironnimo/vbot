@@ -8,6 +8,7 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, cast
 
 from core.runs import ChatRunManager
+from core.sessions import SessionAddress
 from core.tools.command_manager import CommandNotFoundError
 from core.utils.log_viewer import LogViewer
 from core.utils.workers import cancel_and_wait
@@ -163,16 +164,14 @@ def _unregister_run_event_bridge(state: Any) -> None:
 def _register_session_title_bridge(state: Any) -> Any:
     """Publish Session changes the Runtime makes on its own: titles and goals."""
 
-    def publish(address: Any) -> None:
-        publish_session_changed(state, address.project_id, address.agent_id, address.session_id)
+    def publish(address: SessionAddress) -> None:
+        publish_session_changed(state, address)
 
-    def publish_goal(address: Any, history: bool) -> None:
+    def publish_goal(address: SessionAddress, history: bool) -> None:
         # ``history``: the change appended a goal row outside a Run, which an
         # accessor showing the conversation reads from the History.
         extra = {"history": "appended"} if history else {}
-        publish_session_changed(
-            state, address.project_id, address.agent_id, address.session_id, **extra
-        )
+        publish_session_changed(state, address, **extra)
 
     unsubscribers = [state.runtime.chat_sessions.add_title_changed_callback(publish)]
     try:
@@ -202,9 +201,7 @@ def _register_session_completion_read_bridge(state: Any) -> Any:
     return state.runtime.chat_sessions.add_completion_read_callback(
         lambda address, run_id: publish_session_changed(
             state,
-            address.project_id,
-            address.agent_id,
-            address.session_id,
+            address,
             read_run_id=run_id,
         )
     )

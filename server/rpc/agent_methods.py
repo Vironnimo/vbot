@@ -57,7 +57,6 @@ from server.rpc.errors import (
 )
 from server.rpc.event_bridge import publish_archived_sessions, publish_resource_changed
 from server.rpc.payloads import _agent_response
-from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
     _ensure_model_connection_supported,
     _optional_bool,
@@ -253,7 +252,7 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
             async with AsyncExitStack() as guards:
                 for guarded_agent_id in sorted((agent_id, new_agent_id)):
                     await guards.enter_async_context(
-                        _state_chat_runs(state).agent_admission_guard(
+                        state.chat_runs.agent_admission_guard(
                             guarded_agent_id,
                             project_id=None,
                         )

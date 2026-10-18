@@ -27,7 +27,7 @@ from core.subagents import SubAgentState
 from core.subagents.links import link_session
 from core.tools.tools import tool_success
 from server.file_delivery import FileDelivery
-from server.rpc import chat_methods
+from server.rpc import _chat_reads as chat_reads
 from tests.core.sessions.history_fixtures import append_tool_fixture, complete_run, seed_history
 from tests.server.rpc.chat_methods_test_support import call
 
@@ -240,7 +240,7 @@ async def test_history_reports_usage_per_message_and_for_the_whole_session(
 ) -> None:
     windows = {"openai/gpt-5.2": 400_000}
     monkeypatch.setattr(
-        chat_methods, "_resolve_context_window", lambda _state, model: windows.get(model)
+        chat_reads, "_resolve_context_window", lambda _state, model: windows.get(model)
     )
     history.agents.model = "openai/gpt-5.2"
     session = history.session()
@@ -429,13 +429,13 @@ async def test_history_reports_the_current_statuses_of_the_sessions_background_c
     history: _History, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     walks: list[SessionAddress] = []
-    walk = chat_methods.descendants
+    walk = chat_reads.descendants
 
     def recorded_walk(sessions: ChatSessionManager, root: SessionAddress, **kwargs: Any) -> Any:
         walks.append(root)
         return walk(sessions, root, **kwargs)
 
-    monkeypatch.setattr(chat_methods, "descendants", recorded_walk)
+    monkeypatch.setattr(chat_reads, "descendants", recorded_walk)
     session = history.session()
     _handed_off_command(session, "bash-one", "cmd_one")
     _handed_off_command(session, "bash-two", "cmd_two")
@@ -788,7 +788,7 @@ async def test_unchanged_after_read_returns_the_cursor_and_live_commands_in_one_
     session_hops: list[str] = []
     projection_hops: list[str] = []
     session_pool = history.sessions.run_async
-    projection_pool = chat_methods._CHAT_RPC_WORKERS.run
+    projection_pool = chat_reads._CHAT_RPC_WORKERS.run
 
     async def session_hop(function: Any, *args: Any, **kwargs: Any) -> Any:
         session_hops.append(function.__name__)
@@ -802,10 +802,10 @@ async def test_unchanged_after_read_returns_the_cursor_and_live_commands_in_one_
         raise AssertionError("an unchanged read must not recompute Session facts")
 
     monkeypatch.setattr(history.sessions, "run_async", session_hop)
-    monkeypatch.setattr(chat_methods._CHAT_RPC_WORKERS, "run", projection_hop)
-    monkeypatch.setattr(chat_methods, "_session_compaction_policy", unexpected)
-    monkeypatch.setattr(chat_methods, "_read_reflection_runs", unexpected)
-    monkeypatch.setattr(chat_methods, "background_command_statuses", unexpected)
+    monkeypatch.setattr(chat_reads._CHAT_RPC_WORKERS, "run", projection_hop)
+    monkeypatch.setattr(chat_reads, "_session_compaction_policy", unexpected)
+    monkeypatch.setattr(chat_reads, "_read_reflection_runs", unexpected)
+    monkeypatch.setattr(chat_reads, "background_command_statuses", unexpected)
 
     unchanged = await history.read(session_id=session.id, after=first["next_after"])
 
@@ -842,7 +842,7 @@ async def test_unchanged_after_read_returns_the_cursor_and_live_commands_in_one_
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "params",
-    [{"before": "message-missing"}, {"limit": chat_methods.MAX_CHAT_HISTORY_LIMIT + 1}],
+    [{"before": "message-missing"}, {"limit": chat_reads.MAX_CHAT_HISTORY_LIMIT + 1}],
 )
 async def test_history_rejects_an_unknown_cursor_or_an_oversized_page(
     history: _History, params: dict[str, Any]
