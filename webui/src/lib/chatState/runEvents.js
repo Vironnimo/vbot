@@ -1,6 +1,6 @@
+import { isTerminalRunEvent } from '../api.js';
 import {
   CHAT_STATUS_RUNNING,
-  TERMINAL_RUN_EVENTS,
   updateSessionUsage,
   CHAT_STATUS_IDLE,
   CHAT_STATUS_COMPLETED,
@@ -48,8 +48,7 @@ export function startRun(sessionState, run) {
   sessionState.streamStatus = CHAT_STATUS_RUNNING;
   appendRunEvents(sessionState, run.events ?? []);
   const terminal = sessionState.runEvents.find(
-    (event) =>
-      event.run_id === run.run_id && TERMINAL_RUN_EVENTS.has(event.type),
+    (event) => event.run_id === run.run_id && isTerminalRunEvent(event.type),
   );
   if (terminal) finishRun(sessionState, terminal);
   return sessionState.currentRun;
@@ -124,7 +123,7 @@ export function appendRunEvent(sessionState, event) {
       (item) => item.id !== normalizedEvent.payload.queue_item_id,
     );
   }
-  if (TERMINAL_RUN_EVENTS.has(normalizedEvent.type)) {
+  if (isTerminalRunEvent(normalizedEvent.type)) {
     finishRun(sessionState, normalizedEvent);
   }
   return normalizedEvent;
@@ -225,8 +224,7 @@ function beginRunFromEvent(sessionState, event) {
     isReleasedRun(sessionState, event.run_id) ||
     sessionState.runEvents.some(
       (existing) =>
-        existing.run_id === event.run_id &&
-        TERMINAL_RUN_EVENTS.has(existing.type),
+        existing.run_id === event.run_id && isTerminalRunEvent(existing.type),
     )
   )
     return;

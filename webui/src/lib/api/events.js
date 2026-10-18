@@ -75,7 +75,7 @@ export const RUN_EVENT_TYPES = [
   'run_interrupted',
 ];
 
-const TERMINAL_RUN_EVENT_TYPES = new Set([
+export const TERMINAL_RUN_EVENTS = new Set([
   'run_completed',
   'run_cancelled',
   'run_failed',
@@ -87,11 +87,11 @@ const TERMINAL_RUN_EVENT_TYPES = new Set([
 const RUN_SERVER_EVENT_TYPES = new Set([
   'run_started',
   'run_output',
-  ...TERMINAL_RUN_EVENT_TYPES,
+  ...TERMINAL_RUN_EVENTS,
 ]);
 
 export function isTerminalRunEvent(type) {
-  return TERMINAL_RUN_EVENT_TYPES.has(type);
+  return TERMINAL_RUN_EVENTS.has(type);
 }
 
 export function isRunServerEvent(type) {

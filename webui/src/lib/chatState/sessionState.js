@@ -1,3 +1,5 @@
+import { isTerminalRunEvent } from '../api.js';
+
 export const CHAT_STATUS_IDLE = 'idle';
 
 export const CHAT_STATUS_RUNNING = 'running';
@@ -15,13 +17,6 @@ const AGENT_ACTIVITY_IDLE = 'idle';
 const AGENT_ACTIVITY_RUNNING = 'running';
 
 const AGENT_ACTIVITY_UNREAD = 'unread';
-
-export const TERMINAL_RUN_EVENTS = new Set([
-  'run_completed',
-  'run_failed',
-  'run_cancelled',
-  'run_interrupted',
-]);
 
 export const TERMINAL_RUN_STATUSES = new Set([
   CHAT_STATUS_COMPLETED,
@@ -415,8 +410,7 @@ export function sessionHasTerminalRun(sessionState, runId) {
   return (
     sessionState.historyRuns?.[runId]?.complete === true ||
     (sessionState.runEvents ?? []).some(
-      (event) =>
-        event?.run_id === runId && TERMINAL_RUN_EVENTS.has(event?.type),
+      (event) => event?.run_id === runId && isTerminalRunEvent(event?.type),
     )
   );
 }

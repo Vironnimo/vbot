@@ -1,3 +1,4 @@
+import { isTerminalRunEvent } from './api.js';
 import { createRunActivityProjection } from './chatRunStream/activity.js';
 import { runEventFromServerEvent } from './chatRunStream/serverEvents.js';
 import { formatAgentAddress } from './agentAddress.js';
@@ -5,7 +6,6 @@ import { reconnectBackoffDelay } from './backoff.js';
 import { applyTimelineEvent } from './chatTimeline.js';
 import { t } from './i18n.js';
 import {
-  TERMINAL_RUN_EVENTS,
   appendRunEvent,
   applyRunControls,
   ensureSessionState,
@@ -253,7 +253,7 @@ export function createChatRunStream({
     ) {
       attachRunStream(session, { run_id: event.run_id, status: 'running' });
     }
-    if (!TERMINAL_RUN_EVENTS.has(event.type)) return;
+    if (!isTerminalRunEvent(event.type)) return;
     void refreshSessionQueue(session);
     // A WebSocket terminal may overtake the final projection batch. Never
     // close that transport until its own terminal snapshot/update arrives.
