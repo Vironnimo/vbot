@@ -12,6 +12,7 @@ as :class:`OutputWriteError`.
 from __future__ import annotations
 
 import errno
+import tempfile
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -276,13 +277,15 @@ class OutputWriteError(TaskError):
 def ensure_output_dir(output_dir: str | Path) -> Path:
     """Create the caller-selected output folder before a billed request is sent.
 
-    A folder that cannot be created or is a file fails here, so no provider
-    request is paid for media that could not be saved.
+    Create and close a temporary file to check an existing folder also permits
+    new files before paying for a Provider request.
     """
 
     directory = Path(output_dir)
     try:
         directory.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile(dir=directory):
+            pass
     except FileExistsError:
         raise OutputDirectoryError(directory, "a file with that name exists") from None
     except OSError as exc:
