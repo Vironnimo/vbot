@@ -314,9 +314,16 @@ def test_publish_moves_a_skill_into_another_home_with_its_provenance(
     rename = Path.rename
     remove_tree = shutil.rmtree
     original_document = (source / "demo" / "SKILL.md").read_bytes()
+    external_change: str | None = None
+    displaced = tmp_path / "externally-moved-publication"
 
     def refuse_source_archive(path: Path, destination: Path) -> Path:
         if path == source / "demo":
+            if external_change == "edited":
+                (target / "demo" / "references" / "notes.md").write_text("external edit")
+            elif external_change == "replaced":
+                rename(target / "demo", displaced)
+                shutil.copytree(displaced, target / "demo")
             raise PermissionError("source is locked")
         return rename(path, destination)
 
@@ -348,6 +355,25 @@ def test_publish_moves_a_skill_into_another_home_with_its_provenance(
         if cleanup_fails:
             remove_tree(target / "demo")
 
+    for external_change in ("edited", "replaced"):
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "rename", refuse_source_archive)
+            with pytest.raises(SkillAuthoringError) as failure:
+                service.publish(source, target, "demo", writer=AGENT)
+        assert (source / "demo" / "SKILL.md").read_bytes() == original_document
+        assert (source / "demo" / "references" / "notes.md").read_text() == "notes"
+        assert (target / "demo" / "SKILL.md").read_bytes() == original_document
+        assert (target / "demo" / "references" / "notes.md").read_text() == (
+            "external edit" if external_change == "edited" else "notes"
+        )
+        assert (target / "demo").as_posix() in str(failure.value)
+        assert not any(item.skill == "demo" for item in service.recorded_revisions(target))
+        assert service.archived(source) == []
+        remove_tree(target / "demo")
+        if external_change == "replaced":
+            remove_tree(displaced)
+
+    external_change = None
     published = service.publish(source, target, "demo", writer=AGENT)
 
     assert (published.operation, published.path) == ("publish", target / "demo" / "SKILL.md")

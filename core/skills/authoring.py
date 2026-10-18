@@ -30,6 +30,7 @@ from core.skills._authoring_documents import (
     _is_within,
     _normalize_newlines,
     _normalized_support_path,
+    _publication_fingerprint,
     _read_raw_text,
     _read_text_file,
     _reject_new_reserved_path,
@@ -79,7 +80,7 @@ from core.skills.skill_validator import (
 )
 from core.skills.skills import SKILL_FILENAME, SkillRegistry
 from core.utils.atomic import atomic_write_bytes
-from core.utils.file_status import is_file_strict
+from core.utils.file_status import exists_strict, is_file_strict
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
@@ -364,6 +365,7 @@ class SkillAuthoringService:
             staging = Path(tempfile.mkdtemp(prefix=".skill-publish-", dir=destination.parent))
             try:
                 shutil.copytree(source_dir, staging / "package", symlinks=True)
+                publication = _publication_fingerprint(staging / "package")
                 (staging / "package").rename(destination)
             finally:
                 shutil.rmtree(staging, ignore_errors=True)
@@ -381,6 +383,20 @@ class SkillAuthoringService:
             try:
                 archived = self.delete(source_root, skill_name, writer=writer, reason="published")
             except Exception:
+                try:
+                    missing = not exists_strict(destination, follow_symlinks=False)
+                    unchanged = missing or _publication_fingerprint(destination) == publication
+                except OSError:
+                    missing, unchanged = False, False
+                if not unchanged:
+                    raise SkillAuthoringError(
+                        f"Skill '{skill_name}' is still at its source. Publishing failed, "
+                        f"and the destination at {model_path(destination)} changed or could "
+                        "not be verified, so it was left untouched. Ask the user to inspect "
+                        "that destination before retrying."
+                    ) from None
+                if missing:
+                    raise
                 try:
                     shutil.rmtree(destination)
                 except OSError as cleanup_error:
