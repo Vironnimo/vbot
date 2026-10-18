@@ -182,7 +182,7 @@ class ChatLoopDependencies:
     refresh_skills: Callable[[str | None, str | None], SkillRegistry]
     get_local_context_windows: Callable[[], Mapping[str, Any]]
     image_understanding_available: Callable[[], Awaitable[bool]]
-    deliver_background_completions: Callable[[Run, ChatSession], bool]
+    deliver_background_completions: Callable[[Run, ChatSession], Awaitable[ChatMessage | None]]
     # The shell's commands; created after the Chat Loop.
     get_command_manager: Callable[[], CommandManager | None]
     usage_recorder: UsageRecorder | None = None

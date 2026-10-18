@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core.automation import _cron_events as _events
@@ -30,6 +31,14 @@ if TYPE_CHECKING:
     from core.automation.cron import CronService
 
 
+@dataclass(frozen=True)
+class CronRunOutcome:
+    """Whether a fire admitted a Run and whether that Run succeeded."""
+
+    succeeded: bool
+    admitted: bool
+
+
 class CronExecution:
     def __init__(self, owner: CronService) -> None:
         self._owner = owner
@@ -40,7 +49,8 @@ class CronExecution:
         *,
         owed: _schedule.OwedFire | None = None,
         event_due: _events.EventDue | None = None,
-    ) -> bool:
+    ) -> CronRunOutcome:
+        admitted = False
         self._owner._executing_jobs.add(job.id)
         try:
             async with self._owner._run_slots:
@@ -50,12 +60,12 @@ class CronExecution:
                     or latest.status != "active"
                     or job.id in self._owner._pending_restarts
                 ):
-                    return False
+                    return CronRunOutcome(succeeded=False, admitted=admitted)
 
                 if event_due is not None:
                     prepared = await self._owner._scheduler._prepare_event_fire(latest)
                     if prepared is None:
-                        return False
+                        return CronRunOutcome(succeeded=False, admitted=admitted)
                     latest, event_due = prepared
                     owed = _schedule.OwedFire(due_at=event_due.due_at)
                 else:
@@ -71,7 +81,7 @@ class CronExecution:
                     or latest.status != "active"
                     or job.id in self._owner._pending_restarts
                 ):
-                    return False
+                    return CronRunOutcome(succeeded=False, admitted=admitted)
                 # Capacity and claim persistence can delay even an on-time fire.
                 # Keep its due-time evidence until all pre-admission waits settle.
                 late = self._owner._scheduler._late_fire(owed) if owed is not None else None
@@ -102,12 +112,13 @@ class CronExecution:
                         contributes_to_agent_activity=False,
                         **note,
                     )
+                    admitted = True
                     latest = self._owner._jobs.get(job.id)
                     if latest is None:
                         wait_for_run = getattr(run, "wait", None)
                         if callable(wait_for_run):
                             await wait_for_run()
-                        return False
+                        return CronRunOutcome(succeeded=False, admitted=admitted)
                     latest.last_fired_at = _timing._utc_now_iso()
                     run_id = getattr(run, "id", None)
                     latest.last_run_id = run_id if isinstance(run_id, str) else None
@@ -139,10 +150,10 @@ class CronExecution:
                                 job.id,
                                 latest.status,
                             )
-                    return False
+                    return CronRunOutcome(succeeded=False, admitted=admitted)
                 except Exception as error:
                     if run is None and await self._record_unavailable_target(job.id, error):
-                        return False
+                        return CronRunOutcome(succeeded=False, admitted=admitted)
                     if run is None:
                         # Pre-admission failure - the Run never started. A full Queue
                         # or a shutdown window must not burn a recurring job's
@@ -155,7 +166,7 @@ class CronExecution:
                             error,
                             exc_info=(type(error), error, error.__traceback__),
                         )
-                        return False
+                        return CronRunOutcome(succeeded=False, admitted=admitted)
                     await self._record_run_failure(job.id, error)
                     await self._finalize_exhausted_job(job.id)
                     _LOGGER.error(
@@ -164,11 +175,11 @@ class CronExecution:
                         error,
                         exc_info=(type(error), error, error.__traceback__),
                     )
-                    return False
+                    return CronRunOutcome(succeeded=False, admitted=admitted)
 
                 latest = self._owner._jobs.get(job.id)
                 if latest is None:
-                    return False
+                    return CronRunOutcome(succeeded=False, admitted=admitted)
                 latest.last_completed_at = _timing._utc_now_iso()
                 latest.last_outcome = "success"
                 latest.last_error = None
@@ -176,7 +187,7 @@ class CronExecution:
                 self._owner._jobs[latest.id] = latest
                 await self._save_jobs_after_fire(latest.id)
                 await self._finalize_exhausted_job(latest.id)
-                return True
+                return CronRunOutcome(succeeded=True, admitted=admitted)
         finally:
             self._owner._executing_jobs.discard(job.id)
 
@@ -264,7 +275,7 @@ class CronExecution:
             job.status,
         )
 
-    async def _persist_after_fire(self, job_id: str) -> None:
+    async def _persist_after_fire(self, job_id: str) -> bool:
         """Persist job state after a fire, giving up after bounded retries.
 
         A persistently unwritable jobs file must not hang the firing task
@@ -275,7 +286,7 @@ class CronExecution:
         """
         for _attempt in range(_POST_FIRE_SAVE_MAX_ATTEMPTS):
             if await self._save_jobs_after_fire(job_id):
-                return
+                return True
             await _timing._sleep(_POST_FIRE_SAVE_RETRY_SECONDS)
         _LOGGER.error(
             "Cron job state could not be persisted after %d attempts (job=%s); "
@@ -283,6 +294,7 @@ class CronExecution:
             _POST_FIRE_SAVE_MAX_ATTEMPTS,
             job_id,
         )
+        return False
 
     async def _save_jobs_after_fire(self, job_id: str) -> bool:
         try:

@@ -69,6 +69,10 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         availability = getattr(runtime, "task_model_available", None)
         return bool(availability(TASK_IMAGE_UNDERSTANDING)) if callable(availability) else False
 
+    async def deliver_background_completions(run: Run, session: ChatSession) -> ChatMessage | None:
+        deliver = getattr(runtime, "deliver_background_completions", None)
+        return None if deliver is None else await deliver(run, session)
+
     missing = SimpleNamespace()
     dependencies = ChatLoopDependencies(
         agent_resolver=cast(Any, getattr(runtime, "agent_resolver", missing)),
@@ -95,13 +99,7 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         get_local_context_windows=lambda: runtime.local_context_windows(),
         image_understanding_available=image_understanding_available,
         get_command_manager=lambda: getattr(runtime, "command_manager", None),
-        deliver_background_completions=lambda run, session: bool(
-            getattr(
-                runtime,
-                "deliver_background_completions",
-                lambda _run, _session: False,
-            )(run, session)
-        ),
+        deliver_background_completions=deliver_background_completions,
         usage_recorder=getattr(runtime, "usage_recorder", None),
         scratch_areas=getattr(runtime, "scratch_areas", None),
         subagent_reply_to_user=getattr(runtime, "subagent_reply_to_user", None),

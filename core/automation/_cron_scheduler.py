@@ -56,8 +56,11 @@ class CronScheduler:
             if job.status != "active":
                 continue
             if job.schedule_type == "once":
+                assert job.run_at is not None
                 try:
-                    claimed_at = _claims.read(self._owner._once_fire_claims_dir, job.id)
+                    claimed_at = _claims.read(
+                        self._owner._once_fire_claims_dir, job.id, run_at=job.run_at
+                    )
                 except CronStorageError as error:
                     # The job may already have fired. Never fire it from this
                     # process; the next start re-evaluates a readable claim.
@@ -303,36 +306,44 @@ class CronScheduler:
             if job.id in self._owner._pending_restarts:
                 await self._remove_claim(job.id)
                 return
-            succeeded = await self._owner._execution._trigger_job_run(
+            outcome = await self._owner._execution._trigger_job_run(
                 latest, owed=_schedule.OwedFire(due_at=run_at_utc)
             )
+            if outcome.admitted:
+                # Even an unsuccessful admitted Run consumes this fire. Keep
+                # edits behind its final save and claim removal so a replacement
+                # task cannot create a new claim that this one would remove.
+                self._owner._executing_jobs.add(job.id)
+                try:
+                    latest = self._owner._jobs.get(job.id)
+                    if latest is not None:
+                        if (
+                            outcome.succeeded
+                            and latest.status == "active"
+                            and job.id not in self._owner._pending_restarts
+                        ):
+                            latest.status = "completed"
+                            self._owner._jobs[latest.id] = latest
+                        if await self._owner._execution._persist_after_fire(latest.id):
+                            await self._remove_claim(latest.id)
+                finally:
+                    self._owner._executing_jobs.discard(job.id)
+                return
+
+            # No Run was admitted: withdrawing this claim cannot repeat work.
+            await self._remove_claim(job.id)
             if job.id in self._owner._pending_restarts:
-                await self._remove_claim(job.id)
                 return
-            if not succeeded:
-                await self._remove_claim(latest.id)
-                current_after_failure = self._owner._jobs.get(latest.id)
-                if (
-                    current_after_failure is None
-                    or current_after_failure.remaining_runs == 0
-                    or current_after_failure.status != "active"
-                ):
-                    return
-                failed_fire_attempts += 1
-                if await self._back_off_or_abandon_once_job(job.id, failed_fire_attempts):
-                    return
-                continue
-
-            latest = self._owner._jobs.get(job.id)
-            if latest is None:
+            current_after_failure = self._owner._jobs.get(job.id)
+            if (
+                current_after_failure is None
+                or current_after_failure.remaining_runs == 0
+                or current_after_failure.status != "active"
+            ):
                 return
-
-            if latest.status == "active":
-                latest.status = "completed"
-                self._owner._jobs[latest.id] = latest
-                await self._owner._execution._persist_after_fire(latest.id)
-            await self._remove_claim(latest.id)
-            return
+            failed_fire_attempts += 1
+            if await self._back_off_or_abandon_once_job(job.id, failed_fire_attempts):
+                return
 
     async def _claim_once_fire(self, job: CronJob, claimed_at: str) -> None:
         # A reschedule must wait for this claim to settle before replacing its

@@ -39,8 +39,8 @@ def write(directory: Path, job: CronJob, claimed_at: str) -> None:
         raise CronStorageError(f"Cannot write {claim_path}: {error}") from error
 
 
-def read(directory: Path, job_id: str) -> str | None:
-    """Return the claim time, None when no claim exists, or raise when unknown.
+def read(directory: Path, job_id: str, *, run_at: str) -> str | None:
+    """Return this scheduled fire's claim time, None when absent, or raise when unknown.
 
     ``CronStorageError`` means a claim may exist but cannot be read; callers must
     then treat the job as possibly fired.
@@ -59,6 +59,19 @@ def read(directory: Path, job_id: str) -> str | None:
 
     if not isinstance(payload, dict) or payload.get("job_id") != job_id:
         raise CronStorageError(f"Invalid once fire claim {claim_path}: job_id mismatch")
+
+    claimed_run_at = payload.get("run_at")
+    if not isinstance(claimed_run_at, str):
+        raise CronStorageError(f"Invalid once fire claim {claim_path}: run_at is required")
+    try:
+        claimed_due = _parse_utc_timestamp(claimed_run_at, field_name="run_at")
+        expected_due = _parse_utc_timestamp(run_at, field_name="run_at")
+    except CronJobValidationError as error:
+        raise CronStorageError(f"Invalid once fire claim {claim_path}: {error}") from error
+    if claimed_due != expected_due:
+        # A successfully saved explicit reschedule names a new fire. Evidence
+        # of an older fire must not consume that newly armed schedule.
+        return None
 
     claimed_at = payload.get("claimed_at")
     if not isinstance(claimed_at, str):

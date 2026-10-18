@@ -924,7 +924,7 @@ async def test_repeat_is_consumed_when_run_is_admitted_even_if_run_fails(tmp_pat
         remaining_runs=1,
     )
 
-    assert await service._execution._trigger_job_run(job) is False
+    assert (await service._execution._trigger_job_run(job)).succeeded is False
 
     updated = service.get_job(job.id)
     assert updated.remaining_runs == 0

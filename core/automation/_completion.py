@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from core.chat import ChatLoop, ReplySurface, reply_surface_from_note
+from core.chat import ChatLoop, ChatMessage, ReplySurface, reply_surface_from_note
 from core.chat.messages import REPLY_SURFACE_NOTE_PREFIX
 from core.runs import (
     ActiveRunError,
@@ -19,8 +19,9 @@ from core.runs import (
     RunNotFoundError,
     RunStatus,
 )
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.logging import get_logger
+from core.utils.workers import finish_despite_cancel
 
 if TYPE_CHECKING:
     from core.sessions import ChatSession, ChatSessionManager
@@ -199,16 +200,16 @@ class _CompletionDeliveryCoordinator:
             notice.delivered.cancel()
         return True
 
-    def deliver_to_request(self, run: Run, session: ChatSession) -> bool:
+    async def deliver_to_request(self, run: Run, session: ChatSession) -> ChatMessage | None:
         """Persist ready results for the next request of their active boundary Run."""
         if self._closed:
-            return False
+            return None
         address = SessionAddress(
             project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
         )
         bucket = self._buckets.get(address)
         if bucket is None or self._active_run(address) is not run:
-            return False
+            return None
 
         self._move_idle_notices_to_run(bucket, run)
         pending = [
@@ -220,11 +221,16 @@ class _CompletionDeliveryCoordinator:
             and notice.read_after is None
         ]
         if not pending:
-            return False
+            return None
 
+        message = ChatMessage.note(_completion_message(pending))
+        _claim(pending, True)
         try:
-            session.add_note(_completion_message(pending))
+            # Request-boundary Notes are otherwise deferred. This append must
+            # commit before a producer may retire its completion evidence.
+            await finish_despite_cancel(session.append_async(message))
         except Exception:
+            _claim(pending, False)
             # The delivery task still owns these notices. Leaving them pending
             # lets another Model-request boundary retry the append, or the
             # post-Run fallback persist them after this Run reaches terminal.
@@ -235,7 +241,10 @@ class _CompletionDeliveryCoordinator:
                 address.session_id,
                 exc_info=True,
             )
-            return False
+            return None
+        except BaseException:
+            _claim(pending, False)
+            raise
         for notice in pending:
             notice.read_after = run.iteration_count
         self._acknowledge(address, bucket, [notice for notice in pending if not notice.wake])
@@ -243,7 +252,7 @@ class _CompletionDeliveryCoordinator:
         for notice in pending:
             if notice.wake:
                 self._confirm(address, notice)
-        return True
+        return message
 
     async def _deliver(
         self,
@@ -592,11 +601,13 @@ class _CompletionDeliveryCoordinator:
                 return None
             try:
                 session = await sessions.get_async(address)
-            except Exception as error:
+            except SessionNotFoundError as error:
                 # There is no durable target left. A terminal delivery
                 # failure lets producers release their process-local state.
                 self._fail(bucket, pending, error)
                 return None
+            except Exception as error:
+                return error
             # Results withdrawn meanwhile stay out of the note.
             pending = self._still_pending(bucket, pending)
             if not pending:

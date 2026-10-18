@@ -37,7 +37,7 @@ if sys.path[:1] != [_CHECKOUT_ROOT]:
 
 from core.agents import Agent  # noqa: E402
 from core.automation import TriggerService  # noqa: E402
-from core.chat import ChatLoop, ChatLoopDependencies, ChatSessionManager  # noqa: E402
+from core.chat import ChatLoop, ChatLoopDependencies, ChatMessage, ChatSessionManager  # noqa: E402
 from core.prompts import PinnedSkillCatalog  # noqa: E402
 from core.providers.accounts import ConnectionRef  # noqa: E402
 from core.runs import ChatRunManager, Run  # noqa: E402
@@ -377,10 +377,10 @@ async def _run_case(
     wrapped_adapters: list[_SyntheticFirstStepAdapter] = []
     completion_futures: list[asyncio.Future[None]] = []
 
-    def deliver_background_completions(run: Run, session: Any) -> bool:
+    async def deliver_background_completions(run: Run, session: Any) -> ChatMessage | None:
         if trigger_service is None:
             raise RuntimeError("completion TriggerService is not initialized")
-        return trigger_service.deliver_background_completions(run, session)
+        return await trigger_service.deliver_background_completions(run, session)
 
     def get_adapter(connection: ConnectionRef) -> _SyntheticFirstStepAdapter:
         if (

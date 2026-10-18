@@ -15,7 +15,7 @@ import pytest
 
 import core.automation._completion as automation_module
 from core.automation import TriggerService
-from core.chat import ChatSession, ChatSessionError, ChatSessionManager, ReplySurface
+from core.chat import ChatMessage, ChatSession, ChatSessionError, ChatSessionManager, ReplySurface
 from core.runs import (
     ChatRunManager,
     Run,
@@ -639,9 +639,11 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
     assert "background command finished" in notes[0]
 
 
+@pytest.mark.parametrize("failure_boundary", ["read", "append"])
 async def test_completion_fallback_retries_transient_persistence_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_boundary: str,
 ) -> None:
     run_manager = ChatRunManager()
     sessions = ChatSessionManager(tmp_path)
@@ -665,7 +667,19 @@ async def test_completion_fallback_retries_transient_persistence_failure(
             raise ChatSessionError("temporary append failure")
         original_add_note(session, content, **options)
 
-    monkeypatch.setattr(ChatSession, "add_note", add_note_with_transient_failure)
+    original_get = sessions.get_async
+
+    async def get_with_transient_failure(address: SessionAddress) -> ChatSession:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("temporary read failure")
+        return await original_get(address)
+
+    if failure_boundary == "read":
+        monkeypatch.setattr(sessions, "get_async", get_with_transient_failure)
+    else:
+        monkeypatch.setattr(ChatSession, "add_note", add_note_with_transient_failure)
     delays: list[float] = []
 
     async def record_wait(delay: float) -> None:
@@ -715,8 +729,15 @@ async def test_results_ready_at_run_end_coalesce_and_later_ones_get_a_new_delive
     ("ending", "follow_up"),
     [("answered", False), ("failed", True), ("user_cancelled", False)],
 )
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("first_append_fails", [False, True])
 async def test_completion_delivery_joins_active_run_at_next_request_boundary(
-    tmp_path: Path, ending: str, follow_up: bool
+    tmp_path: Path,
+    ending: str,
+    follow_up: bool,
+    deferred: bool,
+    first_append_fails: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = ChatRunManager()
     release = asyncio.Event()
@@ -732,7 +753,18 @@ async def test_completion_delivery_joins_active_run_at_next_request_boundary(
     service, loop, session = _completion_service(tmp_path, manager)
     delivery = _submit(service, "bash:in-run", "finished during the active run", origin.id)
 
-    assert service.deliver_background_completions(origin, session) is True
+    if deferred:
+        session.begin_defer_notes()
+    if first_append_fails:
+        original_append = session.append_async
+        append = AsyncMock(side_effect=ChatSessionError("temporary boundary append failure"))
+        monkeypatch.setattr(session, "append_async", append)
+        assert await service.deliver_background_completions(origin, session) is None
+        assert not delivery.done()
+        assert _notes(session) == []
+        monkeypatch.setattr(session, "append_async", original_append)
+    note = await service.deliver_background_completions(origin, session)
+    assert note is not None
     await asyncio.wait_for(delivery, timeout=1)
 
     notes = _notes(session)
@@ -781,7 +813,9 @@ async def test_cancelled_pending_notice_does_not_start_empty_follow_up(
     assert loop.messages == []
 
 
-@pytest.mark.parametrize("delivery", ["follow_up_run", "reminder"])
+@pytest.mark.parametrize(
+    "delivery", ["follow_up_run", "reminder", "request_boundary", "cancelled_request_boundary"]
+)
 async def test_a_result_its_delivery_claimed_cannot_be_withdrawn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delivery: str
 ) -> None:
@@ -791,7 +825,21 @@ async def test_a_result_its_delivery_claimed_cannot_be_withdrawn(
     service, loop, session = _completion_service(tmp_path, manager)
     entered = asyncio.Event()
     release = asyncio.Event()
-    if delivery == "follow_up_run":
+    request_delivery: asyncio.Task[ChatMessage | None] | None = None
+    origin: Run | None = None
+    origin_release: asyncio.Event | None = None
+    if delivery.endswith("request_boundary"):
+        origin, origin_release = await _active_origin(manager)
+        origin_id = origin.id
+        append = session.append_async
+
+        async def held_append(note: ChatMessage) -> None:
+            entered.set()
+            await release.wait()
+            await append(note)
+
+        monkeypatch.setattr(session, "append_async", held_append)
+    elif delivery == "follow_up_run":
         origin_id = "origin"
         start_run = loop.start_run
 
@@ -813,16 +861,31 @@ async def test_a_result_its_delivery_claimed_cannot_be_withdrawn(
         monkeypatch.setattr(ChatSession, "add_note_async", held_add_note)
 
     result = _submit(service, "bash:claimed", "claimed result", origin_id)
+    if origin is not None:
+        request_delivery = asyncio.create_task(
+            service.deliver_background_completions(origin, session)
+        )
     await asyncio.wait_for(entered.wait(), timeout=1)
 
+    assert not result.done()
     assert not service.cancel_completion(
         SessionAddress(None, "coder", "session-one"), notice_id="bash:claimed"
     )
+    if delivery == "cancelled_request_boundary":
+        assert request_delivery is not None
+        request_delivery.cancel()
     release.set()
+    if request_delivery is not None:
+        assert await asyncio.wait_for(request_delivery, timeout=1) is not None
     await asyncio.wait_for(result, timeout=1)
     delivered = loop.messages if delivery == "follow_up_run" else _notes(session)
     assert len(delivered) == 1
     assert "claimed result" in delivered[0]
+    if origin is not None:
+        assert origin_release is not None
+        origin.iteration_count += 1
+        origin_release.set()
+        await origin.wait()
     await service.aclose()
     await manager.aclose()
 
