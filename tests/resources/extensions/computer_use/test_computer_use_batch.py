@@ -346,6 +346,27 @@ async def test_cancelled_queued_call_does_not_stop_another_runs_input(
     assert computer.target.inputs == [("keys", ["enter"], 1)]
 
 
+async def test_cancellation_after_mouse_down_completes_releases_the_button(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = asyncio.get_running_loop()
+    button = computer.target.button
+
+    def cancel_after_input(*args):
+        button(*args)
+        loop.call_soon_threadsafe(call.cancel)
+
+    monkeypatch.setattr(computer.target, "button", cancel_after_input)
+    call = asyncio.create_task(computer.computer(action="left_mouse_down"))
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    assert computer.target.inputs == [("button", "left", True)]
+    # _act never received the result to set _held_run, so Run-end bookkeeping
+    # cannot be responsible for releasing this completed native input.
+    assert computer.service._held_run is None
+    assert computer.target.released >= 1
+
+
 async def test_run_end_releases_a_mouse_button_the_run_left_pressed(computer: Harness) -> None:
     computer.target.pointer = (200, 150)
     assert (await computer.computer(action="left_mouse_down"))["ok"]

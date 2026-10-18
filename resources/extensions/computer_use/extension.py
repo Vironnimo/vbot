@@ -303,6 +303,20 @@ class ComputerUseService:
                     pass
                 except Exception:
                     self.api.logger.exception("Computer Use worker failed after cancellation")
+                finally:
+                    if interrupt_on_cancel and self._target is not None:
+                        # Input can complete just before cancellation reaches
+                        # this task, before _act records a held mouse button.
+                        # The target then has no later stop checkpoint to run.
+                        try:
+                            await settle_before_cancelling(
+                                asyncio.wrap_future(executor.submit(self._target.release_all))
+                            )
+                            self._held_run = None
+                        except Exception:
+                            self.api.logger.exception(
+                                "Computer Use could not release input after cancellation"
+                            )
             raise
         return future.result()
 
