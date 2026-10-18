@@ -9,7 +9,8 @@ from pathlib import Path
 
 from scripts.tool_lab import definitions, probe, replay, sessions
 from scripts.tool_lab._lab_runtime import DEFAULT_AGENT_ID, lab_runtime, utf8_console
-from scripts.tool_lab._replay_history import ReplayError, SessionStats
+from scripts.tool_lab._replay_evidence import ReplayError
+from scripts.tool_lab._replay_history import SessionStats
 
 
 def main(argv: list[str] | None = None) -> int:
