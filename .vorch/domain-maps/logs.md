@@ -25,7 +25,7 @@ The logs subsystem exposes server log files from `<data_dir>/logs/` for inspecti
 
 ## Interfaces
 
-- `core/utils/log_viewer.py`
+- `core/utils/log_viewer.py` owns the async watcher and subscriber lifecycle; its blocking backend `core/utils/_log_reader.py` owns configured log sources, safe discovery, parsing, bounded page/tail reads and stateless cursors.
   - `await LogViewer.list_files()` -> `{ files, default_file }`
   - `await LogViewer.read_file(file_name, *, before=None)` -> the newest page with a `cursor`, or with `before` the page ending there without one
   - `LogViewer.subscribe(file_name, cursor?)` -> async generator of entry and catalog events
