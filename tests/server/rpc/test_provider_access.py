@@ -13,20 +13,19 @@ from typing import Any
 import pytest
 
 import server.rpc.provider_access as provider_access
+from core.providers.accounts import Account
 from server.rpc.provider_access import _runtime_provider_credential
 
 
 class _RecordingTokenGetter:
     instances: list[_RecordingTokenGetter] = []
 
-    def __init__(
-        self, token_store: Any, provider_id: str, connection_id: str, oauth: Any, *, account_id: str
-    ) -> None:
-        self.account_id = account_id
+    def __init__(self, token_store: Any, account: Account, oauth: Any) -> None:
+        self.account = account
         _RecordingTokenGetter.instances.append(self)
 
     async def __call__(self) -> str:
-        return f"token-for-{self.account_id}"
+        return f"token-for-{self.account.account_id}"
 
 
 class _AccountResolvingCredentials:
@@ -37,7 +36,7 @@ class _AccountResolvingCredentials:
         self, provider_id: str, connection_id: str, account_id: str | None = None
     ) -> str:
         self.requests.append((provider_id, connection_id, account_id))
-        return account_id or "first-usable"
+        return account_id or "first_usable"
 
 
 @pytest.mark.asyncio
@@ -45,7 +44,7 @@ class _AccountResolvingCredentials:
     ("connection_id", "expected_request", "expected_account"),
     [
         ("openai:subscription:work", "work", "work"),
-        ("openai:subscription", None, "first-usable"),
+        ("openai:subscription", None, "first_usable"),
     ],
 )
 async def test_oauth_credential_honors_explicit_account_suffix(
@@ -67,4 +66,6 @@ async def test_oauth_credential_honors_explicit_account_suffix(
         assert await credential() == f"token-for-{expected_account}"
 
     assert credentials.requests == [("openai", "subscription", expected_request)]
-    assert [getter.account_id for getter in _RecordingTokenGetter.instances] == [expected_account]
+    assert [getter.account for getter in _RecordingTokenGetter.instances] == [
+        Account("openai", "subscription", expected_account)
+    ]
