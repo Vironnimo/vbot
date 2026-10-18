@@ -12,47 +12,31 @@ through :meth:`SubAgentCoordinator.subagents`, ``running_work`` and
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Sequence
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from core.agents import is_builtin_agent
 from core.projects import (
-    AgentOverrides,
-    AgentResolutionError,
     InvalidAgentAddressError,
-    ModelConfigurationError,
-    ResolutionAgentNotFoundError,
-    ResolutionProjectNotFoundError,
     WorkingProjectMissingError,
     format_agent_address,
-    parse_agent_address,
 )
 from core.runs import (
     ActiveRunError,
     ChatRunManager,
     Run,
-    RunAdmission,
-    RunKind,
     RunNotFoundError,
 )
 from core.sessions import (
-    AGENT_DEFAULT_PROJECT,
     SessionAddress,
     SessionNotFoundError,
     TemporarySessionBinding,
 )
-from core.settings import SettingsValidationError, validate_thinking_effort
+from core.settings import SettingsValidationError
 from core.subagents._constants import (
-    DEFAULT_MAX_ACTIVE_SUBAGENTS,
-    DEFAULT_MAX_ACTIVE_SUBAGENTS_TOTAL,
-    DEFAULT_MAX_SUBAGENT_DEPTH,
     MESSAGE_PARENT_DELIVERY_UNAVAILABLE_MESSAGE,
     MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE,
     MESSAGE_PARENT_PARENT_GONE_MESSAGE,
     MESSAGE_PARENT_QUEUED_NOTE,
-    PARENT_AGENT_CANCEL_REASON,
     PARENT_MESSAGE_SECTION_TEMPLATE,
     SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_ACTIVITY_NOTE_TEMPLATE,
@@ -78,19 +62,33 @@ from core.subagents._constants import (
     SUBAGENT_SEND_STEERED_NOTE,
     SUBAGENT_SEND_WITHOUT_CONTENT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_WITHOUT_ID_MESSAGE_TEMPLATE,
-    SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_NOT_SUBAGENT_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_PROJECT_MISSING_MESSAGE_TEMPLATE,
-    SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_STARTED_EVENT,
-    SUBAGENT_SESSION_TITLE_MAX_CHARACTERS,
     SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE,
     SUBAGENT_START_FIRST_TEXT,
     SUBAGENT_STARTED_NOTE,
-    SUBAGENT_STATUS_CHANGED_EVENT,
     SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE,
-    SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE,
-    USER_CANCEL_REASON,
+)
+from core.subagents._delegation import (
+    _admission,
+    _caller,
+    _child_working_project,
+    _counts_as_working,
+    _emit,
+    _event_data,
+    _load_subagent_settings,
+    _open_subagent_session,
+    _parse_session_overrides,
+    _public_identity,
+    _remove_unstarted_session,
+    _resolve_target_address,
+    _session_title,
+    _target_binding,
+    _target_is_allowed,
+    _validate_continued_session,
+    _validate_target_agent,
+    _working_subagent_count,
 )
 from core.subagents._interpretation import (
     SUBAGENT_ID_PATTERN,
@@ -100,30 +98,28 @@ from core.subagents._interpretation import (
     optional_text,
     quoted,
     reads_as_new_session,
-    subagent_address,
     target_choices,
     yours_text,
 )
+from core.subagents._tree import SubAgentTreeControl
+from core.subagents._types import SubAgentState, SubAgentStopOutcome
+from core.subagents._types import SubAgentStatus as SubAgentStatus
+from core.subagents._types import SubAgentTree as SubAgentTree
 from core.subagents.catalog import SubAgentPromptTarget, build_subagent_prompt_targets
 from core.subagents.forwarding import (
     SubAgentActivities,
     SubAgentForwarding,
     is_working,
-    running_entries,
 )
 from core.subagents.links import (
     SubAgentLink,
     ancestors,
     children,
-    descendants,
     find_link,
-    link_session,
     read_link,
 )
-from core.tools.availability import subagent_allowed_agents
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.contracts import ToolContractError
-from core.tools.terminal_manager import TerminalOwner
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -132,79 +128,18 @@ from core.tools.tools import (
 )
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
-from core.utils.workers import finish_despite_cancel, settle_before_cancelling
+from core.utils.workers import finish_despite_cancel
 
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
     from core.sessions.session import ChatSession
+
 
 _LOGGER = get_logger("subagents")
 
 
 def _subagent_count(count: int) -> str:
     return f"{count} Sub-Agent" if count == 1 else f"{count} Sub-Agents"
-
-
-# The WebUI's names for the kinds of running work `inspect` reports.
-_INSPECTED_WORK_KINDS = {
-    "Sub-Agent": "subagent",
-    "background command": "command",
-    "terminal": "terminal",
-}
-
-# ``working``: its turn runs; ``queued``: a message waits to start its next turn;
-SubAgentStatus = Literal["working", "queued", "idle"]
-
-# What a stop of a Sub-Agent did. ``stopped``: something ran and was stopped;
-# ``idle`` means that nothing needed stopping.
-SubAgentStopOutcome = Literal["stopped", "idle"]
-
-
-@dataclass(frozen=True)
-class SubAgentState:
-    """One Sub-Agent below a caller, as it is now.
-
-    ``agent_id`` is the address ``subagent`` accepts for its Agent. ``parent_id``
-    names the caller's Sub-Agent it works for, ``None`` for a direct Sub-Agent of
-    the caller. ``last_tool`` is the Tool its working turn called last.
-    ``reply_target`` is independent of membership, status and control.
-    """
-
-    id: str
-    title: str
-    agent_id: str
-    session: SessionAddress
-    parent_id: str | None
-    status: SubAgentStatus
-    last_tool: str | None
-    activity_file: str | None
-    reply_target: str = "parent"
-
-
-class SubAgentTree(Protocol):
-    """The Sub-Agents below a caller, what they run, and how to stop one.
-
-    ``background_tasks`` lists, checks and stops them and the background commands
-    of their Sessions; ``terminal`` names the Sub-Agent whose Session holds a
-    terminal. The complete tree stays visible and controllable.
-    """
-
-    async def subagents(self, caller: SessionAddress) -> Sequence[SubAgentState]:
-        """*caller*'s Sub-Agents at every depth, breadth first, as they are now."""
-        ...
-
-    async def running_work(self, subagent: SubAgentState) -> Sequence[str]:
-        """What *subagent* still runs besides its own turn, each as ``kind id (label)``."""
-        ...
-
-    async def stop_subagent(
-        self, context: ToolContext, subagent: SubAgentState
-    ) -> SubAgentStopOutcome:
-        """Stop *subagent* with its queue, background work and own Sub-Agents.
-
-        The complete subtree is stopped regardless of where its answers go.
-        """
-        ...
 
 
 class SubAgentCoordinator:
@@ -218,6 +153,9 @@ class SubAgentCoordinator:
         # One Sub-Agent start at a time: the limit checks count working Sub-Agents,
         # a count that is stale once another start has finished meanwhile.
         self._admission_lock = asyncio.Lock()
+        self._tree = SubAgentTreeControl(
+            self._runtime, self._admission_lock, self._activities, self._forwarding
+        )
 
     async def _limit_refusal(
         self,
@@ -324,8 +262,7 @@ class SubAgentCoordinator:
         activity = await self._activities.ensure(_caller(context))
         delivery_id = new_id("subagent-message")
         delivery = self._trigger_service.submit_completion(
-            parent.agent_id,
-            parent.session_id,
+            parent,
             notice_id=delivery_id,
             origin_run_id=context.run_id,
             body=PARENT_MESSAGE_SECTION_TEMPLATE.format(
@@ -334,7 +271,6 @@ class SubAgentCoordinator:
                 delivery_id=delivery_id,
                 content=cast(str, arguments["content"]).strip(),
             ),
-            project_id=parent.project_id,
             execution_owner=context.execution_owner,
         )
         delivery.add_done_callback(_log_message_delivery)
@@ -358,286 +294,28 @@ class SubAgentCoordinator:
             await session.append_many_async([], subagent_reply_target="parent")
 
     async def inspect(
-        self,
-        agent_id: str,
-        session_id: str,
-        subagent_id: str,
-        *,
-        project_id: str | None = None,
+        self, agent_id: str, session_id: str, subagent_id: str, *, project_id: str | None = None
     ) -> JsonObject | None:
-        """Return the WebUI projection of one Sub-Agent Session's current state.
-
-        ``running`` lists what the Sub-Agent still runs besides its own Run: its
-        working Sub-Agents, background commands and terminals.
-        """
-        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-        session = await self._runtime.chat_sessions.get_async(address)
-        manager = self._runtime.chat_run_manager
-        projection: JsonObject = {
-            "id": subagent_id,
-            "agent_id": agent_id,
-            "session_id": session_id,
-            "running": [
-                {"kind": _INSPECTED_WORK_KINDS[entry.kind], "id": entry.id, "label": entry.label}
-                for entry in await running_entries(self._runtime, address)
-            ],
-        }
-        if project_id is not None:
-            projection["project_id"] = project_id
-        active = manager.active_run(agent_id=agent_id, session_id=session_id, project_id=project_id)
-        if active is not None:
-            return {
-                **projection,
-                "run_id": active.id,
-                "status": active.status.value,
-                "result": None,
-                "usage": None,
-                "timing": None,
-                "started_at": active.created_at,
-                "tool_name": _latest_tool_name(active),
-            }
-        if manager.list_queued(agent_id, session_id, project_id=project_id):
-            return {**projection, "run_id": None, "status": "queued", "result": None}
-        result = await session.load_run_result_async()
-        if result is None or result.summary.run_id is None or result.summary.status is None:
-            return None
-        assistant, summary = result.assistant, result.summary
-        return {
-            **projection,
-            "run_id": summary.run_id,
-            "status": summary.status,
-            "result": assistant.content if assistant is not None else None,
-            "usage": assistant.usage if assistant is not None else None,
-            "timing": summary.timing,
-            "started_at": None,
-            "tool_name": result.latest_tool_name,
-        }
+        return await self._tree.inspect(agent_id, session_id, subagent_id, project_id=project_id)
 
     async def stop_tree(self, address: SessionAddress) -> int:
-        """Stop a Session's current Run, its background work and every Sub-Agent below it.
-
-        The user's "Stop all"; returns how many Runs, queued messages, commands and
-        terminals were stopped. The Session keeps its own queued messages. Answers of
-        the stopped Sub-Agents are not forwarded, so they do not wake the Sessions
-        above them that are stopped too. The complete subtree is stopped regardless
-        of where its answers go.
-        """
-        stopped = await self._stop_subtree(
-            address,
-            reason=USER_CANCEL_REASON,
-            initiator="user_stop_all",
-            silence_root=False,
-            clear_root_queue=False,
-        )
-        # Without stopped_by the Session the user works in is always stopped.
-        return stopped or 0
+        return await self._tree.stop_tree(address)
 
     async def work_snapshot(
         self, address: SessionAddress, *, include_entries: bool = False
     ) -> JsonObject:
-        """Project Stop all's live scope, independently of loaded History.
-
-        The root's own Queue is retained by Stop all and does not make background
-        work stoppable. Descendant Queues, commands and Terminal attachments do.
-        An unavailable tree read propagates instead of reporting an idle tree.
-        """
-        runtime = self._runtime
-        sessions = runtime.chat_sessions
-        async with self._admission_lock:
-            links = await sessions.run_async(descendants, sessions, address, strict=True)
-            below = {link.session for link in links}
-            tree = {address, *below}
-            run_active = (
-                runtime.chat_run_manager.active_run(
-                    agent_id=address.agent_id,
-                    session_id=address.session_id,
-                    project_id=address.project_id,
-                )
-                is not None
-            )
-            background = any(is_working(runtime, child) for child in below)
-            commands = runtime.command_manager
-            if commands is not None:
-                background |= bool(commands.busy_addresses() & below) or any(
-                    not report.finished for report in commands.commands([address])
-                )
-                if not run_active:
-                    background |= address in commands.busy_addresses()
-            terminals = runtime.terminal_manager
-            if terminals is not None:
-                background |= bool(terminals.busy_addresses() & tree) or any(
-                    info.finished_at is None
-                    and any(
-                        owner is not None
-                        and SessionAddress(owner.project_id, owner.agent_id, owner.session_id)
-                        in tree
-                        for owner in (info.lifecycle_owner, info.attachment)
-                    )
-                    for info in terminals.list_terminals()
-                )
-            snapshot: JsonObject = {
-                "run_active": run_active,
-                "background_work_running": background,
-            }
-            if not include_entries:
-                return snapshot
-
-            # The same strict tree read also supplies an Accessor's activity
-            # list. Keep exact addresses with each entry so opening a child
-            # never depends on a historical Tool row being loaded.
-            ids = {link.session: link.id for link in links}
-
-            def owner_fields(owner: SessionAddress) -> JsonObject:
-                return {
-                    "agent_id": owner.agent_id,
-                    "session_id": owner.session_id,
-                    "project_id": owner.project_id,
-                    "subagent_id": ids.get(owner),
-                }
-
-            running: list[JsonObject] = []
-            for link in links:
-                child = link.session
-                active = runtime.chat_run_manager.active_run(
-                    agent_id=child.agent_id,
-                    session_id=child.session_id,
-                    project_id=child.project_id,
-                )
-                if active is None and not is_working(runtime, child):
-                    continue
-                running.append(
-                    {
-                        "kind": "subagent",
-                        "id": link.id,
-                        "label": link.title,
-                        "status": "running" if active is not None else "queued",
-                        **owner_fields(child),
-                        "parent_id": ids.get(link.parent),
-                        "run_id": active.id if active is not None else None,
-                        "reply_target": link.reply_target,
-                        "tool_name": _latest_tool_name(active) if active is not None else None,
-                    }
-                )
-            if commands is not None:
-                running.extend(
-                    {
-                        "kind": "command",
-                        "id": report.command_id,
-                        "label": report.label,
-                        "status": report.status,
-                        "still_running": bool(report.still_running),
-                        **owner_fields(report.owner),
-                    }
-                    for report in commands.commands(tree)
-                    if not report.finished
-                )
-            if terminals is not None:
-                for info in terminals.list_terminals():
-                    if info.finished_at is not None:
-                        continue
-                    owner = next(
-                        (
-                            scoped
-                            for candidate in (info.attachment, info.lifecycle_owner)
-                            if candidate is not None
-                            and (
-                                scoped := SessionAddress(
-                                    candidate.project_id, candidate.agent_id, candidate.session_id
-                                )
-                            )
-                            in tree
-                        ),
-                        None,
-                    )
-                    if owner is None:
-                        continue
-                    command = " ".join((info.command, *info.arguments)).strip()
-                    running.append(
-                        {
-                            "kind": "terminal",
-                            "id": info.terminal_id,
-                            "label": f"{info.call_name}, {command}" if info.call_name else command,
-                            "status": "running",
-                            **owner_fields(owner),
-                        }
-                    )
-            snapshot["running"] = running
-            return snapshot
+        return await self._tree.work_snapshot(address, include_entries=include_entries)
 
     async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
-        """Return *caller*'s Sub-Agents at every depth, breadth first, as they are now.
-
-        ``background_tasks`` lists, checks and stops them, and shows the caller
-        the background commands of their Sessions.
-        """
-        runtime = self._runtime
-        sessions = runtime.chat_sessions
-        tree = await sessions.run_async(descendants, sessions, caller)
-        ids = {link.session: link.id for link in tree}
-        states: list[SubAgentState] = []
-        for link in tree:
-            address = link.session
-            run = runtime.chat_run_manager.active_run(
-                agent_id=address.agent_id,
-                session_id=address.session_id,
-                project_id=address.project_id,
-            )
-            last_tool: str | None = None
-            status: SubAgentStatus
-            if run is not None:
-                status, last_tool = "working", _latest_tool_name(run)
-            elif is_working(runtime, address):
-                status = "queued"
-            else:
-                status = "idle"
-            states.append(
-                SubAgentState(
-                    id=link.id,
-                    title=link.title,
-                    agent_id=subagent_address(link),
-                    session=address,
-                    parent_id=ids.get(link.parent) if link.parent != caller else None,
-                    status=status,
-                    last_tool=last_tool,
-                    activity_file=self._activities.path(address),
-                    reply_target=link.reply_target,
-                )
-            )
-        return states
+        return await self._tree.subagents(caller)
 
     async def running_work(self, subagent: SubAgentState) -> list[str]:
-        """Name what *subagent* still runs besides its own turn, as ``kind id (label)``.
-
-        Its background commands, its terminals and its own working Sub-Agents.
-        """
-        return [
-            entry.describe() for entry in await running_entries(self._runtime, subagent.session)
-        ]
+        return await self._tree.running_work(subagent)
 
     async def stop_subagent(
         self, context: ToolContext, subagent: SubAgentState
     ) -> SubAgentStopOutcome:
-        """Stop *subagent*: its turn, its queue, its background work and its own Sub-Agents.
-
-        The caller learns the outcome from its Tool result, so a direct
-        Sub-Agent's stopped turn is not forwarded to it; a deeper one's is
-        forwarded to its own Parent when its answer is addressed there.
-        """
-        stopped = await self._stop_subtree(
-            subagent.session,
-            reason=PARENT_AGENT_CANCEL_REASON,
-            initiator=f"parent_run:{context.run_id}",
-            silence_root=subagent.parent_id is None,
-            clear_root_queue=True,
-        )
-        if not stopped:
-            return "idle"
-        await _emit(
-            context,
-            SUBAGENT_STATUS_CHANGED_EVENT,
-            _event_data(subagent.id, subagent.session, status="cancelled"),
-        )
-        return "stopped"
+        return await self._tree.stop_subagent(context, subagent)
 
     async def drain_activity(self) -> None:
         """Wait until the activity files' text so far is on disk."""
@@ -1090,81 +768,6 @@ class SubAgentCoordinator:
         result["note"] = note
         return tool_success(result)
 
-    async def _stop_subtree(
-        self,
-        root: SessionAddress,
-        *,
-        reason: str,
-        initiator: str,
-        silence_root: bool,
-        clear_root_queue: bool,
-    ) -> int:
-        """Cancel a complete admitted tree before awaiting any of its cleanup.
-
-        Includes every descendant, whatever its current answer destination.
-        """
-        sessions = self._runtime.chat_sessions
-        manager = self._runtime.chat_run_manager
-        terminals = self._runtime.terminal_manager
-        commands = self._runtime.command_manager
-        stopped = 0
-        runs: list[Run] = []
-        # A child start already in flight must finish before the tree is read.
-        # Cancel every captured Run while admissions are still excluded, so a
-        # descendant cannot create or resume work during another Run's cleanup.
-        async with self._admission_lock:
-            below = await sessions.run_async(descendants, sessions, root, strict=True)
-            addresses = [root, *(link.session for link in below)]
-            for address in addresses:
-                if address != root or clear_root_queue:
-                    stopped += manager.clear_queued(
-                        address.agent_id, address.session_id, project_id=address.project_id
-                    )
-                run = manager.active_run(
-                    agent_id=address.agent_id,
-                    session_id=address.session_id,
-                    project_id=address.project_id,
-                )
-                if run is not None:
-                    if address != root or silence_root:
-                        self._forwarding.silence(run.id)
-                    run.request_cancel(reason=reason, initiator=initiator)
-                    runs.append(run)
-                    stopped += 1
-
-        async def cleanup() -> int:
-            # Cleanup can wait on other work; never hold the admission lock here.
-            # One failed resource must not leave the rest of the captured tree running.
-            closed = 0
-            failures: list[Exception] = []
-            if terminals is not None:
-                owners = [
-                    TerminalOwner(address.project_id, address.agent_id, address.session_id)
-                    for address in addresses
-                ]
-                try:
-                    closed += await terminals.close_scopes(owners)
-                except Exception as error:
-                    failures.append(error)
-            for address in addresses:
-                if commands is not None:
-                    # Commands still inside their call end with the cancelled Run;
-                    # only background ones count as work of their own.
-                    closed += sum(
-                        1 for report in commands.commands([address]) if not report.finished
-                    )
-                    try:
-                        await commands.close_scope(address)
-                    except Exception as error:
-                        failures.append(error)
-            if runs:
-                await asyncio.gather(*(_run_end(run) for run in runs))
-            if failures:
-                raise failures[0]
-            return closed
-
-        return stopped + await settle_before_cancelling(cleanup())
-
     async def _temporary_parent(
         self, context: ToolContext, target_agent_id: str, target_project_id: str | None
     ) -> TemporarySessionBinding | None:
@@ -1222,403 +825,10 @@ def _not_found(subagent_id: str, own: list[SubAgentLink]) -> JsonObject:
     return tool_failure("subagent_not_found", message.rstrip())
 
 
-def _caller(context: ToolContext) -> SessionAddress:
-    return SessionAddress(
-        project_id=context.project_id, agent_id=context.agent_id, session_id=context.session_id
-    )
-
-
-def _admission(
-    context: ToolContext,
-    subagent_id: str,
-    working_project_id: str | None,
-    *,
-    expected_session_generation_id: str | None = None,
-) -> RunAdmission:
-    return RunAdmission(
-        working_project_id=working_project_id,
-        run_kind=RunKind.SUBAGENT,
-        work_id=subagent_id,
-        owner=context.execution_owner,
-        contributes_to_agent_activity=context.execution_owner is None,
-        expected_session_generation_id=expected_session_generation_id,
-    )
-
-
-def _public_identity(subagent_id: str, address: SessionAddress) -> JsonObject:
-    """Identify a Sub-Agent for the calling Agent; ``agent_id`` is what the Tool accepts."""
-    data: JsonObject = {
-        "id": subagent_id,
-        "agent_id": format_agent_address(address.agent_id, address.project_id),
-        "session_id": address.session_id,
-    }
-    if address.project_id is not None:
-        data["project_id"] = address.project_id
-    return data
-
-
-def _event_data(
-    subagent_id: str,
-    address: SessionAddress,
-    *,
-    status: str,
-    run_id: str | None = None,
-    activity_file: str | None = None,
-) -> JsonObject:
-    """Describe a Sub-Agent for WebUI events, with bare ids."""
-    data: JsonObject = {
-        "id": subagent_id,
-        "agent_id": address.agent_id,
-        "session_id": address.session_id,
-        "status": status,
-        "delivery": "automatic",
-        "activity_file": activity_file,
-    }
-    if address.project_id is not None:
-        data["project_id"] = address.project_id
-    if run_id is not None:
-        data["run_id"] = run_id
-    return data
-
-
-async def _emit(context: ToolContext, event: str, data: JsonObject) -> None:
-    await context.emit(
-        event,
-        {
-            "tool_call": {
-                "id": context.tool_call_id,
-                "index": context.tool_call_index,
-                "name": context.tool_name,
-            },
-            "data": data,
-        },
-    )
-
-
-async def _run_end(run: Run) -> None:
-    try:
-        await run.wait()
-    except Exception:
-        return
-
-
-def _latest_tool_name(run: Run) -> str | None:
-    for event in reversed(run.events):
-        if event.type != "tool_call_started":
-            continue
-        tool_call = event.payload.get("tool_call")
-        if isinstance(tool_call, dict):
-            name = tool_call.get("name")
-            if isinstance(name, str) and name:
-                return name
-    return None
-
-
 def _log_message_delivery(delivery: asyncio.Future[None]) -> None:
     if delivery.cancelled() or delivery.exception() is None:
         return
     _LOGGER.warning("Sub-Agent message to its Parent failed: %s", delivery.exception())
-
-
-def _session_title(description: str) -> str:
-    return " ".join(description.split())[:SUBAGENT_SESSION_TITLE_MAX_CHARACTERS]
-
-
-def _open_subagent_session(
-    runtime: RuntimeServices,
-    agent_id: str,
-    project_id: str | None,
-    title: str,
-    subagent_id: str,
-    context: ToolContext,
-    overrides: dict[str, Any],
-) -> ChatSession:
-    """Create the Sub-Agent Session, title it, link it to its Parent and store *overrides*.
-
-    Blocking. One unit of Session work, so a cancelled Parent never leaves a
-    created Sub-Agent Session without its Parent link. The Session works in
-    :func:`_child_working_project`.
-    """
-    sessions = runtime.chat_sessions
-    session = sessions.create(
-        agent_id,
-        project_id=project_id,
-        metadata=AgentOverrides.from_stored(overrides).session_metadata(),
-        working_project_id=(
-            AGENT_DEFAULT_PROJECT
-            if project_id is not None
-            else _child_working_project(context, project_id)
-        ),
-    )
-    address = session.address
-    sessions.set_auto_title(address, title)
-    link_session(
-        sessions,
-        address,
-        subagent_id=subagent_id,
-        parent=_caller(context),
-        run_id=context.run_id,
-        tool_call_id=context.tool_call_id,
-        tool_call_index=context.tool_call_index,
-    )
-    return session
-
-
-async def _remove_unstarted_session(runtime: RuntimeServices, address: SessionAddress) -> None:
-    """Remove a Sub-Agent Session whose first Run could not start."""
-    sessions = runtime.chat_sessions
-    try:
-        await sessions.run_async(sessions.delete, address)
-    except Exception:
-        _LOGGER.warning(
-            "Could not remove a Sub-Agent Session whose Run did not start (session=%s)",
-            address.session_id,
-            exc_info=True,
-        )
-
-
-def _child_working_project(context: ToolContext, target_project_id: str | None) -> str | None:
-    """Return the Project a new Sub-Agent Session works in.
-
-    A Team target works in its Team's Project. An Identity target, including a
-    copy of the Parent itself, works where the Parent's Run works, so delegated
-    work stays in the Parent's working Project (or its Workspace).
-    """
-    return target_project_id if target_project_id is not None else context.working_project_id
-
-
-def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:
-    settings = runtime.storage.load_subagent_settings()
-    return {
-        "max_subagent_depth": _positive_int(
-            settings.get("max_subagent_depth"), DEFAULT_MAX_SUBAGENT_DEPTH
-        ),
-        "max_active_subagents": _positive_int(
-            settings.get("max_active_subagents"), DEFAULT_MAX_ACTIVE_SUBAGENTS
-        ),
-        "max_active_subagents_total": _positive_int(
-            settings.get("max_active_subagents_total"), DEFAULT_MAX_ACTIVE_SUBAGENTS_TOTAL
-        ),
-    }
-
-
-def _counts_as_working(runtime: RuntimeServices, link: SubAgentLink) -> bool:
-    """Whether *link* takes a place under the limits: working, whatever its answer destination."""
-    return is_working(runtime, link.session)
-
-
-def _working_subagent_count(runtime: RuntimeServices, busy: Iterable[SessionAddress]) -> int:
-    """Count the Sub-Agent Sessions among *busy*."""
-    sessions = runtime.chat_sessions
-    links = (read_link(sessions, address) for address in busy)
-    return sum(1 for link in links if link is not None)
-
-
-def _positive_int(value: Any, default: int) -> int:
-    if isinstance(value, int) and value > 0:
-        return value
-    return default
-
-
-def _parse_session_overrides(arguments: JsonObject) -> dict[str, Any]:
-    """Parse the Sub-Agent Session's Agent overrides the call sets.
-
-    An omitted field keeps the Session's current value: the Agent's own for a
-    new Sub-Agent, the stored override for an existing one. An empty
-    ``thinking_effort`` string counts as omitted.
-    """
-    model = optional_text(arguments, "model")
-    thinking_effort: str | None = None
-    raw = arguments.get("thinking_effort")
-    if isinstance(raw, str) and raw:
-        thinking_effort = cast(
-            str, validate_thinking_effort(raw, label="thinking_effort", allow_none=False)
-        )
-    overrides: dict[str, Any] = {}
-    if model is not None:
-        overrides["model"] = model
-    if thinking_effort is not None:
-        overrides["thinking_effort"] = thinking_effort
-    return overrides
-
-
-async def _validate_target_agent(
-    runtime: RuntimeServices,
-    target_agent_id: str,
-    project_id: str | None,
-    *,
-    model: str | None = None,
-    temporary_parent_binding: TemporarySessionBinding | None = None,
-    caller: ToolContext | None = None,
-    overrides: dict[str, Any] | None = None,
-) -> JsonObject | None:
-    """Validate that the target resolves under its addressed Project and can run.
-
-    Only a missing Agent (unknown, off-Team or the built-in Librarian) or
-    Project reports ``agent_not_found`` / ``project_not_found``; a target that
-    cannot run reports ``agent_unavailable`` with the resolver's reason, and a
-    requested *model* that cannot run reports ``invalid_arguments``.
-    """
-    try:
-        own_agent = (
-            caller is not None
-            and caller.agent_id == target_agent_id
-            and caller.project_id == project_id
-        )
-        if temporary_parent_binding is not None:
-            target = await runtime.agent_resolver.resolve_temporary_agent_async(
-                temporary_parent_binding.address,
-                generation_id=temporary_parent_binding.generation_id,
-                session=temporary_parent_binding.address,
-            )
-        elif own_agent:
-            assert caller is not None
-            if caller.agent_model:
-                inherited = AgentOverrides(
-                    model=caller.agent_model,
-                    thinking_effort=caller.agent_thinking_effort or None,
-                    thinking_effort_default=not caller.agent_thinking_effort,
-                )
-            else:
-                inherited = await runtime.agent_resolver.session_overrides_async(_caller(caller))
-            source = {**inherited.as_dict(), **(overrides or {})}
-            if overrides and "thinking_effort" in overrides:
-                source.pop("thinking_effort_default", None)
-            target = await runtime.agent_resolver.resolve_agent_async(
-                project_id,
-                target_agent_id,
-                new_session_overrides=AgentOverrides.from_stored(source),
-            )
-        else:
-            if (
-                model is None
-                and project_id is not None
-                and caller is not None
-                and overrides is not None
-            ):
-                caller_model = caller.agent_model
-                if not caller_model:
-                    parent_address = _caller(caller)
-                    binding = await runtime.chat_sessions.run_async(
-                        runtime.chat_sessions.temporary_binding, parent_address
-                    )
-                    if binding is not None:
-                        parent = await runtime.agent_resolver.resolve_temporary_agent_async(
-                            parent_address,
-                            generation_id=binding.generation_id,
-                            session=parent_address,
-                        )
-                    else:
-                        parent = await runtime.agent_resolver.resolve_agent_async(
-                            caller.project_id, caller.agent_id, session_id=caller.session_id
-                        )
-                    caller_model = parent.model
-                target = await runtime.agent_resolver.resolve_delegated_agent_async(
-                    project_id, target_agent_id, caller_model=caller_model
-                )
-                if getattr(target, "model_inherit", False):
-                    overrides["model"] = caller_model
-            else:
-                target = await runtime.agent_resolver.resolve_agent_async(
-                    project_id,
-                    target_agent_id,
-                    new_session_overrides=AgentOverrides.from_stored(overrides),
-                )
-        if is_builtin_agent(target):
-            raise ResolutionAgentNotFoundError(f"Agent not found: {target_agent_id}")
-        if model is not None:
-            await runtime.agent_resolver.require_model_configured_async(model)
-        if overrides is not None:
-            if own_agent and caller is not None and caller.agent_model:
-                overrides.setdefault("model", caller.agent_model)
-                if "thinking_effort" not in overrides:
-                    if caller.agent_thinking_effort:
-                        overrides["thinking_effort"] = caller.agent_thinking_effort
-                    else:
-                        overrides["thinking_effort_default"] = True
-            overrides.update(AgentOverrides.from_stored(overrides).capture(target).as_dict())
-    except ResolutionProjectNotFoundError as error:
-        return tool_failure("project_not_found", str(error))
-    except ResolutionAgentNotFoundError as error:
-        return tool_failure("agent_not_found", str(error))
-    except AgentResolutionError as error:
-        return tool_failure(
-            "agent_unavailable",
-            SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE.format(
-                target=format_agent_address(target_agent_id, project_id), reason=error
-            ),
-            retryable=False,
-        )
-    except ModelConfigurationError as error:
-        return tool_failure("invalid_arguments", str(error))
-    return None
-
-
-async def _validate_continued_session(
-    runtime: RuntimeServices, link: SubAgentLink, *, model: str | None
-) -> JsonObject | None:
-    """Refuse a message to a Sub-Agent whose stored Agent settings stop its next Run."""
-    resolver = runtime.agent_resolver
-    try:
-        if model is not None:
-            await resolver.require_model_configured_async(model)
-        stored = await resolver.session_overrides_async(link.session)
-    except ModelConfigurationError as error:
-        return tool_failure("invalid_arguments", str(error))
-    except ValueError as error:
-        return tool_failure(
-            "invalid_arguments",
-            SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE.format(id=link.id, reason=error),
-        )
-    if model is not None or stored.model is None:
-        return None
-    try:
-        await resolver.require_model_configured_async(stored.model)
-    except ModelConfigurationError as error:
-        return tool_failure(
-            "invalid_arguments",
-            SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE.format(id=link.id, reason=error),
-        )
-    return None
-
-
-def _resolve_target_address(address: str, caller_project_id: str | None) -> tuple[str, str | None]:
-    """Resolve the Tool's address; a bare address inherits the caller's Project scope."""
-    agent_id, addressed_project_id = parse_agent_address(address)
-    return agent_id, addressed_project_id or caller_project_id
-
-
-def _target_binding(
-    context: ToolContext, target_agent_id: str, target_project_id: str | None
-) -> str | int | None:
-    """Return an explicit Identity grant's captured incarnation, if it has one."""
-    if (
-        context.project_id is not None
-        or target_project_id is not None
-        or target_agent_id == context.agent_id
-        or "*" in subagent_allowed_agents(context.tool_settings)
-    ):
-        return None
-    return context.delegation_bindings.get(target_agent_id)
-
-
-def _target_is_allowed(
-    context: ToolContext, target_agent_id: str, target_project_id: str | None
-) -> bool:
-    """Check the caller's Tool settings and enforce the Project boundary independently."""
-    if context.project_id is not None and target_project_id != context.project_id:
-        return False
-    if target_agent_id == context.agent_id and target_project_id == context.project_id:
-        return True
-    allowed = subagent_allowed_agents(context.tool_settings)
-    if "*" in allowed:
-        return True
-    address = (
-        target_agent_id
-        if context.project_id is not None
-        else format_agent_address(target_agent_id, target_project_id)
-    )
-    return address in allowed
 
 
 __all__ = ["SubAgentCoordinator", "SubAgentState", "SubAgentStatus", "SubAgentStopOutcome"]

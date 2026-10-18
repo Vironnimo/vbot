@@ -67,13 +67,11 @@ class RecordingTriggerService:
 
     def submit_completion(
         self,
-        agent_id: str,
-        session_id: str,
+        target: SessionAddress,
         *,
         notice_id: str,
         origin_run_id: str,
         body: str,
-        project_id: str | None = None,
         on_persisted: Callable[[], None] | None = None,
         execution_owner: Any | None = None,
         wake: bool = True,
@@ -81,7 +79,7 @@ class RecordingTriggerService:
         self.notices.append(
             Notice(
                 notice_id,
-                address(agent_id, session_id, project_id),
+                target,
                 origin_run_id,
                 body,
                 wake,
