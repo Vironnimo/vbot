@@ -17,6 +17,8 @@ The server side of the chat RPCs: `server/rpc/chat_methods.py` owns submission, 
 
 `chat.timeline` exposes authoritative semantic conversation items and existing History/Session facts. `/api/runs/{id}/timeline` sends a fresh snapshot and bounded-rate patches through `server/timeline.py`; raw History and Run-event APIs remain available. See `chat/timeline.md` for identity, paging, recovery and sanitization contracts.
 
+Its `last_usage` preserves the newest public Assistant Usage before child windowing drops raw Assistant records. Replacement reads without Usage return null; incremental reads without new Assistant Usage omit the field so accessors keep the preceding turn's value.
+
 ## Queue and work
 
 `chat.queue_update` accepts an optional `reply_surface` when an accessor edits queued input. Omission preserves the original surface; an explicit terminal/WebUI surface replaces it with the edited input. Listing or selecting a Steer does not change the captured surface.

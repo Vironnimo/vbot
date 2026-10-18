@@ -19,11 +19,40 @@ from core.sessions import SessionAddress
 from server.file_delivery import FileDelivery
 from server.timeline import (
     TimelineStreamingResponse,
+    project_timeline_history,
     sse_timeline,
     timeline_children,
     timeline_snapshot,
     window_timeline_update,
 )
+
+
+@pytest.mark.parametrize("child_limit", [0, 1])
+def test_history_usage_survives_windowing_and_absent_incremental_assistants(
+    child_limit: int,
+) -> None:
+    usage = {"input_tokens": 120, "output_tokens": 15}
+    response = project_timeline_history(
+        {
+            "messages": [
+                {"id": "a1", "role": "assistant", "content": "Answer", "usage": usage},
+                {"id": "a2", "role": "assistant", "content": "Later text without usage"},
+            ],
+            "incremental": False,
+        },
+        child_limit=child_limit,
+    )
+    assert response["last_usage"] == usage
+    if child_limit:
+        assert response["messages"] == []
+    for incremental in (False, True):
+        empty = project_timeline_history(
+            {"messages": [], "incremental": incremental}, child_limit=child_limit
+        )
+        if incremental:
+            assert "last_usage" not in empty
+        else:
+            assert empty["last_usage"] is None
 
 
 @pytest.mark.asyncio
