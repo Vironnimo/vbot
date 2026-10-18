@@ -214,7 +214,7 @@ async def test_start_publishes_healthy_tools_and_reports_individual_issues(
     try:
         assert set(started) == {"godot", "blender"}
         assert {tool.name for tool in registry.list_tools()} == {"mcp_godot", "mcp_blender"}
-        result = await service.manage("list", {})
+        result = await service.management.manage("list", {})
         assert {item["id"] for item in result["connections"]} == {"godot", "blender"}
         assert {issue["code"] for issue in result["configuration_issues"]} == {
             "unknown_fields",
@@ -222,7 +222,7 @@ async def test_start_publishes_healthy_tools_and_reports_individual_issues(
         }
         assert len(caplog.records) == 3
         assert "secret-sentinel" not in caplog.text
-        await service.manage("disable", {"id": "godot"})
+        await service.management.manage("disable", {"id": "godot"})
         assert ConnectionStore(host.state_dir).load()["godot"]["enabled"] is False
         assert not (host.data_dir / "mcp").exists()
     finally:

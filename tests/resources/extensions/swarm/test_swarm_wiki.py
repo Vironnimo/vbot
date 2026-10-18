@@ -443,7 +443,7 @@ async def test_wiki_scope_management_recovery_and_targeted_edits(board):
         {"action": "swarm_wiki", "parameters": {"action": "read", "page_id": page_id, "limit": 4}},
     )
     assert labelled["data"]["content"] == "same"
-    changed = await board.service.operation(
+    changed = await board.service.management.operation(
         "wiki",
         {
             "swarm_id": board.swarm["id"],
@@ -462,10 +462,10 @@ async def test_wiki_scope_management_recovery_and_targeted_edits(board):
     await board.store.close()
     await board.store.open()
     assert (await stored(board, page_id))["title"] == "Renamed"
-    await board.service.operation(
+    await board.service.management.operation(
         "swarms.stop", {"swarm_id": board.swarm["id"], "request_id": "stop"}
     )
-    await board.service.operation("swarms.delete", {"swarm_id": board.swarm["id"]})
+    await board.service.management.operation("swarms.delete", {"swarm_id": board.swarm["id"]})
     with pytest.raises(SwarmStoreError, match="swarm_not_found"):
         await board.store.wiki(board.swarm["id"], None, {"action": "list"})
 

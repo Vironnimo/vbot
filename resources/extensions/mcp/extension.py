@@ -63,19 +63,15 @@ from ._discovery import (
     noted,
     remote_tool_name,
     resolve,
-    search_entries,
     search_page,
-    summarize,
     target_arguments,
     unsupported_operation,
 )
-from ._importer import ImportDraft, parse_setup
 from ._management import (
     CONNECTIONS_RESOURCE,
     JOBS_RESOURCE,
+    ConnectionManagement,
     ManagementJobs,
-    check_connection,
-    invoke_for_agent,
     register_management,
 )
 from ._recovery import TaskRecovery
@@ -126,6 +122,7 @@ class _ConnectionLock:
 class MCPService:
     def __init__(self, api: ExtensionAPI) -> None:
         self.api = api
+        self.management = ConnectionManagement(self)
         self.host: ExtensionHost | None = None
         self.store: ConnectionStore | None = None
         self.content: ContentStore | None = None
@@ -729,271 +726,6 @@ class MCPService:
         result, artifacts = await self.content.present(payload, context, runner.id, source=source)
         return tool_success(result, artifacts=artifacts)
 
-    async def manage(self, operation: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._host()
-        if self._startup_error is not None:
-            raise ValueError(self._startup_error)
-        if operation == "list":
-            return {
-                "connections": [self._status(identifier) for identifier in self.connections],
-                "configuration_issues": copy.deepcopy(self.store.issues) if self.store else [],
-            }
-        if operation == "requests":
-            return {"requests": self.inputs.list()}
-        if operation == "respond":
-            return self.inputs.respond(arguments["request_id"], arguments["response"])
-        if operation == "job":
-            return self.jobs.status(arguments["job_id"])
-        if operation == "cancel-job":
-            return await self.jobs.cancel(arguments["job_id"])
-        if operation == "save":
-            return await self._save(arguments["connection"])
-        if operation == "import":
-            return await self._import(arguments)
-        if operation == "catalog":
-            return {"entries": self.connectors.listing(self.connections)}
-        if operation == "add_from_catalog":
-            return await self._add_from_catalog(arguments)
-        identifier = arguments["id"]
-        config = self._connection(identifier)
-        if operation == "status":
-            return self._status(identifier)
-        if operation == "inspect":
-            return self._inspect(identifier, arguments)
-        if operation in {"enable", "disable", "remove"}:
-            return await self._mutate(operation, config)
-        async with self._connection_lock(identifier):
-            config = self._connection(identifier)
-            if operation == "credential":
-                if arguments["key"] not in _credential_names(config):
-                    raise ValueError("Credential must be referenced by this MCP connection")
-                self._host().set_credential(arguments["key"], arguments["value"])
-                # The variable name only: never its value.
-                self.api.logger.info(
-                    "MCP connection credential %s (connection=%s variable=%s)",
-                    "set" if arguments["value"] else "cleared",
-                    identifier,
-                    arguments["key"],
-                )
-                await self._stop(identifier)
-                self._runner(config)
-                self._connection_changed(identifier)
-                return {
-                    "id": identifier,
-                    "credential": arguments["key"],
-                    "set": bool(arguments["value"]),
-                }
-            if operation == "reauthorize":
-                if not config.get("oauth"):
-                    raise ValueError("MCP connection does not sign in with OAuth")
-                await self._stop(identifier)
-                self._forget_sign_in(identifier)
-                self._connection_changed(identifier)
-                self.api.logger.info("MCP connection signed out (connection=%s)", identifier)
-                runner = self._runner(config)
-                if config["enabled"]:
-                    runner.start()
-                return self._status(identifier)
-            if operation == "disconnect":
-                previous = self.runners.get(identifier)
-                await self._stop(identifier)
-                self._runner(config)
-                if previous is not None and previous.state != "disconnected":
-                    self.api.logger.info("MCP connection disconnected (connection=%s)", identifier)
-                return self._status(identifier)
-            if not config["enabled"]:
-                raise ValueError("MCP connection is disabled")
-            runner = self._runner(config)
-            if operation == "connect":
-                if runner.state not in {"connecting", "connected"}:
-                    # A connection that then fails logs its own WARNING.
-                    self.api.logger.info("MCP connection started (connection=%s)", identifier)
-                runner.start()
-                return self._status(identifier)
-            if operation == "reconnect":
-                # A new client and, for a local server, a new process.
-                (await self._replace_runner(identifier, config)).start()
-                self.api.logger.info("MCP connection restarted (connection=%s)", identifier)
-                return self._status(identifier)
-            if operation == "events":
-                return runner.events(arguments.get("after", 0))
-            if operation == "test":
-                return self.jobs.start(check_connection(runner))
-            if operation in {"invoke", "explore"}:
-                return self.jobs.start(
-                    invoke_for_agent(self._host(), self.api.operations, runner, arguments)
-                )
-        raise ValueError(f"Unknown MCP management operation: {operation}")
-
-    def _status(self, identifier: str) -> dict[str, Any]:
-        config = self._connection(identifier)
-        runner = self.runners.get(identifier)
-        status = (
-            runner.status()
-            if runner is not None
-            else {"id": identifier, "state": "disconnected", "error": None}
-        )
-        result = {
-            **status,
-            "configuration": copy.deepcopy(config),
-            "missing_credentials": self._missing_credentials(config),
-            "pending_requests": [
-                item for item in self.inputs.list() if item["connection"] == identifier
-            ],
-        }
-        if config.get("oauth"):
-            from ._oauth import sign_in_status
-
-            result["oauth"] = sign_in_status(self._host(), config)
-        return result
-
-    def _forget_sign_in(self, identifier: str) -> None:
-        """Delete the stored OAuth tokens and registered client of *identifier*."""
-        from ._oauth import forget_sign_in
-
-        forget_sign_in(self._host(), identifier)
-
-    def _missing_credentials(self, config: dict[str, Any]) -> list[str]:
-        """The credentials *config* references that have no value yet."""
-        host = self._host()
-        return sorted(
-            name for name in _credential_names(config) if not host.resolve_credential(name)
-        )
-
-    def _inspect(self, identifier: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """The cached Tool catalog and guidance of a connection, one page of Tools at a time."""
-        runner = self.runners.get(identifier)
-        catalog = runner.catalog if runner else {}
-        entries = catalog_entries(identifier, catalog, None)
-        matches = search_entries(entries, arguments.get("query", ""), "tool")
-        offset = arguments.get("offset", 0)
-        return {
-            **self._status(identifier),
-            "catalog_available": bool(catalog),
-            "tools": [
-                {**summarize(item), "description": item["description"]}
-                for item in matches[offset : offset + SEARCH_PAGE_SIZE]
-            ],
-            "total": len(matches),
-            "offset": offset,
-            "previous_offset": max(0, offset - SEARCH_PAGE_SIZE) if offset else None,
-            "next_offset": offset + SEARCH_PAGE_SIZE
-            if offset + SEARCH_PAGE_SIZE < len(matches)
-            else None,
-            "instructions": catalog.get("instructions") or "",
-            "prompts": [
-                {"name": item["name"], "description": item.get("description", "")}
-                for item in catalog.get("prompts", [])
-            ],
-        }
-
-    async def _import(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Preview the servers of setup text, or with ``apply`` save the chosen ones.
-
-        A preview stores nothing. Saving re-reads the text and never replaces a
-        saved connection. A connection that cannot work yet, with a credential
-        or a placeholder still to fill in, is saved disabled.
-        """
-        drafts = parse_setup(arguments["source"], arguments.get("ids"))
-        preview = [self._import_preview(draft) for draft in drafts]
-        if not arguments.get("apply"):
-            return {"servers": preview}
-        wanted = arguments.get("servers")
-        names = {draft.name for draft in drafts}
-        if wanted is not None and (unknown := sorted(set(wanted) - names)):
-            raise ValueError(f"No imported server is named {', '.join(unknown)}")
-        chosen = [
-            (draft, item)
-            for draft, item in zip(drafts, preview, strict=True)
-            if (draft.name in wanted if wanted is not None else item["selected"])
-        ]
-        if not chosen:
-            raise ValueError("Choose at least one server to import")
-        problems = [
-            f"{draft.name}: {draft.error or f'connection {draft.id} already exists'}"
-            for draft, item in chosen
-            if draft.error is not None or item["conflict"]
-        ]
-        if problems:
-            raise ValueError("Cannot import " + "; ".join(problems))
-        host = self._host()
-        imported = []
-        for draft, item in chosen:
-            for credential in draft.credentials:
-                if credential.state == "provided" and credential.value:
-                    host.set_credential(credential.name, credential.value)
-            connection = {**draft.connection, "enabled": item["enabled"]}
-            imported.append(await self._save(connection, replace=False))
-        stored = [
-            credential
-            for draft, _ in chosen
-            for credential in draft.credentials
-            if credential.state == "provided"
-        ]
-        self.api.logger.info(
-            "MCP connections imported (connections=%s credentials=%d)",
-            ",".join(draft.id for draft, _ in chosen),
-            len(stored),
-        )
-        return {"imported": imported}
-
-    def _import_preview(self, draft: ImportDraft) -> dict[str, Any]:
-        """What importing *draft* would save; credential values never leave the draft.
-
-        A credential is ``provided`` by the setup text, already ``set`` on the
-        vBot host, or ``missing``: it still needs a value.
-        """
-        host = self._host()
-        credentials = [
-            {
-                "name": credential.name,
-                "kind": credential.kind,
-                "target": credential.target,
-                "state": (
-                    credential.state
-                    if credential.state != "reference"
-                    else "set"
-                    if host.resolve_credential(credential.name)
-                    else "missing"
-                ),
-                "description": credential.description,
-            }
-            for credential in draft.credentials
-        ]
-        conflict = draft.id in self.connections
-        complete = all(item["state"] != "missing" for item in credentials)
-        return {
-            "name": draft.name,
-            "id": draft.id,
-            "connection": copy.deepcopy(draft.connection) or None,
-            "error": draft.error,
-            "conflict": conflict,
-            "selected": draft.error is None and not conflict and not draft.exposes_secret,
-            # Saved enabled only when it can work: no placeholder left in it
-            # (``unresolved``), not turned off by the setup text (``disabled``)
-            # and no credential missing.
-            "enabled": complete and not draft.unresolved and not draft.disabled,
-            "unresolved": draft.unresolved,
-            "disabled": draft.disabled,
-            "credentials": credentials,
-            "warnings": copy.deepcopy(draft.warnings),
-        }
-
-    async def _add_from_catalog(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Save a catalog entry as a new enabled connection; never replaces a saved one."""
-        # A rejected record keeps its id too: saving under it would overwrite the record.
-        rejected = {
-            issue["connection_id"]
-            for issue in (self.store.issues if self.store else [])
-            if "connection_id" in issue
-        }
-        connection = self.connectors.connection(
-            arguments["entry"],
-            read_only=arguments.get("read_only", False),
-            taken=set(self.connections) | rejected,
-        )
-        return await self._save(connection, replace=False)
-
     async def _save(self, value: dict[str, Any], *, replace: bool = True) -> dict[str, Any]:
         config = validate_connection(value)
         identifier = config["id"]
@@ -1018,7 +750,7 @@ class MCPService:
             else:
                 await self._stop(identifier)
                 if previous is not None and _signs_in_elsewhere(previous, config):
-                    self._forget_sign_in(identifier)
+                    self.management._forget_sign_in(identifier)
                 # A disabled connection keeps its connection Tool, not ready.
                 runner = self._runner(config)
                 if config["enabled"]:
@@ -1026,7 +758,7 @@ class MCPService:
         if self.recovery is not None:
             await self.recovery.resume(self.runners)
         self.api.logger.info("MCP connection configured (connection=%s)", identifier)
-        return self._status(identifier)
+        return self.management._status(identifier)
 
     async def _mutate(self, operation: str, original: dict[str, Any]) -> dict[str, Any]:
         identifier = original["id"]
@@ -1048,7 +780,7 @@ class MCPService:
                     self._publish(runner, runner.catalog or None)
                 self.catalogs.forget(identifier)
                 await self._stop(identifier)
-                self._forget_sign_in(identifier)
+                self.management._forget_sign_in(identifier)
             elif operation == "disable":
                 # Its Tools stay registered but not ready, so the Agent no longer
                 # sees them and naming one says the connection is disabled.
@@ -1066,7 +798,7 @@ class MCPService:
         return (
             {"id": identifier, "removed": True}
             if operation == "remove"
-            else self._status(identifier)
+            else self.management._status(identifier)
         )
 
     async def _store_connections(self, records: dict[str, dict[str, Any]]) -> None:
@@ -1112,17 +844,6 @@ class MCPService:
             self.api.operations.replace_tools(identifier, [])
 
 
-def _credential_names(config: dict[str, Any]) -> set[str]:
-    """The credentials *config* references: variables, headers and an OAuth client secret."""
-    names = {
-        *config.get("credential_environment", {}).values(),
-        *config.get("credential_headers", {}).values(),
-    }
-    if config.get("oauth_client_secret"):
-        names.add(config["oauth_client_secret"])
-    return names
-
-
 def _without_description(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key != "description"}
 
@@ -1141,4 +862,4 @@ def register(api: ExtensionAPI) -> None:
     api.operations.input_response_operation = "respond"
     api.on_shutdown(service.close)
     api.register_prompt_block("mcp_guidance", default_text=MCP_GUIDANCE, requires_tool="mcp_*")
-    register_management(api, service.manage)
+    register_management(api, service.management.manage)

@@ -18,6 +18,7 @@ import pytest
 from mcp.client.auth import OAuthFlowError
 
 from core.extensions.oauth_redirects import OAuthRedirects
+from resources.extensions.mcp import _protocol as mcp_protocol
 from resources.extensions.mcp import client as mcp_client
 from resources.extensions.mcp._oauth import PASTE_REDIRECT_URI, ConnectionOAuth, OAuthStorage
 from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError
@@ -445,20 +446,20 @@ async def test_signing_out_or_changing_the_server_forgets_the_sign_in(
     service, _registry = await start_service(host)
     connection = {"id": "example", "transport": "http", "url": RESOURCE, "oauth": True}
     try:
-        await service.manage("save", {"connection": connection})
+        await service.management.manage("save", {"connection": connection})
         host.set_credential(TOKENS, json.dumps({"access_token": "a", "resource": RESOURCE}))
         host.set_credential(CLIENT, json.dumps({"client_id": "c", "resource": RESOURCE}))
-        assert (await service.manage("status", {"id": "example"}))["oauth"]["signed_in"]
+        assert (await service.management.manage("status", {"id": "example"}))["oauth"]["signed_in"]
 
         with caplog.at_level(logging.INFO, logger="test.mcp"):
             if change == "reauthorize":
-                status = await service.manage("reauthorize", {"id": "example"})
+                status = await service.management.manage("reauthorize", {"id": "example"})
                 assert status["oauth"] == {"redirect_uri": PASTE_REDIRECT_URI, "signed_in": False}
             elif change == "url":
                 moved = {**connection, "url": "https://moved.example.com/mcp"}
-                await service.manage("save", {"connection": moved})
+                await service.management.manage("save", {"connection": moved})
             else:
-                await service.manage("remove", {"id": "example"})
+                await service.management.manage("remove", {"id": "example"})
 
         assert host.resolve_credential(TOKENS) == ""
         assert host.resolve_credential(CLIENT) == ""
@@ -551,8 +552,9 @@ async def test_read_failures_retry_but_mutations_are_not_replayed(
     async def sleep(delay):
         pass
 
-    monkeypatch.setattr(runner, "_perform", fail)
+    monkeypatch.setattr(runner._protocol, "_perform", fail)
     monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    monkeypatch.setattr(mcp_protocol, "_sleep", sleep)
     try:
         with pytest.raises(ValueError, match="test-owned-timeout"):
             await asyncio.wait_for(runner.invoke(operation, {}), 10)
@@ -591,6 +593,7 @@ async def test_a_lost_connection_settles_its_calls_and_reconnects(
         pass
 
     monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    monkeypatch.setattr(mcp_protocol, "_sleep", sleep)
     stream = StreamServer(server)
     runner = runner_for(host, stream, monkeypatch)
     arguments = {"name": "mutate"} if operation == "tools/call" else {"uri": "test://slow"}
@@ -680,10 +683,10 @@ async def test_full_queue_producers_settle_with_their_connection(host, monkeypat
         return arguments
 
     monkeypatch.setattr(mcp_client, "Client", Client)
-    monkeypatch.setattr(runner, "_transport", transport)
-    monkeypatch.setattr(runner, "_refresh", nothing)
-    monkeypatch.setattr(runner, "_watch_catalog", nothing)
-    monkeypatch.setattr(runner, "_perform", perform)
+    monkeypatch.setattr(runner._transport, "open", transport)
+    monkeypatch.setattr(runner._protocol, "_refresh", nothing)
+    monkeypatch.setattr(runner._protocol, "_watch_catalog", nothing)
+    monkeypatch.setattr(runner._protocol, "_perform", perform)
     calls = [asyncio.create_task(runner.invoke("tools/call", {"index": 0}))]
     try:
         await asyncio.wait_for(entered.wait(), 1)

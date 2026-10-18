@@ -75,7 +75,7 @@
   });
 
   function openMenu(event) {
-    menu = { ...contextMenuAnchor(event), ...model.runMenu(run) };
+    menu = { ...contextMenuAnchor(event), ...model.runActions.runMenu(run) };
   }
 
   function inspect(participant) {

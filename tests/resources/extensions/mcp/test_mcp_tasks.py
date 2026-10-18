@@ -10,6 +10,7 @@ import pytest
 from mcp.server import Server
 from mcp.shared.exceptions import MCPError
 
+from resources.extensions.mcp import _protocol as mcp_protocol
 from resources.extensions.mcp import _tasks
 from resources.extensions.mcp import client as mcp_client
 from resources.extensions.mcp._tasks import TASKS_EXTENSION, TaskEndedError
@@ -245,6 +246,7 @@ async def test_a_task_outlives_a_lost_connection_unless_the_server_forgot_it(
         pass
 
     monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    monkeypatch.setattr(mcp_protocol, "_sleep", sleep)
     stream = StreamServer(tasks.server)
     runner = runner_for(host, stream, monkeypatch)
     call = asyncio.create_task(runner.invoke("tools/call", {"name": "long"}, context(host)))
@@ -317,8 +319,9 @@ async def test_a_cancelled_call_cancels_its_task_at_the_server(
         pass
 
     if reconnecting:
-        monkeypatch.setattr(runner, "_transport", transport)
+        monkeypatch.setattr(runner._transport, "open", transport)
         monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    monkeypatch.setattr(mcp_protocol, "_sleep", sleep)
     forgotten = []
     if capturing:
         from types import SimpleNamespace

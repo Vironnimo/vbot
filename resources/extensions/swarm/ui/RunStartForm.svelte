@@ -42,7 +42,7 @@
       help={model.profiles.length || model.loading
         ? ''
         : t('swarm.noProfilesHelp')}
-      error={model.startErrors.profile}
+      error={model.start.startErrors.profile}
     >
       {#snippet children({ labelId, describedBy, invalid })}
         <div class="swarm-start__profile">
@@ -51,19 +51,20 @@
             ariaLabelledby={labelId}
             ariaDescribedby={describedBy}
             {invalid}
-            value={model.selectedProfile?.id ?? ''}
+            value={model.start.selectedProfile?.id ?? ''}
             options={profileOptions}
             disabled={!model.profiles.length || model.pending === 'start'}
             onValueChange={(id) =>
-              model.selectRunProfile(
+              model.start.selectRunProfile(
                 model.profiles.find((profile) => profile.id === id),
               )}
           />
-          {#if model.selectedProfile}<Button
+          {#if model.start.selectedProfile}<Button
               variant="tertiary"
               onClick={() =>
-                model.navigate(() => model.openProfile(model.selectedProfile))}
-              >{t('swarm.editProfile')}</Button
+                model.navigate(() =>
+                  model.openProfile(model.start.selectedProfile),
+                )}>{t('swarm.editProfile')}</Button
             >{:else if !model.profiles.length && !model.loading}<Button
               variant="tertiary"
               onClick={() => model.navigate(() => model.openProfile())}
@@ -75,42 +76,42 @@
     <FormField
       controlId="swarm-start-directory"
       label={t('swarm.profile.directoryHeading')}
-      error={model.startErrors.directory}
+      error={model.start.startErrors.directory}
     >
       {#snippet children({ describedBy, invalid })}
         <PathField
           id="swarm-start-directory"
           mode="directory"
           listDirectory={model.client.listDirectory}
-          value={model.runDirectory}
+          value={model.start.runDirectory}
           {invalid}
           aria-describedby={describedBy}
-          placeholder={model.directoryLoading
+          placeholder={model.start.directoryLoading
             ? t('swarm.start.directoryLoading')
             : ''}
-          disabled={!model.selectedProfile ||
-            model.directoryLoading ||
+          disabled={!model.start.selectedProfile ||
+            model.start.directoryLoading ||
             model.pending === 'start'}
-          onInput={(value) => (model.runDirectory = value)}
+          onInput={(value) => (model.start.runDirectory = value)}
         />
       {/snippet}
     </FormField>
     <FormField
       controlId="swarm-goal"
       label={t('swarm.goal')}
-      error={model.startErrors.goal}
+      error={model.start.startErrors.goal}
     >
       {#snippet children({ describedBy, invalid })}
         <TextArea
           id="swarm-goal"
-          value={model.goal}
+          value={model.start.goal}
           rows="4"
           autoGrow
           {invalid}
           aria-describedby={describedBy}
           disabled={model.pending === 'start'}
           placeholder={t('swarm.goalPlaceholder')}
-          onInput={(value) => (model.goal = value)}
+          onInput={(value) => (model.start.goal = value)}
         />
       {/snippet}
     </FormField>
@@ -119,9 +120,9 @@
     <Button
       variant="primary"
       loading={model.pending === 'start'}
-      disabled={Boolean(model.startDisabledReason)}
-      disabledReason={model.startDisabledReason}
-      onClick={model.startSwarm}
+      disabled={Boolean(model.start.startDisabledReason)}
+      disabledReason={model.start.startDisabledReason}
+      onClick={model.start.startSwarm}
       ><SwarmIcon kind="play" />{model.pending === 'start'
         ? t('swarm.starting')
         : t('swarm.startButton')}</Button

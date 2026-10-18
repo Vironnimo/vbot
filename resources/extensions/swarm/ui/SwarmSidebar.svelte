@@ -164,9 +164,9 @@
               use:tooltip={() => profileTooltip(profile)}
               onclick={() => model.navigate(() => model.openProfile(profile))}
               oncontextmenu={(event) =>
-                openMenu(event, () => model.profileMenu(profile))}
+                openMenu(event, () => model.runActions.profileMenu(profile))}
               onkeydown={(event) =>
-                menuKey(event, () => model.profileMenu(profile))}
+                menuKey(event, () => model.runActions.profileMenu(profile))}
             >
               <span class="swarm-row__inner">
                 <span class="swarm-row__name">{profile.name}</span>
@@ -207,9 +207,9 @@
                 use:tooltip={() => runTooltip(swarm, model.now)}
                 onclick={() => model.navigate(() => model.openSwarm(swarm.id))}
                 oncontextmenu={(event) =>
-                  openMenu(event, () => model.runMenu(swarm))}
+                  openMenu(event, () => model.runActions.runMenu(swarm))}
                 onkeydown={(event) =>
-                  menuKey(event, () => model.runMenu(swarm))}
+                  menuKey(event, () => model.runActions.runMenu(swarm))}
               >
                 <span class="swarm-row__inner">
                   <span class="swarm-row__head">

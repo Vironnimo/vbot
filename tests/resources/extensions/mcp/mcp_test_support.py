@@ -157,7 +157,7 @@ def runner_for(
     async def transport(stack: Any) -> Any:
         return server
 
-    monkeypatch.setattr(runner, "_transport", transport)
+    monkeypatch.setattr(runner._transport, "open", transport)
     return runner
 
 

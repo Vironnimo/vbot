@@ -28,7 +28,9 @@ from mcp.shared.exceptions import MCPDeprecationWarning
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
 from core.utils.timestamps import parse_canonical_timestamp
+from resources.extensions.mcp import _protocol as mcp_protocol
 from resources.extensions.mcp import _tasks
+from resources.extensions.mcp import _transport as mcp_transport
 from resources.extensions.mcp import client as mcp_client
 from resources.extensions.mcp._callbacks import sampling_messages
 from resources.extensions.mcp._network import DestinationGuard
@@ -245,6 +247,7 @@ async def test_an_unprocessed_http_request_is_not_run_and_only_a_read_runs_again
 
     monkeypatch.setattr("resources.extensions.mcp.client.Client", legacy_client)
     monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    monkeypatch.setattr(mcp_protocol, "_sleep", sleep)
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
@@ -410,7 +413,7 @@ async def test_a_failing_connection_logs_once_until_it_recovers(
             raise failure
         return server
 
-    monkeypatch.setattr(runner, "_transport", flaky_transport)
+    monkeypatch.setattr(runner._transport, "open", flaky_transport)
     caplog.set_level(logging.DEBUG, logger="vbot.extensions.mcp")
     try:
         async with asyncio.timeout(10):
@@ -451,8 +454,8 @@ def _http_answer(status: int | None) -> type[httpx2.AsyncClient]:
             raise httpx2.ConnectError("connection refused", request=request)
         return httpx2.Response(status, json={"error": "refused"})
 
-    class Answering(mcp_client._ObservedHTTPClient):
-        def __init__(self, observer: ConnectionRunner, **options: object) -> None:
+    class Answering(mcp_transport._ObservedHTTPClient):
+        def __init__(self, observer: mcp_transport.ConnectionTransport, **options: object) -> None:
             super().__init__(observer, **{**options, "transport": httpx2.MockTransport(handler)})
 
     return Answering
@@ -496,18 +499,18 @@ async def test_a_failed_connection_reports_its_cause(host, tmp_path, monkeypatch
         connection["credential_environment"] = {"TOKEN": "UNSET_TOKEN"}
     elif case != "server-exits":
         connection = {"id": "example", "transport": "http", "url": "https://mcp.test/mcp"}
-        monkeypatch.setattr(mcp_client, "_ObservedHTTPClient", _http_answer(case))
+        monkeypatch.setattr(mcp_transport, "_ObservedHTTPClient", _http_answer(case))
     service, _registry = await start_service(host)
     try:
         async with asyncio.timeout(10):
-            await service.manage("save", {"connection": connection})
+            await service.management.manage("save", {"connection": connection})
             with pytest.raises(InvocationNotSentError):
                 await service.runners["example"].invoke("catalog", {})
-            status = await service.manage("status", {"id": "example"})
+            status = await service.management.manage("status", {"id": "example"})
             # The stderr of a process that ended can arrive after its failure.
             while case == "server-exits" and "rejected" not in "".join(status["stderr_tail"]):
                 await asyncio.sleep(0.01)
-                status = await service.manage("status", {"id": "example"})
+                status = await service.management.manage("status", {"id": "example"})
     finally:
         await service.close()
 
@@ -961,7 +964,7 @@ async def test_a_call_waits_for_its_connection_only_until_the_timeout(
     async def transport(stack):
         return _Hanging(entered)
 
-    monkeypatch.setattr(runner, "_transport", transport)
+    monkeypatch.setattr(runner._transport, "open", transport)
     try:
         with pytest.raises(InvocationNotSentError) as refused:
             await asyncio.wait_for(runner.invoke("ping", {}), 5)
@@ -1087,6 +1090,7 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(h
         await asyncio.sleep(0)
 
     monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    monkeypatch.setattr(mcp_protocol, "_sleep", sleep)
     server = Server("changes", on_call_tool=call, on_list_tools=list_tools)
     runner = runner_for(host, StreamServer(server), monkeypatch)
     runner.config["transport"] = "sse"
@@ -1098,7 +1102,7 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(h
             await runner.invoke("tools/call", {"name": "add"})
             while (
                 runner.catalog["tools"][-1]["name"] != "added"
-                or not runner._subscriptions["catalog-refresh"].done()
+                or not runner._protocol._subscriptions["catalog-refresh"].done()
                 or len(_notified(runner)) < 3
             ):
                 await asyncio.sleep(0)
@@ -1163,6 +1167,7 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
         await asyncio.sleep(0)
 
     monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    monkeypatch.setattr(mcp_protocol, "_sleep", sleep)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", MCPDeprecationWarning)
         server = Server(

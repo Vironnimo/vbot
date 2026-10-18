@@ -147,6 +147,6 @@ def register(api: ExtensionAPI) -> None:
 
 def _operation_handler(service: SwarmExtension, name: str) -> Callable[[Json], Awaitable[Json]]:
     async def handler(arguments: Json) -> Json:
-        return await service.operation(name, arguments)
+        return await service.management.operation(name, arguments)
 
     return handler

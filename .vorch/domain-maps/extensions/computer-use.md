@@ -27,7 +27,7 @@ One published image's pixel space and its physical desktop rectangle (`_screens.
 ## Ownership and source routing
 
 `resources/extensions/computer_use/`:
-- `extension.py` - `register`, `ComputerUseService`: readiness, opt-in check per Tool, Session state lookup, call serialization, desktop control and stop, hotkey arming, `run_end`/shutdown release, the three Tool handlers and their result/error envelopes.
+- `extension.py` - `register`, `ComputerUseService`: readiness, opt-in check per Tool, Session state lookup, call serialization, desktop control and stop, hotkey arming, `run_end`/shutdown release, the three Tool handlers. `_presentation.py` owns app-list text and result/error presentation without controlling the desktop.
 - `_tools.py` - descriptions, schemas, argument normalizers (other harnesses' spellings; Agent error tolerance per `tools.md`).
 - `_actions.py` - parses one `computer` action into an `Action` (points, seconds, notes).
 - `_desktop.py` - `Desktop`: one call's view of the desktop under its `Access`: frame resolution, display selection, screenshot/zoom/cursor, access checks before input, dispatch to the target.

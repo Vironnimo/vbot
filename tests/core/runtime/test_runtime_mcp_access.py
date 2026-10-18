@@ -18,7 +18,7 @@ from core.runtime.runtime import Runtime
 from core.tools.availability import ToolAccess
 from core.tools.tools import ToolContext
 from core.utils.config import Config
-from resources.extensions.mcp.client import ConnectionRunner
+from resources.extensions.mcp._transport import ConnectionTransport
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.extension import MCPService
 
@@ -141,7 +141,7 @@ async def test_management_explore_and_invoke_run_as_the_agent_outside_any_sessio
     async def transport(runner: Any, stack: Any) -> Any:
         return server
 
-    monkeypatch.setattr(ConnectionRunner, "_transport", transport)
+    monkeypatch.setattr(ConnectionTransport, "open", transport)
     runtime = Runtime(config)
     runtime.start()
     service = None
@@ -165,7 +165,7 @@ async def test_management_explore_and_invoke_run_as_the_agent_outside_any_sessio
         async def finished(job: dict[str, Any]) -> dict[str, Any]:
             return await service.jobs.wait(job["job_id"])
 
-        invoke = await service.manage(
+        invoke = await service.management.manage(
             "invoke",
             {
                 "id": "example",
@@ -186,7 +186,7 @@ async def test_management_explore_and_invoke_run_as_the_agent_outside_any_sessio
         called = await asyncio.wait_for(finished(invoke), 10)
         explored = await asyncio.wait_for(
             finished(
-                await service.manage(
+                await service.management.manage(
                     "explore", {"id": "example", "agent": "mcptest", "action": "search"}
                 )
             ),

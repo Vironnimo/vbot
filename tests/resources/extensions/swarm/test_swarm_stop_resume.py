@@ -45,17 +45,17 @@ async def test_stop_resume_preserves_one_initial_input_for_unfinished_participan
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start",
         {"profile_id": profile["id"], "prompt": "shared goal", "request_id": "initial"},
     )
     await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "swarms.stop", {"swarm_id": started["swarm_id"], "request_id": "stop"}
     )
     assert (await lifecycle.service.store.get_swarm(started["swarm_id"]))["state"] == "cancelled"
 
-    resumed = await lifecycle.service.operation(
+    resumed = await lifecycle.service.management.operation(
         "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "resume"}
     )
     resumed_run_id = resumed["runs"][0]["run_id"]
@@ -125,7 +125,7 @@ async def test_run_completion_never_closes_the_swarm(lifecycle, tmp_path, monkey
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start",
         {"profile_id": profile["id"], "prompt": "shared goal", "request_id": "initial"},
     )
@@ -147,32 +147,32 @@ async def test_old_stop_retry_preserves_a_new_resume(lifecycle, tmp_path):
     adapter = PausedSwarmAdapter()
     lifecycle.runtime.adapter = adapter
     profile = await single_participant_profile(lifecycle, tmp_path)
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
     stop = {"swarm_id": started["swarm_id"], "request_id": "old-stop"}
-    stopped = await lifecycle.service.operation("swarms.stop", stop)
-    resumed = await lifecycle.service.operation(
+    stopped = await lifecycle.service.management.operation("swarms.stop", stop)
+    resumed = await lifecycle.service.management.operation(
         "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "new-resume"}
     )
     # Wait for the ordering barrier.
     await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     run = lifecycle.runtime.chat_run_manager.get(resumed["runs"][0]["run_id"])
-    replay = await lifecycle.service.operation("swarms.stop", stop)
+    replay = await lifecycle.service.management.operation("swarms.stop", stop)
     assert replay == {**stopped, "replayed": True}
     assert run.status.value == "running"
-    replay = await lifecycle.service.operation(
+    replay = await lifecycle.service.management.operation(
         "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "new-resume"}
     )
     assert replay == {**resumed, "replayed": True}
     assert run.status.value == "running"
     adapter.pause_at = 3
     adapter.started.clear()
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "swarms.stop", {"swarm_id": started["swarm_id"], "request_id": "second-stop"}
     )
-    latest = await lifecycle.service.operation(
+    latest = await lifecycle.service.management.operation(
         "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "latest-resume"}
     )
     await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
@@ -190,7 +190,7 @@ async def test_old_stop_retry_preserves_a_new_resume(lifecycle, tmp_path):
             started,
         ),
     ]:
-        replay = await lifecycle.service.operation(operation, arguments)
+        replay = await lifecycle.service.management.operation(operation, arguments)
         assert replay == {**original, "replayed": True}
         assert current.status.value == "running"
     assert (
@@ -220,14 +220,14 @@ async def test_stop_does_not_report_expected_late_completion_as_failure(
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     run = lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"])
     async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         while not adapter.requests:
             await asyncio.sleep(0.01)
-    await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
         "swarms.stop", {"swarm_id": started["swarm_id"], "request_id": "stop"}
     )
     assert run.status.value == "cancelled"
@@ -249,7 +249,7 @@ async def test_participant_inspection_failure_is_not_reported_as_idle(
         },
         expected_revision=None,
     )
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
@@ -259,7 +259,9 @@ async def test_participant_inspection_failure_is_not_reported_as_idle(
 
     monkeypatch.setattr(lifecycle.groups, "owned_runs", broken)
     with pytest.raises(RuntimeError):
-        await lifecycle.service.operation("swarms.get", {"swarm_id": started["swarm_id"]})
+        await lifecycle.service.management.operation(
+            "swarms.get", {"swarm_id": started["swarm_id"]}
+        )
 
 
 @pytest.mark.asyncio
@@ -270,7 +272,7 @@ async def test_human_post_after_stop_continues_same_session_once(
     adapter = PausedSwarmAdapter(pause_at=1)
     lifecycle.runtime.adapter = adapter
     profile = await single_participant_profile(lifecycle, tmp_path, mode=mode)
-    started = await lifecycle.service.operation(
+    started = await lifecycle.service.management.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     sid = started["swarm_id"]
@@ -288,14 +290,16 @@ async def test_human_post_after_stop_continues_same_session_once(
     if during_stop:
         monkeypatch.setattr(lifecycle.groups, "close_group", delayed_close)
     stop = asyncio.create_task(
-        lifecycle.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
+        lifecycle.service.management.operation(
+            "swarms.stop", {"swarm_id": sid, "request_id": "stop"}
+        )
     )
     if during_stop:
         await asyncio.wait_for(draining.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     else:
         await stop
     arguments = {"swarm_id": sid, "text": "continue-sentinel", "request_id": "post"}
-    post = asyncio.create_task(lifecycle.service.operation("board.post", arguments))
+    post = asyncio.create_task(lifecycle.service.management.operation("board.post", arguments))
     if during_stop:
         await asyncio.sleep(0)
         assert not post.done()
@@ -309,8 +313,10 @@ async def test_human_post_after_stop_continues_same_session_once(
     assert "continue-sentinel" in str(adapter.requests[1]["messages"])
     history = lifecycle.runtime.chat_sessions.get(after.address).load()
     assert len([message for message in history if message.role == "user"]) == 1
-    await lifecycle.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop-again"})
-    replay = await lifecycle.service.operation("board.post", arguments)
+    await lifecycle.service.management.operation(
+        "swarms.stop", {"swarm_id": sid, "request_id": "stop-again"}
+    )
+    replay = await lifecycle.service.management.operation("board.post", arguments)
     assert replay["post_id"] == result["post_id"] and replay["replayed"]
     snapshot = await lifecycle.service.store.get_swarm(sid)
     assert snapshot["state"] == "cancelled"
@@ -331,19 +337,21 @@ async def test_resume_records_a_participant_session_whose_binding_start_lost(
     with monkeypatch.context() as patch:
         patch.setattr(store, "bind_participant_session", lost_binding)
         with pytest.raises(OSError):
-            await lifecycle.service.operation(
+            await lifecycle.service.management.operation(
                 "swarms.start",
                 {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"},
             )
     swarm_id = (await store.list_swarms()).entries[0]["id"]
     assert len(await lifecycle.groups.list(swarm_id)) == 1
 
-    resumed = await lifecycle.service.operation(
+    resumed = await lifecycle.service.management.operation(
         "swarms.resume", {"swarm_id": swarm_id, "request_id": "resume"}
     )
     await lifecycle.runtime.chat_run_manager.get(resumed["runs"][0]["run_id"]).wait()
-    await lifecycle.service.operation("swarms.stop", {"swarm_id": swarm_id, "request_id": "stop"})
-    posted = await lifecycle.service.operation(
+    await lifecycle.service.management.operation(
+        "swarms.stop", {"swarm_id": swarm_id, "request_id": "stop"}
+    )
+    posted = await lifecycle.service.management.operation(
         "board.post", {"swarm_id": swarm_id, "text": "continue-sentinel", "request_id": "post"}
     )
     await lifecycle.runtime.chat_run_manager.get(posted["runs"][0]["run_id"]).wait()

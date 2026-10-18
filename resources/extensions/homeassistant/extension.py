@@ -14,14 +14,9 @@ REST payloads as short text lines. Failures name the exact next call.
 
 from __future__ import annotations
 
-import asyncio
-import random
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
-
-import httpx
 
 from core.tools.tools import (
     JsonObject,
@@ -30,8 +25,6 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
-from core.utils.http_status import is_retryable_status
-from core.utils.tls import shared_ssl_context
 
 from ._arguments import (
     ENTITY_ID_RE,
@@ -42,6 +35,7 @@ from ._arguments import (
     list_services_normalizer,
     split_entity_ids,
 )
+from ._http import _REFUSED_STATUSES, HomeAssistantClient, _Failure
 from ._listing import (
     LINE_LIMIT,
     area_suggestions,
@@ -61,18 +55,6 @@ from ._listing import (
 # ---------------------------------------------------------------------------
 
 _DEFAULT_HASS_URL = "http://homeassistant.local:8123"
-
-_RETRY_MAX_RETRIES = 2
-_RETRY_INITIAL_DELAY_SECONDS = 1.0
-_RETRY_BACKOFF_FACTOR = 2
-_RETRY_JITTER_FACTOR = 0.5
-
-_REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=15.0)
-
-# Transport errors raised before the request left vBot; only these may repeat a POST.
-_UNSENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
-# Statuses that refuse a service call before it runs, so a POST may repeat them.
-_REFUSED_STATUSES = frozenset({429, 503})
 
 # Unchanged service targets whose current state a service result reports.
 _TARGET_CHECK_LIMIT = 10
@@ -187,124 +169,6 @@ _CALL_SERVICE_UNADVERTISED: JsonObject = {"return_response": {"type": "boolean"}
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class _Failure:
-    """A Home Assistant request that returned no usable payload."""
-
-    status: int | None = None  # HTTP status; None for transport and format problems
-    detail: str = ""
-    retryable: bool = False
-    attempts: int = 1
-    sent: bool = True  # whether the request may have reached Home Assistant
-    invalid_json: bool = False
-
-
-async def _sleep_for_retry(attempt: int) -> None:
-    base_delay = _RETRY_INITIAL_DELAY_SECONDS * (_RETRY_BACKOFF_FACTOR**attempt)
-    jitter = random.uniform(0, base_delay * _RETRY_JITTER_FACTOR)
-    await asyncio.sleep(base_delay + jitter)
-
-
-def _extract_error_detail(response: httpx.Response) -> str:
-    """Extract a human-readable error message from an HA HTTP response."""
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = None
-
-    if isinstance(payload, dict):
-        message = payload.get("message")
-        if isinstance(message, str) and message.strip():
-            return message.strip()
-
-    # Home Assistant answers some refusals with a bare "400: Bad Request" body.
-    fallback = response.text.strip().removeprefix(f"{response.status_code}: ")
-    if fallback:
-        return fallback[:300]
-    return response.reason_phrase or "request failed"
-
-
-def _error_text(error: Exception) -> str:
-    text = str(error).strip()
-    return (f"{type(error).__name__}: {text}" if text else type(error).__name__)[:200]
-
-
-def _status_retryable(status: int, idempotent: bool) -> bool:
-    if idempotent:
-        return is_retryable_status(status, idempotent=True)
-    return status in _REFUSED_STATUSES
-
-
-async def _ha_request(
-    method: str,
-    url: str,
-    token: str,
-    logger: Any,
-    json_body: JsonObject | None = None,
-) -> tuple[Any, _Failure | None]:
-    """Make one Home Assistant REST request, retrying only what is safe to repeat.
-
-    A GET repeats on transport errors and transient statuses. A POST service
-    call repeats only when Home Assistant cannot have run it: the connection
-    was never made, or the status refuses the call (429, 503). The token is
-    never logged.
-
-    Returns:
-        Tuple of (payload, failure); exactly one is None.
-    """
-    headers: dict[str, str] = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-    idempotent = method == "GET"
-
-    async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT, verify=shared_ssl_context()) as client:
-        for attempt in range(_RETRY_MAX_RETRIES + 1):
-            try:
-                if idempotent:
-                    response = await client.get(url, headers=headers)
-                else:
-                    response = await client.post(url, headers=headers, json=json_body)
-            except httpx.RequestError as error:
-                sent = not isinstance(error, _UNSENT_ERRORS)
-                repeatable = idempotent or not sent
-                if repeatable and attempt < _RETRY_MAX_RETRIES:
-                    await _sleep_for_retry(attempt)
-                    continue
-                logger.warning("Home Assistant request failed: %s", _error_text(error))
-                return None, _Failure(
-                    detail=_error_text(error),
-                    retryable=repeatable,
-                    attempts=attempt + 1,
-                    sent=sent,
-                )
-
-            if response.status_code >= 400:
-                retryable = _status_retryable(response.status_code, idempotent)
-                if retryable and attempt < _RETRY_MAX_RETRIES:
-                    await _sleep_for_retry(attempt)
-                    continue
-                detail = _extract_error_detail(response)
-                logger.warning(
-                    "Home Assistant request failed: HTTP %s: %s",
-                    response.status_code,
-                    detail,
-                )
-                return None, _Failure(
-                    status=response.status_code,
-                    detail=detail,
-                    retryable=retryable,
-                    attempts=attempt + 1,
-                )
-
-            try:
-                return response.json(), None
-            except ValueError:
-                return None, _Failure(detail="not JSON", invalid_json=True)
-
-    return None, _Failure(detail="request failed")
-
-
 def _attempts(failure: _Failure) -> str:
     return f" after {failure.attempts} attempts" if failure.attempts > 1 else ""
 
@@ -372,12 +236,6 @@ def _unexpected(hass_url: str, path: str) -> JsonObject:
     )
 
 
-async def _all_states(hass_url: str, token: str, logger: Any) -> list[dict[str, Any]]:
-    """Return every entity state for candidate lists; empty when the read fails."""
-    payload, failure = await _ha_request("GET", f"{hass_url}/api/states", token, logger)
-    return [] if failure is not None else states(payload)
-
-
 def _candidates_sentence(
     candidates: list[dict[str, Any]],
     repeat: Callable[[str], dict[str, Any]],
@@ -405,9 +263,7 @@ async def _entity_reference_failure(
     entity: str,
     repeat: Callable[[str], dict[str, Any]],
     tool: str,
-    hass_url: str,
-    token: str,
-    logger: Any,
+    client: HomeAssistantClient,
 ) -> JsonObject:
     """Fail an unusable entity reference, naming the entities it may mean.
 
@@ -419,7 +275,7 @@ async def _entity_reference_failure(
     else:
         fallback = {"area": (object_id.strip(".") or entity).replace("_", " ")}
     if _NAME_LIKE_RE.match(entity):
-        candidates = entity_candidates(await _all_states(hass_url, token, logger), entity)
+        candidates = entity_candidates(await client.all_states(), entity)
         message += _candidates_sentence(candidates, repeat, tool, fallback)
     else:
         message += " Find ids with ha_list_entities {}."
@@ -483,19 +339,17 @@ def _page_note(matched: list[dict[str, Any]], domain: str, area: str) -> str:
 async def _handle_list_entities(
     context: ToolContext,
     arguments: JsonObject,
-    hass_url: str,
-    token: str,
-    logger: Any,
+    client: HomeAssistantClient,
 ) -> JsonObject:
     del context
     domain = str(arguments.get("domain") or "")
     area = str(arguments.get("area") or "")
 
-    payload, failure = await _ha_request("GET", f"{hass_url}/api/states", token, logger)
+    payload, failure = await client.request("GET", "/api/states")
     if failure is not None:
-        return _failure_result(failure, hass_url)
+        return _failure_result(failure, client.url)
     if not isinstance(payload, list):
-        return _unexpected(hass_url, "/api/states")
+        return _unexpected(client.url, "/api/states")
 
     entries = states(payload)
     matched = [
@@ -524,9 +378,7 @@ async def _handle_list_entities(
 async def _handle_get_state(
     context: ToolContext,
     arguments: JsonObject,
-    hass_url: str,
-    token: str,
-    logger: Any,
+    client: HomeAssistantClient,
 ) -> JsonObject:
     del context
     entity_id = str(arguments["entity_id"])
@@ -538,12 +390,10 @@ async def _handle_get_state(
             entity_id,
             _repeat_call(arguments, entity_id),
             HA_GET_STATE_NAME,
-            hass_url,
-            token,
-            logger,
+            client,
         )
 
-    payload, failure = await _ha_request("GET", f"{hass_url}/api/states/{entity_id}", token, logger)
+    payload, failure = await client.request("GET", f"/api/states/{entity_id}")
     if failure is not None and failure.status == 404:
         return await _entity_reference_failure(
             "entity_not_found",
@@ -551,14 +401,12 @@ async def _handle_get_state(
             entity_id,
             _repeat_call(arguments, entity_id),
             HA_GET_STATE_NAME,
-            hass_url,
-            token,
-            logger,
+            client,
         )
     if failure is not None:
-        return _failure_result(failure, hass_url)
+        return _failure_result(failure, client.url)
     if not isinstance(payload, dict):
-        return _unexpected(hass_url, f"/api/states/{entity_id}")
+        return _unexpected(client.url, f"/api/states/{entity_id}")
 
     data: JsonObject = {
         "entity_id": payload.get("entity_id", entity_id),
@@ -619,19 +467,17 @@ def _unknown_service(
 async def _handle_list_services(
     context: ToolContext,
     arguments: JsonObject,
-    hass_url: str,
-    token: str,
-    logger: Any,
+    client: HomeAssistantClient,
 ) -> JsonObject:
     del context
     domain = str(arguments.get("domain") or "")
     service = str(arguments.get("service") or "")
 
-    payload, failure = await _ha_request("GET", f"{hass_url}/api/services", token, logger)
+    payload, failure = await client.request("GET", "/api/services")
     if failure is not None:
-        return _failure_result(failure, hass_url)
+        return _failure_result(failure, client.url)
     if not isinstance(payload, list):
-        return _unexpected(hass_url, "/api/services")
+        return _unexpected(client.url, "/api/services")
 
     catalog = _catalog(payload)
     if not domain:
@@ -675,40 +521,15 @@ def _check_call(domain: str, entities: list[str]) -> str:
     return f"{HA_LIST_ENTITIES_NAME} {call_text({'domain': domain})}"
 
 
-async def _post_service(
-    url: str,
-    body: JsonObject,
-    requested: bool,
-    token: str,
-    logger: Any,
-) -> tuple[Any, _Failure | None, str | None]:
-    """POST a service call; returns (payload, failure, response-request problem)."""
-    payload, failure = await _ha_request(
-        "POST", url + ("?return_response" if requested else ""), token, logger, json_body=body
-    )
-    if failure is None or failure.status != 400 or "return_response" not in failure.detail:
-        return payload, failure, None
-    if requested:
-        return None, failure, "unsupported"
-    # Home Assistant refuses a data-only service before running it unless the
-    # call asks for its data, so asking now runs the call exactly once.
-    payload, failure = await _ha_request(
-        "POST", url + "?return_response", token, logger, json_body=body
-    )
-    return payload, failure, None
-
-
 async def _rejected_call(
     arguments: JsonObject,
     failure: _Failure,
-    hass_url: str,
-    token: str,
-    logger: Any,
+    client: HomeAssistantClient,
 ) -> JsonObject:
     """Explain a service call Home Assistant refused as a bad request."""
     domain, service = str(arguments["domain"]), str(arguments["service"])
     effect = f"{domain}.{service}"
-    payload, services_failure = await _ha_request("GET", f"{hass_url}/api/services", token, logger)
+    payload, services_failure = await client.request("GET", "/api/services")
     catalog = _catalog(payload) if services_failure is None and isinstance(payload, list) else {}
     if catalog and domain not in catalog:
         return _unknown_domain(domain, catalog, f", so {effect} was not called")
@@ -751,9 +572,7 @@ def _response_fields(response: Any) -> JsonObject:
 async def _handle_call_service(
     context: ToolContext,
     arguments: JsonObject,
-    hass_url: str,
-    token: str,
-    logger: Any,
+    client: HomeAssistantClient,
 ) -> JsonObject:
     del context
     domain, service = str(arguments["domain"]), str(arguments["service"])
@@ -779,20 +598,16 @@ async def _handle_call_service(
                 entity,
                 _repeat_call(arguments, entity),
                 HA_CALL_SERVICE_NAME,
-                hass_url,
-                token,
-                logger,
+                client,
             )
 
     body = dict(data)
     if entities:
         body["entity_id"] = entities[0] if len(entities) == 1 else entities
-    payload, failure, response_problem = await _post_service(
-        f"{hass_url}/api/services/{domain}/{service}",
+    payload, failure, response_problem = await client.post_service(
+        f"/api/services/{domain}/{service}",
         body,
         bool(arguments.get("return_response")),
-        token,
-        logger,
     )
     if response_problem is not None:
         return tool_failure(
@@ -802,10 +617,10 @@ async def _handle_call_service(
             retryable=False,
         )
     if failure is not None and failure.status in (400, 404):
-        return await _rejected_call(arguments, failure, hass_url, token, logger)
+        return await _rejected_call(arguments, failure, client)
     if failure is not None:
         return _failure_result(
-            failure, hass_url, effect=effect, check=_check_call(domain, entities)
+            failure, client.url, effect=effect, check=_check_call(domain, entities)
         )
 
     response = payload.get("service_response") if isinstance(payload, dict) else None
@@ -819,9 +634,7 @@ async def _handle_call_service(
     for entity in [entity for entity in entities if entity not in changed_ids][
         :_TARGET_CHECK_LIMIT
     ]:
-        current, check_failure = await _ha_request(
-            "GET", f"{hass_url}/api/states/{entity}", token, logger
-        )
+        current, check_failure = await client.request("GET", f"/api/states/{entity}")
         if check_failure is not None and check_failure.status == 404:
             missing.append(entity)
         elif isinstance(current, dict):
@@ -834,9 +647,7 @@ async def _handle_call_service(
             missing[0],
             _repeat_call(arguments, missing[0]),
             HA_CALL_SERVICE_NAME,
-            hass_url,
-            token,
-            logger,
+            client,
         )
     result: JsonObject = {"service": effect, "changed": len(changed)}
     if missing:
@@ -930,7 +741,9 @@ def register(api: Any) -> None:
         token = _resolve_token(api)
         if not token:
             return _missing_token_failure()
-        return await _handle_list_entities(context, arguments, _resolve_url(api), token, api.logger)
+        return await _handle_list_entities(
+            context, arguments, HomeAssistantClient(_resolve_url(api), token, api.logger)
+        )
 
     async def get_state_handler(
         context: ToolContext,
@@ -939,7 +752,9 @@ def register(api: Any) -> None:
         token = _resolve_token(api)
         if not token:
             return _missing_token_failure()
-        return await _handle_get_state(context, arguments, _resolve_url(api), token, api.logger)
+        return await _handle_get_state(
+            context, arguments, HomeAssistantClient(_resolve_url(api), token, api.logger)
+        )
 
     async def list_services_handler(
         context: ToolContext,
@@ -948,7 +763,9 @@ def register(api: Any) -> None:
         token = _resolve_token(api)
         if not token:
             return _missing_token_failure()
-        return await _handle_list_services(context, arguments, _resolve_url(api), token, api.logger)
+        return await _handle_list_services(
+            context, arguments, HomeAssistantClient(_resolve_url(api), token, api.logger)
+        )
 
     async def call_service_handler(
         context: ToolContext,
@@ -957,7 +774,9 @@ def register(api: Any) -> None:
         token = _resolve_token(api)
         if not token:
             return _missing_token_failure()
-        return await _handle_call_service(context, arguments, _resolve_url(api), token, api.logger)
+        return await _handle_call_service(
+            context, arguments, HomeAssistantClient(_resolve_url(api), token, api.logger)
+        )
 
     api.register_tool_family(HA_TOOL_FAMILY, "Home Assistant")
 

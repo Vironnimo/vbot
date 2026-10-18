@@ -15,12 +15,12 @@
   } from './runPresentation.js';
   import './runDialogs.css';
 
-  // The details of `model.detailsRun`: its Swarm, start, state, size,
+  // The details of `model.runActions.detailsRun`: its Swarm, start, state, size,
   // settings revision and id, its participants with their Models, and the
   // Swarm snapshot it started from behind a disclosure.
   let { model } = $props();
 
-  const run = $derived(model.detailsRun);
+  const run = $derived(model.runActions.detailsRun);
   const snapshot = $derived(
     run ? JSON.stringify(run.profile_snapshot ?? {}, null, 2) : '',
   );
@@ -29,7 +29,7 @@
 {#if run}<Modal
     title={t('swarm.run.details')}
     class="swarm-dialog swarm-details-dialog"
-    onClose={model.closeDetails}
+    onClose={model.runActions.closeDetails}
     >{#snippet body()}<div class="modal-body">
         <p class="swarm-dialog__target">{runTitle(run)}</p>
         <dl class="s-group swarm-details__facts">
@@ -93,6 +93,6 @@
         </details>
       </div>{/snippet}{#snippet footer()}<Button
         variant="secondary"
-        onClick={model.closeDetails}>{t('common.close')}</Button
+        onClick={model.runActions.closeDetails}>{t('common.close')}</Button
       >{/snippet}</Modal
   >{/if}

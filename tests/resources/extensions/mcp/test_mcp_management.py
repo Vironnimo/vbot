@@ -124,7 +124,7 @@ async def test_stopping_a_connection_that_ignores_cancellation_still_retires_its
 
     try:
         with caplog.at_level(logging.WARNING, logger="vbot.extensions.mcp"):
-            stopping = asyncio.create_task(service.manage(operation, {"id": "example"}))
+            stopping = asyncio.create_task(service.management.manage(operation, {"id": "example"}))
             done, _ = await asyncio.wait({stopping}, timeout=5)
             assert done, "stopping must not wait forever on a connection ignoring cancellation"
             await stopping
@@ -163,8 +163,8 @@ async def test_save_serializes_runner_access_until_replacement_is_ready(host, mo
     monkeypatch.setattr(ConnectionRunner, "start", start)
     monkeypatch.setattr(service, "_browse", browse)
     connection = {"id": "example", "transport": "stdio", "command": "old-command"}
-    await service.manage("save", {"connection": connection})
-    await service.manage(
+    await service.management.manage("save", {"connection": connection})
+    await service.management.manage(
         "save", {"connection": {**connection, "id": "other", "command": "other-command"}}
     )
     closing = asyncio.Event()
@@ -176,7 +176,7 @@ async def test_save_serializes_runner_access_until_replacement_is_ready(host, mo
 
     monkeypatch.setattr(service.runners["example"], "close", close)
     replacement = {**connection, "command": "new-command"}
-    saving = asyncio.create_task(service.manage("save", {"connection": replacement}))
+    saving = asyncio.create_task(service.management.manage("save", {"connection": replacement}))
     accessing = None
     try:
         await asyncio.wait_for(closing.wait(), 1)
@@ -185,17 +185,19 @@ async def test_save_serializes_runner_access_until_replacement_is_ready(host, mo
         async def concurrent_access():
             entered.set()
             if access == "connect":
-                return await service.manage("connect", {"id": "example"})
+                return await service.management.manage("connect", {"id": "example"})
             return await dispatch(registry, host, {"action": "search"})
 
         accessing = asyncio.create_task(concurrent_access())
         await asyncio.wait_for(entered.wait(), 1)
         assert not accessing.done()
-        other = await asyncio.wait_for(service.manage("connect", {"id": "other"}), 1)
+        other = await asyncio.wait_for(service.management.manage("connect", {"id": "other"}), 1)
         assert other["configuration"]["command"] == "other-command"
         # Saving another connection does not wait for this one to close.
         changed = {**connection, "id": "other", "command": "changed-command"}
-        other = await asyncio.wait_for(service.manage("save", {"connection": changed}), 1)
+        other = await asyncio.wait_for(
+            service.management.manage("save", {"connection": changed}), 1
+        )
         assert other["configuration"]["command"] == "changed-command"
         release.set()
         _, result = await asyncio.wait_for(asyncio.gather(saving, accessing), 1)
@@ -226,13 +228,13 @@ async def test_description_only_save_republishes_without_reconnecting(host, monk
     monkeypatch.setattr(ConnectionRunner, "start", lambda runner: started.append(runner))
     service, registry = await start_service(host)
     try:
-        await service.manage("save", {"connection": _CONNECTION})
+        await service.management.manage("save", {"connection": _CONNECTION})
         runner = service.runners["example"]
         runner.catalog = dict(_CATALOG)
         service._publish(runner, runner.catalog)
         described = {**_CONNECTION, "description": "  Studio Blender.  "}
 
-        await service.manage("save", {"connection": described})
+        await service.management.manage("save", {"connection": described})
 
         assert service.runners["example"] is runner
         assert started == [runner]
@@ -242,7 +244,7 @@ async def test_description_only_save_republishes_without_reconnecting(host, monk
         assert registry.get(remote_tool_name("example", "get_scene_info")) is not None
 
         # Any other change replaces the connection; its Tool names stay until a new catalog.
-        await service.manage("save", {"connection": {**_CONNECTION, "command": "other"}})
+        await service.management.manage("save", {"connection": {**_CONNECTION, "command": "other"}})
 
         assert service.runners["example"] is not runner
         assert _description(registry) == f"MCP connection example: Blender. {_USAGE}"
@@ -269,7 +271,7 @@ async def test_known_tool_names_survive_restarts_and_leave_with_the_connection(h
 
     try:
         service, registry = await restart()
-        await service.manage("save", {"connection": _CONNECTION})
+        await service.management.manage("save", {"connection": _CONNECTION})
         assert _tools(registry) == _NO_TOOLS
         service._publish(service.runners["example"], _CATALOG)
         known = _tools(registry)
@@ -278,11 +280,11 @@ async def test_known_tool_names_survive_restarts_and_leave_with_the_connection(h
 
         service, registry = await restart()
         assert _tools(registry) == known
-        await service.manage("remove", {"id": "example"})
+        await service.management.manage("remove", {"id": "example"})
         await stop(service)
 
         service, registry = await restart()
-        await service.manage("save", {"connection": _CONNECTION})
+        await service.management.manage("save", {"connection": _CONNECTION})
         assert _tools(registry) == _NO_TOOLS
         await stop(service)
     finally:
@@ -311,18 +313,20 @@ async def test_setting_a_credential_logs_its_variable_name_but_never_its_value(
     monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
     service, _registry = await start_service(host)
     try:
-        await service.manage("save", {"connection": referencing})
-        status = await service.manage("status", {"id": "example"})
+        await service.management.manage("save", {"connection": referencing})
+        status = await service.management.manage("status", {"id": "example"})
         assert status["missing_credentials"] == ["EXAMPLE_TOKEN"]
 
         with caplog.at_level(logging.INFO):
-            result = await service.manage(
+            result = await service.management.manage(
                 "credential",
                 {"id": "example", "key": "EXAMPLE_TOKEN", "value": "secret-sentinel"},
             )
 
         assert result["set"] is True
-        assert (await service.manage("status", {"id": "example"}))["missing_credentials"] == []
+        assert (await service.management.manage("status", {"id": "example"}))[
+            "missing_credentials"
+        ] == []
         assert "EXAMPLE_TOKEN" in caplog.text
         assert "secret-sentinel" not in caplog.text
     finally:
@@ -337,14 +341,14 @@ async def test_reconnect_restarts_an_enabled_connection_and_refuses_a_disabled_o
     monkeypatch.setattr(ConnectionRunner, "start", lambda runner: started.append(runner))
     service, registry = await start_service(host)
     try:
-        await service.manage("save", {"connection": _CONNECTION})
+        await service.management.manage("save", {"connection": _CONNECTION})
         first = service.runners["example"]
         first.catalog = dict(_CATALOG)
         service._publish(first, first.catalog)
         remote = remote_tool_name("example", "get_scene_info")
 
         with caplog.at_level(logging.INFO):
-            await service.manage("reconnect", {"id": "example"})
+            await service.management.manage("reconnect", {"id": "example"})
 
         # A new client, and for a local server a new process, replaces the old one.
         assert started == [first, service.runners["example"]]
@@ -353,9 +357,9 @@ async def test_reconnect_restarts_an_enabled_connection_and_refuses_a_disabled_o
         # Its Tools stay registered meanwhile, not ready until it is connected again.
         assert registry.get(remote) is not None
         assert remote not in _tool_names(registry, ready_only=True)
-        await service.manage("save", {"connection": {**_CONNECTION, "enabled": False}})
+        await service.management.manage("save", {"connection": {**_CONNECTION, "enabled": False}})
         with pytest.raises(ValueError, match="disabled"):
-            await service.manage("reconnect", {"id": "example"})
+            await service.management.manage("reconnect", {"id": "example"})
     finally:
         await service.close()
 
@@ -368,7 +372,7 @@ async def test_connection_and_job_changes_reach_accessors_in_revision_order(host
         replace(host, publish_change=lambda *change: changes.append(change))
     )
     try:
-        await service.manage("save", {"connection": _CONNECTION})
+        await service.management.manage("save", {"connection": _CONNECTION})
         runner = service.runners["example"]
 
         async def invoke(operation, arguments, invocation_context=None):
@@ -377,7 +381,7 @@ async def test_connection_and_job_changes_reach_accessors_in_revision_order(host
         monkeypatch.setattr(runner, "invoke", invoke)
         runner.state = "connected"
         runner.state = "connected"
-        job = await service.manage("test", {"id": "example"})
+        job = await service.management.manage("test", {"id": "example"})
         assert (await service.jobs.wait(job["job_id"]))["state"] == "completed"
     finally:
         await service.close()
@@ -471,10 +475,10 @@ async def test_adding_from_the_catalog_creates_a_connection_and_never_replaces_o
     service.connectors = load_connectors(path)
     mine = {"id": "docs", "transport": "http", "url": "https://docs.example.com/mcp/"}
     try:
-        await service.manage("save", {"connection": mine})
+        await service.management.manage("save", {"connection": mine})
 
-        added = await service.manage("add_from_catalog", {"entry": "docs"})
-        read_only = await service.manage(
+        added = await service.management.manage("add_from_catalog", {"entry": "docs"})
+        read_only = await service.management.manage(
             "add_from_catalog", {"entry": "tracker", "read_only": True}
         )
 
@@ -497,15 +501,17 @@ async def test_adding_from_the_catalog_creates_a_connection_and_never_replaces_o
         assert read_only["oauth"]["signed_in"] is False
         listing = {
             entry["id"]: entry["connections"]
-            for entry in (await service.manage("catalog", {}))["entries"]
+            for entry in (await service.management.manage("catalog", {}))["entries"]
         }
         # A trailing slash still names the same server.
         assert listing == {"docs": ["docs", "docs_3"], "tracker": ["tracker"]}
 
         with pytest.raises(ValueError, match="No MCP catalog entry is named missing"):
-            await service.manage("add_from_catalog", {"entry": "missing"})
+            await service.management.manage("add_from_catalog", {"entry": "missing"})
         with pytest.raises(ValueError, match="has no read-only variant"):
-            await service.manage("add_from_catalog", {"entry": "docs", "read_only": True})
+            await service.management.manage(
+                "add_from_catalog", {"entry": "docs", "read_only": True}
+            )
         assert sorted(service.connections) == ["docs", "docs_3", "tracker"]
     finally:
         await service.close()
@@ -541,7 +547,9 @@ async def test_the_protocol_client_loads_only_once_a_connection_exists(host):
         await service.start(host)
         try:
             assert loaded() == []
-            await service.manage("save", {"connection": {**_CONNECTION, "enabled": False}})
+            await service.management.manage(
+                "save", {"connection": {**_CONNECTION, "enabled": False}}
+            )
             assert "client" in loaded()
             assert service.runners["example"].state == "disconnected"
         finally:
