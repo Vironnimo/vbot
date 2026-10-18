@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
+import { createAutosaveCoordinator } from '../../lib/autosave.js';
 import { init, t } from '../../lib/i18n.js';
 import {
   compactTimestamp,
@@ -26,6 +27,8 @@ vi.mock('$lib/api.js', () =>
 );
 const { default: CalendarEventJobs } =
   await import('../CalendarEventJobs.svelte');
+const { default: AutosaveContextHost } =
+  await import('./AutosaveContextHost.support.svelte');
 let component;
 
 // One occurrence of the event `event1`, 12:00 to 13:00 UTC.
@@ -293,6 +296,69 @@ it('edits the Agent, Session and timing of a job from the choice fields', async 
     event_time: 'end + 2h',
     session_id: 'helper-s1',
   });
+});
+
+it('keeps an existing job editable through slow autosave, failure, and a protected close', async () => {
+  vi.useFakeTimers();
+  try {
+    const coordinator = createAutosaveCoordinator();
+    const backend = catalogRpc();
+    let release;
+    const first = new Promise((resolve) => {
+      release = resolve;
+    });
+    let updates = 0;
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'cron.update') {
+        updates += 1;
+        if (updates === 1) await first;
+        if (updates === 2) throw new Error('test-update-refused');
+        return {};
+      }
+      return backend(method, params);
+    });
+    component = mount(AutosaveContextHost, {
+      target: document.body,
+      props: {
+        component: CalendarEventJobs,
+        coordinator,
+        componentProps: {
+          eventId: 'event1',
+          occurrence: OCCURRENCE,
+          jobs: [job()],
+        },
+      },
+    });
+    await settle();
+    button(t('common.edit')).click();
+    await settle();
+    const prompt = document.getElementById('calendar-job-prompt');
+    change('calendar-job-prompt', 'First edit');
+    await vi.advanceTimersByTimeAsync(800);
+    expect(updates).toBe(1);
+    expect(prompt.disabled).toBe(false);
+    change('calendar-job-prompt', 'Latest edit');
+    const leaving = coordinator.flushPending();
+    release();
+    expect(await leaving).toBe(false);
+    await settle();
+    expect(document.getElementById('calendar-job-prompt')).toBe(prompt);
+    expect(prompt.value).toBe('Latest edit');
+    expect(coordinator.hasPending()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(updates).toBe(2);
+    button(t('common.cancel')).click();
+    await settle();
+    expect(updates).toBe(3);
+    expect(rpcMock).toHaveBeenCalledWith(
+      'cron.update',
+      expect.objectContaining({ prompt: 'Latest edit' }),
+    );
+    expect(document.querySelector('.calendar-job-editor')).toBeNull();
+    expect(coordinator.hasPending()).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it.each([

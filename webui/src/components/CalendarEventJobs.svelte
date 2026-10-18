@@ -2,7 +2,7 @@
   // The Agent jobs of one calendar event: the Cron jobs bound to it, each
   // with when it runs relative to the event, its Agent, instruction and
   // state, and a form to add, change or delete one.
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import Button from './ui/Button.svelte';
   import Banner from './ui/Banner.svelte';
   import FormField from './ui/FormField.svelte';
@@ -10,6 +10,11 @@
   import TextArea from './ui/TextArea.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import InfoHint from './ui/InfoHint.svelte';
+  import SaveStatus from './ui/SaveStatus.svelte';
+  import {
+    createDebouncedAutosave,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import Dropdown from './Dropdown.svelte';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import {
@@ -70,6 +75,38 @@
   let error = $state('');
   let busy = $state(false);
   let deleting = $state('');
+  let saving = $state(false);
+  let baseline = $state('');
+  const autosaveContext = useAutosaveContext();
+  const autosave = createDebouncedAutosave({
+    getSnapshot: () => ({ eventId, ...editor }),
+    hasChanges: () => Boolean(editor?.id) && fingerprint(editor) !== baseline,
+    save,
+  });
+  const unregister = autosaveContext.register(autosave.participant);
+  $effect(() => {
+    if (saving || serverUnavailable || !autosave.participant.hasChanges())
+      return;
+    autosave.scheduleRun();
+    return autosave.cancelPendingTimer;
+  });
+  onDestroy(() => {
+    unregister();
+    autosave.cancelPendingTimer();
+  });
+
+  function fingerprint(values) {
+    return JSON.stringify(
+      values && {
+        id: values.id,
+        target: values.target,
+        prompt: values.prompt.trim(),
+        session: values.session || '',
+        event_time: eventTimeText(values),
+      },
+    );
+  }
+
   let shownJobs = $derived(eventJobs(jobs, eventId));
   // A stored target or Session that is no longer listed stays selectable under
   // its raw id, so opening an older job never silently changes it.
@@ -158,6 +195,10 @@
 
   // A new job runs 30 minutes before the event starts.
   function begin(job = null) {
+    return autosaveContext.requestTransition(() => beginNow(job));
+  }
+
+  function beginNow(job) {
     const time = job
       ? eventTimeFields(job.event_edge, job.event_offset_minutes)
       : eventTimeFields('start', -30);
@@ -168,13 +209,16 @@
       session: job?.session_id ?? '',
       ...time,
     };
+    baseline = fingerprint(editor);
     error = '';
     loadSessions();
   }
 
   function cancel() {
-    editor = null;
-    sessionRequest += 1;
+    return autosaveContext.requestTransition(() => {
+      editor = null;
+      sessionRequest += 1;
+    });
   }
 
   async function loadSessions(append = false) {
@@ -213,49 +257,63 @@
   }
 
   async function save() {
-    if (!editor || busy) return;
+    if (!editor || busy || saving) return false;
     const eventTime = eventTimeText(editor);
     if (!editor.target || !editor.prompt.trim() || !eventTime) {
       error = t('calendar.jobs.required');
-      return;
+      return false;
     }
+    const submitted = { ...editor };
+    const submittedEventId = eventId;
     const fields = {
       agent_id: editor.target,
       prompt: editor.prompt.trim(),
       event_time: eventTime,
     };
-    busy = true;
+    if (submitted.id) saving = true;
+    else busy = true;
     error = '';
     try {
-      if (editor.id) {
+      if (submitted.id) {
         await updateCronJob({
-          id: editor.id,
+          id: submitted.id,
           ...fields,
-          session_id: editor.session || null,
+          session_id: submitted.session || null,
         });
       } else {
         await createCronJob({
           ...fields,
           schedule_type: 'event',
-          event_id: eventId,
-          ...(editor.session ? { session_id: editor.session } : {}),
+          event_id: submittedEventId,
+          ...(submitted.session ? { session_id: submitted.session } : {}),
         });
       }
-      editor = null;
+      if (editor?.id === submitted.id && eventId === submittedEventId) {
+        if (submitted.id) baseline = fingerprint(submitted);
+        else editor = null;
+      }
       await onChanged();
+      return true;
     } catch (e) {
       error = e.message ?? String(e);
+      return false;
     } finally {
       busy = false;
+      saving = false;
     }
   }
 
-  async function remove(id) {
+  function remove(id) {
+    return autosaveContext.requestTransition(() => removeNow(id));
+  }
+
+  async function removeNow(id) {
     busy = true;
     error = '';
     try {
       await deleteCronJob(id);
       deleting = '';
+      if (editor?.id === id) editor = null;
       await onChanged();
     } catch (e) {
       error = e.message ?? String(e);
@@ -360,8 +418,10 @@
         {#if job.session_id && onOpenSession}
           <Button
             variant="secondary"
-            onClick={() => onOpenSession(job.target, job.session_id)}
-            >{t('calendar.jobs.openSession')}</Button
+            onClick={() =>
+              autosaveContext.requestTransition(() =>
+                onOpenSession(job.target, job.session_id),
+              )}>{t('calendar.jobs.openSession')}</Button
           >
         {/if}
         <Button
@@ -395,7 +455,8 @@
       class="calendar-job-editor"
       onsubmit={(event) => {
         event.preventDefault();
-        save();
+        if (editor.id) autosave.participant.runSave('manual');
+        else save();
       }}
     >
       <div class="calendar-form-row">
@@ -505,13 +566,24 @@
         /></FormField
       >
       <div class="calendar-job-controls">
-        <Button
-          variant="primary"
-          disabled={busy || serverUnavailable}
-          onClick={save}>{t('common.save')}</Button
-        ><Button variant="secondary" disabled={busy} onClick={cancel}
-          >{t('common.cancel')}</Button
-        >
+        {#if editor.id}
+          <SaveStatus
+            {saving}
+            pending={autosave.participant.hasChanges()}
+            onClick={() => autosave.participant.runSave('manual')}
+          />
+        {:else}
+          <Button
+            variant="primary"
+            disabled={busy || serverUnavailable}
+            onClick={save}
+          >
+            {t('common.save')}
+          </Button>
+        {/if}
+        <Button variant="secondary" disabled={busy} onClick={cancel}>
+          {t('common.cancel')}
+        </Button>
       </div>
     </form>
   {/if}

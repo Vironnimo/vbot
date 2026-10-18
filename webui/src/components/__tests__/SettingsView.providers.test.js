@@ -254,7 +254,9 @@ describe('SettingsView Providers', () => {
     const input = document.querySelector('.s-local-context-input');
     expect(input.placeholder).toBe('32768');
     input.value = '16384';
-    input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    providerRow('Ollama').querySelector('.save-status button').click();
     await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
     expect(getSettingsUpdateCalls()[0][1]).toEqual({
       local_models: {

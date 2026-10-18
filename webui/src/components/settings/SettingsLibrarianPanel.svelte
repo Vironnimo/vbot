@@ -10,18 +10,8 @@
   import SaveStatus from '../ui/SaveStatus.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
-  import {
-    getAgent,
-    librarianOverview,
-    listConnections,
-    listModels,
-    updateAgent,
-  } from '$lib/api.js';
-  import {
-    AGENT_FORM_MODE_EDIT,
-    createAgentFormValues,
-    normalizeAgentForm,
-  } from '$lib/agentForm.js';
+  import { librarianOverview, listConnections, listModels } from '$lib/api.js';
+  import { createBuiltinAgentEditor } from './builtinAgentEditor.svelte.js';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
@@ -113,12 +103,11 @@
   // available; an Agent of the user that holds its id is never edited here.
   let overview = $state(null);
   let overviewError = $state('');
-  let librarianAgent = $state(null);
-  let agentLoadError = $state('');
-  let agentForm = $state(createAgentFormValues({}));
-  let agentBaseline = $state(createAgentFormValues({}));
-  let agentFormErrors = $state({});
-  let agentSaving = $state(false);
+  const agentEditor = createBuiltinAgentEditor({
+    agentId: LIBRARIAN_AGENT_ID,
+    builtin: 'librarian',
+    onError: (message) => onError(message),
+  });
   let disposed = false;
   let overviewVersion = 0;
   let agentVersion = 0;
@@ -137,12 +126,6 @@
       ? overview.running_session_id
       : '',
   );
-  let effectiveConfig = $derived(
-    librarianAgent?.effective && typeof librarianAgent.effective === 'object'
-      ? librarianAgent.effective
-      : {},
-  );
-
   let saveDisabled = $derived(
     saving ||
       librarianSettingsMatch(librarianSettings, getLibrarianSettings(settings)),
@@ -157,18 +140,9 @@
       ),
     save: saveLibrarianSettings,
   });
-  const agentAutosave = createDebouncedAutosave({
-    getSnapshot: () => JSON.stringify(agentForm),
-    hasChanges: agentHasChanges,
-    save: saveLibrarianAgent,
-  });
   const unregisterLibrarianAutosave = autosaveContext.register(
     librarianAutosave.participant,
   );
-  const unregisterAgentAutosave = autosaveContext.register(
-    agentAutosave.participant,
-  );
-
   $effect(() => {
     if (saveDisabled) {
       return;
@@ -181,18 +155,6 @@
     };
   });
 
-  $effect(() => {
-    if (agentSaving || !agentHasChanges()) {
-      return;
-    }
-
-    agentAutosave.scheduleRun();
-
-    return () => {
-      agentAutosave.cancelPendingTimer();
-    };
-  });
-
   onMount(() => {
     void loadModelCatalogs();
     void loadLibrarian();
@@ -200,9 +162,7 @@
   onDestroy(() => {
     disposed = true;
     unregisterLibrarianAutosave();
-    unregisterAgentAutosave();
     librarianAutosave.cancelPendingTimer();
-    agentAutosave.cancelPendingTimer();
   });
 
   watchToken(
@@ -254,6 +214,7 @@
       const result = await librarianOverview();
       if (disposed || current !== overviewVersion) return null;
       overview = result ?? {};
+      if (typeof overview.problem === 'string') agentEditor.clear();
       overviewError = '';
       return overview;
     } catch (error) {
@@ -270,98 +231,10 @@
     const result = await loadOverview();
     if (disposed || current !== agentVersion || !result) return;
     if (typeof result.problem === 'string') {
-      librarianAgent = null;
+      agentEditor.clear();
       return;
     }
-    try {
-      const agent = await getAgent(LIBRARIAN_AGENT_ID);
-      if (disposed || current !== agentVersion) return;
-      if (agent?.builtin !== 'librarian') {
-        librarianAgent = null;
-        return;
-      }
-      applyLibrarianAgent(agent);
-      agentLoadError = '';
-    } catch (error) {
-      if (!disposed && current === agentVersion) agentLoadError = error.message;
-    }
-  }
-
-  // The loaded or saved Agent becomes the baseline. It replaces the form
-  // unless the form holds edits: edits since the load, or since `draft` was
-  // sent to be saved.
-  function applyLibrarianAgent(agent, draft = agentBaseline) {
-    const replaceForm = formValuesMatch(agentForm, draft);
-    librarianAgent = agent;
-    agentBaseline = createAgentFormValues(agent);
-    if (replaceForm) agentForm = createAgentFormValues(agent);
-  }
-
-  function formValuesMatch(left, right) {
-    return JSON.stringify(left) === JSON.stringify(right);
-  }
-
-  function agentChanges() {
-    return normalizeAgentForm(agentForm, {
-      mode: AGENT_FORM_MODE_EDIT,
-      initialValues: agentBaseline,
-    });
-  }
-
-  function agentHasChanges() {
-    if (!librarianAgent) return false;
-    const result = agentChanges();
-    if (!result.isValid) return !formValuesMatch(agentForm, agentBaseline);
-    return Object.keys(result.payload).some((field) => field !== 'id');
-  }
-
-  async function saveLibrarianAgent(reason) {
-    if (!librarianAgent || agentSaving) return false;
-    const result = agentChanges();
-    if (reason !== 'auto' || result.isValid) agentFormErrors = result.errors;
-    if (!result.isValid) {
-      if (reason !== 'auto') onError(t('errors.validation'));
-      return false;
-    }
-    if (!Object.keys(result.payload).some((field) => field !== 'id'))
-      return true;
-    const draft = JSON.parse(JSON.stringify(agentForm));
-    agentSaving = true;
-    try {
-      const saved = await updateAgent({
-        ...result.payload,
-        id: LIBRARIAN_AGENT_ID,
-      });
-      if (disposed) return true;
-      applyLibrarianAgent(
-        saved && typeof saved === 'object'
-          ? saved
-          : { ...librarianAgent, ...result.payload },
-        draft,
-      );
-      onError('');
-      return true;
-    } catch (error) {
-      if (!disposed) onError(error?.message || t('agents.saveError'));
-      return false;
-    } finally {
-      agentSaving = false;
-    }
-  }
-
-  function inheritSource(fieldName) {
-    const field = effectiveConfig[fieldName];
-    return field && typeof field === 'object' ? (field.source ?? null) : null;
-  }
-
-  function inheritDisplayValue(fieldName) {
-    const field = effectiveConfig[fieldName];
-    const value = field && typeof field === 'object' ? field.value : null;
-    return value === null || value === undefined ? '' : String(value);
-  }
-
-  function fieldError(fieldName) {
-    return agentFormErrors[fieldName] ? t('errors.validation') : '';
+    await agentEditor.load();
   }
 
   function agentName(agentId) {
@@ -426,7 +299,7 @@
 
   function saveNow() {
     void librarianAutosave.participant.runSave('manual');
-    void agentAutosave.participant.runSave('manual');
+    void agentEditor.participant.runSave('manual');
   }
 </script>
 
@@ -523,9 +396,9 @@
 
 <div class="s-footer">
   <SaveStatus
-    saving={saving || agentSaving}
+    saving={saving || agentEditor.saving}
     pending={librarianAutosave.participant.hasChanges() ||
-      agentAutosave.participant.hasChanges()}
+      agentEditor.participant.hasChanges()}
     onClick={saveNow}
   />
 </div>
@@ -541,19 +414,20 @@
       problem: librarianProblemText(problem),
     })}
   </Banner>
-{:else if agentLoadError}
+{:else if agentEditor.loadError}
   <Banner variant="error"
-    >{t('settings.librarian.agentLoadError')} {agentLoadError}</Banner
+    >{t('settings.librarian.agentLoadError')}
+    {agentEditor.loadError}</Banner
   >
-{:else if librarianAgent}
+{:else if agentEditor.agent}
   <AgentModelSettings
-    bind:formValues={agentForm}
+    bind:formValues={agentEditor.form}
     {availableModels}
     {availableConnections}
-    formErrors={agentFormErrors}
-    {fieldError}
-    {inheritSource}
-    {inheritDisplayValue}
+    formErrors={agentEditor.formErrors}
+    fieldError={agentEditor.fieldError}
+    inheritSource={agentEditor.inheritSource}
+    inheritDisplayValue={agentEditor.inheritDisplayValue}
     idPrefix="settings-librarian"
   />
 {/if}

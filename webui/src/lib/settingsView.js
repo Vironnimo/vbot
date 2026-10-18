@@ -137,5 +137,5 @@ export {
   formatModelCount,
   describeProviderBilling,
 } from './settingsView/providers.js';
-export { CHANNEL_DM_SCOPES as CHANNEL_DM_SCOPES } from './channelSettings.js';
-export { CHANNEL_PLATFORMS as CHANNEL_PLATFORMS } from './channelSettings.js';
+export { CHANNEL_DM_SCOPES as CHANNEL_DM_SCOPES } from './settingsView/channels.js';
+export { CHANNEL_PLATFORMS as CHANNEL_PLATFORMS } from './settingsView/channels.js';

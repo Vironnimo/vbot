@@ -35,6 +35,7 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
   let saving = $state(false);
   let disposed = false;
   let loadVersion = 0;
+  let resetVersion = 0;
 
   let effective = $derived(
     isPlainObject(agent?.effective) ? agent.effective : {},
@@ -42,7 +43,7 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
 
   const autosaveContext = useAutosaveContext();
   const autosave = createDebouncedAutosave({
-    getSnapshot: () => JSON.stringify(form),
+    getSnapshot: () => ({ resetVersion, form: JSON.stringify(form) }),
     hasChanges,
     save,
   });
@@ -61,6 +62,19 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
     unregisterAutosave();
     autosave.cancelPendingTimer();
   });
+
+  function clear() {
+    loadVersion += 1;
+    resetVersion += 1;
+    autosave.cancelPendingTimer();
+    agent = null;
+    loaded = false;
+    loadError = '';
+    form = createAgentFormValues({});
+    baseline = createAgentFormValues({});
+    formErrors = {};
+    saving = false;
+  }
 
   async function load() {
     const current = ++loadVersion;
@@ -116,11 +130,12 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
     }
     if (!Object.keys(result.payload).some((field) => field !== 'id'))
       return true;
+    const currentReset = resetVersion;
     const draft = JSON.parse(JSON.stringify(form));
     saving = true;
     try {
       const saved = await updateAgent({ ...result.payload, id: agentId });
-      if (disposed) return true;
+      if (disposed || currentReset !== resetVersion) return true;
       apply(
         isPlainObject(saved) ? saved : { ...agent, ...result.payload },
         draft,
@@ -128,10 +143,11 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
       onError('');
       return true;
     } catch (error) {
-      if (!disposed) onError(error?.message || t('agents.saveError'));
+      if (!disposed && currentReset === resetVersion)
+        onError(error?.message || t('agents.saveError'));
       return false;
     } finally {
-      saving = false;
+      if (currentReset === resetVersion) saving = false;
     }
   }
 
@@ -174,6 +190,7 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
       return saving;
     },
     load,
+    clear,
     inheritSource,
     inheritDisplayValue,
     fieldError,

@@ -3,6 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
+import { createAutosaveCoordinator } from '../../lib/autosave.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 import {
@@ -20,6 +22,9 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: SettingsLibrarianPanel } =
   await import('../settings/SettingsLibrarianPanel.svelte');
+
+const { default: AutosaveContextHost } =
+  await import('./AutosaveContextHost.support.svelte');
 
 const SETTINGS = Object.freeze({
   librarian: {
@@ -199,6 +204,68 @@ describe('SettingsLibrarianPanel', () => {
     expect(calls('agent.update')).toEqual([
       { model: 'openai/gpt-5.2-mini::api-key', id: 'librarian' },
     ]);
+  });
+
+  it('clears pending Agent edits and ignores an old load after an overview refuses the Librarian', async () => {
+    serve();
+    const backend = rpcMock.getMockImplementation();
+    let blocked = false;
+    let delayLoad = false;
+    let finishLoad;
+    const oldLoad = new Promise((resolve) => {
+      finishLoad = resolve;
+    });
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'librarian.overview' && blocked)
+        return Promise.resolve({ problem: 'agent_id_taken', passes: [] });
+      if (method === 'agent.get' && delayLoad) return oldLoad;
+      return backend(method, params);
+    });
+    const props = reactiveProps({
+      settings: SETTINGS,
+      agentsRefreshToken: 0,
+      skillsRefreshToken: 0,
+    });
+    const coordinator = createAutosaveCoordinator();
+    mountedComponent = mount(AutosaveContextHost, {
+      target: document.body,
+      props: {
+        component: SettingsLibrarianPanel,
+        componentProps: props,
+        coordinator,
+      },
+    });
+    await waitForCondition(() =>
+      Boolean(document.getElementById('settings-librarian-model')),
+    );
+    await openSearchableDropdown('settings-librarian-model');
+    selectSearchableOption('settings-librarian-model', 'openai/gpt-5.2-mini');
+    expect(coordinator.hasPending()).toBe(true);
+    delayLoad = true;
+    props.agentsRefreshToken += 1;
+    await waitForCondition(() => calls('agent.get').length === 2);
+    blocked = true;
+    props.skillsRefreshToken += 1;
+    await waitForCondition(
+      () => document.getElementById('settings-librarian-model') === null,
+    );
+    expect(coordinator.hasPending()).toBe(false);
+    finishLoad(LIBRARIAN);
+    expect(await coordinator.flushPending()).toBe(true);
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.resolve();
+      flushSync();
+    }
+    expect(document.getElementById('settings-librarian-model')).toBeNull();
+    expect(calls('agent.get')).toHaveLength(2);
+    expect(calls('agent.update')).toEqual([]);
+    blocked = false;
+    delayLoad = false;
+    props.agentsRefreshToken += 1;
+    await waitForCondition(() =>
+      Boolean(document.getElementById('settings-librarian-model')),
+    );
+    expect(coordinator.hasPending()).toBe(false);
   });
 
   it('lists the recent passes with their Sessions and says why an unavailable Librarian cannot run', async () => {
