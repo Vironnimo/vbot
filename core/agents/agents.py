@@ -3,24 +3,19 @@
 from __future__ import annotations
 
 import builtins
-import shutil
-import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager, suppress
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from threading import RLock
 from typing import Any
 
 from core.agents import _archive, _delegation
 from core.agents import _workspace as workspace_ops
+from core.agents._builtins import BuiltinAgents
 from core.agents._config import (
     AGENT_FORMAT,
-    AGENT_ORDER_FORMAT,
-    AGENT_ORDER_SHAPE,
-    AGENT_RENAME_FORMAT,
-    AGENT_RENAME_SHAPE,
     DEFAULT_ALLOWED_ITEMS,
     DEFAULT_FALLBACK_MODELS,
     DEFAULT_MODEL,
@@ -28,30 +23,10 @@ from core.agents._config import (
     DEFAULT_THINKING_EFFORT,
     _agent_document,
     _agent_from_dict,
-    _agent_order_document,
-    _agent_rename_document,
-    _agent_rename_from_data,
-    _apply_agent_order,
     _apply_defaults,
-    _normalize_agent_description,
-    _normalize_agent_name,
-    _replace_list_item_once,
     _validate_agent_id,
-    _validate_allowed_items,
-    _validate_bool_field,
-    _validate_excluded_skills,
-    _validate_fallback_models,
-    _validate_memory_prompt_mode,
     _validate_new_agent_id,
-    _validate_root_project_id,
-    _validate_string_field,
-    _validate_temperature,
-    _validate_thinking_effort,
-    _validate_tool_access,
-    _validate_tool_loading,
-    _validate_top_p,
     _validated_agent_data,
-    _with_builtin_capabilities,
     load_validated_agent_json,
     normalize_agent_tools,
     validate_agent_data,
@@ -61,6 +36,9 @@ from core.agents._config import (
     validate_agent_rename_data,
     validate_agent_rename_file,
 )
+from core.agents._mutations import AgentMutations
+from core.agents._rename import AgentRenames
+from core.agents._roster import AgentRoster
 from core.agents._types import (
     BUILTIN_AGENT_IDS,
     BUILTIN_AGENT_NAMES,
@@ -68,7 +46,6 @@ from core.agents._types import (
     DEFAULT_LIBRARIAN_ENABLED,
     LIBRARIAN_AGENT_ID,
     LIBRARIAN_AGENT_NAME,
-    LIBRARIAN_BUILTIN,
     LIBRARIAN_TOOLS,
     LIVE_BACKEND_AGENT_ID,
     LIVE_BACKEND_BUILTIN,
@@ -93,7 +70,6 @@ from core.agents._types import (
     InvalidAgentIdError,
     InvalidAgentOrderError,
     LibrarianProblem,
-    _AgentOrderDocument,
     is_builtin_agent,
     is_librarian,
     is_live_agent,
@@ -104,69 +80,22 @@ from core.agents._workspace import (
     WORKSPACE_IDENTITY_FILES,
     WORKSPACE_TEMPLATE_FILES,
     _is_missing_workspace,
-    _paths_are_same_location,
-    _rebase_path_with_tree,
-    _resolve_workspace,
     _workspace_for_storage,
-    _WorkspaceRelocation,
     default_workspace_dir,
 )
-from core.config_validation import (
-    JsonConfigValidationError,
-    load_validated_json_file,
-)
 from core.database import MemberFrozenError, SnapshotBarrier
-from core.json_documents import (
-    JsonDocumentWriteError,
-    document_change,
-    strip_unknown_fields,
-    write_json_document,
-)
-from core.memory import (
-    DEFAULT_MEMORY_PROMPT_MODE,
-    MemoryPromptMode,
-)
+from core.json_documents import JsonDocumentWriteError, document_change, write_json_document
+from core.memory import DEFAULT_MEMORY_PROMPT_MODE, MemoryPromptMode
 from core.sessions import ChatSessionManager, SessionAddress
-from core.settings import (
-    AgentDefaults,
-    is_valid_agent_id,
-)
-from core.settings.normalizers import normalize_compaction_policy
-from core.tools.availability import (
-    TOOL_ACCESS_MODE_SELECTED,
-    ToolAccess,
-)
-from core.tools.live import LIVE_TOOL_NAMES
-from core.tools.web_fetch import WEB_FETCH_TOOL_NAME
-from core.tools.web_search import WEB_SEARCH_TOOL_NAME
-from core.utils.file_status import exists_strict
+from core.settings import AgentDefaults, is_valid_agent_id
+from core.tools.availability import ToolAccess
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
 
 __all__ = [
-    "BUILTIN_AGENT_IDS",
-    "BUILTIN_AGENT_NAMES",
-    "LIVE_BACKEND_AGENT_ID",
-    "LIVE_BACKEND_BUILTIN",
-    "LIVE_VOICE_AGENT_ID",
-    "LIVE_VOICE_BUILTIN",
-    "BuiltinAgentProblem",
-    "is_live_agent",
-    "LIBRARIAN_AGENT_ID",
-    "LIBRARIAN_AGENT_NAME",
-    "LIBRARIAN_TOOLS",
-    "SKILL_AGENT_ID_KEY",
     "Agent",
     "AgentAlreadyExistsError",
-    "BuiltinAgentError",
-    "LibrarianProblem",
-    "is_builtin_agent",
-    "is_librarian",
-    "librarian_problem_message",
-    "skill_subject_id",
-    "ArchivedAgent",
-    "ArchivedAgentPayload",
     "AgentError",
     "AgentListResult",
     "AgentNotFoundError",
@@ -175,8 +104,13 @@ __all__ = [
     "AgentRename",
     "AgentRenameResult",
     "AgentStore",
-    "normalize_agent_tools",
     "AgentUpdateResult",
+    "ArchivedAgent",
+    "ArchivedAgentPayload",
+    "BUILTIN_AGENT_IDS",
+    "BUILTIN_AGENT_NAMES",
+    "BuiltinAgentError",
+    "BuiltinAgentProblem",
     "DEFAULT_ALLOWED_ITEMS",
     "DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED",
     "DEFAULT_FALLBACK_MODELS",
@@ -185,10 +119,25 @@ __all__ = [
     "DEFAULT_THINKING_EFFORT",
     "InvalidAgentIdError",
     "InvalidAgentOrderError",
+    "LIBRARIAN_AGENT_ID",
+    "LIBRARIAN_AGENT_NAME",
+    "LIBRARIAN_TOOLS",
+    "LIVE_BACKEND_AGENT_ID",
+    "LIVE_BACKEND_BUILTIN",
+    "LIVE_VOICE_AGENT_ID",
+    "LIVE_VOICE_BUILTIN",
+    "LibrarianProblem",
+    "SKILL_AGENT_ID_KEY",
     "WORKSPACE_IDENTITY_FILES",
     "WORKSPACE_TEMPLATE_FILES",
     "default_workspace_dir",
+    "is_builtin_agent",
+    "is_librarian",
+    "is_live_agent",
+    "librarian_problem_message",
     "load_validated_agent_json",
+    "normalize_agent_tools",
+    "skill_subject_id",
     "validate_agent_data",
     "validate_agent_file",
     "validate_agent_order_data",
@@ -197,55 +146,15 @@ __all__ = [
     "validate_agent_rename_file",
 ]
 
-_BOOTSTRAP_AGENT_ID = "main"
-
-_BOOTSTRAP_AGENT_NAME = "Main"
 
 _AGENT_ORDER_FILE_NAME = "order.json"
 
-_AGENT_RENAME_FILE_NAME = "rename-pending.json"
-
-# What the user may change on a built-in Agent: its Model settings, and on the
-# Agents of a Live call also their Tools. The current Session follows the
-# Session the user opens.
-_BUILTIN_MODEL_FIELDS = frozenset(
-    {
-        "model",
-        "fallback_models",
-        "temperature",
-        "top_p",
-        "thinking_effort",
-        "current_session_id",
-    }
-)
-_BUILTIN_EDITABLE_FIELDS: dict[str, frozenset[str]] = {
-    LIBRARIAN_BUILTIN: _BUILTIN_MODEL_FIELDS,
-    LIVE_VOICE_BUILTIN: _BUILTIN_MODEL_FIELDS | {"tool_access"},
-    LIVE_BACKEND_BUILTIN: _BUILTIN_MODEL_FIELDS | {"tool_access"},
-}
-# The Tools a new Agent of a Live call starts with: the Live Tools, and for the
-# backend Agent also web research.
-_BUILTIN_DEFAULT_TOOL_ACCESS: dict[str, ToolAccess] = {
-    LIVE_VOICE_BUILTIN: ToolAccess(mode=TOOL_ACCESS_MODE_SELECTED, allowed=LIVE_TOOL_NAMES),
-    LIVE_BACKEND_BUILTIN: ToolAccess(
-        mode=TOOL_ACCESS_MODE_SELECTED,
-        allowed=(*LIVE_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME),
-    ),
-}
 
 _LOGGER = get_logger("agents")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
-
-
-@dataclass(frozen=True)
-class _AppliedRename:
-    """What the Agent-owned half of one rename direction changed besides the tree."""
-
-    policy_agent_ids: tuple[str, ...]
-    session_link_count: int
 
 
 class AgentStore:
@@ -281,6 +190,10 @@ class AgentStore:
         self._snapshot_barrier = (
             snapshot_barrier if snapshot_barrier is not None else SnapshotBarrier()
         )
+        self._renames = AgentRenames(self)
+        self._roster = AgentRoster(self)
+        self._builtins = BuiltinAgents(self)
+        self._mutations = AgentMutations(self)
 
     @contextmanager
     def lifecycle_guard(self) -> Iterator[None]:
@@ -332,7 +245,7 @@ class AgentStore:
         The id must be free and may not be one vBot reserves (:class:`InvalidAgentIdError`).
         """
         _validate_new_agent_id(agent_id)
-        return self._create(
+        return self._mutations._create(
             agent_id,
             name,
             builtin=None,
@@ -353,117 +266,6 @@ class AgentStore:
             librarian_enabled=librarian_enabled,
             description=description,
         )
-
-    def _create(
-        self,
-        agent_id: str,
-        name: str | None,
-        *,
-        builtin: BuiltinAgent | None,
-        model: str = DEFAULT_MODEL,
-        fallback_models: list[str] | None = None,
-        workspace: str | Path | None = None,
-        temperature: float | None = DEFAULT_TEMPERATURE,
-        top_p: float | None = None,
-        thinking_effort: str | None = DEFAULT_THINKING_EFFORT,
-        memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE,
-        tool_access: ToolAccess | Mapping[str, Any] | None = None,
-        allowed_skills: list[str] | None = None,
-        excluded_skills: list[str] | None = None,
-        tools: Mapping[str, Any] | None = None,
-        custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
-        compaction_policy: dict[str, Any] | None = None,
-        tool_loading: Mapping[str, Any] | None = None,
-        librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
-        description: str | None = None,
-    ) -> Agent:
-        """:meth:`create` past the reserved-id rules; ``builtin`` marks a built-in Agent."""
-        with self._snapshot_barrier.compound_mutation(), self._change():
-            _validate_agent_id(agent_id)
-            agent_dir = self._agent_dir(agent_id)
-            if exists_strict(agent_dir):
-                raise AgentAlreadyExistsError(f"Agent already exists: {agent_id}")
-            if agent_id in self._pending_rename_ids():
-                raise AgentError(
-                    f"Agent id {agent_id} belongs to an unfinished rename; "
-                    "restart vBot to finish it"
-                )
-
-            validated_name = _normalize_agent_name(agent_id, name)
-            validated_description = _normalize_agent_description(description)
-            validated_model = _validate_string_field("model", model, allow_empty=True)
-            validated_fallback_models = _validate_fallback_models(
-                "fallback_models", fallback_models or []
-            )
-            validated_temperature = _validate_temperature(temperature)
-            validated_top_p = _validate_top_p(top_p)
-            validated_thinking_effort = _validate_thinking_effort(thinking_effort)
-            validated_memory_prompt_mode = _validate_memory_prompt_mode(memory_prompt_mode)
-            validated_tool_access = _validate_tool_access(tool_access)
-            validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
-            validated_excluded_skills = _validate_excluded_skills(excluded_skills)
-            validated_tools = normalize_agent_tools(tools)
-            validated_custom_system_prompt_enabled = _validate_bool_field(
-                "custom_system_prompt_enabled", custom_system_prompt_enabled
-            )
-            validated_librarian_enabled = _validate_bool_field(
-                "librarian_enabled", librarian_enabled
-            )
-            validated_compaction_policy = (
-                normalize_compaction_policy(compaction_policy)
-                if compaction_policy is not None
-                else None
-            )
-            validated_tool_loading = _validate_tool_loading(tool_loading)
-            now = _delegation.new_creation_timestamp(self)
-            workspace_value = workspace
-            if workspace_value is None or (
-                isinstance(workspace_value, str) and not workspace_value.strip()
-            ):
-                workspace_value = self._default_workspace(agent_id)
-            workspace_path = _resolve_workspace(workspace_value, data_dir=self._data_dir)
-
-            # A new Agent has no Session: its first message creates one.
-            agent_dir.mkdir(parents=True)
-            agent = Agent(
-                id=agent_id,
-                name=validated_name,
-                description=validated_description,
-                model=validated_model,
-                fallback_models=validated_fallback_models,
-                workspace=str(workspace_path.resolve()),
-                root_project_id=None,
-                temperature=validated_temperature,
-                top_p=validated_top_p,
-                thinking_effort=validated_thinking_effort,
-                memory_prompt_mode=validated_memory_prompt_mode,
-                tool_access=validated_tool_access,
-                allowed_skills=validated_allowed_skills,
-                excluded_skills=validated_excluded_skills,
-                tools=validated_tools,
-                custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
-                compaction_policy=validated_compaction_policy,
-                tool_loading=validated_tool_loading,
-                librarian_enabled=validated_librarian_enabled,
-                created_at=now,
-                updated_at=now,
-                builtin=builtin,
-            )
-            agent = _with_builtin_capabilities(agent)
-
-            try:
-                agent = _delegation.bind_changes(self, agent, None)
-                self._seed_workspace(Path(agent.workspace))
-                self._write_agent(agent)
-            except Exception:
-                shutil.rmtree(agent_dir, ignore_errors=True)
-                raise
-            # ``list_with_order`` appends this newly valid Agent after every existing
-            # roster entry and persists that projection. The config write remains the
-            # creation commit point; an auxiliary order write failure is logged there
-            # and never turns a successfully created identity into a false failure.
-            self.list_with_order()
-            return _apply_defaults(agent, self._agent_defaults())
 
     def get(self, agent_id: str) -> Agent:
         """Load an agent from disk by its exact id, with a verified current-Session pointer."""
@@ -541,21 +343,15 @@ class AgentStore:
 
         The roster holds the user's Agents; built-in Agents are never part of it.
         """
-        return list(self.list_with_order().agents)
+        return self._roster.list()
 
     def list_with_builtins(self) -> builtins.list[Agent]:
         """Return the roster followed by the built-in Agents that are available."""
-        available = (self.builtin_agent(builtin) for builtin in BUILTIN_AGENT_IDS)
-        return [*self.list(), *(agent for agent in available if agent is not None)]
+        return self._roster.list_with_builtins()
 
     def builtin_agent(self, builtin: BuiltinAgent) -> Agent | None:
         """Return a built-in Agent with defaults applied, ``None`` while unavailable."""
-        if self.builtin_problem(builtin) is not None:
-            return None
-        try:
-            return self.get(BUILTIN_AGENT_IDS[builtin])
-        except AgentError, OSError:
-            return None
+        return self._builtins.builtin_agent(builtin)
 
     def builtin_problem(self, builtin: BuiltinAgent) -> BuiltinAgentProblem | None:
         """Why a built-in Agent is unavailable, ``None`` while it is available.
@@ -564,28 +360,15 @@ class AgentStore:
         an Agent of the user or an unfinished rename holds the id;
         ``invalid_config``: its ``agent.json`` cannot be loaded. Never raises.
         """
-        agent_id = BUILTIN_AGENT_IDS[builtin]
-        with self._write_lock:
-            try:
-                agent_path = self._stored_agent_path(agent_id)
-                if agent_path is None:
-                    if agent_id in self._pending_rename_ids() or exists_strict(
-                        self._agent_dir(agent_id)
-                    ):
-                        return "agent_id_taken"
-                    return "missing"
-                agent = self._read_agent_config(agent_path)
-            except AgentError, OSError:
-                return "invalid_config"
-            return None if agent.builtin == builtin else "agent_id_taken"
+        return self._builtins.builtin_problem(builtin)
 
     def librarian(self) -> Agent | None:
         """Return the built-in Librarian with defaults applied, ``None`` while unavailable."""
-        return self.builtin_agent(LIBRARIAN_BUILTIN)
+        return self._builtins.librarian()
 
     def librarian_problem(self) -> LibrarianProblem | None:
         """Why the built-in Librarian is unavailable (:meth:`builtin_problem`)."""
-        return self.builtin_problem(LIBRARIAN_BUILTIN)
+        return self._builtins.librarian_problem()
 
     def ensure_builtin_agents(self) -> None:
         """Create each built-in Agent that is missing.
@@ -596,29 +379,7 @@ class AgentStore:
         ``agent.json`` that cannot be loaded stay as they are; the warning names
         the problem.
         """
-        for builtin, agent_id in BUILTIN_AGENT_IDS.items():
-            name = BUILTIN_AGENT_NAMES[builtin]
-            with self._snapshot_barrier.compound_mutation(), self._change():
-                problem = self.builtin_problem(builtin)
-                if problem == "missing":
-                    try:
-                        self._create(
-                            agent_id,
-                            name,
-                            builtin=builtin,
-                            tool_access=_BUILTIN_DEFAULT_TOOL_ACCESS.get(builtin),
-                        )
-                    except (AgentError, OSError) as error:
-                        _LOGGER.warning("Could not create the built-in %s Agent: %s", name, error)
-                        continue
-                    _LOGGER.info("Built-in %s Agent created (agent=%s)", name, agent_id)
-                elif problem is not None:
-                    _LOGGER.warning(
-                        "The built-in %s Agent is unavailable (agent=%s problem=%s)",
-                        name,
-                        agent_id,
-                        problem,
-                    )
+        return self._builtins.ensure_builtin_agents()
 
     def list_with_order(self) -> AgentListResult:
         """Return the canonical roster plus its conflict-detection revision.
@@ -629,79 +390,7 @@ class AgentStore:
         never hides Agents: the roster falls back to id order and the invalid
         file remains available for ``doctor config`` diagnostics.
         """
-        return self._repairing_read(self._list_with_order)
-
-    def _list_with_order(self) -> AgentListResult:
-        """:meth:`list_with_order` under the store lock."""
-        agents_dir = self._data_dir / "agents"
-        if not agents_dir.exists():
-            return AgentListResult(agents=(), order_revision=0)
-
-        defaults = self._agent_defaults()
-        try:
-            agent_paths = sorted(agents_dir.glob("*/agent.json"))
-        except OSError as error:
-            _LOGGER.warning("Could not scan Agent configs in %s: %s", agents_dir, error)
-            agent_paths = []
-
-        loaded: list[tuple[Path, Agent]] = []
-        for agent_path in agent_paths:
-            try:
-                agent = self._load_seeded_agent(agent_path)
-            except (AgentError, OSError) as error:
-                _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
-                continue
-            if agent.builtin is None:
-                loaded.append((agent_path, agent))
-        # One Session read verifies every current pointer of the roster.
-        live = self._live_current_session_agent_ids([agent for _path, agent in loaded])
-        agents: list[Agent] = []
-        for agent_path, raw_agent in loaded:
-            try:
-                if raw_agent.current_session_id and raw_agent.id not in live:
-                    raw_agent = self._clear_current_session(raw_agent)
-                agents.append(_apply_defaults(raw_agent, defaults))
-            except (AgentError, OSError) as error:
-                _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
-
-        order = self._load_agent_order()
-        ordered_agents = _apply_agent_order(agents, order)
-        if not agents and order is None:
-            return AgentListResult(
-                agents=(),
-                order_revision=0,
-            )
-
-        effective_ids = tuple(agent.id for agent in ordered_agents)
-        order_path = self._agent_order_path()
-        try:
-            order_is_invalid = order is None and exists_strict(order_path)
-        except OSError:
-            order_is_invalid = True  # an order that cannot be checked is never replaced
-        if order is None and not order_is_invalid:
-            materialized = _AgentOrderDocument(agent_ids=effective_ids, revision=1)
-            try:
-                self._write_agent_order(materialized)
-            except OSError as error:
-                _LOGGER.warning("Could not persist Identity Agent order: %s", error)
-            else:
-                order = materialized
-        elif order is not None and order.agent_ids != effective_ids:
-            reconciled = _AgentOrderDocument(
-                agent_ids=effective_ids,
-                revision=order.revision + 1,
-            )
-            try:
-                self._write_agent_order(reconciled)
-            except OSError as error:
-                _LOGGER.warning("Could not reconcile Identity Agent order: %s", error)
-            else:
-                order = reconciled
-
-        return AgentListResult(
-            agents=tuple(ordered_agents),
-            order_revision=order.revision if order is not None else 0,
-        )
+        return self._roster.list_with_order()
 
     def reorder(
         self,
@@ -710,48 +399,7 @@ class AgentStore:
         expected_revision: int,
     ) -> AgentListResult:
         """Atomically replace the canonical order when roster and revision match."""
-        with self._change():
-            if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
-                raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
-            if expected_revision < 0:
-                raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
-            if not isinstance(agent_ids, list) or not all(
-                isinstance(agent_id, str) for agent_id in agent_ids
-            ):
-                raise InvalidAgentOrderError("agent_ids must be a list of strings")
-            if any(not is_valid_agent_id(agent_id) for agent_id in agent_ids):
-                raise InvalidAgentOrderError("agent_ids must contain only valid Agent ids")
-            if len(agent_ids) != len(set(agent_ids)):
-                raise InvalidAgentOrderError("agent_ids must not contain duplicates")
-
-            current = self.list_with_order()
-            current_ids = [agent.id for agent in current.agents]
-            if len(agent_ids) != len(current_ids) or set(agent_ids) != set(current_ids):
-                raise AgentOrderConflictError(
-                    "Identity Agent roster changed; reload it before reordering",
-                    current_revision=current.order_revision,
-                )
-
-            order_needs_repair = self._load_agent_order() is None
-            if agent_ids == current_ids and not order_needs_repair:
-                return current
-            if expected_revision != current.order_revision:
-                raise AgentOrderConflictError(
-                    "Identity Agent order changed; reload it before reordering",
-                    current_revision=current.order_revision,
-                )
-
-            next_order = _AgentOrderDocument(
-                agent_ids=tuple(agent_ids),
-                revision=current.order_revision + 1,
-            )
-            self._write_agent_order(next_order)
-            agents_by_id = {agent.id: agent for agent in current.agents}
-            return AgentListResult(
-                agents=tuple(agents_by_id[agent_id] for agent_id in agent_ids),
-                order_revision=next_order.revision,
-                order_changed=True,
-            )
+        return self._roster.reorder(agent_ids, expected_revision=expected_revision)
 
     def ensure_bootstrap(self) -> Agent | None:
         """Create one valid bootstrap Agent when the store has none.
@@ -759,17 +407,7 @@ class AgentStore:
         Invalid Agent directories are preserved for diagnosis. If one already
         occupies ``main``, the bootstrap Agent uses the first free ``main-N`` id.
         """
-        with self._snapshot_barrier.compound_mutation(), self._change():
-            if self.list():
-                return None
-
-            candidate = _BOOTSTRAP_AGENT_ID
-            suffix = 2
-            reserved = self._pending_rename_ids()
-            while exists_strict(self._agent_dir(candidate)) or candidate in reserved:
-                candidate = f"{_BOOTSTRAP_AGENT_ID}-{suffix}"
-                suffix += 1
-            return self.create(candidate, _BOOTSTRAP_AGENT_NAME)
+        return self._builtins.ensure_bootstrap()
 
     def update(self, agent_id: str, **changes: Any) -> Agent:
         """Update mutable fields for an existing agent."""
@@ -790,144 +428,13 @@ class AgentStore:
         a failure restores every destination touched before leaving the config on
         its original Workspace.
         """
-        with self._change():
-            _validate_agent_id(agent_id)
-            if "id" in changes and changes["id"] != agent_id:
-                raise AgentError("Agent id is immutable")
-
-            changes.pop("id", None)
-            agent_path = self._require_agent_path(agent_id)
-            agent = self._load_verified_agent(agent_path)
-            if agent.builtin is not None:
-                editable = _BUILTIN_EDITABLE_FIELDS[agent.builtin]
-                fixed_fields = sorted(set(changes) - editable)
-                if fixed_fields or copy_workspace_identity_files:
-                    names = ", ".join(sorted(editable - {"current_session_id"}))
-                    raise BuiltinAgentError(
-                        f"The {agent.name} Agent is built into vBot: only its {names} can "
-                        "change, not "
-                        f"{', '.join(fixed_fields or ['copy_workspace_identity_files'])}"
-                    )
-            if not changes:
-                if copy_workspace_identity_files:
-                    raise AgentError("copy_workspace_identity_files requires a workspace change")
-                return AgentUpdateResult(_apply_defaults(agent, self._agent_defaults()))
-
-            allowed_fields = set(Agent.__dataclass_fields__) - {
-                "id",
-                "created_at",
-                "updated_at",
-                "delegation_bindings",
-            }
-            unknown_fields = sorted(set(changes) - allowed_fields)
-            if unknown_fields:
-                raise AgentError(f"Unknown agent fields: {', '.join(unknown_fields)}")
-
-            if "name" in changes:
-                changes["name"] = _normalize_agent_name(agent_id, changes["name"])
-            if "description" in changes:
-                changes["description"] = _normalize_agent_description(changes["description"])
-            # An empty current_session_id clears the pointer: the Agent opens a new Session.
-            string_fields = {"model", "current_session_id"}
-            for field_name in sorted(string_fields & set(changes)):
-                changes[field_name] = _validate_string_field(
-                    field_name, changes[field_name], allow_empty=True
-                )
-            if "fallback_models" in changes:
-                changes["fallback_models"] = _validate_fallback_models(
-                    "fallback_models", changes["fallback_models"]
-                )
-            if "workspace" in changes:
-                workspace = changes["workspace"]
-                if workspace is None or (isinstance(workspace, str) and not workspace.strip()):
-                    workspace = self._default_workspace(agent_id)
-                changes["workspace"] = str(_resolve_workspace(workspace, data_dir=self._data_dir))
-                if changes["workspace"] == agent.workspace:
-                    if copy_workspace_identity_files:
-                        raise AgentError(
-                            "copy_workspace_identity_files requires a changed workspace"
-                        )
-                    changes.pop("workspace")
-            elif copy_workspace_identity_files:
-                raise AgentError("copy_workspace_identity_files requires a workspace change")
-            if "root_project_id" in changes:
-                changes["root_project_id"] = _validate_root_project_id(changes["root_project_id"])
-            if "temperature" in changes:
-                changes["temperature"] = _validate_temperature(changes["temperature"])
-            if "top_p" in changes:
-                changes["top_p"] = _validate_top_p(changes["top_p"])
-            if "thinking_effort" in changes:
-                changes["thinking_effort"] = _validate_thinking_effort(changes["thinking_effort"])
-            if "memory_prompt_mode" in changes:
-                changes["memory_prompt_mode"] = _validate_memory_prompt_mode(
-                    changes["memory_prompt_mode"]
-                )
-            if "tool_access" in changes:
-                changes["tool_access"] = _validate_tool_access(changes["tool_access"])
-            if "allowed_skills" in changes:
-                changes["allowed_skills"] = _validate_allowed_items(
-                    "allowed_skills", changes["allowed_skills"]
-                )
-            if "excluded_skills" in changes:
-                changes["excluded_skills"] = _validate_excluded_skills(changes["excluded_skills"])
-            if "tools" in changes:
-                changes["tools"] = normalize_agent_tools(changes["tools"])
-            for bool_field in ("custom_system_prompt_enabled", "librarian_enabled"):
-                if bool_field in changes:
-                    changes[bool_field] = _validate_bool_field(bool_field, changes[bool_field])
-            if "compaction_policy" in changes:
-                policy = changes["compaction_policy"]
-                changes["compaction_policy"] = (
-                    normalize_compaction_policy(policy) if policy is not None else None
-                )
-            if "tool_loading" in changes:
-                changes["tool_loading"] = _validate_tool_loading(changes["tool_loading"])
-            if changes.get("current_session_id"):
-                self._validate_current_session(agent_id, changes["current_session_id"])
-
-            if not changes:
-                return AgentUpdateResult(_apply_defaults(agent, self._agent_defaults()))
-
-            updated_agent = _with_builtin_capabilities(
-                replace(agent, **changes, updated_at=utc_now_timestamp())
-            )
-            updated_agent = _delegation.bind_changes(self, updated_agent, agent)
-            relocation = _WorkspaceRelocation()
-            try:
-                if "workspace" in changes:
-                    relocation = workspace_ops.relocate_workspace(
-                        self._agent_dir(agent_id),
-                        self._template_dir,
-                        agent,
-                        Path(updated_agent.workspace),
-                        copy_identity_files=copy_workspace_identity_files,
-                    )
-                self._write_agent(updated_agent)
-            except Exception:
-                relocation.rollback()
-                raise
-            return AgentUpdateResult(
-                agent=_apply_defaults(updated_agent, self._agent_defaults()),
-                copied_files=relocation.copied_files,
-                backed_up_files=relocation.backed_up_files,
-                backup_dir=str(relocation.backup_dir) if relocation.backup_dir else None,
-                created_files=relocation.created_files,
-                destination=str(relocation.destination) if relocation.destination else None,
-            )
+        return self._mutations.update_with_metadata(
+            agent_id, copy_workspace_identity_files=copy_workspace_identity_files, **changes
+        )
 
     def restore_update(self, previous_agent: Agent, result: AgentUpdateResult) -> None:
         """Compensate a completed update during a larger coordinated operation."""
-        with self._change():
-            if result.destination is not None:
-                relocation = _WorkspaceRelocation(
-                    destination=Path(result.destination),
-                    copied_files=result.copied_files,
-                    backed_up_files=result.backed_up_files,
-                    created_files=result.created_files,
-                    backup_dir=Path(result.backup_dir) if result.backup_dir else None,
-                )
-                relocation.rollback()
-            self._write_agent(previous_agent)
+        return self._mutations.restore_update(previous_agent, result)
 
     def rename(
         self, agent_id: str, new_agent_id: str, *, external_references: Iterable[str] = ()
@@ -961,64 +468,7 @@ class AgentStore:
         Agent-owned half and removes the record. While a rename is pending, no
         other rename starts and neither id can be created.
         """
-        with self._snapshot_barrier.compound_mutation(), self._change():
-            _validate_agent_id(agent_id)
-            _validate_new_agent_id(new_agent_id)
-            if agent_id == new_agent_id:
-                raise AgentError("new agent id must differ from the current id")
-            if exists_strict(self._rename_record_path()):
-                raise AgentError(
-                    "An earlier Agent rename is still pending; restart vBot to finish it"
-                )
-
-            source_dir = self._agent_dir(agent_id)
-            destination_dir = self._agent_dir(new_agent_id)
-            agent_path = self._require_agent_path(agent_id)
-            source = self._read_agent_config(agent_path)
-            if source.builtin is not None:
-                raise BuiltinAgentError(
-                    f"The {source.name} is built into vBot and cannot be renamed"
-                )
-            case_only = _paths_are_same_location(source_dir, destination_dir)
-            if exists_strict(destination_dir) and not case_only:
-                raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
-            sessions = self._session_manager()
-            # Rolling back renames the new id's Sessions back, so it must own none yet.
-            if sessions.list_addresses(None, agent_id=new_agent_id):
-                raise AgentAlreadyExistsError(f"Sessions already exist for Agent: {new_agent_id}")
-            references = tuple(external_references)
-            if references:
-                raise AgentReferencedError(new_agent_id, references)
-            # Before the record, outside every rename direction: an interruption
-            # leaves only fewer leftovers, and no revert brings them back.
-            leftover_policy_agent_ids = self._remove_from_allow_lists(new_agent_id)
-            _delegation.revoke_future_grants(self, new_agent_id)
-            # Repairs a dangling current-Session pointer before the Sessions move.
-            self._load_verified_agent(agent_path)
-            session_ids = tuple(
-                address.session_id for address in sessions.list_addresses(None, agent_id=agent_id)
-            )
-            rename = AgentRename(
-                source_id=agent_id,
-                target_id=new_agent_id,
-                staging_name=f".{agent_id}.rename-{uuid.uuid4().hex}.tmp" if case_only else None,
-            )
-            self._write_rename_record(rename)
-            try:
-                applied = self._apply_rename(rename)
-                renamed = self._read_agent_config(self._require_agent_path(new_agent_id))
-            except Exception as error:
-                self._roll_back_rename(rename, error)
-                raise
-            return AgentRenameResult(
-                rename=rename,
-                agent=_apply_defaults(renamed, self._agent_defaults()),
-                session_ids=session_ids,
-                policy_agent_ids=tuple(
-                    sorted({*leftover_policy_agent_ids, *applied.policy_agent_ids})
-                ),
-                session_link_count=applied.session_link_count,
-            )
+        return self._renames.rename(agent_id, new_agent_id, external_references=external_references)
 
     def revert_rename(self, rename: AgentRename) -> AgentRename:
         """Reverse the pending ``rename`` and apply its Agent-owned half back.
@@ -1028,18 +478,11 @@ class AgentStore:
         :meth:`finish_rename` with it. On failure the reversed record stays, and
         the next start completes the rollback.
         """
-        with self._snapshot_barrier.compound_mutation(), self._change():
-            self._require_pending_rename(rename)
-            reverse = rename.reversed()
-            self._write_rename_record(reverse)
-            self._apply_rename(reverse)
-            return reverse
+        return self._renames.revert_rename(rename)
 
     def finish_rename(self, rename: AgentRename) -> None:
         """Remove the pending ``rename`` record once every reference is retargeted."""
-        with self._change():
-            self._require_pending_rename(rename)
-            self._rename_record_path().unlink(missing_ok=True)
+        return self._renames.finish_rename(rename)
 
     def recover_rename(self) -> AgentRename | None:
         """Bring an interrupted rename's Agent-owned half to one consistent end.
@@ -1052,140 +495,7 @@ class AgentStore:
         the record cannot be read or neither direction completes; that record
         stays for the next start and the failure is logged.
         """
-        with self._snapshot_barrier.compound_mutation(), self._change():
-            try:
-                rename = self._load_rename_record()
-            except (AgentError, OSError) as error:
-                _LOGGER.error("Pending Agent rename cannot be read and stays in place: %s", error)
-                return None
-            if rename is None:
-                return None
-            try:
-                self._apply_rename(rename)
-                return rename
-            except Exception as error:
-                _LOGGER.warning(
-                    "Agent rename could not be completed after restart; reverting it "
-                    "(agent=%s new_agent=%s): %s",
-                    rename.old_id,
-                    rename.new_id,
-                    error,
-                )
-            reverse = rename.reversed()
-            try:
-                self._write_rename_record(reverse)
-                self._apply_rename(reverse)
-            except Exception as error:
-                _LOGGER.error(
-                    "Agent rename recovery failed; the next start retries it "
-                    "(agent=%s new_agent=%s)",
-                    rename.old_id,
-                    rename.new_id,
-                    exc_info=(type(error), error, error.__traceback__),
-                )
-                return None
-            return reverse
-
-    def _roll_back_rename(self, rename: AgentRename, error: Exception) -> None:
-        """Revert a rename whose Agent-owned half failed; the next start finishes a failure."""
-        reverse = rename.reversed()
-        try:
-            self._write_rename_record(reverse)
-            self._apply_rename(reverse)
-            self._rename_record_path().unlink(missing_ok=True)
-        except Exception as rollback_error:
-            _LOGGER.error(
-                "Agent rename rollback incomplete; the next start finishes it "
-                "(agent=%s new_agent=%s error=%s)",
-                rename.old_id,
-                rename.new_id,
-                error,
-                exc_info=(type(rollback_error), rollback_error, rollback_error.__traceback__),
-            )
-
-    def _apply_rename(self, rename: AgentRename) -> _AppliedRename:
-        """Move every Agent-owned trace of ``source_id`` to ``target_id``.
-
-        Each step selects only what still names ``source_id`` or converges on its
-        target state, so repeating the whole sequence after an interruption at any
-        point finishes it.
-        """
-        _delegation.retire(self, rename.source_id)
-        sessions = self._session_manager()
-        sessions.retarget_identity_agent_sessions(rename.source_id, rename.target_id)
-        link_count = len(
-            sessions.retarget_identity_agent_references(rename.source_id, rename.target_id)
-        )
-        # The Librarian Sessions that maintain the Agent's Skills keep doing so.
-        sessions.retarget_metadata_value(
-            LIBRARIAN_AGENT_ID, SKILL_AGENT_ID_KEY, rename.source_id, rename.target_id
-        )
-        if workspace_ops._move_renamed_tree(self._data_dir / "agents", rename):
-            self._write_renamed_config(rename)
-            self._rename_order_entry(rename)
-        else:
-            _LOGGER.warning(
-                "Agent files missing during rename; only references were renamed "
-                "(agent=%s new_agent=%s)",
-                rename.old_id,
-                rename.new_id,
-            )
-        return _AppliedRename(
-            policy_agent_ids=self._retarget_allowed_agents(rename.source_id, rename.target_id),
-            session_link_count=link_count,
-        )
-
-    def _write_renamed_config(self, rename: AgentRename) -> None:
-        """Give the moved config the target id and rebase an in-tree Workspace."""
-        agent_path = self._agent_path(rename.target_id)
-        data = load_validated_agent_json(agent_path)
-        if data["id"] not in (rename.source_id, rename.target_id):
-            raise AgentError(f"{agent_path}: Agent id {data['id']!r} does not match the rename")
-        agent = _agent_from_dict(
-            data,
-            data_dir=self._data_dir,
-            default_workspace=self._default_workspace(rename.target_id),
-        )
-        workspace = str(
-            _rebase_path_with_tree(
-                agent.workspace,
-                self._agent_dir(rename.source_id),
-                self._agent_dir(rename.target_id),
-            )
-        )
-        if agent.id == rename.target_id and workspace == agent.workspace:
-            return
-        self._write_agent(
-            replace(agent, id=rename.target_id, workspace=workspace, updated_at=utc_now_timestamp())
-        )
-
-    def _rename_order_entry(self, rename: AgentRename) -> None:
-        """Keep the renamed Agent at its roster position."""
-        order = self._load_agent_order()
-        if order is None or rename.source_id not in order.agent_ids:
-            return
-        agent_ids = _replace_list_item_once(
-            builtins.list(order.agent_ids), rename.source_id, rename.target_id
-        )
-        self._write_agent_order(
-            _AgentOrderDocument(agent_ids=tuple(agent_ids), revision=order.revision + 1)
-        )
-
-    def _retarget_allowed_agents(self, old_agent_id: str, new_agent_id: str) -> tuple[str, ...]:
-        """Retarget a bare Identity Agent id in every delegation allow-list.
-
-        Returns the ids of the Agents whose configs changed.
-        """
-        changed: builtins.list[str] = []
-        for agent, allowed_agents in self._allow_lists_naming(old_agent_id):
-            tools = deepcopy(agent.tools)
-            tools["subagent"]["allowed_agents"] = _replace_list_item_once(
-                allowed_agents, old_agent_id, new_agent_id
-            )
-            updated = _delegation.retarget(agent, old_agent_id, new_agent_id, self)
-            self._write_agent(replace(updated, tools=tools, updated_at=utc_now_timestamp()))
-            changed.append(agent.id)
-        return tuple(changed)
+        return self._renames.recover_rename()
 
     def _remove_from_allow_lists(
         self, agent_id: str, *, best_effort: bool = False
@@ -1428,47 +738,6 @@ class AgentStore:
     def _agent_order_path(self) -> Path:
         return self._data_dir / "agents" / _AGENT_ORDER_FILE_NAME
 
-    def _rename_record_path(self) -> Path:
-        return self._data_dir / "agents" / _AGENT_RENAME_FILE_NAME
-
-    def _load_rename_record(self) -> AgentRename | None:
-        try:
-            data = load_validated_json_file(
-                self._rename_record_path(),
-                validate_agent_rename_data,
-                missing_ok=True,
-                missing_default=None,
-            )
-        except JsonConfigValidationError as error:
-            raise AgentError(str(error)) from error
-        if data is None:
-            return None
-        return _agent_rename_from_data(strip_unknown_fields(data, AGENT_RENAME_SHAPE))
-
-    def _write_rename_record(self, rename: AgentRename) -> None:
-        try:
-            write_json_document(
-                self._rename_record_path(), _agent_rename_document(rename), AGENT_RENAME_FORMAT
-            )
-        except JsonDocumentWriteError as error:
-            raise AgentError(str(error)) from error
-
-    def _require_pending_rename(self, rename: AgentRename) -> None:
-        if self._load_rename_record() != rename:
-            raise AgentError(
-                f"No such pending Agent rename: {rename.source_id} -> {rename.target_id}"
-            )
-
-    def _pending_rename_ids(self) -> frozenset[str]:
-        """Both ids of a readable pending rename, which no new Agent may take."""
-        try:
-            rename = self._load_rename_record()
-        except AgentError, OSError:
-            return frozenset()
-        if rename is None:
-            return frozenset()
-        return frozenset((rename.source_id, rename.target_id))
-
     def default_workspace(self, agent_id: str) -> str:
         """Return an agent's default identity home as a resolved absolute path.
 
@@ -1514,41 +783,6 @@ class AgentStore:
                 return _delegation.target_allowed(self, target_id, binding)
             except AgentError, OSError:
                 return False
-
-    def _load_agent_order(self) -> _AgentOrderDocument | None:
-        order_path = self._agent_order_path()
-        try:
-            data = load_validated_json_file(
-                order_path,
-                validate_agent_order_data,
-                missing_ok=True,
-                missing_default=None,
-            )
-        except JsonConfigValidationError as error:
-            message = str(error)
-            if message != self._reported_order_error:
-                _LOGGER.warning("Ignoring invalid Identity Agent order: %s", message)
-                self._reported_order_error = message
-            return None
-
-        self._reported_order_error = None
-        if data is None:
-            return None
-        data = strip_unknown_fields(data, AGENT_ORDER_SHAPE)
-        return _AgentOrderDocument(
-            agent_ids=tuple(data["agent_ids"]),
-            revision=data["revision"],
-        )
-
-    def _write_agent_order(self, order: _AgentOrderDocument) -> None:
-        """Write the roster order; it never waits under the lock (see ``_repairing_read``)."""
-        order_path = self._agent_order_path()
-        with self._write_lock, document_change(order_path, wait=False):
-            try:
-                write_json_document(order_path, _agent_order_document(order), AGENT_ORDER_FORMAT)
-            except JsonDocumentWriteError as error:
-                raise AgentError(str(error)) from error
-        self._reported_order_error = None
 
     def _agent_defaults(self) -> AgentDefaults:
         if self._defaults_provider is None:

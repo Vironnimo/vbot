@@ -168,8 +168,8 @@ async def test_async_resolution_runs_each_agent_kind_on_its_pool(
     resolver = _resolver(agents, projects, _openai_configured())
     threads: dict[str, str] = {}
     store_get = agents.get
-    read_fresh = resolver._read_agent_fresh
-    apply_overrides = resolver._apply_overrides
+    read_fresh = resolver._team_resolution._read_agent_fresh
+    apply_overrides = resolver._session_resolution._apply_overrides
 
     def recording_get(agent_id: str) -> Any:
         threads["identity"] = threading.current_thread().name
@@ -184,8 +184,8 @@ async def test_async_resolution_runs_each_agent_kind_on_its_pool(
         return apply_overrides(*args)
 
     monkeypatch.setattr(agents, "get", recording_get)
-    monkeypatch.setattr(resolver, "_read_agent_fresh", recording_read)
-    monkeypatch.setattr(resolver, "_apply_overrides", recording_overrides)
+    monkeypatch.setattr(resolver._team_resolution, "_read_agent_fresh", recording_read)
+    monkeypatch.setattr(resolver._session_resolution, "_apply_overrides", recording_overrides)
 
     # Act
     resolved = await resolver.resolve_agent_async(None, "orchestrator")

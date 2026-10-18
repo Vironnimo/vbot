@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Hashable
 from dataclasses import replace
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 from core.projects._model_configuration import (
     ConnectionRestrictedModel,
@@ -14,6 +13,16 @@ from core.projects._model_configuration import (
     ModelConfigurationError,
     ModelProbe,
     ProviderProbe,
+)
+from core.projects._project_context import resolve_prompt_project as resolve_prompt_project
+from core.projects._project_context import resolve_skill_scope as resolve_skill_scope
+from core.projects._project_context import runtime_agent_body as runtime_agent_body
+from core.projects._resolution_context import (
+    _RESOLUTION_WORKERS,
+    _require_one_override_source,
+    _require_temporary_binding,
+    _session_address,
+    _skill_binding_key,
 )
 from core.projects._resolution_values import (
     _build_config_agent,
@@ -33,7 +42,6 @@ from core.projects._resolution_values import (
 )
 from core.projects._runtime_agent import (
     AGENT_OVERRIDE_FIELDS,
-    AGENT_OVERRIDES_META_KEY,
     AgentOverrides,
     AgentResolutionError,
     ConfigAgent,
@@ -44,20 +52,17 @@ from core.projects._runtime_agent import (
     RuntimeAgent,
     WorkingProjectMissingError,
 )
-from core.projects.projects import ProjectError, ProjectNotFoundError
-from core.projects.scan_report import FindingType, ScanFinding
-from core.projects.sources import (
-    AgentAdapter,
-    AgentProfile,
-    ScanResult,
-    Translation,
-    read_profile,
-    scan_project,
+from core.projects._session_resolution import (
+    DEFAULT_PROJECT_MISSING_MESSAGE,
+    SKILL_SUBJECT_MISSING_MESSAGE,
+    TEAM_WORKING_PROJECT_MESSAGE,
+    SessionResolution,
 )
-from core.projects.sources._translation import rules_allow
+from core.projects._team_resolution import TeamResolution, _profile_skill_allowed
+from core.projects.projects import ProjectError, ProjectNotFoundError
+from core.projects.sources import AgentAdapter, AgentProfile, ScanResult
 from core.sessions import AGENT_DEFAULT_PROJECT
 from core.settings import AgentDefaults
-from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -71,15 +76,16 @@ if TYPE_CHECKING:
     from core.runtime.interfaces import ProviderCredentialResolverProtocol
     from core.sessions import SessionAddress, SessionWorkingProject, WorkingProjectChoice
 
+
 __all__ = [
     "AGENT_OVERRIDE_FIELDS",
     "AgentOverrides",
     "AgentResolutionError",
     "AgentResolver",
-    "SessionMetadataStore",
     "ConfigAgent",
     "ConnectionRestrictedModel",
     "CredentialProbe",
+    "DEFAULT_PROJECT_MISSING_MESSAGE",
     "GlobalAgentDefaultsProvider",
     "ModelConfigurationChecker",
     "ModelConfigurationError",
@@ -89,6 +95,9 @@ __all__ = [
     "ResolutionAgentNotFoundError",
     "ResolutionProjectNotFoundError",
     "RuntimeAgent",
+    "SKILL_SUBJECT_MISSING_MESSAGE",
+    "SessionMetadataStore",
+    "TEAM_WORKING_PROJECT_MESSAGE",
     "WorkingProjectMissingError",
     "build_agent_resolver",
     "effective_project_allowed_skills",
@@ -96,30 +105,6 @@ __all__ = [
     "resolve_skill_scope",
     "runtime_agent_body",
 ]
-
-
-# Project Agent resolution and the Project and Model checks applied to other
-# Agents read Project, repository and configuration files; the async variants
-# run them here. Identity Agent reads and temporary bindings run on the Session
-# database's pool instead. The first resolution in a Project whose Team is not
-# cached yet also lists its Session-owning Agents here, for the scan report.
-_RESOLUTION_WORKERS = BoundedWorkerPool(name="agent-resolution", max_workers=4)
-
-# A Librarian Session cannot run once the Agent whose Skills it maintains is gone.
-SKILL_SUBJECT_MISSING_MESSAGE = (
-    "This Session works on the Skills of Agent {agent_id}, which no longer exists, "
-    "so it cannot continue."
-)
-# An Agent's default Project names where its new Sessions work.
-DEFAULT_PROJECT_MISSING_MESSAGE = (
-    "Agent {agent_id} starts new Sessions in Project {project_id}, which no longer exists. "
-    "Choose another default Project for the Agent."
-)
-# A Team Agent's Session works in the Team's Project, never in another one.
-TEAM_WORKING_PROJECT_MESSAGE = (
-    "A Session of Team Agent {agent_id}@{project_id} works in Project {project_id}; "
-    "it cannot work in another Project."
-)
 
 
 class SessionMetadataStore(Protocol):
@@ -156,26 +141,9 @@ class SessionMetadataStore(Protocol):
     async def run_async(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any: ...
 
 
-def _profile_skill_allowed(profile: AgentProfile, name: str) -> bool:
-    return rules_allow(profile.skill_rules, name)
-
-
 def _no_project_skills(_project_id: str) -> frozenset[str]:
     """Default project-skill probe: a project with no own skills (bundled-only)."""
     return frozenset()
-
-
-def _bad_model_finding(member: AgentProfile) -> ScanFinding:
-    """Build a ``BAD_MODEL`` finding for a scanned agent's unconfigured model."""
-    return ScanFinding(
-        type=FindingType.BAD_MODEL,
-        detail=(
-            f"model '{member.model}' is not configured in this instance "
-            f"(unknown provider/model or no usable connection)"
-        ),
-        agent_id=member.agent_id,
-        source_path=member.source_path,
-    )
 
 
 def _identity_resolution_error(error: Exception) -> AgentResolutionError:
@@ -185,34 +153,6 @@ def _identity_resolution_error(error: Exception) -> AgentResolutionError:
     if isinstance(error, AgentNotFoundError):
         return ResolutionAgentNotFoundError(str(error))
     return AgentResolutionError(str(error))
-
-
-def _session_address(project_id: str | None, agent_id: str, session_id: str) -> SessionAddress:
-    from core.sessions import SessionAddress
-
-    return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-
-
-def _require_one_override_source(
-    session_id: str | None, new_session_overrides: AgentOverrides | None
-) -> None:
-    if session_id is not None and new_session_overrides is not None:
-        raise ValueError("an existing Session already has its own Agent overrides")
-
-
-def _require_temporary_binding(agent: TemporaryAgent | None) -> TemporaryAgent:
-    if agent is None:
-        raise AgentResolutionError("temporary Session binding is unavailable")
-    return agent
-
-
-def _orphan_finding(agent_id: str, detail: str) -> ScanFinding:
-    """Build an ``ORPHAN`` finding for an anchor pointer at a non-team agent id.
-
-    Pointer-origin findings carry no ``source_path`` — the pointer lives in the
-    anchor (``project.json`` / the sessions subtree), not in a repo source file.
-    """
-    return ScanFinding(type=FindingType.ORPHAN, detail=detail, agent_id=agent_id)
 
 
 class AgentResolver:
@@ -261,6 +201,8 @@ class AgentResolver:
         # Team-scan cache keyed by project id. A run reads from here; an explicit
         # re-scan / project-open repopulates it via ``rescan_project``.
         self._team_cache: dict[str, tuple[Hashable, ScanResult]] = {}
+        self._session_resolution = SessionResolution(self)
+        self._team_resolution = TeamResolution(self)
 
     def resolve_agent(
         self,
@@ -308,12 +250,14 @@ class AgentResolver:
             agent = self._resolve_config_agent(
                 project_id, agent_id, model_override=overrides.model, require_model=require_model
             )
-        agent = self._apply_overrides(agent, overrides)
+        agent = self._session_resolution._apply_overrides(agent, overrides)
         if address is None:
             return agent
         key = _skill_binding_key(agent) if project_id is None else None
         if key is not None:
-            agent = self._bind_skill_subject(agent, self._session_value(address, key))
+            agent = self._session_resolution._bind_skill_subject(
+                agent, self._session_resolution._session_value(address, key)
+            )
         return agent
 
     def resolve_temporary_agent(
@@ -374,12 +318,16 @@ class AgentResolver:
             except AgentError as error:
                 raise _identity_resolution_error(error) from error
         if not overrides.is_empty:
-            agent = await _RESOLUTION_WORKERS.run(self._apply_overrides, agent, overrides)
+            agent = await _RESOLUTION_WORKERS.run(
+                self._session_resolution._apply_overrides, agent, overrides
+            )
         key = _skill_binding_key(agent) if project_id is None else None
         if address is not None and key is not None:
-            subject_id = await self._session_value_async(address, key)
+            subject_id = await self._session_resolution._session_value_async(address, key)
             if subject_id is not None:
-                agent = await _RESOLUTION_WORKERS.run(self._bind_skill_subject, agent, subject_id)
+                agent = await _RESOLUTION_WORKERS.run(
+                    self._session_resolution._bind_skill_subject, agent, subject_id
+                )
         return agent
 
     async def resolve_delegated_agent_async(
@@ -436,11 +384,9 @@ class AgentResolver:
         where a new Session with *requested* works
         (:meth:`new_session_working_project`).
         """
-        if project_id is None:
-            stored = self._stored_working_project(agent.id, session_id)
-            if stored is not None:
-                return self._require_session_project(stored)
-        return self.new_session_working_project(project_id, agent, requested)
+        return self._session_resolution.resolve_working_project(
+            project_id, agent, session_id=session_id, requested=requested
+        )
 
     async def resolve_working_project_async(
         self,
@@ -455,12 +401,8 @@ class AgentResolver:
         The Session read runs on the Session database's pool; the Project check
         reads Project files on the ``agent-resolution`` pool.
         """
-        if project_id is None:
-            stored = await self._stored_working_project_async(agent.id, session_id)
-            if stored is not None:
-                return await _RESOLUTION_WORKERS.run(self._require_session_project, stored)
-        return await _RESOLUTION_WORKERS.run(
-            self.new_session_working_project, project_id, agent, requested
+        return await self._session_resolution.resolve_working_project_async(
+            project_id, agent, session_id=session_id, requested=requested
         )
 
     def new_session_working_project(
@@ -477,22 +419,7 @@ class AgentResolver:
         Workspace, and :data:`~core.sessions.AGENT_DEFAULT_PROJECT` the Agent's
         default Project (its ``root_project_id``).
         """
-        if project_id is not None:
-            if requested is not AGENT_DEFAULT_PROJECT:
-                raise AgentResolutionError(
-                    TEAM_WORKING_PROJECT_MESSAGE.format(agent_id=agent.id, project_id=project_id)
-                )
-            return project_id
-        if requested is AGENT_DEFAULT_PROJECT:
-            default = getattr(agent, "root_project_id", None)
-            if default is not None and not self._projects.exists(default):
-                raise AgentResolutionError(
-                    DEFAULT_PROJECT_MISSING_MESSAGE.format(agent_id=agent.id, project_id=default)
-                )
-            return cast("str | None", default)
-        if requested is not None and not self._projects.exists(requested):
-            raise ResolutionProjectNotFoundError(f"Project not found: {requested}")
-        return requested
+        return self._session_resolution.new_session_working_project(project_id, agent, requested)
 
     async def session_working_project_async(self, address: SessionAddress) -> str | None:
         """Return the Project the Session at *address* works in, ``None`` for the Workspace.
@@ -503,72 +430,21 @@ class AgentResolver:
         exists. The Session read runs on the Session database's pool, the Project
         check on the ``agent-resolution`` pool.
         """
-        if address.project_id is not None:
-            return address.project_id
-        stored = await self._stored_working_project_async(address.agent_id, address.session_id)
-        if stored is None:
-            return None
-        return await _RESOLUTION_WORKERS.run(self._require_session_project, stored)
-
-    def _require_session_project(self, binding: SessionWorkingProject) -> str | None:
-        """Require the bound Project, never a replacement reusing its public id."""
-        project_id = binding.project_id
-        if project_id is not None and (binding.archived or not self._projects.exists(project_id)):
-            raise WorkingProjectMissingError(project_id)
-        return project_id
-
-    def _stored_working_project(
-        self, agent_id: str, session_id: str | None
-    ) -> SessionWorkingProject | None:
-        """Return the Session's Working Project binding, or ``None`` without a Session."""
-        if session_id is None or self._sessions is None:
-            return None
-        from core.sessions import SessionNotFoundError
-
-        try:
-            return self._sessions.working_project(_session_address(None, agent_id, session_id))
-        except SessionNotFoundError:
-            return None
-
-    async def _stored_working_project_async(
-        self, agent_id: str, session_id: str | None
-    ) -> SessionWorkingProject | None:
-        """Event-Loop-safe :meth:`_stored_working_project`."""
-        if session_id is None or self._sessions is None:
-            return None
-        from core.sessions import SessionNotFoundError
-
-        try:
-            return await self._sessions.working_project_async(
-                _session_address(None, agent_id, session_id)
-            )
-        except SessionNotFoundError:
-            return None
+        return await self._session_resolution.session_working_project_async(address)
 
     def session_overrides(self, address: SessionAddress) -> AgentOverrides:
         """Return the Agent overrides *address* stores (none for a missing Session)."""
-        return AgentOverrides.from_stored(self._session_value(address, AGENT_OVERRIDES_META_KEY))
+        return self._session_resolution.session_overrides(address)
 
     async def session_overrides_async(self, address: SessionAddress) -> AgentOverrides:
         """Event-Loop-safe :meth:`session_overrides`."""
-        return AgentOverrides.from_stored(
-            await self._session_value_async(address, AGENT_OVERRIDES_META_KEY)
-        )
+        return await self._session_resolution.session_overrides_async(address)
 
     def capture_session_settings(
         self, address: SessionAddress, agent: RuntimeAgent
     ) -> AgentOverrides:
         """Fill uncaptured Model settings once, preserving concurrent explicit choices."""
-        if self._sessions is None:
-            raise AgentResolutionError("Session Agent overrides are unavailable")
-
-        def capture(metadata: Any) -> None:
-            stored = metadata.get(AGENT_OVERRIDES_META_KEY) or {}
-            settings = AgentOverrides.from_stored(stored).capture(agent)
-            metadata[AGENT_OVERRIDES_META_KEY] = {**stored, **settings.as_dict()}
-
-        _, updated = self._sessions.ensure_metadata(address, capture)
-        return AgentOverrides.from_stored(updated.get(AGENT_OVERRIDES_META_KEY))
+        return self._session_resolution.capture_session_settings(address, agent)
 
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
         """Keep existing Sessions' choices before changing their Agent's start values.
@@ -577,94 +453,18 @@ class AgentResolver:
         under the caller's configuration mutation guard before the default moves.
         This does not validate availability: replacing a broken Model must work.
         """
-        if self._sessions is None:
-            return
-        agent = self.resolve_agent(project_id, agent_id, require_model=False)
-        for address in self._sessions.list_addresses(
-            project_id, agent_id=agent_id, exclude_owner_managed=True
-        ):
-            self.capture_session_settings(address, agent)
+        return self._session_resolution.preserve_agent_sessions(project_id, agent_id)
 
     async def capture_session_settings_async(
         self, address: SessionAddress, agent: RuntimeAgent
     ) -> AgentOverrides:
-        if self._sessions is None:
-            raise AgentResolutionError("Session Agent overrides are unavailable")
-        result: AgentOverrides = await self._sessions.run_async(
-            self.capture_session_settings, address, agent
-        )
-        return result
+        return await self._session_resolution.capture_session_settings_async(address, agent)
 
     def remember_session_settings(
         self, address: SessionAddress, changes: Mapping[str, Any]
     ) -> AgentOverrides:
         """Set this Session's choices and the Agent's start values for new Sessions."""
-        if set(changes) - {"model", "thinking_effort"}:
-            raise ValueError("Only model and thinking_effort can be remembered for new Sessions")
-        requested = AgentOverrides(
-            **{key: value for key, value in changes.items() if value is not None}
-        )
-        if requested.model is not None:
-            self.require_model_configured(requested.model)
-        if "model" in changes and changes["model"] is None:
-            raise ValueError("A remembered Model must be selected explicitly")
-        if self._sessions is None:
-            raise AgentResolutionError("Session Agent overrides are unavailable")
-        self._sessions.get(address)
-        self.preserve_agent_sessions(address.project_id, address.agent_id)
-        agent_changes = dict(changes)
-        if agent_changes.get("thinking_effort", False) is None:
-            agent_changes["thinking_effort"] = ""
-        if address.project_id is None:
-            self._agents.update(address.agent_id, **agent_changes)
-        else:
-            for field, value in agent_changes.items():
-                self._projects.set_override(address.project_id, address.agent_id, field, value)
-        self.update_session_overrides(address, changes)
-        agent = self.resolve_agent(address.project_id, address.agent_id, require_model=False)
-        return self.capture_session_settings(address, agent)
-
-    def _session_value(self, address: SessionAddress, key: str) -> Any:
-        """Return one metadata value of *address*, ``None`` for a missing Session."""
-        if self._sessions is None:
-            return None
-        from core.sessions import SessionNotFoundError
-
-        try:
-            return self._sessions.metadata_value(address, key)
-        except SessionNotFoundError:
-            return None
-
-    async def _session_value_async(self, address: SessionAddress, key: str) -> Any:
-        """Event-Loop-safe :meth:`_session_value`."""
-        if self._sessions is None:
-            return None
-        from core.sessions import SessionNotFoundError
-
-        try:
-            return await self._sessions.metadata_value_async(address, key)
-        except SessionNotFoundError:
-            return None
-
-    def _bind_skill_subject(self, agent: RuntimeAgent, subject_id: Any) -> RuntimeAgent:
-        """Return the Librarian as a bound Session runs it: on its subject Agent's Skills.
-
-        The runtime view names the subject (``skill_agent_id``) and takes its Skill
-        selection (``allowed_skills``), so the Skill catalog, triggers and the Skill
-        Tools of that Session resolve the subject's Skills; nothing else changes.
-        ``None`` (an unbound Session) keeps the Librarian's own Skills. A subject that
-        is not an Agent of the user any more refuses the Session.
-        """
-        if subject_id is None:
-            return agent
-        subject = self._agents.find(subject_id) if isinstance(subject_id, str) else None
-        if subject is None or subject.builtin is not None:
-            raise AgentResolutionError(SKILL_SUBJECT_MISSING_MESSAGE.format(agent_id=subject_id))
-        return replace(
-            cast("Agent", agent),
-            skill_agent_id=subject.id,
-            allowed_skills=list(subject.allowed_skills),
-        )
+        return self._session_resolution.remember_session_settings(address, changes)
 
     def update_session_overrides(
         self, address: SessionAddress, changes: Mapping[str, Any]
@@ -676,64 +476,13 @@ class AgentResolver:
         vBot added survive. Every value is validated first, a Model also for
         usability, so an invalid change writes nothing.
         """
-        unknown = sorted(set(changes) - {*AGENT_OVERRIDE_FIELDS, "thinking_effort_default"})
-        if unknown:
-            raise ValueError("unknown Agent override: " + ", ".join(unknown))
-        requested = AgentOverrides(
-            **{name: value for name, value in changes.items() if value is not None}
-        )
-        if requested.model is not None:
-            self._model_checker.require_configured(requested.model)
-        if self._sessions is None:
-            raise AgentResolutionError("Session Agent overrides are unavailable")
-        normalized = requested.as_dict()
-
-        def mutate(metadata: Any) -> None:
-            stored = metadata.get(AGENT_OVERRIDES_META_KEY)
-            merged = dict(stored) if isinstance(stored, dict) else {}
-            if requested.thinking_effort_default:
-                merged.pop("thinking_effort", None)
-            for name in changes:
-                if name == "thinking_effort":
-                    merged.pop("thinking_effort_default", None)
-                if name in normalized:
-                    merged[name] = normalized[name]
-                else:
-                    merged.pop(name, None)
-            if requested.thinking_effort_default:
-                merged["thinking_effort_default"] = True
-            if merged:
-                metadata[AGENT_OVERRIDES_META_KEY] = merged
-            else:
-                metadata.pop(AGENT_OVERRIDES_META_KEY, None)
-
-        updated = self._sessions.mutate_metadata(address, mutate)
-        return AgentOverrides.from_stored(updated.get(AGENT_OVERRIDES_META_KEY))
+        return self._session_resolution.update_session_overrides(address, changes)
 
     async def update_session_overrides_async(
         self, address: SessionAddress, changes: Mapping[str, Any]
     ) -> AgentOverrides:
         """Event-Loop-safe :meth:`update_session_overrides` on the Session database's pool."""
-        if self._sessions is None:
-            raise AgentResolutionError("Session Agent overrides are unavailable")
-        result: AgentOverrides = await self._sessions.run_async(
-            self.update_session_overrides, address, changes
-        )
-        return result
-
-    def _preload_profile(
-        self, project_id: str, profile: AgentProfile, allowed: list[str]
-    ) -> AgentProfile:
-        from core.skills.skills import format_skill_activation_context
-
-        body = [profile.body]
-        for name in profile.preload_skills:
-            if name not in allowed and "*" not in allowed:
-                continue
-            content = self._profile_skill_content(project_id, name, allowed)
-            if content is not None:
-                body.append(format_skill_activation_context(name, content))
-        return replace(profile, body="\n\n".join(part for part in body if part))
+        return await self._session_resolution.update_session_overrides_async(address, changes)
 
     def prepare_temporary_config(
         self, config: TemporaryAgentConfig, project_id: str | None
@@ -744,7 +493,7 @@ class AgentResolver:
         if project_id is None:
             raise AgentResolutionError("A repository profile requires a Project.")
         project = self._load_project(project_id)
-        profile = self._read_agent_fresh(project, config.repository_profile)
+        profile = self._team_resolution._read_agent_fresh(project, config.repository_profile)
         owner_tools = (
             config.tool_access.allowed
             if config.tool_access.mode == "selected"
@@ -769,7 +518,7 @@ class AgentResolver:
             else config.allowed_skills
         )
         skills = [name for name in selected_skills if _profile_skill_allowed(profile, name)]
-        profile = self._preload_profile(project_id, profile, skills)
+        profile = self._team_resolution._preload_profile(project_id, profile, skills)
         overrides = project.overrides.get(profile.agent_id, {})
         override_model = overrides.get("model")
         if override_model and self.is_model_configured(override_model):
@@ -845,7 +594,7 @@ class AgentResolver:
     ) -> RuntimeAgent:
         """Check the address's Project, then apply the Session's overrides."""
         self._require_temporary_project(getattr(address, "project_id", None))
-        return self._apply_overrides(agent, overrides)
+        return self._session_resolution._apply_overrides(agent, overrides)
 
     def _require_temporary_project(self, project_id: str | None) -> None:
         # A temporary Agent keeps its owner's Tool and Skill selection: like an
@@ -854,25 +603,6 @@ class AgentResolver:
         # Project's Team.
         if project_id is not None:
             self._load_project(project_id)
-
-    def _apply_overrides(self, agent: RuntimeAgent, overrides: AgentOverrides) -> RuntimeAgent:
-        """Return an immutable runtime view with only the overridden fields replaced."""
-        if overrides.is_empty:
-            return agent
-
-        changes = overrides.agent_changes()
-        if overrides.model is not None:
-            self._model_checker.require_configured(overrides.model)
-        if isinstance(agent, ConfigAgent):
-            return replace(agent, **changes)
-        from core.agents.agents import Agent
-        from core.agents.temporary import TemporaryAgent
-
-        if isinstance(agent, Agent):
-            return replace(agent, **changes)
-        if isinstance(agent, TemporaryAgent):
-            return replace(agent, **changes)
-        raise TypeError(f"unsupported RuntimeAgent implementation: {type(agent).__name__}")
 
     def _resolve_identity_agent(self, agent_id: str) -> Agent:
         """Resolve one persisted Identity Agent."""
@@ -893,7 +623,7 @@ class AgentResolver:
         require_model: bool = True,
     ) -> ConfigAgent:
         project = self._load_project(project_id)
-        team = self._project_team(project)
+        team = self._team_resolution._project_team(project)
         if agent_id not in {member.agent_id for member in team}:
             raise ResolutionAgentNotFoundError(
                 f"agent '{agent_id}' is not on project '{project_id}' team"
@@ -903,7 +633,7 @@ class AgentResolver:
         # repo edit between the open-time scan and this run takes effect. The
         # cached Team only told us the agent still belongs; the live config comes
         # from disk.
-        scanned = self._read_agent_fresh(project, agent_id)
+        scanned = self._team_resolution._read_agent_fresh(project, agent_id)
         # Read the global tier once and feed it to all three chains, so one resolve
         # never reads the settings file three times (model + temp + thinking).
         global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
@@ -933,7 +663,7 @@ class AgentResolver:
         allowed_skills = [name for name in allowed_skills if _profile_skill_allowed(scanned, name)]
         allowed_agents = _effective_allowed_agents(scanned, team)
         tools = _project_agent_tools(tool_access, allowed_agents)
-        scanned = self._preload_profile(project_id, scanned, allowed_skills)
+        scanned = self._team_resolution._preload_profile(project_id, scanned, allowed_skills)
         result = _build_config_agent(
             scanned,
             resolved_model,
@@ -997,7 +727,9 @@ class AgentResolver:
     def effective_tools_for_member(self, project: Project, member: AgentProfile) -> dict[str, Any]:
         """Project repository-owned Tool settings for one current Team member."""
         tool_access = _project_agent_tool_access(project, member)
-        allowed_agents = _effective_allowed_agents(member, self._project_team(project))
+        allowed_agents = _effective_allowed_agents(
+            member, self._team_resolution._project_team(project)
+        )
         return _project_agent_tools(tool_access, allowed_agents)
 
     def effective_config_for_member(
@@ -1036,12 +768,12 @@ class AgentResolver:
 
     def _config_effective_config(self, project_id: str, agent_id: str) -> dict[str, dict[str, Any]]:
         project = self._load_project(project_id)
-        team = self._project_team(project)
+        team = self._team_resolution._project_team(project)
         if agent_id not in {member.agent_id for member in team}:
             raise ResolutionAgentNotFoundError(
                 f"agent '{agent_id}' is not on project '{project_id}' team"
             )
-        scanned = self._read_agent_fresh(project, agent_id)
+        scanned = self._team_resolution._read_agent_fresh(project, agent_id)
         global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         return self._config_effective_from_scanned(project, scanned, global_defaults)
 
@@ -1070,7 +802,7 @@ class AgentResolver:
         """
         tiers = (
             ("override", _overridden_model(project, scanned.agent_id)),
-            ("agent", self._profile_model(project, scanned)),
+            ("agent", self._team_resolution._profile_model(project, scanned)),
             ("project_default", project.default_model),
             ("global_default", str(global_defaults.model or "")),
         )
@@ -1090,20 +822,11 @@ class AgentResolver:
         not produce (both via :meth:`ScanReport.with_findings`). Both checks happen
         **here, at scan time** — not lazily at first run.
         """
-        result = scan_project(
-            _project_root(project),
-            adapters=self._source_adapters,
-            sources=project.sources,
-        )
-        translated = [self.translated_profile(project, member) for member in result.team]
-        model_findings = self._model_findings(project, translated)
-        pointer_findings = self._pointer_findings(project, result.team)
-        report = result.report.with_findings(model_findings + pointer_findings)
-        return replace(result, team=translated, report=report)
+        return self._team_resolution.scan_project_report(project)
 
     def team_for_project(self, project_id: str) -> list[AgentProfile]:
         """Return the current cached Team snapshot for one registered Project."""
-        return list(self._project_team(self._load_project(project_id)))
+        return self._team_resolution.team_for_project(project_id)
 
     def rescan_project(self, project: Project) -> ScanResult:
         """Re-run the project scan and refresh the cached Team for this project.
@@ -1113,16 +836,11 @@ class AgentResolver:
         Team-membership cache so subsequent ``resolve_agent`` calls see the new
         Team without re-walking the repo.
         """
-        result = self.scan_project_report(project)
-        self._team_cache[project.project_id] = (_team_key(project), result)
-        return result
+        return self._team_resolution.rescan_project(project)
 
     def invalidate_team_cache(self, project_id: str | None = None) -> None:
         """Drop the cached Team for one project, or for all when ``None``."""
-        if project_id is None:
-            self._team_cache.clear()
-            return
-        self._team_cache.pop(project_id, None)
+        return self._team_resolution.invalidate_team_cache(project_id)
 
     def is_model_configured(self, model: str) -> bool:
         """Return whether *model* can actually run in this instance.
@@ -1152,17 +870,7 @@ class AgentResolver:
         already scanned, so listing every Project's Team stays cheap; an open or an
         explicit re-scan refreshes the cache.
         """
-        cached = self._team_cache.get(project.project_id)
-        # A changed Source list, location or Model mapping (a background Source
-        # refresh included) makes the cached Team stale.
-        if cached is not None and cached[0] == _team_key(project):
-            return cached[1]
-        # Lazy first scan: a resolve before any explicit open still works, and the
-        # result is cached so the next turn does not re-walk the repo.
-        return self.rescan_project(project)
-
-    def _project_team(self, project: Project) -> list[AgentProfile]:
-        return self.cached_scan(project).team
+        return self._team_resolution.cached_scan(project)
 
     def _load_project(self, project_id: str) -> Project:
         try:
@@ -1171,45 +879,6 @@ class AgentResolver:
             raise ResolutionProjectNotFoundError(str(error)) from error
         except ProjectError as error:
             raise AgentResolutionError(str(error)) from error
-
-    def _read_agent_fresh(self, project: Project, agent_id: str) -> AgentProfile:
-        """Reload the selected repository definition and its inherited settings.
-
-        Reads the live config from disk so a repo edit is reflected on the next
-        run. If the agent vanished from the repo since the cached Team was built
-        (deleted file), that is an "agent no longer exists" error rather than a
-        silent fall-back to the stale cached profile.
-        """
-        try:
-            # Team resolution has already selected a winner. A temporary Profile
-            # may be requested before that scan; keep its ordinary live lookup
-            # instead of filling the Team/Skill report just for this read.
-            selected: AgentProfile | None = None
-            cached = self._team_cache.get(project.project_id)
-            if cached is not None and cached[0] == _team_key(project):
-                selected = next(
-                    (member for member in cached[1].team if member.agent_id == agent_id), None
-                )
-            member = read_profile(
-                _project_root(project),
-                project.sources,
-                agent_id,
-                self._source_adapters,
-                selected=selected,
-            )
-        except (OSError, ValueError) as error:
-            raise AgentResolutionError(
-                f"Cannot read repository Agent '{agent_id}': {error}"
-            ) from error
-        if member is not None:
-            if member.unavailable_reason:
-                raise AgentResolutionError(
-                    f"Repository Agent '{agent_id}' is unavailable: {member.unavailable_reason}"
-                )
-            return member
-        raise ResolutionAgentNotFoundError(
-            f"agent '{agent_id}' is no longer present in project '{project.project_id}'"
-        )
 
     def _resolve_model_or_raise(
         self, scanned: AgentProfile, project: Project, global_defaults: AgentDefaults
@@ -1232,230 +901,8 @@ class AgentResolver:
             "set a Project default or a vBot override."
         )
 
-    def _profile_model(self, project: Project, scanned: AgentProfile) -> str:
-        if scanned.model == "inherit":
-            return ""
-        return project.model_mappings.get(scanned.model, scanned.model)
-
     def translated_profile(self, project: Project, scanned: AgentProfile) -> AgentProfile:
-        reports = list(scanned.translations)
-        mapped = self._profile_model(project, scanned)
-        if scanned.model == "inherit":
-            reports = [entry for entry in reports if entry.setting != "model"]
-            reports.append(
-                Translation(
-                    "model",
-                    "translated",
-                    "Uses the delegating caller's Model, otherwise the Project or global default.",
-                )
-            )
-        elif mapped != scanned.model and self._model_checker.is_configured(mapped):
-            reports = [entry for entry in reports if entry.setting != "model"]
-            reports.append(
-                Translation(
-                    "model",
-                    "translated",
-                    f"Model wish '{scanned.model}' maps to '{mapped}'.",
-                )
-            )
-        if (
-            scanned.model
-            and scanned.model != "inherit"
-            and not self._model_checker.is_configured(mapped)
-        ):
-            reports = [entry for entry in reports if entry.setting != "model"]
-            reports.append(
-                Translation(
-                    "model",
-                    "not_supported",
-                    f"Model wish '{scanned.model}' is unmapped or unusable; "
-                    "the Project or global default is used.",
-                )
-            )
-        for setting in project.overrides.get(scanned.agent_id, {}):
-            reports = [
-                replace(
-                    entry,
-                    status="overridden",
-                    detail="The explicit vBot Tool policy replaces this imported restriction.",
-                )
-                if setting == "tool_access"
-                and entry.setting not in {"permission.skill", "permission.task"}
-                and entry.setting.startswith(
-                    (
-                        "tools",
-                        "permission",
-                        "disallowedTools",
-                        "hooks",
-                        "sandbox",
-                        "approval",
-                        "isolation",
-                        "readonly",
-                    )
-                )
-                else entry
-                for entry in reports
-                if entry.setting != setting
-                and not (
-                    setting == "thinking_effort"
-                    and entry.setting in {"effort", "model_reasoning_effort"}
-                )
-            ]
-            reports.append(
-                Translation(
-                    setting,
-                    "overridden",
-                    "The explicit vBot override replaces this repository setting.",
-                )
-            )
-        allowed = effective_project_allowed_skills(
-            project, self._project_skill_names(project.project_id)
-        )
-        for name in scanned.preload_skills:
-            if name not in allowed or not _profile_skill_allowed(scanned, name):
-                reports.append(
-                    Translation(
-                        f"skills.{name}",
-                        "not_supported",
-                        "Skill is absent or outside the Project Skill selection; it cannot"
-                        " be preloaded.",
-                    )
-                )
-            elif self._profile_skill_content(project.project_id, name, allowed) is None:
-                reports.append(
-                    Translation(
-                        f"skills.{name}",
-                        "not_supported",
-                        "Skill is unavailable or unreadable; it cannot be preloaded.",
-                    )
-                )
-        return replace(scanned, translations=tuple(reports))
-
-    def _model_findings(self, project: Project, team: list[AgentProfile]) -> list[ScanFinding]:
-        return [
-            _bad_model_finding(member)
-            for member in team
-            if member.model
-            and member.model != "inherit"
-            and not self._model_checker.is_configured(_overridden_model(project, member.agent_id))
-            and not self._model_checker.is_configured(self._profile_model(project, member))
-        ]
-
-    def _pointer_findings(self, project: Project, team: list[AgentProfile]) -> list[ScanFinding]:
-        """Build the scan's ``ORPHAN`` findings for the project's anchor pointers.
-
-        The pointers live in the anchor, not the repo, so the structural scan
-        cannot see them: the project's ``default_agent`` and every session-owning
-        agent under the anchor must name an agent the current scan produced. A
-        pointer at an id the scan did not yield is unclean under what exists — the
-        default agent cannot resolve, and orphaned sessions belong to an agent that
-        is no longer in the repo (renamed or deleted). A project without a default
-        agent and without sessions yields no findings (clean empty is normal).
-        """
-        team_ids = {member.agent_id for member in team}
-        findings: list[ScanFinding] = []
-        if project.default_agent and project.default_agent not in team_ids:
-            findings.append(
-                _orphan_finding(
-                    project.default_agent,
-                    f"default agent '{project.default_agent}' is not in the scanned team",
-                )
-            )
-        for owner in self._projects.session_owning_agents(project.project_id):
-            if owner not in team_ids:
-                findings.append(
-                    _orphan_finding(
-                        owner,
-                        f"agent '{owner}' owns sessions in this project "
-                        f"but is not in the scanned team",
-                    )
-                )
-        return findings
-
-
-def runtime_agent_body(agent: RuntimeAgent) -> str:
-    """Return the verbatim prompt body of a runtime agent, or ``""``.
-
-    The single seam that maps the resolver's two agent forms onto the prompt
-    builder's ``agent_body`` parameter: a :class:`ConfigAgent` carries an imported
-    body, an identity ``Agent`` carries none. Keeping this here (not in the prompt
-    domain) lets prompt assembly stay on its Protocols without importing
-    ``ConfigAgent`` or probing types — the chat loop calls this on the agent it
-    already resolved and hands the result over as an explicit argument.
-    """
-    if isinstance(agent, ConfigAgent):
-        return agent.body
-    # Owner-managed temporary Agents carry their reviewed profile instructions
-    # in the protected Session binding rather than an Identity workspace.
-    instructions = getattr(agent, "instructions", "")
-    return instructions if isinstance(instructions, str) else ""
-
-
-def resolve_prompt_project(
-    projects: ProjectStore, working_project_id: str | None
-) -> Project | None:
-    """Return the project whose auto-load files belong in this run's system prompt.
-
-    The one policy shared by the chat loop and the prompt-preview RPC, so the
-    preview can never drift from what a run actually sends:
-
-    - ``working_project_id`` set → the Project the Session works in.
-    - ``working_project_id is None`` → no Project context.
-
-    Kept beside :func:`runtime_agent_body` for the same reason: the chat loop and
-    the RPC call it with the already-resolved working Project, so prompt assembly
-    never learns working-Project or Session-addressing policy itself.
-    """
-    if working_project_id is not None:
-        project = projects.get(working_project_id)
-        if not Path(project.cwd).is_dir():
-            raise ProjectError(f"Project repository is unavailable: {project.cwd}")
-        return replace(project, auto_load=project.instruction_files)
-    return None
-
-
-def resolve_skill_scope(
-    project_id: str | None, prompt_project: Project | None, agent: RuntimeAgent
-) -> tuple[str | None, str | None]:
-    """Return ``(skill_project_id, identity_agent_id)`` for a run's skill pool.
-
-    The one skill-scoping policy shared by the chat loop, the prompt-preview RPC,
-    and ``$``-autocomplete, so no surface can drift from the pool a run actually
-    activates against. ``prompt_project`` is the already-resolved working Project
-    from :func:`resolve_prompt_project` (pure — no second store lookup here), and
-    ``agent`` the resolved runtime Agent:
-
-    - ``skill_project_id`` — the effective skill project: the run's own project,
-      or, for an identity Session working in a Project (``project_id is None``),
-      that Project; else ``None``.
-    - ``identity_agent_id`` — the agent's private-skill layer applies to identity
-      runs only: a project run executes a config agent whose project-local slug
-      must never resolve a same-named identity agent's private home (private
-      skills bypass the project skill whitelist as always-allowed). It names the
-      Agent whose Skills the run works on (``skill_subject_id``): the Agent
-      itself, or the subject of a Librarian Session.
-    """
-    if project_id is not None:
-        return project_id, None
-    from core.agents import skill_subject_id
-
-    working_project_id = prompt_project.project_id if prompt_project is not None else None
-    return working_project_id, skill_subject_id(agent)
-
-
-def _skill_binding_key(agent: RuntimeAgent) -> str | None:
-    """Return the Session metadata key binding *agent* to a Skill subject, if any.
-
-    Only Sessions of the Librarian have one.
-    """
-    from core.agents import SKILL_AGENT_ID_KEY, is_librarian
-
-    return SKILL_AGENT_ID_KEY if is_librarian(agent) else None
-
-
-def _project_root(project: Project) -> Path:
-    """Return the repo root a project's scan runs against (its cwd)."""
-    return Path(project.cwd)
+        return self._team_resolution.translated_profile(project, scanned)
 
 
 def build_agent_resolver(
@@ -1497,7 +944,3 @@ def build_agent_resolver(
         temporary_agents=temporary_agents,
         sessions=sessions,
     )
-
-
-def _team_key(project: Project) -> Hashable:
-    return (project.cwd, tuple(project.sources), tuple(sorted(project.model_mappings.items())))
