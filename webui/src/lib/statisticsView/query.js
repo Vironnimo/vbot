@@ -94,12 +94,30 @@ function zoneOffset(instant, timeZone) {
   }
 }
 
-// The instant of local midnight on a calendar day in `timeZone`; the second
-// pass corrects a day whose offset differs from midnight UTC's (DST).
+// The first instant of this local day. Midnight may repeat or be skipped
+// by DST; an offset correction alone oscillates across a midnight gap.
 function zonedMidnight(year, monthIndex, day, timeZone) {
   const wall = Date.UTC(year, monthIndex, day);
-  const first = wall - zoneOffset(wall, timeZone);
-  return wall - zoneOffset(first, timeZone);
+  const candidates = [
+    ...new Set(
+      [-DAY_MS, 0, DAY_MS].map(
+        (shift) => wall - zoneOffset(wall + shift, timeZone),
+      ),
+    ),
+  ].sort((left, right) => left - right);
+  const local = (instant) => instant + zoneOffset(instant, timeZone);
+  const midnight = candidates.find((instant) => local(instant) === wall);
+  if (midnight !== undefined) return midnight;
+  // No midnight exists: find the transition into the day (also handles a
+  // skipped calendar day), rather than including time from the previous day.
+  let start = candidates[0];
+  let end = candidates.at(-1);
+  while (end - start > 1) {
+    const middle = Math.floor((start + end) / 2);
+    if (local(middle) >= wall) end = middle;
+    else start = middle;
+  }
+  return end;
 }
 
 /**

@@ -75,6 +75,15 @@ describe('statisticsView tabs and windows', () => {
     });
     expect(statisticsWindow('all', 'Europe/Berlin', now)).toEqual({});
 
+    for (const [zone, end, since] of [
+      ['America/Havana', '2026-03-14T12:00:00Z', '2026-03-08T05:00:00.000Z'],
+      ['America/Santiago', '2026-09-12T12:00:00Z', '2026-09-06T04:00:00.000Z'],
+      // A repeated midnight starts at its first occurrence.
+      ['America/Havana', '2026-11-07T12:00:00Z', '2026-11-01T04:00:00.000Z'],
+    ]) {
+      expect(statisticsWindow('7d', zone, Date.parse(end))).toEqual({ since });
+    }
+
     expect(statisticsReportParams('tools', '7d', 'UTC', now)).toEqual({
       since: '2026-03-24T00:00:00.000Z',
       timezone: 'UTC',
