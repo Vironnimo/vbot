@@ -206,6 +206,103 @@ describe('SettingsLibrarianPanel', () => {
     ]);
   });
 
+  it('rebases untouched Agent fields while preserving another field draft', async () => {
+    serve();
+    const backend = rpcMock.getMockImplementation();
+    let stored = LIBRARIAN;
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'agent.get') return Promise.resolve(stored);
+      if (method === 'agent.update') {
+        stored = { ...stored, config: { ...stored.config, ...params } };
+        return Promise.resolve(stored);
+      }
+      return backend(method, params);
+    });
+    const props = reactiveProps({ settings: SETTINGS, agentsRefreshToken: 0 });
+    const coordinator = createAutosaveCoordinator();
+    mountedComponent = mount(AutosaveContextHost, {
+      target: document.body,
+      props: {
+        component: SettingsLibrarianPanel,
+        componentProps: props,
+        coordinator,
+      },
+    });
+    await waitForCondition(() =>
+      Boolean(document.getElementById('settings-librarian-model')),
+    );
+    await openSearchableDropdown('settings-librarian-model');
+    selectSearchableOption('settings-librarian-model', 'openai/gpt-5.2-mini');
+    stored = {
+      ...LIBRARIAN,
+      config: { ...LIBRARIAN.config, temperature: 0.7 },
+    };
+    props.agentsRefreshToken += 1;
+    await waitForCondition(
+      () =>
+        document.getElementById('settings-librarian-temperature')?.value ===
+        '0.7',
+    );
+    expect(await coordinator.flushPending()).toBe(true);
+    expect(calls('agent.update')).toEqual([
+      { model: 'openai/gpt-5.2-mini::api-key', id: 'librarian' },
+    ]);
+    expect(stored.config.temperature).toBe(0.7);
+  });
+
+  it('revalidates an Agent read overtaken by a save and ignores its old reply', async () => {
+    serve();
+    const backend = rpcMock.getMockImplementation();
+    let stored = LIBRARIAN;
+    let finishOldRead;
+    const oldRead = new Promise((resolve) => {
+      finishOldRead = resolve;
+    });
+    let reads = 0;
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'agent.get') {
+        reads += 1;
+        return reads === 2 ? oldRead : Promise.resolve(stored);
+      }
+      if (method === 'agent.update') {
+        stored = { ...stored, config: { ...stored.config, ...params } };
+        return Promise.resolve(stored);
+      }
+      return backend(method, params);
+    });
+    const props = reactiveProps({ settings: SETTINGS, agentsRefreshToken: 0 });
+    const coordinator = createAutosaveCoordinator();
+    mountedComponent = mount(AutosaveContextHost, {
+      target: document.body,
+      props: {
+        component: SettingsLibrarianPanel,
+        componentProps: props,
+        coordinator,
+      },
+    });
+    await waitForCondition(() =>
+      Boolean(document.getElementById('settings-librarian-model')),
+    );
+    props.agentsRefreshToken += 1;
+    await waitForCondition(() => reads === 2);
+    await openSearchableDropdown('settings-librarian-model');
+    selectSearchableOption('settings-librarian-model', 'openai/gpt-5.2-mini');
+    expect(await coordinator.flushPending()).toBe(true);
+    await waitForCondition(() => reads === 3);
+    finishOldRead(LIBRARIAN);
+    for (let index = 0; index < 20; index += 1) {
+      await Promise.resolve();
+      flushSync();
+    }
+    await openSearchableDropdown('settings-librarian-model');
+    expect(
+      document.querySelector('[role="option"][aria-selected="true"]')
+        .textContent,
+    ).toContain('gpt-5.2-mini');
+    expect(coordinator.hasPending()).toBe(false);
+    expect(calls('agent.update')).toHaveLength(1);
+  });
+
   it('clears pending Agent edits and ignores an old load after an overview refuses the Librarian', async () => {
     serve();
     const backend = rpcMock.getMockImplementation();

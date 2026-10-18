@@ -35,6 +35,9 @@ function historyLoadOptions(history) {
     reset: history?.history_reset,
     activeRunId: history?.active_run?.run_id,
     sessionUsage: history?.session_usage,
+    ...(isRecord(history) && Object.hasOwn(history, 'last_usage')
+      ? { lastUsage: history.last_usage }
+      : {}),
     ...(isRecord(history) && Object.hasOwn(history, 'context_usage')
       ? { contextUsage: history.context_usage }
       : {}),
@@ -119,6 +122,7 @@ export function createChatHistory({
     historyLoadVersions.set(sessionState.key, version);
     const snapshotVersion = sessionState.historySnapshotVersion;
     const compactionPolicy = sessionState.compactionPolicy;
+    const usage = sessionState.usage;
     return {
       snapshotVersion,
       loadOptions(history) {
@@ -128,6 +132,8 @@ export function createChatHistory({
         if (sessionState.compactionPolicy !== compactionPolicy) {
           delete options.compactionPolicy;
         }
+        // Output from the live Run may have advanced since the read began.
+        if (sessionState.usage !== usage) options.preserveUsage = true;
         return options;
       },
       isLatest: () => historyLoadVersions.get(sessionState.key) === version,
@@ -175,6 +181,11 @@ export function createChatHistory({
           subagent_background_commands:
             page.subagent_background_commands ??
             result.subagent_background_commands,
+          ...(Object.hasOwn(page, 'last_usage')
+            ? { last_usage: page.last_usage }
+            : Object.hasOwn(result, 'last_usage')
+              ? { last_usage: result.last_usage }
+              : {}),
         };
       after = page.next_after;
     } while (result?.has_newer);

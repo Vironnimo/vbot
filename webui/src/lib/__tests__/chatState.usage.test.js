@@ -206,6 +206,19 @@ describe('usage from History', () => {
       usage: null,
     },
     {
+      name: 'windowed last-turn usage without raw assistant messages',
+      messages: [{ id: 'user-one', role: 'user', content: 'Hi' }],
+      options: { lastUsage: { input_tokens: 200, output_tokens: 75 } },
+      usage: { input_tokens: 200, output_tokens: 75 },
+    },
+    {
+      name: 'no usage after an authoritative empty replacement',
+      liveUsage: { input_tokens: 8432, output_tokens: 512 },
+      messages: [],
+      options: { lastUsage: null },
+      usage: null,
+    },
+    {
       name: 'the completed Run usage when History has none',
       liveUsage: { input_tokens: 8432, output_tokens: 512 },
       messages: [
@@ -214,30 +227,33 @@ describe('usage from History', () => {
       ],
       usage: { input_tokens: 8432, output_tokens: 512 },
     },
-  ])('shows $name after loading History', ({ liveUsage, messages, usage }) => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    if (liveUsage) {
-      startRun(sessionState, {
-        run_id: 'run-one',
-        sse_url: '/api/runs/run-one/events',
-        status: 'running',
-      });
-      appendRunEvent(sessionState, {
-        type: 'run_completed',
-        run_id: 'run-one',
-        sequence: 2,
-        payload: { status: 'completed', usage: liveUsage },
-      });
-    }
+  ])(
+    'shows $name after loading History',
+    ({ liveUsage, messages, usage, options }) => {
+      const sessionState = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-one',
+      );
+      if (liveUsage) {
+        startRun(sessionState, {
+          run_id: 'run-one',
+          sse_url: '/api/runs/run-one/events',
+          status: 'running',
+        });
+        appendRunEvent(sessionState, {
+          type: 'run_completed',
+          run_id: 'run-one',
+          sequence: 2,
+          payload: { status: 'completed', usage: liveUsage },
+        });
+      }
 
-    loadHistory(sessionState, messages);
+      loadHistory(sessionState, messages, options);
 
-    expect(sessionState.usage).toEqual(usage);
-  });
+      expect(sessionState.usage).toEqual(usage);
+    },
+  );
 });
 
 describe('contextCompactionState', () => {
