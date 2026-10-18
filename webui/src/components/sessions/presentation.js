@@ -25,6 +25,9 @@ export function sessionHoverDetails(
 ) {
   const lastActive = session.last_active_at ?? session.created_at;
   const rows = [
+    ...(session.owner_name
+      ? [{ label: t('sessions.details.agent'), value: session.owner_name }]
+      : []),
     {
       label: t('sessions.last_active'),
       value: formatMoment(lastActive, { nowMs }) || t('common.unknown'),
