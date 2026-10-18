@@ -113,6 +113,19 @@ class _CompletionDeliveryCoordinator:
         """Set the accessor relay used by idle-session completion Runs."""
         self._run_relay = relay
 
+    def set_owned_starter(self, starter: Callable[..., Awaitable[Run]]) -> None:
+        self._owned_run_starter = starter
+
+    def set_owned_validator(self, validator: OwnedCompletionValidator) -> None:
+        self._owned_completion_validator = validator
+
+    def has_execution_work(self, owner: RunExecutionOwner) -> bool:
+        return any(
+            notice.execution_owner == owner and not notice.read
+            for bucket in self._buckets.values()
+            for notice in bucket.notices.values()
+        )
+
     def submit(
         self,
         address: SessionAddress,

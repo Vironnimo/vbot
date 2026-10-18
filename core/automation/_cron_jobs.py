@@ -764,3 +764,15 @@ def normalize_job_fields(job: CronJob) -> None:
         _parse_utc_timestamp(job.covered_until, field_name="covered_until")
     if job.last_run_id is not None and not isinstance(job.last_run_id, str):
         raise CronJobValidationError("last_run_id must be a string when provided")
+
+
+_SCHEDULE_FIELDS = (
+    "schedule_type",
+    "cron_expression",
+    "interval_seconds",
+    "interval_anchor_at",
+    "run_at",
+    "event_id",
+    "event_edge",
+    "event_offset_minutes",
+)

@@ -126,7 +126,7 @@ class TriggerService:
         )
 
     def set_owned_completion_starter(self, starter: Callable[..., Awaitable[Run]]) -> None:
-        self._completion_delivery._owned_run_starter = starter
+        self._completion_delivery.set_owned_starter(starter)
 
     def set_owned_completion_validator(self, validator: OwnedCompletionValidator) -> None:
         """Install the check that an owned completion may still reach its Session.
@@ -134,17 +134,13 @@ class TriggerService:
         Every submission carrying an execution owner, and every Session-write
         fallback for one, is checked; a rejected owner's result is withdrawn.
         """
-        self._completion_delivery._owned_completion_validator = validator
+        self._completion_delivery.set_owned_validator(validator)
 
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
         await self._completion_delivery.close_execution_group(extension, group_id, epoch)
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:
-        return any(
-            notice.execution_owner == owner and not notice.read
-            for bucket in self._completion_delivery._buckets.values()
-            for notice in bucket.notices.values()
-        )
+        return self._completion_delivery.has_execution_work(owner)
 
     def cancel_completion(
         self,

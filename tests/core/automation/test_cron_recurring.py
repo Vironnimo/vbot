@@ -50,7 +50,7 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
     trigger_service.trigger_run.side_effect = trigger_then_fail_then_pause
 
     # Act
-    await service._run_recurring_job(job, "cron")
+    await service._scheduler._run_recurring_job(job, "cron")
 
     # Assert
     assert trigger_service.trigger_run.await_count == 2
@@ -92,8 +92,8 @@ async def test_crud_status_or_schedule_changes_restart_tasks(
     def record_cancel(job_id: str) -> None:
         cancelled_jobs.append(job_id)
 
-    monkeypatch.setattr(service, "_start_job_task", record_start)
-    monkeypatch.setattr(service, "_cancel_job_task", record_cancel)
+    monkeypatch.setattr(service._scheduler, "_start_job_task", record_start)
+    monkeypatch.setattr(service._scheduler, "_cancel_job_task", record_cancel)
 
     # Act
     await service.update_job(job.id, cron_expression="*/5 * * * *")
