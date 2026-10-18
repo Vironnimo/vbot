@@ -67,18 +67,21 @@ def test_probe_cli_runs_a_scenario_against_the_configured_adapter(
     adapter = ScriptedAdapter(*turns)
 
     class Runtime:
-        def __init__(self, _config: Any) -> None:
+        def __init__(self, _config: Any, *, safe_startup_mode: str) -> None:
+            assert safe_startup_mode == "verification"
             pass
 
         def get_adapter(self, _ref: Any) -> ScriptedAdapter:
             return adapter
+
+        def start(self) -> None:
+            pass
 
         async def aclose(self) -> None:
             return None
 
     monkeypatch.setattr(PROBE, "Runtime", Runtime)
     monkeypatch.setattr(PROBE, "Config", lambda **_: None)
-    monkeypatch.setattr(PROBE, "_start_probe_runtime", lambda _runtime: None)
 
     code = asyncio.run(PROBE._run(PROBE._parser().parse_args(argv)))
 
@@ -117,18 +120,21 @@ def test_learning_evaluation_runs_a_text_pack_arm_and_compares_reports(
     )
 
     class Runtime:
-        def __init__(self, _config: Any) -> None:
+        def __init__(self, _config: Any, *, safe_startup_mode: str) -> None:
+            assert safe_startup_mode == "verification"
             pass
 
         def get_adapter(self, _ref: Any) -> ScriptedAdapter:
             return adapter
+
+        def start(self) -> None:
+            pass
 
         async def aclose(self) -> None:
             return None
 
     monkeypatch.setattr(PROBE, "Runtime", Runtime)
     monkeypatch.setattr(PROBE, "Config", lambda **_: None)
-    monkeypatch.setattr(PROBE, "_start_probe_runtime", lambda _runtime: None)
     report_path = tmp_path / "arm.json"
     argv = ["--scenario", "reflection_workflow", "--reflection-case"]
     argv += ["standing_preference,librarian_protected_cluster", "--reflection-scope", "memory"]

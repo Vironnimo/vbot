@@ -38,6 +38,7 @@ from websockets.exceptions import ConnectionClosed
 from core.model_tasks._live_wire import (
     MEDIA_WEBRTC,
     JsonObject,
+    PlaybackReceipt,
     WireCaption,
     WireClosed,
     WireDelegation,
@@ -390,9 +391,7 @@ class OpenAILiveWire:
     async def send_audio(self, pcm: bytes) -> None:
         """WebRTC audio flows between the accessor and OpenAI; nothing to forward."""
 
-    async def update_playback(
-        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
-    ) -> list[WireEvent]:
+    async def update_playback(self, receipt: PlaybackReceipt) -> list[WireEvent]:
         """WebRTC playback is managed by the Provider."""
         return []
 

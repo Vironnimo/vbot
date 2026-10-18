@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from core.extensions.extensions import ExtensionRegistry
+from core.runtime import _settings as runtime_settings
 from core.runtime.runtime import Runtime
 from core.skills.policy import SkillPackageRef
 from core.skills.skills import SkillRegistry
@@ -357,19 +358,20 @@ async def test_extension_skill_scan_yields_and_settles_before_shutdown(
     loop_thread = threading.get_ident()
     installed: list[SkillRegistry] = []
     entered, release = _pause_first_global_scan(runtime, monkeypatch)
-    original_apply = runtime._apply_reloaded_skills  # noqa: SLF001 - the loop-side install.
+    original_apply = runtime_settings.publish_skills
 
-    def install(skills: SkillRegistry, *, generation: object) -> None:
+    def install(target: Runtime, skills: SkillRegistry, *, generation: object) -> None:
+        assert target is runtime
         assert threading.get_ident() == loop_thread
         assert runtime._started  # noqa: SLF001
-        original_apply(skills, generation=generation)
+        original_apply(runtime, skills, generation=generation)
         assert runtime.skills is skills
         installed.append(skills)
 
     async def load_no_extensions(*_args: object, **_kwargs: object) -> ExtensionRegistry:
         return ExtensionRegistry()
 
-    monkeypatch.setattr(runtime, "_apply_reloaded_skills", install)
+    monkeypatch.setattr(runtime_settings, "publish_skills", install)
     monkeypatch.setattr(ExtensionRegistry, "aload", load_no_extensions)
     mutation = asyncio.create_task(
         runtime.reload_extensions()

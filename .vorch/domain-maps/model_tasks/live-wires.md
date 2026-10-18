@@ -2,6 +2,8 @@
 
 Read when changing the OpenAI or xAI Live wire, adding a Live provider, or probing the backend. The provider-neutral contract (`LiveWire`, normalized `Wire*` events, media descriptors) is `core/model_tasks/_live_wire.py`; registration in `_PROVIDER_WIRES` (`live.py`) is described in `model_tasks/live.md` -> Ownership.
 
+`PlaybackReceipt` (publicly available through `live.py`) validates owner-socket uint32 positions and boolean flags before core admission. Its confirmed-prefix rule clamps to produced samples without regressing earlier confirmation; generation zero can report initial readiness, while retired generations can only complete their pending clear. The call and both wires pass the same receipt through to the xAI state owner.
+
 ## OpenAI wire (`_live_openai.py`)
 
 - The Connection mode picks the dialect: `codex_responses` (ChatGPT subscription) -> codex, otherwise public API.

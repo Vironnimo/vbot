@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from core.model_tasks.live import LiveCall
+from core.model_tasks.live import LiveCall, PlaybackReceipt
 from core.utils.ids import new_id
 from server.events import ServerEventBus
 from server.live._context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
@@ -433,20 +433,9 @@ class LiveCallEntry:
         elif frame.get("type") == "stay":
             self._mark_active()
         elif frame.get("type") == "playback":
-            generation = frame.get("generation")
-            played = frame.get("played_samples")
-            enabled = frame.get("enabled")
-            cleared = frame.get("cleared", False)
-            if (
-                type(generation) is int
-                and 0 <= generation <= 0xFFFFFFFF
-                and type(played) is int
-                and 0 <= played <= 0xFFFFFFFF
-                and isinstance(enabled, bool)
-                and isinstance(cleared, bool)
-                and self.call is not None
-            ):
-                self.call.report_playback(generation, played, enabled=enabled, cleared=cleared)
+            receipt = PlaybackReceipt.from_owner_frame(frame)
+            if receipt is not None and self.call is not None:
+                self.call.report_playback(receipt)
 
     def _deliver(self, frame: JsonObject) -> None:
         owner = self._owner

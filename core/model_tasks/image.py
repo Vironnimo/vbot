@@ -17,7 +17,12 @@ from PIL import Image as PILImage
 from core.attachments import sniff_media_type
 from core.attachments.images import ImageConversionError, ImageConverter, PreparedImage
 from core.debug import DebugContext
-from core.model_tasks.artifacts import OutputWriteError, ensure_output_dir, os_error_reason
+from core.model_tasks.artifacts import (
+    OutputWriteError,
+    ensure_output_dir,
+    os_error_reason,
+    persist_artifacts,
+)
 from core.model_tasks.constants import TASK_IMAGE_GENERATION, TASK_IMAGE_UNDERSTANDING
 from core.model_tasks.image_profile import ImageCallOptionError, ImageProfile
 from core.model_tasks.image_providers import ProviderImageClient
@@ -661,31 +666,36 @@ class ImageService:
         raises :class:`OutputDirectoryError` without paying for images.
         """
 
-        directory = ensure_output_dir(output_dir)
+        directory = await persist_artifacts(ensure_output_dir, output_dir)
         result = await self.generate(
             prompt,
             call_options=call_options,
             source_paths=source_paths,
             usage_context=usage_context,
         )
-        extension = _extension_for_media_type(result.media_type)
-        artifacts: list[ImageArtifact] = []
-        for idx, image_bytes in enumerate(result.images):
-            try:
-                artifacts.append(
-                    _write_image_artifact(
-                        image_bytes,
-                        output_dir=directory,
-                        extension=extension,
-                        media_type=result.media_type,
-                        index=idx,
-                        revised_prompt=result.revised_prompt,
-                    )
+        return await persist_artifacts(_write_image_batch, result, directory)
+
+
+def _write_image_batch(result: ImageGenerationResult, directory: Path) -> tuple[ImageArtifact, ...]:
+    """Publish the ordered batch as one admitted operation, retaining partial saves."""
+    extension = _extension_for_media_type(result.media_type)
+    artifacts: list[ImageArtifact] = []
+    for idx, image_bytes in enumerate(result.images):
+        try:
+            artifacts.append(
+                _write_image_artifact(
+                    image_bytes,
+                    output_dir=directory,
+                    extension=extension,
+                    media_type=result.media_type,
+                    index=idx,
+                    revised_prompt=result.revised_prompt,
                 )
-            except OutputWriteError as exc:
-                saved = tuple(artifact.file_path for artifact in artifacts)
-                raise OutputWriteError(exc.directory, exc.reason, saved=saved) from exc
-        return tuple(artifacts)
+            )
+        except OutputWriteError as exc:
+            saved = tuple(artifact.file_path for artifact in artifacts)
+            raise OutputWriteError(exc.directory, exc.reason, saved=saved) from exc
+    return tuple(artifacts)
 
 
 def _attempts_made(error: VBotError) -> int | None:

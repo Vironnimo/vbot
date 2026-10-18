@@ -81,7 +81,6 @@ from scripts.provider_probe.choices import (  # noqa: E402
 from scripts.provider_probe.common import (  # noqa: E402
     ModelFacingAdapter,
     ProbeScenario,
-    _start_probe_runtime,
 )
 from scripts.provider_probe.measurements import _compile_probe_contracts  # noqa: E402
 from scripts.provider_probe.scenarios import _scenario  # noqa: E402
@@ -397,8 +396,8 @@ async def _run(args: argparse.Namespace) -> int:
         "recall_workflow",
         "live_tools",
     }:
-        runtime = Runtime(Config(data_dir=args.data_dir))
-        _start_probe_runtime(runtime)
+        runtime = Runtime(Config(data_dir=args.data_dir), safe_startup_mode="verification")
+        runtime.start()
         if getattr(args, "edit_dialect", "auto") == "auto":
             try:
                 family = runtime.models.get(args.provider, args.model).family or ""
@@ -472,8 +471,8 @@ async def _run(args: argparse.Namespace) -> int:
     if strict_true_tool_count:
         raise AssertionError("vBot must never render a Tool with strict mode enabled")
     explicit_non_strict_tool_count = sum(1 for tool in rendered if tool.get("strict") is False)
-    runtime = Runtime(Config(data_dir=args.data_dir))
-    _start_probe_runtime(runtime)
+    runtime = Runtime(Config(data_dir=args.data_dir), safe_startup_mode="verification")
+    runtime.start()
     adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
     request_adapter: Any = adapter
     try:

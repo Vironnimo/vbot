@@ -31,6 +31,7 @@ from core.model_tasks._live_results import live_failure, live_result_text
 from core.model_tasks._live_wire import (
     RELAY_SAMPLE_RATE,
     JsonObject,
+    PlaybackReceipt,
     WireAudio,
     WireCaption,
     WireClosed,
@@ -280,26 +281,25 @@ class XaiSession:
             {"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode("ascii")}
         ]
 
-    def playback(
-        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
-    ) -> _Step:
+    def playback(self, receipt: PlaybackReceipt) -> _Step:
         """Keep a monotonically increasing rendered prefix, never a delivery estimate.
 
         Generation zero is the owner's initial readiness report. Older reports
         can finish a pending clear but cannot change the current playback state.
         """
+        generation = receipt.generation
         step = _Step()
         progress = self._playback.get(generation)
         if progress is not None:
-            progress.played = max(progress.played, min(played_samples, progress.samples))
-        if generation not in {0, self._playback_generation}:
-            if progress is not None and cleared:
+            progress.played = receipt.confirmed_prefix(progress.samples, progress.played)
+        if not receipt.controls_generation(self._playback_generation):
+            if progress is not None and receipt.cleared:
                 step.commands.extend(self._truncate_playback(generation))
             step.commands.extend(self._flush())
             return step
-        changed = enabled != self._playback_enabled
-        self._playback_enabled = enabled
-        if cleared or (changed and not enabled):
+        changed = receipt.enabled != self._playback_enabled
+        self._playback_enabled = receipt.enabled
+        if receipt.cleared or (changed and not receipt.enabled):
             self._clear_playback(step, wait=False)
         self._forget_played_audio()
         step.commands.extend(self._flush())

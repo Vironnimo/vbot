@@ -70,7 +70,7 @@ from core.model_tasks._live_results import (
     live_result_text,
     live_success,
 )
-from core.model_tasks._live_wire import MEDIA_RELAY, MEDIA_WEBRTC, LiveWire
+from core.model_tasks._live_wire import MEDIA_RELAY, MEDIA_WEBRTC, LiveWire, PlaybackReceipt
 from core.model_tasks._live_xai import open_xai_live_wire
 from core.model_tasks.constants import TASK_LIVE_VOICE
 from core.model_tasks.model_tasks import (
@@ -103,6 +103,7 @@ __all__ = [
     "LiveRuntime",
     "LiveStartRejected",
     "LiveVoiceError",
+    "PlaybackReceipt",
     "LiveVoiceService",
     "backend_instructions",
     "live_failure",
@@ -234,9 +235,7 @@ class LiveCall(Protocol):
         """
         ...
 
-    def report_playback(
-        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
-    ) -> None:
+    def report_playback(self, receipt: PlaybackReceipt) -> None:
         """Keep the accessor's actual rendered PCM prefix (relay only)."""
         ...
 

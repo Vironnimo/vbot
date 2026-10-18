@@ -19,7 +19,7 @@ import pytest_asyncio
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
-from core.model_tasks.live import LiveCallHost, LiveRunNotice, LiveStartRejected
+from core.model_tasks.live import LiveCallHost, LiveRunNotice, LiveStartRejected, PlaybackReceipt
 from server.app import create_app
 from server.events import ServerEventBus
 from server.live.owner import (
@@ -71,7 +71,7 @@ class FakeCall:
             else {"type": "webrtc", "sdp": f"answer-{call_id}"}
         )
         self.audio: list[bytes] = []
-        self.playback_reports: list[tuple[int, int, bool, bool]] = []
+        self.playback_reports: list[PlaybackReceipt] = []
         self.playback_resets = 0
         self.playback_syncs = 0
         self.notices: list[LiveRunNotice] = []
@@ -102,10 +102,8 @@ class FakeCall:
     def push_audio(self, pcm: bytes) -> None:
         self.audio.append(pcm)
 
-    def report_playback(
-        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
-    ) -> None:
-        self.playback_reports.append((generation, played_samples, enabled, cleared))
+    def report_playback(self, receipt: PlaybackReceipt) -> None:
+        self.playback_reports.append(receipt)
 
     def reset_playback(self) -> None:
         self.playback_resets += 1
@@ -467,6 +465,12 @@ async def test_playback_receipts_only_accept_the_current_owner_and_valid_sample_
     owner.receive_text(json.dumps(report))
     for invalid in (
         {"generation": True},
+        {"generation": -1},
+        {"generation": 2**32},
+        {"generation": 1.5},
+        {"generation": None},
+        {"played_samples": True},
+        {"played_samples": None},
         {"played_samples": -1},
         {"played_samples": 2**32},
         {"played_samples": 1.5},
@@ -478,7 +482,10 @@ async def test_playback_receipts_only_accept_the_current_owner_and_valid_sample_
     assert replacement is not None
     owner.receive_text(json.dumps({**report, "played_samples": 4800}))
     replacement.receive_text(json.dumps({**report, "enabled": False, "cleared": True}))
-    assert call.playback_reports == [(2, 2400, True, False), (2, 2400, False, True)]
+    assert call.playback_reports == [
+        PlaybackReceipt(2, 2400, True, False),
+        PlaybackReceipt(2, 2400, False, True),
+    ]
     replacement.detach()
     assert call.playback_resets == 2
 

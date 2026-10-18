@@ -29,6 +29,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus, InvalidURI, W
 
 from core.model_tasks._live_wire import (
     JsonObject,
+    PlaybackReceipt,
     WireEvent,
     WireSendError,
     relay_media,
@@ -200,13 +201,9 @@ class XaiLiveWire:
         async with self._lock:
             await self._send(self._session.audio(pcm))
 
-    async def update_playback(
-        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
-    ) -> list[WireEvent]:
+    async def update_playback(self, receipt: PlaybackReceipt) -> list[WireEvent]:
         async with self._lock:
-            step = self._session.playback(
-                generation, played_samples, enabled=enabled, cleared=cleared
-            )
+            step = self._session.playback(receipt)
             await self._send(step.commands)
         self._state_changed.set()
         return step.events

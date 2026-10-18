@@ -35,6 +35,8 @@ files, and shutdown cancels playback and joins file cleanup through `aclose`.
 
 `SpeechSynthesisResult` contains raw audio bytes, media type, response format, and optional generation id.
 
+Artifact writes use the shared bounded `task-artifacts` pool; admitted writes settle before cancellation.
+
 Speech execution writes durable Model Usage through the Runtime-injected recorder before returning or writing an artifact. Provider requests record each actual POST attempt; local calls record their execution boundary. Existing STT telemetry is retained, while absent counters (including ordinary binary TTS responses) remain unknown rather than measured zero. TTS Tool calls pass internal `TaskUsageContext` for the initiating Run and Extension scope; standalone upload/preview calls have no invented Session. Artifact deletion or write failure does not erase consumption. Coverage: `tests/core/model_tasks/test_task_usage.py`, `tests/core/tools/test_speech_tool.py`.
 
 `SpeechArtifact.to_dict()` returns:
@@ -90,8 +92,11 @@ worker and cancellation path. Coverage: `test_speech.py`, `test_speech_input.py`
 
 ## Local engines
 
-`speech_local.py` owns engine definitions, option schemas, dependency preflight,
-audio chunking, adapters and lifecycle; `speech_models.py` (`SPEECH_MODELS`) pins
+`speech_local.py` owns executor residency, request admission and lifecycle; internal
+`_speech_catalog.py` holds target definitions/options, `_speech_context.py` owns
+execution contracts and request cancellation/context, and `_speech_engines.py`
+holds worker protocol, audio chunking and engine adapters. These units import no
+ML runtime until an engine first loads; `speech_models.py` (`SPEECH_MODELS`) pins
 every built-in target's Model: repository, commit revision, and each file's SHA-256
 and size. Moving a target to a newer upstream revision means editing its entry there.
 Runtime passes one `LocalSpeechExecutor`

@@ -16,20 +16,18 @@ from unittest.mock import AsyncMock, Mock
 import numpy as np
 import pytest
 
-from core.model_tasks import local_setup, speech_worker
+from core.model_tasks import _speech_context, local_setup, speech_worker
+from core.model_tasks._speech_context import _AUDIO, _PROGRESS
+from core.model_tasks._speech_engines import _TtsEngine, _WaitingWorkers
 from core.model_tasks.constants import TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
 from core.model_tasks.model_files import ModelFilesError, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
-    _AUDIO,
-    _PROGRESS,
     LocalSpeechError,
     LocalSpeechExecutionError,
     LocalSpeechExecutor,
     SpeechEngineDefinition,
-    _TtsEngine,
-    _WaitingWorkers,
 )
 from core.model_tasks.speech_models import SPEECH_MODELS
 from core.model_tasks.speech_setup import LocalSpeechSetup
@@ -79,6 +77,74 @@ async def test_installations_share_a_queue_and_stop_on_cancel_or_close(tmp_path,
     assert first.status()["error"] == "interrupted"
     assert first.activity() == {"state": "failed", "error": "interrupted"}
     await executor.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["environment", "download", "download_failure", "publication"])
+async def test_cancelled_installation_keeps_its_queue_until_worker_settles(
+    tmp_path, monkeypatch, phase
+):
+    executor = LocalSpeechExecutor(engines_dir=tmp_path / "engines")
+    first, second = (
+        executor.setup_for(target) for target in ("local/qwen3-tts-1.7b", "local/chatterbox")
+    )
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    signalled = threading.Event()
+    next_install = AsyncMock()
+    monkeypatch.setattr(second, "_run_install", next_install)
+    assert first.model_directory is not None
+    first.model_directory.mkdir(parents=True)
+    (first.model_directory.parent / "old").mkdir()
+
+    def block(*args, **kwargs):
+        loop.call_soon_threadsafe(entered.set)
+        if phase.startswith("download"):
+            # Cancellation must reach the cooperative downloader before it settles.
+            assert kwargs["cancelled"].wait(2)
+            signalled.set()
+        assert release.wait(2)
+        if phase == "download_failure":
+            raise ModelFilesError("download_failed")
+
+    if phase.startswith("download"):
+        monkeypatch.setattr(local_setup, "fetch_model_files", block)
+        operation = first._fetch_model
+    else:
+        monkeypatch.setattr(local_setup.shutil, "rmtree", block)
+        operation = first._publish_model
+        if phase == "environment":
+            assert first.directory is not None
+            first.directory.mkdir(parents=True)
+            operation = first._environment_needed
+
+    monkeypatch.setattr(first, "_perform", operation)
+    cancelling = None
+    try:
+        first.install()
+        await entered.wait()
+        second.install()
+        cancelling = asyncio.create_task(first.cancel())
+        await asyncio.sleep(0)
+        first.close()  # a second owner cancellation while the same worker is admitted
+        await asyncio.sleep(0)
+        assert not cancelling.done()
+        assert second.status()["phase"] == "queued"
+        next_install.assert_not_called()
+        release.set()
+        await cancelling
+        await second._task
+        next_install.assert_awaited_once()
+        assert not (first.model_directory / "verified.json").exists()
+        assert first.status()["error"] == "interrupted"
+        if phase.startswith("download"):
+            assert signalled.is_set()
+    finally:
+        release.set()
+        if cancelling is not None:
+            await cancelling
+        await executor.aclose()
 
 
 class _Fetch:
@@ -439,7 +505,7 @@ def test_worker_generates_playable_wav_and_keeps_every_text_chunk(tmp_path, engi
 def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(
     tmp_path, monkeypatch, delivery
 ):
-    from core.model_tasks import speech_local
+    from core.model_tasks import _speech_engines as speech_local
 
     streaming = delivery != "buffered"
     failed = delivery == "consumer_failure"
@@ -537,7 +603,7 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(
 @pytest.mark.parametrize("ending", ["deadline", "cancellation", "shutdown"])
 @pytest.mark.parametrize("phase", ["loading", "synthesizing"])
 async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, ending, phase):
-    from core.model_tasks import speech_local
+    from core.model_tasks import _speech_engines as speech_local
 
     monkeypatch.setattr(
         speech_local, "_LOAD_DEADLINE_S", 0.05 if (ending, phase) == ("deadline", "loading") else 60
@@ -547,7 +613,7 @@ async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, e
         "_SYNTHESIS_DEADLINE_S",
         0.05 if (ending, phase) == ("deadline", "synthesizing") else 60,
     )
-    monkeypatch.setattr(speech_local, "_CANCEL_GRACE_S", 0.05)
+    monkeypatch.setattr(_speech_context, "_CANCEL_GRACE_S", 0.05)
     asked, killed = threading.Event(), threading.Event()
     armed = Future()
 
@@ -568,6 +634,7 @@ async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, e
             self.function(*self.args)
 
     monkeypatch.setattr(speech_local, "Timer", Timer)
+    monkeypatch.setattr(_speech_context, "Timer", Timer)
 
     def kill_tree(*_arguments):
         killed.set()

@@ -120,14 +120,16 @@ class EvalWorker:
         """Start the Runtime, configure the fixture Agent and apply the text pack."""
         from core.runtime.runtime import Runtime
         from core.utils.config import Config
-        from scripts.provider_probe.common import _start_probe_runtime
 
         self._temporary = TemporaryDirectory(
             prefix="vbot-learning-eval-", ignore_cleanup_errors=True
         )
         root = Path(self._temporary.name)
-        self._runtime = Runtime(Config(data_dir=root / "data", overrides={"LOG_LEVEL": "WARNING"}))
-        _start_probe_runtime(self._runtime)
+        self._runtime = Runtime(
+            Config(data_dir=root / "data", overrides={"LOG_LEVEL": "WARNING"}),
+            operational_producers="disabled",
+        )
+        self._runtime.start()
         runtime = self._runtime
         # The System Prompt names the Agent's Model and thinking effort.
         changes = {
