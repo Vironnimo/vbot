@@ -32,7 +32,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 
 **Definition:** A named credential slot on one Connection, addressed `provider:connection[:account]`; the omitted Account resolves deterministically to the first usable slot (`default`, then sorted named Accounts).
 
-`accounts.py::Account` validates a resolved slot and composes public addresses and stable token keys; OAuth lifecycle and token operations take this value.
+`accounts.py::Account` validates a resolved slot and composes its public address; OAuth lifecycle and token operations take this value. `TokenStore` hides durable key encoding.
 
 **Not:** A product user identity or a distinct Model catalog.
 

@@ -130,11 +130,10 @@ def compose_connection_id(
 
 @dataclass(frozen=True)
 class Account:
-    """One resolved credential slot, including its Connection and durable token key.
+    """One resolved credential slot, including its Connection and public address.
 
-    Unlike ConnectionRef, this identity never defers Account selection. The
-    token key is the established Secret Store spelling, independent of the
-    public compositional Connection address.
+    Unlike ConnectionRef, this identity never defers Account selection.
+    TokenStore owns the private durable encoding of this identity.
     """
 
     provider_id: str
@@ -163,12 +162,6 @@ class Account:
     def connection_id(self) -> str:
         """The exact public address, with its resolved Account suffix."""
         return compose_connection_id(self.provider_id, self.local_connection_id, self.account_id)
-
-    @property
-    def token_id(self) -> str:
-        """The stable Generation 1 Secret Store key for this credential slot."""
-        base = f"{self.provider_id}-{self.local_connection_id}"
-        return base if self.account_id == DEFAULT_ACCOUNT_ID else f"{base}--{self.account_id}"
 
 
 @dataclass(frozen=True)

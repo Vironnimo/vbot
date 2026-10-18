@@ -134,7 +134,7 @@ class TokenStore:
         fails to load, or when the Secret Store cannot be written.
         """
 
-        token_id = account.token_id
+        token_id = self._token_id(account)
         payload = self._token_to_dict(token)
         with self._mutation_lock:
             try:
@@ -162,7 +162,7 @@ class TokenStore:
         including while the Secret Store is unavailable.
         """
 
-        token_id = account.token_id
+        token_id = self._token_id(account)
         try:
             text = self._secrets.entry(OAUTH_TOKENS, token_id)
         except SecretStoreError as error:
@@ -185,7 +185,7 @@ class TokenStore:
     ) -> bool:
         """Return whether a token is stored, without loading it."""
 
-        token_id = account.token_id
+        token_id = self._token_id(account)
         return token_id in self._secrets.entry_names(OAUTH_TOKENS)
 
     async def load_async(
@@ -204,7 +204,7 @@ class TokenStore:
         Raises :class:`OAuthTokenFileError` when the Secret Store cannot be written.
         """
 
-        token_id = account.token_id
+        token_id = self._token_id(account)
         with self._mutation_lock:
             try:
                 self._secrets.remove_entry(OAUTH_TOKENS, token_id)
@@ -256,7 +256,7 @@ class TokenStore:
         starts or changes, not on every check.
         """
 
-        token_id = account.token_id
+        token_id = self._token_id(account)
         try:
             token = self.load(account)
         except OAuthTokenFileError as error:
@@ -276,7 +276,7 @@ class TokenStore:
     def list_account_ids(self, provider_id: str, local_connection_id: str) -> list[str]:
         """Return stored account ids for the connection, default first then sorted."""
 
-        base = Account(provider_id, local_connection_id).token_id
+        base = self._token_id(Account(provider_id, local_connection_id))
         prefix = f"{base}{_ACCOUNT_FILE_SEPARATOR}"
         account_ids: list[str] = []
         for token_id in self._secrets.entry_names(OAUTH_TOKENS):
@@ -291,6 +291,14 @@ class TokenStore:
             ):
                 account_ids.append(suffix)
         return sorted_account_ids(account_ids)
+
+    @staticmethod
+    def _token_id(account: Account) -> str:
+        """Encode an Account with the stable Generation 1 Secret Store key."""
+        base = f"{account.provider_id}-{account.local_connection_id}"
+        if account.account_id == DEFAULT_ACCOUNT_ID:
+            return base
+        return f"{base}{_ACCOUNT_FILE_SEPARATOR}{account.account_id}"
 
     def _write(
         self, transaction: SecretTransaction, token_id: str, payload: dict[str, object]
