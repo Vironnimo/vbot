@@ -193,17 +193,24 @@ export function createSessionSettings(context) {
       : null;
     if (shown.kind === 'draft') {
       const draft = drafts[shown.key] ?? {};
+      const project = teamProject ?? {
+        editable: true,
+        known: true,
+        team: false,
+        value:
+          draft.workingProjectId !== undefined
+            ? draft.workingProjectId
+            : defaults.rootProjectId,
+        defaultValue: defaults.rootProjectId,
+      };
       return {
         ...base,
-        project: teamProject ?? {
-          editable: true,
-          known: true,
-          team: false,
-          value:
-            draft.workingProjectId !== undefined
-              ? draft.workingProjectId
-              : defaults.rootProjectId,
-          defaultValue: defaults.rootProjectId,
+        project,
+        // Until its first send, a draft can move to another Agent that can
+        // work in its Project.
+        agent: {
+          value: shown.agentAddress,
+          choices: context.target.draftAgentChoices(project.value ?? null),
         },
         model: draft.model || defaults.model,
         thinkingEffort: draft.thinking_effort ?? defaults.thinkingEffort,
@@ -515,6 +522,19 @@ export function createSessionSettings(context) {
         return;
       }
       updateDraft(draft.key, { workingProjectId: workingProjectId || null });
+    },
+    // The draft moved to another Agent's draft: it keeps working in
+    // `workingProjectId`, with the new Agent's Model and effort.
+    moveDraft(fromDraft, toDraft, workingProjectId) {
+      if (!fromDraft?.key || !toDraft?.key || fromDraft.key === toDraft.key) {
+        return;
+      }
+      const next = { ...drafts };
+      delete next[fromDraft.key];
+      next[toDraft.key] = parseAgentAddress(toDraft.agentAddress).projectId
+        ? {}
+        : { workingProjectId: workingProjectId || null };
+      drafts = next;
     },
     // Keep the effort on the nearest level the next Model offers, saving both
     // choices in the same write.

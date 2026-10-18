@@ -486,6 +486,9 @@ export default Object.freeze({
   'chat.goal.clear': 'Clear',
   'chat.sessionSettings.label': 'Session settings',
   'chat.sessionSettings.project': 'Project',
+  'chat.sessionSettings.agent': 'Agent',
+  'chat.sessionSettings.agentDraftHint':
+    'The Agent this new Session starts with. Choosing another moves the draft to it, with your text and attachments.',
   'chat.sessionSettings.model': 'Model',
   'chat.sessionSettings.thinkingEffort': 'Thinking effort',
   'chat.sessionSettings.workspace': 'Workspace',

@@ -365,6 +365,23 @@
       options,
     );
 
+  // The draft footer's Agent picker: the draft moves to the chosen Agent,
+  // which becomes the active one. Its text, attachments and Project follow;
+  // Model and effort become the new Agent's (user decision).
+  let composer = $state(null);
+  const moveDraftToAgent = (agentAddress) => {
+    const from = target.activeDraft();
+    const view = sessionSettings.view;
+    if (!from || view?.kind !== 'draft' || agentAddress === from.agentAddress) {
+      return;
+    }
+    const projectId = view.project.value ?? null;
+    return navigation.handleNewSessionWith(agentAddress, (to) => {
+      composer?.moveDraft(from.key, to.key);
+      sessionSettings.moveDraft(from, to, projectId);
+    });
+  };
+
   const handleNewSession = () => {
     const next =
       showSessionDrawer && sessionFilters?.byProject
@@ -886,6 +903,7 @@
                 />
               {/if}
               <ChatComposer
+                bind:this={composer}
                 disabled={composerDisabled}
                 isRunning={isRunActive(target.activeSessionState)}
                 cancelling={target.activeSessionState?.cancellingRunIds?.includes(
@@ -931,6 +949,7 @@
                       {projects}
                       {projectsLoaded}
                       onSelectProject={sessionSettings.selectProject}
+                      onSelectAgent={moveDraftToAgent}
                       onSelectModel={sessionSettings.selectModel}
                       onSelectThinkingEffort={sessionSettings.selectThinkingEffort}
                       onModelPickerOpen={() =>
