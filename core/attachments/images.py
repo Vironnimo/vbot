@@ -149,6 +149,7 @@ class ImageTarget:
 @dataclass(frozen=True)
 class _ImageInfo:
     size: tuple[int, int]
+    maximum_size: tuple[int, int]
     frames: int
     pixels: int
 
@@ -218,7 +219,7 @@ class ImageConverter:
     ) -> PreparedImage:
         digest = hashlib.sha256(data).digest()
         info = self._validate(data, media_type, digest)
-        if target.accepts(media_type, len(data), info.size):
+        if target.accepts(media_type, len(data), info.maximum_size):
             return PreparedImage(data, media_type, info.size, info.size)
         targets = target.output_types
         if not targets:
@@ -275,15 +276,18 @@ class ImageConverter:
                     image.verify()
                 with Image.open(io.BytesIO(data)) as image:
                     size = image.size
+                    maximum_width, maximum_height = size
                     frames = getattr(image, "n_frames", 1)
                     pixels = 0
                     for frame in range(frames):
                         image.seek(frame)
+                        maximum_width = max(maximum_width, image.width)
+                        maximum_height = max(maximum_height, image.height)
                         pixels += image.width * image.height
                         if pixels > _PIXEL_LIMIT:
                             raise ImageConversionError("image_too_large", pixels=pixels)
                         image.load()
-                    info = _ImageInfo(size, frames, pixels)
+                    info = _ImageInfo(size, (maximum_width, maximum_height), frames, pixels)
         except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
             raise ImageConversionError("image_too_large") from exc
         except _DECODE_ERRORS as exc:

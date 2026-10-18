@@ -217,23 +217,36 @@ async def test_native_oversize_image_fits_limit_and_reports_resampling(limits):
 
 
 @pytest.mark.asyncio
-async def test_native_multiframe_is_preserved_but_never_flattened_to_fit():
+@pytest.mark.parametrize(
+    "format,media_type,last_size,dimension_limit",
+    [("GIF", "image/gif", (12, 8), 11), ("TIFF", "image/tiff", (48, 8), 16)],
+)
+async def test_native_multiframe_is_preserved_but_never_flattened_to_fit(
+    format, media_type, last_size, dimension_limit
+):
     stream = io.BytesIO()
     Image.new("RGB", (12, 8), "red").save(
         stream,
-        format="GIF",
+        format=format,
         save_all=True,
-        append_images=[Image.new("RGB", (12, 8), "blue")],
+        append_images=[Image.new("RGB", last_size, "blue")],
     )
     original = stream.getvalue()
     converter = ImageConverter()
-    result = await converter.convert(original, "image/gif", ImageTarget(frozenset({"image/gif"})))
+    result = await converter.convert(original, media_type, ImageTarget(frozenset({media_type})))
     assert result.data is original
     with pytest.raises(ImageConversionError) as failure:
         await converter.convert(
             original,
-            "image/gif",
-            ImageTarget(frozenset({"image/gif", "image/png"}), max_output_bytes=len(original) - 1),
+            media_type,
+            ImageTarget(frozenset({media_type, "image/png"}), max_output_bytes=len(original) - 1),
+        )
+    assert failure.value.reason == "multiple_frames"
+    with pytest.raises(ImageConversionError) as failure:
+        await converter.convert(
+            original,
+            media_type,
+            ImageTarget(frozenset({media_type, "image/png"}), max_dimension=dimension_limit),
         )
     assert failure.value.reason == "multiple_frames"
 
