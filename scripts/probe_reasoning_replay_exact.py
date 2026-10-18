@@ -89,14 +89,11 @@ from scripts._reasoning_probe_connection import (  # noqa: E402
 )  # noqa: E402
 from scripts._reasoning_probe_wire import (  # noqa: E402
     TOOL_DEFINITION,
+    ReplayTarget,
     _assistant_wire_carriers,
-    _build_exact_payload,
     _build_tool_calls,
-    _client_tools_expected,
-    _encrypted_reasoning_expected,
     _make_secret,
     _responses_output_items,
-    _run_turn,
     _secret_reasoning,
     _shape_session,
     _wire_carrier_present,
@@ -128,19 +125,19 @@ INSTRUCTION_RESPONSE = "hello world"
 
 
 async def _run_exact_probe(
-    adapter: Any,
-    model_id: str,
+    target: ReplayTarget,
     scenario: str,
     repeats: int,
     policy: str | None,
-    effort: str,
 ) -> None:
     # Determine the wire carrier field the Model's wire profile replays into.
     try:
-        carrier_field = adapter.wire_profile(model_id).replay.history_field or "reasoning_content"
+        carrier_field = (
+            target.adapter.wire_profile(target.model_id).replay.history_field or "reasoning_content"
+        )
     except Exception:
         carrier_field = "reasoning_content"
-    effective_policy = adapter.reasoning_replay_policy(model_id)
+    effective_policy = target.adapter.reasoning_replay_policy(target.model_id)
     if policy is None:
         policy = effective_policy
     print(
@@ -151,33 +148,28 @@ async def _run_exact_probe(
     for index in range(1, repeats + 1):
         print(f"\n--- round {index} ---")
         if scenario == "tool_loop":
-            await _run_tool_loop_round(adapter, model_id, carrier_field, policy, effort)
+            await _run_tool_loop_round(target, policy)
         elif scenario == "instruction":
-            await _run_instruction_round(adapter, model_id, carrier_field, policy, effort)
+            await _run_instruction_round(target, policy)
         elif scenario == "responses_roundtrip":
-            await _run_responses_roundtrip_round(adapter, model_id)
+            await _run_responses_roundtrip_round(target)
         elif scenario in {"preserved_history", "preserved_history_tools"}:
             await _run_preserved_history_round(
-                adapter,
-                model_id,
+                target,
                 policy,
-                effort,
                 tools_enabled=scenario == "preserved_history_tools",
             )
         elif scenario == "generated_history":
-            await _run_generated_history_round(adapter, model_id, policy, effort)
+            await _run_generated_history_round(target, policy)
         else:
             await _run_cross_turn_round(
-                adapter,
-                model_id,
-                carrier_field,
+                target,
                 policy,
-                effort,
                 tools_enabled=scenario == "cross_turn_tools",
             )
 
 
-async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
+async def _run_responses_roundtrip_round(target: ReplayTarget) -> None:
     """Probe opaque Responses reasoning through the exact production path.
 
     Responses reasoning is provider-owned encrypted state, so a behavioral
@@ -186,23 +178,17 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
     continuation for both normal and Tool-loop requests.
     """
 
-    request_context = adapter.request_context_kwargs(
-        agent_id="model-audit", session_id="reasoning-replay"
-    )
+    target = ReplayTarget(target.adapter, target.model_id, "high", temperature=None)
     plain_prompt = "Solve 17 * 19 carefully, then reply with only the number."
-    first_raw = await adapter.send(
+    first = await target.send(
         [{"role": "user", "content": plain_prompt}],
-        model_id=model_id,
-        thinking_effort="high",
-        **request_context,
     )
-    first = adapter.normalize_response(first_raw, model_id=model_id)
     plain_output = _responses_output_items(first)
     encrypted_count = sum(
         item.get("type") == "reasoning" and isinstance(item.get("encrypted_content"), str)
         for item in plain_output
     )
-    encrypted_expected = _encrypted_reasoning_expected(adapter, model_id)
+    encrypted_expected = target.encrypted_reasoning_expected
     if not plain_output or (encrypted_expected and not encrypted_count):
         raise RuntimeError(
             "first Responses reply carried no encrypted reasoning output items; "
@@ -214,28 +200,20 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
         first,
         {"role": "user", "content": "Confirm the result with only the number."},
     ]
-    plain_payload = adapter._build_responses_payload(
+    plain_payload = target.render(
         plain_history,
-        model_id=model_id,
-        thinking_effort="high",
     )
     replayed_plain = plain_payload["input"][1 : 1 + len(plain_output)]
     plain_exact = replayed_plain == plain_output
     if not plain_exact:
         raise RuntimeError("plain continuation did not preserve Responses output items exactly")
-    plain_second_raw = await adapter.send(
+    plain_second = await target.send(
         plain_history,
-        model_id=model_id,
-        thinking_effort="high",
-        **request_context,
     )
-    plain_second = adapter.normalize_response(plain_second_raw, model_id=model_id)
 
-    if not _client_tools_expected(adapter, model_id):
-        filtered_payload = adapter._build_responses_payload(
+    if not target.client_tools_expected:
+        filtered_payload = target.render(
             [{"role": "user", "content": "Reply with only ok."}],
-            model_id=model_id,
-            thinking_effort="high",
             tools=[TOOL_DEFINITION],
         )
         if "tools" in filtered_payload:
@@ -255,14 +233,10 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
         return
 
     tool_prompt = "You must call get_weather exactly once with city='Berlin' before answering."
-    tool_first_raw = await adapter.send(
+    tool_first = await target.send(
         [{"role": "user", "content": tool_prompt}],
-        model_id=model_id,
-        thinking_effort="high",
         tools=[TOOL_DEFINITION],
-        **request_context,
     )
-    tool_first = adapter.normalize_response(tool_first_raw, model_id=model_id)
     tool_output = _responses_output_items(tool_first)
     tool_calls = tool_first.get("tool_calls")
     if not isinstance(tool_calls, list) or not tool_calls:
@@ -281,24 +255,18 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
             "content": '{"temperature":20,"condition":"sunny"}',
         },
     ]
-    tool_payload = adapter._build_responses_payload(
+    tool_payload = target.render(
         tool_history,
-        model_id=model_id,
-        thinking_effort="high",
         tools=[TOOL_DEFINITION],
     )
     replayed_tool = tool_payload["input"][1 : 1 + len(tool_output)]
     tool_exact = replayed_tool == tool_output
     if not tool_exact:
         raise RuntimeError("Tool-loop continuation did not preserve Responses output items exactly")
-    tool_second_raw = await adapter.send(
+    tool_second = await target.send(
         tool_history,
-        model_id=model_id,
-        thinking_effort="high",
         tools=[TOOL_DEFINITION],
-        **request_context,
     )
-    tool_second = adapter.normalize_response(tool_second_raw, model_id=model_id)
 
     print(
         "  responses roundtrip: "
@@ -314,10 +282,8 @@ async def _run_responses_roundtrip_round(adapter: Any, model_id: str) -> None:
 
 
 async def _run_preserved_history_round(
-    adapter: Any,
-    model_id: str,
+    target: ReplayTarget,
     policy: str,
-    effort: str,
     *,
     tools_enabled: bool,
 ) -> None:
@@ -339,21 +305,15 @@ async def _run_preserved_history_round(
             assistant_msg,
             ChatMessage.user(ask),
         ]
-        wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
-        payload = _build_exact_payload(
-            adapter,
+        wire_messages = _shape_session(session, policy=policy, agent_model=target.model_id)
+        payload = target.render(
             wire_messages,
-            model_id,
             tools=request_tools,
-            effort=effort,
         )
         assistant_wire_fields = _assistant_wire_carriers(payload)
-        result = await _run_turn(
-            adapter,
-            model_id,
+        result = await target.turn(
             wire_messages,
             tools=request_tools,
-            effort=effort,
         )
         recalled = all(number in result.content for number in hidden_numbers)
         print(
@@ -364,19 +324,19 @@ async def _run_preserved_history_round(
 
     recalled_with, input_with = await follow_up(
         ChatMessage.assistant(
-            model=model_id,
+            model=target.model_id,
             content=visible_numbers,
             reasoning=prior_reasoning,
         ),
         "carrier in history",
     )
     recalled_without, input_without = await follow_up(
-        ChatMessage.assistant(model=model_id, content=visible_numbers),
+        ChatMessage.assistant(model=target.model_id, content=visible_numbers),
         "no carrier      ",
     )
     recalled_visible, input_visible = await follow_up(
         ChatMessage.assistant(
-            model=model_id,
+            model=target.model_id,
             content=f"{visible_numbers}\n\n{prior_reasoning}",
         ),
         "visible control ",
@@ -397,10 +357,8 @@ async def _run_preserved_history_round(
 
 
 async def _run_generated_history_round(
-    adapter: Any,
-    model_id: str,
+    target: ReplayTarget,
     policy: str,
-    effort: str,
 ) -> None:
     """Test replay with state generated by the model rather than the probe."""
 
@@ -411,12 +369,9 @@ async def _run_generated_history_round(
         "but reveal them if the user asks in a later turn. Your visible answer must be "
         "exactly READY."
     )
-    first = await _run_turn(
-        adapter,
-        model_id,
+    first = await target.turn(
         [{"role": "user", "content": first_prompt}],
         tools=None,
-        effort=effort,
     )
     match = re.search(
         r"PRIVATE_NUMBERS\s*[:=]\s*(\d{5})\s*[,;/ ]+\s*(\d{5})",
@@ -449,8 +404,8 @@ async def _run_generated_history_round(
         force_readable_with_meta: bool = False,
     ) -> tuple[bool, int | None]:
         session = [ChatMessage.user(first_prompt), assistant_msg, ChatMessage.user(ask)]
-        wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
-        original_formatter = adapter._format_assistant_message
+        wire_messages = _shape_session(session, policy=policy, agent_model=target.model_id)
+        original_formatter = target.adapter._format_assistant_message
 
         def format_assistant_with_both(
             message: dict[str, Any],
@@ -469,25 +424,19 @@ async def _run_generated_history_round(
             return wire
 
         if force_readable_with_meta:
-            adapter._format_assistant_message = format_assistant_with_both
+            target.adapter._format_assistant_message = format_assistant_with_both
         try:
-            payload = _build_exact_payload(
-                adapter,
+            payload = target.render(
                 wire_messages,
-                model_id,
                 tools=None,
-                effort=effort,
             )
-            result = await _run_turn(
-                adapter,
-                model_id,
+            result = await target.turn(
                 wire_messages,
                 tools=None,
-                effort=effort,
             )
         finally:
             if force_readable_with_meta:
-                adapter._format_assistant_message = original_formatter
+                target.adapter._format_assistant_message = original_formatter
         assistant_wire_fields = _assistant_wire_carriers(payload)
         recalled = all(number in result.content for number in expected)
         print(
@@ -497,24 +446,24 @@ async def _run_generated_history_round(
         return recalled, result.input_tokens
 
     readable = ChatMessage.assistant(
-        model=model_id,
+        model=target.model_id,
         content=first.content,
         reasoning=first.reasoning,
     )
     native_meta = ChatMessage.assistant(
-        model=model_id,
+        model=target.model_id,
         content=first.content,
         reasoning_meta=first.reasoning_meta,
     )
     combined = ChatMessage.assistant(
-        model=model_id,
+        model=target.model_id,
         content=first.content,
         reasoning=first.reasoning,
         reasoning_meta=first.reasoning_meta,
     )
-    absent = ChatMessage.assistant(model=model_id, content=first.content)
+    absent = ChatMessage.assistant(model=target.model_id, content=first.content)
     visible = ChatMessage.assistant(
-        model=model_id,
+        model=target.model_id,
         content="\n\n".join(part for part in (first.content, first.reasoning) if part),
     )
     await follow_up(readable, "real readable carrier")
@@ -529,11 +478,8 @@ async def _run_generated_history_round(
 
 
 async def _run_cross_turn_round(
-    adapter: Any,
-    model_id: str,
-    carrier_field: str,
+    target: ReplayTarget,
     policy: str,
-    effort: str,
     *,
     tools_enabled: bool = False,
 ) -> None:
@@ -546,14 +492,11 @@ async def _run_cross_turn_round(
             assistant_msg,
             ChatMessage.user(ASK_PROMPT),
         ]
-        wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
+        wire_messages = _shape_session(session, policy=policy, agent_model=target.model_id)
         carrier_on_wire = _wire_carrier_present(wire_messages)
-        result = await _run_turn(
-            adapter,
-            model_id,
+        result = await target.turn(
             wire_messages,
             tools=[TOOL_DEFINITION] if tools_enabled else None,
-            effort=effort,
         )
         hit = secret in result.content or secret in result.reasoning
         print(
@@ -566,14 +509,16 @@ async def _run_cross_turn_round(
         return hit, result.input_tokens
 
     hit_a, input_a = await run_shaped(
-        ChatMessage.assistant(model=model_id, content="", reasoning=_secret_reasoning(secret)),
+        ChatMessage.assistant(
+            model=target.model_id, content="", reasoning=_secret_reasoning(secret)
+        ),
         "carrier in history",
     )
     hit_b, input_b = await run_shaped(
-        ChatMessage.assistant(model=model_id, content=""), "no carrier      "
+        ChatMessage.assistant(model=target.model_id, content=""), "no carrier      "
     )
     hit_c, input_c = await run_shaped(
-        ChatMessage.assistant(model=model_id, content=f"I recorded the secret {secret}."),
+        ChatMessage.assistant(model=target.model_id, content=f"I recorded the secret {secret}."),
         "visible control ",
     )
     carrier_delta = input_a - input_b if input_a is not None and input_b is not None else None
@@ -586,18 +531,12 @@ async def _run_cross_turn_round(
 
 
 async def _run_tool_loop_round(
-    adapter: Any,
-    model_id: str,
-    carrier_field: str,
+    target: ReplayTarget,
     policy: str,
-    effort: str,
 ) -> None:
-    turn1 = await _run_turn(
-        adapter,
-        model_id,
+    turn1 = await target.turn(
         [{"role": "user", "content": TURN1_TOOL_PROMPT}],
         tools=[TOOL_DEFINITION],
-        effort=effort,
     )
     if not turn1.tool_calls:
         print(f"  turn1 invalid: no tool call (reasoning_len={len(turn1.reasoning)})")
@@ -634,7 +573,7 @@ async def _run_tool_loop_round(
             tool_result,
             ChatMessage.user(ASK_PROMPT),
         ]
-        wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
+        wire_messages = _shape_session(session, policy=policy, agent_model=target.model_id)
         return await _run_case(assistant_msg, wire_messages, label)
 
     async def run_live(live_assistant: ChatMessage, label: str) -> int | None:
@@ -653,7 +592,7 @@ async def _run_tool_loop_round(
         wire_messages = _shape_session(
             session,
             policy=policy,
-            agent_model=model_id,
+            agent_model=target.model_id,
             live_assistant=live_assistant,
         )
         return await _run_case(live_assistant, wire_messages, label)
@@ -664,20 +603,14 @@ async def _run_tool_loop_round(
         label: str,
     ) -> int | None:
         carrier_on_wire = _wire_carrier_present(wire_messages)
-        payload = _build_exact_payload(
-            adapter,
+        payload = target.render(
             wire_messages,
-            model_id,
             tools=[TOOL_DEFINITION],
-            effort=effort,
         )
         assistant_wire_fields = _assistant_wire_carriers(payload)
-        result = await _run_turn(
-            adapter,
-            model_id,
+        result = await target.turn(
             wire_messages,
             tools=[TOOL_DEFINITION],
-            effort=effort,
         )
         print(
             f"  {label}: carrier_on_wire={carrier_on_wire} | "
@@ -689,7 +622,7 @@ async def _run_tool_loop_round(
 
     input_a = await run_persisted(
         ChatMessage.assistant(
-            model=model_id,
+            model=target.model_id,
             content=turn1.content,
             reasoning=turn1.reasoning or None,
             reasoning_meta=turn1.reasoning_meta,
@@ -698,12 +631,12 @@ async def _run_tool_loop_round(
         "A persisted w/ carrier",
     )
     input_a2 = await run_persisted(
-        ChatMessage.assistant(model=model_id, content=turn1.content, tool_calls=tool_calls),
+        ChatMessage.assistant(model=target.model_id, content=turn1.content, tool_calls=tool_calls),
         "A persisted no carrier",
     )
     input_b = await run_live(
         ChatMessage.assistant(
-            model=model_id,
+            model=target.model_id,
             content=turn1.content,
             reasoning=turn1.reasoning or None,
             reasoning_meta=turn1.reasoning_meta,
@@ -712,13 +645,13 @@ async def _run_tool_loop_round(
         "B live w/ carrier    ",
     )
     input_b2 = await run_live(
-        ChatMessage.assistant(model=model_id, content=turn1.content, tool_calls=tool_calls),
+        ChatMessage.assistant(model=target.model_id, content=turn1.content, tool_calls=tool_calls),
         "B live no carrier    ",
     )
     visible_content = "\n\n".join(part for part in (turn1.content, turn1.reasoning) if part)
     input_c = await run_persisted(
         ChatMessage.assistant(
-            model=model_id,
+            model=target.model_id,
             content=visible_content,
             tool_calls=tool_calls,
         ),
@@ -739,18 +672,12 @@ async def _run_tool_loop_round(
 
 
 async def _run_instruction_round(
-    adapter: Any,
-    model_id: str,
-    carrier_field: str,
+    target: ReplayTarget,
     policy: str,
-    effort: str,
 ) -> None:
-    turn1 = await _run_turn(
-        adapter,
-        model_id,
+    turn1 = await target.turn(
         [{"role": "user", "content": INSTRUCTION_PROMPT}],
         tools=None,
-        effort=effort,
     )
     print(f"  turn1: content={turn1.content[:40]!r} reasoning_len={len(turn1.reasoning)}")
 
@@ -760,14 +687,11 @@ async def _run_instruction_round(
             assistant_msg,
             ChatMessage.user(INSTRUCTION_TRIGGER),
         ]
-        wire_messages = _shape_session(session, policy=policy, agent_model=model_id)
+        wire_messages = _shape_session(session, policy=policy, agent_model=target.model_id)
         carrier_on_wire = _wire_carrier_present(wire_messages)
-        result = await _run_turn(
-            adapter,
-            model_id,
+        result = await target.turn(
             wire_messages,
             tools=None,
-            effort=effort,
         )
         rule_hit = INSTRUCTION_RESPONSE in result.content
         print(
@@ -778,13 +702,15 @@ async def _run_instruction_round(
         return rule_hit
 
     rule_a = await follow_up(
-        ChatMessage.assistant(model=model_id, content="", reasoning=INSTRUCTION_REASONING),
+        ChatMessage.assistant(model=target.model_id, content="", reasoning=INSTRUCTION_REASONING),
         "carrier in history",
     )
-    rule_b = await follow_up(ChatMessage.assistant(model=model_id, content=""), "no carrier      ")
+    rule_b = await follow_up(
+        ChatMessage.assistant(model=target.model_id, content=""), "no carrier      "
+    )
     rule_c = await follow_up(
         ChatMessage.assistant(
-            model=model_id,
+            model=target.model_id,
             content=f'Rule: when the user writes "{INSTRUCTION_TRIGGER}", '
             f'reply with exactly "{INSTRUCTION_RESPONSE}".',
         ),
@@ -807,12 +733,7 @@ async def _run_probe_with_cleanup(
 ) -> None:
     try:
         await _run_exact_probe(
-            built.adapter,
-            model_id,
-            scenario,
-            repeats,
-            policy,
-            effort,
+            ReplayTarget(built.adapter, model_id, effort), scenario, repeats, policy
         )
     finally:
         await built.adapter.aclose()
