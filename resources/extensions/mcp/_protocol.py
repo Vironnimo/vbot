@@ -49,6 +49,7 @@ CATALOG_REFRESH_DELAY_SECONDS = 0.5
 DISCOVERY_PROTOCOL_VERSION = "2026-07-28"
 
 RESULT_PROBLEM_CHARACTERS = 300
+_SUBSCRIPTION_ENDED = "The resource subscription ended before this request completed"
 
 OPERATION_MODELS: dict[str, Any] = {
     "tools/call": types.CallToolRequestParams,
@@ -277,7 +278,11 @@ class ConnectionProtocol:
             uri = arguments["uri"]
             # Concurrent subscribers share one acknowledgement; one that is
             # cancelled leaves it to the others.
-            await asyncio.shield(self._watch(uri))
+            ready = self._watch(uri)
+            await asyncio.shield(ready)
+            current = self._resource_watches.get(uri)
+            if current is None or current[1] is not ready:
+                raise ValueError(_SUBSCRIPTION_ENDED)
             self._resource_subscriptions.add(uri)
             return {"subscribed": uri}
         if operation == "resources/unsubscribe":
@@ -618,6 +623,8 @@ class ConnectionProtocol:
                             "resource_changed", {"uri": uri, "event": dump(event)}
                         )
         except asyncio.CancelledError:
+            if not ready.done():
+                ready.set_exception(ValueError(_SUBSCRIPTION_ENDED))
             raise
         except Exception as error:
             self._runner._events.record(

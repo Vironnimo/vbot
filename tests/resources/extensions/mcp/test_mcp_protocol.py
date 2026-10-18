@@ -1123,10 +1123,18 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
     # The server's subscribe and unsubscribe requests, in order; legacy sessions to notify.
     requests: list[tuple[str, str]] = []
     sessions = []
+    pending_started = asyncio.Event()
+    release_pending = asyncio.Event()
+
+    async def pending(uri):
+        if uri == "test://pending":
+            pending_started.set()
+            await release_pending.wait()
 
     async def listened(server_context, params):
         for uri in params.notifications.resource_subscriptions or ():
             requests.append(("subscribe", uri))
+            await pending(uri)
         try:
             return await listen(server_context, params)
         finally:
@@ -1135,6 +1143,7 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
 
     async def subscribe(server_context, params):
         requests.append(("subscribe", str(params.uri)))
+        await pending(str(params.uri))
         sessions.append(server_context.session)
         return types.EmptyResult()
 
@@ -1182,6 +1191,7 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
     runner = runner_for(host, stream, monkeypatch)
     if legacy:
         runner.config["transport"] = "sse"
+    subscribing = None
     try:
         async with asyncio.timeout(10):
             await runner.invoke("resources/subscribe", {"uri": "test://watched"})
@@ -1211,7 +1221,23 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
             ("unsubscribe", "test://watched"),
             ("subscribe", "test://other"),
         ]
+        # Unsubscribe while the server has not acknowledged subscribe yet.
+        # Both callers must settle, and the cancelled watch must not be retained
+        # for the next connection.
+        async with asyncio.timeout(2):
+            subscribing = asyncio.create_task(
+                runner.invoke("resources/subscribe", {"uri": "test://pending"})
+            )
+            await pending_started.wait()
+            await runner.invoke("resources/unsubscribe", {"uri": "test://pending"})
+            with pytest.raises(ValueError):
+                await subscribing
+        assert "test://pending" not in runner._protocol._resource_subscriptions
     finally:
+        release_pending.set()
+        if subscribing is not None:
+            subscribing.cancel()
+            await asyncio.gather(subscribing, return_exceptions=True)
         await runner.close()
 
 
