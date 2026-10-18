@@ -19,7 +19,7 @@ from core.runs import (
     RunNotFoundError,
     RunStatus,
 )
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -592,11 +592,13 @@ class _CompletionDeliveryCoordinator:
                 return None
             try:
                 session = await sessions.get_async(address)
-            except Exception as error:
+            except SessionNotFoundError as error:
                 # There is no durable target left. A terminal delivery
                 # failure lets producers release their process-local state.
                 self._fail(bucket, pending, error)
                 return None
+            except Exception as error:
+                return error
             # Results withdrawn meanwhile stay out of the note.
             pending = self._still_pending(bucket, pending)
             if not pending:

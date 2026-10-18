@@ -639,9 +639,11 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
     assert "background command finished" in notes[0]
 
 
+@pytest.mark.parametrize("failure_boundary", ["read", "append"])
 async def test_completion_fallback_retries_transient_persistence_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_boundary: str,
 ) -> None:
     run_manager = ChatRunManager()
     sessions = ChatSessionManager(tmp_path)
@@ -665,7 +667,19 @@ async def test_completion_fallback_retries_transient_persistence_failure(
             raise ChatSessionError("temporary append failure")
         original_add_note(session, content, **options)
 
-    monkeypatch.setattr(ChatSession, "add_note", add_note_with_transient_failure)
+    original_get = sessions.get_async
+
+    async def get_with_transient_failure(address: SessionAddress) -> ChatSession:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("temporary read failure")
+        return await original_get(address)
+
+    if failure_boundary == "read":
+        monkeypatch.setattr(sessions, "get_async", get_with_transient_failure)
+    else:
+        monkeypatch.setattr(ChatSession, "add_note", add_note_with_transient_failure)
     delays: list[float] = []
 
     async def record_wait(delay: float) -> None:
