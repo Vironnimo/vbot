@@ -179,9 +179,9 @@ async def test_async_resolution_runs_each_agent_kind_on_its_pool(
         threads["project"] = threading.current_thread().name
         return read_fresh(*args)
 
-    def recording_overrides(*args: Any) -> Any:
+    def recording_overrides(*args: Any, **kwargs: Any) -> Any:
         threads["overrides"] = threading.current_thread().name
-        return apply_overrides(*args)
+        return apply_overrides(*args, **kwargs)
 
     monkeypatch.setattr(agents, "get", recording_get)
     monkeypatch.setattr(resolver._team_resolution, "_read_agent_fresh", recording_read)
