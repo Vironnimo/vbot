@@ -1,3 +1,4 @@
+import { isTerminalRunEvent } from './api.js';
 // The App's live feed of Run server events (`run_started`, `run_output` and
 // the terminal lifecycle events) for its Chat owners. Each event takes the
 // next position; an owner keeps the newest position it applied and reads what
@@ -5,13 +6,6 @@
 // applied. Events stay plain objects: only the positions are reactive.
 
 export const MAX_RUN_EVENTS = 500;
-
-const TERMINAL_RUN_EVENT_TYPES = new Set([
-  'run_completed',
-  'run_cancelled',
-  'run_failed',
-  'run_interrupted',
-]);
 
 export function createRunEventFeed({ capacity = MAX_RUN_EVENTS } = {}) {
   // Position `p` lives in slot `p % capacity` until position `p + capacity`
@@ -62,7 +56,7 @@ export function createRunEventFeed({ capacity = MAX_RUN_EVENTS } = {}) {
       forgetEvicted(position - capacity);
       slots[position % capacity] = serverEvent;
       const runId = serverEvent?.payload?.run_id;
-      if (runId && TERMINAL_RUN_EVENT_TYPES.has(serverEvent.type)) {
+      if (runId && isTerminalRunEvent(serverEvent.type)) {
         terminalPositions.set(runId, position);
       }
       activeRuns = nextActiveRuns(activeRuns, serverEvent);
@@ -71,7 +65,7 @@ export function createRunEventFeed({ capacity = MAX_RUN_EVENTS } = {}) {
       }
       if (
         serverEvent?.type === 'run_started' ||
-        TERMINAL_RUN_EVENT_TYPES.has(serverEvent?.type)
+        isTerminalRunEvent(serverEvent?.type)
       ) {
         lifecycle += 1;
       }
@@ -109,7 +103,7 @@ function nextActiveRuns(activeRuns, serverEvent) {
   if (serverEvent.type === 'run_started' && !known) {
     return [...activeRuns, activeRunFromStartedEvent(payload)];
   }
-  if (TERMINAL_RUN_EVENT_TYPES.has(serverEvent.type) && known) {
+  if (isTerminalRunEvent(serverEvent.type) && known) {
     return activeRuns.filter((run) => run?.run_id !== runId);
   }
   return activeRuns;

@@ -13,7 +13,11 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
+vi.mock('$lib/api.js', () =>
+  rpcBackedApiMock(rpcMock, {
+    updateCronJob: (params) => rpcMock('cron.update', params),
+  }),
+);
 
 const { default: CalendarView } = await import('../CalendarView.svelte');
 
@@ -456,6 +460,68 @@ describe('CalendarView', () => {
         rrule: null,
       });
     });
+
+    it.each(['close', 'edit', 'delete'])(
+      'protects a pending job when the event detail tries to %s',
+      async (transition) => {
+        serveWindow(weeklyStandup(), [eventJob()]);
+        const backend = rpcMock.getMockImplementation();
+        let refuse = true;
+        rpcMock.mockImplementation((method, params) => {
+          if (method === 'cron.update') {
+            return refuse
+              ? Promise.reject(new Error('test-job-write-refused'))
+              : Promise.resolve({});
+          }
+          return backend(method, params);
+        });
+        mountedComponent = await mountCalendarView();
+        document.querySelector('.calendar-cell .calendar-entry').click();
+        flushSync();
+        await waitForCondition(() =>
+          Boolean(document.querySelector('.calendar-job-row')),
+        );
+        button(
+          t('common.edit'),
+          document.querySelector('.calendar-job-row'),
+        ).click();
+        flushSync();
+        typeInto('calendar-job-prompt', 'Pending event job');
+        const act = () => {
+          if (transition === 'close')
+            document.dispatchEvent(
+              new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+            );
+          else
+            button(
+              t(transition === 'edit' ? 'common.edit' : 'common.delete'),
+              document.querySelector('.modal-footer'),
+            ).click();
+          flushSync();
+        };
+        act();
+        await waitForCondition(() => rpcCalls('cron.update').length === 1);
+        await waitForCondition(() =>
+          document.body.textContent.includes('test-job-write-refused'),
+        );
+        expect(document.getElementById('calendar-job-prompt').value).toBe(
+          'Pending event job',
+        );
+        expect(document.querySelector('.calendar-detail')).not.toBeNull();
+        refuse = false;
+        act();
+        await waitForCondition(
+          () => document.querySelector('.calendar-detail') === null,
+        );
+        expect(rpcCalls('cron.update')).toHaveLength(2);
+        if (transition === 'edit')
+          expect(document.querySelector('.calendar-form')).not.toBeNull();
+        if (transition === 'delete')
+          expect(
+            document.querySelector('[role="dialog"]').textContent,
+          ).toContain(t('calendar.deleteTitle'));
+      },
+    );
 
     it('opens an entry in the detail modal and saves an edit in the server wall clock', async () => {
       serveWindow(

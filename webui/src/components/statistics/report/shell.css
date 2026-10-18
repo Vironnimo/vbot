@@ -1,0 +1,348 @@
+/* Statistics view (StatisticsView.svelte and components/statistics/). Tables
+   are the shared DataTable primitive and keep its styles; this sheet lays
+   out the shell, tiles, blocks, charts and disclosures around them. Limits
+   styles its own cards (ProviderLimits.svelte, limitHistory.css). */
+
+.stats-view {
+  /* Series colors: cost parts, token parts, Run outcomes and origins. */
+  --stats-reported: var(--blue);
+  --stats-estimated: color-mix(in srgb, var(--blue) 45%, var(--surface-3));
+  --stats-input: var(--blue);
+  --stats-output: var(--green);
+  --stats-failed: var(--red);
+  --stats-origin-user: var(--blue);
+  --stats-origin-subagent: color-mix(in srgb, var(--blue) 50%, var(--green));
+  --stats-origin-extension: var(--accent);
+  --stats-origin-automation: var(--amber);
+  --stats-origin-channel: var(--green);
+  --stats-origin-reflection: color-mix(in srgb, var(--blue) 55%, var(--red));
+  --stats-origin-system: var(--text-lo);
+  --stats-origin-background: var(--text-faint);
+
+  /* Layout steps follow the view's own width, not the window's: the
+     sidebar takes a varying share of the window. */
+  container: stats-view / inline-size;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+  color: var(--text-hi);
+}
+
+/* An overview page: header, toolbar and tab content share the wide content
+   measure, centered; the scroll container itself stays full width (scrollbar
+   at the edge) and reserves its gutter on both edges, so the content does not
+   move when a tab starts to scroll. */
+.stats-view > * {
+  width: 100%;
+  max-width: var(--content-max-wide);
+  margin-inline: auto;
+}
+
+.stats-view .stats-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.stats-view .stats-mono {
+  font-family: var(--font-mono);
+}
+
+.stats-view .stats-muted {
+  color: var(--text-lo);
+}
+
+.stats-view .stats-note {
+  margin: 0;
+  max-width: 85ch;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+/* ---- Toolbar: range, status, refresh ---------------------------------- */
+
+.stats-view .stats-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-md);
+}
+
+.stats-view .stats-toolbar__range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.stats-view .stats-toolbar__label {
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+
+.stats-view .stats-toolbar__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 1lh;
+}
+
+.stats-view .stats-toolbar__pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: stats-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes stats-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* A row of pressed-state buttons choosing one representation (range,
+   period, metric). Pressed buttons, not tabs, so it keeps its own markup but
+   wears the shared segmented treatment of `.tab-list--segmented`. */
+.stats-view .stats-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.stats-view .stats-toggle__option {
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-med);
+  font: inherit;
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.stats-view .stats-toggle__option:hover {
+  color: var(--text-hi);
+}
+
+.stats-view .stats-toggle__option--active,
+.stats-view .stats-toggle__option--active:hover {
+  background: var(--surface-3);
+  color: var(--text-hi);
+}
+
+.stats-view .stats-toggle__option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---- Panel layout ----------------------------------------------------- */
+
+.stats-view .stats-view__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  min-width: 0;
+}
+
+.stats-view .stats-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  min-width: 0;
+}
+
+.stats-view .stats-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+/* A short bar list beside two tables, which get the extra width. */
+.stats-view .stats-columns--three {
+  grid-template-columns: minmax(0, 4fr) minmax(0, 5fr) minmax(0, 5fr);
+}
+
+.stats-view .stats-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+  padding: var(--space-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.stats-view .stats-block__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-md);
+}
+
+/* A switch in a block head scrolls sideways when it is wider than the block. */
+.stats-view .stats-block__head > .tab-list {
+  flex-shrink: 1;
+  max-width: 100%;
+}
+
+.stats-view .stats-block__title {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: var(--fs-label-md);
+  font-weight: 600;
+}
+
+.stats-view .stats-block__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.stats-view .stats-block__link {
+  margin-right: calc(-1 * var(--space-sm));
+}
+
+.stats-view .stats-block__link svg {
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+.stats-view .stats-section-title {
+  margin: var(--space-sm) 0 0;
+  color: var(--text-hi);
+  font-size: var(--fs-heading-sm);
+  font-weight: 600;
+}
+
+.stats-view .stats-section-title:first-child {
+  margin-top: 0;
+}
+
+.stats-view .stats-subheading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin: var(--space-sm) 0 0;
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
+}
+
+/* ---- First-load placeholder ------------------------------------------ */
+
+.stats-view .stats-skeleton__bar,
+.stats-view .stats-skeleton__fill {
+  display: block;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  animation: stats-skeleton 1.4s ease-in-out infinite;
+}
+
+.stats-view .stats-skeleton__bar--label {
+  width: 55%;
+  height: 12px;
+}
+
+.stats-view .stats-skeleton__bar--value {
+  width: 70%;
+  height: 22px;
+}
+
+.stats-view .stats-skeleton__bar--detail {
+  width: 45%;
+  height: 10px;
+}
+
+.stats-view .stats-skeleton__bar--title {
+  width: 160px;
+  max-width: 50%;
+  height: 14px;
+}
+
+.stats-view .stats-skeleton__fill--chart {
+  height: 220px;
+}
+
+.stats-view .stats-skeleton__fill--table {
+  height: 260px;
+}
+
+.stats-view .stats-skeleton__fill--short {
+  height: 150px;
+}
+
+.stats-view .stats-skeleton__line {
+  height: 44px;
+  border-radius: var(--r-lg);
+}
+
+@keyframes stats-skeleton {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stats-view .stats-toolbar__pulse,
+  .stats-view .stats-skeleton__bar,
+  .stats-view .stats-skeleton__fill {
+    animation: none;
+  }
+
+  .stats-view .stats-toggle__option {
+    transition: none;
+  }
+}
+
+@container stats-view (max-width: 1080px) {
+  .stats-view .stats-columns--three {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stats-view .stats-columns--three > :first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@container stats-view (max-width: 700px) {
+  .stats-view .stats-columns,
+  .stats-view .stats-columns--three {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stats-view .stats-block {
+    padding: var(--space-md);
+  }
+
+  .stats-view .stats-toolbar__label {
+    display: none;
+  }
+
+  .stats-view .stats-toggle__option {
+    min-height: 36px;
+    padding-inline: 8px;
+  }
+}

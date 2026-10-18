@@ -32,18 +32,19 @@ export function statisticsReport(key) {
 }
 
 /**
- * Requests the report of `key` with `params`. Without `force`, a key that is
+ * Requests one report query. Without `force`, a key that is
  * already loading keeps its pending request; `force` starts a new request
  * that supersedes it. Resolves once the request settles.
  */
-export function requestStatisticsReport(key, params, { force = false } = {}) {
+export function requestStatisticsReport(query, { force = false } = {}) {
+  const key = query.key;
   const current = entries.get(key) ?? EMPTY_ENTRY;
   if (current.loading && !force) return Promise.resolve();
   nextToken += 1;
   const token = nextToken;
   latestRequest.set(key, token);
   entries.set(key, { report: current.report, error: null, loading: true });
-  return getStatisticsReport(params).then(
+  return getStatisticsReport(query.params()).then(
     (report) => {
       if (latestRequest.get(key) !== token) return;
       entries.set(key, { report, error: null, loading: false });

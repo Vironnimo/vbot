@@ -1,4 +1,8 @@
 import {
+  skillAutocompleteRows,
+  modelAutocompleteRows,
+} from './autocomplete.js';
+import {
   createMentionIndex,
   findOpenQuotedMention,
   formatMentionToken,
@@ -220,42 +224,15 @@ export function createComposerPicker(context) {
     return matchingSkillCount();
   };
 
-  const matchingSkillCount = () => {
-    if (!triggerContext) {
-      return 0;
-    }
+  const matchingSkillCount = () =>
+    triggerContext
+      ? skillAutocompleteRows(autocompleteItems, autocompleteQuery).length
+      : 0;
 
-    const normalizedQuery = autocompleteQuery.trim().toLowerCase();
-    const matchingItems = normalizedQuery
-      ? autocompleteItems.filter((item) =>
-          `${item.name} ${item.description ?? ''}`
-            .toLowerCase()
-            .includes(normalizedQuery),
-        )
-      : autocompleteItems;
-
-    // Mirror SkillAutocomplete's match set exactly (same predicate, no cap) so
-    // arrow-key navigation can reach every rendered entry — the popup shows all
-    // matches (scrollable), and the keyboard must not stop short of the list.
-    return matchingItems.length;
-  };
-
-  const matchingModelCount = () => {
-    if (!triggerContext || triggerContext.marker !== 'model') {
-      return 0;
-    }
-
-    const normalizedQuery = autocompleteQuery.trim().toLowerCase();
-    if (!normalizedQuery) {
-      return modelOptions.length;
-    }
-
-    return modelOptions.filter((option) =>
-      `${option.label} ${option.secondaryLabel ?? ''}`
-        .toLowerCase()
-        .includes(normalizedQuery),
-    ).length;
-  };
+  const matchingModelCount = () =>
+    triggerContext?.marker === 'model'
+      ? modelAutocompleteRows(modelOptions, autocompleteQuery).length
+      : 0;
 
   function triggerItemsForContext(context) {
     if (!context) {

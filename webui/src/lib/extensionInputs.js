@@ -1,3 +1,7 @@
+import {
+  dateTimePartsInZone as zoneParts,
+  timeZoneOffsetMilliseconds,
+} from './dateTimePrefs.svelte.js';
 import { t } from './i18n.js';
 
 // The `resource` of the change an Extension publishes whenever its pending
@@ -255,31 +259,8 @@ export function zonedDateTime(text, timeZone = 'UTC') {
   );
 }
 
-function zoneParts(instant, timeZone) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date(instant));
-  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
-}
-
 function zoneOffsetMinutes(instant, timeZone) {
-  const part = zoneParts(instant, timeZone);
-  const asUtc = Date.UTC(
-    Number(part.year),
-    Number(part.month) - 1,
-    Number(part.day),
-    Number(part.hour),
-    Number(part.minute),
-    Number(part.second),
-  );
-  return Math.round((asUtc - Math.floor(instant / 1000) * 1000) / 60_000);
+  return Math.round(timeZoneOffsetMilliseconds(instant, timeZone) / 60_000);
 }
 
 // An RFC 3339 instant as the wall time a `datetime-local` control shows in

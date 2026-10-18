@@ -1,0 +1,184 @@
+/* Canonical button primitives. The Button component (`components/ui/Button.svelte`)
+   is the only place that emits these class names; the historical aliases
+   (btn-new, btn-outline, modal-btn-*, send-btn, icon-btn, tl-btn, pane-action)
+   were collapsed into the four variants plus the `btn-icon` footprint modifier. */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  color: var(--on-accent);
+  background: var(--accent);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-sm);
+  font-weight: 600;
+  line-height: 1.3;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.btn-primary:hover {
+  border-color: color-mix(in srgb, var(--accent) 86%, white);
+  background: color-mix(in srgb, var(--accent) 86%, white);
+}
+
+.btn-primary:disabled:hover {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.btn-danger:focus-visible,
+.btn-tertiary:focus-visible,
+.toggle:focus-visible,
+.tl-toggle:focus-visible,
+.dropdown-trigger:focus-visible,
+.s-dropdown-trigger:focus-visible,
+.dropdown-option:focus-visible,
+.s-dropdown-opt:focus-visible,
+.toast-close:focus-visible,
+.modal-close:focus-visible,
+.reasoning-header:focus-visible,
+.tool-event-line:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.btn-secondary,
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 13px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  background: var(--surface-2);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  line-height: 1.3;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.btn-secondary:hover {
+  border-color: var(--text-faint);
+  color: var(--text-hi);
+  background: var(--surface-3);
+}
+
+.btn-danger:hover {
+  border-color: var(--red);
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+}
+
+.btn-tertiary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--text-med);
+  background: transparent;
+  font: 500 var(--fs-body-sm)/1.3 var(--font-ui);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.btn-tertiary:hover {
+  border-color: transparent;
+  color: var(--text-hi);
+  background: var(--surface-3);
+}
+
+/* Icon footprint: primary becomes the 32px send-style square, tertiary the
+   30px borderless square. */
+.btn-primary.btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.btn-tertiary.btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-color: transparent;
+}
+
+.btn-secondary.btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+/* Danger icon footprint: the 32px stop-style square (composer run cancel).
+   Unlike the text danger button (neutral at rest), the icon-only variant is
+   red at rest — with no label, color is the only carrier of the destructive
+   meaning. */
+.btn-danger.btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-color: color-mix(in srgb, var(--red) 22%, transparent);
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+}
+
+.btn-danger.btn-icon:hover {
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+/* Keep the icon variant red when disabled (cancel in flight) — the shared
+   danger disabled:hover reset below would flip it to the neutral ghost. */
+.btn-danger.btn-icon:disabled:hover {
+  border-color: color-mix(in srgb, var(--red) 22%, transparent);
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+}
+
+/* A live capture (recording) uses the running-state color, like the other
+   recording indicators. */
+.btn-icon.btn-icon--active {
+  border-color: color-mix(in srgb, var(--amber) 45%, transparent);
+  color: var(--amber);
+  background: var(--amber-dim);
+}
+
+.btn-secondary:disabled:hover {
+  border-color: var(--border-2);
+  color: var(--text-hi);
+  background: var(--surface-2);
+}
+
+.btn-danger:disabled:hover {
+  border-color: var(--border-2);
+  color: var(--text-hi);
+  background: var(--surface-2);
+}
+
+.btn-tertiary:disabled:hover {
+  border-color: transparent;
+  color: var(--text-med);
+  background: transparent;
+}

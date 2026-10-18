@@ -3,15 +3,8 @@
   import {
     contextCompactionState,
     isRunActive,
-    agentActivityStatus,
-    agentUnreadResults,
-    createChatController,
     createChatState,
     isSessionEmpty,
-    selectAgent,
-    sessionHasTerminalRun,
-    setAgents,
-    visibleTimelineItemsForRender,
   } from '../lib/chatState.js';
   import ProjectScanBanner from './chat/ProjectScanBanner.svelte';
   import { t } from '$lib/i18n.js';
@@ -26,18 +19,14 @@
   import ComposerSessionSettings from './chat/ComposerSessionSettings.svelte';
   import ComputerUseControl from './ComputerUseControl.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
-  import { agentActivityState } from './chat/agentActivityTooltip.js';
-  import {
-    backgroundTasks,
-    reflectionTaskRows,
-    runningSubAgentCommands,
-  } from '../lib/chatTimelinePresentation.js';
-  import { onMount, untrack } from 'svelte';
-  import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
+  import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
+  import { untrack } from 'svelte';
+  import { listConnections, listModels } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
   import { agentNeedsModel } from '$lib/onboarding.js';
-  import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
-  import { createChatRunStream } from '../lib/chatRunStream.js';
+  import { parseAgentAddress } from '$lib/agentAddress.js';
+  import { createChatViewActivity } from './chat/view/activity.svelte.js';
+  import { createChatViewLifecycle } from './chat/view/lifecycle.svelte.js';
   import { createChatViewTarget } from './chat/view/target.svelte.js';
   import { createChatViewNavigation } from './chat/view/navigation.svelte.js';
   import { createChatViewActions } from './chat/view/actions.svelte.js';
@@ -222,10 +211,10 @@
       return onProjectSelected;
     },
     get lastSharedSelectedAgentId() {
-      return lastSharedSelectedAgentId;
+      return lifecycle.lastSharedSelectedAgentId;
     },
     set lastSharedSelectedAgentId(value) {
-      lastSharedSelectedAgentId = value;
+      lifecycle.lastSharedSelectedAgentId = value;
     },
     get onSessionNavigation() {
       return onSessionNavigation;
@@ -310,7 +299,7 @@
       return sessionsRefreshToken;
     },
     get timelineItems() {
-      return activeTimelineItems;
+      return activity.timelineItems;
     },
     get sessionUsage() {
       return target.activeSessionState?.sessionUsage;
@@ -366,81 +355,6 @@
 
   let sessionFilters = $state(untrack(() => initialSessionFilters));
 
-  // The address + invalidation token the command/skill suggestions were last
-  // loaded for. `undefined` is distinct from every real key, so the first effect
-  // always loads; Agent changes and Extension lifecycle events both refresh it.
-  let lastCommandsAddress = undefined;
-
-  // The displayed Session's rendered rows, projected once per update and
-  // shared by the timeline, the Activity panel and Sub-Agent reconciliation.
-  let activeTimelineItems = $derived(
-    visibleTimelineItemsForRender(target.activeSessionState),
-  );
-  // The live state of the displayed Session's own background commands; a
-  // fork's History names its source's commands, which never run for it.
-  let displayedCommandStatuses = $derived(
-    chatState.commandStatuses[target.activeSessionState?.sessionId] ?? {},
-  );
-  // The background commands the displayed Session's Sub-Agents (at every
-  // depth) still run, by the id of its own Sub-Agent above them; each follows
-  // the live state of the Session that runs it.
-  let displayedSubAgentCommands = $derived(
-    runningSubAgentCommands(
-      target.activeSessionState?.subAgentBackgroundCommands,
-      chatState.commandStatuses,
-    ),
-  );
-  // The server covers all work, including directly opened Terminals and
-  // descendants absent from the loaded History. Local rows bridge the first
-  // read only; an accepted empty projection retires stale local work hints.
-  let backgroundWorkRunning = $derived.by(() => {
-    const work = target.activeSessionState?.workProjection;
-    if (work) return work.background_work_running || work.run_active;
-    return (
-      Object.keys(displayedSubAgentCommands).length > 0 ||
-      backgroundTasks(
-        activeTimelineItems,
-        chatState.subAgentStatuses,
-        target.activeSessionState?.backgroundCommandStatuses,
-        displayedCommandStatuses,
-      ).some((task) => task.dotStatus === 'running')
-    );
-  });
-  // Every Agent the picker offers: Identity Agents, then each Project Team.
-  let pickerAgentAddresses = $derived([
-    ...chatState.agents.map((agent) => agent.id),
-    ...target.projectGroups.flatMap((group) =>
-      group.members.map((member) =>
-        formatAgentAddress(member.agent_id, group.projectId),
-      ),
-    ),
-  ]);
-
-  let pickerAgentActivity = $derived.by(() => {
-    const displayedSessionKey = target.displayedSessionKey();
-    return Object.fromEntries(
-      pickerAgentAddresses.map((address) => {
-        const unreadResults = agentUnreadResults(
-          chatState,
-          address,
-          displayedSessionKey,
-        );
-        return [
-          address,
-          {
-            status: agentActivityStatus(
-              chatState,
-              address,
-              displayedSessionKey,
-            ),
-            unreadCount: unreadResults.count,
-            latestUnreadAt: unreadResults.latestAt,
-          },
-        ];
-      }),
-    );
-  });
-
   // A picker choice: an Identity Agent by its id, a Project Agent by its
   // `agent@project` address.
   function handleSelectPickerAgent(address) {
@@ -485,19 +399,6 @@
           subAgent: true,
         }),
     },
-  );
-
-  let sessionDrawerActivity = $derived.by(() =>
-    Object.values(chatState.sessions).map((sessionState) => ({
-      agent_address: sessionState.agentId,
-      session_id: sessionState.sessionId,
-      has_active_run: isRunActive(sessionState),
-      has_unread_completion: sessionState.hasUnreadCompletion === true,
-      latest_completion_run_id: sessionState.latestCompletionRunId || null,
-      unread_run_id: sessionState.unreadRunId || null,
-      unread_run_status: sessionState.unreadRunStatus || null,
-      unread_run_at: sessionState.unreadRunAt || null,
-    })),
   );
 
   let composerDisabled = $derived(
@@ -608,10 +509,6 @@
     isSessionEmpty(target.activeSessionState) &&
     getDraft(composerDraftKey).trim().length === 0 &&
     actions.transientCards.length === 0;
-  let lastSharedSelectedAgentId = '';
-  let lastSharedAgents = null;
-  let lastAgentsRefreshToken = null;
-
   // Chat stays mounted while another primary view is visible so Runs and
   // history can keep reconciling. Only the visible Chat surface may publish
   // navigation into App's shared selection; an async navigation that finishes
@@ -622,271 +519,77 @@
     }
   }
 
-  $effect(() => {
-    if (sharedAgents.length > 0 && sharedAgents !== lastSharedAgents) {
-      lastSharedAgents = sharedAgents;
-      setAgents(chatState, sharedAgents, { preserveSessionSelection });
-    }
-  });
-
-  let initialSharedAgentSyncDone = false;
-  $effect(() => {
-    if (!active) {
-      return;
-    }
-    const firstSync = !initialSharedAgentSyncDone;
-    initialSharedAgentSyncDone = true;
-    if (
-      sharedSelectedAgentId &&
-      sharedSelectedAgentId !== chatState.selectedAgentId &&
-      chatState.agents.some((agent) => agent.id === sharedSelectedAgentId)
-    ) {
-      lastSharedSelectedAgentId = sharedSelectedAgentId;
-      if (firstSync) {
-        // Mount-time prop reconciliation, not user navigation: sync silently.
-        // Routing this through handleSelectAgent would clear a just-restored
-        // override and report a session navigation during a history restore —
-        // the report then pushes a phantom entry over the restored one (the
-        // mount-path echo hole). The controller still loads the adopted
-        // Agent's current History when Chat was mounted hidden.
-        selectAgent(chatState, sharedSelectedAgentId);
-        void chatController.loadAdoptedSelectionHistory();
-        return;
-      }
-      // Following the shared selection corrects Chat's place; the choice was
-      // made (and recorded) where the Agent was selected.
-      navigation.handleSelectAgent(sharedSelectedAgentId, {
-        focusComposer: false,
-        step: false,
-      });
-    }
-  });
-
-  // An Identity Agent was renamed (from any window or the CLI): this area
-  // keeps showing the same Session, with its History, drafts and Session
-  // settings, under the new id. A History read in flight for the old id is
-  // superseded, so the shown Session is read again.
-  function renameAgent(oldAgentId, newAgentId) {
-    if (!oldAgentId || !newAgentId || oldAgentId === newAgentId) {
-      return;
-    }
-    chatController.renameAgent(oldAgentId, newAgentId);
-    navigation.renameAgent(oldAgentId, newAgentId);
-    sessionSettings.renameAgent(oldAgentId, newAgentId);
-    actions.renameAgent(oldAgentId, newAgentId);
-    if (lastSharedSelectedAgentId === oldAgentId) {
-      lastSharedSelectedAgentId = newAgentId;
-    }
-    const shown = target.activeSessionState;
-    if (shown?.agentId === newAgentId) {
-      void actions.loadHistoryForSession(newAgentId, shown.sessionId);
-    }
-  }
-
-  $effect(() => subscribeAgentRenames?.(renameAgent));
-
-  // The controller owns reconnect deduplication and reconciliation; the View
-  // only forwards the latest reactive input.
-  $effect(() => {
-    chatController.applyConnectionSnapshot(connectionSnapshot);
-  });
-
-  $effect(() => {
-    if (lastAgentsRefreshToken === null) {
-      lastAgentsRefreshToken = agentsRefreshToken;
-      return;
-    }
-    if (agentsRefreshToken !== lastAgentsRefreshToken) {
-      lastAgentsRefreshToken = agentsRefreshToken;
-      loadAgents({ preferredAgentId: sharedSelectedAgentId, silent: true });
-    }
-  });
-
-  // A shown Chat applies each Run event as it arrives. A hidden one wakes only
-  // for Run starts; the controller applies the rest when it is shown again.
-  $effect(() => {
-    if (!runEvents) {
-      return;
-    }
-    const deferred = !active;
-    void (deferred ? runEvents.runStarts : runEvents.end);
-    untrack(() => chatController.handleRunEvents({ deferred }));
-  });
-
-  $effect(() => {
-    const statuses = commandStatuses;
-    untrack(() => chatController.applyCommandStatuses(statuses));
-  });
-
-  $effect(() => {
-    const sessionState = active ? target.activeSessionState : null;
-    void runEvents?.lifecycle;
-    void commandStatuses;
-    void queueInvalidation;
-    void terminalsRefreshToken;
-    void connectionSnapshot;
-    void sessionsRefreshToken;
-    void sessionInvalidations;
-    untrack(() => chatController.syncSessionWork(sessionState));
-  });
-
-  // Durable completion activity for the displayed Agent addresses. A reconnect
-  // or a full Session refresh re-reads every address; an address joining the
-  // set is read once. Scoped Session invalidations are applied separately.
-  $effect(() => {
-    const addresses = pickerAgentAddresses;
-    const reconnectRevision = connectionSnapshot
-      ? `${connectionSnapshot.epoch ?? ''}:${connectionSnapshot.last_sequence ?? ''}`
-      : '';
-    const refreshKey = `${sessionsRefreshToken}:${reconnectRevision}`;
-    untrack(() => chatController.syncAgentActivity(addresses, refreshKey));
-  });
-
-  $effect(() => {
-    const entries = sessionInvalidations;
-    untrack(() => chatController.applySessionInvalidations(entries));
-  });
-
-  // A read acknowledgement tells every connected app, including the vBot tray,
-  // that the user has seen the result, so only a page the user is looking at
-  // (visible and focused) sends it. Attention is read live; regaining focus or
-  // visibility bumps the revision so the displayed Session is checked again.
-  let pageAttentionRevision = $state(0);
-  const pageAttended = () =>
-    document.visibilityState === 'visible' && document.hasFocus();
-
-  $effect(() => {
-    void pageAttentionRevision;
-    const sessionState = target.activeSessionState;
-    const unreadRunId = sessionState?.unreadRunId ?? '';
-    if (
-      !active ||
-      !unreadRunId ||
-      sessionState.markReadFailedRunId === unreadRunId ||
-      !target.isDisplayedSession(
-        sessionState.agentId,
-        sessionState.sessionId,
-      ) ||
-      !sessionHasTerminalRun(sessionState, unreadRunId) ||
-      !pageAttended()
-    ) {
-      return;
-    }
-    void chatController.markSessionCompletionRead(sessionState);
-  });
-
-  // Re-sync a held session's queue when another window mutates it. App forwards
-  // the generic `resource_changed(kind:"queue")` signal as a scope object (a
-  // fresh object per signal, so this re-fires even for a repeat scope). Only
-  // sessions we actually hold are synced — the queue RPC keys on the bare agent
-  // id, so match the scope's bare agent id + session id against each held
-  // session — and of those only where this Chat shows the Queue or still holds
-  // items; any other reads its Queue when opened. The viewed conversation is
-  // never switched.
-  $effect(() => {
-    chatController.applyQueueInvalidation(queueInvalidation);
-  });
-
-  onMount(() => {
-    loadAgents({ preferredAgentId: sharedSelectedAgentId });
-    const onPageAttentionChange = () => {
-      pageAttentionRevision += 1;
-    };
-    const onVisibilityChange = () => {
-      onPageAttentionChange();
-      if (document.visibilityState !== 'visible') {
-        return;
-      }
-      const sessionState = target.activeSessionState;
-      if (
-        !sessionState?.currentRun?.runId ||
-        sessionState.status !== 'running'
-      ) {
-        return;
-      }
-      if (sessionState.streamError) {
-        void chatController.reconcileRunSession(
-          sessionState,
-          sessionState.currentRun.runId,
-        );
-      }
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    window.addEventListener('focus', onPageAttentionChange);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      window.removeEventListener('focus', onPageAttentionChange);
-      chatController.destroy();
-    };
-  });
-
-  // Reload command/skill suggestions whenever the active address, the
-  // Project its Skills come from (the Session's, or the one a draft chose) or
-  // the live command catalog changes. The token does not disturb the draft or
-  // active selection. The mount's roster read decides the first address, so
-  // nothing loads before it ends.
-  $effect(() => {
-    if (chatState.loadingAgents) {
-      return;
-    }
-    const { agentAddress } = target.activeAddressing();
-    const scope = sessionSettings.readScope();
-    const commandsKey = `${commandsRefreshToken}:${agentAddress}:${JSON.stringify(scope)}`;
-    if (commandsKey === lastCommandsAddress) {
-      return;
-    }
-    lastCommandsAddress = commandsKey;
-    chatController.loadCommands(agentAddress, scope);
-  });
-
-  const loadAgents = (options = {}) => chatController.loadAgents(options);
-
-  const runStream = createChatRunStream({
-    childLimit: 100,
+  const activity = createChatViewActivity({
     chatState,
-    subscribeRunEvents,
-    refreshSessionQueue: (sessionState) =>
-      chatController.refreshSessionQueue(sessionState),
-    reconcileRunSession: (sessionState, expectedRunId) =>
-      chatController.reconcileRunSession(sessionState, expectedRunId),
-    isDisplayedSession: target.isDisplayedSession,
-    updateSubAgentRunStatuses: (updates, options) =>
-      chatController.applySubAgentStatusUpdates(updates, options),
-    // A finished review's row reports what it changed, displayed or not.
-    onReflectionFinished: (sourceState) =>
-      chatController.refreshReflections(sourceState),
+    target,
+    get active() {
+      return active;
+    },
+    get onNavigationIndicator() {
+      return onNavigationIndicator;
+    },
   });
-  const chatController = createChatController({
+  const lifecycle = createChatViewLifecycle({
     chatState,
-    preserveSessionSelection: untrack(() => preserveSessionSelection),
-    runStream,
-    runEvents: untrack(() => runEvents),
-    isDisplayedSession: target.isDisplayedSession,
-    shouldLoadCurrentHistory: () =>
-      !navigation.viewingSessionId && !target.projectAgentActive,
-    onAgentsChanged: (agents) => onAgentsChanged?.(agents),
-    onAgentSelected: reportAgentSelected,
-    onSessionCreated: (sessionState) => {
-      navigation.adoptCreatedSession(
-        sessionState.agentId,
-        sessionState.sessionId,
-      );
+    target,
+    navigation,
+    actions,
+    sessionSettings,
+    activity,
+    reportAgentSelected,
+    get active() {
+      return active;
+    },
+    get sharedAgents() {
+      return sharedAgents;
+    },
+    get sharedSelectedAgentId() {
+      return sharedSelectedAgentId;
+    },
+    get preserveSessionSelection() {
+      return preserveSessionSelection;
+    },
+    get subscribeAgentRenames() {
+      return subscribeAgentRenames;
+    },
+    get connectionSnapshot() {
+      return connectionSnapshot;
+    },
+    get agentsRefreshToken() {
+      return agentsRefreshToken;
+    },
+    get runEvents() {
+      return runEvents;
+    },
+    get commandStatuses() {
+      return commandStatuses;
+    },
+    get queueInvalidation() {
+      return queueInvalidation;
+    },
+    get terminalsRefreshToken() {
+      return terminalsRefreshToken;
+    },
+    get sessionsRefreshToken() {
+      return sessionsRefreshToken;
+    },
+    get sessionInvalidations() {
+      return sessionInvalidations;
+    },
+    get commandsRefreshToken() {
+      return commandsRefreshToken;
+    },
+    get onAgentsChanged() {
+      return onAgentsChanged;
+    },
+    onSessionCreated() {
       createdSessions += 1;
     },
-    onRestartQueueDiscarded: (count) => {
-      actions.showChatToast(
-        count === 1
-          ? t('queue.restartDiscardedOne')
-          : t('queue.restartDiscardedMany', { count }),
-      );
-    },
   });
-  // Before the snapshot/event effects run: a fresh owner adopts the current
-  // Run state instead of replaying the events already in App's feed.
-  untrack(() => chatController.startFromServerState(connectionSnapshot));
+  const chatController = lifecycle.controller;
 
   $effect(() => {
-    chatController.reconcileSubAgentRows(activeTimelineItems, {
+    chatController.reconcileSubAgentRows(activity.timelineItems, {
       projectId: target.displayedSessionProjectId(),
     });
   });
@@ -900,32 +603,6 @@
     };
     untrack(() => onDisplayedSession(selection));
   });
-
-  // Unread results across every Agent on the Agent bar and in its All agents
-  // list. While this Chat is shown, the displayed Session's result is being
-  // read and does not count, like on the Agent bar.
-  let unreadResultCount = $derived.by(() => {
-    const displayedSessionKey = active ? target.displayedSessionKey() : '';
-    return pickerAgentAddresses.reduce(
-      (count, address) =>
-        count +
-        agentUnreadResults(chatState, address, displayedSessionKey).count,
-      0,
-    );
-  });
-
-  $effect(() => {
-    const count = unreadResultCount;
-    const indicator =
-      count > 0
-        ? {
-            count,
-            tone: 'unread',
-            label: agentActivityState('unread', count),
-          }
-        : null;
-    untrack(() => onNavigationIndicator(indicator));
-  });
 </script>
 
 <section
@@ -938,7 +615,7 @@
     titleId={chatTitleId}
     agents={chatState.agents}
     projectGroups={target.projectGroups}
-    agentActivity={pickerAgentActivity}
+    agentActivity={activity.pickerAgentActivity}
     selectedAddress={target.activeAgentAddress}
     displayedAgentName={target.activeAgent?.__overrideAddress
       ? target.activeAgent.name
@@ -997,7 +674,7 @@
           reloadToken={`${sessionsRefreshToken}:${createdSessions}`}
           invalidations={sessionInvalidations}
           agents={target.sessionDrawerAgents}
-          liveActivity={sessionDrawerActivity}
+          liveActivity={activity.sessionDrawerActivity}
           initialFilters={sessionFilters}
           onFiltersChange={(next) => {
             sessionFilters = next;
@@ -1017,7 +694,7 @@
       >
         <div class="chat-view__timeline-shell">
           <ChatTimeline
-            timelineItems={activeTimelineItems}
+            timelineItems={activity.timelineItems}
             sessionKey={target.activeSessionState?.key ?? ''}
             currentRun={target.activeSessionState?.currentRun ?? null}
             agentName={target.activeAgent.name}
@@ -1037,7 +714,7 @@
             subAgentStatuses={chatState.subAgentStatuses}
             backgroundCommandStatuses={target.activeSessionState
               ?.backgroundCommandStatuses}
-            commandStatuses={displayedCommandStatuses}
+            commandStatuses={activity.commandStatuses}
             onLoadOlder={actions.loadOlderHistory}
             onLoadRunHistory={(gap) =>
               chatController.loadRunHistory(target.activeSessionState, gap)}
@@ -1209,7 +886,7 @@
                 sessionUsage={target.activeSessionState?.sessionUsage}
                 onSendMessage={composerSendMessage}
                 onCancelRun={actions.handleCancelRun}
-                {backgroundWorkRunning}
+                backgroundWorkRunning={activity.backgroundWorkRunning}
                 stoppingAll={target.activeSessionState?.stoppingAll ?? false}
                 onStopAll={actions.handleStopAll}
                 onTranscriptionError={actions.handleTranscriptionError}
@@ -1251,14 +928,14 @@
           onRunningCountChange={(count) => (activityRunningCount = count)}
           id={`${componentId}-info`}
           toggleId={`${componentId}-info-toggle`}
-          timelineItems={activeTimelineItems}
+          timelineItems={activity.timelineItems}
           subAgentStatuses={chatState.subAgentStatuses}
           subAgentWork={chatState.subAgentWork}
           onSubAgentWorkWanted={actions.handleSubAgentWorkWanted}
-          subAgentCommands={displayedSubAgentCommands}
+          subAgentCommands={activity.subAgentCommands}
           backgroundCommandStatuses={target.activeSessionState
             ?.backgroundCommandStatuses}
-          commandStatuses={displayedCommandStatuses}
+          commandStatuses={activity.commandStatuses}
           reflectionTasks={reflectionTaskRows(target.activeSessionState)}
           sessionStats={sessionInfo.stats}
           session={sessionInfo.summary}

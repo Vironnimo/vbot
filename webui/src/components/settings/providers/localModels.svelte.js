@@ -1,3 +1,5 @@
+import { onDestroy, untrack } from 'svelte';
+import { createDebouncedAutosave, useAutosaveContext } from '$lib/autosave.js';
 import { listModels, updateSettings } from '$lib/api.js';
 import { t } from '$lib/i18n.js';
 import { isChatModel } from '$lib/modelSelection.js';
@@ -13,12 +15,38 @@ export function createLocalProviderModels(context) {
   let localContextDrafts = $state({});
 
   let localContextBusy = $state(false);
+  let baselines = $state({});
+  const autosaveContext = useAutosaveContext();
+  const autosave = createDebouncedAutosave({
+    getSnapshot: () => ({ ...localContextDrafts }),
+    hasChanges,
+    save: saveLocalContextWindows,
+  });
+  const unregister = autosaveContext.register(autosave.participant);
+  $effect(() => {
+    if (localContextBusy || !hasChanges()) return;
+    autosave.scheduleRun();
+    return autosave.cancelPendingTimer;
+  });
+  onDestroy(() => {
+    unregister();
+    autosave.cancelPendingTimer();
+  });
 
   let localContextWindows = $derived(
     context.settings?.local_models?.context_windows ?? {},
   );
 
   let localModelsByProvider = $derived(groupLocalModelsByProvider(localModels));
+  $effect(() => {
+    void localContextWindows;
+    untrack(() => {
+      if (localContextBusy) return;
+      for (const [id, raw] of Object.entries(localContextDrafts)) {
+        if (normalized(raw) === baselines[id]) delete localContextDrafts[id];
+      }
+    });
+  });
 
   async function loadLocalModels() {
     try {
@@ -27,7 +55,7 @@ export function createLocalProviderModels(context) {
         (model) => model?.local === true && isChatModel(model),
       );
     } catch {
-      localModels = [];
+      // Keep the shown catalog and its mounted editors until a later refresh.
     }
   }
 
@@ -65,41 +93,69 @@ export function createLocalProviderModels(context) {
       : String(configured);
   }
 
-  async function saveLocalContextWindow(model, rawValue) {
-    const trimmed = String(rawValue ?? '').trim();
-    let value = null;
-    if (trimmed !== '') {
-      const parsed = Number(trimmed);
-      if (!Number.isInteger(parsed) || parsed <= 0) {
-        context.onToast({
-          title: t('settings.providers.localContext.invalidValue'),
-          variant: 'error',
-        });
-        return;
-      }
-      value = parsed;
-    }
+  function normalized(raw) {
+    const trimmed = String(raw ?? '').trim();
+    if (!trimmed) return null;
+    const parsed = Number(trimmed);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : trimmed;
+  }
 
-    localContextBusy = true;
-    localContextDrafts = { ...localContextDrafts, [model.id]: trimmed };
-    try {
-      await updateSettings({
-        local_models: { context_windows: { [model.id]: value } },
+  function setLocalContextDraft(model, value) {
+    if (!(model.id in localContextDrafts)) {
+      baselines[model.id] = localContextWindows[model.id] ?? null;
+    }
+    localContextDrafts[model.id] = value;
+  }
+
+  function hasChanges() {
+    return Object.entries(localContextDrafts).some(
+      ([id, raw]) => normalized(raw) !== baselines[id],
+    );
+  }
+
+  async function saveLocalContextWindows() {
+    const submitted = Object.fromEntries(
+      Object.entries(localContextDrafts).filter(
+        ([id, raw]) => normalized(raw) !== baselines[id],
+      ),
+    );
+    const values = Object.fromEntries(
+      Object.entries(submitted).map(([id, raw]) => [id, normalized(raw)]),
+    );
+    if (Object.values(values).some((value) => typeof value === 'string')) {
+      context.onToast({
+        title: t('settings.providers.localContext.invalidValue'),
+        variant: 'error',
       });
+      return false;
+    }
+    if (!Object.keys(values).length) return true;
+    localContextBusy = true;
+    try {
+      await updateSettings({ local_models: { context_windows: values } });
+      // Advance only the captured keys. Inputs remain editable while the write
+      // and catalog refresh run, and later keystrokes remain pending.
+      for (const [id, value] of Object.entries(values)) baselines[id] = value;
       context.onError('');
       await context.onRefreshProviderSettings();
       await loadLocalModels();
-      localContextDrafts = {};
+      for (const [id, raw] of Object.entries(submitted)) {
+        if (localContextDrafts[id] === raw) delete localContextDrafts[id];
+      }
+      return true;
     } catch (error) {
       context.onToast({
         title: error?.message || String(error),
         variant: 'error',
       });
+      return false;
     } finally {
       localContextBusy = false;
     }
   }
   return {
+    participant: autosave.participant,
+    setLocalContextDraft,
     get localContextBusy() {
       return localContextBusy;
     },
@@ -120,9 +176,6 @@ export function createLocalProviderModels(context) {
     },
     get localContextDraftValue() {
       return localContextDraftValue;
-    },
-    get saveLocalContextWindow() {
-      return saveLocalContextWindow;
     },
   };
 }

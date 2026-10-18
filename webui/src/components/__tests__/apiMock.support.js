@@ -1,3 +1,9 @@
+import { getAttachmentUrl } from '../../lib/api/media.js';
+import {
+  isTerminalRunEvent,
+  isRunServerEvent,
+  TERMINAL_RUN_EVENTS,
+} from '../../lib/api/events.js';
 import { accessLossFromClose } from '../../lib/api/accessLoss.js';
 
 export function rpcBackedApiMock(rpcMock, overrides = {}) {
@@ -10,6 +16,10 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
   });
 
   return {
+    getAttachmentUrl,
+    TERMINAL_RUN_EVENTS,
+    isTerminalRunEvent,
+    isRunServerEvent,
     openFilePreview: (source) => call('file.preview_open', { source }),
     getFilePreviewRevision: (token) => call('file.preview_revision', { token }),
     rpc: (...args) => rpcMock(...args),

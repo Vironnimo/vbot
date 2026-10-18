@@ -1,3 +1,4 @@
+import { useAutosaveContext } from '$lib/autosave.js';
 import { todayKey, eventById } from '$lib/calendarView.js';
 import {
   emptyEventForm,
@@ -22,6 +23,7 @@ const FORM_PROBLEMS = {
 // one occurrence and the delete confirmation. Editing a repeating event
 // changes the whole series or, by choice, only the shown occurrence.
 export function createCalendarEventEditor(context) {
+  const autosaveContext = useAutosaveContext();
   let formOpen = $state(false);
 
   let formMode = $state('create');
@@ -55,6 +57,10 @@ export function createCalendarEventEditor(context) {
   );
 
   function openCreate(dayKey = context.viewState.anchorKey) {
+    return autosaveContext.requestTransition(() => openCreateNow(dayKey));
+  }
+
+  function openCreateNow(dayKey) {
     formMode = 'create';
     formOccurrence = null;
     editScope = 'series';
@@ -64,11 +70,19 @@ export function createCalendarEventEditor(context) {
   }
 
   function openDetail(occurrence) {
+    return autosaveContext.requestTransition(() => openDetailNow(occurrence));
+  }
+
+  function openDetailNow(occurrence) {
     detailOccurrence = occurrence;
     detailOpen = true;
   }
 
   function openEdit(occurrence) {
+    return autosaveContext.requestTransition(() => openEditNow(occurrence));
+  }
+
+  function openEditNow(occurrence) {
     const event = eventById(context.viewState.events, occurrence.event_id);
     if (!event) {
       return;
@@ -180,6 +194,12 @@ export function createCalendarEventEditor(context) {
   }
 
   function requestDelete(occurrence) {
+    return autosaveContext.requestTransition(() =>
+      requestDeleteNow(occurrence),
+    );
+  }
+
+  function requestDeleteNow(occurrence) {
     detailOpen = false;
     deleteOccurrenceOnly = false;
     deleteTarget = occurrence;
@@ -206,7 +226,12 @@ export function createCalendarEventEditor(context) {
     }
   }
 
+  function closeDetail() {
+    return autosaveContext.requestTransition(() => (detailOpen = false));
+  }
+
   return {
+    closeDetail,
     get formOpen() {
       return formOpen;
     },
@@ -235,7 +260,8 @@ export function createCalendarEventEditor(context) {
       return detailOpen;
     },
     set detailOpen(value) {
-      detailOpen = value;
+      if (value) detailOpen = true;
+      else closeDetail();
     },
     get detailOccurrence() {
       return detailOccurrence;

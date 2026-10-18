@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
+import { isTerminalRunEvent } from '../../lib/api/events.js';
 
 vi.mock(
   'svelte',
@@ -11,6 +12,7 @@ vi.mock(
 const operation = vi.fn();
 const history = vi.fn();
 vi.mock('$lib/api.js', () => ({
+  isTerminalRunEvent,
   invokeExtensionPageOperation: (...args) => operation(...args),
   openExtensionPageRun: vi.fn(),
   cancelExtensionPageToolCall: vi.fn().mockResolvedValue({ ok: true }),

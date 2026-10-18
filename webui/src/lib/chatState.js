@@ -1,7 +1,8 @@
 // Public Chat state/controller surface. Internal files retain one controller
 // lifecycle and own Session, History, Run-event and streaming projections.
+// Compatibility export; protocol membership belongs to the API owner.
+export { TERMINAL_RUN_EVENTS } from './api.js';
 export {
-  TERMINAL_RUN_EVENTS,
   createChatState,
   setAgents,
   selectAgent,

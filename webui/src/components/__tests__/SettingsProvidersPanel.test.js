@@ -135,6 +135,130 @@ describe('SettingsProvidersPanel', () => {
     });
   });
 
+  it('tracks raw local Context input, waits for number completion, and preserves newer edits through failure and retry', async () => {
+    vi.useFakeTimers();
+    try {
+      const modelId = 'ollama/local';
+      const model = {
+        id: modelId,
+        model_id: 'local',
+        provider_id: 'ollama',
+        local: true,
+        capabilities: { tools: true },
+        context_window: 131072,
+      };
+      const settings = {
+        providers: {
+          items: [
+            {
+              id: 'ollama',
+              name: 'Ollama',
+              connections: [
+                {
+                  id: 'ollama:local',
+                  type: 'none',
+                  added: true,
+                  configured: true,
+                  enabled: true,
+                  accounts: [{ id: 'default', usable: true, source: 'none' }],
+                },
+              ],
+            },
+          ],
+        },
+        local_models: { context_windows: {} },
+      };
+      let releaseFirst;
+      const firstWrite = new Promise((resolve) => {
+        releaseFirst = resolve;
+      });
+      let serverWindows = {};
+      const writes = [];
+      const props = reactiveProps({
+        settings,
+        visible: true,
+        onRefreshProviderSettings: async () => {
+          props.settings = {
+            ...props.settings,
+            local_models: { context_windows: serverWindows },
+          };
+        },
+      });
+      rpcMock.mockImplementation(async (method, params) => {
+        if (method === 'model.list') return { models: [model] };
+        if (method === 'settings.update') {
+          writes.push(params);
+          if (writes.length === 1) await firstWrite;
+          if (writes.length === 2) throw new Error('test-write-refused');
+          serverWindows = {
+            ...serverWindows,
+            ...params.local_models.context_windows,
+          };
+          return {
+            ...settings,
+            local_models: { context_windows: serverWindows },
+          };
+        }
+        return {};
+      });
+      const coordinator = createAutosaveCoordinator();
+      mountedComponent = mount(AutosaveContextHost, {
+        target: document.body,
+        props: {
+          component: SettingsProvidersPanel,
+          componentProps: props,
+          coordinator,
+        },
+      });
+      const settle = async () => {
+        for (let index = 0; index < 30; index += 1) {
+          await Promise.resolve();
+          flushSync();
+        }
+      };
+      await settle();
+      const input = document.querySelector('.s-local-context-input');
+      input.focus();
+      const edit = (value) => {
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        flushSync();
+      };
+      edit('8192');
+      await vi.advanceTimersByTimeAsync(800);
+      edit('16384');
+      await vi.advanceTimersByTimeAsync(800);
+      expect(writes).toHaveLength(0);
+      expect(coordinator.hasPending()).toBe(true);
+      input.blur();
+      await settle();
+      expect(writes[0]).toEqual({
+        local_models: { context_windows: { [modelId]: 16384 } },
+      });
+      expect(input.disabled).toBe(false);
+      edit('32768');
+      const flushing = coordinator.flushPending();
+      releaseFirst();
+      expect(await flushing).toBe(false);
+      await settle();
+      expect(document.querySelector('.s-local-context-input')).toBe(input);
+      expect(input.value).toBe('32768');
+      expect(coordinator.hasPending()).toBe(true);
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(writes).toHaveLength(2);
+      document.querySelector('.save-status button').click();
+      await settle();
+      expect(writes).toHaveLength(3);
+      expect(writes[2]).toEqual({
+        local_models: { context_windows: { [modelId]: 32768 } },
+      });
+      expect(coordinator.hasPending()).toBe(false);
+      expect(input.value).toBe('32768');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reflects a provider change via a settings reload when modelsRefreshToken changes', async () => {
     const props = reactiveProps({
       settings: { providers: { items: [] } },

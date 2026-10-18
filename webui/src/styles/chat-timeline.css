@@ -1,2 +1,4 @@
 @import './chat-timeline/entries.css';
+@import './chat-timeline/tool-details.css';
+@import './chat-timeline/row-controls.css';
 @import './chat-timeline/attachments.css';

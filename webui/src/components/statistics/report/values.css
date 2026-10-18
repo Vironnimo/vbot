@@ -1,0 +1,333 @@
+/* ---- KPI tiles -------------------------------------------------------- */
+
+.stats-view .stats-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stats-view .stats-tiles--5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.stats-view .stats-tiles--6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.stats-view .stats-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.stats-view .stats-tile__label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+
+.stats-view .stats-tile__label > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-view .stats-tile__value-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.stats-view .stats-tile__value {
+  color: var(--text-hi);
+  font-size: var(--fs-heading-lg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.stats-view .stats-tile__warning {
+  display: inline-flex;
+  align-self: center;
+  color: var(--amber);
+  cursor: default;
+}
+
+.stats-view .stats-tile__warning svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.stats-view .stats-tile__detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.stats-view .stats-tile__detail {
+  min-width: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A value or detail with more behind it on hover or focus. */
+.stats-view .stats-tile__value--more,
+.stats-view .stats-tile__detail--more {
+  cursor: default;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--text-faint);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+}
+
+/* Change against the previous period: neutral unless judged. */
+.stats-view .stats-change {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.stats-view .stats-change > span[aria-hidden='true'] {
+  font-size: 0.75em;
+}
+
+.stats-view .stats-change--good {
+  color: var(--green);
+}
+
+.stats-view .stats-change--bad {
+  color: var(--red);
+}
+
+/* ---- Names and numbers ------------------------------------------------ */
+
+.stats-view .stats-number {
+  border-radius: var(--r-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+
+/* The Agent name shortens; its Project or Extension badge never does. */
+.stats-view .stats-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.stats-view .stats-agent__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-view .stats-agent__badge {
+  flex-shrink: 0;
+}
+
+/* A narrow table (Overview's top lists): the number columns keep their set
+   widths and the name column takes the rest, shortening long names. */
+.stats-view .stats-compact-table .data-table__table {
+  table-layout: fixed;
+}
+
+.stats-view .stats-compact-table .stats-id {
+  max-width: 100%;
+}
+
+/* A wide table (Diagnostics' data quality): column labels wrap where the
+   view is too narrow for them, so the numbers set the column widths and
+   the table fits a desktop-wide view. On a narrower view the table scrolls
+   sideways inside its block and its first column (the name) stays put. */
+.stats-view .stats-wide-table :is(th.data-table__cell, .data-table__sort) {
+  white-space: normal;
+}
+
+.stats-view .stats-wide-table .data-table__cell:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.stats-view .stats-wide-table th.data-table__cell:first-child {
+  z-index: 2;
+  background: var(--data-table-head-surface, var(--surface));
+}
+
+.stats-view
+  .stats-wide-table
+  .data-table__row:hover
+  > .data-table__cell:first-child {
+  background: var(--surface-2);
+}
+
+/* Where the column width is set (top lists, bar lists), a long badge
+   gives way faster than the name, so the name stays readable. */
+.stats-view :is(.stats-compact-table, .stats-bars__label) .stats-agent__badge {
+  display: inline-block;
+  flex-shrink: 3;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-view .stats-date {
+  white-space: nowrap;
+}
+
+.stats-view .stats-session,
+.stats-view .stats-name,
+.stats-view .stats-id,
+.stats-view .stats-model {
+  display: inline-block;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* A Run table has ten columns; its Run and Model names shorten sooner so
+   the whole table fits a desktop-wide view. */
+.stats-view .stats-run-table .stats-session {
+  max-width: 20ch;
+}
+
+.stats-view .stats-run-table .stats-model {
+  max-width: 16ch;
+}
+
+.stats-view .stats-model__more {
+  margin-left: 4px;
+  color: var(--text-lo);
+  font-family: var(--font-ui);
+}
+
+.stats-view .stats-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stats-view .stats-stack__secondary {
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+}
+
+/* A name with its count after it (a failed hour's Models and Agents). */
+.stats-view .stats-count-entry {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.stats-view .stats-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.stats-view .stats-skill-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stats-view .stats-skill-name .badge {
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+}
+
+.stats-view .stats-origin-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.stats-view .stats-swatch {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--text-faint);
+}
+
+.stats-view .stats-number:focus-visible,
+.stats-view .stats-tile__value--more:focus-visible,
+.stats-view .stats-tile__detail--more:focus-visible,
+.stats-view .stats-tile__warning:focus-visible,
+.stats-view .stats-change:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@container stats-view (max-width: 1080px) {
+  /* A wide table may scroll here: a line marks where its name column
+     covers the scrolled columns. */
+  .stats-view .stats-wide-table td.data-table__cell:first-child {
+    box-shadow: inset -1px 0 0 var(--border);
+  }
+
+  .stats-view .stats-wide-table th.data-table__cell:first-child {
+    box-shadow:
+      inset -1px 0 0 var(--border),
+      inset 0 -1px 0 var(--border);
+  }
+
+  .stats-view .stats-tiles--5,
+  .stats-view .stats-tiles--6 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container stats-view (max-width: 700px) {
+  .stats-view .stats-wide-table .stats-id {
+    max-width: 18ch;
+  }
+
+  .stats-view .stats-tiles,
+  .stats-view .stats-tiles--5,
+  .stats-view .stats-tiles--6 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stats-view .stats-tile {
+    padding: 12px;
+  }
+
+  .stats-view .stats-tile__value {
+    font-size: var(--fs-heading-md);
+  }
+}

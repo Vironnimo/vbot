@@ -72,11 +72,11 @@
   let rawKey = $derived(`${viewKey}:raw-call`);
 </script>
 
-{#snippet argsSection(raw)}
+{#snippet argsSection(mode)}
   <ToolDetailSection
     label={t('chat.toolArgs')}
     value={args}
-    {raw}
+    {mode}
     {toolName}
     {tool}
   />
@@ -98,7 +98,7 @@
       label={t('chat.toolResultLabel')}
       value={result}
       isError={resultFailed}
-      preferPayload
+      mode="result"
       {toolName}
       {tool}
     />
@@ -117,7 +117,7 @@
             <ToolDetailSection
               label={TEXT_LABELS[block.label]()}
               value={block.text}
-              literal
+              mode="literal"
             />
           {/if}
         {:else if block.type === 'file_changes'}
@@ -145,17 +145,17 @@
           </summary>
           {#if viewState.isOpen(rawKey)}
             <div class="tool-raw-call__body">
-              {@render argsSection(true)}
+              {@render argsSection('raw')}
               {@render resultSection()}
             </div>
           {/if}
         </details>
       {:else}
-        {@render argsSection(true)}
+        {@render argsSection('raw')}
         {@render resultSection()}
       {/if}
     {:else}
-      {@render argsSection(false)}
+      {@render argsSection('arguments')}
       {@render outputSections()}
       {@render resultSection()}
     {/if}

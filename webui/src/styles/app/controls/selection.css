@@ -1,0 +1,197 @@
+/* Switches: an off track that recedes into the surface and an accent track
+   with a light knob when on, so the state reads at a glance without a light
+   blob per row. Switches set one immediate on/off setting; selecting items
+   from a list uses the Checkbox primitive instead. */
+.toggle,
+.tl-toggle {
+  position: relative;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--border-2);
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.toggle {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+}
+
+.tl-toggle {
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+}
+
+.toggle:hover:not(:disabled),
+.tl-toggle:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px var(--text-faint);
+}
+
+.toggle.on,
+.tl-toggle.on,
+.toggle[aria-checked='true'],
+.tl-toggle[aria-checked='true'] {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.toggle.on:hover:not(:disabled),
+.tl-toggle.on:hover:not(:disabled),
+.toggle[aria-checked='true']:hover:not(:disabled),
+.tl-toggle[aria-checked='true']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, white);
+  box-shadow: none;
+}
+
+.toggle:disabled,
+.tl-toggle:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.t-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-lo);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition:
+    transform 160ms ease,
+    background 160ms ease;
+}
+
+.tl-toggle .t-knob {
+  width: 12px;
+  height: 12px;
+}
+
+.toggle.on .t-knob,
+.tl-toggle.on .t-knob,
+.toggle[aria-checked='true'] .t-knob,
+.tl-toggle[aria-checked='true'] .t-knob {
+  background: var(--text-hi);
+}
+
+.toggle.on .t-knob,
+.toggle[aria-checked='true'] .t-knob {
+  transform: translateX(16px);
+}
+
+.tl-toggle.on .t-knob,
+.tl-toggle[aria-checked='true'] .t-knob {
+  transform: translateX(12px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toggle,
+  .tl-toggle,
+  .t-knob {
+    transition: none;
+  }
+}
+
+/* Checkbox primitive (`components/ui/Checkbox.svelte`): a 16px box that
+   takes the accent fill when checked or mixed. Used where the user selects
+   members of a list; a labelled checkbox makes its whole row the target. */
+.checkbox {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.checkbox--labelled {
+  display: flex;
+  width: 100%;
+}
+
+.checkbox__box {
+  display: grid;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 1.5px solid color-mix(in srgb, var(--text-lo) 70%, transparent);
+  border-radius: 4px;
+  background: var(--field-surface);
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.checkbox__box svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: var(--on-accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
+}
+
+.checkbox[aria-checked='true'] .checkbox__box,
+.checkbox[aria-checked='mixed'] .checkbox__box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.checkbox:hover:not(:disabled)[aria-checked='false'] .checkbox__box {
+  border-color: var(--text-med);
+}
+
+.checkbox:hover:not(:disabled)[aria-checked='true'] .checkbox__box,
+.checkbox:hover:not(:disabled)[aria-checked='mixed'] .checkbox__box {
+  border-color: color-mix(in srgb, var(--accent) 88%, white);
+  background: color-mix(in srgb, var(--accent) 88%, white);
+}
+
+.checkbox:focus-visible {
+  outline: none;
+}
+
+.checkbox:not(.checkbox--labelled):focus-visible .checkbox__box {
+  box-shadow: var(--focus-ring);
+}
+
+.checkbox--labelled:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.checkbox:disabled {
+  cursor: default;
+}
+
+.checkbox:disabled .checkbox__box {
+  opacity: 0.45;
+}
+
+.checkbox__label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .checkbox__box {
+    transition: none;
+  }
+}
