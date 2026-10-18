@@ -77,7 +77,7 @@ def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     async def _record(attempt: int) -> None:
         attempts.append(attempt)
 
-    monkeypatch.setattr(sys.modules[_EXTENSION_MODULE], "_sleep_for_retry", _record)
+    monkeypatch.setattr(sys.modules[f"{_EXTENSION_MODULE}._http"], "sleep_for_retry", _record)
     return attempts
 
 
