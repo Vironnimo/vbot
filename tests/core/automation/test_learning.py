@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-import core.memory.memory as memory_module
+import core.memory._file_backend as memory_module
 import core.skills._revert as skill_revert_module
 from core.automation import (
     LearningChanges,
