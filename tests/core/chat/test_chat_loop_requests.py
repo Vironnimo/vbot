@@ -681,8 +681,7 @@ async def test_background_completion_joins_next_request_in_same_run(tmp_path: Pa
     def start_work(context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
         deliveries.append(
             trigger_service.submit_completion(
-                "coder",
-                "session-one",
+                SESSION,
                 notice_id="bash:completed",
                 origin_run_id=context.run_id,
                 body="### Bash process — completed\nBuild finished successfully.",

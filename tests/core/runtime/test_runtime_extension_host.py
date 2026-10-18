@@ -336,9 +336,7 @@ async def test_owner_groups_run_observably_and_reject_completions_after_close(
         with pytest.raises(RunAdmissionBlockedError):
             validate(binding.address, owner)
         late = service.submit_completion(
-            binding.address.agent_id,
-            binding.address.session_id,
-            project_id=binding.address.project_id,
+            binding.address,
             notice_id="late",
             origin_run_id="origin",
             body="late owned result",
