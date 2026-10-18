@@ -35,6 +35,8 @@ files, and shutdown cancels playback and joins file cleanup through `aclose`.
 
 `SpeechSynthesisResult` contains raw audio bytes, media type, response format, and optional generation id.
 
+Artifact writes use the shared bounded `task-artifacts` pool; admitted writes settle before cancellation.
+
 Speech execution writes durable Model Usage through the Runtime-injected recorder before returning or writing an artifact. Provider requests record each actual POST attempt; local calls record their execution boundary. Existing STT telemetry is retained, while absent counters (including ordinary binary TTS responses) remain unknown rather than measured zero. TTS Tool calls pass internal `TaskUsageContext` for the initiating Run and Extension scope; standalone upload/preview calls have no invented Session. Artifact deletion or write failure does not erase consumption. Coverage: `tests/core/model_tasks/test_task_usage.py`, `tests/core/tools/test_speech_tool.py`.
 
 `SpeechArtifact.to_dict()` returns:

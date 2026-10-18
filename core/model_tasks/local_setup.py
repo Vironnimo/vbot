@@ -48,8 +48,10 @@ from core.model_tasks.model_files import (
 )
 from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool, cancel_and_wait, settle_before_cancelling
 
 _LOGGER = get_logger("local_engines.setup")
+_SETUP_WORKERS = BoundedWorkerPool(name="local-setup", max_workers=2)
 # The optional extra that brings uv to a development checkout's server interpreter.
 UV_BOOTSTRAP_EXTRA = "local-tts"
 # Longest one package-manager or verification command may run. Model
@@ -215,7 +217,7 @@ class LocalSetup:
             return False
         if self.directory.exists():
             # A Torch environment holds tens of thousands of files.
-            await _remove_off_loop(partial(shutil.rmtree, self.directory))
+            await _SETUP_WORKERS.run(partial(shutil.rmtree, self.directory))
         return True
 
     def install(self) -> dict[str, Any]:
@@ -237,7 +239,7 @@ class LocalSetup:
         if self._state == "installing" and task is not None and not task.done():
             self._cancelled = True
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            await cancel_and_wait(task)
             # A task cancelled before it started never ran its handler.
             if self._state == "installing":
                 self._stopped()
@@ -311,7 +313,7 @@ class LocalSetup:
 
         cancelled = threading.Event()
         work = asyncio.create_task(
-            asyncio.to_thread(
+            _SETUP_WORKERS.run(
                 fetch_model_files,
                 model,
                 directory,
@@ -325,7 +327,7 @@ class LocalSetup:
         except asyncio.CancelledError:
             # The thread stops within one chunk; its files stay for a retry.
             cancelled.set()
-            await asyncio.wait([work])
+            await settle_before_cancelling(_settle_download(work))
             raise
         except ModelFilesCancelledError:
             self._fail("interrupted")
@@ -350,7 +352,7 @@ class LocalSetup:
                 if entry.is_dir() and entry != current:
                     shutil.rmtree(entry, ignore_errors=True)
 
-        await _remove_off_loop(remove_superseded)
+        await _SETUP_WORKERS.run(remove_superseded)
         receipt = {"repo": self.model.repo, "revision": self.model.revision}
         self._write_marker(current / "verified.json", json.dumps(receipt) + "\n")
 
@@ -555,23 +557,13 @@ class LocalSetup:
     async def aclose(self) -> None:
         self.close()
         if self._task is not None:
-            await asyncio.gather(self._task, return_exceptions=True)
+            await cancel_and_wait(self._task)
 
 
-async def _remove_off_loop(remove: Callable[[], None]) -> None:
-    """Run the blocking removal *remove* in a thread and let it finish.
-
-    Removing an environment or a model revision can take seconds, which must
-    not stall the Event Loop. A cancelled caller still waits for the removal to
-    end before it sees the cancellation, so no later installation starts in a
-    half-removed tree.
-    """
-    removal = asyncio.ensure_future(asyncio.to_thread(remove))
-    try:
-        await asyncio.shield(removal)
-    except asyncio.CancelledError:
-        await asyncio.wait([removal])
-        raise
+async def _settle_download(work: asyncio.Task[None]) -> None:
+    """Join a cooperatively stopped download; cancellation is its expected result."""
+    with suppress(ModelFilesCancelledError):
+        await work
 
 
 def environment_error(directory: Path, python: Path, python_version: str) -> str:

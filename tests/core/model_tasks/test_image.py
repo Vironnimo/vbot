@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import io
 import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -24,12 +26,14 @@ from core.model_tasks import (
     ImageTooLargeError,
     ImageUnsupportedTargetError,
 )
+from core.model_tasks import artifacts as artifact_module
 from core.model_tasks import image as image_module
 from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.model_tasks.image_profile import ImageWire, build_image_profile
 from core.model_tasks.image_types import ImageGenerationResult
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.utils import ids
+from core.utils.workers import BoundedWorkerPool
 from tests.core.model_tasks.image_test_support import (
     _MissingModelTasks,
 )
@@ -173,6 +177,60 @@ async def test_failed_save_names_the_images_already_saved(
     assert caught.value.reason == "the disk is full"
     assert caught.value.saved == (tmp_path / writes[0].name,)
     assert (tmp_path / writes[0].name).read_bytes() == b"one"
+
+
+@pytest.mark.asyncio
+async def test_artifact_batch_settles_on_cancel_and_waiting_preflight_is_not_billed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = ImageService(_MissingModelTasks(), cast(Any, object()))
+    pool = BoundedWorkerPool(name="test-artifacts", max_workers=1)
+    monkeypatch.setattr(artifact_module, "_PERSISTENCE_WORKERS", pool)
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    writes: list[bytes] = []
+    calls: list[str] = []
+    real_write = image_module.write_id_file
+
+    async def generate(prompt: str, **_kwargs: Any) -> ImageGenerationResult:
+        calls.append(prompt)
+        return ImageGenerationResult(images=(b"one", b"two"), media_type="image/png", model="m")
+
+    def write(directory: Path, prefix: str, suffix: str, payload: bytes) -> Path:
+        assert threading.current_thread() is not threading.main_thread()
+        if not writes:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(2)
+        writes.append(payload)
+        return real_write(directory, prefix, suffix, payload)
+
+    monkeypatch.setattr(service, "generate", generate)
+    monkeypatch.setattr(image_module, "write_id_file", write)
+    active = asyncio.create_task(service.generate_artifacts("active", output_dir=tmp_path))
+    waiting = None
+    try:
+        await entered.wait()
+        waiting = asyncio.create_task(service.generate_artifacts("waiting", output_dir=tmp_path))
+        await asyncio.sleep(0)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        active.cancel()
+        await asyncio.sleep(0)
+        active.cancel()
+        await asyncio.sleep(0)
+        assert not active.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await active
+        assert writes == [b"one", b"two"]
+        assert calls == ["active"]
+        assert len(list(tmp_path.glob("img_*.png"))) == 2
+    finally:
+        release.set()
+        await asyncio.gather(active, *([waiting] if waiting else []), return_exceptions=True)
+        pool.shutdown()
 
 
 @pytest.mark.asyncio

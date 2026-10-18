@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.model_tasks.artifacts import StoredArtifact, TaskArtifactStore
+from core.model_tasks.artifacts import StoredArtifact, TaskArtifactStore, persist_artifacts
 from core.model_tasks.constants import (
     DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS,
     TASK_SPEECH_TO_TEXT,
@@ -419,13 +419,11 @@ class SpeechService:
         result = await self.synthesize(
             text, progress=progress, usage_context=usage_context, on_audio=on_audio
         )
-        stored = await settle_before_cancelling(
-            asyncio.to_thread(
-                self._artifacts.write,
-                result.audio,
-                extension=_extension_for_audio(result.media_type, result.format),
-                media_type=result.media_type,
-            )
+        stored = await persist_artifacts(
+            self._artifacts.write,
+            result.audio,
+            extension=_extension_for_audio(result.media_type, result.format),
+            media_type=result.media_type,
         )
         return _speech_artifact(stored)
 

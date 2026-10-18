@@ -81,6 +81,71 @@ async def test_installations_share_a_queue_and_stop_on_cancel_or_close(tmp_path,
     await executor.aclose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["environment", "download", "publication"])
+async def test_cancelled_installation_keeps_its_queue_until_worker_settles(
+    tmp_path, monkeypatch, phase
+):
+    executor = LocalSpeechExecutor(engines_dir=tmp_path / "engines")
+    first, second = (
+        executor.setup_for(target) for target in ("local/qwen3-tts-1.7b", "local/chatterbox")
+    )
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    signalled = threading.Event()
+    next_install = AsyncMock()
+    monkeypatch.setattr(second, "_run_install", next_install)
+    assert first.model_directory is not None
+    first.model_directory.mkdir(parents=True)
+    (first.model_directory.parent / "old").mkdir()
+
+    def block(*args, **kwargs):
+        loop.call_soon_threadsafe(entered.set)
+        if phase == "download":
+            # Cancellation must reach the cooperative downloader before it settles.
+            assert kwargs["cancelled"].wait(2)
+            signalled.set()
+        assert release.wait(2)
+
+    if phase == "download":
+        monkeypatch.setattr(local_setup, "fetch_model_files", block)
+        operation = first._fetch_model
+    else:
+        monkeypatch.setattr(local_setup.shutil, "rmtree", block)
+        operation = first._publish_model
+        if phase == "environment":
+            assert first.directory is not None
+            first.directory.mkdir(parents=True)
+            operation = first._environment_needed
+
+    monkeypatch.setattr(first, "_perform", operation)
+    cancelling = None
+    try:
+        first.install()
+        await entered.wait()
+        second.install()
+        cancelling = asyncio.create_task(first.cancel())
+        await asyncio.sleep(0)
+        first.close()  # a second owner cancellation while the same worker is admitted
+        await asyncio.sleep(0)
+        assert not cancelling.done()
+        assert second.status()["phase"] == "queued"
+        next_install.assert_not_called()
+        release.set()
+        await cancelling
+        await second._task
+        next_install.assert_awaited_once()
+        assert not (first.model_directory / "verified.json").exists()
+        if phase == "download":
+            assert signalled.is_set()
+    finally:
+        release.set()
+        if cancelling is not None:
+            await cancelling
+        await executor.aclose()
+
+
 class _Fetch:
     """Fake model download: reports half the bytes, then all, or fails with *error*."""
 

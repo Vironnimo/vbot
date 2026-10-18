@@ -12,6 +12,7 @@ as :class:`OutputWriteError`.
 from __future__ import annotations
 
 import errno
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,17 @@ from core.utils.atomic import atomic_write_text, write_new_bytes
 from core.utils.errors import TaskError
 from core.utils.file_status import is_file_strict
 from core.utils.ids import is_safe_id, new_id, write_id_file
+from core.utils.workers import BoundedWorkerPool
+
+_PERSISTENCE_WORKERS = BoundedWorkerPool(name="task-artifacts", max_workers=2)
+
+
+async def persist_artifacts[Result](
+    operation: Callable[..., Result], *args: Any, **kwargs: Any
+) -> Result:
+    """Run one complete persistence operation; admitted writes settle on cancellation."""
+    return await _PERSISTENCE_WORKERS.run(operation, *args, **kwargs)
+
 
 TASK_ARTIFACT_FORMAT_VERSION = 1
 TASK_ARTIFACT_SHAPE = json_document({"id", "filename", "media_type", "size_bytes"})

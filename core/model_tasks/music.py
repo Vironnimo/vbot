@@ -11,6 +11,7 @@ from typing import Any
 from core.model_tasks.artifacts import (
     GeneratedMediaArtifact,
     ensure_output_dir,
+    persist_artifacts,
     write_generated_media_artifact,
 )
 from core.model_tasks.constants import TASK_MUSIC_GENERATION
@@ -171,9 +172,9 @@ class MusicService:
         The artifact carries the text the Model returned beside the audio.
         """
 
-        directory = ensure_output_dir(output_dir)
+        directory = await persist_artifacts(ensure_output_dir, output_dir)
         result = await self.generate(prompt, source_paths=source_paths, usage_context=usage_context)
-        artifact = await asyncio.to_thread(
+        artifact = await persist_artifacts(
             write_generated_media_artifact,
             result.data,
             output_dir=directory,

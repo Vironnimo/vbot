@@ -12,6 +12,7 @@ from typing import Any
 from core.model_tasks.artifacts import (
     GeneratedMediaArtifact,
     ensure_output_dir,
+    persist_artifacts,
     write_generated_media_artifact,
 )
 from core.model_tasks.constants import TASK_VIDEO_GENERATION
@@ -281,14 +282,14 @@ class VideoService:
         raises :class:`OutputDirectoryError` without paying for a video.
         """
 
-        directory = ensure_output_dir(output_dir)
+        directory = await persist_artifacts(ensure_output_dir, output_dir)
         result = await self.generate(
             prompt,
             call_options=call_options,
             frame_paths=frame_paths,
             usage_context=usage_context,
         )
-        return await asyncio.to_thread(
+        return await persist_artifacts(
             write_generated_media_artifact,
             result.data,
             output_dir=directory,
