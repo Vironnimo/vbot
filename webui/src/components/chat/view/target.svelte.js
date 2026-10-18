@@ -743,6 +743,28 @@ export function createChatViewTarget(context) {
       if (isCurrent()) loadingProjectTeam = false;
     }
   };
+
+  // The Agent and Project New Session continues in, or null for the plain
+  // New Session: a draft, an unknown Project, or a displayed Agent the area
+  // cannot start (a stand-in).
+  const projectNewSessionTarget = (view) => {
+    if (view?.kind !== 'session' || view.project.known !== true) {
+      return null;
+    }
+    const agentAddress = activeAgentAddress;
+    const { agentId, projectId: teamProjectId } =
+      parseAgentAddress(agentAddress);
+    const projectId = context.projects.some(
+      (project) => project.project_id === view.project.value,
+    )
+      ? view.project.value
+      : null;
+    const startable = teamProjectId
+      ? teamProjectId === projectId
+      : context.chatState.agents.some((agent) => agent.id === agentId);
+    return startable ? { agentAddress, projectId } : null;
+  };
+
   return {
     get projectTeam() {
       return projectTeam;
@@ -807,6 +829,7 @@ export function createChatViewTarget(context) {
     get displayedProjectAgentId() {
       return displayedProjectAgentId;
     },
+    projectNewSessionTarget,
     activeOwnAgentAddress,
     activeAddressing,
     activeDraft,

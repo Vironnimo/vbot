@@ -4,17 +4,14 @@ from __future__ import annotations
 
 import builtins
 import json
-import threading
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from weakref import WeakValueDictionary
 
 from core.runs import RunKind
 from core.sessions._archive_types import ArchiveEntryRef
-from core.sessions._io import _SessionWriteLock
+from core.sessions._io import _SessionWriteLock, _SessionWriteLocks
 from core.sessions._lifecycle import SessionLifecycle
-from core.sessions._lifecycle import _validate_creatable_address as validate_creatable_address
 from core.sessions._metadata import (
     _validate_session_id,
 )
@@ -73,10 +70,7 @@ class ChatSessionManager:
         self._owns_store = store is None
         self._archive_ledger = SessionArchiveLedger(self._store)
         self._completion_read_callbacks: list[Callable[[SessionAddress, str], None]] = []
-        self._write_locks: WeakValueDictionary[SessionAddress, _SessionWriteLock] = (
-            WeakValueDictionary()
-        )
-        self._write_locks_guard = threading.Lock()
+        self._write_locks = _SessionWriteLocks()
         self._runs = SessionRunPersistence(
             self._store,
             lambda address, run_id: self._lifecycle._notify_callbacks(
@@ -88,8 +82,7 @@ class ChatSessionManager:
         )
 
     def close(self) -> None:
-        with self._write_locks_guard:
-            self._write_locks.clear()
+        self._write_locks.clear()
         if self._owns_store:
             self._store.close()
 
@@ -164,13 +157,7 @@ class ChatSessionManager:
         self._lifecycle.agent_default_project = provider
 
     def write_lock(self, address: SessionAddress) -> _SessionWriteLock:
-        _validate_session_id(address.session_id)
-        with self._write_locks_guard:
-            lock = self._write_locks.get(address)
-            if lock is None:
-                lock = _SessionWriteLock()
-                self._write_locks[address] = lock
-            return lock
+        return self._write_locks.get(address)
 
     def create(
         self,
@@ -286,9 +273,7 @@ class ChatSessionManager:
 
     def get(self, address: SessionAddress) -> ChatSession:
         """Resolve a live Session and capture its generation for later Run admission."""
-        _validate_session_id(address.session_id)
-        generation_id = self._store.require_live(address)
-        return ChatSession(self._store, address, generation_id=generation_id)
+        return self._lifecycle.get(address)
 
     async def get_async(self, address: SessionAddress) -> ChatSession:
         return await self._store.run_async(self.get, address)
@@ -298,11 +283,7 @@ class ChatSessionManager:
 
         A created Session of an Identity Agent works in the Agent's default Project.
         """
-        validate_creatable_address(address)
-        self._store.ensure_live(
-            address, lambda: self._lifecycle._new_working_project(address, AGENT_DEFAULT_PROJECT)
-        )
-        return ChatSession(self._store, address)
+        return self._lifecycle.get_or_create(address)
 
     def get_metadata(self, address: SessionAddress) -> JsonObject:
         return self._store.metadata(address)
@@ -319,16 +300,7 @@ class ChatSessionManager:
         The mutation may run twice, so it must be deterministic and side-effect free.
         A created Session of an Identity Agent works in the Agent's default Project.
         """
-        if create_missing:
-            validate_creatable_address(address)
-        return self._store.ensure_metadata(
-            address,
-            mutation,
-            create_missing=create_missing,
-            new_working_project=lambda: self._lifecycle._new_working_project(
-                address, AGENT_DEFAULT_PROJECT
-            ),
-        )
+        return self._lifecycle.ensure_metadata(address, mutation, create_missing=create_missing)
 
     async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
         return await self._store.run_async(self.get_metadata, address)
