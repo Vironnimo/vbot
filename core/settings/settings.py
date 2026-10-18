@@ -2,33 +2,65 @@
 
 from __future__ import annotations
 
-import math
-import re
 from collections.abc import Mapping
-from typing import Any, cast
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
-
-from tzlocal import get_localzone_name
+from typing import Any
 
 from core.fetch_config import parse_web_fetch_settings
-from core.model_tasks.constants import (
-    SUPPORTED_TASK_TYPES,
-    SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
-    SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES,
-    SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES,
-    TASK_TEXT_EMBEDDING,
-    TRANSCRIPTION_AUDIO_PRESETS,
-)
-from core.model_tasks.options import (
-    TaskModelOptionValidationError,
-    validate_text_embedding_options,
-)
 from core.search_config import (
     FIRST_PARTY_WEB_SEARCH_PROVIDERS,
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
 )
 from core.settings._json_settings import normalize_json_object
+from core.settings._rules import (
+    AGENT_ID_PATTERN,
+    ALLOWED_THINKING_EFFORTS,
+    ARCHIVE_RETENTION_DAYS_RULE,
+    DEFAULT_APPEARANCE_CHAT_WIDTH,
+    DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
+    LIBRARIAN_BOOLEAN_FIELDS,
+    LIBRARIAN_DAY_FIELDS,
+    LIBRARIAN_DAYS_RULE,
+    MAX_ARCHIVE_RETENTION_DAYS,
+    MAX_FALLBACK_MODELS,
+    MAX_LIBRARIAN_DAYS,
+    MIN_ARCHIVE_RETENTION_DAYS,
+    NOTIFICATION_FIELDS,
+    OPENROUTER_MODEL_ID_MAX_LENGTH,
+    OPENROUTER_PROVIDER_SLUG_MAX_LENGTH,
+    OPENROUTER_PROVIDER_SLUG_PATTERN,
+    OPENROUTER_ROUTING_FIELDS,
+    OPENROUTER_ROUTING_MODES,
+    OPENROUTER_ROUTING_POLICY_FIELDS,
+    PROJECT_ID_PATTERN,
+    PROJECT_TOOL_ALLOWLIST_WILDCARD,
+    RECALL_BACKEND_PATTERN,
+    REFLECTION_INTERVAL_FIELDS,
+    SETTINGS_UPDATE_SECTIONS,
+    SUBAGENT_SETTING_FIELDS,
+    SUPPORTED_APPEARANCE_CHAT_WIDTHS,
+    SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
+    JsonObject,
+    SettingsValidationError,
+    _positive_integer,
+    available_timezone_names,
+    default_timezone_name,
+    effective_timezone_name,
+    is_archive_retention_days,
+    is_valid_agent_id,
+    is_valid_project_id,
+    validate_temperature,
+    validate_thinking_effort,
+    validate_timezone_name,
+    validate_top_p,
+)
+from core.settings._update_models import (
+    _parse_local_models_update,
+    _parse_model_tasks_update,
+    _parse_providers_update,
+    _parse_speech_update,
+    parse_openrouter_routing,
+)
 from core.settings.agent_defaults import (
     AGENT_DEFAULT_FIELDS,
     MAX_TEMPERATURE,
@@ -38,159 +70,6 @@ from core.settings.agent_defaults import (
     parse_agent_default_value,
 )
 from core.utils.errors import StorageError
-
-JsonObject = dict[str, Any]
-
-# Structural shape of a recall backend name (lowercase snake_case). Whether a
-# name actually resolves to a registered backend is a runtime concern checked
-# against the recall registry (built-ins + extension backends) at the RPC layer,
-# not here — the parser only enforces the shape.
-RECALL_BACKEND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
-
-ALLOWED_THINKING_EFFORTS = frozenset(
-    {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
-)
-
-# Upper bound for one Agent's ordered fallback-model chain. Shared by the agent
-# store's save-time validation and the chat loop's defensive runtime slice; a
-# bounded chain keeps a misconfigured cascade from stacking unbounded retries.
-MAX_FALLBACK_MODELS = 5
-# Single authority for the agent-id format (filesystem-safe slug): a leading
-# letter or digit, then up to 63 more of letter/digit/hyphen/underscore. Shared
-# by file-schema validation, the agent store, and prompt-fragment storage. Every
-# reader accepts these; creating or renaming an Agent also refuses names Windows
-# reserves (``core.utils.ids.is_reserved_name``), such as ``con`` or ``lpt1``.
-AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
-# Single authority for the project-id format (filesystem-safe slug). Same shape
-# as the agent-id rule: a leading letter or digit, then up to 63 more of
-# letter/digit/hyphen/underscore. Shared by the project store and the central
-# file-schema validator. Lives here (not in core.projects) so validation.py can
-# import it without an import cycle through the projects package. Creating a
-# Project also refuses names Windows reserves (``core.utils.ids.is_reserved_name``).
-PROJECT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
-# Tool allowlists generally use ``*`` as the all-tools wildcard, but a Project
-# Tool Whitelist is a security ceiling assembled from explicit tool names. Keep
-# the spelling in the low-level settings contract so both raw ``project.json``
-# validation and the Project entity reject the same forbidden value without an
-# import cycle through ``core.tools``.
-PROJECT_TOOL_ALLOWLIST_WILDCARD = "*"
-# Appearance chat-width preference (the WebUI chat reading-column width). The
-# constant lives here, not in normalizers.py, so the public update parser can
-# validate membership without a circular import (normalizers imports settings).
-DEFAULT_APPEARANCE_CHAT_WIDTH = "comfortable"
-SUPPORTED_APPEARANCE_CHAT_WIDTHS = frozenset({"comfortable", "wide", "full"})
-# Appearance preference for inline Thinking/Tool detail versus compact Working
-# disclosures in Chat. It is display-only and applies live in accessors.
-DEFAULT_APPEARANCE_CHAT_WORKING_MODE = "normal"
-SUPPORTED_APPEARANCE_CHAT_WORKING_MODES = frozenset({"normal", "compact"})
-SETTINGS_UPDATE_SECTIONS = frozenset(
-    {
-        "appearance",
-        "archive",
-        "debug",
-        "server",
-        "skills",
-        "subagents",
-        "compaction",
-        "defaults",
-        "recall",
-        "model_tasks",
-        "providers",
-        "web_search",
-        "web_fetch",
-        "extensions",
-        "reflection",
-        "librarian",
-        "local_models",
-        "session_titles",
-        "speech",
-        "notifications",
-    }
-)
-# Desktop notification kinds the Windows tray application shows. Each field is
-# an independent boolean switch; defaults live in ``normalizers.py``.
-NOTIFICATION_FIELDS = (
-    "run_completed",
-    "run_failed",
-    "automation_failed",
-    "update_result",
-    "server_stopped",
-)
-OPENROUTER_ROUTING_MODES = frozenset({"automatic", "allowed", "ordered"})
-OPENROUTER_ROUTING_FIELDS = frozenset({"default", "models"})
-OPENROUTER_ROUTING_POLICY_FIELDS = frozenset({"mode", "providers", "blocked", "allow_fallbacks"})
-OPENROUTER_PROVIDER_SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*$")
-OPENROUTER_PROVIDER_SLUG_MAX_LENGTH = 128
-OPENROUTER_MODEL_ID_MAX_LENGTH = 256
-REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_model_step_interval")
-# The Librarian section: switches, and day counts from 1 to 3650 (ten years,
-# like archive retention), which keeps every date computed from them valid.
-LIBRARIAN_BOOLEAN_FIELDS = ("enabled", "consolidate")
-LIBRARIAN_DAY_FIELDS = ("interval_days", "archive_after_days")
-MAX_LIBRARIAN_DAYS = 3650
-LIBRARIAN_DAYS_RULE = f"must be an integer from 1 to {MAX_LIBRARIAN_DAYS}"
-SUBAGENT_SETTING_FIELDS = (
-    "max_subagent_depth",
-    "max_active_subagents",
-    "max_active_subagents_total",
-)
-# How many days an archive entry rests before vBot deletes it permanently;
-# ``None`` keeps archived items until they are deleted by hand. The default lives
-# in ``normalizers.py``.
-MIN_ARCHIVE_RETENTION_DAYS = 1
-MAX_ARCHIVE_RETENTION_DAYS = 3650
-ARCHIVE_RETENTION_DAYS_RULE = (
-    f"must be an integer from {MIN_ARCHIVE_RETENTION_DAYS} to {MAX_ARCHIVE_RETENTION_DAYS}, "
-    "or null to keep archived items until they are deleted"
-)
-
-
-class SettingsValidationError(ValueError):
-    """Raised when a public Settings payload is malformed."""
-
-
-def validate_timezone_name(value: Any, *, label: str) -> str:
-    """Validate and normalize one IANA timezone name."""
-    if not isinstance(value, str) or not value.strip():
-        raise SettingsValidationError(f"{label} must be a non-empty IANA timezone name")
-    normalized = value.strip()
-    try:
-        ZoneInfo(normalized)
-    except (ZoneInfoNotFoundError, ValueError) as error:
-        raise SettingsValidationError(f"{label} is not a known IANA timezone") from error
-    return normalized
-
-
-def default_timezone_name() -> str:
-    """Return the host IANA zone used when Settings has no explicit override."""
-    try:
-        return validate_timezone_name(get_localzone_name(), label="system timezone")
-    except SettingsValidationError, OSError:
-        return "UTC"
-
-
-def is_archive_retention_days(value: Any) -> bool:
-    """Return whether ``value`` is a valid ``archive.retention_days``, including ``None``."""
-    if value is None:
-        return True
-    return (
-        isinstance(value, int)
-        and not isinstance(value, bool)
-        and MIN_ARCHIVE_RETENTION_DAYS <= value <= MAX_ARCHIVE_RETENTION_DAYS
-    )
-
-
-def available_timezone_names() -> tuple[str, ...]:
-    """Return the runtime's deterministic IANA timezone catalog."""
-    return tuple(sorted(available_timezones()))
-
-
-def effective_timezone_name(settings: Mapping[str, Any]) -> str:
-    """Resolve the configured application timezone with the host zone as default."""
-    configured = settings.get("timezone")
-    if configured is None:
-        return default_timezone_name()
-    return validate_timezone_name(configured, label="settings.timezone")
 
 
 def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
@@ -312,228 +191,6 @@ def _parse_notifications_update(notifications: Any) -> JsonObject:
     return parsed
 
 
-def _parse_speech_update(speech: Any) -> JsonObject:
-    if not isinstance(speech, Mapping):
-        raise SettingsValidationError("params.speech must be an object")
-    unsupported_fields = sorted(set(speech) - {"transcription_audio"})
-    if unsupported_fields:
-        raise SettingsValidationError(
-            f"unsupported speech settings: {', '.join(unsupported_fields)}"
-        )
-    if "transcription_audio" not in speech:
-        raise SettingsValidationError("params.speech requires transcription_audio")
-
-    audio = speech["transcription_audio"]
-    if not isinstance(audio, Mapping):
-        raise SettingsValidationError("params.speech.transcription_audio must be an object")
-    required_fields = {"profile", "format", "sample_rate_hz"}
-    unsupported_audio_fields = sorted(set(audio) - required_fields)
-    if unsupported_audio_fields:
-        raise SettingsValidationError(
-            "unsupported speech.transcription_audio settings: "
-            f"{', '.join(unsupported_audio_fields)}"
-        )
-    missing_fields = sorted(required_fields - set(audio))
-    if missing_fields:
-        raise SettingsValidationError(
-            f"params.speech.transcription_audio requires {', '.join(missing_fields)}"
-        )
-
-    profile = audio["profile"]
-    if not isinstance(profile, str) or profile not in SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES:
-        allowed = ", ".join(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES))
-        raise SettingsValidationError(
-            f"params.speech.transcription_audio.profile must be one of: {allowed}"
-        )
-    audio_format = audio["format"]
-    if (
-        not isinstance(audio_format, str)
-        or audio_format not in SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS
-    ):
-        allowed = ", ".join(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS))
-        raise SettingsValidationError(
-            f"params.speech.transcription_audio.format must be one of: {allowed}"
-        )
-    sample_rate_hz = audio["sample_rate_hz"]
-    if (
-        not isinstance(sample_rate_hz, int)
-        or isinstance(sample_rate_hz, bool)
-        or sample_rate_hz not in SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES
-    ):
-        allowed = ", ".join(
-            str(sample_rate) for sample_rate in sorted(SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES)
-        )
-        raise SettingsValidationError(
-            f"params.speech.transcription_audio.sample_rate_hz must be one of: {allowed}"
-        )
-
-    preset = TRANSCRIPTION_AUDIO_PRESETS.get(profile)
-    if preset is not None and (
-        audio_format != preset["format"] or sample_rate_hz != preset["sample_rate_hz"]
-    ):
-        raise SettingsValidationError(
-            f"params.speech.transcription_audio must use format={preset['format']!r} "
-            f"and sample_rate_hz={preset['sample_rate_hz']} for profile {profile!r}"
-        )
-
-    return {
-        "transcription_audio": {
-            "profile": profile,
-            "format": audio_format,
-            "sample_rate_hz": sample_rate_hz,
-        }
-    }
-
-
-def _parse_providers_update(providers: Any) -> JsonObject:
-    """Parse the public Provider-settings subset.
-
-    Connection enablement remains owned by ``connection.set_enabled``. The
-    public Settings update surface accepts only OpenRouter routing policy so a
-    routing save cannot accidentally replace Connection state.
-    """
-
-    if not isinstance(providers, Mapping):
-        raise SettingsValidationError("params.providers must be an object")
-    unsupported_fields = sorted(set(providers) - {"openrouter"})
-    if unsupported_fields:
-        raise SettingsValidationError(
-            f"unsupported providers settings: {', '.join(unsupported_fields)}"
-        )
-    if "openrouter" not in providers:
-        raise SettingsValidationError("params.providers requires openrouter")
-
-    openrouter = providers["openrouter"]
-    if not isinstance(openrouter, Mapping):
-        raise SettingsValidationError("params.providers.openrouter must be an object")
-    unsupported_openrouter_fields = sorted(set(openrouter) - {"routing"})
-    if unsupported_openrouter_fields:
-        raise SettingsValidationError(
-            f"unsupported providers.openrouter settings: {', '.join(unsupported_openrouter_fields)}"
-        )
-    if "routing" not in openrouter:
-        raise SettingsValidationError("params.providers.openrouter requires routing")
-    return {"openrouter": {"routing": parse_openrouter_routing(openrouter["routing"])}}
-
-
-def parse_openrouter_routing(value: Any) -> JsonObject:
-    """Validate and normalize the complete OpenRouter routing configuration."""
-
-    path = "params.providers.openrouter.routing"
-    if not isinstance(value, Mapping):
-        raise SettingsValidationError(f"{path} must be an object")
-    unsupported_fields = sorted(set(value) - OPENROUTER_ROUTING_FIELDS)
-    if unsupported_fields:
-        raise SettingsValidationError(
-            f"unsupported {path} settings: {', '.join(unsupported_fields)}"
-        )
-
-    default_policy = _parse_openrouter_routing_policy(
-        value.get("default", {}),
-        path=f"{path}.default",
-    )
-    raw_models = value.get("models", {})
-    if not isinstance(raw_models, Mapping):
-        raise SettingsValidationError(f"{path}.models must be an object")
-
-    models: JsonObject = {}
-    for raw_model_id, raw_policy in raw_models.items():
-        if not isinstance(raw_model_id, str):
-            raise SettingsValidationError(f"{path}.models keys must be strings")
-        model_id = raw_model_id.strip()
-        if not model_id or len(model_id) > OPENROUTER_MODEL_ID_MAX_LENGTH:
-            raise SettingsValidationError(
-                f"{path}.models keys must be 1-{OPENROUTER_MODEL_ID_MAX_LENGTH} characters"
-            )
-        if model_id in models:
-            raise SettingsValidationError(f"{path}.models contains duplicate model '{model_id}'")
-        policy = _parse_openrouter_routing_policy(
-            raw_policy,
-            path=f"{path}.models['{model_id}']",
-        )
-        for provider_slug in policy["providers"]:
-            if any(
-                _openrouter_slug_is_blocked(provider_slug, blocked_slug)
-                for blocked_slug in default_policy["blocked"]
-            ):
-                raise SettingsValidationError(
-                    f"{path}.models['{model_id}'].providers contains globally blocked "
-                    f"provider '{provider_slug}'"
-                )
-        models[model_id] = policy
-
-    return {"default": default_policy, "models": models}
-
-
-def _parse_openrouter_routing_policy(value: Any, *, path: str) -> JsonObject:
-    if not isinstance(value, Mapping):
-        raise SettingsValidationError(f"{path} must be an object")
-    unsupported_fields = sorted(set(value) - OPENROUTER_ROUTING_POLICY_FIELDS)
-    if unsupported_fields:
-        raise SettingsValidationError(
-            f"unsupported {path} settings: {', '.join(unsupported_fields)}"
-        )
-
-    mode = value.get("mode", "automatic")
-    if not isinstance(mode, str) or mode not in OPENROUTER_ROUTING_MODES:
-        allowed = ", ".join(sorted(OPENROUTER_ROUTING_MODES))
-        raise SettingsValidationError(f"{path}.mode must be one of: {allowed}")
-    providers = _parse_openrouter_provider_slugs(
-        value.get("providers", []), path=f"{path}.providers"
-    )
-    blocked = _parse_openrouter_provider_slugs(value.get("blocked", []), path=f"{path}.blocked")
-    allow_fallbacks = value.get("allow_fallbacks", True)
-    if not isinstance(allow_fallbacks, bool):
-        raise SettingsValidationError(f"{path}.allow_fallbacks must be a boolean")
-
-    if mode == "automatic" and providers:
-        raise SettingsValidationError(f"{path}.providers must be empty in automatic mode")
-    if mode != "automatic" and not providers:
-        raise SettingsValidationError(f"{path}.providers must not be empty in {mode} mode")
-    for provider_slug in providers:
-        if any(
-            _openrouter_slug_is_blocked(provider_slug, blocked_slug) for blocked_slug in blocked
-        ):
-            raise SettingsValidationError(
-                f"{path}.providers contains blocked provider '{provider_slug}'"
-            )
-
-    return {
-        "mode": mode,
-        "providers": providers,
-        "blocked": blocked,
-        "allow_fallbacks": allow_fallbacks,
-    }
-
-
-def _parse_openrouter_provider_slugs(value: Any, *, path: str) -> list[str]:
-    if not isinstance(value, list):
-        raise SettingsValidationError(f"{path} must be a list")
-
-    slugs: list[str] = []
-    seen: set[str] = set()
-    for raw_slug in value:
-        if not isinstance(raw_slug, str):
-            raise SettingsValidationError(f"{path} entries must be strings")
-        slug = raw_slug.strip().lower()
-        if (
-            not slug
-            or len(slug) > OPENROUTER_PROVIDER_SLUG_MAX_LENGTH
-            or OPENROUTER_PROVIDER_SLUG_PATTERN.fullmatch(slug) is None
-        ):
-            raise SettingsValidationError(f"{path} entries must be valid OpenRouter provider slugs")
-        if slug not in seen:
-            slugs.append(slug)
-            seen.add(slug)
-    return slugs
-
-
-def _openrouter_slug_is_blocked(provider_slug: str, blocked_slug: str) -> bool:
-    """Mirror OpenRouter base-slug matching for local conflict validation."""
-
-    return provider_slug == blocked_slug or provider_slug.startswith(f"{blocked_slug}/")
-
-
 def _parse_session_titles_update(session_titles: Any) -> JsonObject:
     """Parse the complete automatic Session-title settings section."""
     if not isinstance(session_titles, dict):
@@ -553,43 +210,6 @@ def _parse_session_titles_update(session_titles: Any) -> JsonObject:
     if not isinstance(model, str):
         raise SettingsValidationError("params.session_titles.model must be a string")
     return {"enabled": enabled, "model": model.strip()}
-
-
-def _parse_local_models_update(local_models: Any) -> JsonObject:
-    """Parse the local-models section (sparse per-key merge, ``null`` removes).
-
-    ``context_windows`` maps ``"<provider>/<model_id>"`` to the user-configured
-    effective context window. A ``null`` value removes the key so the model
-    falls back to the default cap; unmentioned keys are preserved by storage.
-    """
-    if not isinstance(local_models, dict):
-        raise SettingsValidationError("params.local_models must be an object")
-
-    unsupported_fields = sorted(set(local_models) - {"context_windows"})
-    if unsupported_fields:
-        raise SettingsValidationError(
-            f"unsupported local_models settings: {', '.join(unsupported_fields)}"
-        )
-    if "context_windows" not in local_models:
-        raise SettingsValidationError("params.local_models requires context_windows")
-
-    context_windows = local_models["context_windows"]
-    if not isinstance(context_windows, dict):
-        raise SettingsValidationError("params.local_models.context_windows must be an object")
-
-    parsed_windows: JsonObject = {}
-    for key, value in context_windows.items():
-        if not isinstance(key, str) or "/" not in key or not key.strip():
-            raise SettingsValidationError(
-                "params.local_models.context_windows keys must be '<provider>/<model_id>' strings"
-            )
-        if value is None:
-            parsed_windows[key] = None
-            continue
-        parsed_windows[key] = _positive_integer(
-            value, f"params.local_models.context_windows['{key}']"
-        )
-    return {"context_windows": parsed_windows}
 
 
 def _parse_reflection_update(reflection: Any) -> JsonObject:
@@ -734,63 +354,6 @@ def _parse_searxng_settings(searxng: Any) -> JsonObject:
     if not isinstance(base_url, str) or not base_url.strip():
         raise SettingsValidationError("params.web_search.searxng.base_url must be a string")
     return {"base_url": base_url.strip()}
-
-
-def _parse_model_tasks_update(model_tasks: Any) -> JsonObject:
-    if not isinstance(model_tasks, dict):
-        raise SettingsValidationError("params.model_tasks must be an object")
-
-    parsed: JsonObject = {}
-    for task_type, raw_binding in model_tasks.items():
-        if not isinstance(task_type, str) or task_type not in SUPPORTED_TASK_TYPES:
-            allowed = ", ".join(sorted(SUPPORTED_TASK_TYPES))
-            raise SettingsValidationError(
-                f"params.model_tasks contains unsupported task type {task_type!r}; "
-                f"supported: {allowed}"
-            )
-        if not isinstance(raw_binding, dict):
-            raise SettingsValidationError(f"params.model_tasks.{task_type} must be an object")
-
-        unsupported_fields = sorted(set(raw_binding) - {"target", "options"})
-        if unsupported_fields:
-            raise SettingsValidationError(
-                f"unsupported model task settings for {task_type}: {', '.join(unsupported_fields)}"
-            )
-
-        parsed_binding: JsonObject = {}
-        if "target" in raw_binding:
-            target = raw_binding["target"]
-            if not isinstance(target, str):
-                raise SettingsValidationError(
-                    f"params.model_tasks.{task_type}.target must be a string"
-                )
-            parsed_binding["target"] = target.strip()
-
-        if "options" in raw_binding:
-            options = raw_binding["options"]
-            if not isinstance(options, dict):
-                raise SettingsValidationError(
-                    f"params.model_tasks.{task_type}.options must be an object"
-                )
-            if task_type == TASK_TEXT_EMBEDDING:
-                try:
-                    validate_text_embedding_options(options)
-                except TaskModelOptionValidationError as error:
-                    raise SettingsValidationError(f"params.model_tasks.{error}") from error
-            try:
-                parsed_binding["options"] = normalize_json_object(
-                    options, f"params.model_tasks.{task_type}.options"
-                )
-            except StorageError as error:
-                raise SettingsValidationError(str(error)) from error
-
-        if not parsed_binding:
-            raise SettingsValidationError(
-                f"params.model_tasks.{task_type} must include target or options"
-            )
-        parsed[task_type] = parsed_binding
-
-    return parsed
 
 
 def _parse_recall_update(recall: Any) -> JsonObject:
@@ -1097,81 +660,49 @@ def _parse_server_update(server: Any) -> JsonObject:
     return parsed
 
 
-def _positive_integer(value: Any, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise SettingsValidationError(f"{label} must be a positive integer")
-    if value <= 0:
-        raise SettingsValidationError(f"{label} must be a positive integer")
-    return cast("int", value)
-
-
-def is_valid_agent_id(value: Any) -> bool:
-    """Return whether ``value`` is a filesystem-safe agent id per the canonical rule."""
-    return isinstance(value, str) and AGENT_ID_PATTERN.fullmatch(value) is not None
-
-
-def is_valid_project_id(value: Any) -> bool:
-    """Return whether ``value`` is a filesystem-safe project id per the canonical rule."""
-    return isinstance(value, str) and PROJECT_ID_PATTERN.fullmatch(value) is not None
-
-
-def validate_temperature(
-    value: Any,
-    *,
-    label: str,
-    allow_none: bool = False,
-) -> float | None:
-    """Validate one agent ``temperature`` value against the canonical schema rules."""
-    return _validate_sampling_value(
-        value, label=label, allow_none=allow_none, minimum=MIN_TEMPERATURE, maximum=MAX_TEMPERATURE
-    )
-
-
-def validate_top_p(
-    value: Any,
-    *,
-    label: str,
-    allow_none: bool = False,
-) -> float | None:
-    """Validate one agent ``top_p`` value against the canonical schema rules."""
-    return _validate_sampling_value(
-        value, label=label, allow_none=allow_none, minimum=MIN_TOP_P, maximum=MAX_TOP_P
-    )
-
-
-def _validate_sampling_value(
-    value: Any, *, label: str, allow_none: bool, minimum: float, maximum: float
-) -> float | None:
-    if value is None:
-        if allow_none:
-            return None
-        raise SettingsValidationError(f"{label} must be a number")
-
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise SettingsValidationError(f"{label} must be a number")
-    if value < minimum or value > maximum:
-        raise SettingsValidationError(f"{label} must be between {minimum:g} and {maximum:g}")
-    number = float(value)
-    if not math.isfinite(number):
-        raise SettingsValidationError(f"{label} must be finite")
-    return number
-
-
-def validate_thinking_effort(
-    value: Any,
-    *,
-    label: str,
-    allow_none: bool = False,
-) -> str | None:
-    """Validate one agent ``thinking_effort`` value against the canonical schema rules."""
-    if value is None:
-        if allow_none:
-            return None
-        raise SettingsValidationError(f"{label} must be a string")
-
-    if not isinstance(value, str):
-        raise SettingsValidationError(f"{label} must be a string")
-    if value not in ALLOWED_THINKING_EFFORTS:
-        allowed = ", ".join(repr(item) for item in sorted(ALLOWED_THINKING_EFFORTS))
-        raise SettingsValidationError(f"{label} must be one of: {allowed}")
-    return value
+__all__ = [
+    "AGENT_ID_PATTERN",
+    "ALLOWED_THINKING_EFFORTS",
+    "ARCHIVE_RETENTION_DAYS_RULE",
+    "DEFAULT_APPEARANCE_CHAT_WIDTH",
+    "DEFAULT_APPEARANCE_CHAT_WORKING_MODE",
+    "JsonObject",
+    "LIBRARIAN_BOOLEAN_FIELDS",
+    "LIBRARIAN_DAYS_RULE",
+    "LIBRARIAN_DAY_FIELDS",
+    "MAX_ARCHIVE_RETENTION_DAYS",
+    "MAX_FALLBACK_MODELS",
+    "MAX_LIBRARIAN_DAYS",
+    "MAX_TEMPERATURE",
+    "MAX_TOP_P",
+    "MIN_ARCHIVE_RETENTION_DAYS",
+    "MIN_TEMPERATURE",
+    "MIN_TOP_P",
+    "NOTIFICATION_FIELDS",
+    "OPENROUTER_MODEL_ID_MAX_LENGTH",
+    "OPENROUTER_PROVIDER_SLUG_MAX_LENGTH",
+    "OPENROUTER_PROVIDER_SLUG_PATTERN",
+    "OPENROUTER_ROUTING_FIELDS",
+    "OPENROUTER_ROUTING_MODES",
+    "OPENROUTER_ROUTING_POLICY_FIELDS",
+    "PROJECT_ID_PATTERN",
+    "PROJECT_TOOL_ALLOWLIST_WILDCARD",
+    "RECALL_BACKEND_PATTERN",
+    "REFLECTION_INTERVAL_FIELDS",
+    "SETTINGS_UPDATE_SECTIONS",
+    "SUBAGENT_SETTING_FIELDS",
+    "SUPPORTED_APPEARANCE_CHAT_WIDTHS",
+    "SUPPORTED_APPEARANCE_CHAT_WORKING_MODES",
+    "SettingsValidationError",
+    "available_timezone_names",
+    "default_timezone_name",
+    "effective_timezone_name",
+    "is_archive_retention_days",
+    "is_valid_agent_id",
+    "is_valid_project_id",
+    "parse_openrouter_routing",
+    "validate_temperature",
+    "validate_thinking_effort",
+    "validate_timezone_name",
+    "validate_top_p",
+]
