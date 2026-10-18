@@ -15,7 +15,7 @@ None of this runs in the regular test suites or CI. Timing measurements are slow
 
 ## In-app measurement
 
-The server measures itself all the time with negligible overhead (around a microsecond per measurement). The domain map is `.vorch/domain-maps/performance.md`; it lists the full metric catalog and the RPC contract.
+The server measures itself all the time with negligible overhead (around a microsecond per measurement). The domain map is `.vorch/domain-maps/performance.md`; its supplementary files `performance/metric-catalog.md` and `performance/rpc-and-files.md` hold the full metric catalog and the RPC contract.
 
 What is measured:
 

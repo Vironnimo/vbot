@@ -363,6 +363,8 @@ python scripts/test-env.py start
 
 `scripts/test-env.py start` rebuilds the frontend, starts the Settings-declared fake Provider (`scripts/fake-provider.mjs`, needs Node.js) with an owned PID under the Worktree data directory, then starts vBot. Use `python cli/main.py server start` only when intentionally testing vBot without the fake endpoint.
 
+Start a bare worktree server as `python -m server.main`, never `python server/main.py`: the script form imports `core` through the main repo's editable install, and new RPC methods come back `method_not_found`.
+
 ### Stop the local worktree server
 
 From inside the worktree:
