@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -225,18 +226,105 @@ async def test_control_reports_and_stops_only_the_current_control(computer: Harn
     assert (await computer.api.operations.invoke("control", {}))["active"] is False
 
 
-async def test_run_cancellation_stops_the_call(computer: Harness) -> None:
+@pytest.mark.parametrize("cancellation", ["run", "task", "both"])
+async def test_run_cancellation_stops_the_call(computer: Harness, cancellation: str) -> None:
+    cancel_task = cancellation != "run"
     callbacks: list = []
     context = computer.context_for("computer", cancel_registration_hook=callbacks.append)
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
 
     def cancel(record: tuple) -> None:
-        for callback in callbacks:
-            callback()
+        if cancellation != "task":
+            for callback in callbacks:
+                callback()
+        if cancel_task:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "cancelled desktop worker was not released"
 
     computer.target.on_input = cancel
-    result = await computer.call("computer", {"action": "key", "text": "enter"}, context)
+    call = asyncio.create_task(
+        computer.call("computer", {"action": "key", "text": "enter"}, context)
+    )
+    if cancel_task:
+        try:
+            await entered.wait()
+            owner = computer.service._active
+            call.cancel()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            # Cancellation cannot release whole-call serialization while native
+            # input still runs, or lose the owner of its stop event.
+            assert not call.done()
+            assert computer.service._lock.locked()
+            assert computer.service._active == owner
+            assert computer.target.stop_event is not None and computer.target.stop_event.is_set()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        assert not computer.service._lock.locked()
+        assert computer.service._active is None
+        return
+    result = await call
     assert result["error"]["code"] == "computer_use_interrupted"
     assert result["error"]["message"].startswith("The Run was cancelled during key enter")
+
+
+async def test_cancelled_queued_call_does_not_stop_another_runs_input(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = asyncio.Event()
+    queued = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    readiness_calls = []
+    target_readiness = computer.target.readiness
+
+    def readiness() -> str | None:
+        readiness_calls.append(True)
+        return target_readiness()
+
+    def block(record: tuple) -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5), "desktop worker was not released"
+
+    monkeypatch.setattr(computer.target, "readiness", readiness)
+    computer.target.on_input = block
+    first = asyncio.create_task(computer.computer(action="key", text="enter"))
+    second = None
+    try:
+        await entered.wait()
+        executor = computer.service._executor
+        assert executor is not None
+        submit = executor.submit
+
+        def submitted(*args, **kwargs):
+            future = submit(*args, **kwargs)
+            queued.set()
+            return future
+
+        monkeypatch.setattr(executor, "submit", submitted)
+        second = asyncio.create_task(
+            computer.call(
+                "computer_apps", {"action": "list"}, computer.context_for("computer_apps")
+            )
+        )
+        await queued.wait()
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+        assert computer.service._lock.locked()
+        assert computer.target.stop_event is not None and not computer.target.stop_event.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(
+            first, *([second] if second is not None else []), return_exceptions=True
+        )
+    assert (await first)["ok"]
+    assert len(readiness_calls) == 1
+    assert computer.target.inputs == [("keys", ["enter"], 1)]
 
 
 async def test_run_end_releases_a_mouse_button_the_run_left_pressed(computer: Harness) -> None:

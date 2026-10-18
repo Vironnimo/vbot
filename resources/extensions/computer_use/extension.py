@@ -24,6 +24,7 @@ from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
 from core.tools import ToolContext, ToolDisplay, tool_failure, tool_success
 from core.tools.availability import resolve_tool_access
 from core.utils.ids import new_id
+from core.utils.workers import settle_before_cancelling
 
 from ._access import (
     Access,
@@ -279,13 +280,31 @@ class ComputerUseService:
         self._unready = reason
         self._checked = time.monotonic()
 
-    async def _on_worker[T](self, function: Callable[..., T], *args: Any) -> T:
-        """Run *function* on the desktop worker thread."""
+    async def _on_worker[T](
+        self, function: Callable[..., T], *args: Any, interrupt_on_cancel: bool = False
+    ) -> T:
+        """Run *function* without releasing its caller while desktop work still runs."""
         executor = self._executor
         if executor is None or self._closed:
             raise TargetError("Computer Use has stopped.", "computer_use_unavailable")
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(executor, functools.partial(function, *args))
+        pending = executor.submit(functools.partial(function, *args))
+        future = asyncio.wrap_future(pending)
+        try:
+            # Keep the executor Future intact so cancellation can distinguish
+            # queued work from a desktop operation that is already running.
+            await asyncio.wait((future,))
+        except asyncio.CancelledError:
+            if not pending.cancel():
+                if interrupt_on_cancel:
+                    self.interrupt(source="run_cancel")
+                try:
+                    await settle_before_cancelling(future)
+                except InputInterrupted:
+                    pass
+                except Exception:
+                    self.api.logger.exception("Computer Use worker failed after cancellation")
+            raise
+        return future.result()
 
     # Stop control
 
@@ -632,7 +651,7 @@ class ComputerUseService:
             self.api.logger.exception("Computer Use screenshot after a failed call failed")
 
     async def _act(self, context: ToolContext, desktop: Desktop, action: Action, frame: Any) -> str:
-        done = await self._on_worker(desktop.act, action, frame)
+        done = await self._on_worker(desktop.act, action, frame, interrupt_on_cancel=True)
         if action.name == "left_mouse_down":
             self._held_run = context.run_id or ""
         elif action.name == "left_mouse_up":
@@ -830,7 +849,7 @@ class ComputerUseService:
         async with self._active_call(context):
             try:
                 desktop.input_started = True
-                await self._on_worker(self._target.open, match)
+                await self._on_worker(self._target.open, match, interrupt_on_cancel=True)
                 await self._pause(OPEN_SETTLE_SECONDS)
                 shot = await self._on_worker(desktop.screenshot)
             except InputInterrupted:
