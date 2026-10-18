@@ -7,19 +7,10 @@ server, non-vBot server, missing WebUI, invalid target, refused sign-in) lands
 the user back on the *same* interactive screen with the failed target
 prefilled, so there is never a page the user cannot recover from.
 
-Two pieces live here:
-
-- Remembered-servers operations over :mod:`desktop.settings`
-  (:func:`list_servers` / :func:`add_server` / :func:`select_server` /
-  :func:`remove_server` / :func:`resolve_last_used`). A server is a host and
-  port (HTTP) or an ``https://`` address (:mod:`desktop.server_address`).
-- :class:`ConnectionController`, which holds the live pywebview ``Window`` and
-  drives the launch connect and server switches: a successful probe navigates
-  the window to the server's WebUI via ``Window.load_url``; any failure renders
-  the connection screen (:mod:`desktop.connection_screen`) inline via
-  ``Window.load_html``. The launch connect waits for a server that does not
-  answer yet (a server still starting after an update or at login), showing a
-  waiting state meanwhile.
+Remembered servers live in :mod:`desktop.servers`; connection outcome and
+pending-attempt records live in :mod:`desktop.connection_types`. This controller
+owns navigation and the shared-lock state machine across native launch connects,
+page-started switches, sign-in landings and pairing.
 
 A server in the access mode ``authenticated`` needs a sign-in
 (:mod:`desktop.access`): the window opens a login ticket, whose redemption gives
@@ -29,9 +20,9 @@ pairing: it names the server's origin and the device name the server will see,
 which the user may edit, and only the user's "Get a code" asks the server for a
 code (:meth:`ConnectionController.start_pairing`). The code shows until the
 pairing is approved, denied or expires, or the user cancels it. A connect a
-server's page starts never pairs: the window goes to :data:`SIGN_IN_PAGE` and
+server's page starts never pairs: the window goes to :data:`state.SIGN_IN_PAGE` and
 then shows the connection screen with the offer. A ticket never reaches page
-JavaScript either: such a connect returns :data:`SIGN_IN_PAGE`, and the
+JavaScript either: such a connect returns :data:`state.SIGN_IN_PAGE`, and the
 controller opens the ticket once that page has loaded
 (:meth:`ConnectionController.page_loaded`).
 
@@ -50,14 +41,16 @@ import secrets
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from uuid import uuid4
 
+from desktop import connection_types as state
+from desktop import servers
 from desktop._windows import url_origin
-from desktop.access import TICKET_PATH_PREFIX, AccessFailure, PairingRequest, ServerAccess
+from desktop.access import TICKET_PATH_PREFIX, AccessFailure, ServerAccess
 from desktop.connection_screen import (
     STATUS_PAIRING_DENIED,
     STATUS_PAIRING_EXPIRED,
@@ -66,9 +59,8 @@ from desktop.connection_screen import (
     PairingOffer,
     PairingView,
     build_connection_html,
-    connection_error_copy,
 )
-from desktop.main import (
+from desktop.probe import (
     ACCESS_MODE_AUTHENTICATED,
     ACCESSOR_QUERY_PARAM,
     PROBE_INVALID_TARGET,
@@ -76,19 +68,10 @@ from desktop.main import (
     PROBE_WEBUI_AVAILABLE,
     DesktopProbeResult,
     DesktopTarget,
-    SessionLink,
     probe_target,
 )
-from desktop.server_address import Scheme, ServerAddress, parse_server_address
-from desktop.settings import (
-    HTTPS_SCHEME,
-    SCHEME_KEY,
-    clear_last_used,
-    read_last_used,
-    read_servers,
-    write_last_used,
-    write_servers,
-)
+from desktop.server_address import ServerAddress, parse_server_address
+from desktop.window import SessionLink
 
 logger = logging.getLogger("vbot.desktop.connection")
 
@@ -96,8 +79,6 @@ DESKTOP_SESSION_QUERY_PARAM = "desktop_session"
 # The WebUI opens this Session once it has loaded and removes both parameters.
 OPEN_AGENT_QUERY_PARAM = "open_agent"
 OPEN_SESSION_QUERY_PARAM = "open_session"
-SIGN_IN_PAGE = "about:blank"
-"""Where a page goes when its connect needs a sign-in; the controller opens the ticket next."""
 LAUNCH_WAIT_SECONDS = 60.0
 """How long the launch connect keeps trying a server that is unreachable."""
 LAUNCH_RETRY_SECONDS = 0.25
@@ -112,336 +93,6 @@ SIGN_IN_LANDING_SECONDS = 60.0
 # touches the window once ended, so a longer request in flight may finish on its own.
 _CLOSE_JOIN_SECONDS = 1.0
 _PAIRING_FAILURES = {"denied": STATUS_PAIRING_DENIED, "expired": STATUS_PAIRING_EXPIRED}
-
-
-class WindowProtocol(Protocol):
-    """Subset of a pywebview ``Window`` the controller drives.
-
-    pywebview keeps the same ``Window`` across navigation, so the controller can
-    swap between the remote WebUI and the local connection screen on one window.
-    """
-
-    def load_url(self, url: str) -> Any:
-        """Navigate the live window to a URL."""
-
-    def load_html(self, content: str) -> Any:
-        """Replace the live window content with inline HTML."""
-
-    def get_current_url(self) -> str | None:
-        """Return the URL of the loaded page (``None`` for inline HTML)."""
-
-
-@dataclass(frozen=True)
-class ServerEntry:
-    """A remembered Desktop server target.
-
-    Identity is ``(scheme, host, port)`` — the optional ``label`` is display
-    only. This mirrors the on-disk ``servers`` entry shape so the settings store
-    and the controller speak the same vocabulary.
-    """
-
-    host: str
-    port: int
-    label: str | None = None
-    scheme: Scheme = "http"
-
-    @classmethod
-    def for_address(cls, address: ServerAddress, label: str | None = None) -> ServerEntry:
-        """The entry of a validated address."""
-
-        return cls(address.host, address.port, label or None, address.scheme)
-
-    @property
-    def address(self) -> ServerAddress:
-        """The server address of the entry."""
-
-        return ServerAddress(self.scheme, self.host, self.port)
-
-    @property
-    def key(self) -> tuple[str, str, int]:
-        """Return the identity used to match/deduplicate remembered servers."""
-
-        return (self.scheme, self.host, self.port)
-
-    def to_storage(self) -> dict[str, Any]:
-        """Render the entry as a settings ``servers`` dict (scheme only for HTTPS)."""
-
-        entry: dict[str, Any] = {"host": self.host, "port": self.port}
-        if self.scheme == HTTPS_SCHEME:
-            entry[SCHEME_KEY] = HTTPS_SCHEME
-        if self.label:
-            entry["label"] = self.label
-        return entry
-
-    @classmethod
-    def from_storage(cls, entry: dict[str, Any]) -> ServerEntry:
-        """Build an entry from a normalized settings ``servers`` dict."""
-
-        label = entry.get("label")
-        return cls(
-            host=entry["host"],
-            port=entry["port"],
-            label=label if isinstance(label, str) else None,
-            scheme="https" if entry.get(SCHEME_KEY) == HTTPS_SCHEME else "http",
-        )
-
-    def to_bridge(self) -> dict[str, Any]:
-        """Render the entry for bridge callers, which pass ``host`` and ``port`` back.
-
-        ``host`` is the plain host of an HTTP server and the ``https://`` address
-        of an HTTPS one.
-        """
-
-        payload: dict[str, Any] = {
-            "host": self.address.bridge_host,
-            "port": self.port,
-            "scheme": self.scheme,
-        }
-        if self.label:
-            payload["label"] = self.label
-        return payload
-
-    def display_name(self) -> str:
-        """Return a human label for the UI — explicit label or the address."""
-
-        display = self.address.display
-        return f"{self.label} ({display})" if self.label else display
-
-
-@dataclass(frozen=True)
-class PreparedConnection:
-    """A connect outcome whose visible navigation has not happened yet.
-
-    pywebview API calls return through a Promise callback stored in the current
-    document. Replacing that document before the Python method returns destroys
-    the callback and makes pywebview raise while delivering the result. This
-    value lets bridge callers receive the outcome first and navigate from
-    JavaScript afterwards, while native callers apply the same outcome
-    themselves.
-
-    ``failure`` names a sign-in outcome beside the probe ``result`` (a pairing
-    offered or waiting for approval included). ``ticket_url`` signs the window
-    in and never leaves the Desktop: a bridge caller gets :data:`SIGN_IN_PAGE`
-    as ``navigation_url``.
-    """
-
-    result: DesktopProbeResult
-    navigation_url: str | None = None
-    error_title: str | None = None
-    error_body: str | None = None
-    failure: str | None = None
-    offer: PairingOffer | None = None
-    pairing: PairingView | None = None
-    ticket_url: str | None = field(default=None, repr=False)
-
-    @property
-    def status(self) -> str:
-        """The outcome: a sign-in status, else the probe status."""
-
-        return self.failure or self.result.status
-
-    def to_bridge_payload(self) -> dict[str, Any]:
-        """Return the plain payload consumed by Desktop JavaScript callers."""
-
-        payload: dict[str, Any] = {"status": self.status}
-        if self.navigation_url is not None:
-            payload["url"] = self.navigation_url
-        if self.error_title is not None:
-            payload["error_title"] = self.error_title
-        if self.error_body is not None:
-            payload["error_body"] = self.error_body
-        if self.offer is not None:
-            payload["offer"] = self.offer.to_payload()
-        if self.pairing is not None:
-            payload["pairing"] = self.pairing.to_payload()
-        return payload
-
-
-@dataclass(frozen=True)
-class _Attempt:
-    """One connect attempt: the probe, then the sign-in the server needs.
-
-    ``pair`` means the server needs this Desktop paired; the user decides.
-    """
-
-    result: DesktopProbeResult
-    ticket_path: str | None = field(default=None, repr=False)
-    pair: bool = False
-    failure: str | None = None
-
-
-@dataclass(eq=False)
-class _LaunchConnect:
-    """The launch connect while its outcome may still replace the window's content."""
-
-    target: DesktopTarget
-    label: str | None
-    open_session: SessionLink | None
-    location: str | None
-    started: float
-    # Set once the connection screen shows the waiting state.
-    waiting: bool = False
-    stop: threading.Event = field(default_factory=threading.Event)
-
-
-@dataclass(eq=False)
-class _PairingWait:
-    """A pairing waiting for approval; its outcome may still replace the window's content."""
-
-    request: PairingRequest
-    target: DesktopTarget
-    label: str | None
-    open_session: SessionLink | None
-    location: str | None
-    # The connection screen shows the code; failures are shown there too.
-    on_screen: bool
-    stop: threading.Event = field(default_factory=threading.Event)
-
-
-@dataclass(eq=False)
-class _Offer:
-    """The server the connection screen offers to pair with, and where to go afterwards."""
-
-    view: PairingOffer
-    target: DesktopTarget
-    label: str | None
-    open_session: SessionLink | None
-    location: str | None
-    # Until when a page that started the connect may still reach SIGN_IN_PAGE,
-    # where the window then shows the connection screen with the offer.
-    screen_due: float | None = None
-
-
-@dataclass(eq=False)
-class _Landing:
-    """A window sign-in until its ticket has landed the window on the WebUI.
-
-    The ticket redirects to ``app_url``'s page; ``app_url`` is loaded only when
-    the window landed anywhere else on the server.
-    """
-
-    address: ServerAddress
-    ticket_url: str = field(repr=False)
-    app_url: str
-    expires_at: float
-    # Set once the window was sent to the ticket.
-    redeeming: bool = False
-
-
-# -- Remembered-servers operations -------------------------------------------
-
-
-def list_servers(settings_file: Path | None = None) -> list[ServerEntry]:
-    """Return the remembered servers in stored order."""
-
-    return [ServerEntry.from_storage(entry) for entry in read_servers(settings_file)]
-
-
-def add_server(
-    host: str,
-    port: Any,
-    label: str | None = None,
-    *,
-    settings_file: Path | None = None,
-) -> ServerEntry:
-    """Add (or update) a remembered server, keyed by scheme, host and port.
-
-    ``host`` may be an ``https://`` address (its port then wins over ``port``).
-    An existing entry with the same identity is replaced in place (so a re-add
-    can refresh its label) rather than duplicated; the list order is otherwise
-    preserved. The address is validated through the shared Desktop rules before
-    anything is persisted, so a malformed entry never reaches disk.
-    """
-
-    entry = ServerEntry.for_address(parse_server_address(host, port), label)
-
-    servers = list_servers(settings_file)
-    replaced = False
-    updated: list[ServerEntry] = []
-    for existing in servers:
-        if existing.key == entry.key:
-            updated.append(entry)
-            replaced = True
-        else:
-            updated.append(existing)
-    if not replaced:
-        updated.append(entry)
-
-    write_servers([item.to_storage() for item in updated], settings_file)
-    return entry
-
-
-def remove_server(
-    host: str,
-    port: Any,
-    *,
-    settings_file: Path | None = None,
-) -> bool:
-    """Remove a remembered server by its address (as :func:`add_server` takes it).
-
-    Returns whether an entry was removed. Removing the last-used target also
-    clears the last-used reference so launch does not point at a server the user
-    just forgot.
-    """
-
-    target_key = _entry_key(host, port)
-    servers = list_servers(settings_file)
-    remaining = [entry for entry in servers if entry.key != target_key]
-    if len(remaining) == len(servers):
-        return False
-
-    write_servers([entry.to_storage() for entry in remaining], settings_file)
-
-    last_used = read_last_used(settings_file)
-    if last_used is not None and ServerEntry.from_storage(last_used).key == target_key:
-        clear_last_used(settings_file)
-    return True
-
-
-def select_server(
-    host: str,
-    port: Any,
-    *,
-    settings_file: Path | None = None,
-) -> None:
-    """Mark a server as last-used so the next launch auto-connects to it."""
-
-    address = parse_server_address(host, port)
-    write_last_used(address.host, address.port, settings_file, scheme=address.scheme)
-
-
-def resolve_last_used(settings_file: Path | None = None) -> ServerEntry | None:
-    """Resolve the target to auto-connect on launch.
-
-    The last-used reference wins; when it names a remembered server the stored
-    label is carried through. With no last-used reference, the first remembered
-    server is used. With nothing remembered at all, ``None`` signals first-run —
-    the caller opens the connection screen instead of grabbing a default.
-    """
-
-    servers = list_servers(settings_file)
-    last_used = read_last_used(settings_file)
-    if last_used is not None:
-        wanted = ServerEntry.from_storage(last_used)
-        for entry in servers:
-            if entry.key == wanted.key:
-                return entry
-        return wanted
-    if servers:
-        return servers[0]
-    return None
-
-
-def _entry_key(host: Any, port: Any) -> tuple[str, Any, Any]:
-    """The identity of an address; a value that does not parse keeps its raw form."""
-
-    try:
-        return ServerEntry.for_address(parse_server_address(host, port)).key
-    except ValueError:
-        return ("http", host, port)
-
-
-# -- Controller --------------------------------------------------------------
 
 
 class ConnectionController:
@@ -462,7 +113,7 @@ class ConnectionController:
         self,
         *,
         settings_file: Path | None = None,
-        window: WindowProtocol | None = None,
+        window: state.WindowProtocol | None = None,
         probe: Callable[[DesktopTarget], DesktopProbeResult] = probe_target,
         access: ServerAccess | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -485,8 +136,8 @@ class ConnectionController:
         # lock, never held while the window is driven.
         self._window_lock = threading.Lock()
         self._active_address: ServerAddress | None = None
-        self._landing: _Landing | None = None
-        self._offer: _Offer | None = None
+        self._landing: state._Landing | None = None
+        self._offer: state._Offer | None = None
         # Only the connection screen carries it: bridge calls that connect,
         # pair or forget a sign-in must come from that screen.
         self._screen_key = secrets.token_urlsafe(32)
@@ -497,13 +148,13 @@ class ConnectionController:
         # the user starts and close() end it under this lock, so a late outcome
         # never replaces what the user chose. Never taken on the GUI thread.
         self._lock = threading.Lock()
-        self._pending: _LaunchConnect | _PairingWait | None = None
+        self._pending: state._LaunchConnect | state._PairingWait | None = None
         self._worker: threading.Thread | None = None
         self._closed = False
         if access is not None:
             access.set_sign_in_lost_listener(self._sign_in_lost)
 
-    def attach_window(self, window: WindowProtocol) -> None:
+    def attach_window(self, window: state.WindowProtocol) -> None:
         """Bind the live pywebview window the controller navigates."""
 
         self._window = window
@@ -548,15 +199,15 @@ class ConnectionController:
 
     # -- Remembered-servers surface (delegates to the module operations) -----
 
-    def list_servers(self) -> list[ServerEntry]:
+    def list_servers(self) -> list[servers.ServerEntry]:
         """Return the remembered servers in stored order."""
 
-        return list_servers(self._settings_file)
+        return servers.list_servers(self._settings_file)
 
     def describe_servers(self) -> list[dict[str, Any]]:
         """Return the remembered servers for bridge callers.
 
-        Each entry is :meth:`ServerEntry.to_bridge` plus ``active`` (the window's
+        Each entry is :meth:`servers.ServerEntry.to_bridge` plus ``active`` (the window's
         server) and ``signed_in`` (a device token is stored for it).
         """
 
@@ -571,16 +222,16 @@ class ConnectionController:
             for entry in self.list_servers()
         ]
 
-    def add_server(self, host: str, port: Any, label: str | None = None) -> ServerEntry:
+    def add_server(self, host: str, port: Any, label: str | None = None) -> servers.ServerEntry:
         """Remember a server, keyed by scheme, host and port."""
 
-        return add_server(host, port, label, settings_file=self._settings_file)
+        return servers.add_server(host, port, label, settings_file=self._settings_file)
 
     def is_remembered(self, host: Any, port: Any) -> bool:
         """Whether ``host:port`` (or an ``https://`` address) is a remembered server."""
 
         try:
-            key = ServerEntry.for_address(parse_server_address(host, port)).key
+            key = servers.ServerEntry.for_address(parse_server_address(host, port)).key
         except ValueError:
             return False
         return any(entry.key == key for entry in self.list_servers())
@@ -588,7 +239,7 @@ class ConnectionController:
     def remove_server(self, host: str, port: Any) -> bool:
         """Forget a remembered server and its stored sign-in."""
 
-        removed = remove_server(host, port, settings_file=self._settings_file)
+        removed = servers.remove_server(host, port, settings_file=self._settings_file)
         try:
             address = parse_server_address(host, port)
         except ValueError:
@@ -611,10 +262,10 @@ class ConnectionController:
                 self._lost_handled = True
         return self._access.forget(address)
 
-    def resolve_last_used(self) -> ServerEntry | None:
+    def resolve_last_used(self) -> servers.ServerEntry | None:
         """Resolve the launch target (last-used, else first remembered, else None)."""
 
-        return resolve_last_used(self._settings_file)
+        return servers.resolve_last_used(self._settings_file)
 
     # -- Navigation ----------------------------------------------------------
 
@@ -653,7 +304,7 @@ class ConnectionController:
         the launch connect goes on waiting.
         """
 
-        launch = _LaunchConnect(
+        launch = state._LaunchConnect(
             target=self._build_target(host, port),
             label=label,
             open_session=open_session,
@@ -711,7 +362,7 @@ class ConnectionController:
         label: str | None = None,
         *,
         on_screen: bool = False,
-    ) -> PreparedConnection:
+    ) -> state.PreparedConnection:
         """Probe, sign in and persist a target the user chose, without replacing the document.
 
         One attempt, never waiting: successful attempts are remembered, marked
@@ -721,7 +372,7 @@ class ConnectionController:
         pywebview can deliver the payload to JavaScript before that document
         applies the outcome. A server that needs pairing returns the offer
         (``offer``, also as error copy) when ``on_screen`` (the connection
-        screen calls); a server's page is sent to :data:`SIGN_IN_PAGE`
+        screen calls); a server's page is sent to :data:`state.SIGN_IN_PAGE`
         instead, where the window shows the connection screen with the offer.
         It ends the launch connect and a pending pairing first, so the user's
         choice wins.
@@ -736,9 +387,9 @@ class ConnectionController:
         with self._window_lock:
             if self._offer is not None:
                 self._offer.screen_due = self._clock() + SIGN_IN_LANDING_SECONDS
-        return replace(prepared, offer=None, navigation_url=SIGN_IN_PAGE)
+        return replace(prepared, offer=None, navigation_url=state.SIGN_IN_PAGE)
 
-    def start_pairing(self, host: str, port: Any, name: Any = None) -> PreparedConnection:
+    def start_pairing(self, host: str, port: Any, name: Any = None) -> state.PreparedConnection:
         """Ask the server for a pairing code with the device ``name`` the user confirmed.
 
         Only the connection screen calls this, after it offered the server. The
@@ -751,7 +402,9 @@ class ConnectionController:
         target = self._build_target(host, port)
         address = target.address
         if address is None or self._access is None:
-            return _failed(DesktopProbeResult(PROBE_INVALID_TARGET, target), PROBE_INVALID_TARGET)
+            return state._failed(
+                DesktopProbeResult(PROBE_INVALID_TARGET, target), PROBE_INVALID_TARGET
+            )
         result = DesktopProbeResult(PROBE_WEBUI_AVAILABLE, target, ACCESS_MODE_AUTHENTICATED)
         with self._window_lock:
             offer = self._offer
@@ -761,12 +414,12 @@ class ConnectionController:
             request = self._access.start_pairing(address, name)
         except AccessFailure as exc:
             logger.warning("Desktop pairing with %s failed to start (%s)", address.display, exc)
-            return _failed(result, exc.error_code)
+            return state._failed(result, exc.error_code)
         view = PairingView(
             code=request.code, server=address.display, origin=address.origin, target=target
         )
         logger.info("Desktop waiting for %s to approve its pairing", address.display)
-        wait = _PairingWait(
+        wait = state._PairingWait(
             request,
             target,
             offer.label if offer is not None else None,
@@ -776,7 +429,7 @@ class ConnectionController:
         )
         with self._lock:
             self._wait_for_pairing_locked(wait)
-        return PreparedConnection(
+        return state.PreparedConnection(
             result=result,
             failure=STATUS_PAIRING_REQUIRED,
             error_title=view.title,
@@ -791,7 +444,7 @@ class ConnectionController:
         """
 
         with self._lock:
-            if not isinstance(self._pending, _PairingWait):
+            if not isinstance(self._pending, state._PairingWait):
                 return False
             self._end_pending_locked()
         logger.info("Desktop pairing cancelled")
@@ -801,7 +454,7 @@ class ConnectionController:
         """Continue a window sign-in once the window loaded a page (pywebview ``loaded``).
 
         A connect the page started is signed in when the page it was sent to
-        (:data:`SIGN_IN_PAGE`) has loaded: the window opens the ticket. The
+        (:data:`state.SIGN_IN_PAGE`) has loaded: the window opens the ticket. The
         ticket redirects to the WebUI with the Desktop's parameters, and a URL
         fragment the ticket URL carries stays with that redirect. A window the
         server sent to another page loads the WebUI page itself. A ticket the
@@ -823,7 +476,7 @@ class ConnectionController:
             if offer is not None and offer.screen_due is not None:
                 if self._clock() > offer.screen_due:
                     offer.screen_due = None
-                elif url in (None, SIGN_IN_PAGE):
+                elif url in (None, state.SIGN_IN_PAGE):
                     # The page that started the connect left: offer pairing natively.
                     offer.screen_due = None
                     show_offer = offer.view
@@ -840,7 +493,7 @@ class ConnectionController:
                 self._landing = None
                 return
             if not landing.redeeming:
-                if url not in (None, SIGN_IN_PAGE):
+                if url not in (None, state.SIGN_IN_PAGE):
                     return
                 landing.redeeming = True
                 step = "ticket"
@@ -913,7 +566,7 @@ class ConnectionController:
             )
         return DesktopTarget.for_address(address)
 
-    def _attempt(self, target: DesktopTarget, landing: str, *, pair: bool = True) -> _Attempt:
+    def _attempt(self, target: DesktopTarget, landing: str, *, pair: bool = True) -> state._Attempt:
         """Probe the target; sign in when its server is in the access mode ``authenticated``.
 
         The sign-in's ticket lands on ``landing`` (:meth:`_app_path`). Without a
@@ -929,19 +582,19 @@ class ConnectionController:
             or result.status != PROBE_WEBUI_AVAILABLE
             or result.access_mode != ACCESS_MODE_AUTHENTICATED
         ):
-            return _Attempt(result)
+            return state._Attempt(result)
         sign_in = self._access.sign_in(address, landing)
         if sign_in.ticket_path is not None:
-            return _Attempt(result, ticket_path=sign_in.ticket_path)
+            return state._Attempt(result, ticket_path=sign_in.ticket_path)
         if sign_in.error_code is not None:
-            return _Attempt(result, failure=sign_in.error_code)
+            return state._Attempt(result, failure=sign_in.error_code)
         if not sign_in.pairing_required:
-            return _Attempt(result)
+            return state._Attempt(result)
         if not pair:
-            return _Attempt(result, failure=STATUS_SIGN_IN_FAILED)
-        return _Attempt(result, pair=True)
+            return state._Attempt(result, failure=STATUS_SIGN_IN_FAILED)
+        return state._Attempt(result, pair=True)
 
-    def _keep_trying(self, launch: _LaunchConnect) -> None:
+    def _keep_trying(self, launch: state._LaunchConnect) -> None:
         """Try the launch target again until it answers, the deadline passes or it ends."""
 
         deadline = launch.started + LAUNCH_WAIT_SECONDS
@@ -974,7 +627,7 @@ class ConnectionController:
                 "Desktop launch connect to %s stopped unexpectedly", launch.target.display
             )
 
-    def _finish_launch(self, launch: _LaunchConnect, attempt: _Attempt) -> None:
+    def _finish_launch(self, launch: state._LaunchConnect, attempt: state._Attempt) -> None:
         """Apply the launch connect's outcome to the window (under the lock)."""
 
         waited = self._clock() - launch.started if launch.waiting else None
@@ -991,7 +644,7 @@ class ConnectionController:
             return
         self._apply(prepared)
 
-    def _wait_for_pairing_locked(self, wait: _PairingWait) -> None:
+    def _wait_for_pairing_locked(self, wait: state._PairingWait) -> None:
         """Make ``wait`` the pending step and poll for its outcome in the background."""
 
         self._end_pending_locked()
@@ -1000,7 +653,7 @@ class ConnectionController:
         self._pending = wait
         self._start_worker(self._await_pairing, wait, "vbot-desktop-pairing")
 
-    def _await_pairing(self, wait: _PairingWait) -> None:
+    def _await_pairing(self, wait: state._PairingWait) -> None:
         """Wait for the pairing's outcome; connect once approved, else report it."""
 
         access = self._access
@@ -1034,7 +687,7 @@ class ConnectionController:
         except Exception:
             logger.exception("Desktop pairing with %s stopped unexpectedly", wait.target.display)
 
-    def _apply(self, prepared: PreparedConnection) -> None:
+    def _apply(self, prepared: state.PreparedConnection) -> None:
         """Navigate the window to a prepared outcome, or show its failure."""
 
         if prepared.ticket_url is not None:
@@ -1050,13 +703,13 @@ class ConnectionController:
     def _settle(
         self,
         target: DesktopTarget,
-        attempt: _Attempt,
+        attempt: state._Attempt,
         label: str | None,
         *,
         open_session: SessionLink | None = None,
         location: str | None = None,
         waited: float | None = None,
-    ) -> PreparedConnection:
+    ) -> state.PreparedConnection:
         """Remember and announce a successful connect, or describe the failure inline."""
 
         result = attempt.result
@@ -1069,14 +722,14 @@ class ConnectionController:
                 result.status,
                 waited_note,
             )
-            return _failed(result, result.status)
+            return state._failed(result, result.status)
 
         self._remember(address, label)
         if attempt.failure is not None:
             logger.warning(
                 "Desktop sign-in to %s failed (%s)%s", address.display, attempt.failure, waited_note
             )
-            return _failed(result, attempt.failure)
+            return state._failed(result, attempt.failure)
         if attempt.pair:
             offer = PairingOffer(
                 server=address.display,
@@ -1085,9 +738,9 @@ class ConnectionController:
                 target=target,
             )
             with self._window_lock:
-                self._offer = _Offer(offer, target, label, open_session, location)
+                self._offer = state._Offer(offer, target, label, open_session, location)
             logger.info("Desktop offers to pair with %s", address.display)
-            return PreparedConnection(
+            return state.PreparedConnection(
                 result=result,
                 failure=STATUS_PAIRING_REQUIRED,
                 error_title=offer.title,
@@ -1111,12 +764,16 @@ class ConnectionController:
         landing = (
             None
             if ticket_url is None
-            else _Landing(address, ticket_url, app_url, self._clock() + SIGN_IN_LANDING_SECONDS)
+            else state._Landing(
+                address, ticket_url, app_url, self._clock() + SIGN_IN_LANDING_SECONDS
+            )
         )
         self._activate(address, landing)
         if ticket_url is None:
-            return PreparedConnection(result=result, navigation_url=app_url)
-        return PreparedConnection(result=result, navigation_url=SIGN_IN_PAGE, ticket_url=ticket_url)
+            return state.PreparedConnection(result=result, navigation_url=app_url)
+        return state.PreparedConnection(
+            result=result, navigation_url=state.SIGN_IN_PAGE, ticket_url=ticket_url
+        )
 
     def _app_path(self, open_session: SessionLink | None) -> str:
         """The WebUI page the window opens: ``/`` with the Desktop's query parameters."""
@@ -1128,14 +785,14 @@ class ConnectionController:
         """Remember a server that answered; a connect without a name keeps the saved one."""
 
         if label is None:
-            key = ServerEntry.for_address(address).key
+            key = servers.ServerEntry.for_address(address).key
             label = next((entry.label for entry in self.list_servers() if entry.key == key), None)
         self.add_server(address.bridge_host, address.port, label)
 
-    def _activate(self, address: ServerAddress, landing: _Landing | None) -> None:
+    def _activate(self, address: ServerAddress, landing: state._Landing | None) -> None:
         """Make ``address`` the window's server: last-used, active, and announced."""
 
-        select_server(address.bridge_host, address.port, settings_file=self._settings_file)
+        servers.select_server(address.bridge_host, address.port, settings_file=self._settings_file)
         with self._window_lock:
             self._active_address = address
             self._landing = landing
@@ -1178,18 +835,18 @@ class ConnectionController:
             if reason == "closed":
                 self._closed = True
             pending = self._end_pending_locked()
-        if isinstance(pending, _LaunchConnect) and pending.waiting:
+        if isinstance(pending, state._LaunchConnect) and pending.waiting:
             logger.info(
                 "Desktop stopped waiting for %s (reason=%s)", pending.target.display, reason
             )
-        elif isinstance(pending, _PairingWait):
+        elif isinstance(pending, state._PairingWait):
             logger.info(
                 "Desktop stopped waiting for the pairing with %s (reason=%s)",
                 pending.target.display,
                 reason,
             )
 
-    def _end_pending_locked(self) -> _LaunchConnect | _PairingWait | None:
+    def _end_pending_locked(self) -> state._LaunchConnect | state._PairingWait | None:
         pending, self._pending = self._pending, None
         if pending is not None:
             pending.stop.set()
@@ -1254,22 +911,10 @@ class ConnectionController:
     def _signed_in(self, address: ServerAddress) -> bool:
         return self._access is not None and self._access.signed_in(address)
 
-    def _require_window(self) -> WindowProtocol:
+    def _require_window(self) -> state.WindowProtocol:
         if self._window is None:
             raise RuntimeError("ConnectionController has no window attached")
         return self._window
-
-
-def _failed(result: DesktopProbeResult, status: str) -> PreparedConnection:
-    """A failed connect with the inline error copy of ``status``."""
-
-    error_title, error_body = connection_error_copy(status)
-    return PreparedConnection(
-        result=result,
-        error_title=error_title,
-        error_body=error_body,
-        failure=None if status == result.status else status,
-    )
 
 
 def _with_accessor_param(url: str, desktop_session_id: str) -> str:

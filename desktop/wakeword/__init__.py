@@ -18,15 +18,17 @@ from desktop.wakeword.engine import (
 )
 
 if TYPE_CHECKING:
-    from desktop.wakeword.controller import VoiceController, VoiceRuntime
+    from desktop.wakeword.controller import VoiceController
+    from desktop.wakeword.listener import VoiceRuntime
 
 
 def __getattr__(name: str) -> Any:
     if name not in {"VoiceController", "VoiceRuntime"}:
         raise AttributeError(name)
-    from desktop.wakeword import controller
+    import importlib
 
-    return getattr(controller, name)
+    module = "controller" if name == "VoiceController" else "listener"
+    return getattr(importlib.import_module(f"desktop.wakeword.{module}"), name)
 
 
 __all__ = [

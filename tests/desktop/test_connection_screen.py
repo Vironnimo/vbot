@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from desktop.connection import ServerEntry
 from desktop.connection_screen import (
     STATUS_DEVICES_UNAVAILABLE,
     STATUS_HTTPS_REQUIRED,
@@ -17,7 +16,7 @@ from desktop.connection_screen import (
     build_connection_html,
     connection_error_copy,
 )
-from desktop.main import (
+from desktop.probe import (
     PROBE_ACCESS_DENIED,
     PROBE_INVALID_TARGET,
     PROBE_NOT_VBOT_SERVER,
@@ -27,6 +26,7 @@ from desktop.main import (
     DesktopTarget,
 )
 from desktop.server_address import ServerAddress, validate_host
+from desktop.servers import ServerEntry
 
 CLOUD = ServerEntry("vbot.example.com", 443, "Cloud", "https")
 CLOUD_TARGET = DesktopTarget.for_address(ServerAddress("https", "vbot.example.com", 443))

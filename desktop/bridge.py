@@ -48,10 +48,11 @@ from desktop.system_actions import DesktopSystemActions
 from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordModelError
 
 if TYPE_CHECKING:
-    from desktop.connection import PreparedConnection, ServerEntry
+    from desktop.connection_types import PreparedConnection
     from desktop.dictation.controller import DictationController
     from desktop.hotkey import HotkeyController
     from desktop.restart import DesktopRestart
+    from desktop.servers import ServerEntry
     from desktop.speech.microphone import MicrophoneService
     from desktop.wakeword.controller import VoiceController
     from desktop.zoom import DesktopZoom

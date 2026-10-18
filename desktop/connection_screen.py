@@ -22,7 +22,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from desktop.main import (
+from desktop.probe import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     PROBE_ACCESS_DENIED,
@@ -36,7 +36,7 @@ from desktop.main import (
 )
 
 if TYPE_CHECKING:
-    from desktop.connection import ServerEntry
+    from desktop.servers import ServerEntry
 
 _WAITING_BODY = (
     "vBot Desktop connects as soon as the server answers. You can also choose another server below."

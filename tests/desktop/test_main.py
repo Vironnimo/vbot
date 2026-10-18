@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import ast
 import json
-import logging
-import os
 import re
 import stat
 import subprocess
@@ -14,21 +12,22 @@ import threading
 import time
 import types
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, override
 
-import httpx
 import pytest
 
+from desktop import _logging as desktop_logging
 from desktop import connection as desktop_connection
 from desktop import hotkey as desktop_hotkey
 from desktop import main as desktop_main
 from desktop import page_events as desktop_page_events
+from desktop import probe as desktop_probe
 from desktop import restart as desktop_restart
 from desktop.dictation import controller as desktop_dictation
-from desktop.main import DesktopProbeResult, DesktopTarget
+from desktop.probe import DesktopProbeResult, DesktopTarget
 from desktop.speech import cues as desktop_cues
+from tests.desktop.window_test_support import FakeScreen
 
 _TEST_DESKTOP_SESSION_ID = "desktop-test-session"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -176,17 +175,6 @@ def launch_seams(monkeypatch: pytest.MonkeyPatch) -> LaunchSeams:
     return seams
 
 
-@dataclass
-class FakeResponse:
-    status_code: int
-    payload: Any = None
-
-    def json(self) -> Any:
-        if isinstance(self.payload, Exception):
-            raise self.payload
-        return self.payload
-
-
 class FakeWindow:
     """Live-window double recording the navigation the controller drives."""
 
@@ -245,32 +233,6 @@ class FakeWindowEvents:
         self.minimized = FakeEvent()
         self.maximized = FakeEvent()
         self.restored = FakeEvent()
-
-
-@dataclass
-class FakeFrame:
-    """Minimal work-area rectangle double (Windows PascalCase convention)."""
-
-    X: int = 0
-    Y: int = 0
-    Width: int = 1600
-    Height: int = 1000
-
-
-@dataclass
-class FakeScreen:
-    """pywebview Screen double with origin, scale, and optional work area."""
-
-    width: int = 1600
-    height: int = 1000
-    x: int = 0
-    y: int = 0
-    scale: float = 1.0
-    frame: Any = None
-
-    def __post_init__(self) -> None:
-        if self.frame is None:
-            self.frame = FakeFrame(Width=self.width, Height=self.height)
 
 
 class FakeWebview:
@@ -334,7 +296,7 @@ class RecordingVoice:
 
 
 def _available(target: DesktopTarget) -> DesktopProbeResult:
-    return DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target)
+    return DesktopProbeResult(desktop_probe.PROBE_WEBUI_AVAILABLE, target)
 
 
 def _launch(
@@ -452,65 +414,15 @@ def test_main_reports_a_normal_shutdown_only_after_its_own_window(
 ) -> None:
     """A launch that only focused an already running Desktop stops silently."""
 
-    monkeypatch.setattr(desktop_main, "configure_desktop_logging", lambda: None)
-    monkeypatch.setattr(desktop_main, "close_desktop_logging", lambda _handler: None)
-    monkeypatch.setattr(desktop_main, "enable_desktop_crash_log", lambda: None)
+    monkeypatch.setattr(desktop_logging, "configure_desktop_logging", lambda: None)
+    monkeypatch.setattr(desktop_logging, "close_desktop_logging", lambda _handler: None)
+    monkeypatch.setattr(desktop_logging, "enable_desktop_crash_log", lambda: None)
     monkeypatch.setattr(desktop_main, "launch_desktop", lambda _argv: opened)
 
     with caplog.at_level("INFO", logger="vbot.desktop"):
         desktop_main.main([])
 
     assert len([record for record in caplog.records if record.name == "vbot.desktop"]) == records
-
-
-def test_desktop_logging_writes_structured_daily_file(tmp_path: Path) -> None:
-    handler = desktop_main.configure_desktop_logging(tmp_path)
-    assert handler is not None
-    try:
-        logging.getLogger("vbot.desktop.wakeword.controller").warning(
-            "Voice state: error (speech_to_text_unconfigured)"
-        )
-        handler.flush()
-
-        log_files = list((tmp_path / "logs").glob("*.log"))
-        assert len(log_files) == 1
-        content = log_files[0].read_text(encoding="utf-8")
-        assert "[WARN] vbot.desktop.wakeword.controller" in content
-        assert "error (speech_to_text_unconfigured)" in content
-    finally:
-        desktop_main.close_desktop_logging(handler)
-
-
-def test_desktop_crash_log_keeps_earlier_crashes_in_bounded_generations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    enabled: list[dict[str, Any]] = []
-
-    def enable(*, file: Any, **options: Any) -> None:
-        enabled.append({"path": Path(file.name).resolve(), **options})
-        # The real fault handler would keep it open and take over the test process's own.
-        file.close()
-
-    monkeypatch.setattr(desktop_main, "faulthandler", types.SimpleNamespace(enable=enable))
-    monkeypatch.setattr(desktop_main, "_DESKTOP_CRASH_LOG_ROTATE_BYTES", 64)
-    crash_log = tmp_path / "logs" / desktop_main.DESKTOP_CRASH_LOG_NAME
-    crash_log.parent.mkdir()
-    crash_log.write_bytes(b"Windows fatal exception: access violation\n")
-
-    desktop_main.enable_desktop_crash_log(tmp_path)
-    # A start after a crash keeps what the crashed process wrote, then names itself
-    # in one line of the log format, which the dump of a later crash follows.
-    first = crash_log.read_text(encoding="utf-8")
-    crashed, started = first.splitlines()
-    assert crashed == "Windows fatal exception: access violation"
-    assert "[INFO] vbot.desktop - " in started and f"pid={os.getpid()}" in started
-
-    desktop_main.enable_desktop_crash_log(tmp_path)
-    # An oversized crash log moves to its single previous generation.
-    assert crash_log.with_name(f"{crash_log.name}.1").read_text(encoding="utf-8") == first
-    assert len(crash_log.read_text(encoding="utf-8").splitlines()) == 1
-    # Every thread's Python stack, plus the C stack where the platform provides one.
-    assert enabled == [{"path": crash_log.resolve(), "all_threads": True, "c_stack": True}] * 2
 
 
 def test_icon_path_selects_the_platform_native_asset(tmp_path: Path) -> None:
@@ -626,175 +538,8 @@ def test_real_wakeword_availability_requires_the_complete_voice_stack(
 
 # -- Probe classification --------------------------------------------------------
 
-PROBE_TARGET = DesktopTarget("vbot.lan", 9000, "http://vbot.lan:9000/")
-HEALTH_URL = "http://vbot.lan:9000/health"
-ROOT_URL = "http://vbot.lan:9000/"
-STATUS_URL = "http://vbot.lan:9000/api/auth/status"
-HEALTH_OK = FakeResponse(200, {"status": "ok"})
-AUTHENTICATED = FakeResponse(200, {"mode": "authenticated", "authenticated": False})
-ACCESS_DENIED = FakeResponse(
-    403, {"ok": False, "error": {"code": "access_denied", "message": "Access denied"}}
-)
-AVAILABLE = desktop_main.PROBE_WEBUI_AVAILABLE
-UNAVAILABLE = desktop_main.PROBE_WEBUI_UNAVAILABLE
-NOT_VBOT = desktop_main.PROBE_NOT_VBOT_SERVER
-
-
-@pytest.mark.parametrize(
-    ("health", "root", "auth_status", "status", "access_mode"),
-    [
-        pytest.param(HEALTH_OK, FakeResponse(200), AUTHENTICATED, AVAILABLE, "authenticated"),
-        # A server from before access modes has no status route.
-        pytest.param(HEALTH_OK, FakeResponse(399), FakeResponse(404), AVAILABLE, None),
-        pytest.param(
-            HEALTH_OK, FakeResponse(200), FakeResponse(200, {"mode": "x"}), AVAILABLE, None
-        ),
-        pytest.param(HEALTH_OK, FakeResponse(400), None, UNAVAILABLE, None),
-        pytest.param(HEALTH_OK, FakeResponse(500), None, UNAVAILABLE, None),
-        pytest.param(HEALTH_OK, httpx.ConnectError("closed"), None, UNAVAILABLE, None),
-        pytest.param(
-            httpx.ConnectError("refused"), None, None, desktop_main.PROBE_SERVER_UNREACHABLE, None
-        ),
-        pytest.param(ACCESS_DENIED, None, None, desktop_main.PROBE_ACCESS_DENIED, None),
-        pytest.param(FakeResponse(403, {"status": "ok"}), None, None, NOT_VBOT, None),
-        pytest.param(FakeResponse(503, {"status": "ok"}), None, None, NOT_VBOT, None),
-        pytest.param(FakeResponse(200, {"status": "starting"}), None, None, NOT_VBOT, None),
-        pytest.param(
-            FakeResponse(200, {"status": "ok", "version": "dev"}), None, None, NOT_VBOT, None
-        ),
-        pytest.param(FakeResponse(200, ValueError("no json")), None, None, NOT_VBOT, None),
-        pytest.param(FakeResponse(200, ["ok"]), None, None, NOT_VBOT, None),
-    ],
-    ids=[
-        "webui-200-authenticated",
-        "webui-399-without-access-modes",
-        "webui-unknown-access-mode",
-        "webui-400",
-        "webui-500",
-        "webui-request-error",
-        "health-request-error",
-        "health-access-denied",
-        "health-403",
-        "health-503",
-        "health-starting",
-        "health-extra-keys",
-        "health-not-json",
-        "health-not-object",
-    ],
-)
-def test_probe_target_classifies_the_server_with_one_request_per_step(
-    health: FakeResponse | httpx.RequestError,
-    root: FakeResponse | httpx.RequestError | None,
-    auth_status: FakeResponse | None,
-    status: str,
-    access_mode: str | None,
-) -> None:
-    replies = {HEALTH_URL: health, ROOT_URL: root, STATUS_URL: auth_status}
-    requested: list[str] = []
-
-    def get(url: str, *, timeout: httpx.Timeout | float, trust_env: bool) -> FakeResponse:
-        assert (timeout, trust_env) == (desktop_main.PROBE_TIMEOUT_SECONDS, False)
-        requested.append(url)
-        reply = replies[url]
-        assert reply is not None, f"unexpected request: {url}"
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
-
-    result = desktop_main.probe_target(PROBE_TARGET, get=get)
-
-    assert (result.status, result.access_mode) == (status, access_mode)
-    # No retry loop: /health once, the WebUI root once when /health is vBot's,
-    # and the access status once when the WebUI is there.
-    expected = [HEALTH_URL] if root is None else [HEALTH_URL, ROOT_URL]
-    assert requested == (expected if auth_status is None else [*expected, STATUS_URL])
-
-
-def test_probe_target_reports_a_configuration_error_without_a_request() -> None:
-    def get(url: str, *, timeout: httpx.Timeout | float, trust_env: bool) -> FakeResponse:
-        raise AssertionError(f"unexpected request: {url}")
-
-    target = DesktopTarget("bad host", 8420, "", configuration_error="bad host")
-
-    assert desktop_main.probe_target(target, get=get).status == desktop_main.PROBE_INVALID_TARGET
-
-
-@pytest.mark.parametrize(
-    ("root_fails", "host", "connect"),
-    [
-        pytest.param(False, "vbot.test", 0.75, id="remote"),
-        pytest.param(True, "vbot.test", 0.75, id="remote-root-fails"),
-        # A refused loopback connect waits out its whole budget on Windows (about 2 s).
-        pytest.param(False, "127.0.0.1", 0.2, id="loopback-address"),
-        pytest.param(False, "localhost", 0.2, id="localhost"),
-    ],
-)
-def test_probe_reuses_one_unproxied_client_and_closes_it(
-    monkeypatch: pytest.MonkeyPatch, root_fails: bool, host: str, connect: float
-) -> None:
-    clients: list[httpx.Client] = []
-    requests: list[httpx.Request] = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if request.url.path == "/health":
-            return httpx.Response(200, json={"status": "ok"})
-        if root_fails:
-            raise httpx.ConnectError("test transport unavailable", request=request)
-        return httpx.Response(200, text="test WebUI")
-
-    class ProbeClient(httpx.Client):
-        def __init__(self, **kwargs: Any) -> None:
-            assert kwargs["trust_env"] is False
-            assert kwargs["verify"] is desktop_main._http.shared_ssl_context()
-            super().__init__(transport=httpx.MockTransport(respond), **kwargs)
-            clients.append(self)
-
-    monkeypatch.setattr(desktop_main.httpx, "Client", ProbeClient)
-    target = DesktopTarget(host, 8420, f"http://{host}:8420/")
-    result = desktop_main.probe_target(target, timeout=0.75)
-
-    assert result.status == (
-        desktop_main.PROBE_WEBUI_UNAVAILABLE if root_fails else desktop_main.PROBE_WEBUI_AVAILABLE
-    )
-    assert len(clients) == 1
-    assert clients[0].is_closed
-    assert [request.url.path for request in requests] == (
-        ["/health", "/"] if root_fails else ["/health", "/", "/api/auth/status"]
-    )
-    assert all(
-        request.extensions["timeout"]
-        == {"connect": connect, "read": 0.75, "write": 0.75, "pool": 0.75}
-        for request in requests
-    )
-
 
 # -- Window layout -----------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("saved_size", "screen", "size"),
-    [
-        (None, FakeScreen(1920, 1080), (1440, 864)),
-        ((1380, 900), FakeScreen(1920, 1080), (1380, 900)),
-        ((1800, 1100), FakeScreen(1280, 720), (1280, 720)),
-        (
-            (2048, 1152),
-            FakeScreen(2048, 1152, frame=FakeFrame(Width=2048, Height=1104)),
-            (2048, 1104),
-        ),
-        (None, None, (1280, 800)),
-    ],
-    ids=["first-run", "remembered-fits", "smaller-screen", "taskbar-work-area", "no-screen"],
-)
-def test_resolve_window_layout_bounds_the_size_to_the_primary_work_area(
-    saved_size: tuple[int, int] | None, screen: FakeScreen | None, size: tuple[int, int]
-) -> None:
-    layout = desktop_main.resolve_window_layout(saved_size, screen)
-
-    assert (layout.width, layout.height) == size
-    assert (layout.minimum_width, layout.minimum_height) == (800, 600)
-    assert layout.screen is screen
 
 
 @pytest.mark.parametrize(
@@ -928,8 +673,8 @@ def test_first_launch_shows_the_connection_screen_without_probing_localhost(
     ("argv", "saved", "target"),
     [
         (["--host", "pi.lan", "--port", "9000"], None, ("pi.lan", 9000)),
-        (["--port", "9000"], None, (desktop_main.DEFAULT_HOST, 9000)),
-        (["--host", "pi.lan"], None, ("pi.lan", desktop_main.DEFAULT_PORT)),
+        (["--port", "9000"], None, (desktop_probe.DEFAULT_HOST, 9000)),
+        (["--host", "pi.lan"], None, ("pi.lan", desktop_probe.DEFAULT_PORT)),
         (
             ["--host", "new.lan", "--port", "9000"],
             {
@@ -970,7 +715,7 @@ def test_closing_the_window_ends_a_launch_connect_still_waiting_for_its_server(
     saved: dict[str, Any] | None,
 ) -> None:
     def unreachable(target: DesktopTarget) -> DesktopProbeResult:
-        return DesktopProbeResult(desktop_main.PROBE_SERVER_UNREACHABLE, target)
+        return DesktopProbeResult(desktop_probe.PROBE_SERVER_UNREACHABLE, target)
 
     with caplog.at_level("INFO", logger="vbot.desktop.connection"):
         fake_webview = _launch(tmp_path, argv, settings=saved, probe=unreachable)
@@ -1157,7 +902,7 @@ SESSION_REQUEST = {"agent": "builder@project", "session": "session-1"}
         ),
         (
             ["--port", "9000", "--open-session", "builder@project", "session-1"],
-            {"host": desktop_main.DEFAULT_HOST, "port": 9000, **SESSION_REQUEST},
+            {"host": desktop_probe.DEFAULT_HOST, "port": 9000, **SESSION_REQUEST},
             "handed over Session session-1 of builder@project",
         ),
     ],

@@ -10,37 +10,27 @@ to the controller. There is no silent localhost default: the controller
 auto-connects to the last-used server after the GUI loop starts, or shows the
 connection screen on first run / any unreachable target.
 
-This module still owns the shared probing primitives (``probe_target`` /
-``build_target_url`` and the ``PROBE_*`` classifications) that the connection
-controller reuses; server addresses and their validation live in
-:mod:`desktop.server_address`, the sign-in to a server in the access mode
-``authenticated`` in :mod:`desktop.access`.
+Server targets and health probing live in :mod:`desktop.probe`, native window
+placement and activation in :mod:`desktop.window`, and standalone logs in
+:mod:`desktop._logging`. Server addresses and validation live in
+:mod:`desktop.server_address`, sign-in in :mod:`desktop.access`.
 """
 
 from __future__ import annotations
 
 import argparse
-import faulthandler
 import importlib
 import logging
-import os
 import sys
-import threading
 import time
-from collections.abc import Callable, Mapping
-from contextlib import suppress
-from dataclasses import dataclass
-from datetime import date
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, override
+from typing import TYPE_CHECKING, Any
 
-import httpx
-
-from desktop import _http, _windows, restart
+from desktop import _http, _windows, probe, restart
+from desktop import _logging as desktop_logging
+from desktop import window as desktop_window
 from desktop.server_address import (
-    Scheme,
-    ServerAddress,
-    is_loopback_host,
     parse_server_address,
     validate_port,
 )
@@ -60,292 +50,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("vbot.desktop")
 
-DEFAULT_HOST = "127.0.0.1"
-# Same as core.utils.config.DEFAULT_PORT; the Desktop imports nothing from the server side.
-DEFAULT_PORT = 22332
 WINDOW_TITLE = "vBot"
 APP_BACKGROUND_COLOR = "#15130F"
 DEFAULT_ICON_FILE_NAME = "icon.png"
 WINDOWS_ICON_FILE_NAME = "icon.ico"
 WEBVIEW_STORAGE_DIR_NAME = "webview"
-FALLBACK_SCREEN_WIDTH = 1600
-FALLBACK_SCREEN_HEIGHT = 1000
-DEFAULT_WINDOW_SCREEN_RATIO = 0.8
-DEFAULT_WINDOW_MAX_WIDTH = 1440
-DEFAULT_WINDOW_MAX_HEIGHT = 960
-MINIMUM_WINDOW_WIDTH = 800
-MINIMUM_WINDOW_HEIGHT = 600
-WINDOW_SCREEN_EDGE_ALLOWANCE = 80
-PROBE_TIMEOUT_SECONDS = 2.0
-# The kernel completes a loopback handshake even while the server's Event Loop is
-# busy; a refused one is what takes long (Windows retries the SYN for about 2 s).
-LOOPBACK_CONNECT_TIMEOUT_SECONDS = 0.2
-PROBE_WEBUI_AVAILABLE = "webui_available"
-PROBE_WEBUI_UNAVAILABLE = "webui_unavailable"
-PROBE_SERVER_UNREACHABLE = "server_unreachable"
-PROBE_NOT_VBOT_SERVER = "not_vbot_server"
-PROBE_INVALID_TARGET = "invalid_target"
-# The server refused this computer at its access guard (wrong network, or
-# plain HTTP from another computer in the access mode ``authenticated``).
-PROBE_ACCESS_DENIED = "access_denied"
-AUTH_STATUS_PATH = "/api/auth/status"
-ACCESS_MODE_AUTHENTICATED = "authenticated"
-_ACCESS_MODES = frozenset({"local", "lan", ACCESS_MODE_AUTHENTICATED})
-ACCESSOR_QUERY_PARAM = "accessor=desktop"
-SESSION_LINK_PART_MAX_LENGTH = 512
-DESKTOP_LOG_DIRECTORY_NAME = "logs"
-DESKTOP_LOG_FILE_SUFFIX = ".log"
-_DESKTOP_LOG_HANDLER_FLAG = "_vbot_desktop_log_handler"
-_DESKTOP_LOG_FORMAT = "%(asctime)s [%(vbot_level)s] %(name)s - %(message)s"
-_DESKTOP_LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-# Fatal errors (a native crash, a fatal interpreter error) bypass logging; the
-# fault handler writes them to this file beside the daily logs instead.
-DESKTOP_CRASH_LOG_NAME = "desktop-crash.log"
-# Checked at each start: a larger crash log moves to its single previous generation.
-_DESKTOP_CRASH_LOG_ROTATE_BYTES = 1024 * 1024
-
-
-class HttpResponse(Protocol):
-    """Subset of an HTTP response used by Desktop probing."""
-
-    status_code: int
-
-    def json(self) -> Any:
-        """Return the decoded JSON body."""
-
-
-class HttpGet(Protocol):
-    """Synchronous HTTP GET callable used by Desktop probing."""
-
-    def __call__(
-        self, url: str, *, timeout: httpx.Timeout | float, trust_env: bool
-    ) -> HttpResponse:
-        """Fetch a URL with a bounded timeout."""
-
-
-class WebviewModule(Protocol):
-    """Subset of pywebview used by the Desktop shell.
-
-    pywebview requires the window to be created with initial content *before*
-    the GUI loop starts; ``Window.load_url`` / ``load_html`` may only run after
-    ``start``. Desktop therefore attaches its startup callback to the window's
-    ``shown`` event and uses ``start`` only to enter the native GUI loop.
-    """
-
-    screens: list[Any]
-
-    def create_window(self, title: str, **kwargs: Any) -> Any:
-        """Create a window before the GUI loop starts (needs ``url`` or ``html``)."""
-
-    def start(self, func: Any = None, **kwargs: Any) -> Any:
-        """Start the native GUI loop, calling ``func`` once after it starts."""
-
-
-@dataclass(frozen=True)
-class DesktopTarget:
-    """Resolved Desktop server target.
-
-    ``host`` is the plain host name (also for an HTTPS server); ``url`` its base
-    URL. A target that could not be validated carries the attempted values and
-    its ``configuration_error``.
-    """
-
-    host: str
-    port: int
-    url: str
-    configuration_error: str | None = None
-    scheme: Scheme = "http"
-
-    @classmethod
-    def for_address(cls, address: ServerAddress) -> DesktopTarget:
-        """The target of a validated address."""
-        return cls(address.host, address.port, address.url, scheme=address.scheme)
-
-    @property
-    def address(self) -> ServerAddress | None:
-        """The validated address, or ``None`` for a target with a configuration error."""
-        if self.configuration_error is not None:
-            return None
-        return ServerAddress(self.scheme, self.host, self.port)
-
-    @property
-    def display(self) -> str:
-        """How the user sees the target: ``host:port`` or the HTTPS address."""
-        address = self.address
-        return address.display if address is not None else f"{self.host}:{self.port}"
-
-
-@dataclass(frozen=True)
-class SessionLink:
-    """One Session to open in the WebUI: its Agent address (``agent`` or
-    ``agent@project``) and its Session id."""
-
-    agent: str
-    session: str
-
-
-@dataclass(frozen=True)
-class DesktopProbeResult:
-    """Result of probing a target vBot server and its WebUI root.
-
-    ``access_mode`` is the server's access mode (``local``, ``lan`` or
-    ``authenticated``) when its WebUI is available and it reported one; a
-    server from before access modes, or one whose status could not be read,
-    leaves it ``None`` and needs no sign-in.
-    """
-
-    status: str
-    target: DesktopTarget
-    access_mode: str | None = None
-
-
-@dataclass(frozen=True)
-class DesktopWindowLayout:
-    """Initial Desktop window size, its screen-safe resize floor, and the
-    pywebview Screen to center the window on (or None for OS-default centering)."""
-
-    width: int
-    height: int
-    minimum_width: int
-    minimum_height: int
-    screen: Any = None
-
-
-class _DesktopLogFormatter(logging.Formatter):
-    """Render the Desktop process with the same structured labels as vBot logs."""
-
-    @override
-    def format(self, record: logging.LogRecord) -> str:
-        original_label = getattr(record, "vbot_level", None)
-        record.vbot_level = "WARN" if record.levelname == "WARNING" else record.levelname
-        try:
-            return super().format(record)
-        finally:
-            if original_label is None:
-                delattr(record, "vbot_level")
-            else:
-                record.vbot_level = original_label
-
-
-class _DesktopDailyFileHandler(logging.FileHandler):
-    """Write the standalone Desktop process to per-user daily log files."""
-
-    def __init__(
-        self,
-        logs_directory: Path,
-        *,
-        current_date_provider: Callable[[], date] = date.today,
-    ) -> None:
-        self._logs_directory = logs_directory
-        self._logs_directory.mkdir(parents=True, exist_ok=True)
-        self._current_date_provider = current_date_provider
-        self._active_date = current_date_provider()
-        self.original_logger_level = logging.NOTSET
-        self.original_logger_propagate = True
-        super().__init__(self._path_for(self._active_date), encoding="utf-8")
-
-    @override
-    def emit(self, record: logging.LogRecord) -> None:
-        self._rotate_if_needed()
-        super().emit(record)
-
-    def _rotate_if_needed(self) -> None:
-        current_date = self._current_date_provider()
-        if current_date == self._active_date:
-            return
-        self.acquire()
-        try:
-            if current_date == self._active_date:
-                return
-            if self.stream is not None:
-                self.stream.close()
-            self._active_date = current_date
-            self.baseFilename = os.fspath(self._path_for(current_date))
-            self.stream = self._open()
-        finally:
-            self.release()
-
-    def _path_for(self, target_date: date) -> Path:
-        return self._logs_directory / f"{target_date.isoformat()}{DESKTOP_LOG_FILE_SUFFIX}"
-
-
-def configure_desktop_logging(
-    desktop_config_directory: Path | None = None,
-) -> logging.Handler | None:
-    """Attach structured per-user file logging for the standalone Desktop process."""
-
-    vbot_logger = logging.getLogger("vbot")
-    for handler in vbot_logger.handlers:
-        if getattr(handler, _DESKTOP_LOG_HANDLER_FLAG, False):
-            return handler
-    try:
-        handler = _DesktopDailyFileHandler(
-            (desktop_config_directory or config_dir()) / DESKTOP_LOG_DIRECTORY_NAME
-        )
-    except OSError:
-        return None
-    setattr(handler, _DESKTOP_LOG_HANDLER_FLAG, True)
-    handler.original_logger_level = vbot_logger.level
-    handler.original_logger_propagate = vbot_logger.propagate
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(
-        _DesktopLogFormatter(_DESKTOP_LOG_FORMAT, datefmt=_DESKTOP_LOG_DATE_FORMAT)
-    )
-    vbot_logger.setLevel(logging.INFO)
-    vbot_logger.propagate = False
-    vbot_logger.addHandler(handler)
-    return handler
-
-
-def close_desktop_logging(handler: logging.Handler | None) -> None:
-    """Detach the file handler created for this Desktop process."""
-
-    if handler is None:
-        return
-    vbot_logger = logging.getLogger("vbot")
-    vbot_logger.removeHandler(handler)
-    handler.close()
-    original_level = getattr(handler, "original_logger_level", logging.NOTSET)
-    original_propagate = getattr(handler, "original_logger_propagate", True)
-    vbot_logger.setLevel(original_level)
-    vbot_logger.propagate = original_propagate
-
-
-def enable_desktop_crash_log(desktop_config_directory: Path | None = None) -> None:
-    """Record this process's fatal errors in the crash log beside its daily logs.
-
-    Native libraries (WebView2 through .NET, PortAudio, the wake word and speech
-    models) can end the process without a Python traceback. Each start appends
-    one line in the log format, so a crashed process's dump (every thread's
-    Python stack, and the C stack where the platform provides one) follows the
-    line of its own start. The fault handler keeps the file object referenced,
-    so it stays open until the interpreter has finalized.
-    """
-
-    path = (
-        (desktop_config_directory or config_dir())
-        / DESKTOP_LOG_DIRECTORY_NAME
-        / DESKTOP_CRASH_LOG_NAME
-    )
-    started = time.strftime(_DESKTOP_LOG_DATE_FORMAT)
-    header = f"{started} [INFO] vbot.desktop - Desktop process started (pid={os.getpid()})\n"
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # A missing file needs nothing; a file another Desktop process holds open
-        # cannot move and keeps growing until a later start.
-        with suppress(OSError):
-            if path.stat().st_size > _DESKTOP_CRASH_LOG_ROTATE_BYTES:
-                os.replace(path, path.with_name(f"{path.name}.1"))
-        crash_log = path.open("ab", buffering=0)
-        try:
-            crash_log.write(header.encode("utf-8"))
-        except OSError:
-            crash_log.close()
-            raise
-    except OSError as exc:
-        logger.warning("Opening the crash log failed (path=%s error=%s)", path, exc)
-        return
-    faulthandler.enable(file=crash_log, all_threads=True, c_stack=True)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -395,95 +104,7 @@ def icon_path(base_dir: Path | None = None, *, platform: str = sys.platform) -> 
     return (base_dir if base_dir is not None else desktop_dir()) / file_name
 
 
-def build_target_url(host: str, port: int) -> str:
-    """Build the WebUI root URL of a target (``host`` may be an ``https://`` URL)."""
-
-    return parse_server_address(host, port).url
-
-
-def probe_target(
-    target: DesktopTarget,
-    *,
-    get: HttpGet | None = None,
-    timeout: float = PROBE_TIMEOUT_SECONDS,
-) -> DesktopProbeResult:
-    """Classify the target using one client and connection for both requests.
-
-    A loopback target gets ``LOOPBACK_CONNECT_TIMEOUT_SECONDS`` to connect, so a
-    server that is not listening yet costs a launch wait attempt 0.2 s, not 2 s.
-    """
-
-    if target.configuration_error is not None:
-        return DesktopProbeResult(status=PROBE_INVALID_TARGET, target=target)
-
-    budget: httpx.Timeout | float = timeout
-    if is_loopback_host(target.host):
-        budget = httpx.Timeout(timeout, connect=min(timeout, LOOPBACK_CONNECT_TIMEOUT_SECONDS))
-    if get is not None:
-        return _probe_target(target, lambda url: get(url, timeout=budget, trust_env=False))
-    with httpx.Client(timeout=budget, trust_env=False, verify=_http.shared_ssl_context()) as client:
-        return _probe_target(target, client.get)
-
-
-def _probe_target(target: DesktopTarget, get: Callable[[str], HttpResponse]) -> DesktopProbeResult:
-    base_url = target.url.rstrip("/")
-    try:
-        health_response = get(f"{base_url}/health")
-    except httpx.RequestError:
-        return DesktopProbeResult(status=PROBE_SERVER_UNREACHABLE, target=target)
-
-    if health_response.status_code == 403 and _error_code(health_response) == "access_denied":
-        return DesktopProbeResult(status=PROBE_ACCESS_DENIED, target=target)
-    if health_response.status_code != 200 or not _is_vbot_health_response(health_response):
-        return DesktopProbeResult(status=PROBE_NOT_VBOT_SERVER, target=target)
-
-    try:
-        webui_response = get(target.url)
-    except httpx.RequestError:
-        return DesktopProbeResult(status=PROBE_WEBUI_UNAVAILABLE, target=target)
-
-    if not 200 <= webui_response.status_code <= 399:
-        return DesktopProbeResult(status=PROBE_WEBUI_UNAVAILABLE, target=target)
-    return DesktopProbeResult(
-        status=PROBE_WEBUI_AVAILABLE,
-        target=target,
-        access_mode=_access_mode(get, f"{base_url}{AUTH_STATUS_PATH}"),
-    )
-
-
-def _access_mode(get: Callable[[str], HttpResponse], status_url: str) -> str | None:
-    """Return the access mode the server reports, or ``None`` when it reports none.
-
-    Asked without a credential: the mode is public. A server from before access
-    modes answers 404; an unreadable answer is treated the same, so the WebUI's
-    own sign-in gate stays the fallback.
-    """
-    try:
-        response = get(status_url)
-    except httpx.RequestError:
-        return None
-    if response.status_code != 200:
-        return None
-    try:
-        payload = response.json()
-    except ValueError:
-        return None
-    mode = payload.get("mode") if isinstance(payload, dict) else None
-    return mode if mode in _ACCESS_MODES else None
-
-
-def _error_code(response: HttpResponse) -> str | None:
-    """Return the ``error.code`` of a JSON error envelope, if the response is one."""
-    try:
-        payload = response.json()
-    except ValueError:
-        return None
-    error = payload.get("error") if isinstance(payload, dict) else None
-    code = error.get("code") if isinstance(error, dict) else None
-    return code if isinstance(code, str) else None
-
-
-def load_webview() -> WebviewModule:
+def load_webview() -> desktop_window.WebviewModule:
     """Import pywebview lazily so non-desktop test gates do not require it."""
 
     _windows.configure_dpi()
@@ -506,8 +127,8 @@ def launch_desktop(
     argv: list[str] | None = None,
     *,
     settings_file: Path | None = None,
-    probe: Callable[[DesktopTarget], DesktopProbeResult] = probe_target,
-    webview_module: WebviewModule | None = None,
+    probe: Callable[[probe.DesktopTarget], probe.DesktopProbeResult] = probe.probe_target,
+    webview_module: desktop_window.WebviewModule | None = None,
     app_icon_path: Path | None = None,
 ) -> bool:
     """Build the controller, bridge, and window, then run the GUI loop.
@@ -536,7 +157,7 @@ def launch_desktop(
 
     ``--open-session`` rides on the first navigation to the WebUI. A launch
     that finds a running Desktop hands it over with the activation instead
-    (see :func:`_activation_handler`).
+    (see :func:`desktop_window.activation_handler`).
     """
 
     args = parse_args(argv)
@@ -557,7 +178,7 @@ def launch_desktop(
             override, session_link = restart_request.server, None
     instance = _windows.claim_desktop_instance(
         desktop_config_directory,
-        request=_activation_request(override, session_link),
+        request=desktop_window.activation_request(override, session_link),
         handoff=restart_request.nonce if restart_request is not None else None,
     )
     if instance is None:
@@ -601,15 +222,15 @@ def launch_desktop(
 def _run_desktop(
     args: argparse.Namespace,
     override: tuple[str, int] | None,
-    session_link: SessionLink | None,
+    session_link: desktop_window.SessionLink | None,
     instance: _windows.DesktopInstance,
     *,
     contract: restart.RelaunchContract | None = None,
     restart_request: restart.RestartRequest | None = None,
     desktop_config_directory: Path,
     settings_file: Path | None,
-    probe: Callable[[DesktopTarget], DesktopProbeResult],
-    webview_module: WebviewModule | None,
+    probe: Callable[[probe.DesktopTarget], probe.DesktopProbeResult],
+    webview_module: desktop_window.WebviewModule | None,
     app_icon_path: Path | None,
 ) -> None:
     """Create the window and its services for the instance that owns the Desktop."""
@@ -665,14 +286,14 @@ def _run_desktop(
         authorization=access,
     )
     window_holder: list[Any] = []
-    window_state = _WindowState()
+    window_state = desktop_window.WindowState()
     desktop_restart = (
         restart.DesktopRestart(
             contract,
             config_directory=desktop_config_directory,
             page=page_events,
             active_server=controller.active_target,
-            location=lambda: _page_location(window_holder, controller),
+            location=lambda: desktop_window.page_location(window_holder, controller),
             placement=lambda: (
                 window_state.placement(window_holder[0], settings_file) if window_holder else None
             ),
@@ -692,7 +313,7 @@ def _run_desktop(
         )
 
     permissions = PagePermissions(
-        page_url=lambda: _current_page_url(window_holder),
+        page_url=lambda: desktop_window.current_page_url(window_holder),
         own_server=access.is_installation_server,
         confirm=confirm,
     )
@@ -723,11 +344,11 @@ def _run_desktop(
     # replaces once the loop is live (navigating to the WebUI on connect).
     initial_html = controller.connection_screen_html()
     placement = restart_request.placement if restart_request is not None else None
-    window_layout = resolve_window_layout(
+    window_layout = desktop_window.resolve_window_layout(
         (placement.width, placement.height)
         if placement is not None
         else read_window_size(settings_file),
-        _primary_screen(webview),
+        desktop_window.primary_screen(webview),
     )
     placement_kwargs: dict[str, Any] = {}
     if placement is not None:
@@ -766,8 +387,11 @@ def _run_desktop(
     window.events.loaded += permissions.page_loaded
     page_events.attach_window(window)
     instance.listen(
-        _activation_handler(
-            controller, page_events, _WindowFocus(window, window_state), desktop_restart
+        desktop_window.activation_handler(
+            controller,
+            page_events,
+            desktop_window.WindowFocus(window, window_state),
+            desktop_restart,
         )
     )
 
@@ -843,17 +467,6 @@ def _run_desktop(
         page_events.close()
 
 
-def _current_page_url(window_holder: list[Any]) -> str | None:
-    """The window's top-level URL; ``None`` before the window exists or for inline HTML."""
-    if not window_holder:
-        return None
-    try:
-        url = window_holder[0].get_current_url()
-    except Exception:
-        return None
-    return url if isinstance(url, str) else None
-
-
 def _make_private_directory(path: Path) -> None:
     """Create the WebView profile directory for the user alone on POSIX.
 
@@ -867,94 +480,6 @@ def _make_private_directory(path: Path) -> None:
         path.chmod(0o700)
     except OSError:
         logger.warning("The Desktop could not make %s private", path, exc_info=True)
-
-
-class _WindowState:
-    """Track whether the Desktop window is minimized or maximized.
-
-    pywebview reports these only as events. The state brings a minimized,
-    formerly maximized window back maximized (``restore`` always returns to the
-    normal size) and describes the window for a restart.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._minimized = False
-        self._maximized = False
-
-    def track(self, window: Any, initial: str = "normal") -> None:
-        with self._lock:
-            self._minimized = initial == "minimized"
-            self._maximized = initial == "maximized"
-        window.events.minimized += self._on_minimized
-        window.events.maximized += self._on_maximized
-        window.events.restored += self._on_restored
-
-    def flags(self) -> tuple[bool, bool]:
-        """Return ``(minimized, maximized)``."""
-        with self._lock:
-            return self._minimized, self._maximized
-
-    def placement(self, window: Any, settings_file: Path | None) -> restart.WindowPlacement:
-        """Describe the window for its restart successor (logical pixels)."""
-        minimized, maximized = self.flags()
-        if minimized or maximized:
-            # Such a window reports no useful normal size or position; the
-            # successor uses the remembered size and centers.
-            width, height = read_window_size(settings_file) or (window.width, window.height)
-            state: restart.WindowState = "minimized" if minimized else "maximized"
-            return restart.WindowPlacement(state, int(width), int(height))
-        return restart.WindowPlacement(
-            "normal", int(window.width), int(window.height), int(window.x), int(window.y)
-        )
-
-    def _on_minimized(self) -> None:
-        with self._lock:
-            self._minimized = True
-
-    def _on_maximized(self) -> None:
-        with self._lock:
-            self._minimized = False
-            self._maximized = True
-
-    def _on_restored(self) -> None:
-        with self._lock:
-            self._minimized = False
-            self._maximized = False
-
-
-class _WindowFocus:
-    """Bring the Desktop window to the front from a background thread.
-
-    The Window API marshals onto the GUI thread itself.
-    """
-
-    def __init__(self, window: Any, state: _WindowState) -> None:
-        self._window = window
-        self._state = state
-
-    def bring_to_front(self) -> None:
-        minimized, maximized = self._state.flags()
-        if minimized:
-            if maximized:
-                self._window.maximize()
-            else:
-                self._window.restore()
-        self._window.show()
-
-
-def _page_location(window_holder: list[Any], controller: ConnectionController) -> str | None:
-    """Return the WebUI URL fragment the window shows, for a restart to restore."""
-
-    active = controller.active_server_url()
-    if not window_holder or active is None:
-        return None
-    url = window_holder[0].get_current_url()
-    if not isinstance(url, str) or not url.startswith(active):
-        return None
-    _, separator, fragment = url.partition("#")
-    location = f"#{fragment}" if separator and fragment else None
-    return location if restart.is_location(location) else None
 
 
 def _launch_targets(
@@ -979,118 +504,10 @@ def _launch_targets(
     return targets
 
 
-def resolve_window_layout(
-    saved_size: tuple[int, int] | None,
-    screen: Any | None,
-) -> DesktopWindowLayout:
-    """Return a useful initial size bounded to the current primary display.
-
-    A fresh install uses roughly 80% of the display with a desktop-sized cap.
-    A remembered size wins when present, but is clamped so a former large
-    monitor cannot produce an unreachable or unusable window on a smaller one.
-
-    DPI-aware: the clamp uses the screen's work area in logical pixels, so a
-    window that fits logically also fits physically after the monitor's DPI
-    scale is applied. The returned screen is passed to pywebview's
-    create_window so the window centers on the correct monitor with correct
-    DPI conversion, instead of WinForms' CenterScreen default which can
-    center on the wrong monitor or mismatch logical/physical dimensions.
-    """
-
-    if screen is None:
-        screen_width = FALLBACK_SCREEN_WIDTH
-        screen_height = FALLBACK_SCREEN_HEIGHT
-        available_width = max(1, screen_width - WINDOW_SCREEN_EDGE_ALLOWANCE)
-        available_height = max(1, screen_height - WINDOW_SCREEN_EDGE_ALLOWANCE)
-        placement_screen: Any = None
-    else:
-        _, _, screen_width, screen_height = _screen_work_area(screen)
-        available_width = max(1, screen_width)
-        available_height = max(1, screen_height)
-        placement_screen = screen
-
-    minimum_width = min(MINIMUM_WINDOW_WIDTH, available_width)
-    minimum_height = min(MINIMUM_WINDOW_HEIGHT, available_height)
-
-    if saved_size is None:
-        preferred_width = round(screen_width * DEFAULT_WINDOW_SCREEN_RATIO)
-        preferred_height = round(screen_height * DEFAULT_WINDOW_SCREEN_RATIO)
-        width = min(preferred_width, DEFAULT_WINDOW_MAX_WIDTH)
-        height = min(preferred_height, DEFAULT_WINDOW_MAX_HEIGHT)
-    else:
-        width, height = saved_size
-
-    return DesktopWindowLayout(
-        width=max(minimum_width, min(width, available_width)),
-        height=max(minimum_height, min(height, available_height)),
-        minimum_width=minimum_width,
-        minimum_height=minimum_height,
-        screen=placement_screen,
-    )
-
-
-def _primary_screen(webview: WebviewModule) -> Any | None:
-    """Return the pywebview Screen that contains the desktop origin (0, 0).
-
-    WinForms does not guarantee screens[0] is the primary monitor; the list
-    order is arbitrary. The primary screen is the one whose bounds include the
-    origin. Falls back to screens[0] when no screen contains the origin or when
-    screen discovery fails.
-    """
-
-    try:
-        screens = webview.screens
-        if not screens:
-            return None
-        for candidate in screens:
-            cx = int(getattr(candidate, "x", 0))
-            cy = int(getattr(candidate, "y", 0))
-            cw = int(getattr(candidate, "width", 0))
-            ch = int(getattr(candidate, "height", 0))
-            if cx <= 0 < cx + cw and cy <= 0 < cy + ch:
-                return _windows.logical_primary_screen(candidate)
-        return screens[0]
-    except AttributeError, IndexError, OSError, RuntimeError, TypeError, ValueError:
-        return None
-
-
-def _screen_work_area(screen: Any) -> tuple[int, int, int, int]:
-    """Return (x, y, width, height) of the screen's usable work area in logical pixels.
-
-    The work area excludes OS chrome like the taskbar. pywebview's Screen.frame
-    holds the platform-native work-area rectangle, whose attribute casing differs
-    by platform (Windows uses PascalCase, GTK uses lowercase). Both are tried.
-    Falls back to the full screen bounds when the frame is unavailable.
-    """
-
-    frame = getattr(screen, "frame", None)
-    if frame is not None:
-        for width_attr, height_attr, x_attr, y_attr in (
-            ("Width", "Height", "X", "Y"),
-            ("width", "height", "x", "y"),
-        ):
-            if hasattr(frame, width_attr) and hasattr(frame, height_attr):
-                try:
-                    work_width = int(getattr(frame, width_attr))
-                    work_height = int(getattr(frame, height_attr))
-                    if work_width > 0 and work_height > 0:
-                        work_x = int(getattr(frame, x_attr, getattr(screen, "x", 0)))
-                        work_y = int(getattr(frame, y_attr, getattr(screen, "y", 0)))
-                        return work_x, work_y, work_width, work_height
-                except TypeError, ValueError, AttributeError:
-                    continue
-    return (
-        int(getattr(screen, "x", 0)),
-        int(getattr(screen, "y", 0)),
-        int(getattr(screen, "width", FALLBACK_SCREEN_WIDTH)),
-        int(getattr(screen, "height", FALLBACK_SCREEN_HEIGHT)),
-    )
-
-
 def _select_launch_entry(
     controller: ConnectionController,
     override: tuple[str, int] | None,
-    session_link: SessionLink | None,
+    session_link: desktop_window.SessionLink | None,
     *,
     location: str | None = None,
 ) -> Callable[[], Any]:
@@ -1127,101 +544,6 @@ def _select_launch_entry(
         return controller.auto_connect(open_session=session_link)
 
     return auto_connect
-
-
-def _activation_handler(
-    controller: ConnectionController,
-    page_events: PageEventDispatcher,
-    focus: _WindowFocus,
-    desktop_restart: restart.DesktopRestart | None = None,
-) -> Callable[[Mapping[str, Any] | None], None]:
-    """Return the running Desktop's answer to a later launch.
-
-    The window always comes to the front. A handed-over ``--open-session``
-    request additionally opens its Session through the page, but only when
-    the window shows the requested server: the one the launch named with
-    ``--host`` / ``--port``, or any server when it named none. A restart
-    successor's ``{"handoff": nonce}`` instead lets the restart close this
-    window.
-    """
-
-    def on_activate(request: Mapping[str, Any] | None) -> None:
-        if request is not None and "handoff" in request:
-            if desktop_restart is not None:
-                desktop_restart.accept_handoff(request.get("handoff"))
-            else:
-                logger.warning("Ignoring a Desktop handoff; this Desktop is not restarting")
-            return
-        link = _requested_session(request, controller)
-        if link is not None:
-            page_events.request_open_session(link.agent, link.session)
-        focus.bring_to_front()
-
-    return on_activate
-
-
-def _activation_request(
-    override: tuple[str, int] | None,
-    session_link: SessionLink | None,
-) -> dict[str, Any] | None:
-    """Return what a launch hands over to a running Desktop, if anything."""
-
-    if session_link is None:
-        return None
-    host, port = override if override is not None else (None, None)
-    return {
-        "host": host,
-        "port": port,
-        "agent": session_link.agent,
-        "session": session_link.session,
-    }
-
-
-def _requested_session(
-    request: Mapping[str, Any] | None,
-    controller: ConnectionController,
-) -> SessionLink | None:
-    """Return the handed-over Session when the window shows its server."""
-
-    if request is None:
-        return None
-    agent = request.get("agent")
-    session = request.get("session")
-    host = request.get("host")
-    port = request.get("port")
-    if not (
-        isinstance(agent, str)
-        and isinstance(session, str)
-        and _is_session_link_part(agent)
-        and _is_session_link_part(session)
-    ):
-        logger.warning("Ignoring a malformed Session request from another Desktop launch")
-        return None
-    if host is None and port is None:
-        shown = controller.active_server_url() is not None
-    elif isinstance(host, str) and isinstance(port, int) and not isinstance(port, bool):
-        shown = controller.is_active_server(host, port)
-    else:
-        logger.warning("Ignoring a malformed Session request from another Desktop launch")
-        return None
-    if not shown:
-        logger.info(
-            "Not opening Session %s of %s: the window does not show the requested server",
-            session,
-            agent,
-        )
-        return None
-    return SessionLink(agent=agent, session=session)
-
-
-def _is_vbot_health_response(response: HttpResponse) -> bool:
-    """Return whether /health matches the vBot server identity contract."""
-
-    try:
-        payload = response.json()
-    except ValueError:
-        return False
-    return bool(payload == {"status": "ok"})
 
 
 def _create_voice(
@@ -1282,7 +604,7 @@ def _resolve_launch_override(args: argparse.Namespace) -> tuple[str, int] | None
 
     A ``--host`` and/or ``--port`` is a *deliberate* target, not the silent
     localhost default the plan removed — so when either is given it must take
-    effect. A missing half is filled from ``DEFAULT_HOST`` / ``DEFAULT_PORT``
+    effect. A missing half is filled from ``probe.DEFAULT_HOST`` / ``probe.DEFAULT_PORT``
     (acceptable because the user explicitly asked to launch at a specific
     target). With neither flag given, returns ``None`` and the launcher falls
     back to last-used auto-connect.
@@ -1290,18 +612,18 @@ def _resolve_launch_override(args: argparse.Namespace) -> tuple[str, int] | None
 
     if args.host is None and args.port is None:
         return None
-    host = args.host if args.host is not None else DEFAULT_HOST
-    port = args.port if args.port is not None else DEFAULT_PORT
+    host = args.host if args.host is not None else probe.DEFAULT_HOST
+    port = args.port if args.port is not None else probe.DEFAULT_PORT
     return (host, port)
 
 
-def _resolve_session_link(args: argparse.Namespace) -> SessionLink | None:
+def _resolve_session_link(args: argparse.Namespace) -> desktop_window.SessionLink | None:
     """Return the ``--open-session`` request, if one was given."""
 
     if args.open_session is None:
         return None
     agent, session = args.open_session
-    return SessionLink(agent=agent, session=session)
+    return desktop_window.SessionLink(agent=agent, session=session)
 
 
 def _resolve_launch_server_url(
@@ -1325,7 +647,7 @@ def _resolve_launch_server_url(
             return ""
         host, port = entry.address.bridge_host, entry.port
     try:
-        return build_target_url(host, port)
+        return probe.build_target_url(host, port)
     except ValueError:
         return ""
 
@@ -1333,8 +655,8 @@ def _resolve_launch_server_url(
 def main(argv: list[str] | None = None) -> None:
     """Open the vBot Desktop shell, routing target selection through the window."""
 
-    log_handler = configure_desktop_logging()
-    enable_desktop_crash_log()
+    log_handler = desktop_logging.configure_desktop_logging()
+    desktop_logging.enable_desktop_crash_log()
     try:
         opened = launch_desktop(argv)
     except Exception:
@@ -1344,7 +666,7 @@ def main(argv: list[str] | None = None) -> None:
         if opened:
             logger.info("Desktop stopped normally")
     finally:
-        close_desktop_logging(log_handler)
+        desktop_logging.close_desktop_logging(log_handler)
 
 
 def _parse_port(value: str) -> int:
@@ -1359,22 +681,13 @@ def _parse_port(value: str) -> int:
 def _parse_session_link_part(value: str) -> str:
     """Argparse adapter for the Agent address and Session id of ``--open-session``."""
 
-    if not _is_session_link_part(value):
+    if not desktop_window.is_session_link_part(value):
         raise argparse.ArgumentTypeError(
             "--open-session needs a non-empty Agent address and Session id without "
-            f"spaces or control characters, at most {SESSION_LINK_PART_MAX_LENGTH} "
+            f"spaces or control characters, at most {desktop_window.SESSION_LINK_PART_MAX_LENGTH} "
             "characters each"
         )
     return value
-
-
-def _is_session_link_part(value: Any) -> bool:
-    return (
-        isinstance(value, str)
-        and 0 < len(value) <= SESSION_LINK_PART_MAX_LENGTH
-        and value.isprintable()
-        and not any(character.isspace() for character in value)
-    )
 
 
 if __name__ == "__main__":
