@@ -14,6 +14,7 @@ The code is too large for one context: subagents gather and confirm candidates p
 4. **Boundary violations:** code or imports crossing a layer or domain line, such as business logic in `server/` or `webui/`, an accessor importing what it must not, a domain reaching into another's internals, or I/O outside its owner. Keep it when the root map explicitly allows it. Cure: move the code to its owner; when source, tests and user decisions show that the map is stale, the finding is documentation drift instead.
 5. **Unjustified modules:** a package that no domain map owns, or several small modules doing what one owner could. Name the existing owner that could take it and why it cannot; "no owner fits" is an answer, "not checked" is not. Cure: fold it into the owner, or record the justification in the owning domain map. Supplementary map files are documentation, never modules.
 6. **Over-exposure:** callers importing another module's private `_` files or deep paths instead of its main-file API, or a main file exporting internals. Cure: narrow the interface and route the callers through it.
+7. **Missing types:** values that travel together without a type of their own: the same group of three or more parameters in at least three functions or across a module boundary, the same dict or tuple shape built and read in several places, or a bool parameter that switches a function between two behaviors. `python -m ruff check <paths> --select PLR0913,FBT001 --exit-zero` lists long parameter lists and bool parameters as candidates; a long parameter list alone is no finding. Keep it when the values pass only between two functions, or when the type would be a bag of fields with no meaning of its own. Cure: a type owned by the domain that owns the concept, with the logic that works on those values moved into it; for a switching bool, two functions or an enum.
 
 ## Judging a candidate
 
@@ -27,7 +28,7 @@ Report only findings that survive step 4 of the procedure; three real problems b
 ## Procedure
 
 1. **Partition.** List the tracked source files in scope outside the test directories with their line counts. Group related domains along the Domain Maps index into groups of at most about 50,000 lines.
-2. **Gather ledgers.** Give each group to a subagent. It reads this workflow, the rules above and the group's root maps (a supplementary file only when its trigger matches a candidate), inspects the group for all six dimensions, and confirms each candidate against source and tests. It changes no files and returns a ledger of at most 4,000 characters:
+2. **Gather ledgers.** Give each group to a subagent. It reads this workflow, the rules above and the group's root maps (a supplementary file only when its trigger matches a candidate), inspects the group for all dimensions, and confirms each candidate against source and tests. It changes no files and returns a ledger of at most 4,000 characters:
    - per domain, its public interface and boundary in one or two lines;
    - each finding: dimension, `file:line`, evidence, code or documentation drift, severity, cure, and the files the cure touches;
    - each oversized file: line count and proposed units, or the reason to defer;
