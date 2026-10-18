@@ -204,6 +204,12 @@
               : '',
   );
 
+  // Move this area's draft to another Agent's draft (the footer's Agent
+  // picker): its text and attachments follow, after what that draft holds.
+  export function moveDraft(fromKey, toKey) {
+    submission.moveDraft(fromKey, toKey, { merge: true });
+  }
+
   onDestroy(() => {
     media.destroy();
     // Leaving the Chat tab tears this component down; make sure the latest

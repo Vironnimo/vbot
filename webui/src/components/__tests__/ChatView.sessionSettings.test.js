@@ -15,15 +15,18 @@ import {
   rpcCalls,
   rpcMock,
   runningRun,
+  selectedAgentName,
   sendComposerMessage,
   sessionListButton,
   settle,
+  setInputValue,
   setupChatViewTestSuite,
   showProjectMock,
   streamResponses,
   testChatStateRefs,
   waitForCondition,
 } from './ChatView.support.js';
+import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const SONNET = 'openrouter/anthropic/claude-sonnet-4';
@@ -152,6 +155,89 @@ describe('ChatView Session settings', () => {
         thinking_effort: 'medium',
         ...overrides,
       });
+
+    it('moves to another Agent with its text and Project and that Agent’s Model', async () => {
+      const builderScan = {
+        team: [
+          {
+            agent_id: 'builder',
+            display_name: 'Builder',
+            effective: {
+              model: { value: R1, source: 'project' },
+              thinking_effort: { value: 'high', source: 'project' },
+            },
+          },
+        ],
+        report: { clean: true, findings: [] },
+      };
+      showProjectMock.mockResolvedValue({
+        project: { project_id: 'vbot', default_agent: 'builder' },
+        scan: builderScan,
+      });
+      rpcMock.mockImplementation(
+        settingsRpcMock({
+          agents: [
+            draftAgent(),
+            draftAgent({
+              id: 'beta',
+              name: 'Beta',
+              root_project_id: 'docs',
+              model: MINI,
+              thinking_effort: '',
+            }),
+          ],
+          streamHandler: (params) => ({
+            ...runningRun('run-builder'),
+            session_id: params.session_id ?? 'created-builder',
+          }),
+        }),
+      );
+      const parent = createChatViewParentHarness();
+      await chat.mountChat(
+        parent.props(['agent', 'project'], {
+          projects: [{ ...PROJECTS[0], scan: builderScan }, PROJECTS[1]],
+        }),
+        { ready: null },
+      );
+      await waitForCondition(() => pickerText('Project') === 'vBot');
+      const input = document.querySelector('.msg-input');
+      setInputValue(input, 'Plan the release');
+      flushSync();
+
+      expect(await pickerOptions('Agent')).toEqual([
+        'Alpha',
+        'Beta',
+        'Builder',
+      ]);
+      await choose('Agent', 'Beta');
+      await waitForCondition(() => pickerText('Agent') === 'Beta');
+      // The draft keeps its Project, not Beta's default one, and takes
+      // Beta's Model.
+      expect(selectedAgentName()).toBe('Beta');
+      expect(pickerText('Project')).toBe('vBot');
+      expect(pickerText('Model')).toBe(MINI);
+      expect(document.querySelector('.msg-input').value).toBe(
+        'Plan the release',
+      );
+
+      await choose('Agent', 'Builder');
+      await waitForCondition(() => readOnlyProject() !== null);
+      expect(document.querySelector('.msg-input').value).toBe(
+        'Plan the release',
+      );
+      await waitForCondition(() => pickerText('Model') === R1);
+      sendComposerMessage('Plan the release');
+
+      await waitForCondition(() => rpcCalls('chat.stream').length === 1);
+      expect(rpcCalls('chat.stream')[0]).toMatchObject({
+        agent_id: 'builder@vbot',
+        content: 'Plan the release',
+      });
+      // A created Session has its Agent; the picker is gone.
+      await waitForCondition(() => picker('Agent') === null);
+      // Moving the draft changes no Agent's defaults.
+      expect(rpcCalls('agent.update')).toEqual([]);
+    });
 
     it.each([
       ['a chosen Project', 'Docs', 'docs', false],

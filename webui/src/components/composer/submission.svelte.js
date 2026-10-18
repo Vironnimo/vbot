@@ -204,28 +204,45 @@ export function createComposerSubmission(context) {
       context.resetInputHistory();
     }
     if (continuedDraftKey && continuedDraftKey !== snapshot.draftKey) {
-      continueDraft(snapshot.draftKey, continuedDraftKey);
+      moveDraft(snapshot.draftKey, continuedDraftKey);
     }
     return true;
   };
 
-  // The send created the Session of the draft it came from. What the draft
-  // still holds (text typed meanwhile, attachments added meanwhile) moves to
-  // that Session, as it would have stayed in a Session's composer.
-  const continueDraft = (fromKey, toKey) => {
-    const remainingText = getDraft(fromKey);
-    if (remainingText && !getDraft(toKey)) {
-      setDraft(toKey, remainingText);
+  // What a draft holds (text, attachments, uploads still running) moves to
+  // `toKey`. A send that created the draft's Session moves what was added
+  // meanwhile, as it would have stayed in a Session's composer, unless the
+  // Session already holds its own. A draft moved to another Agent (`merge`)
+  // adds its text and attachments after what that Agent's draft holds.
+  const moveDraft = (fromKey, toKey, { merge = false } = {}) => {
+    if (!fromKey || !toKey || fromKey === toKey) {
+      return;
+    }
+    const movedText = getDraft(fromKey);
+    const keptText = getDraft(toKey);
+    if (movedText && (merge || !keptText)) {
+      setDraft(
+        toKey,
+        keptText
+          ? `${keptText}
+
+${movedText}`
+          : movedText,
+      );
       clearDraft(fromKey);
     }
     const fromScope = media.attachmentScopeForDraftKey(fromKey);
     const movedAttachments = media.attachmentsForScope(fromScope);
     if (
       movedAttachments.length > 0 &&
-      media.attachmentsForScope(media.attachmentScopeForDraftKey(toKey))
-        .length === 0
+      (merge ||
+        media.attachmentsForScope(media.attachmentScopeForDraftKey(toKey))
+          .length === 0)
     ) {
-      media.updateAttachmentsForDraftKey(toKey, () => movedAttachments);
+      media.updateAttachmentsForDraftKey(toKey, (attachments) => [
+        ...attachments,
+        ...movedAttachments,
+      ]);
       media.updateAttachmentsForDraftKey(fromKey, (attachments) =>
         attachments.filter(
           (attachment) => !movedAttachments.includes(attachment),
@@ -264,5 +281,6 @@ export function createComposerSubmission(context) {
     },
     submit,
     submitCommand,
+    moveDraft,
   };
 }

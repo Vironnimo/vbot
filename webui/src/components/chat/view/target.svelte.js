@@ -747,6 +747,27 @@ export function createChatViewTarget(context) {
   // The Agent and Project New Session continues in, or null for the plain
   // New Session: a draft, an unknown Project, or a displayed Agent the area
   // cannot start (a stand-in).
+  // The Agents a draft working in `projectId` can move to: every Identity
+  // Agent, then that Project's Team (none in the Workspace).
+  const draftAgentChoices = (projectId) => {
+    const team = projectId
+      ? (projectGroups.find((group) => group.projectId === projectId)
+          ?.members ?? [])
+      : [];
+    return [
+      ...context.chatState.agents.map((agent) => ({
+        address: agent.id,
+        name: agent.name || agent.id,
+        projectId: null,
+      })),
+      ...team.map((member) => ({
+        address: formatAgentAddress(member.agent_id, projectId),
+        name: member.display_name || member.agent_id,
+        projectId,
+      })),
+    ];
+  };
+
   const projectNewSessionTarget = (view) => {
     if (view?.kind !== 'session' || view.project.known !== true) {
       return null;
@@ -830,6 +851,7 @@ export function createChatViewTarget(context) {
       return displayedProjectAgentId;
     },
     projectNewSessionTarget,
+    draftAgentChoices,
     activeOwnAgentAddress,
     activeAddressing,
     activeDraft,

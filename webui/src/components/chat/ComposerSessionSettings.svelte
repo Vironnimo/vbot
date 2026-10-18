@@ -6,6 +6,8 @@
   //
   // - Project: a picker in a draft of an Identity Agent; afterwards, and for
   //   a Project team Agent, a read-only name.
+  // - Agent: in a draft only, the Agents that can work in its Project; a
+  //   choice moves the draft to that Agent.
   // - Model: the Session's concrete choice, initially copied from the Agent;
   //   the row names the Model by its catalog name, the tooltip by its id.
   // - Thinking effort: Provider default or a level the effective Model
@@ -38,6 +40,7 @@
     // Until the Project list is read, a Project missing from it is unknown.
     projectsLoaded = false,
     onSelectProject = noop,
+    onSelectAgent = noop,
     onSelectModel = noop,
     onSelectThinkingEffort = noop,
     onModelPickerOpen = noop,
@@ -124,6 +127,30 @@
       ? t('chat.sessionSettings.projectDraftHint')
       : t('chat.sessionSettings.projectFixedHint');
   }
+
+  // --- Agent -----------------------------------------------------------
+
+  let agentOptions = $derived.by(() => {
+    if (!view.agent) {
+      return [];
+    }
+    const options = view.agent.choices.map((choice) => ({
+      value: choice.address,
+      label: choice.name,
+      secondaryLabel: choice.projectId ? projectName(choice.projectId) : '',
+    }));
+    if (!options.some((option) => option.value === view.agent.value)) {
+      options.unshift({ value: view.agent.value, label: view.agent.value });
+    }
+    return options;
+  });
+  let agentTooltip = $derived({
+    title:
+      agentOptions.find((option) => option.value === view.agent?.value)
+        ?.label ?? t('chat.sessionSettings.agent'),
+    text: t('chat.sessionSettings.agentDraftHint'),
+    placement: 'top',
+  });
 
   // --- Model -----------------------------------------------------------
 
@@ -291,6 +318,29 @@
             <span class="session-settings__value-label">{projectLabel}</span>
           </span>
         {/if}
+      </span>
+    {/if}
+    {#if view.agent}
+      <span class="session-settings__field session-settings__field--icon">
+        <svg
+          class="session-settings__icon"
+          viewBox="0 0 16 16"
+          width="13"
+          height="13"
+          aria-hidden="true"
+        >
+          <circle cx="8" cy="5.5" r="2.5" />
+          <path d="M3 13.5a5 5 0 0 1 10 0" />
+        </svg>
+        <Dropdown
+          value={view.agent.value}
+          options={agentOptions}
+          ariaLabel={t('chat.sessionSettings.agent')}
+          triggerClass="session-settings__picker"
+          triggerTooltip={agentTooltip}
+          panelMinWidth={200}
+          onValueChange={(next) => onSelectAgent(next)}
+        />
       </span>
     {/if}
   </div>
