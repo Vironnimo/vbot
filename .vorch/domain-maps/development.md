@@ -8,6 +8,12 @@ The tooling that checks, tests, pushes and builds vBot itself: the commit hook, 
 
 Provider probe CLIs and their disposable Eval workers use Runtime-owned startup policies; source-only verification and production-catalog Eval isolation are distinct (`runtime.md` -> Bootstrap).
 
+## Developer harness ownership
+
+Worktree creation and listing stay in `scripts/worktree.py`; merge landing, rollback and repair belong to `_worktree_merge.py`, and service shutdown, data ownership and checkout cleanup to `_worktree_removal.py`. Both use an explicit `WorktreeContext` (`_worktree_context.py`) for repository and executing-checkout identity, subprocesses and port locking; helpers never import entrypoint globals. The push check uses the same private-checkout cleanup owner. Safety and recovery protocols remain documented in `scripts/README-worktree.md`.
+
+Load-scenario defaults, validation and result serialization belong to `scripts/perf_load_suite/config.py`; `runner.py` owns orchestration. Tool lab replay keeps recorded-history decoding in `_replay_evidence.py`, Session path identity and rewriting in `_replay_paths.py`, and forward simulation in `_replay_history.py`.
+
 ## Python version
 
 vBot supports exactly one CPython minor version, the one its packages bundle (currently 3.14, `scripts/package_build.PYTHON_VERSION`). Development checkouts, mypy and every CI job use it too; there is no compatibility floor and no matrix across versions. Changing it is one deliberate commit that moves every pin together: `requires-python` and mypy's `python_version` in `pyproject.toml`, `PYTHON_VERSION` (the Windows builder's runtime check and the Linux runtime layout), the python-build-standalone runtime in `scripts/linux/python.lock.json`, all five runtime dependency locks (regenerated with `--python-version` and checked to resolve with `--only-binary :all:`), every workflow's and `.github/actions/*`'s `python-version`, and the setup documentation. `tests/scripts/test_package_build.py` fails while one of them disagrees.
