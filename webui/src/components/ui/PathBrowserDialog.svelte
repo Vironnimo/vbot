@@ -29,31 +29,14 @@
   import { portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
-  import {
-    breadcrumbTrail,
-    browseStartPaths,
-    creationFailureText,
-    filterEntries,
-    isAbsolutePath,
-    joinPath,
-    listingErrorReason,
-    listingFailureText,
-    listingPathFor,
-    normalizeServerPath,
-    parentMayList,
-    parentPath,
-    toNativePath,
-    trimTrailingSeparator,
-    unusedFolderName,
-  } from '$lib/pathPicker.js';
+  import { isAbsolutePath, toNativePath } from '$lib/pathPicker.js';
+  import { createPathBrowser } from './pathBrowser.svelte.js';
   import Button from './Button.svelte';
   import Modal from './Modal.svelte';
   import TextField from './TextField.svelte';
   import Toggle from './Toggle.svelte';
 
   const noop = () => {};
-  // Rows rendered at once; the filter reaches the rest.
-  const MAX_ROWS = 500;
   const componentId = $props.id();
 
   let {
@@ -71,137 +54,62 @@
   let portaled = $state(false);
   let listElement = $state();
   let trailElement = $state();
-  // 'places' | 'folder'
-  let view = $state('');
-  let status = $state('loading');
-  let failure = $state('');
-  // A refused request (a folder outside the root) fails the same way again.
-  let retryable = $state(true);
-  // The folder shown or being opened, in listing form.
-  let target = $state('');
-  let listing = $state.raw(null);
-  let places = $state.raw(null);
-  let shortcuts = $state.raw([]);
-  let separator = $state('/');
-  let filter = $state('');
-  let showHidden = $state(false);
-  let activeKey = $state('');
-  // The trail as a path field: its text and why the last path did not open.
-  let editingPath = $state(false);
-  let pathText = $state('');
-  let pathFailure = $state('');
-  // The new folder row: its name, why it was not created, and a pending
-  // request.
-  let creating = $state(false);
-  let newName = $state('');
-  let createFailure = $state('');
-  let createBusy = $state(false);
-  let loadToken = 0;
   let initialFocusDone = false;
+  const browser = createPathBrowser(
+    {
+      get mode() {
+        return mode;
+      },
+      get root() {
+        return root;
+      },
+      get value() {
+        return value;
+      },
+      get startPath() {
+        return startPath;
+      },
+      get listDirectory() {
+        return listDirectory;
+      },
+      get createDirectory() {
+        return createDirectory;
+      },
+      get loadShortcuts() {
+        return loadShortcuts;
+      },
+      get onSelect() {
+        return onSelect;
+      },
+    },
+    {
+      focusList,
+      revealActive,
+      onEditPath: focusPathInput,
+      onEditNewName: focusNewName,
+    },
+  );
 
-  let title = $derived(
-    mode === 'file'
-      ? t('pathPicker.titleFile')
-      : mode === 'any'
-        ? t('pathPicker.titleAny')
-        : t('pathPicker.titleDirectory'),
-  );
-  let folderReady = $derived(view === 'folder' && status === 'ready');
-  let crumbs = $derived(
-    view === 'folder' ? breadcrumbTrail(target, { root }) : [],
-  );
-  let visibleEntries = $derived(
-    folderReady ? filterEntries(listing?.entries, filter, { showHidden }) : [],
-  );
-  let rows = $derived(
-    view === 'places' && status === 'ready'
-      ? placeRows()
-      : visibleEntries.slice(0, MAX_ROWS).map((entry) => ({
-          key: `entry:${entry.name}`,
-          label: entry.name,
-          entry,
-        })),
-  );
-  let unrenderedCount = $derived(Math.max(0, visibleEntries.length - MAX_ROWS));
-  let activeIndex = $derived(rows.findIndex((row) => row.key === activeKey));
-  let activeEntry = $derived(rows[activeIndex]?.entry ?? null);
-  let chosenPath = $derived(choicePath());
-  let chosenValue = $derived(
-    chosenPath === null
-      ? ''
-      : root
-        ? chosenPath
-        : toNativePath(chosenPath, separator),
-  );
-  let canGoUp = $derived(view === 'folder' && (root ? target !== '' : true));
-  let canCreate = $derived(Boolean(createDirectory) && mode !== 'file');
-  let rootText = $derived(
-    root && toNativePath(normalizeServerPath(root), separator),
-  );
-  let emptyText = $derived(
-    folderReady && rows.length === 0
-      ? filter.trim()
-        ? t('pathPicker.noMatches')
-        : mode === 'directory'
-          ? t('pathPicker.noFolders')
-          : t('pathPicker.empty')
-      : '',
-  );
+  function focusPathInput(text) {
+    void tick().then(() => {
+      const input = document.getElementById(pathInputId);
+      input?.focus();
+      if (text === null) input?.select();
+      else input?.setSelectionRange(text.length, text.length);
+    });
+  }
+
+  function focusNewName() {
+    void tick().then(() => {
+      const input = document.getElementById(newNameId);
+      input?.focus();
+      input?.select();
+    });
+  }
 
   const rowId = (index) => `${componentId}-row-${index}`;
   const pathInputId = `${componentId}-path`;
   const newNameId = `${componentId}-new-name`;
-
-  function placeRows() {
-    const result = [];
-    if (places?.home) {
-      result.push({
-        key: `home:${places.home}`,
-        label: t('pathPicker.home'),
-        detail: toNativePath(places.home, separator),
-        path: places.home,
-        group: 'locations',
-      });
-    }
-    for (const entry of places?.entries ?? []) {
-      result.push({
-        key: `root:${entry.name}`,
-        label: toNativePath(entry.name, separator),
-        path: entry.name,
-        group: 'locations',
-      });
-    }
-    for (const shortcut of shortcuts) {
-      result.push({
-        key: `project:${shortcut.path}`,
-        label: shortcut.label,
-        detail: toNativePath(shortcut.path, separator),
-        path: shortcut.path,
-        group: 'projects',
-      });
-    }
-    return result;
-  }
-
-  function choicePath() {
-    if (!folderReady) return null;
-    const folder = listing.path;
-    const entry = activeEntry;
-    const highlighted = entry ? joinPath(folder, entry.name) : null;
-    if (mode === 'file') return entry?.kind === 'file' ? highlighted : null;
-    if (mode === 'directory' && entry?.kind === 'file') return null;
-    const choice = highlighted ?? folder;
-    // The root itself is no value inside the root.
-    return root && choice === '' ? null : choice;
-  }
-
-  function listingParams(path) {
-    return {
-      path,
-      ...(root ? { root } : {}),
-      include_files: mode !== 'directory',
-    };
-  }
 
   // Navigation replaces the row or crumb that was clicked, which would drop
   // keyboard focus to the page: the list takes it, so arrow keys and
@@ -212,243 +120,26 @@
     listElement?.focus();
   }
 
-  // Opens a folder and resolves to null, or to why it did not open: a
-  // `listingErrorReason`, or 'superseded' once a newer navigation started. A
-  // quiet attempt (a start candidate) changes nothing when it fails.
-  async function openFolder(path, { highlight = '', quiet = false } = {}) {
-    const token = ++loadToken;
-    if (!quiet) {
-      view = 'folder';
-      status = 'loading';
-      target = path;
-      filter = '';
-      activeKey = '';
-      closeNewFolder();
-      focusList();
-    }
-    try {
-      const result = await listDirectory(listingParams(path));
-      if (token !== loadToken) return 'superseded';
-      closeNewFolder();
-      listing = result;
-      separator = result?.separator === '\\' ? '\\' : '/';
-      view = 'folder';
-      target = typeof result?.path === 'string' ? result.path : path;
-      status = 'ready';
-      filter = '';
-      activeKey = highlight ? `entry:${highlight}` : '';
-      if (highlight) {
-        showHidden ||= Boolean(
-          result?.entries?.find((entry) => entry.name === highlight)?.hidden,
-        );
-      }
-      await revealActive();
-      return null;
-    } catch (error) {
-      if (token !== loadToken) return 'superseded';
-      const reason = listingErrorReason(error);
-      if (!quiet) showFailure(reason);
-      return reason;
-    }
-  }
-
-  async function openPlaces() {
-    const token = ++loadToken;
-    view = 'places';
-    status = 'loading';
-    target = '';
-    filter = '';
-    activeKey = '';
-    closeNewFolder();
-    focusList();
-    try {
-      const [result, found] = await Promise.all([
-        listDirectory({ path: null }),
-        shortcutsOnce(),
-      ]);
-      if (token !== loadToken) return;
-      places = result;
-      shortcuts = found;
-      separator = result?.separator === '\\' ? '\\' : '/';
-      status = 'ready';
-    } catch (error) {
-      if (token !== loadToken) return;
-      showFailure(listingErrorReason(error));
-    }
-  }
-
-  function showFailure(reason) {
-    status = 'error';
-    retryable = reason !== 'invalid';
-    failure = listingFailureText(reason, { root: rootText });
-  }
-
-  let shortcutRequest = null;
-  function shortcutsOnce() {
-    if (!loadShortcuts) return Promise.resolve([]);
-    // Shortcuts are a convenience; without them the places still work.
-    shortcutRequest ??= Promise.resolve()
-      .then(loadShortcuts)
-      .then((found) => (Array.isArray(found) ? found : []))
-      .catch(() => []);
-    return shortcutRequest;
-  }
-
-  function openStart() {
-    return root ? openFolder('') : openPlaces();
-  }
-
-  async function start() {
-    const fromValue = browseStartPaths(value, { root });
-    const candidates = fromValue.length
-      ? fromValue
-      : browseStartPaths(startPath, { root });
-    for (const { path, highlight } of candidates) {
-      const failure = await openFolder(path, { highlight, quiet: true });
-      if (failure === null || failure === 'superseded') return;
-      if (!parentMayList(failure)) break;
-    }
-    await openStart();
-  }
-
-  // Lists the open folder (or the places) again, keeping the highlight.
-  function refresh() {
-    if (view === 'places') {
-      void openPlaces();
-    } else {
-      void openFolder(target, { highlight: activeEntry?.name ?? '' });
-    }
-  }
-
-  // `text` replaces the open folder's path, with the caret at its end.
-  function startPathEdit(text = null) {
-    if (editingPath && text === null) return;
-    pathText =
-      text ??
-      (view === 'folder'
-        ? root
-          ? target
-          : toNativePath(target, separator)
-        : '');
-    pathFailure = '';
-    editingPath = true;
-    void tick().then(() => {
-      const input = document.getElementById(pathInputId);
-      input?.focus();
-      if (text === null) {
-        input?.select();
-      } else {
-        input?.setSelectionRange(text.length, text.length);
-      }
-    });
-  }
-
-  function endPathEdit() {
-    editingPath = false;
-    pathFailure = '';
-    focusList();
-  }
-
-  // Opens the typed folder, or where files can be chosen a file's folder
-  // with the file highlighted. A path that does not open keeps the field.
-  async function goToTypedPath() {
-    const text = trimTrailingSeparator(pathText.trim());
-    if (!text) {
-      endPathEdit();
-      void openStart();
-      return;
-    }
-    // Without a root, a relative path starts at the open folder.
-    const relative = !root && view === 'folder' && !isAbsolutePath(text);
-    const path = listingPathFor(relative ? joinPath(target, text) : text, {
-      root,
-    });
-    if (path === null) {
-      pathFailure = listingFailureText('invalid', { root: rootText });
-      return;
-    }
-    let reason = await openFolder(path, { quiet: true });
-    if (reason === 'not_a_directory' && mode !== 'directory') {
-      const parent = parentPath(path, { relative: Boolean(root) });
-      if (parent !== null) {
-        reason = await openFolder(parent, {
-          highlight: path.slice(path.lastIndexOf('/') + 1),
-          quiet: true,
-        });
-      }
-    }
-    if (reason === 'superseded') return;
-    if (reason === null) {
-      endPathEdit();
-    } else {
-      pathFailure = listingFailureText(reason, { root: rootText });
-    }
-  }
-
   function handlePathKey(event) {
     if (event.isComposing) return;
     if (event.key === 'Enter') {
-      void goToTypedPath();
+      void browser.goToTypedPath();
     } else if (event.key === 'Escape') {
       // The field closes; the dialog stays.
-      endPathEdit();
+      browser.endPathEdit();
     } else {
       return;
     }
     event.preventDefault();
   }
 
-  function startNewFolder() {
-    if (!canCreate || !folderReady) return;
-    newName = unusedFolderName(
-      t('pathPicker.newFolderDefault'),
-      listing?.entries,
-    );
-    createFailure = '';
-    creating = true;
-    void tick().then(() => {
-      const input = document.getElementById(newNameId);
-      input?.focus();
-      input?.select();
-    });
-  }
-
-  function closeNewFolder() {
-    creating = false;
-    createFailure = '';
-  }
-
-  function cancelNewFolder() {
-    closeNewFolder();
-    focusList();
-  }
-
-  async function createFolder() {
-    const name = newName.trim();
-    if (!name || createBusy || !folderReady) return;
-    const folder = listing.path;
-    const token = loadToken;
-    createBusy = true;
-    createFailure = '';
-    try {
-      await createDirectory({ path: folder, name, ...(root ? { root } : {}) });
-      if (token === loadToken) await openFolder(folder, { highlight: name });
-    } catch (error) {
-      if (token === loadToken) {
-        createFailure = creationFailureText(error, { root: rootText });
-      }
-    } finally {
-      createBusy = false;
-    }
-  }
-
   function handleNewNameKey(event) {
     if (event.isComposing) return;
     if (event.key === 'Enter') {
-      void createFolder();
+      void browser.createFolder();
     } else if (event.key === 'Escape') {
       // The row closes; the dialog stays.
-      cancelNewFolder();
+      browser.cancelNewFolder();
     } else {
       return;
     }
@@ -460,63 +151,22 @@
     if (event.isComposing || event.defaultPrevented) return;
     const command = event.ctrlKey || event.metaKey;
     if (event.key === 'F5' && !command && !event.altKey) {
-      refresh();
+      browser.refresh();
     } else if (command && !event.altKey && event.key.toLowerCase() === 'l') {
-      startPathEdit();
+      browser.startPathEdit();
     } else if (event.altKey && !command && event.key === 'ArrowUp') {
-      goUp();
+      browser.goUp();
     } else {
       return;
     }
     event.preventDefault();
   }
-  function goUp() {
-    if (!canGoUp) return;
-    const parent = parentPath(target, { relative: Boolean(root) });
-    if (parent === null) {
-      void openStart();
-    } else {
-      void openFolder(parent, {
-        highlight: target.slice(target.lastIndexOf('/') + 1),
-      });
-    }
-  }
-
-  // A click: places open at once, entries are highlighted.
-  function pick(row) {
-    if (row.path !== undefined) {
-      void openFolder(row.path);
-    } else {
-      activeKey = row.key;
-    }
-  }
-
-  // A double click or Enter: folders open, files are chosen.
-  function open(row) {
-    if (row.path !== undefined) {
-      void openFolder(row.path);
-    } else if (row.entry.kind === 'directory') {
-      void openFolder(joinPath(listing.path, row.entry.name));
-    } else if (mode !== 'directory') {
-      activeKey = row.key;
-      choose();
-    }
-  }
-
-  function choose() {
-    if (chosenPath === null) return;
-    onSelect(chosenValue);
-  }
-
-  // A filtered list highlights its first match; an empty filter, nothing.
-  function highlightFirstMatch() {
-    activeKey = filter.trim() ? (rows[0]?.key ?? '') : '';
-    void revealActive();
-  }
 
   async function revealActive() {
     await tick();
-    const index = rows.findIndex((row) => row.key === activeKey);
+    const index = browser.rows.findIndex(
+      (row) => row.key === browser.activeKey,
+    );
     if (index >= 0) {
       document
         .getElementById(rowId(index))
@@ -524,50 +174,35 @@
     }
   }
 
-  function moveActive(step, { edge = false } = {}) {
-    if (!rows.length) return;
-    const current = rows.findIndex((row) => row.key === activeKey);
-    let next;
-    if (edge) {
-      next = step > 0 ? rows.length - 1 : 0;
-    } else if (current < 0) {
-      next = step > 0 ? 0 : rows.length - 1;
-    } else {
-      next = Math.min(rows.length - 1, Math.max(0, current + step));
-    }
-    activeKey = rows[next].key;
-    void revealActive();
-  }
-
   // Keys shared by the filter field and the list.
   function handleNavigationKey(event, { inList = false } = {}) {
     if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing) {
       return;
     }
-    const activeRow = rows[activeIndex];
+    const activeRow = browser.rows[browser.activeIndex];
     switch (event.key) {
       case 'ArrowDown':
       case 'ArrowUp':
-        moveActive(event.key === 'ArrowDown' ? 1 : -1);
+        browser.moveActive(event.key === 'ArrowDown' ? 1 : -1);
         break;
       case 'Home':
       case 'End':
         if (!inList) return;
-        moveActive(event.key === 'End' ? 1 : -1, { edge: true });
+        browser.moveActive(event.key === 'End' ? 1 : -1, { edge: true });
         break;
       case 'Enter':
         if (activeRow) {
-          open(activeRow);
-        } else if (!filter.trim() && chosenPath !== null) {
+          browser.open(activeRow);
+        } else if (!browser.filter.trim() && browser.chosenPath !== null) {
           // A filter without matches chooses nothing.
-          choose();
+          browser.choose();
         } else {
           return;
         }
         break;
       case 'Backspace':
-        if (!inList && filter) return;
-        goUp();
+        if (!inList && browser.filter) return;
+        browser.goUp();
         break;
       default:
         return;
@@ -583,7 +218,7 @@
 
   // A deep folder's trail shows its end: the folder that is open.
   $effect(() => {
-    void crumbs;
+    void browser.crumbs;
     if (trailElement) trailElement.scrollLeft = trailElement.scrollWidth;
   });
 
@@ -595,13 +230,13 @@
   });
 
   onMount(() => {
-    void start();
+    void browser.start();
   });
 </script>
 
 <div class="path-browser-host" use:portalThenRender>
   {#if portaled}
-    <Modal {title} class="path-browser" {onClose}>
+    <Modal title={browser.title} class="path-browser" {onClose}>
       {#snippet body()}
         <!-- Shortcuts only: every key it handles has a control too. -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -612,8 +247,8 @@
               icon
               ariaLabel={t('pathPicker.up')}
               tooltip={t('pathPicker.up')}
-              disabled={!canGoUp}
-              onClick={goUp}
+              disabled={!browser.canGoUp}
+              onClick={browser.goUp}
             >
               <svg
                 viewBox="0 0 16 16"
@@ -631,23 +266,18 @@
                 />
               </svg>
             </Button>
-            {#if editingPath}
+            {#if browser.editingPath}
               <TextField
                 id={pathInputId}
                 variant="modal"
                 code
                 class="path-browser__path"
-                value={pathText}
+                value={browser.pathText}
                 ariaLabel={t('pathPicker.pathInput')}
-                invalid={Boolean(pathFailure)}
-                onInput={(next) => {
-                  pathText = next;
-                  pathFailure = '';
-                }}
+                invalid={Boolean(browser.pathFailure)}
+                onInput={browser.setPathText}
                 onkeydown={handlePathKey}
-                onblur={() => {
-                  if (!pathFailure) editingPath = false;
-                }}
+                onblur={browser.blurPathEdit}
               />
             {:else}
               <div class="path-browser__address">
@@ -659,7 +289,7 @@
                   <ol>
                     {#if !root}
                       <li>
-                        {#if view === 'places'}
+                        {#if browser.view === 'places'}
                           <span
                             class="path-browser__crumb"
                             aria-current="location"
@@ -669,15 +299,15 @@
                           <button
                             type="button"
                             class="path-browser__crumb"
-                            onclick={() => openPlaces()}
+                            onclick={() => browser.openPlaces()}
                             >{t('pathPicker.places')}</button
                           >
                         {/if}
                       </li>
                     {/if}
-                    {#each crumbs as crumb, index (crumb.path)}
+                    {#each browser.crumbs as crumb, index (crumb.path)}
                       <li>
-                        {#if index === crumbs.length - 1}
+                        {#if index === browser.crumbs.length - 1}
                           <span
                             class="path-browser__crumb path-browser__crumb--path"
                             aria-current="location">{crumb.label}</span
@@ -686,7 +316,7 @@
                           <button
                             type="button"
                             class="path-browser__crumb path-browser__crumb--path"
-                            onclick={() => openFolder(crumb.path)}
+                            onclick={() => browser.openFolder(crumb.path)}
                             >{crumb.label}</button
                           >
                         {/if}
@@ -701,7 +331,7 @@
                   class="path-browser__type-path"
                   aria-label={t('pathPicker.editPath')}
                   use:tooltip={{ text: t('pathPicker.editPathHint') }}
-                  onclick={() => startPathEdit()}
+                  onclick={() => browser.startPathEdit()}
                 ></button>
               </div>
             {/if}
@@ -710,8 +340,8 @@
               icon
               ariaLabel={t('pathPicker.refresh')}
               tooltip={t('pathPicker.refresh')}
-              disabled={status === 'loading'}
-              onClick={refresh}
+              disabled={browser.status === 'loading'}
+              onClick={browser.refresh}
             >
               <svg
                 viewBox="0 0 16 16"
@@ -729,14 +359,14 @@
                 />
               </svg>
             </Button>
-            {#if canCreate}
+            {#if browser.canCreate}
               <Button
                 variant="tertiary"
                 icon
                 ariaLabel={t('pathPicker.newFolder')}
                 tooltip={t('pathPicker.newFolder')}
-                disabled={!folderReady || creating}
-                onClick={startNewFolder}
+                disabled={!browser.folderReady || browser.creating}
+                onClick={browser.startNewFolder}
               >
                 <svg
                   viewBox="0 0 16 16"
@@ -756,61 +386,59 @@
               </Button>
             {/if}
           </div>
-          {#if editingPath && pathFailure}
-            <p class="path-browser__error" role="alert">{pathFailure}</p>
+          {#if browser.editingPath && browser.pathFailure}
+            <p class="path-browser__error" role="alert">
+              {browser.pathFailure}
+            </p>
           {/if}
 
-          {#if view === 'folder'}
+          {#if browser.view === 'folder'}
             <div class="path-browser__tools">
               <TextField
                 variant="modal"
                 class="path-browser__filter"
-                value={filter}
+                value={browser.filter}
                 placeholder={t('pathPicker.filterPlaceholder')}
                 ariaLabel={t('pathPicker.filter')}
-                disabled={!folderReady}
+                disabled={!browser.folderReady}
                 onInput={(next, event) => {
                   // A path typed or pasted here is one to go to.
                   if (isAbsolutePath(next.trim())) {
-                    event.currentTarget.value = filter;
-                    startPathEdit(next.trim());
+                    event.currentTarget.value = browser.filter;
+                    browser.startPathEdit(next.trim());
                     return;
                   }
-                  filter = next;
-                  highlightFirstMatch();
+                  browser.setFilter(next);
                 }}
                 onkeydown={(event) => handleNavigationKey(event)}
               />
               <label class="path-browser__hidden"
                 ><Toggle
                   size="sm"
-                  checked={showHidden}
+                  checked={browser.showHidden}
                   ariaLabel={t('pathPicker.showHidden')}
-                  onChange={(next) => {
-                    showHidden = next;
-                    if (filter.trim()) highlightFirstMatch();
-                  }}
+                  onChange={browser.setShowHidden}
                 />{t('pathPicker.showHidden')}</label
               >
             </div>
           {/if}
 
           <div class="path-browser__panel">
-            {#if status === 'loading'}
+            {#if browser.status === 'loading'}
               <p class="path-browser__state" role="status">
                 {t('common.loading')}
               </p>
-            {:else if status === 'error'}
+            {:else if browser.status === 'error'}
               <div class="path-browser__state" role="alert">
-                <p>{failure}</p>
-                {#if retryable}
-                  <Button variant="secondary" onClick={refresh}
+                <p>{browser.failure}</p>
+                {#if browser.retryable}
+                  <Button variant="secondary" onClick={browser.refresh}
                     >{t('common.retry')}</Button
                   >
                 {/if}
               </div>
             {/if}
-            {#if creating && folderReady}
+            {#if browser.creating && browser.folderReady}
               <div class="path-browser__new">
                 <div class="path-browser__new-row">
                   <svg
@@ -833,27 +461,25 @@
                     variant="modal"
                     code
                     class="path-browser__new-name"
-                    value={newName}
+                    value={browser.newName}
                     ariaLabel={t('pathPicker.newFolderName')}
-                    invalid={Boolean(createFailure)}
-                    onInput={(next) => {
-                      newName = next;
-                      createFailure = '';
-                    }}
+                    invalid={Boolean(browser.createFailure)}
+                    onInput={browser.setNewName}
                     onkeydown={handleNewNameKey}
                   />
                   <Button
                     variant="primary"
-                    loading={createBusy}
-                    disabled={!newName.trim()}
-                    onClick={createFolder}>{t('pathPicker.create')}</Button
+                    loading={browser.createBusy}
+                    disabled={!browser.newName.trim()}
+                    onClick={browser.createFolder}
+                    >{t('pathPicker.create')}</Button
                   >
                   <Button
                     variant="tertiary"
                     icon
                     ariaLabel={t('common.cancel')}
                     tooltip={t('common.cancel')}
-                    onClick={cancelNewFolder}
+                    onClick={browser.cancelNewFolder}
                   >
                     <svg
                       viewBox="0 0 16 16"
@@ -871,14 +497,14 @@
                     </svg>
                   </Button>
                 </div>
-                {#if createFailure}
+                {#if browser.createFailure}
                   <p class="path-browser__error" role="alert">
-                    {createFailure}
+                    {browser.createFailure}
                   </p>
                 {/if}
               </div>
-            {:else if emptyText}
-              <p class="path-browser__state">{emptyText}</p>
+            {:else if browser.emptyText}
+              <p class="path-browser__state">{browser.emptyText}</p>
             {/if}
             <!-- Stays while folders load, so keyboard focus stays too. -->
             <div
@@ -886,20 +512,22 @@
               class="path-browser__list"
               role="listbox"
               tabindex="0"
-              aria-label={view === 'places'
+              aria-label={browser.view === 'places'
                 ? t('pathPicker.places')
                 : t('pathPicker.contents', {
-                    path: root ? target : toNativePath(target, separator),
+                    path: root
+                      ? browser.target
+                      : toNativePath(browser.target, browser.separator),
                   })}
-              aria-busy={status === 'loading' || undefined}
-              aria-activedescendant={activeIndex >= 0
-                ? rowId(activeIndex)
+              aria-busy={browser.status === 'loading' || undefined}
+              aria-activedescendant={browser.activeIndex >= 0
+                ? rowId(browser.activeIndex)
                 : undefined}
               onkeydown={(event) =>
                 handleNavigationKey(event, { inList: true })}
             >
-              {#each rows as row, index (row.key)}
-                {#if row.group && row.group !== rows[index - 1]?.group}
+              {#each browser.rows as row, index (row.key)}
+                {#if row.group && row.group !== browser.rows[index - 1]?.group}
                   <div class="path-browser__group" aria-hidden="true">
                     {row.group === 'projects'
                       ? t('pathPicker.projects')
@@ -911,17 +539,17 @@
                   type="button"
                   tabindex="-1"
                   class="path-browser__row"
-                  class:active={index === activeIndex}
+                  class:active={index === browser.activeIndex}
                   class:path-browser__row--hidden={row.entry?.hidden}
                   role="option"
-                  aria-selected={index === activeIndex}
+                  aria-selected={index === browser.activeIndex}
                   aria-label={row.entry
                     ? row.entry.kind === 'directory'
                       ? t('pathPicker.folder', { name: row.label })
                       : t('pathPicker.file', { name: row.label })
                     : undefined}
-                  onclick={() => pick(row)}
-                  ondblclick={() => open(row)}
+                  onclick={() => browser.pick(row)}
+                  ondblclick={() => browser.open(row)}
                 >
                   {#if row.entry?.kind === 'file'}
                     <svg
@@ -974,12 +602,12 @@
             </div>
           </div>
 
-          {#if folderReady && unrenderedCount > 0}
+          {#if browser.folderReady && browser.unrenderedCount > 0}
             <p class="path-browser__notice">
-              {t('pathPicker.moreRows', { count: unrenderedCount })}
+              {t('pathPicker.moreRows', { count: browser.unrenderedCount })}
             </p>
           {/if}
-          {#if folderReady && listing?.truncated}
+          {#if browser.folderReady && browser.listing?.truncated}
             <p class="path-browser__notice">{t('pathPicker.truncated')}</p>
           {/if}
         </div>
@@ -988,18 +616,21 @@
         <!-- A long path loses its start; the tooltip shows it whole. -->
         <code
           class="path-browser__choice"
-          use:tooltip={{ text: chosenValue, mono: true, whenTruncated: true }}
-          ><bdi>{chosenValue}</bdi></code
+          use:tooltip={{
+            text: browser.chosenValue,
+            mono: true,
+            whenTruncated: true,
+          }}><bdi>{browser.chosenValue}</bdi></code
         >
         <Button variant="secondary" onClick={onClose}
           >{t('common.cancel')}</Button
         >
         <Button
           variant="primary"
-          disabled={chosenPath === null}
-          onClick={choose}
+          disabled={browser.chosenPath === null}
+          onClick={browser.choose}
         >
-          {mode === 'file' || activeEntry?.kind === 'file'
+          {mode === 'file' || browser.activeEntry?.kind === 'file'
             ? t('pathPicker.selectFile')
             : t('pathPicker.selectFolder')}
         </Button>

@@ -95,10 +95,9 @@ export function createAccessGate({
     });
   }
 
-  // Asks the server and shows what it calls for. `boot` mounts the app when
-  // the server cannot be asked; `afterPairing` notes an approved browser that
-  // still has no access.
-  async function check({ boot = false, afterPairing = false } = {}) {
+  // The check's reason selects its one exception: boot may mount the app
+  // offline; an approval that still needs pairing reports a lost cookie.
+  async function check(reason = 'recheck') {
     if (destroyed) {
       return;
     }
@@ -116,7 +115,7 @@ export function createAccessGate({
         show({ screen: GATE_DENIED });
       } else if (error?.code === 'devices_unavailable') {
         scheduleRetry(GATE_UNAVAILABLE, error.retryAfter);
-      } else if (boot) {
+      } else if (reason === 'boot') {
         show({ screen: GATE_APP });
       } else {
         scheduleRetry(GATE_UNREACHABLE);
@@ -132,7 +131,9 @@ export function createAccessGate({
       screen,
       status,
       notice:
-        afterPairing && screen === GATE_PAIRING ? GATE_NOTICE_NOT_KEPT : null,
+        reason === 'pairing-approved' && screen === GATE_PAIRING
+          ? GATE_NOTICE_NOT_KEPT
+          : null,
     });
   }
 
@@ -176,7 +177,7 @@ export function createAccessGate({
     },
     start() {
       stopListening ??= onAccessLoss(handleLoss);
-      return check({ boot: true });
+      return check('boot');
     },
     // Retry from `unavailable`, `unreachable`, `looping` or `denied`.
     retry() {
@@ -186,7 +187,7 @@ export function createAccessGate({
     },
     // The pairing screen saw its request approved.
     pairingApproved() {
-      return check({ afterPairing: true });
+      return check('pairing-approved');
     },
     // The pairing screen learned the server's access changed (the mode is no
     // longer `authenticated`, or this client is refused).

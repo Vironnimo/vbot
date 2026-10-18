@@ -1,0 +1,191 @@
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
+  line-height: 1;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+
+/* A leading dot plus the label carries the status, so the pill stays quiet
+   instead of relying on color alone. */
+.chip::before {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentcolor;
+  content: '';
+}
+
+/* Canonical status-chip variants. `StatusChip` (`components/ui/StatusChip.svelte`)
+   emits `chip <variant>`; the color-named aliases (chip-green/amber/orange/red)
+   were collapsed into these semantic names. */
+.chip.success {
+  color: var(--green);
+  background: var(--green-dim);
+}
+
+.chip.warn {
+  color: var(--amber);
+  background: var(--amber-dim);
+}
+
+.chip.info {
+  color: var(--blue);
+  background: var(--blue-dim);
+}
+
+.chip.error {
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+.chip.neutral {
+  color: var(--text-med);
+  background: var(--surface-3);
+}
+
+/* Canonical metadata-badge variants. `Badge` (`components/ui/Badge.svelte`)
+   emits `badge badge--<variant>` for small metadata tags — kind markers,
+   origins, versions, scopes — the counterpart to StatusChip's semantic-status
+   `.chip`. Accent tints come only from the `--accent-XX` ramp. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.badge--neutral {
+  border-color: var(--border-2);
+  background: var(--surface-3);
+  color: var(--text-med);
+}
+
+.badge--info {
+  border-color: color-mix(in srgb, var(--blue) 30%, transparent);
+  background: color-mix(in srgb, var(--blue) 8%, transparent);
+  color: var(--blue);
+}
+
+.badge--success {
+  border-color: color-mix(in srgb, var(--green) 28%, transparent);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  color: var(--green);
+}
+
+.badge--warn {
+  border-color: color-mix(in srgb, var(--amber) 28%, transparent);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+  color: var(--amber);
+}
+
+.badge--error {
+  border-color: color-mix(in srgb, var(--red) 28%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
+}
+
+/* Canonical inline-banner variants. `Banner` (`components/ui/Banner.svelte`)
+   emits `banner banner--<variant>` for an in-flow message box — loading / error
+   / empty states, form errors, non-blocking notices. A 2px colored left stripe
+   carries the semantic weight (the app's toast / command-output stripe
+   language); the text stays `text-med` and the tint ramp matches Badge. It is
+   the in-flow counterpart to the bottom-right ToastStack. Content lays out with
+   space-between, so a trailing action (Retry, Review) floats to the right. */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+.banner > :where(p) {
+  margin: 0;
+}
+
+.banner--neutral {
+  background: var(--surface-2);
+}
+
+.banner--info {
+  border-left-color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 8%, transparent);
+}
+
+.banner--success {
+  border-left-color: var(--green);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+}
+
+.banner--warn {
+  border-left-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+}
+
+.banner--error {
+  border-left-color: var(--red);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+/* Quiet Chat context and Queue surface, with the same text-action footprint. */
+.banner--compact {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 4px 12px;
+  border: 0;
+  background: var(--composer-surface);
+}
+
+.banner--compact > :where(strong, p) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.banner--compact .btn-tertiary {
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 3px 6px;
+  font-size: var(--fs-label-sm);
+}
+
+.banner--compact > .btn-tertiary {
+  margin-inline-start: auto;
+}
+
+@media (pointer: coarse) {
+  .banner--compact .btn-tertiary {
+    min-height: 40px;
+    min-width: 40px;
+  }
+}
+
+@media (max-width: 640px) {
+  .banner:not(.banner--compact) {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

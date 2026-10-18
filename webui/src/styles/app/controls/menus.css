@@ -1,0 +1,470 @@
+.dropdown,
+.s-dropdown {
+  position: relative;
+  display: inline-block;
+
+  --dropdown-focus-border: var(--accent-40);
+  --dropdown-focus-ring: var(--focus-ring);
+}
+
+.s-dropdown {
+  width: 100%;
+}
+
+.dropdown-trigger,
+.s-dropdown-trigger {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 11px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  background: var(--field-surface);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  line-height: 1.4;
+  transition: border-color 150ms ease;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.dropdown-trigger:disabled,
+.s-dropdown-trigger:disabled {
+  opacity: 0.55;
+}
+
+.dropdown-trigger:hover:not(:disabled),
+.s-dropdown-trigger:hover:not(:disabled) {
+  border-color: var(--text-faint);
+}
+
+.dropdown.open .dropdown-trigger,
+.s-dropdown.open .s-dropdown-trigger {
+  border-color: var(--dropdown-focus-border);
+}
+
+/* Invalid choice: the red border wins over hover and the open state, as on
+   an invalid field (`.s-input--invalid`). */
+.dropdown-trigger--invalid {
+  border-color: var(--red) !important;
+}
+
+.dropdown-chevron {
+  flex-shrink: 0;
+  color: var(--text-lo);
+  transition: transform 180ms ease;
+}
+
+.dropdown.open .dropdown-chevron,
+.s-dropdown.open .dropdown-chevron {
+  transform: rotate(180deg);
+}
+
+.dropdown-list,
+.s-dropdown-panel {
+  /* Both panels are portaled to <body> and positioned via inline
+     `left`/`top`/`width`, so they share the single top-most layer. This is
+     what keeps a menu from hiding behind a sibling card or a modal — do not
+     reintroduce per-usage z-index overrides. */
+  position: fixed;
+  z-index: var(--z-floating);
+  overflow: hidden;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  box-shadow: var(--dropdown-elevation);
+}
+
+.dropdown-list {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-2);
+}
+
+.s-dropdown-panel {
+  border: 1px solid var(--border-2);
+  box-shadow: var(--dropdown-elevation-strong);
+}
+
+.dropdown-option,
+.s-dropdown-opt {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  border: 0;
+  color: var(--text-hi);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  text-align: left;
+  transition:
+    background 100ms ease,
+    color 100ms ease;
+}
+
+.dropdown-option:disabled,
+.s-dropdown-opt:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.dropdown-option:hover,
+.dropdown-option.active,
+.s-dropdown-opt:hover,
+.s-dropdown-opt.active {
+  color: var(--text-hi);
+  background: var(--surface-3);
+}
+
+.dropdown-option:focus-visible,
+.s-dropdown-opt:focus-visible,
+.dropdown-trigger:focus-visible,
+.s-dropdown-trigger:focus-visible,
+.s-dropdown-search input:focus-visible {
+  box-shadow: var(--field-focus-ring);
+}
+
+.dropdown-option.selected,
+.s-dropdown-opt.selected {
+  color: var(--accent);
+}
+
+.s-dropdown-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.s-dropdown-search input {
+  flex: 1;
+  border: 0;
+  padding: 0;
+  color: var(--text-hi);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  outline: none;
+}
+
+.s-dropdown-options {
+  max-height: var(--searchable-dropdown-options-max-height, 200px);
+  overflow-y: auto;
+}
+
+.s-dropdown-empty {
+  padding: 10px 12px;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
+.s-dropdown-footer {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.s-dropdown-footer:hover {
+  color: var(--text-hi);
+  background: var(--surface-3);
+}
+
+/* Context menus (`components/ui/ContextMenu.svelte`): portaled to <body> and
+   positioned by inline `left`/`top`, in the same top-most floating layer as
+   the dropdown panels. Used by the Desktop context menu and component menus.
+   It intentionally reads like native app chrome: compact rows, technical
+   restraint, and no decorative accent. */
+.context-menu {
+  position: fixed;
+  z-index: var(--z-floating);
+  min-width: 224px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  box-shadow: var(--floating-elevation);
+}
+
+.context-menu__item.btn-tertiary {
+  width: 100%;
+  min-height: 32px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-med);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.context-menu__item.btn-tertiary:not(:disabled):hover,
+.context-menu__item.btn-tertiary:focus-visible {
+  color: var(--text-hi);
+  background: var(--surface-3);
+  box-shadow: none;
+}
+
+.context-menu__item--danger.btn-tertiary,
+.context-menu__item--danger.btn-tertiary:disabled:hover,
+.context-menu__item--danger.btn-tertiary:not(:disabled):hover,
+.context-menu__item--danger.btn-tertiary:focus-visible {
+  color: var(--red);
+}
+
+.context-menu__item--danger.btn-tertiary:not(:disabled):hover,
+.context-menu__item--danger.btn-tertiary:focus-visible {
+  background: var(--red-dim);
+}
+
+.context-menu__item svg {
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.25;
+}
+
+.context-menu__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-menu__hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-lo);
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+
+.context-menu__separator {
+  height: 1px;
+  margin: 4px;
+  background: var(--border);
+}
+
+.dropdown-primitive,
+.searchable-dropdown {
+  min-width: 140px;
+}
+
+.dropdown-primitive__trigger,
+.searchable-dropdown__trigger {
+  min-height: 34px;
+}
+
+.dropdown-primitive__trigger-label,
+.searchable-dropdown__trigger-label,
+.dropdown-primitive__option-label,
+.searchable-dropdown__option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-primitive__trigger-label--placeholder,
+.searchable-dropdown__trigger-label--placeholder {
+  color: var(--text-lo);
+}
+
+/* The one disclosure marker: a small chevron that points right when closed
+   and down when open. Plain <summary> elements get it automatically; custom
+   disclosure buttons render <span class="disclosure-chevron">. */
+.disclosure-chevron,
+summary:not([class])::before {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin: 0 7px 1px 2px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  color: var(--text-lo);
+  content: '';
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+  vertical-align: middle;
+}
+
+.disclosure-chevron--open,
+details[open] > summary:not([class])::before {
+  transform: rotate(45deg);
+}
+
+summary:not([class]) {
+  list-style: none;
+}
+
+summary:not([class])::-webkit-details-marker {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-chevron,
+  summary:not([class])::before {
+    transition: none;
+  }
+}
+
+/* The muted lead of an option label (a Model id's provider path). */
+.searchable-dropdown__label-lead {
+  color: var(--text-lo);
+}
+
+.dropdown-primitive__option-meta,
+.searchable-dropdown__option-meta {
+  flex-shrink: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+}
+
+/* A labelled run of options (for example the sections of a sidebar shown as
+   one Dropdown on narrow screens). */
+.dropdown-primitive__group + .dropdown-primitive__group,
+.searchable-dropdown__group + .searchable-dropdown__group {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.dropdown-primitive__group-label,
+.searchable-dropdown__group-label {
+  padding: 8px 12px 4px;
+  color: var(--text-lo);
+  font: 600 var(--fs-label-sm) / 1.4 var(--font-ui);
+}
+
+/* A collapsible group's header row: disclosure chevron, name, then the
+   warning sign and, while closed, the summary dot and count. During a search
+   it is only a label, so it keeps its full color. */
+.searchable-dropdown__group-row {
+  justify-content: flex-start;
+  gap: 4px;
+  color: var(--text-med);
+  font-weight: 500;
+}
+
+.searchable-dropdown__group-row:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.searchable-dropdown__group-row .searchable-dropdown__option-label {
+  flex: 1 1 auto;
+}
+
+.searchable-dropdown__group-row .disclosure-chevron {
+  margin-right: 6px;
+}
+
+.searchable-dropdown__group-warning {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  color: var(--amber);
+}
+
+.searchable-dropdown__group-warning svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.25;
+}
+
+/* An option inside a group lines up with the group name. */
+.searchable-dropdown__option--nested {
+  padding-left: 33px;
+}
+
+/* Optional option decorations: a status dot before the label (also on the
+   trigger for the selected option) and a count pill after it. The label then
+   takes the free space so the pill and chevron stay at the end. */
+.dropdown-status-dot {
+  flex-shrink: 0;
+}
+
+.dropdown-status-dot + .dropdown-primitive__trigger-label,
+.dropdown-status-dot + .searchable-dropdown__trigger-label,
+.dropdown-status-dot + .dropdown-primitive__option-label,
+.dropdown-status-dot + .searchable-dropdown__option-label {
+  flex: 1 1 auto;
+  text-align: left;
+}
+
+/* A marker (OptionMarker.svelte) sits right after the option label; the
+   remaining space follows it, so the meta and count stay at the end. */
+.dropdown-option .option-marker,
+.s-dropdown-opt .option-marker {
+  margin-right: auto;
+  margin-left: -6px;
+}
+
+/* Compact numeric count pill (for example unread results). Blue like the
+   other info badges, never the accent. */
+.count-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--blue);
+  background: var(--blue-dim);
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.dropdown-primitive__list,
+.searchable-dropdown__panel {
+  isolation: isolate;
+}
+
+/* A focused listbox signals focus through its active option (via
+   aria-activedescendant), so the list itself carries no outline. */
+.dropdown-primitive__list:focus-visible,
+.searchable-dropdown__options:focus-visible {
+  outline: none;
+}
+
+.searchable-dropdown__search svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--text-lo);
+}
+
+.searchable-dropdown__empty {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+}

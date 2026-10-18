@@ -1,0 +1,196 @@
+/* Canonical text-field classes. The TextField component
+   (`components/ui/TextField.svelte`) emits `s-input` (default) / `modal-input`
+   (modal contrast) for editable fields and `s-value-box` for the read-only
+   presentation; the dead bare `.input` alias was dropped. The `.agents-view
+   input/textarea` tag selectors stay as a safety net for non-primitive fields. */
+.s-input,
+.modal-input,
+.agents-view input,
+.agents-view textarea {
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  background: var(--field-surface);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  line-height: 1.4;
+  outline: none;
+  padding: 6px 11px;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.s-input:hover,
+.modal-input:hover {
+  border-color: var(--text-faint);
+}
+
+.s-input:focus,
+.modal-input:focus,
+.agents-view input:focus,
+.agents-view textarea:focus {
+  border-color: var(--accent);
+  box-shadow: var(--field-focus-ring);
+}
+
+/* Invalid field: red border wins over the focus glow, matching the previous
+   agents-view__invalid treatment. */
+/* Code-like values (paths, commands, URLs, expressions); two classes so it
+   outranks the `.agents-view input` safety net. */
+.s-input.s-input--code,
+.modal-input.s-input--code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+}
+
+/* Code text areas in the Agents view (a Skill's SKILL.md editor) keep their
+   monospace face against the `.agents-view textarea` safety net. */
+.agents-view .text-area--code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+}
+
+.s-input--invalid {
+  border-color: var(--red) !important;
+}
+
+/* Canonical multi-line form control. Default is the bordered form field;
+   inset is the editor integrated into an already-bounded parent surface. Both
+   remain independent from the Chat composer's dedicated surface role. */
+.text-area {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 76px;
+  padding: 7px 11px;
+  resize: vertical;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  outline: none;
+  color: var(--text-hi);
+  background: var(--field-surface);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  line-height: 1.5;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.text-area:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--field-focus-ring);
+}
+
+.text-area:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* A growing field (TextArea `autoGrow`) fits its text and scrolls past its
+   max-height; dragging its size would fight the fit. */
+.text-area--grow {
+  max-height: 50vh;
+  overflow-y: auto;
+  resize: none;
+}
+
+.text-area--inset {
+  min-height: 150px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 0;
+  background: var(--prompt-content-surface);
+  font-size: var(--fs-body-md);
+  line-height: 1.6;
+}
+
+.text-area--inset:focus-visible {
+  box-shadow:
+    inset 0 0 0 1px var(--accent-40),
+    var(--field-focus-ring);
+}
+
+.text-area--code {
+  min-height: 168px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+  line-height: 1.5;
+  tab-size: 2;
+  overflow-x: auto;
+  overflow-wrap: normal;
+  white-space: pre;
+  word-break: normal;
+}
+
+.text-area--invalid {
+  border-color: var(--red) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.text-area--invalid:focus-visible {
+  border-color: var(--red) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 16%, transparent);
+}
+
+.modal-input {
+  background: var(--field-surface);
+  padding: 8px 12px;
+}
+
+.input-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 11px 14px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  background: var(--composer-surface);
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+/* The composer holds focus most of the time: an accent border marks it
+   clearly without a permanent glowing ring around the main work surface. */
+.input-wrap:focus-within {
+  border-color: var(--accent-60);
+}
+
+.msg-input,
+.composer-input {
+  min-height: 22px;
+  max-height: 182px;
+  flex: 1;
+  resize: none;
+  border: 0;
+  color: var(--text-hi);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-lg);
+  line-height: 1.5;
+  outline: none;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.msg-input::-webkit-scrollbar,
+.composer-input::-webkit-scrollbar {
+  display: none;
+}
+
+.msg-input::placeholder,
+.composer-input::placeholder,
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-lo);
+}
+
+.input-btns {
+  display: flex;
+  flex-shrink: 0;
+  align-self: flex-end;
+  align-items: center;
+  gap: 4px;
+}

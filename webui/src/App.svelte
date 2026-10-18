@@ -91,7 +91,7 @@
   import Modal from './components/ui/Modal.svelte';
   import ConfirmDialog from './components/ui/ConfirmDialog.svelte';
   import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
-  import { onMount, tick, untrack } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import {
     CONNECTION_STATUS_DISCONNECTED,
     handleVisibilityChange,
@@ -109,13 +109,8 @@
     reportClientMetrics,
   } from '$lib/api.js';
   import { startClientMetrics } from '$lib/clientMetrics.js';
-  import { parseAgentAddress } from '$lib/agentAddress.js';
   import { isWebuiOutdated } from '$lib/webuiBuild.js';
-  import {
-    AUTOSAVE_STILL_SAVING_MS,
-    createAutosaveCoordinator,
-    provideAutosaveContext,
-  } from '$lib/autosave.js';
+  import { provideAutosaveContext } from '$lib/autosave.js';
   import {
     flushComposerMemory,
     renameComposerAgent,
@@ -128,13 +123,15 @@
   import {
     createNavigator,
     provideNavigation,
-    sameLocation,
   } from '$lib/navigation.svelte.js';
   import { createAppSelection } from './app/selection.svelte.js';
   import { createAppSetup } from './app/setup.svelte.js';
   import { createAppDesktop } from './app/desktop.svelte.js';
   import { createAppExtensions } from './app/extensions.svelte.js';
   import { createLiveUiActions } from './app/liveUiActions.js';
+  import { createAppAutosave } from './app/autosave.svelte.js';
+  import AutosaveTransitionPrompt from './app/AutosaveTransitionPrompt.svelte';
+  import { createAppChatNavigation } from './app/chatNavigation.svelte.js';
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
@@ -177,20 +174,12 @@
     extensions.allNavigationItems.some((item) => item.id === viewId);
 
   const appControllerState = $state(createAppControllerState());
-  const autosaveCoordinator = createAutosaveCoordinator();
+  const autosave = createAppAutosave({
+    onStay: () => navigator.cancelPendingMove(),
+  });
+  provideAutosaveContext(autosave);
   let appController;
 
-  // A navigation waits here while pending edits save. `autosavePrompt` is
-  // null, 'slow' (a save takes long: Keep waiting / Leave anyway) or
-  // 'failed' (Retry / Discard and continue).
-  let autosaveTransitionSaving = $state(false);
-  let autosavePrompt = $state(null);
-  let pendingAutosaveTransition = null;
-  // Each flush belongs to one transition; one the user left behind cannot
-  // navigate or reopen a prompt when it settles.
-  let autosaveTransitionId = 0;
-  let autosaveTransitionSlow = false;
-  let autosaveSlowTimer = null;
   // Unknown until the first status read; Debug stays reachable meanwhile so a
   // startup link to it is not lost.
   let debugEnabled = $state(null);
@@ -257,108 +246,12 @@
     }
   });
 
-  const stopAutosaveSlowTimer = () => {
-    clearTimeout(autosaveSlowTimer);
-    autosaveSlowTimer = null;
-    autosaveTransitionSlow = false;
-  };
-
-  // Ends the waiting transition without running it; a flush still running
-  // for it settles unobserved.
-  const closeAutosaveTransition = () => {
-    autosaveTransitionId += 1;
-    stopAutosaveSlowTimer();
-    autosaveTransitionSaving = false;
-    autosavePrompt = null;
-    pendingAutosaveTransition = null;
-  };
-
-  const runAutosaveTransition = async (action) => {
-    const transitionId = ++autosaveTransitionId;
-    pendingAutosaveTransition = action;
-    autosaveTransitionSaving = true;
-    stopAutosaveSlowTimer();
-    // A save that takes long offers to leave; an open failure prompt (a
-    // Retry) already offers it.
-    autosaveSlowTimer = setTimeout(() => {
-      autosaveSlowTimer = null;
-      if (transitionId !== autosaveTransitionId) return;
-      autosaveTransitionSlow = true;
-      autosavePrompt ??= 'slow';
-    }, AUTOSAVE_STILL_SAVING_MS);
-    const saved = await autosaveCoordinator.flushPending();
-    if (transitionId !== autosaveTransitionId) return false;
-    stopAutosaveSlowTimer();
-    autosaveTransitionSaving = false;
-
-    if (!saved) {
-      autosavePrompt = 'failed';
-      return false;
-    }
-
-    const latestAction = pendingAutosaveTransition;
-    pendingAutosaveTransition = null;
-    autosavePrompt = null;
-    return latestAction?.();
-  };
-
-  const requestAutosaveTransition = (action) => {
-    if (typeof action !== 'function' || autosavePrompt === 'failed') {
-      return false;
-    }
-    if (autosaveTransitionSaving) {
-      pendingAutosaveTransition = action;
-      // The save already took long: ask again instead of waiting silently.
-      if (autosaveTransitionSlow) autosavePrompt ??= 'slow';
-      return false;
-    }
-    if (!autosaveCoordinator.hasPending()) {
-      return action();
-    }
-    return runAutosaveTransition(action);
-  };
-
-  provideAutosaveContext({
-    register: autosaveCoordinator.register,
-    requestTransition: requestAutosaveTransition,
-  });
-
-  const retryAutosaveTransition = () => {
-    if (!pendingAutosaveTransition || autosaveTransitionSaving) {
-      return;
-    }
-    void runAutosaveTransition(pendingAutosaveTransition);
-  };
-
-  // Keep waiting: the navigation still runs once the save finishes.
-  const keepWaitingForAutosave = () => {
-    if (autosavePrompt === 'slow') autosavePrompt = null;
-  };
-
-  // Leave anyway / Discard and continue: the latest navigation runs now,
-  // also while a save still runs. Running saves finish in the background.
-  const leaveAutosaveTransition = () => {
-    const action = pendingAutosaveTransition;
-    if (!action) return;
-    closeAutosaveTransition();
-    autosaveCoordinator.releaseRunningSaves();
-    action();
-  };
-
-  // Closing the failure prompt stays with the unsaved edits: the navigation
-  // is dropped, and a pending Back/Forward returns to the shown place.
-  const stayAfterAutosaveFailure = () => {
-    if (autosavePrompt !== 'failed') return;
-    closeAutosaveTransition();
-    navigator.cancelPendingMove();
-  };
-
   // Every navigation - a click, a deep link, Back or Forward - waits for
   // pending edits here. Leaving Settings also keeps its reading position:
   // captured while Settings still owns its DOM, because scroll events alone
   // must not decide the navigation boundary.
   const navigationGate = (action) =>
-    requestAutosaveTransition(() => {
+    autosave.requestTransition(() => {
       if (activeViewId === 'settings') {
         const position = settingsView?.getScrollPosition?.();
         if (position) {
@@ -367,18 +260,6 @@
       }
       return action();
     });
-
-  // Whether pending edits saved within the time a navigation waits before it
-  // offers to leave. A slower save keeps running.
-  const flushPendingWithinStillSavingLimit = () => {
-    let timer;
-    const limit = new Promise((resolve) => {
-      timer = setTimeout(() => resolve(false), AUTOSAVE_STILL_SAVING_MS);
-    });
-    return Promise.race([autosaveCoordinator.flushPending(), limit]).finally(
-      () => clearTimeout(timer),
-    );
-  };
 
   // A Desktop restart into a new version replaces this page. The Restart
   // button and the Desktop's request both come here. The user's restart saves
@@ -402,11 +283,10 @@
         restartDiscardConfirmOpen = true;
         return false;
       }
-      return requestAutosaveTransition(restart);
+      return autosave.requestTransition(restart);
     }
     // A slower save keeps running and may still land before the handoff.
-    if (autosaveCoordinator.hasPending())
-      await flushPendingWithinStillSavingLimit();
+    if (autosave.hasPending()) await autosave.flushWithinLimit();
     return restart();
   };
 
@@ -427,6 +307,11 @@
   });
   provideNavigation(navigator);
   let activeViewId = $derived(navigator.location.view);
+  const chatNavigation = createAppChatNavigation({
+    navigator,
+    selection,
+    openChat: () => openView('chat'),
+  });
 
   // The main navigation: a view's last place; the view already shown stays
   // where it is. Leaving first-run setup for another view sets setup aside.
@@ -435,112 +320,6 @@
       setup.dismissOnboarding();
     }
     return navigator.open(viewId);
-  };
-
-  // Chat's first area reports every place it moves to; App turns places it
-  // did not choose itself (Back/Forward, deep links, the main navigation)
-  // into a restore request for that area.
-  const chatNavigation = navigator.view('chat');
-  let chatShownSession = $state(null);
-  let pendingSessionNavigation = $state(null);
-  let chatRestoreRequestId = 0;
-  let lastChatLocation = null;
-  let initialChatProjectCatalogSettled = $state(false);
-
-  // A copied Project link has no selection metadata. Wait until its Team is
-  // known before deciding whether it selects a member or views a hidden owner.
-  const chatLinkWaitingForProjects = (location) =>
-    !selection.projectsLoaded &&
-    !initialChatProjectCatalogSettled &&
-    !location.extra?.selection &&
-    Boolean(parseAgentAddress(location.place[0]).projectId);
-
-  // Restores wait for the Agent roster, so an entry's Agent is known when
-  // Chat applies it.
-  $effect.pre(() => {
-    const location = navigator.location;
-    if (location.view !== 'chat') {
-      pendingSessionNavigation = null;
-      lastChatLocation = null;
-      return;
-    }
-    if (selection.agents.length === 0 || chatLinkWaitingForProjects(location))
-      return;
-    untrack(() => {
-      const previous = lastChatLocation;
-      lastChatLocation = location;
-      if (location.origin === 'view' || sameLocation(previous, location)) {
-        return;
-      }
-      // Chat names its first shown Session itself once it resolves; when it
-      // already resolved while hidden, the start place is corrected below.
-      if (
-        !previous &&
-        !chatShownSession &&
-        location.place.length === 0 &&
-        !location.extra
-      ) {
-        return;
-      }
-      const [agentId = '', sessionId = ''] = location.place;
-      const subAgent = location.extra?.subAgent === true;
-      const shown = chatShownSession;
-      if (
-        shown?.agentId === agentId &&
-        shown.sessionId === sessionId &&
-        shown.subAgent === subAgent
-      ) {
-        return;
-      }
-      chatRestoreRequestId += 1;
-      // A place naming only an Agent is that Agent's unsaved draft.
-      pendingSessionNavigation = {
-        ...(agentId && sessionId
-          ? {
-              agentId,
-              sessionId,
-              subAgent,
-              followSession: subAgent && location.origin === 'app',
-            }
-          : agentId
-            ? { agentId, draft: true }
-            : { returnToCurrent: true }),
-        selection: location.extra?.selection ?? null,
-        requestId: chatRestoreRequestId,
-      };
-    });
-  });
-
-  const chatExtra = (subAgent) => ({
-    selection: selection.currentNavigationSelection(),
-    subAgent: subAgent === true,
-  });
-
-  // `session` is the Session Chat's first area shows now (`{agentId,
-  // sessionId, subAgent}`; no `sessionId` for a draft, whose place names only
-  // the Agent). A report while Chat is hidden corrects the place Chat returns
-  // to and never pulls the app back to Chat.
-  const handleChatSessionNavigation = (session, { replace = false } = {}) => {
-    chatShownSession = session ?? null;
-    if (!session) return false;
-    if (
-      replace &&
-      activeViewId === 'chat' &&
-      chatLinkWaitingForProjects(navigator.location)
-    )
-      return false;
-    const place = [session.agentId, session.sessionId];
-    const extra = chatExtra(session.subAgent);
-    return replace || activeViewId !== 'chat'
-      ? chatNavigation.replace(place, { extra })
-      : chatNavigation.navigate(place, { extra });
-  };
-
-  const navigateToSession = (agentId, sessionId, subAgent = false) => {
-    if (!agentId || !sessionId) return false;
-    return navigator.navigate('chat', [agentId, sessionId], {
-      extra: chatExtra(subAgent),
-    });
   };
 
   // Another view chose a different Agent: Chat follows the shared selection
@@ -562,89 +341,16 @@
     return openView('chat');
   };
 
-  // Open in split view on an Agent row: Chat shows that Agent beside the area
-  // it shows now. A request whose switch to Chat did not happen (an autosave
-  // prompt, then another view) is dropped instead of applying later.
-  let chatSplitRequest = $state(null);
-  const openAgentInSplit = (agentId) => {
-    if (!agentId) return false;
-    chatSplitRequest = {
-      target: { agentAddress: agentId },
-      requestId: (chatSplitRequest?.requestId ?? 0) + 1,
-      revision: navigator.location.revision,
-    };
-    return openView('chat');
-  };
-  $effect(() => {
-    const location = navigator.location;
-    if (
-      chatSplitRequest &&
-      location.view !== 'chat' &&
-      location.revision !== untrack(() => chatSplitRequest.revision)
-    ) {
-      chatSplitRequest = null;
-    }
-  });
-
-  // A remembered Location with an Identity Agent's old id replaced by its
-  // new one.
-  function renameAgentInLocation(location, oldAgentId, newAgentId) {
-    const resolve = (agentId) =>
-      agentId === oldAgentId ? newAgentId : agentId;
-    const remapScope = (segment) =>
-      segment.startsWith('agent:')
-        ? `agent:${resolve(segment.slice('agent:'.length))}`
-        : segment;
-    if (location.view === 'chat') {
-      const [agentId, ...rest] = location.place;
-      const chatSelection = location.extra?.selection;
-      return {
-        ...location,
-        place:
-          agentId && !agentId.includes('@')
-            ? [resolve(agentId), ...rest]
-            : location.place,
-        extra: chatSelection
-          ? {
-              ...location.extra,
-              selection: {
-                ...chatSelection,
-                agentId: resolve(chatSelection.agentId),
-              },
-            }
-          : location.extra,
-      };
-    }
-    if (location.view === 'agents' && location.place[0]) {
-      return {
-        ...location,
-        place: [resolve(location.place[0]), ...location.place.slice(1)],
-      };
-    }
-    if (location.view === 'skills' || location.view === 'system-prompt') {
-      return { ...location, place: location.place.map(remapScope) };
-    }
-    return location;
-  }
-
   const liveUiActions = createLiveUiActions({
     selection,
     navigator,
-    navigateToSession,
+    navigateToSession: chatNavigation.navigateToSession,
     activeView: () => activeViewId,
-    requestTransition: requestAutosaveTransition,
-    chatSelection: () => chatShownSession,
+    requestTransition: autosave.requestTransition,
+    chatSelection: () => chatNavigation.shownSession,
     terminalsView: () => terminalsView,
     afterRender: tick,
   });
-
-  const navigateToSubAgent = (target) =>
-    navigateToSession(target?.agentId, target?.sessionId, true);
-
-  // Opens one Session from outside the page, the way Live UI's `open` action
-  // does: a startup link or a request of the Desktop app.
-  const openSessionLink = ({ agentId, sessionId }) =>
-    navigateToSession(agentId, sessionId);
 
   const loadDataStoreStatus = async () => {
     try {
@@ -770,12 +476,7 @@
       // Chat areas re-key their Sessions here; the place Chat's first area
       // reported follows, so the remapped place reads as already shown.
       selection.remapIdentityAgentId(oldAgentId, newAgentId);
-      if (chatShownSession?.agentId === oldAgentId) {
-        chatShownSession = { ...chatShownSession, agentId: newAgentId };
-      }
-      navigator.remapAll((location) =>
-        renameAgentInLocation(location, oldAgentId, newAgentId),
-      );
+      chatNavigation.remapIdentityAgentId(oldAgentId, newAgentId);
     },
     onReloadAgents: selection.reloadAgentsFromServer,
     onReloadExtensionPages: extensions.loadExtensionPages,
@@ -795,10 +496,10 @@
     });
     const sessionLink = navigator.takeSessionLink();
     if (sessionLink) {
-      openSessionLink(sessionLink);
+      chatNavigation.openSessionLink(sessionLink);
     }
     const stopDesktopSessionRequests = isDesktopAccessor()
-      ? onDesktopOpenSession(openSessionLink)
+      ? onDesktopOpenSession(chatNavigation.openSessionLink)
       : () => {};
     // This page always takes over the Desktop's restart request, so it saves
     // pending edits before the Desktop would restart on its own.
@@ -816,9 +517,7 @@
 
     // Load the project list for the chat dropdown (best-effort; the chat works
     // identity-only when this fails).
-    void selection.loadProjects().finally(() => {
-      initialChatProjectCatalogSettled = true;
-    });
+    void selection.loadProjects().finally(chatNavigation.settleInitialProjects);
     // Voice routing and other non-Chat views also consume the shared Agent
     // roster, so seed it at app mount instead of relying on ChatView having
     // mounted first.
@@ -843,7 +542,7 @@
 
     return () => {
       cancelled = true;
-      closeAutosaveTransition();
+      autosave.destroy();
       stopDesktopSessionRequests();
       stopDesktopRestartRequests();
       selection.destroy();
@@ -858,7 +557,7 @@
   function protectPendingEdits(event) {
     const cronDraftAtRisk =
       Boolean(cronNewJobDraft) && !desktop.update?.restarting;
-    if (!autosaveCoordinator.hasPending() && !cronDraftAtRisk) return;
+    if (!autosave.hasPending() && !cronDraftAtRisk) return;
     event.preventDefault();
     event.returnValue = '';
   }
@@ -992,9 +691,9 @@
         agentsRefreshToken={selection.agentsRefreshToken}
         onAgentsChanged={selection.syncAgents}
         onAgentSelected={selection.selectAgent}
-        {navigateToSubAgent}
-        {pendingSessionNavigation}
-        onSessionNavigation={handleChatSessionNavigation}
+        navigateToSubAgent={chatNavigation.navigateToSubAgent}
+        pendingSessionNavigation={chatNavigation.pendingSessionNavigation}
+        onSessionNavigation={chatNavigation.handleSessionNavigation}
         {runEvents}
         {commandStatuses}
         {terminalsRefreshToken}
@@ -1004,7 +703,7 @@
         {commandsRefreshToken}
         {queueInvalidation}
         {sessionDeletion}
-        splitRequest={chatSplitRequest}
+        splitRequest={chatNavigation.splitRequest}
         subscribeAgentRenames={selection.subscribeAgentRenames}
         subscribeExtensionInvalidations={extensions.subscribeInvalidations}
         hasConnectedProvider={setup.settings === null
@@ -1036,7 +735,7 @@
           onAgentsChanged={selection.refreshAgents}
           onAgentSelected={selectAgentFromView}
           onOpenChat={openAgentChat}
-          onOpenInSplit={openAgentInSplit}
+          onOpenInSplit={chatNavigation.openAgentInSplit}
           onToast={desktop.showToast}
           onNavigateToSettingsPanel={navigateToSettingsPanel}
           onNavigateToAgentPrompt={navigateToAgentPromptScope}
@@ -1055,7 +754,7 @@
           {terminalsRefreshToken}
           {serverUnavailable}
           onToast={desktop.showToast}
-          onOpenSession={navigateToSession}
+          onOpenSession={chatNavigation.navigateToSession}
         />
       {:else if activeViewId === 'projects'}
         <ProjectsView
@@ -1079,7 +778,7 @@
           {cronRefreshToken}
           agentsRefreshToken={selection.agentsRefreshToken}
           onOpenCronJob={openCronJobFromCalendar}
-          onOpenSession={navigateToSession}
+          onOpenSession={chatNavigation.navigateToSession}
         />
       {:else if activeViewId === 'cron'}
         <CronView
@@ -1097,7 +796,7 @@
           onToast={desktop.showToast}
           settings={setup.settings}
           onSettingsCommit={(nextSettings) => (setup.settings = nextSettings)}
-          onOpenSession={navigateToSession}
+          onOpenSession={chatNavigation.navigateToSession}
           {skillsRefreshToken}
           agentsRefreshToken={selection.agentsRefreshToken}
           {projectsRefreshToken}
@@ -1136,7 +835,7 @@
           {projectsRefreshToken}
           {sessionsRefreshToken}
           {skillsRefreshToken}
-          onOpenSession={navigateToSession}
+          onOpenSession={chatNavigation.navigateToSession}
           initialScrollPosition={settingsScrollPosition}
           onScrollPositionChange={rememberSettingsScrollPosition}
           subscribeExtensionInvalidations={extensions.subscribeInvalidations}
@@ -1159,57 +858,7 @@
   />
 </AppShell>
 
-{#if autosavePrompt === 'slow'}
-  <Modal
-    title={t('autosave.stillSavingTitle')}
-    labelledById="autosave-transition-slow-title"
-    onClose={keepWaitingForAutosave}
-  >
-    {#snippet body()}
-      <div class="modal-body">
-        <p>
-          {t('autosave.stillSavingBody')}
-        </p>
-      </div>
-    {/snippet}
-    {#snippet footer()}
-      <Button variant="primary" onClick={keepWaitingForAutosave}>
-        {t('autosave.keepWaiting')}
-      </Button>
-      <Button variant="secondary" onClick={leaveAutosaveTransition}>
-        {t('autosave.leaveAnyway')}
-      </Button>
-    {/snippet}
-  </Modal>
-{:else if autosavePrompt === 'failed'}
-  <!-- Closing it stays with the unsaved edits; Discard stays available
-       while a Retry runs, so a hanging save never locks the app. -->
-  <Modal
-    title={t('autosave.transitionFailureTitle')}
-    labelledById="autosave-transition-failure-title"
-    onClose={stayAfterAutosaveFailure}
-  >
-    {#snippet body()}
-      <div class="modal-body">
-        <p>
-          {t('autosave.transitionFailureBody')}
-        </p>
-      </div>
-    {/snippet}
-    {#snippet footer()}
-      <Button
-        variant="primary"
-        disabled={autosaveTransitionSaving}
-        onClick={retryAutosaveTransition}
-      >
-        {autosaveTransitionSaving ? t('common.saving') : t('common.retry')}
-      </Button>
-      <Button variant="danger" onClick={leaveAutosaveTransition}>
-        {t('autosave.discardAndContinue')}
-      </Button>
-    {/snippet}
-  </Modal>
-{/if}
+<AutosaveTransitionPrompt transition={autosave} />
 
 {#if restartDiscardConfirmOpen}
   <ConfirmDialog
