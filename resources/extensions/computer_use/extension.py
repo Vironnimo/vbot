@@ -713,7 +713,7 @@ class ComputerUseService:
                 ) from None
             except (CallRefusedError, TargetError) as error:
                 raise TargetError(
-                    f"All {len(actions)} actions ran, but the final screenshot failed: {error}. "
+                    f"All requested actions ran, but the final screenshot failed: {error}. "
                     "Take a screenshot before repeating any input.\nActions that ran:\n"
                     + "\n".join(lines),
                     error.code,
