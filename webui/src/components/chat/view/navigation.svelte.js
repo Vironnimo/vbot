@@ -675,6 +675,52 @@ export function createChatViewNavigation(context) {
     context.layout.requestComposerFocus({ includeMobile: true });
   };
 
+  const handleNewSessionWith = (agentAddress, prepareDraft, options) =>
+    asStep(() => startNewSessionWith(agentAddress, prepareDraft, options));
+
+  // A new Session of `agentAddress`, which may be another Agent than the
+  // active one (the by-Project Session list): it becomes the active Agent and
+  // shows its draft, and `prepareDraft` sets where the draft works. With
+  // `keepEmptySession`, an empty displayed Session - which the caller knows to
+  // be that Agent's, in that Project - stays the fresh conversation.
+  const startNewSessionWith = async (
+    agentAddress,
+    prepareDraft,
+    { keepEmptySession = false } = {},
+  ) => {
+    if (context.chatState.loadingHistory || !agentAddress) {
+      return;
+    }
+    if (
+      keepEmptySession &&
+      !context.target.activeDraft() &&
+      context.composerAvailable &&
+      context.displayedSessionIsEmpty()
+    ) {
+      context.layout.requestComposerFocus({ includeMobile: true });
+      return;
+    }
+    const { agentId, projectId } = parseAgentAddress(agentAddress);
+    if (agentAddress !== context.target.activeOwnAgentAddress()) {
+      if (projectId) {
+        await moveToProjectAgent({
+          projectId,
+          bareAgentId: agentId,
+          agentAddress,
+          sessionId: '',
+        });
+      } else {
+        moveToIdentityAgent({ bareAgentId: agentAddress });
+      }
+    }
+    showDraft(agentAddress);
+    const draft = context.target.activeDraft();
+    if (draft) {
+      prepareDraft?.(draft);
+    }
+    context.layout.requestComposerFocus({ includeMobile: true });
+  };
+
   // Show the active Agent's draft in place of its current Session. An
   // Identity Agent's current Session in this area becomes empty (the server
   // pointer is untouched until the draft's first send); a Project Agent holds
@@ -904,6 +950,9 @@ export function createChatViewNavigation(context) {
     },
     get handleNewSession() {
       return handleNewSession;
+    },
+    get handleNewSessionWith() {
+      return handleNewSessionWith;
     },
     get showAgentDraft() {
       return showAgentDraft;

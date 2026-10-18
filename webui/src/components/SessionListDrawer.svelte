@@ -18,8 +18,11 @@
   import SessionKindIcon from './sessions/SessionKindIcon.svelte';
   import {
     sessionDisplayName,
+    applyProjectGroups,
+    appendProjectGroupPage,
     applySessionList,
     appendSessionList,
+    projectGroupKey,
     createSessionListFilters,
     createSessionListState,
     overlayLiveSessionActivity,
@@ -33,7 +36,12 @@
   import Modal from './ui/Modal.svelte';
   import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
   import { onDestroy, untrack } from 'svelte';
-  import { listSessions } from '$lib/api.js';
+  import {
+    listProjectSessions,
+    listSessionProjectGroups,
+    listSessions,
+  } from '$lib/api.js';
+  import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
   import {
     createCoalescedRefresh,
     sessionInvalidationListsTarget,
@@ -45,6 +53,10 @@
 
   const SESSION_INITIAL_DISPLAY_LIMIT = 35;
   const SESSION_DISPLAY_INCREMENT = 20;
+  // The newest Sessions a Project group shows, and how many more each
+  // "Show more" adds.
+  const PROJECT_GROUP_LIMIT = 5;
+  const PROJECT_GROUP_INCREMENT = 10;
 
   let {
     agentId = '',
@@ -88,8 +100,18 @@
     // Called with (agentAddress, sessionId, effectivePolicy) after a Session
     // Compaction Policy is saved, so Chat applies it without another read.
     onCompactionPolicyChange = () => {},
+    // Registered Projects ({ project_id, display_name }) that name the groups
+    // of the by-Project view.
+    projects = [],
+    // Every Project's Team ({ projectId, members: [{ agent_id, display_name }] })
+    // for the Agent names of Team rows and the "+" Agent choice.
+    projectTeams = [],
+    // Called with (projectId, agentAddress) when a group's "+" asks for a new
+    // Session of that Agent in that Project (null: the Workspace).
+    onNewSessionInProject = () => {},
   } = $props();
   const menus = createSessionMenus();
+  const uid = $props.id();
   // The open row menu (./ui/ContextMenu.svelte) and the row it belongs to.
   let rowMenu = $state(null);
   let rowMenuKey = $state(null);
@@ -163,12 +185,136 @@
     return roster;
   });
 
+  // The by-Project view: the groups of `session.project_groups`.
+  let projectState = $state({ groups: [], loading: false, error: null });
+  let loadingMoreGroupKey = $state(null);
+
+  // Names of every Agent a by-Project row can belong to: the roster's
+  // Identity Agents and each Project's Team members.
+  let agentNames = $derived.by(() => {
+    const names = {};
+    for (const entry of rosterAgents) {
+      names[entry.address] = entry.name;
+    }
+    for (const team of Array.isArray(projectTeams) ? projectTeams : []) {
+      for (const member of team?.members ?? []) {
+        const address = formatAgentAddress(member.agent_id, team.projectId);
+        names[address] ??= member.display_name || member.agent_id;
+      }
+    }
+    return names;
+  });
+
+  let projectNames = $derived(
+    Object.fromEntries(
+      (Array.isArray(projects) ? projects : []).map((project) => [
+        project.project_id,
+        project.display_name || project.project_id,
+      ]),
+    ),
+  );
+
+  let displayedGroups = $derived(
+    projectState.groups.map((group) => {
+      const sessions = overlayLiveSessionActivity(
+        group.sessions,
+        liveActivity,
+        null,
+      ).map((session) => ({
+        ...session,
+        agent_name:
+          agentNames[session.agent_address] ||
+          parseAgentAddress(session.agent_address).agentId,
+      }));
+      return {
+        ...group,
+        key: projectGroupKey(group.projectId),
+        name:
+          group.projectId === null
+            ? t('sessions.projects.other')
+            : projectNames[group.projectId] || group.projectId,
+        sessions: visibleSessionsForSelection(sessions, {
+          filters,
+          selectedSessionId: currentSessionId,
+        }),
+      };
+    }),
+  );
+
+  const groupCollapsed = (key) => filters.collapsedProjects.includes(key);
+
+  const toggleGroup = (key) =>
+    setFilter(
+      'collapsedProjects',
+      groupCollapsed(key)
+        ? filters.collapsedProjects.filter((entry) => entry !== key)
+        : [...filters.collapsedProjects, key],
+    );
+
+  // The Agent a group's "+" starts with: the displayed Agent when it can
+  // work in that Project - an Identity Agent everywhere, a Team member only
+  // in its own Project - else '' (the user chooses).
+  const directNewSessionAgent = (projectId) => {
+    const address = asText(agentId);
+    const { projectId: teamProjectId } = parseAgentAddress(address);
+    if (teamProjectId) {
+      return teamProjectId === projectId ? address : '';
+    }
+    return rosterAgents.some((entry) => entry.address === address)
+      ? address
+      : '';
+  };
+
+  // The Agents that can work in a Project group: every Identity Agent, then
+  // that Project's Team.
+  const newSessionChoices = (projectId) => {
+    const identity = rosterAgents
+      .filter((entry) => !parseAgentAddress(entry.address).projectId)
+      .map((entry) => ({ ...entry, group: 'identity' }));
+    const team =
+      projectId === null
+        ? []
+        : ((Array.isArray(projectTeams) ? projectTeams : []).find(
+            (entry) => entry.projectId === projectId,
+          )?.members ?? []);
+    return [
+      ...identity,
+      ...team.map((member) => ({
+        address: formatAgentAddress(member.agent_id, projectId),
+        name: member.display_name || member.agent_id,
+        group: 'team',
+      })),
+    ];
+  };
+
+  const startNewSessionInGroup = (group, event) => {
+    const direct = directNewSessionAgent(group.projectId);
+    if (direct) {
+      onNewSessionInProject(group.projectId, direct);
+      return;
+    }
+    menus.closeFilterMenu();
+    rowMenuKey = null;
+    rowMenu = {
+      ...contextMenuAnchor(event),
+      label: t('sessions.projects.chooseAgent', { project: group.name }),
+      items: newSessionChoices(group.projectId).map((choice) => ({
+        id: choice.address,
+        label: choice.name,
+        group: choice.group,
+        onSelect: () => onNewSessionInProject(group.projectId, choice.address),
+      })),
+    };
+  };
+
   // The header names whose Sessions the list shows.
   let headerTitle = $derived(
-    filters.allAgents
-      ? t('sessions.filters.allAgents')
-      : rosterAgents.find((entry) => entry.address === asText(agentId))?.name ||
-          t('sessions.title'),
+    filters.byProject
+      ? t('sessions.projects.title')
+      : filters.allAgents
+        ? t('sessions.filters.allAgents')
+        : rosterAgents.find((entry) => entry.address === asText(agentId))
+            ?.name || t('sessions.title'),
   );
 
   const SESSION_FILTER_ROWS = [
@@ -217,8 +363,8 @@
   // changes while that filter is on.
   let listSourceKey = $derived(
     [
-      asText(agentId),
-      filters.allAgents
+      filters.byProject ? '~projects' : asText(agentId),
+      filters.allAgents && !filters.byProject
         ? rosterAgents.map((entry) => entry.address).join('|')
         : '',
       Number(filters.channels),
@@ -236,7 +382,7 @@
 
     loadedListKey = listSourceKey;
 
-    if (!asText(agentId)) {
+    if (!filters.byProject && !asText(agentId)) {
       sessionState = createSessionListState();
       return;
     }
@@ -305,6 +451,14 @@
         lastInvalidationId,
       );
       lastInvalidationId = lastId;
+      // The by-Project view lists every Agent.
+      if (
+        filters.byProject &&
+        (overflowed || targets.some((target) => !target.readRunId))
+      ) {
+        listReloads.schedule();
+        return;
+      }
       const listedAddresses = [
         asText(agentId),
         ...(filters.allAgents
@@ -327,6 +481,10 @@
   // Mutations may finish after selection or filters changed. Reload the
   // drawer's current scope, while each mutation keeps its original target.
   const loadSessions = async () => {
+    if (filters.byProject) {
+      await loadProjectGroups();
+      return;
+    }
     const targetAgentId = asText(agentId);
     if (!targetAgentId) {
       sessionState = createSessionListState();
@@ -451,6 +609,77 @@
     } finally {
       if (requestVersion === loadVersion) {
         loadingMore = false;
+      }
+    }
+  };
+
+  const categoryQuery = () => ({
+    includeSubagents: filters.subagents,
+    includeMemoryReflections: filters.memoryReflections,
+    includeSkillReflections: filters.skillReflections,
+    includeCron: filters.cron,
+    includeChannels: filters.channels === true,
+  });
+
+  const loadProjectGroups = async () => {
+    const requestVersion = ++loadVersion;
+    loadingMoreGroupKey = null;
+    projectState = { ...projectState, loading: true, error: null };
+    try {
+      const result = await listSessionProjectGroups({
+        limit: PROJECT_GROUP_LIMIT,
+        ...categoryQuery(),
+      });
+      if (requestVersion !== loadVersion) {
+        return;
+      }
+      projectState = {
+        groups: applyProjectGroups(result),
+        loading: false,
+        error: null,
+      };
+    } catch (error) {
+      if (requestVersion === loadVersion) {
+        projectState = {
+          ...projectState,
+          loading: false,
+          error: error.message,
+        };
+      }
+    }
+  };
+
+  const loadMoreInGroup = async (group) => {
+    const cursor = group.nextCursor;
+    if (cursor === null || loadingMoreGroupKey !== null) {
+      return;
+    }
+    const requestVersion = loadVersion;
+    loadingMoreGroupKey = group.key;
+    try {
+      const page = await listProjectSessions(group.projectId, {
+        limit: PROJECT_GROUP_INCREMENT,
+        cursor,
+        ...categoryQuery(),
+      });
+      if (requestVersion !== loadVersion) {
+        return;
+      }
+      projectState = {
+        ...projectState,
+        groups: appendProjectGroupPage(
+          projectState.groups,
+          group.projectId,
+          page,
+        ),
+      };
+    } catch (error) {
+      if (requestVersion === loadVersion) {
+        projectState = { ...projectState, error: error.message };
+      }
+    } finally {
+      if (requestVersion === loadVersion) {
+        loadingMoreGroupKey = null;
       }
     }
   };
@@ -590,6 +819,16 @@
     }
   };
 
+  // The by-Project view marks the shown Session; the Agent list keeps its
+  // own selection.
+  const rowSelected = (session) => {
+    const owner = session.agent_address || asText(agentId);
+    return filters.byProject
+      ? session.id === asText(currentSessionId) && owner === asText(agentId)
+      : sessionState.selectedSessionId === session.id &&
+          sessionState.selectedAgentAddress === owner;
+  };
+
   const sessionRowKey = (session) =>
     `${session.agent_address || asText(agentId)}::${session.id}`;
 </script>
@@ -607,29 +846,55 @@
     <div class="session-drawer__filter">
       <button
         type="button"
-        class="session-drawer__icon-button session-drawer__all-agents"
-        class:session-drawer__filter-trigger--active={filters.allAgents}
-        aria-label={t('sessions.filters.allAgents')}
-        aria-pressed={filters.allAgents}
-        use:tooltip={filters.allAgents
-          ? t('sessions.filters.allAgentsOn')
-          : t('sessions.filters.allAgentsOff')}
-        onclick={() => setFilter('allAgents', !filters.allAgents)}
+        class="session-drawer__icon-button session-drawer__by-project"
+        class:session-drawer__filter-trigger--active={filters.byProject}
+        aria-label={t('sessions.projects.toggle')}
+        aria-pressed={filters.byProject}
+        use:tooltip={filters.byProject
+          ? t('sessions.projects.toggleOn')
+          : t('sessions.projects.toggleOff')}
+        onclick={() => setFilter('byProject', !filters.byProject)}
       >
         <svg
           viewBox="0 0 20 20"
           fill="none"
           stroke="currentColor"
           stroke-width="1.5"
-          stroke-linecap="round"
+          stroke-linejoin="round"
           aria-hidden="true"
         >
-          <circle cx="7" cy="6" r="2.5" />
           <path
-            d="M2 16v-1.5a5 5 0 0 1 10 0V16M13 3.7a2.5 2.5 0 0 1 0 4.6M15 10a4 4 0 0 1 3 4v2"
+            d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.6l1.8 2h6.6a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5z"
           />
         </svg>
       </button>
+      {#if !filters.byProject}
+        <button
+          type="button"
+          class="session-drawer__icon-button session-drawer__all-agents"
+          class:session-drawer__filter-trigger--active={filters.allAgents}
+          aria-label={t('sessions.filters.allAgents')}
+          aria-pressed={filters.allAgents}
+          use:tooltip={filters.allAgents
+            ? t('sessions.filters.allAgentsOn')
+            : t('sessions.filters.allAgentsOff')}
+          onclick={() => setFilter('allAgents', !filters.allAgents)}
+        >
+          <svg
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <circle cx="7" cy="6" r="2.5" />
+            <path
+              d="M2 16v-1.5a5 5 0 0 1 10 0V16M13 3.7a2.5 2.5 0 0 1 0 4.6M15 10a4 4 0 0 1 3 4v2"
+            />
+          </svg>
+        </button>
+      {/if}
       <button
         type="button"
         class="session-drawer__icon-button session-drawer__filter-trigger"
@@ -697,7 +962,116 @@
     </p>
   {/if}
 
-  {#if sessionState.error}
+  {#if filters.byProject}
+    {#if projectState.error}
+      <Banner variant="error" class="session-drawer__load-error" role="alert">
+        <span>{projectState.error}</span>
+        <Button
+          variant="secondary"
+          disabled={projectState.loading}
+          onClick={() => loadSessions()}
+        >
+          {t('common.retry')}
+        </Button>
+      </Banner>
+    {/if}
+    {#if projectState.loading && projectState.groups.length === 0}
+      <p class="session-drawer__state">
+        {t('sessions.loading')}
+      </p>
+    {:else}
+      <div class="session-drawer__groups">
+        {#each displayedGroups as group (group.key)}
+          {@const collapsed = groupCollapsed(group.key)}
+          {@const direct = directNewSessionAgent(group.projectId)}
+          <section
+            class="session-group"
+            aria-labelledby={`${uid}-group-${group.key || '~other'}`}
+          >
+            <div class="session-group__header">
+              <button
+                type="button"
+                class="session-group__toggle"
+                aria-expanded={!collapsed}
+                onclick={() => toggleGroup(group.key)}
+              >
+                <svg
+                  class="session-group__chevron"
+                  viewBox="0 0 16 16"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="m6 4 4 4-4 4"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+                <span
+                  class="session-group__name"
+                  id={`${uid}-group-${group.key || '~other'}`}
+                >
+                  {group.name}
+                </span>
+              </button>
+              <button
+                type="button"
+                class="session-drawer__icon-button session-group__new"
+                aria-label={t('sessions.projects.newSession', {
+                  project: group.name,
+                })}
+                aria-haspopup={direct ? undefined : 'menu'}
+                use:tooltip={t('sessions.projects.newSession', {
+                  project: group.name,
+                })}
+                onclick={(event) => startNewSessionInGroup(group, event)}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path
+                    d="M8 3.5v9M3.5 8h9"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+            </div>
+            {#if !collapsed}
+              {#if group.sessions.length > 0}
+                <ul class="session-drawer__list session-group__list">
+                  {#each group.sessions as session (sessionRowKey(session))}
+                    {@render sessionRow(session, group.sessions)}
+                  {/each}
+                </ul>
+              {:else}
+                <p class="session-group__empty">
+                  {t('sessions.projects.empty')}
+                </p>
+              {/if}
+              {#if group.nextCursor !== null}
+                <button
+                  type="button"
+                  class="session-group__more"
+                  disabled={loadingMoreGroupKey !== null}
+                  onclick={() => loadMoreInGroup(group)}
+                >
+                  {t('sessions.projects.showMore', {
+                    count: Math.max(
+                      group.totalCount - group.sessions.length,
+                      0,
+                    ),
+                  })}
+                </button>
+              {/if}
+            {/if}
+          </section>
+        {/each}
+      </div>
+    {/if}
+  {:else if sessionState.error}
     <Banner variant="error" class="session-drawer__load-error" role="alert">
       <span>{sessionState.error}</span>
       <Button
@@ -731,118 +1105,7 @@
   {:else}
     <ul class="session-drawer__list" onscroll={handleListScroll}>
       {#each displayedSessions as session (sessionRowKey(session))}
-        {@const marker = sessionMarker(session)}
-        <!-- Right click anywhere on the row opens its menu; the context menu key
-             on the row's button is the keyboard path. -->
-        <li
-          class="session-row"
-          class:session-row--marked={marker !== null}
-          class:session-row--menu-open={rowMenuKey === sessionRowKey(session)}
-          class:session-row--editing={actions.editingSessionId === session.id &&
-            actions.editingAgentAddress ===
-              (session.agent_address || asText(agentId))}
-          oncontextmenu={(event) => openRowMenu(session, event)}
-        >
-          {#if actions.editingSessionId === session.id && actions.editingAgentAddress === (session.agent_address || asText(agentId))}
-            <div class="session-row__edit">
-              <input
-                class="session-row__edit-input"
-                type="text"
-                value={actions.editValue}
-                maxlength={actions.SESSION_TITLE_MAX_LENGTH}
-                placeholder={t('sessions.rename_placeholder')}
-                aria-label={t('sessions.rename_label')}
-                disabled={actions.renameSaving}
-                oninput={(event) =>
-                  (actions.editValue = event.currentTarget.value)}
-                onkeydown={actions.handleRenameKeydown}
-                use:autofocusRename
-              />
-              {#if actions.renameError}
-                <p class="session-row__edit-error" role="alert">
-                  {actions.renameError}
-                </p>
-              {/if}
-            </div>
-          {:else}
-            <button
-              type="button"
-              class:session-row__select--active={sessionState.selectedSessionId ===
-                session.id &&
-                sessionState.selectedAgentAddress ===
-                  (session.agent_address || asText(agentId))}
-              class="session-row__select"
-              onclick={() => handleSelectSession(session)}
-              onkeydown={(event) => {
-                if (isContextMenuKey(event)) openRowMenu(session, event);
-              }}
-              use:tooltip={() =>
-                sessionHoverDetails(session, {
-                  sessions: sessionsWithLiveActivity,
-                  agents: rosterAgents,
-                })}
-            >
-              <div class="session-row__heading">
-                <!-- One status slot before the title: running wins over an
-                     unread result. -->
-                {#if session.has_active_run}
-                  <span
-                    class="session-row__status session-row__active-dot"
-                    aria-label={t('sessions.activeRun')}
-                    use:tooltip={t('sessions.activeRunHint')}
-                  >
-                    <span
-                      class="tab-indicator tab-indicator--running"
-                      aria-hidden="true"
-                    ></span>
-                  </span>
-                {:else if session.has_unread_completion && session.id !== currentSessionId}
-                  <span
-                    class="session-row__status session-row__unread"
-                    aria-label={t('sessions.unreadCompletion')}
-                    use:tooltip={() => unreadRunDetails(session)}
-                  >
-                    <span
-                      class="tab-indicator tab-indicator--unread"
-                      aria-hidden="true"
-                    ></span>
-                  </span>
-                {/if}
-                <p class="session-row__name">
-                  {session.display_name || sessionDisplayName(session)}
-                </p>
-              </div>
-              {#if marker}
-                <span
-                  class="session-row__marker"
-                  role="img"
-                  aria-label={marker.label}
-                  data-session-marker={marker.kind}
-                >
-                  <SessionKindIcon icon={sessionKindIcon(marker)} />
-                </span>
-              {/if}
-              {#if session.agent_name}
-                <span class="session-row__agent">{session.agent_name}</span>
-              {/if}
-            </button>
-            <Button
-              variant="tertiary"
-              icon
-              class="session-row__menu-trigger"
-              ariaLabel={t('sessions.actions')}
-              aria-haspopup="menu"
-              aria-expanded={rowMenuKey === sessionRowKey(session)}
-              onClick={(event) => openRowMenu(session, event)}
-            >
-              <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                <circle cx="3.5" cy="8" r="1.25" />
-                <circle cx="8" cy="8" r="1.25" />
-                <circle cx="12.5" cy="8" r="1.25" />
-              </svg>
-            </Button>
-          {/if}
-        </li>
+        {@render sessionRow(session)}
       {/each}
     </ul>
     {#if hasMoreToDisplay}
@@ -854,6 +1117,117 @@
     {/if}
   {/if}
 </aside>
+
+{#snippet sessionRow(session, rowSessions = sessionsWithLiveActivity)}
+  {@const marker = sessionMarker(session)}
+  <!-- Right click anywhere on the row opens its menu; the context menu key
+         on the row's button is the keyboard path. -->
+  <li
+    class="session-row"
+    class:session-row--marked={marker !== null}
+    class:session-row--menu-open={rowMenuKey === sessionRowKey(session)}
+    class:session-row--editing={actions.editingSessionId === session.id &&
+      actions.editingAgentAddress ===
+        (session.agent_address || asText(agentId))}
+    oncontextmenu={(event) => openRowMenu(session, event)}
+  >
+    {#if actions.editingSessionId === session.id && actions.editingAgentAddress === (session.agent_address || asText(agentId))}
+      <div class="session-row__edit">
+        <input
+          class="session-row__edit-input"
+          type="text"
+          value={actions.editValue}
+          maxlength={actions.SESSION_TITLE_MAX_LENGTH}
+          placeholder={t('sessions.rename_placeholder')}
+          aria-label={t('sessions.rename_label')}
+          disabled={actions.renameSaving}
+          oninput={(event) => (actions.editValue = event.currentTarget.value)}
+          onkeydown={actions.handleRenameKeydown}
+          use:autofocusRename
+        />
+        {#if actions.renameError}
+          <p class="session-row__edit-error" role="alert">
+            {actions.renameError}
+          </p>
+        {/if}
+      </div>
+    {:else}
+      <button
+        type="button"
+        class:session-row__select--active={rowSelected(session)}
+        class="session-row__select"
+        onclick={() => handleSelectSession(session)}
+        onkeydown={(event) => {
+          if (isContextMenuKey(event)) openRowMenu(session, event);
+        }}
+        use:tooltip={() =>
+          sessionHoverDetails(session, {
+            sessions: rowSessions,
+            agents: rosterAgents,
+          })}
+      >
+        <div class="session-row__heading">
+          <!-- One status slot before the title: running wins over an
+                 unread result. -->
+          {#if session.has_active_run}
+            <span
+              class="session-row__status session-row__active-dot"
+              aria-label={t('sessions.activeRun')}
+              use:tooltip={t('sessions.activeRunHint')}
+            >
+              <span
+                class="tab-indicator tab-indicator--running"
+                aria-hidden="true"
+              ></span>
+            </span>
+          {:else if session.has_unread_completion && session.id !== currentSessionId}
+            <span
+              class="session-row__status session-row__unread"
+              aria-label={t('sessions.unreadCompletion')}
+              use:tooltip={() => unreadRunDetails(session)}
+            >
+              <span
+                class="tab-indicator tab-indicator--unread"
+                aria-hidden="true"
+              ></span>
+            </span>
+          {/if}
+          <p class="session-row__name">
+            {session.display_name || sessionDisplayName(session)}
+          </p>
+        </div>
+        {#if marker}
+          <span
+            class="session-row__marker"
+            role="img"
+            aria-label={marker.label}
+            data-session-marker={marker.kind}
+          >
+            <SessionKindIcon icon={sessionKindIcon(marker)} />
+          </span>
+        {/if}
+        {#if session.agent_name}
+          <span class="session-row__agent">{session.agent_name}</span>
+        {/if}
+      </button>
+      <Button
+        variant="tertiary"
+        icon
+        class="session-row__menu-trigger"
+        ariaLabel={t('sessions.actions')}
+        aria-haspopup="menu"
+        aria-expanded={rowMenuKey === sessionRowKey(session)}
+        onClick={(event) => openRowMenu(session, event)}
+      >
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <circle cx="3.5" cy="8" r="1.25" />
+          <circle cx="8" cy="8" r="1.25" />
+          <circle cx="12.5" cy="8" r="1.25" />
+        </svg>
+      </Button>
+    {/if}
+  </li>
+{/snippet}
 
 <ContextMenu menu={rowMenu} onClose={closeRowMenu} />
 

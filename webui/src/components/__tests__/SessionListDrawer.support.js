@@ -11,6 +11,8 @@ import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const api = vi.hoisted(() => ({
   listSessions: vi.fn(),
+  listSessionProjectGroups: vi.fn(),
+  listProjectSessions: vi.fn(),
   renameSession: vi.fn(),
   deleteSession: vi.fn(),
   setSessionCompactionPolicy: vi.fn(),
@@ -54,6 +56,8 @@ export function setupSessionListDrawerSuite() {
     api.listSessions.mockReset().mockResolvedValue({
       sessions: [{ id: 'session-1', created_at: '2026-05-09T00:00:00+00:00' }],
     });
+    api.listSessionProjectGroups.mockReset().mockResolvedValue({ groups: [] });
+    api.listProjectSessions.mockReset().mockResolvedValue({ sessions: [] });
     api.renameSession.mockReset().mockResolvedValue({
       title: 'Release planning',
     });

@@ -511,6 +511,20 @@ describe('RPC wrappers', () => {
       },
     ],
     [
+      'session.project_groups',
+      (o) =>
+        api.listSessionProjectGroups(
+          { limit: 5, includeCron: false, includeChannels: false },
+          o,
+        ),
+      { limit: 5, include_cron: false, include_channels: false },
+    ],
+    [
+      'session.list (one Project group)',
+      (o) => api.listProjectSessions(null, { limit: 10, cursor }, o),
+      { working_project_id: null, limit: 10, cursor },
+    ],
+    [
       'session.activity_list',
       (o) => api.listSessionActivity(['alpha', 'builder@vbot'], o),
       { agent_ids: ['alpha', 'builder@vbot'] },

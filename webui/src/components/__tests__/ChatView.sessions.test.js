@@ -315,6 +315,59 @@ describe('ChatView Sessions', () => {
       });
     });
 
+    it('starts a Session in a Project of the by-Project Session list without changing the default Project', async () => {
+      const chatRpc = createChatRpcMock({
+        streamHandler: (params) => ({
+          ...runningRun('run-one'),
+          session_id: params.session_id ?? 'created-alpha',
+        }),
+      });
+      rpcMock.mockImplementation(async (method, params) =>
+        method === 'session.project_groups'
+          ? {
+              groups: [
+                {
+                  project_id: 'vbot',
+                  sessions: [],
+                  next_cursor: null,
+                  total_count: 0,
+                },
+                {
+                  project_id: null,
+                  sessions: [{ id: 'session-1', agent_address: 'alpha' }],
+                  next_cursor: null,
+                  total_count: 1,
+                },
+              ],
+            }
+          : chatRpc(method, params),
+      );
+      await chat.mountChat({
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        onSessionFiltersChange: vi.fn(),
+      });
+
+      sessionsButton().click();
+      flushSync();
+      document.querySelector('.session-drawer__by-project').click();
+      flushSync();
+      const newInVbot = () =>
+        document.querySelector(
+          `.session-group__new[aria-label="${t('sessions.projects.newSession', { project: 'vBot' })}"]`,
+        );
+      await waitForCondition(() => Boolean(newInVbot()));
+      newInVbot().click();
+      await waitForCondition(() => alphaSessionId() === '');
+      sendComposerMessage('First message');
+
+      await waitForCondition(() => alphaSessionId() === 'created-alpha');
+      expect(rpcCalls('chat.stream')[0]).toMatchObject({
+        agent_id: 'alpha',
+        new_session: { working_project_id: 'vbot' },
+      });
+      expect(rpcCalls('agent.update')).toEqual([]);
+    });
+
     it('keeps the composer text of a left empty Session and of the draft', async () => {
       rpcMock.mockImplementation(
         createChatRpcMock({ sessionMessages: { 'session-1': [] } }),
