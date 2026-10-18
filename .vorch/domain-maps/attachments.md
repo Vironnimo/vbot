@@ -23,7 +23,7 @@ Blob-backed original-file storage, attachment-specific message shaping, and shar
 
 ## Image conversion
 
-`core/attachments/images.py::ImageConverter` prepares an image for given destination MIME types and optional encoded-byte and dimension ceilings; it owns no Provider facts (Chat passes the target Adapter's declaration). Every image is checked and decoded; valid native inputs within the ceilings stay byte-identical, and original files stay untouched. Details: `attachments/image-conversion.md`.
+`core/attachments/images.py::ImageConverter` prepares an image for an `ImageTarget` carrying accepted MIME types and optional encoded-byte and dimension ceilings; it owns no Provider facts (Chat passes the target Adapter's declaration). Every image is checked and decoded; valid native inputs within the ceilings stay byte-identical, and original files stay untouched. Details: `attachments/image-conversion.md`.
 
 ## Constraints & Gotchas
 

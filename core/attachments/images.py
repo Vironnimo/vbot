@@ -115,6 +115,38 @@ class PreparedImage:
 
 
 @dataclass(frozen=True)
+class ImageTarget:
+    """The accepted formats and limits of one image destination."""
+
+    supported_types: frozenset[str]
+    max_output_bytes: int | None = None
+    max_dimension: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_output_bytes is not None and self.max_output_bytes <= 0:
+            raise ValueError("max_output_bytes must be positive")
+        if self.max_dimension is not None and self.max_dimension <= 0:
+            raise ValueError("max_dimension must be positive")
+
+    def accepts(self, media_type: str, size_bytes: int, size: tuple[int, int]) -> bool:
+        """Whether the validated native image already fits this destination."""
+        return (
+            media_type in self.supported_types
+            and (self.max_output_bytes is None or size_bytes <= self.max_output_bytes)
+            and (self.max_dimension is None or max(size) <= self.max_dimension)
+        )
+
+    @property
+    def output_types(self) -> tuple[str, ...]:
+        """Available encodings in the converter's lossless-first preference order."""
+        return tuple(kind for kind in _FORMATS if kind in self.supported_types)
+
+    def cache_key(self, digest: bytes, media_type: str) -> tuple[Any, ...]:
+        """Converted copies with the same destination policy share one cache entry."""
+        return (digest, media_type, self.output_types, self.max_output_bytes, self.max_dimension)
+
+
+@dataclass(frozen=True)
 class _ImageInfo:
     size: tuple[int, int]
     frames: int
@@ -160,57 +192,40 @@ class ImageConverter:
         self,
         data: bytes,
         media_type: str,
-        supported_types: frozenset[str],
-        *,
-        max_output_bytes: int | None = None,
-        max_dimension: int | None = None,
+        target: ImageTarget,
     ) -> PreparedImage:
-        return await _WORKERS.run(
-            self.prepare, data, media_type, supported_types, max_output_bytes, max_dimension
-        )
+        return await _WORKERS.run(self.prepare, data, media_type, target)
 
     def prepare(
         self,
         data: bytes,
         media_type: str,
-        supported_types: frozenset[str],
-        max_output_bytes: int | None = None,
-        max_dimension: int | None = None,
+        target: ImageTarget,
     ) -> PreparedImage:
         """Blocking conversion for callers already running in a bounded worker.
 
         Provider payload builders use this entrypoint after counting every image
         in the final request. The lock also protects caches shared with convert().
         """
-        if max_output_bytes is not None and max_output_bytes <= 0:
-            raise ValueError("max_output_bytes must be positive")
-        if max_dimension is not None and max_dimension <= 0:
-            raise ValueError("max_dimension must be positive")
         with self._lock:
-            return self._prepare(data, media_type, supported_types, max_output_bytes, max_dimension)
+            return self._prepare(data, media_type, target)
 
     def _prepare(
         self,
         data: bytes,
         media_type: str,
-        supported_types: frozenset[str],
-        max_bytes: int | None,
-        max_dimension: int | None,
+        target: ImageTarget,
     ) -> PreparedImage:
         digest = hashlib.sha256(data).digest()
         info = self._validate(data, media_type, digest)
-        if (
-            media_type in supported_types
-            and (max_bytes is None or len(data) <= max_bytes)
-            and (max_dimension is None or max(info.size) <= max_dimension)
-        ):
+        if target.accepts(media_type, len(data), info.size):
             return PreparedImage(data, media_type, info.size, info.size)
-        targets = tuple(kind for kind in _FORMATS if kind in supported_types)
+        targets = target.output_types
         if not targets:
             raise ImageConversionError("unsupported_target")
         if info.frames != 1:
             raise ImageConversionError("multiple_frames")
-        key = (digest, media_type, targets, max_bytes, max_dimension)
+        key = target.cache_key(digest, media_type)
         if key in self._cache:
             self._cache.move_to_end(key)
             return self._cache[key]
@@ -228,7 +243,7 @@ class ImageConverter:
                     assert profiled is not None
                     converted = profiled
                     profile = converted.info.get("icc_profile")
-                result = self._fit(converted, targets, max_bytes, profile, max_dimension)
+                result = self._fit(converted, target, profile)
         except (*_DECODE_ERRORS, ImageCms.PyCMSError) as exc:
             raise ImageConversionError() from exc
         if len(result.data) <= _CACHE_BYTES:
@@ -281,11 +296,11 @@ class ImageConverter:
     @staticmethod
     def _fit(
         original: Image.Image,
-        targets: tuple[str, ...],
-        max_bytes: int | None,
+        target: ImageTarget,
         profile: bytes | None,
-        max_dimension: int | None,
     ) -> PreparedImage:
+        targets = target.output_types
+        max_bytes, max_dimension = target.max_output_bytes, target.max_dimension
         image = original
         if max_dimension is not None and max(original.size) > max_dimension:
             factor = max_dimension / max(original.size)
@@ -297,21 +312,21 @@ class ImageConverter:
         # byte ceiling permits further quality reduction or resampling.
         for attempt in range(9):
             smallest_overflow: int | None = None
-            for target in targets:
-                qualities = (95, 85, 75) if target == "image/jpeg" and max_bytes else (95,)
+            for output_type in targets:
+                qualities = (95, 85, 75) if output_type == "image/jpeg" and max_bytes else (95,)
                 for quality in qualities:
                     try:
-                        data = _encode(image, target, quality, profile, max_bytes)
+                        data = _encode(image, output_type, quality, profile, max_bytes)
                     except _EncodingTooLargeError as exc:
                         smallest_overflow = min(smallest_overflow or exc.size, exc.size)
                         continue
                     return PreparedImage(
                         data,
-                        target,
+                        output_type,
                         original.size,
                         image.size,
                         reencoded=True,
-                        lossy=target == "image/jpeg",
+                        lossy=output_type == "image/jpeg",
                     )
             if max_bytes is None or image.size == (1, 1) or attempt == 8:
                 break

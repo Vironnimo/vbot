@@ -10,7 +10,7 @@ from typing import Any
 
 from PIL import Image
 
-from core.attachments.images import ImageConversionError, ImageConverter
+from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget
 from core.providers.errors import ProviderError
 from core.providers.wire_profile import MediaRules
 
@@ -65,9 +65,9 @@ def prepare_message_images(messages: Any, converter: ImageConverter, rules: Medi
                 prepared = converter.prepare(
                     base64.b64decode(encoded, validate=True),
                     source.get("media_type", ""),
-                    rules.types,
-                    max_output_bytes=rules.image_max_bytes,
-                    max_dimension=dimension,
+                    ImageTarget(
+                        rules.types, max_output_bytes=rules.image_max_bytes, max_dimension=dimension
+                    ),
                 )
             except (ImageConversionError, ValueError) as exc:
                 raise ProviderError(

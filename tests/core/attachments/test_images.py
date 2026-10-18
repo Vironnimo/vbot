@@ -10,7 +10,7 @@ from PIL import Image
 
 import core.attachments.images as image_module
 from core.attachments import AttachmentStore, canonical_extension_for_media_type, sniff_media_type
-from core.attachments.images import ImageConversionError, ImageConverter
+from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget
 
 
 def raster(format: str, mode: str = "RGB", **options) -> bytes:
@@ -18,6 +18,13 @@ def raster(format: str, mode: str = "RGB", **options) -> bytes:
     stream = io.BytesIO()
     image.save(stream, format=format, **options)
     return stream.getvalue()
+
+
+@pytest.mark.parametrize("field", ["max_output_bytes", "max_dimension"])
+@pytest.mark.parametrize("limit", [0, -1])
+def test_image_target_rejects_nonpositive_limits(field, limit):
+    with pytest.raises(ValueError):
+        ImageTarget(frozenset({"image/png"}), **{field: limit})
 
 
 @pytest.mark.asyncio
@@ -31,7 +38,9 @@ async def test_additional_formats_store_original_and_convert_to_png(tmp_path, fo
     record = store.store("misleading.txt", data)
     assert record.media_type == media_type
     assert sniff_media_type(data, "wrong.jpg") == media_type
-    prepared = await ImageConverter().convert(data, media_type, frozenset({"image/png"}))
+    prepared = await ImageConverter().convert(
+        data, media_type, ImageTarget(frozenset({"image/png"}))
+    )
     result, actual_type = prepared.data, prepared.media_type
     assert actual_type == "image/png"
     with Image.open(io.BytesIO(result)) as converted, Image.open(io.BytesIO(data)) as original:
@@ -44,7 +53,9 @@ async def test_additional_formats_store_original_and_convert_to_png(tmp_path, fo
 async def test_native_image_bytes_are_validated_without_reencoding():
     data = raster("PNG")
     with patch.object(Image.Image, "save", side_effect=AssertionError("unexpected encode")):
-        prepared = await ImageConverter().convert(data, "image/png", frozenset({"image/png"}))
+        prepared = await ImageConverter().convert(
+            data, "image/png", ImageTarget(frozenset({"image/png"}))
+        )
     assert prepared.data is data
     assert prepared.media_type == "image/png"
     assert prepared.note is None
@@ -55,7 +66,7 @@ async def test_target_switch_and_alpha_preservation():
     data = raster("TIFF", "RGBA")
     converter = ImageConverter()
     for target in ("image/png", "image/webp", "image/jpeg"):
-        prepared = await converter.convert(data, "image/tiff", frozenset({target}))
+        prepared = await converter.convert(data, "image/tiff", ImageTarget(frozenset({target})))
         result, actual_type = prepared.data, prepared.media_type
         assert actual_type == sniff_media_type(result, "ignored") == target
         with Image.open(io.BytesIO(result)) as converted:
@@ -72,7 +83,9 @@ async def test_orientation_is_applied_without_resampling():
     exif = Image.Exif()
     exif[274] = 6
     data = raster("JPEG", exif=exif)
-    prepared = await ImageConverter().convert(data, "image/jpeg", frozenset({"image/png"}))
+    prepared = await ImageConverter().convert(
+        data, "image/jpeg", ImageTarget(frozenset({"image/png"}))
+    )
     result = prepared.data
     with Image.open(io.BytesIO(result)) as converted:
         assert converted.size == (8, 12)
@@ -83,13 +96,13 @@ async def test_orientation_is_applied_without_resampling():
 async def test_repeated_conversion_uses_cache_and_source_changes_invalidate_it(monkeypatch):
     converter = ImageConverter()
     data = raster("BMP")
-    first = await converter.convert(data, "image/bmp", frozenset({"image/png"}))
+    first = await converter.convert(data, "image/bmp", ImageTarget(frozenset({"image/png"})))
     with patch.object(Image, "open", side_effect=AssertionError("cached image decoded")):
-        again = await converter.convert(data, "image/bmp", frozenset({"image/png"}))
+        again = await converter.convert(data, "image/bmp", ImageTarget(frozenset({"image/png"})))
     assert again is first
     monkeypatch.setattr(image_module, "_CACHE_BYTES", len(first.data))
     altered = raster("TIFF")
-    await converter.convert(altered, "image/tiff", frozenset({"image/png"}))
+    await converter.convert(altered, "image/tiff", ImageTarget(frozenset({"image/png"})))
     assert len(converter._cache) == 1
     assert converter._cache_bytes <= len(first.data)
 
@@ -98,18 +111,18 @@ async def test_repeated_conversion_uses_cache_and_source_changes_invalidate_it(m
 async def test_conversion_failures_are_structured_and_do_not_discard_frames(monkeypatch):
     converter = ImageConverter()
     with pytest.raises(ImageConversionError) as unsupported:
-        await converter.convert(raster("BMP"), "image/bmp", frozenset())
+        await converter.convert(raster("BMP"), "image/bmp", ImageTarget(frozenset()))
     assert unsupported.value.reason == "unsupported_target"
     with pytest.raises(ImageConversionError) as corrupt:
-        await converter.convert(b"broken", "image/bmp", frozenset({"image/png"}))
+        await converter.convert(b"broken", "image/bmp", ImageTarget(frozenset({"image/png"})))
     assert corrupt.value.reason == "invalid_image"
     data = raster("TIFF", save_all=True, append_images=[Image.new("RGB", (12, 8), "red")])
     with pytest.raises(ImageConversionError) as multiple:
-        await converter.convert(data, "image/tiff", frozenset({"image/png"}))
+        await converter.convert(data, "image/tiff", ImageTarget(frozenset({"image/png"})))
     assert multiple.value.reason == "multiple_frames"
     monkeypatch.setattr(image_module, "_PIXEL_LIMIT", 10)
     with pytest.raises(ImageConversionError) as oversized:
-        await converter.convert(raster("BMP"), "image/bmp", frozenset({"image/png"}))
+        await converter.convert(raster("BMP"), "image/bmp", ImageTarget(frozenset({"image/png"})))
     assert oversized.value.reason == "image_too_large"
 
 
@@ -120,7 +133,9 @@ async def test_conversion_failures_are_structured_and_do_not_discard_frames(monk
 async def test_corrupt_native_images_fail_before_delivery(format, media_type):
     data = raster(format)
     with pytest.raises(ImageConversionError) as failure:
-        await ImageConverter().convert(data[: len(data) // 2], media_type, frozenset({media_type}))
+        await ImageConverter().convert(
+            data[: len(data) // 2], media_type, ImageTarget(frozenset({media_type}))
+        )
     assert failure.value.reason == "invalid_image"
 
 
@@ -128,14 +143,14 @@ async def test_corrupt_native_images_fail_before_delivery(format, media_type):
 async def test_native_validation_cache_retains_no_image_bytes(monkeypatch):
     converter = ImageConverter()
     data = raster("PNG")
-    await converter.convert(data, "image/png", frozenset({"image/png"}))
+    await converter.convert(data, "image/png", ImageTarget(frozenset({"image/png"})))
     with patch.object(Image, "open", side_effect=AssertionError("repeated decoding")):
-        again = await converter.convert(data, "image/png", frozenset({"image/png"}))
+        again = await converter.convert(data, "image/png", ImageTarget(frozenset({"image/png"})))
     assert again.data is data
     assert not converter._cache
     monkeypatch.setattr(image_module, "_PIXEL_LIMIT", 10)
     with pytest.raises(ImageConversionError) as failure:
-        await converter.convert(data, "image/png", frozenset({"image/png"}))
+        await converter.convert(data, "image/png", ImageTarget(frozenset({"image/png"})))
     assert failure.value.reason == "image_too_large"
     assert failure.value.pixels == 96
     assert failure.value.max_pixels == 10
@@ -145,14 +160,15 @@ async def test_native_validation_cache_retains_no_image_bytes(monkeypatch):
 async def test_known_limit_tries_lossless_alternative_before_jpeg_or_resizing():
     converter = ImageConverter()
     data = raster("BMP")
-    png = await converter.convert(data, "image/bmp", frozenset({"image/png"}))
-    webp = await converter.convert(data, "image/bmp", frozenset({"image/webp"}))
+    png = await converter.convert(data, "image/bmp", ImageTarget(frozenset({"image/png"})))
+    webp = await converter.convert(data, "image/bmp", ImageTarget(frozenset({"image/webp"})))
     assert len(webp.data) < len(png.data)
     result = await converter.convert(
         data,
         "image/bmp",
-        frozenset({"image/png", "image/webp", "image/jpeg"}),
-        max_output_bytes=len(webp.data),
+        ImageTarget(
+            frozenset({"image/png", "image/webp", "image/jpeg"}), max_output_bytes=len(webp.data)
+        ),
     )
     assert result.media_type == "image/webp"
     assert not result.lossy
@@ -176,12 +192,14 @@ async def test_native_oversize_image_fits_limit_and_reports_resampling(limits):
     source.save(stream, format="PNG")
     converter = ImageConverter()
     original = stream.getvalue()
-    unbounded = await converter.convert(original, "image/png", frozenset({"image/png"}))
+    unbounded = await converter.convert(
+        original, "image/png", ImageTarget(frozenset({"image/png"}))
+    )
     bounded = await converter.convert(
-        original,
-        "image/png",
-        frozenset({"image/png"}),
-        **limits,
+        original, "image/png", ImageTarget(frozenset({"image/png"}), **limits)
+    )
+    assert bounded is await converter.convert(
+        original, "image/png", ImageTarget(frozenset({"image/png"}), **limits)
     )
     assert unbounded.data is original
     if "max_output_bytes" in limits:
@@ -194,7 +212,7 @@ async def test_native_oversize_image_fits_limit_and_reports_resampling(limits):
         actual.load()
         assert actual.size == bounded.size
         assert abs(actual.width - actual.height * 2) <= 1
-    again = await converter.convert(original, "image/png", frozenset({"image/png"}))
+    again = await converter.convert(original, "image/png", ImageTarget(frozenset({"image/png"})))
     assert again.data is original
 
 
@@ -209,14 +227,13 @@ async def test_native_multiframe_is_preserved_but_never_flattened_to_fit():
     )
     original = stream.getvalue()
     converter = ImageConverter()
-    result = await converter.convert(original, "image/gif", frozenset({"image/gif"}))
+    result = await converter.convert(original, "image/gif", ImageTarget(frozenset({"image/gif"})))
     assert result.data is original
     with pytest.raises(ImageConversionError) as failure:
         await converter.convert(
             original,
             "image/gif",
-            frozenset({"image/gif", "image/png"}),
-            max_output_bytes=len(original) - 1,
+            ImageTarget(frozenset({"image/gif", "image/png"}), max_output_bytes=len(original) - 1),
         )
     assert failure.value.reason == "multiple_frames"
 
@@ -225,7 +242,7 @@ async def test_native_multiframe_is_preserved_but_never_flattened_to_fit():
 async def test_impossible_byte_limit_remains_an_explicit_failure():
     with pytest.raises(ImageConversionError) as failure:
         await ImageConverter().convert(
-            raster("PNG"), "image/png", frozenset({"image/png"}), max_output_bytes=1
+            raster("PNG"), "image/png", ImageTarget(frozenset({"image/png"}), max_output_bytes=1)
         )
     assert failure.value.reason == "output_too_large"
     assert failure.value.max_bytes == 1
@@ -256,7 +273,7 @@ async def test_native_multiframe_pixel_budget_counts_every_frame(monkeypatch):
     data = raster("GIF", save_all=True, append_images=[Image.new("RGB", (12, 8), "red")])
     monkeypatch.setattr(image_module, "_PIXEL_LIMIT", 150)
     with pytest.raises(ImageConversionError) as failure:
-        await ImageConverter().convert(data, "image/gif", frozenset({"image/gif"}))
+        await ImageConverter().convert(data, "image/gif", ImageTarget(frozenset({"image/gif"})))
     assert failure.value.reason == "image_too_large"
     assert failure.value.pixels == 192
 
@@ -270,12 +287,13 @@ async def test_full_resolution_jpeg_is_reported_before_resizing():
     stream = io.BytesIO()
     source.save(stream, format="BMP")
     converter = ImageConverter()
-    jpeg = await converter.convert(stream.getvalue(), "image/bmp", frozenset({"image/jpeg"}))
+    jpeg = await converter.convert(
+        stream.getvalue(), "image/bmp", ImageTarget(frozenset({"image/jpeg"}))
+    )
     prepared = await converter.convert(
         stream.getvalue(),
         "image/bmp",
-        frozenset({"image/jpeg"}),
-        max_output_bytes=len(jpeg.data),
+        ImageTarget(frozenset({"image/jpeg"}), max_output_bytes=len(jpeg.data)),
     )
     assert prepared.size == prepared.original_size == (128, 64)
     assert prepared.lossy

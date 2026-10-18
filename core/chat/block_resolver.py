@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from core.attachments import AttachmentStore
-from core.attachments.images import ImageConversionError, ImageConverter
+from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget
 from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.errors import ChatError
 from core.chat.file_mentions import file_mention_request_text
@@ -310,7 +310,7 @@ class ContentBlockResolver:
             try:
                 raw = await _IMAGE_WORKERS.run(base64.b64decode, encoded)
                 prepared = await converter.convert(
-                    raw, media_type, wire_media_types, max_output_bytes=max_image_bytes
+                    raw, media_type, ImageTarget(wire_media_types, max_output_bytes=max_image_bytes)
                 )
                 if prepared.reencoded:
                     encoded = await _IMAGE_WORKERS.run(
@@ -372,10 +372,12 @@ class ContentBlockResolver:
             prepared = await self._image_converter.convert(
                 blob_data,
                 media_type,
-                wire_media_types,
-                max_output_bytes=min(self.max_image_bytes, max_image_bytes)
-                if max_image_bytes is not None
-                else self.max_image_bytes,
+                ImageTarget(
+                    wire_media_types,
+                    max_output_bytes=min(self.max_image_bytes, max_image_bytes)
+                    if max_image_bytes is not None
+                    else self.max_image_bytes,
+                ),
             )
         except ImageConversionError as exc:
             return [
