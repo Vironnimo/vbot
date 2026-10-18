@@ -12,6 +12,8 @@ Read this reference when you change what every local engine shares: the installa
 
 A recipe environment is based on a uv-managed Python: setup runs the uv executable directly, because `python -m uv` names the server's interpreter as uv's parent, which uv prefers over `--managed-python` when the versions match, and the environment would then depend on the release's runtime (managed STT, created from the packaged runtime on purpose, is the exception, `model_tasks/speech.md`). `SETUP_TIMEOUT_S` bounds each package or verification command, not the whole job.
 
+Command cleanup settles process-tree termination and reaping before releasing the install lock, including repeated cancel requests or shutdown during cancellation. A queued installation cannot start while the previous command still runs.
+
 A setup may own one pinned Model (`model=PinnedModel`, `models_dir`): its files live in `<models_dir>/<name>/<revision>/`, the target is available only when its environment is ready and that folder holds the receipt `verified.json` (`{repo, revision}`; else `model_missing`), `_fetch_model()` removes the receipt and fetches the files in phase `downloading` with byte `progress`, and `_publish_model()` removes the Model's other revision folders, then writes the receipt. Both tree removals (an old environment, other revisions) and downloads use the named bounded `local-setup` pool. Admitted work settles through repeated cancellation before the install lock releases; downloads receive their cooperative cancellation Event immediately. A cancel while publishing finishes removal but writes no receipt, so the Model stays `model_missing`.
 
 ## Pinned Model files
