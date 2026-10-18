@@ -96,10 +96,8 @@ class TriggerService:
 
     def submit_completion(
         self,
-        address: SessionAddress | str,
-        session_id: str | None = None,
+        address: SessionAddress,
         *,
-        project_id: str | None = None,
         notice_id: str,
         origin_run_id: str,
         body: str,
@@ -112,9 +110,6 @@ class TriggerService:
         An idle Session gets a Run that delivers it; with ``wake=False`` it is
         persisted without one and reaches the Agent with its next Run.
         """
-        if isinstance(address, str):
-            assert session_id is not None
-            address = SessionAddress(project_id, address, session_id)
         return self._completion_delivery.submit(
             address,
             notice_id=notice_id,
@@ -144,10 +139,8 @@ class TriggerService:
 
     def cancel_completion(
         self,
-        address: SessionAddress | str,
-        session_id: str | None = None,
+        address: SessionAddress,
         *,
-        project_id: str | None = None,
         notice_id: str,
     ) -> bool:
         """Withdraw one pending automatic result after another durable delivery.
@@ -155,9 +148,6 @@ class TriggerService:
         Returns False when it is no longer pending, or its delivery already
         claimed it: it is then delivered once, as submitted.
         """
-        if isinstance(address, str):
-            assert session_id is not None
-            address = SessionAddress(project_id, address, session_id)
         return self._completion_delivery.cancel(
             address,
             notice_id=notice_id,

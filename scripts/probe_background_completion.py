@@ -431,8 +431,7 @@ async def _run_case(
             token_line = f"Verification token: {verification_token}" if index == 0 else ""
             completion_futures.append(
                 trigger_service.submit_completion(
-                    PROBE_AGENT_ID,
-                    PROBE_SESSION_ID,
+                    SessionAddress(None, PROBE_AGENT_ID, PROBE_SESSION_ID),
                     notice_id=f"bash:{context.run_id}:{index}",
                     origin_run_id=context.run_id,
                     body=(
