@@ -12,6 +12,7 @@ import {
   AGENT_FORM_MODE_EDIT,
   createAgentFormValues,
   normalizeAgentForm,
+  rebaseAgentFormValues,
 } from '$lib/agentForm.js';
 import { createDebouncedAutosave, useAutosaveContext } from '$lib/autosave.js';
 import { t } from '$lib/i18n.js';
@@ -35,6 +36,7 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
   let saving = $state(false);
   let disposed = false;
   let loadVersion = 0;
+  let loading = false;
   let resetVersion = 0;
 
   let effective = $derived(
@@ -70,6 +72,7 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
     agent = null;
     loaded = false;
     loadError = '';
+    loading = false;
     form = createAgentFormValues({});
     baseline = createAgentFormValues({});
     formErrors = {};
@@ -78,6 +81,7 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
 
   async function load() {
     const current = ++loadVersion;
+    loading = true;
     try {
       const result = await getAgent(agentId);
       if (disposed || current !== loadVersion) return;
@@ -88,18 +92,19 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
       if (disposed || current !== loadVersion) return;
       loadError = error?.message || String(error);
     } finally {
-      if (!disposed && current === loadVersion) loaded = true;
+      if (!disposed && current === loadVersion) {
+        loading = false;
+        loaded = true;
+      }
     }
   }
 
-  // The loaded or saved Agent becomes the baseline. It replaces the form
-  // unless the form holds edits: edits since the load, or since `draft` was
-  // sent to be saved.
+  // Rebase each unedited field; another field's draft must not turn an old
+  // value into an edit that reverts a change made elsewhere.
   function apply(next, draft = baseline) {
-    const replaceForm = formValuesMatch(form, draft);
     agent = next;
     baseline = createAgentFormValues(next);
-    if (replaceForm) form = createAgentFormValues(next);
+    form = rebaseAgentFormValues(form, draft, baseline);
   }
 
   function formValuesMatch(left, right) {
@@ -131,6 +136,8 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
     if (!Object.keys(result.payload).some((field) => field !== 'id'))
       return true;
     const currentReset = resetVersion;
+    const currentLoad = loadVersion;
+    const loadWasPending = loading;
     const draft = JSON.parse(JSON.stringify(form));
     saving = true;
     try {
@@ -140,6 +147,9 @@ export function createBuiltinAgentEditor({ agentId, builtin, onError }) {
         isPlainObject(saved) ? saved : { ...agent, ...result.payload },
         draft,
       );
+      // A read started before the write settled can carry its old snapshot.
+      // Re-read rather than lose that invalidation or install it after saving.
+      if (loadWasPending || currentLoad !== loadVersion) void load();
       onError('');
       return true;
     } catch (error) {
