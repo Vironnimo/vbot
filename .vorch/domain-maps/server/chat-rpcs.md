@@ -23,4 +23,6 @@ Its `last_usage` preserves the newest public Assistant Usage before child window
 
 `chat.queue_update` accepts an optional `reply_surface` when an accessor edits queued input. Omission preserves the original surface; an explicit terminal/WebUI surface replaces it with the edited input. Listing or selecting a Steer does not change the captured surface.
 
+Public Queue mutations publish `resource_changed(kind="queue")` with the full Session scope (`project_id`, bare `agent_id`, `session_id`); the TUI refreshes the addressed conversation when another accessor changes it.
+
 `chat.work {agent_id, session_id}` serves the Sub-Agent coordinator's live work snapshot of the Session's subtree (`subagents.md` -> Interfaces, `work_snapshot`), independently of paged History. Accessors refresh it from existing Run, command, Queue and Terminal events and reconnects.

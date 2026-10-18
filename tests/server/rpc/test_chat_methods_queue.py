@@ -88,8 +88,13 @@ def _queue_state(runs: Any, loop: _RecordingLoop | None = None) -> SimpleNamespa
     return state
 
 
-def _queue_signal(session_id: str) -> list[dict[str, Any]]:
-    return [{"kind": "queue", "scope": {"agent_id": "builder", "session_id": session_id}}]
+def _queue_signal(session_id: str, project_id: str | None = None) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": "queue",
+            "scope": {"agent_id": "builder", "project_id": project_id, "session_id": session_id},
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -208,7 +213,7 @@ async def test_queue_update_rebuilds_the_item_under_its_address_and_resolved_ses
     assert runs.update_calls == [
         ("builder", "resolved-s1", "queue-1", "Edited preview", project_id, editable)
     ]
-    assert resource_changes(state, "queue") == _queue_signal("resolved-s1")
+    assert resource_changes(state, "queue") == _queue_signal("resolved-s1", project_id)
 
 
 @pytest.mark.asyncio
@@ -272,7 +277,7 @@ async def test_queue_steer_selects_a_public_item(steering: _Steering) -> None:
     assert wrong_scope["ok"] is False
     assert response["result"]["item"]["steering"] is True
     assert response["result"]["item"]["editable"] is False
-    assert resource_changes(steering.state, "queue") == _queue_signal("s1")
+    assert resource_changes(steering.state, "queue") == _queue_signal("s1", "project")
     steering.item.internal = True
     assert (await call(steering.state, "chat.queue_steer", **params))["ok"] is False
 

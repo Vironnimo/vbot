@@ -346,7 +346,7 @@ class ConversationController:
                     elif kind == "resource_changed":
                         resource = event.get("payload") or {}
                         if resource.get("kind") in {"agents", "projects", "settings", "models"} or (
-                            resource.get("kind") == "sessions"
+                            resource.get("kind") in {"sessions", "queue"}
                             and self.event_targets_view(resource.get("scope") or {})
                         ):
                             self.schedule_refresh()

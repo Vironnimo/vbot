@@ -23,6 +23,7 @@ from server.rpc.errors import (
 )
 from server.rpc.event_bridge import (
     publish_resource_changed,
+    session_resource_scope,
 )
 from server.rpc.validation import (
     _chat_reply_surface,
@@ -40,8 +41,8 @@ JsonObject = dict[str, Any]
 def _publish_queue_changed(state: Any, address: SessionAddress) -> None:
     """Signal that one session's queue changed so other windows reload it live.
 
-    Scoped to the affected session (bare agent id, as the queue is keyed) so
-    windows on a different session ignore it. Only the browser/RPC send surface
+    Scoped to the complete Session address so windows on a different Session
+    or Project ignore it. Only the browser/RPC send surface
     emits this — core enqueues (automation, channels, sub-agents) deliberately
     do not, keeping the chat core untouched; those windows still catch up on the
     next terminal event.
@@ -49,7 +50,7 @@ def _publish_queue_changed(state: Any, address: SessionAddress) -> None:
     publish_resource_changed(
         state,
         RESOURCE_KIND_QUEUE,
-        scope={"agent_id": address.agent_id, "session_id": address.session_id},
+        scope=session_resource_scope(address),
     )
 
 
