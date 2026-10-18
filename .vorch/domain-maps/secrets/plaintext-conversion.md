@@ -2,6 +2,8 @@
 
 The one-time conversion of the plaintext credential files the Secret Store replaced (`core/secrets/plaintext.py`): import, retire, the import record, the per-start settle step, and what `doctor` and the data-store status report about plaintext files and quarantined stores. The store itself is `../secrets.md`.
 
+`plaintext.py` coordinates import, retirement, startup settling and copy purges. `_plaintext_files.py` owns discovery, parsing and import-source decoding; `_plaintext_reports.py` owns file inspection diagnostics and health projections. Public conversion and reporting entrypoints remain in `plaintext.py`.
+
 ## Interfaces
 
 `import_plaintext_credentials(store, remove_missing=True)`, `retire_plaintext_credentials`, `settle_plaintext_credentials(store, mode=...)`, `ignored_plaintext_files`, `plaintext_credential_files`, `quarantined_plaintext_files`, `quarantined_secret_stores`, `credential_file_reports` (doctor warnings), `secret_store_health` (status projection with `degraded_reason`, plus `plaintext_files`, `plaintext_copies`, `quarantined_stores`, and `plaintext_check` when the data directory cannot be listed).

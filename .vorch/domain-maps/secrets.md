@@ -6,6 +6,8 @@ The Secret Store: credentials and OAuth tokens of a data directory, encrypted at
 
 `core/secrets/` owns the store document, the protection of its data key, and the one-time conversion of `.env` and `oauth/*.json`. It is a kernel module of its own rather than part of `core/storage/` because it carries its own persisted format, cryptography, per-system key protection and operator commands, and because consumers outside Storage build on it directly: the Provider `TokenStore`, `doctor` validation and the `vbot data-store secrets` commands work without a `StorageManager`. Storage keeps the credential API that every other domain uses; the database kernel never imports it (it only receives the health projection).
 
+`store.py` owns store state, key opening, transactions and process locking; `_document.py` owns the document schema, structural validation and decoding. Public store exports remain in `store.py`.
+
 - Owns: `secrets.json` (format, reads, writes, reset), `secrets.lock`, key creation and lookup, entry encryption, credential-name folding, plaintext import/retirement, the health projection.
 - Does not own: which names a domain stores (environment-variable names chosen by Providers, Extensions, Channels, web Tools; token ids chosen by `core/providers/token_store.py`), process-environment precedence (`runtime.md` -> Service properties, `provider_credentials`), the `secrets.*` RPC handlers (`server/rpc/secret_methods.py`, contract below), the operator command grammar (`cli/data-store.md`), or the WebUI.
 
