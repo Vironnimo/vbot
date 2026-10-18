@@ -8,7 +8,8 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => ({
+vi.mock('$lib/api.js', async (importOriginal) => ({
+  getAttachmentUrl: (await importOriginal()).getAttachmentUrl,
   prepareSpeechTranscription: vi.fn(),
   transcribeSpeech: vi.fn(),
   uploadAttachment: vi.fn(),

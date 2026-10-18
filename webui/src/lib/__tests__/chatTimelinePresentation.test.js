@@ -793,7 +793,7 @@ describe('Tool detail values', () => {
           data: { content: 'file contents' },
           artifacts: [{ id: 'internal' }],
         },
-        { preferPayload: true, toolName: 'read' },
+        { mode: 'result', toolName: 'read' },
       ).copyText,
     ).toBe('file contents');
   });
@@ -809,7 +809,7 @@ describe('Tool detail values', () => {
           warnings: ['Search timed out'],
         },
       },
-      { preferPayload: true, toolName: 'search_files' },
+      { mode: 'result', toolName: 'search_files' },
     ).copyText;
 
     expect(value).toContain('next_offset');
@@ -827,7 +827,7 @@ describe('Tool detail values', () => {
             literal: 'keep \\n as text',
           },
         },
-        { preferPayload: true, toolName: 'probe' },
+        { mode: 'result', toolName: 'probe' },
       ).copyText,
     ).toBe(
       'summary: first line\n  second line\n' +

@@ -11,11 +11,9 @@
     label,
     value,
     isError = false,
-    preferPayload = false,
-    // Show arguments with the keys the Tool's display hides.
-    raw = false,
-    // Show a text value as it is, never parsed as JSON.
-    literal = false,
+    // Arguments hide display-owned keys; raw keeps them, literal skips JSON
+    // parsing, and result selects the Tool's user-facing result payload.
+    mode = 'arguments',
     toolName = '',
     tool = null,
     // Keep showing the end of growing content, such as live command output.
@@ -24,9 +22,7 @@
 
   let presentation = $derived(
     toolDetailPresentation(value, {
-      preferPayload,
-      raw,
-      literal,
+      mode,
       toolName,
       tool,
     }),
@@ -36,7 +32,7 @@
 <div
   class="teb-row teb-section"
   class:teb-section--error={isError}
-  class:teb-section--success={preferPayload && !isError}
+  class:teb-section--success={mode === 'result' && !isError}
 >
   <div class="teb-section-header">
     <span class="teb-label">{label}</span>

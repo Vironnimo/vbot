@@ -32,7 +32,8 @@ import {
   undoLearningChanges as requestUndoLearningChanges,
 } from '../api.js';
 import { t } from '../i18n.js';
-import { mergeTimelineItems, mergeRunChildPage } from '../chatTimeline.js';
+import { createChatHistory } from './historyLoading.js';
+import { createChatQueue } from './queue.js';
 import { createChatActivity } from './activity.js';
 import { createChatChildTasks } from './childTasks.js';
 import { createChatReflections } from './reflections.js';
@@ -45,72 +46,12 @@ import {
   sessionKey,
   ensureSessionState,
   renameAgentInState,
-  supersedeRenamedSessionKey,
-  syncQueueFromServer,
-  removeQueuedMessage,
   isRecord,
-  isRunActive,
-  resetStaleRun,
 } from './sessionState.js';
-import {
-  loadHistory,
-  hasRetainedTerminalRunProjection,
-  attachableHistoryRun,
-  prependHistory,
-  truncateSessionForEdit,
-} from './history.js';
+import { truncateSessionForEdit } from './history.js';
 import { startRun } from './runEvents.js';
 import { takeSessionInvalidations } from '../sessionInvalidation.js';
 import { resolveMoveActionFromResponse } from './addressing.js';
-
-const RPC_ERROR_QUEUE_ITEM_STEERING = 'queue_item_steering';
-const HISTORY_INITIAL_LIMIT = 100;
-
-const HISTORY_OLDER_LIMIT = 50;
-
-// `chat.history` omits what an unchanged read did not recompute; an absent
-// field keeps the Session's current value. `context_usage` is present (possibly
-// null) whenever it was read.
-function historyLoadOptions(history) {
-  return {
-    items: history?.items,
-    replaceRunIds: history?.replace_run_ids,
-    timelineSequence: history?.timeline_sequence,
-    hasMore: history?.has_more === true,
-    nextBefore: history?.next_before,
-    nextAfter: history?.next_after,
-    generation: history?.history_generation,
-    runs: history?.runs,
-    incremental: history?.incremental,
-    reset: history?.history_reset,
-    activeRunId: history?.active_run?.run_id,
-    sessionUsage: history?.session_usage,
-    ...(isRecord(history) && Object.hasOwn(history, 'context_usage')
-      ? { contextUsage: history.context_usage }
-      : {}),
-    compactionPolicy: history?.compaction_policy,
-    backgroundCommandStatuses: history?.background_command_statuses,
-    backgroundCommandsStillRunning: history?.background_commands_still_running,
-    subAgentBackgroundCommands: history?.subagent_background_commands,
-  };
-}
-
-// Each page reports the Runs of its own messages; a later record wins.
-function mergeHistoryRuns(earlier, later) {
-  const runs = new Map();
-  for (const run of [...(earlier ?? []), ...(later ?? [])]) {
-    runs.set(run.run_id, run);
-  }
-  return [...runs.values()];
-}
-
-// Background status deltas fold in order; a later status wins.
-function mergeBackgroundStatuses(earlier, later) {
-  if (!isRecord(later)) {
-    return earlier;
-  }
-  return { ...(isRecord(earlier) ? earlier : {}), ...later };
-}
 
 function defaultChatOperations() {
   return {
@@ -169,44 +110,10 @@ export function createChatController({
   onRestartQueueDiscarded = () => {},
 }) {
   let handledConnectionSnapshot = null;
-  let handledQueueInvalidation = null;
   let commandsLoadVersion = 0;
   let agentsLoadVersion = 0;
   let initialHistoryPending = false;
-  const historyLoadVersions = new Map();
-  const queueSyncVersions = new Map();
-  const historyCache = new Map();
-  const runHistoryLoads = new Map();
 
-  function retainHistory(session) {
-    historyCache.delete(session);
-    historyCache.set(
-      session,
-      JSON.stringify([session.messages, session.timelineItems]).length * 2,
-    );
-    let bytes = [...historyCache.values()].reduce((sum, size) => sum + size, 0);
-    for (const [cached, size] of historyCache) {
-      if (historyCache.size <= 8 && bytes <= 16 * 1024 * 1024) break;
-      if (
-        cached === session ||
-        isDisplayedSession(cached.agentId, cached.sessionId)
-      )
-        continue;
-      runStream.closeSubscriptionFor(cached.key);
-      historyLoadVersions.set(
-        cached.key,
-        (historyLoadVersions.get(cached.key) ?? 0) + 1,
-      );
-      cached.messages = [];
-      cached.timelineItems = [];
-      cached.historyRuns = {};
-      cached.historyLoaded = false;
-      cached.historyAfter = '';
-      cached.historyBefore = '';
-      historyCache.delete(cached);
-      bytes -= size;
-    }
-  }
   // Feed positions: the newest one this owner applied, and the newest one a
   // hidden owner scanned for its displayed Session's Run starts. Those starts
   // apply early, at the positions in `earlyRunStarts`.
@@ -214,7 +121,6 @@ export function createChatController({
   let runStartCursor = 0;
   const earlyRunStarts = new Set();
 
-  let displayedHistoryLoad = null;
   const work = createChatWork({ operations });
   const childTasks = createChatChildTasks({
     chatState,
@@ -246,6 +152,37 @@ export function createChatController({
   });
   const { markSessionCompletionRead, refreshAgentActivity, syncAgentActivity } =
     activity;
+  const queue = createChatQueue({
+    chatState,
+    operations,
+    isDisplayedSession,
+    errorMessage,
+    onRestartQueueDiscarded,
+  });
+  const {
+    refreshSessionQueue,
+    syncSessionQueue,
+    steerQueued,
+    removeQueued,
+    updateQueued,
+    applyQueueInvalidation,
+  } = queue;
+  const history = createChatHistory({
+    chatState,
+    runStream,
+    operations,
+    isDisplayedSession,
+    reflections,
+    syncSessionQueue,
+    errorMessage,
+  });
+  const {
+    loadHistoryForSession,
+    reconcileRunSession,
+    loadOlderHistory,
+    loadRunHistory,
+    syncDisplayedHistoryLoad,
+  } = history;
   let lastHistoryInvalidationId = null;
 
   // Apply App's Session invalidation window: activity first, then the History
@@ -278,48 +215,6 @@ export function createChatController({
     return typeof error?.message === 'string' && error.message
       ? error.message
       : String(error ?? '');
-  }
-
-  function invalidateQueueSync(sessionState) {
-    const version = (queueSyncVersions.get(sessionState.key) ?? 0) + 1;
-    queueSyncVersions.set(sessionState.key, version);
-    return version;
-  }
-
-  // Reads a Session's Queue again after its Run ended or another window
-  // changed it, where the Queue is shown or still holds items. Any other
-  // Session reads its Queue when opened.
-  async function refreshSessionQueue(sessionState) {
-    if (
-      isDisplayedSession(sessionState?.agentId, sessionState?.sessionId) ||
-      sessionState?.queue?.length > 0
-    ) {
-      await syncSessionQueue(sessionState);
-    }
-  }
-
-  async function syncSessionQueue(sessionState) {
-    if (!sessionState?.agentId || !sessionState?.sessionId) {
-      return;
-    }
-    const requestVersion = invalidateQueueSync(sessionState);
-    const isLatestRequest = () =>
-      queueSyncVersions.get(sessionState.key) === requestVersion;
-    try {
-      const result = await operations.listQueue(
-        sessionState.agentId,
-        sessionState.sessionId,
-      );
-      if (!isLatestRequest()) {
-        return;
-      }
-      syncQueueFromServer(sessionState, result?.items ?? []);
-    } catch (error) {
-      if (!isLatestRequest()) {
-        return;
-      }
-      sessionState.actionError = `${t('queue.syncError')} ${errorMessage(error)}`;
-    }
   }
 
   async function loadAgents({ preferredAgentId = '', silent = false } = {}) {
@@ -384,9 +279,8 @@ export function createChatController({
     }
     renameAgentInState(chatState, oldAgentId, newAgentId);
     renamed.forEach((sessionState, index) => {
-      for (const versions of [historyLoadVersions, queueSyncVersions]) {
-        supersedeRenamedSessionKey(versions, oldKeys[index], sessionState.key);
-      }
+      history.renameSession(oldKeys[index], sessionState.key);
+      queue.renameSession(oldKeys[index], sessionState.key);
       reflections.renameSession(oldKeys[index], sessionState.key);
     });
   }
@@ -400,14 +294,6 @@ export function createChatController({
     return loadHistoryForSession(agent.id, agent.current_session_id);
   }
 
-  function syncDisplayedHistoryLoad() {
-    if (displayedHistoryLoad && !displayedHistoryLoad.isDisplayed()) {
-      displayedHistoryLoad = null;
-      chatState.loadingHistory = false;
-      chatState.historyError = '';
-    }
-  }
-
   // A selection adopted without navigation still shows its current History.
   // While the mount's roster load is pending, that load reads the History
   // itself; a Chat mounted hidden has already finished it for another Agent.
@@ -418,309 +304,12 @@ export function createChatController({
     return loadCurrentHistory();
   }
 
-  function beginHistoryRequest(sessionState) {
-    const version = (historyLoadVersions.get(sessionState.key) ?? 0) + 1;
-    historyLoadVersions.set(sessionState.key, version);
-    const snapshotVersion = sessionState.historySnapshotVersion;
-    const compactionPolicy = sessionState.compactionPolicy;
-    return {
-      snapshotVersion,
-      loadOptions(history) {
-        const options = historyLoadOptions(history);
-        // A settings read or local save accepted while History was in flight
-        // supersedes its policy snapshot without discarding its new messages.
-        if (sessionState.compactionPolicy !== compactionPolicy) {
-          delete options.compactionPolicy;
-        }
-        return options;
-      },
-      isLatest: () => historyLoadVersions.get(sessionState.key) === version,
-      isDisplayed: () =>
-        isDisplayedSession(sessionState.agentId, sessionState.sessionId),
-    };
-  }
-
-  async function readCurrentHistory(sessionState) {
-    let after = sessionState.historyAfter;
-    let result = null;
-    do {
-      const page = await operations.loadChatHistory({
-        agent_id: sessionState.agentId,
-        session_id: sessionState.sessionId,
-        limit: after ? 500 : HISTORY_INITIAL_LIMIT,
-        child_limit: 100,
-        ...(after ? { after } : {}),
-      });
-      if (!result || !page.incremental) result = page;
-      else
-        result = {
-          ...page,
-          incremental: result.incremental,
-          has_more: result.has_more,
-          next_before: result.next_before,
-          history_reset: result.history_reset,
-          messages: [...(result.messages ?? []), ...(page.messages ?? [])],
-          items: mergeTimelineItems(result.items, page.items),
-          replace_run_ids: [
-            ...new Set([
-              ...(result.replace_run_ids ?? []),
-              ...(page.replace_run_ids ?? []),
-            ]),
-          ],
-          runs: mergeHistoryRuns(result.runs, page.runs),
-          background_command_statuses: mergeBackgroundStatuses(
-            result.background_command_statuses,
-            page.background_command_statuses,
-          ),
-          // Each list is complete; the newest one wins.
-          background_commands_still_running:
-            page.background_commands_still_running ??
-            result.background_commands_still_running,
-          subagent_background_commands:
-            page.subagent_background_commands ??
-            result.subagent_background_commands,
-        };
-      after = page.next_after;
-    } while (result?.has_newer);
-    return result;
-  }
-
-  // Only a read without `after` carries reflection Runs; live Run events keep
-  // them current in between, so an incremental read leaves them alone.
-  async function loadHistoryForSession(agentId, sessionId) {
-    const sessionState = ensureSessionState(chatState, agentId, sessionId);
-    const request = beginHistoryRequest(sessionState);
-    const reflectionRequest = sessionState.historyAfter
-      ? null
-      : reflections.beginRequest(sessionState);
-    const isLatestRequest = request.isLatest;
-    const isDisplayed = () => isDisplayedSession(agentId, sessionId);
-    const startedDisplayed = isDisplayed();
-    if (startedDisplayed) {
-      displayedHistoryLoad = request;
-      chatState.loadingHistory = true;
-      chatState.historyError = '';
-      runStream.closeSubscriptionsExcept(sessionState.key);
-    }
-    try {
-      let history;
-      let staleRunId;
-      do {
-        staleRunId = sessionState.currentRun?.runId ?? '';
-        history = await readCurrentHistory(sessionState);
-        if (
-          !isLatestRequest() ||
-          sessionState.historySnapshotVersion !== request.snapshotVersion
-        ) {
-          return false;
-        }
-        // Run admission can overtake a History response, including while the
-        // composer is disabled. Read again rather than reattach the old Run
-        // or install the lineage from before an accepted edit.
-      } while (
-        sessionState.currentRun?.runId &&
-        sessionState.currentRun.runId !== staleRunId &&
-        history?.active_run?.run_id !== sessionState.currentRun.runId
-      );
-      loadHistory(
-        sessionState,
-        history?.messages ?? [],
-        request.loadOptions(history),
-      );
-      retainHistory(sessionState);
-      reflectionRequest?.apply(history?.reflection_runs);
-      sessionState.markReadFailedRunId = '';
-      if (
-        !history?.active_run &&
-        isRunActive(sessionState) &&
-        sessionState.currentRun?.runId === staleRunId
-      ) {
-        resetStaleRun(sessionState);
-        runStream.closeSubscriptionFor(sessionState.key);
-      }
-      // A loaded result is acknowledged by the Chat view, which knows whether
-      // the user can see it.
-      if (isDisplayed()) {
-        runStream.attachRunStream(
-          sessionState,
-          attachableHistoryRun(sessionState, history?.active_run),
-        );
-      }
-      await syncSessionQueue(sessionState);
-      return true;
-    } catch (error) {
-      if (isLatestRequest() && isDisplayed()) {
-        chatState.historyError = errorMessage(error);
-      }
-      return false;
-    } finally {
-      if (displayedHistoryLoad === request) {
-        displayedHistoryLoad = null;
-        chatState.loadingHistory = false;
-      }
-    }
-  }
-
   // A Session Compaction Policy saved from this window takes effect at once;
   // other windows reconcile it with their invalidated Session settings row.
   function applySessionCompactionPolicy(agentId, sessionId, policy) {
     const sessionState = chatState.sessions[sessionKey(agentId, sessionId)];
     if (sessionState && isRecord(policy)) {
       sessionState.compactionPolicy = policy;
-    }
-  }
-
-  async function reconcileRunSession(sessionState, expectedRunId) {
-    if (!sessionState?.agentId || !sessionState?.sessionId || !expectedRunId) {
-      return false;
-    }
-
-    const request = beginHistoryRequest(sessionState);
-    const reflectionRequest = sessionState.historyAfter
-      ? null
-      : reflections.beginRequest(sessionState);
-    const isLatestRequest = request.isLatest;
-    try {
-      const history = await readCurrentHistory(sessionState);
-      // History may settle an older Run while its successor owns the stream.
-      // Keep the current Run's projection and subscription in that case.
-      if (
-        !isLatestRequest() ||
-        sessionState.historySnapshotVersion !== request.snapshotVersion
-      ) {
-        // Keeping the same Run id does not prove the newer read succeeded:
-        // it may have failed while this recovery's stream was already closed.
-        // The stream owner can independently recognize a restored subscription.
-        return sessionState.historyRuns?.[expectedRunId]?.complete === true;
-      }
-
-      const successor = sessionState.currentRun?.runId !== expectedRunId;
-      const currentRunId = sessionState.currentRun?.runId;
-
-      loadHistory(sessionState, history?.messages ?? [], {
-        ...request.loadOptions(history),
-        ...(successor ? { activeRunId: currentRunId, reset: false } : {}),
-      });
-      reflectionRequest?.apply(history?.reflection_runs);
-      sessionState.markReadFailedRunId = '';
-      if (successor) {
-        await syncSessionQueue(sessionState);
-        return sessionState.historyRuns?.[expectedRunId]?.complete === true;
-      }
-      const activeRun = attachableHistoryRun(sessionState, history?.active_run);
-      if (activeRun) {
-        if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
-          runStream.attachRunStream(sessionState, activeRun);
-        }
-      } else if (
-        !history?.active_run &&
-        !hasRetainedTerminalRunProjection(sessionState)
-      ) {
-        resetStaleRun(sessionState);
-        runStream.closeSubscriptionFor(sessionState.key);
-      }
-      await syncSessionQueue(sessionState);
-      return true;
-    } catch {
-      // Recovery is deliberately silent and retried by chatRunStream. A
-      // transient history failure must not replace a real Run failure or the
-      // user's current global history error.
-      return false;
-    }
-  }
-
-  async function loadOlderHistory(sessionState) {
-    if (
-      !sessionState?.agentId ||
-      !sessionState.hasOlderHistory ||
-      sessionState.loadingOlderHistory ||
-      (!sessionState.historyBefore && sessionState.messages.length === 0)
-    ) {
-      return false;
-    }
-    const before =
-      sessionState.historyBefore ||
-      (sessionState.messages ?? []).find(
-        (message) => typeof message?.id === 'string' && message.id.length > 0,
-      )?.id ||
-      '';
-    if (!before) {
-      sessionState.hasOlderHistory = false;
-      return false;
-    }
-    sessionState.loadingOlderHistory = true;
-    sessionState.actionError = '';
-    const snapshotVersion = sessionState.historySnapshotVersion;
-    const isCurrentSnapshot = () =>
-      sessionState.historySnapshotVersion === snapshotVersion;
-    try {
-      const history = await operations.loadChatHistory({
-        agent_id: sessionState.agentId,
-        session_id: sessionState.sessionId,
-        limit: HISTORY_OLDER_LIMIT,
-        child_limit: 100,
-        before,
-      });
-      // A refreshed snapshot owns a new page boundary. Joining a page from
-      // the previous snapshot could skip the messages between those bounds.
-      if (!isCurrentSnapshot()) {
-        return false;
-      }
-      prependHistory(sessionState, history?.messages ?? [], {
-        items: history?.items,
-        replaceRunIds: history?.replace_run_ids,
-        runs: history?.runs,
-        hasMore: history?.has_more === true,
-        nextBefore: history?.next_before,
-      });
-      retainHistory(sessionState);
-      return true;
-    } catch (error) {
-      if (isCurrentSnapshot()) {
-        sessionState.actionError = `${t('chat.historyOlderLoadError')} ${errorMessage(error)}`;
-      }
-      return false;
-    } finally {
-      sessionState.loadingOlderHistory = false;
-    }
-  }
-
-  // Loads the steps before one Run's history gap. Concurrent requests for the
-  // same gap share one read; different Runs load independently.
-  function loadRunHistory(sessionState, gap) {
-    if (!sessionState) return Promise.resolve(false);
-    const key = `${sessionState.key}\n${gap.run_id}\n${gap.before}`;
-    if (!runHistoryLoads.has(key)) {
-      runHistoryLoads.set(
-        key,
-        readRunHistory(sessionState, gap).finally(() =>
-          runHistoryLoads.delete(key),
-        ),
-      );
-    }
-    return runHistoryLoads.get(key);
-  }
-
-  async function readRunHistory(sessionState, gap) {
-    const generation = sessionState.historyGeneration;
-    try {
-      const page = await operations.loadTimelineChildren({
-        agent_id: sessionState.agentId,
-        session_id: sessionState.sessionId,
-        run_id: gap.run_id,
-        before: gap.before,
-        history_generation: generation,
-        limit: 100,
-      });
-      // Newer snapshots may have arrived meanwhile; the page still applies
-      // while the Run shows the same gap.
-      const merged = mergeRunChildPage(sessionState, page);
-      if (merged) retainHistory(sessionState);
-      return merged;
-    } catch (error) {
-      if (sessionState.historyGeneration === generation)
-        sessionState.actionError = errorMessage(error);
-      return false;
     }
   }
 
@@ -1008,85 +597,6 @@ export function createChatController({
     }
   }
 
-  async function steerQueued(sessionState, itemId) {
-    if (!sessionState) return false;
-    sessionState.actionError = '';
-    try {
-      await operations.steerQueueItem(
-        sessionState.agentId,
-        sessionState.sessionId,
-        itemId,
-      );
-      await syncSessionQueue(sessionState);
-      return true;
-    } catch (error) {
-      sessionState.actionError = `${t('queue.steerError')} ${errorMessage(error)}`;
-      await syncSessionQueue(sessionState);
-      return false;
-    }
-  }
-
-  async function removeQueued(sessionState, queuedMessageId) {
-    if (!sessionState) {
-      return;
-    }
-    sessionState.actionError = '';
-    try {
-      await operations.removeFromQueue(
-        sessionState.agentId,
-        sessionState.sessionId,
-        queuedMessageId,
-      );
-      invalidateQueueSync(sessionState);
-      removeQueuedMessage(sessionState, queuedMessageId);
-    } catch (error) {
-      if (await reportQueueItemSteering(sessionState, error)) return;
-      sessionState.actionError = `${t('queue.removeError')} ${errorMessage(error)}`;
-    }
-  }
-
-  // The item is already bound for the running Run; refresh the Queue so its
-  // steering state (or its delivery) replaces the stale local controls.
-  async function reportQueueItemSteering(sessionState, error) {
-    if (error?.code !== RPC_ERROR_QUEUE_ITEM_STEERING) return false;
-    sessionState.actionError = t('queue.steeringLocked');
-    await syncSessionQueue(sessionState);
-    return true;
-  }
-
-  async function updateQueued(
-    sessionState,
-    queuedMessageId,
-    newContent,
-    fileMentions,
-  ) {
-    if (!sessionState) {
-      return false;
-    }
-    sessionState.actionError = '';
-    try {
-      const normalizedFileMentions = Array.isArray(fileMentions)
-        ? fileMentions
-        : [];
-      await operations.updateQueueItem(
-        sessionState.agentId,
-        sessionState.sessionId,
-        queuedMessageId,
-        newContent,
-        { fileMentions: normalizedFileMentions },
-      );
-      // Acceptance proves this edit was saved, not that it is still current:
-      // another window may have changed or consumed the item before this reply.
-      // The fresh read also retires any Queue read that predates acceptance.
-      await syncSessionQueue(sessionState);
-      return true;
-    } catch (error) {
-      if (await reportQueueItemSteering(sessionState, error)) return false;
-      sessionState.actionError = `${t('queue.editError')} ${errorMessage(error)}`;
-      return false;
-    }
-  }
-
   function applyConnectionSnapshot(snapshot) {
     if (!snapshot || snapshot === handledConnectionSnapshot) {
       return false;
@@ -1095,42 +605,7 @@ export function createChatController({
     // itself recovers any of them this owner missed.
     applyRunEvents({ onMissed: () => {} });
     handledConnectionSnapshot = snapshot;
-    if (Array.isArray(snapshot.queues)) {
-      const queueItemsBySession = new Map();
-      for (const queueScope of snapshot.queues) {
-        if (
-          typeof queueScope?.agent_id !== 'string' ||
-          typeof queueScope?.session_id !== 'string'
-        ) {
-          continue;
-        }
-        queueItemsBySession.set(
-          sessionKey(
-            formatAgentAddress(queueScope.agent_id, queueScope.project_id),
-            queueScope.session_id,
-          ),
-          Array.isArray(queueScope.items) ? queueScope.items : [],
-        );
-      }
-
-      let discardedCount = 0;
-      for (const sessionState of Object.values(chatState.sessions)) {
-        const serverItems = queueItemsBySession.get(sessionState.key) ?? [];
-        if (snapshot.replay_status === 'epoch_changed') {
-          const serverItemIds = new Set(
-            serverItems.map((item) => item?.id).filter(Boolean),
-          );
-          discardedCount += sessionState.queue.filter(
-            (item) => item?.id && !serverItemIds.has(item.id),
-          ).length;
-        }
-        invalidateQueueSync(sessionState);
-        syncQueueFromServer(sessionState, serverItems);
-      }
-      if (discardedCount > 0) {
-        onRestartQueueDiscarded(discardedCount);
-      }
-    }
+    queue.applyConnectionSnapshot(snapshot);
     // A replay gap or a server restart may have lost the end of a background
     // command. Its live state starts over (App's map with it), and the
     // displayed Session reads its History on: the read reports every live
@@ -1254,38 +729,16 @@ export function createChatController({
     return true;
   }
 
-  function applyQueueInvalidation(scope) {
-    if (!scope || scope === handledQueueInvalidation) {
-      return false;
-    }
-    handledQueueInvalidation = scope;
-    if (!scope.sessionId) {
-      return true;
-    }
-    for (const sessionState of Object.values(chatState.sessions)) {
-      const { agentId } = parseAgentAddress(sessionState.agentId);
-      if (
-        sessionState.sessionId === scope.sessionId &&
-        agentId === scope.agentId
-      ) {
-        void refreshSessionQueue(sessionState);
-      }
-    }
-    return true;
-  }
-
   function destroy() {
     agentsLoadVersion += 1;
     initialHistoryPending = false;
     chatState.loadingAgents = false;
     runStream.closeSubscriptions();
-    historyLoadVersions.clear();
-    queueSyncVersions.clear();
+    history.destroy();
+    queue.destroy();
     childTasks.dispose();
     activity.dispose();
     work.destroy();
-    displayedHistoryLoad = null;
-    chatState.loadingHistory = false;
   }
 
   return {

@@ -1,0 +1,253 @@
+/* Copy actions stay visually quiet in the dense Chat timeline. Pointer hover
+   reveals only the actions belonging to the current semantic copy surface;
+   keyboard focus and coarse pointers keep the same controls discoverable. */
+.chat-copy-action {
+  flex: 0 0 auto;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.chat-edit-action {
+  flex: 0 0 auto;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.msg:hover > .msg-header .message-copy,
+.msg:focus-within > .msg-header .message-copy,
+.msg:hover > .msg-header .message-edit,
+.msg:focus-within > .msg-header .message-edit,
+.reasoning-block[open]:hover .reasoning-copy,
+.reasoning-block[open]:focus-within .reasoning-copy,
+.tool-event[open]:hover .tool-detail-copy,
+.tool-event[open]:focus-within .tool-detail-copy,
+.transient-card:hover .transient-card__copy,
+.transient-card:focus-within .transient-card__copy,
+.chat-copy-action:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-edit-action:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.btn-tertiary.btn-icon.message-copy,
+.btn-tertiary.btn-icon.message-edit,
+.btn-tertiary.btn-icon.reasoning-copy,
+.btn-tertiary.btn-icon.tool-detail-copy,
+.btn-tertiary.btn-icon.transient-card__copy {
+  width: 24px;
+  height: 24px;
+}
+
+.message-edit-form {
+  display: flex;
+  width: min(75%, 720px);
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message-edit-form .text-area {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.message-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.message-edit-hint {
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  text-align: right;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .chat-edit-action {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.speech-audio-player {
+  margin-top: var(--space-sm);
+}
+
+.chat-terminal-event {
+  align-self: center;
+  margin: 8px 28px;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.streaming-message .msg-author {
+  color: var(--text-med);
+}
+
+.streaming-text {
+  color: var(--text-hi);
+}
+
+.streaming-reasoning .reasoning-body {
+  color: var(--text-med);
+  font-style: italic;
+}
+
+.streaming-tool-event .te-time {
+  color: var(--amber);
+}
+
+.run-inline-banner {
+  margin: 4px 0 2px;
+  font-size: var(--fs-label-sm);
+  font-style: italic;
+}
+
+.subagent-tool-event .tool-event-line {
+  align-items: center;
+}
+
+.subagent-agent {
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+}
+
+/* A Sub-Agent's task and current activity are prose, not arguments. */
+.te-arg:is(.subagent-preview, .subagent-activity) {
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
+}
+
+.subagent-preview {
+  max-width: min(34rem, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Per-row cancel control. The CSS-only fade-in keeps fast tool calls (the
+   majority) from flashing a button for calls that finish in well under the
+   reveal window. */
+.btn-icon.tool-row-action {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: var(--r-sm);
+}
+
+.tool-row-action + .tool-row-action {
+  margin-left: 0;
+}
+
+.tool-row-action svg {
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+.btn-danger.btn-icon.row-cancel {
+  /* Hidden (not just transparent) during the reveal delay: an invisible
+     button must not catch clicks — a mis-click here kills a real process. */
+  visibility: hidden;
+  opacity: 0;
+  animation: row-cancel-reveal 0.5s ease 0.5s forwards;
+}
+
+@keyframes row-cancel-reveal {
+  from {
+    visibility: visible;
+    opacity: 0;
+  }
+
+  to {
+    visibility: visible;
+    opacity: 1;
+  }
+}
+
+.streaming-caret {
+  display: inline-block;
+  width: 5px;
+  height: 1em;
+  margin-left: 3px;
+  transform: translateY(2px);
+  background: var(--accent);
+  animation: stream-pulse 900ms steps(2, start) infinite;
+}
+
+.reasoning-header .streaming-caret {
+  width: 4px;
+  height: 10px;
+  margin-left: 2px;
+}
+
+@keyframes stream-pulse {
+  0%,
+  45% {
+    opacity: 1;
+  }
+
+  46%,
+  100% {
+    opacity: 0.2;
+  }
+}
+
+.msg-body-blocks {
+  display: flex;
+  /* User attachment blocks are right-aligned like the plain-text user bubble:
+     full width so the text bubble's max-width matches text-only messages, with
+     every block (text bubble + attachment card) pinned to the right edge. */
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.msg-body-blocks .msg-body-text {
+  margin: 0;
+}
+
+.msg-user-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* A very long user text shows its first 14 lines until the reader asks for
+   more; the fade marks the cut. 20px covers the vertical padding of the
+   bubble and its Markdown. */
+.msg-user-text--clamped {
+  position: relative;
+  max-height: calc(1em * var(--md-line-height, 1.55) * 14 + 20px);
+  overflow: hidden;
+}
+
+.msg-user-text--clamped::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 4.5em;
+  background: linear-gradient(transparent, var(--surface-2));
+  content: '';
+  pointer-events: none;
+}
+
+.msg-content > .msg-clamp-toggle,
+.msg-body-blocks > .msg-clamp-toggle {
+  margin-top: -3px;
+}

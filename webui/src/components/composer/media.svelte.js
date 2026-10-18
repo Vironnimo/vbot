@@ -6,6 +6,7 @@ import {
   subscribePendingAttachments,
 } from '$lib/composerMemory.js';
 import {
+  getAttachmentUrl,
   prepareSpeechTranscription,
   uploadAttachment,
   transcribeSpeech,
@@ -97,9 +98,6 @@ export function createComposerMedia(context) {
     return cachedAttachmentsForScope(scope);
   };
 
-  const attachmentPreviewUrl = (attachmentId) =>
-    `/api/attachments/${encodeURIComponent(attachmentId)}`;
-
   const nextAttachmentLocalId = () => {
     nextPendingAttachmentId += 1;
     return `pending-attachment-${nextPendingAttachmentId}`;
@@ -133,7 +131,9 @@ export function createComposerMedia(context) {
       restored.push({
         ...attachment,
         local_id: nextAttachmentLocalId(),
-        preview_url: attachmentPreviewUrl(attachment.attachment_id),
+        preview_url: getAttachmentUrl(
+          encodeURIComponent(attachment.attachment_id),
+        ),
         uploading: false,
       });
     }

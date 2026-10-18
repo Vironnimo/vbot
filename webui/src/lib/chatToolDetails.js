@@ -76,31 +76,26 @@ export function toolDetailMedia(tool, result) {
   });
 }
 
-// `raw` shows arguments with the keys the Tool's display hides, as sent;
-// `literal` shows a text as it is, even one that reads as JSON.
+// Rendering modes keep arguments, unfiltered raw arguments, literal display
+// text and a result payload distinct without combining competing flags.
 export const toolDetailPresentation = (
   value,
-  {
-    preferPayload = false,
-    raw = false,
-    literal = false,
-    toolName = '',
-    tool = null,
-  } = {},
+  { mode = 'arguments', toolName = '', tool = null } = {},
 ) => {
-  const processed = literal
-    ? value
-    : preferPayload
-      ? preferredToolResultValue(value, toolName, tool)
-      : sanitizeToolDetailNode(
-          value,
-          raw
-            ? null
-            : tool
-              ? hiddenArgumentKeysForTool(tool, toolName)
-              : hiddenArgumentKeysForTool(toolName),
-          true,
-        );
+  const processed =
+    mode === 'literal'
+      ? value
+      : mode === 'result'
+        ? preferredToolResultValue(value, toolName, tool)
+        : sanitizeToolDetailNode(
+            value,
+            mode === 'raw'
+              ? null
+              : tool
+                ? hiddenArgumentKeysForTool(tool, toolName)
+                : hiddenArgumentKeysForTool(toolName),
+            true,
+          );
 
   if (!hasMeaningfulToolDetail(processed)) {
     const emptyText = t('chat.toolNoData');

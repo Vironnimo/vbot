@@ -1,5 +1,5 @@
 <script>
-  import { optionDecorations } from '$lib/dropdownPanel.js';
+  import { modelAutocompleteRows } from './composer/autocomplete.js';
   import { t } from '$lib/i18n.js';
   import OptionMarker from './OptionMarker.svelte';
 
@@ -16,8 +16,7 @@
     onHover = noop,
   } = $props();
 
-  let normalizedOptions = $derived(normalizeOptions(options));
-  let matchingOptions = $derived(matchOptions(normalizedOptions, query));
+  let matchingOptions = $derived(modelAutocompleteRows(options, query));
   let containerElement = $state(null);
 
   // Keep the active option visible inside the scrollable popup when keyboard
@@ -63,42 +62,6 @@
     }
 
     return false;
-  }
-
-  function normalizeOptions(items) {
-    return items
-      .filter(
-        (option) =>
-          typeof option?.value === 'string' && option.value.length > 0,
-      )
-      .map((option) => ({
-        value: option.value,
-        label: option.label ?? option.value,
-        // The Model id's provider path, shown muted.
-        labelLead:
-          typeof option.labelLead === 'string' &&
-          (option.label ?? option.value).startsWith(option.labelLead)
-            ? option.labelLead
-            : '',
-        secondaryLabel: option.secondaryLabel ?? '',
-        marker: optionDecorations(option).marker,
-        searchText:
-          `${option.label ?? option.value} ${option.secondaryLabel ?? ''}`
-            .trim()
-            .toLowerCase(),
-      }));
-  }
-
-  function matchOptions(items, value) {
-    const normalizedQuery = value.trim().toLowerCase();
-
-    if (!normalizedQuery) {
-      return items;
-    }
-
-    return items.filter((option) =>
-      option.searchText.includes(normalizedQuery),
-    );
   }
 </script>
 
