@@ -55,14 +55,14 @@ def _read_settings_port(data_dir: Path | None) -> int | None:
 
     try:
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    except OSError, json.JSONDecodeError:
+    except OSError, UnicodeError, json.JSONDecodeError:
         return None
 
     if not isinstance(settings, dict):
         return None
 
     port = settings.get(SERVER_PORT_KEY)
-    if isinstance(port, int):
+    if isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65_535:
         return port
     return None
 
@@ -79,7 +79,11 @@ def _worktree_server_port(
     if port is not None:
         return port
     recorded = marker_data.get(SERVER_PORT_KEY) if marker_data is not None else None
-    return recorded if isinstance(recorded, int) and not isinstance(recorded, bool) else None
+    return (
+        recorded
+        if isinstance(recorded, int) and not isinstance(recorded, bool) and 1 <= recorded <= 65_535
+        else None
+    )
 
 
 def _marker_data_dir(marker_data: dict[str, object] | None) -> tuple[str, Path | None]:

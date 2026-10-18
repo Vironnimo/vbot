@@ -423,7 +423,8 @@ Important behavior:
 - the port comes from the data dir's `settings.json`, else from the marker; with
   neither deletion refuses, because `stop` without a port targets vBot's default
   port `22332`, where the installed application may run. Missing settings do not
-  skip the stop when the marker records a port. After stopping, any remaining
+  skip the stop when the marker records a port. Both sources accept only integer
+  ports from 1 to 65535; JSON booleans and invalid ranges are not ports. After stopping, any remaining
   server claim on the data directory, or a failed claim check, prevents deletion.
   `vbot server stop` also refuses to stop a server whose control record belongs
   to another data directory
