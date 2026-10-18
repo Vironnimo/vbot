@@ -313,6 +313,7 @@ def test_publish_moves_a_skill_into_another_home_with_its_provenance(
 
     rename = Path.rename
     remove_tree = shutil.rmtree
+    original_document = (source / "demo" / "SKILL.md").read_bytes()
 
     def refuse_source_archive(path: Path, destination: Path) -> Path:
         if path == source / "demo":
@@ -321,20 +322,29 @@ def test_publish_moves_a_skill_into_another_home_with_its_provenance(
 
     def refuse_copy_cleanup(path: Path, **kwargs: Any) -> None:
         if path == target / "demo":
+            if cleanup_mode == "partial":
+                (path / "SKILL.md").unlink()
             raise PermissionError("copy is locked")
         remove_tree(path, **kwargs)
 
-    for cleanup_fails in (False, True):
+    for cleanup_mode in ("complete", "blocked", "partial"):
+        cleanup_fails = cleanup_mode != "complete"
         with monkeypatch.context() as patch:
             patch.setattr(Path, "rename", refuse_source_archive)
             if cleanup_fails:
                 patch.setattr(shutil, "rmtree", refuse_copy_cleanup)
             with pytest.raises(SkillAuthoringError if cleanup_fails else PermissionError):
                 service.publish(source, target, "demo", writer=AGENT)
+        assert (source / "demo" / "SKILL.md").read_bytes() == original_document
         assert (source / "demo" / "references" / "notes.md").read_text() == "notes"
         assert (target / "demo").exists() is cleanup_fails
         assert not any(item.skill == "demo" for item in service.recorded_revisions(target))
         assert service.archived(source) == []
+        if cleanup_mode == "partial":
+            assert not (target / "demo" / "SKILL.md").exists()
+            assert (target / "demo" / "references" / "notes.md").read_text() == "notes"
+            with pytest.raises(SkillAuthoringError):
+                service.delete(target, "demo", writer=HUMAN_WRITER)
         if cleanup_fails:
             remove_tree(target / "demo")
 

@@ -385,10 +385,9 @@ class SkillAuthoringService:
                     shutil.rmtree(destination)
                 except OSError as cleanup_error:
                     raise SkillAuthoringError(
-                        f"Skill '{skill_name}' remains at its source and at "
-                        f"{model_path(destination)}: publishing failed and the destination "
-                        "copy could not be removed. Ask the user to remove the destination copy "
-                        "in Skill controls before retrying."
+                        f"Skill '{skill_name}' is still at its source. Publishing failed, "
+                        f"and cleanup left files at {model_path(destination)}. Ask the user "
+                        "to remove that destination folder from the filesystem before retrying."
                     ) from cleanup_error
                 raise
             revision = self._revisions._commit(
