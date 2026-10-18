@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-14T09:37:00.988545+00:00",
+  "fetched_at": "2026-10-18T20:45:27.521798+00:00",
   "models": {
     "codestral-2508": {
       "canonical": "mistral/codestral-2508",
@@ -11,6 +11,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "supported": false
+        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -103,6 +106,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "supported": false
+        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -301,6 +307,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "supported": false
+        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -376,6 +385,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "supported": false
+        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -459,6 +471,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "supported": false
+        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -603,6 +618,9 @@
         "output_modalities": [
           "embeddings"
         ],
+        "reasoning": {
+          "supported": false
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -1129,7 +1147,7 @@
       "context_window": 32768,
       "family": "voxtral",
       "max_output_tokens": 32000,
-      "name": "voxtral-small-2507",
+      "name": "Voxtral Small Transcribe",
       "pricing": {
         "rates": {
           "input": 0.1,
@@ -1149,6 +1167,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "supported": false
+        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -1167,7 +1188,7 @@
       "context_window": 32768,
       "family": "voxtral",
       "max_output_tokens": 32000,
-      "name": "voxtral-small-2507",
+      "name": "Voxtral Small Transcribe",
       "pricing": {
         "rates": {
           "input": 0.1,

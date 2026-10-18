@@ -1,27 +1,6 @@
 {
   "_comment": "Hand-authored OpenCode Go Model facts. Wire decisions (each Model's wire, response carrier, thinking controls, cheapest rung for none, replay scope and fidelity, listed Tools, media) live in resources/wire/opencode-go.json. Verified MiMo V2.6 Flash/Pro on 2026-09-22: binary thinking, readable-only full_history replay, 131072 output ceiling. GLM 5.1, MiniMax M2.5, Omen Alpha and Kimi K2.6 are complete records so they stay usable when a refreshed catalog lacks them (all four listed live on 2026-10-02). Earlier model-specific evidence and gateway divergences remain in providers/opencode-go.md. Go publishes a monthly DeepSeek ZDR agreement through 2026-09-30 (read 2026-09-22).",
   "models": {
-    "deepseek-flash": {
-      "name": "DeepSeek V4.1 Flash",
-      "context_window": 1000000,
-      "max_output_tokens": 384000,
-      "capabilities": {
-        "vision": true,
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "reasoning": {
-          "supported": true,
-          "control": "levels",
-          "levels": [
-            "low",
-            "high",
-            "max"
-          ]
-        }
-      }
-    },
     "deepseek-v4.1-flash": {
       "name": "DeepSeek V4.1 Flash",
       "context_window": 1000000,
@@ -150,14 +129,14 @@
     "space-bunny": {
       "name": "Space Bunny"
     },
-    "step-5-preview-free": {
-      "name": "Step 5 Preview Free"
-    },
-    "cat-jam-free": {
-      "name": "Cat Jam Free"
-    },
     "gemini-4-argon-contributor": {
       "name": "Gemini 4 Argon Contributor"
+    },
+    "beam-free": {
+      "name": "Beam Free"
+    },
+    "step-5-preview": {
+      "name": "Step 5 Preview"
     }
   }
 }

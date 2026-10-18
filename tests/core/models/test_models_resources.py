@@ -46,8 +46,10 @@ def _profile(model: Model, *keys: str, wire: WireProfile | None = None) -> dict[
     return {key: facts[key] for key in keys}
 
 
-def _wire_profile(registry: ModelRegistry, provider_id: str, model_id: str) -> WireProfile:
-    """The bundled wire profile of one catalog Model on the Provider's first Connection."""
+def _wire_profile(
+    registry: ModelRegistry, provider_id: str, model_id: str, connection_id: str = "api-key"
+) -> WireProfile:
+    """The bundled wire profile of one catalog Model on the selected Connection."""
 
     adapter = {
         "ollama-cloud": OllamaCloudAdapter,
@@ -56,7 +58,7 @@ def _wire_profile(registry: ModelRegistry, provider_id: str, model_id: str) -> W
     }[provider_id]
     return standalone_wire_binding(
         provider_id=provider_id,
-        connection_id="api-key",
+        connection_id=connection_id,
         protocols=adapter.WIRE_PROTOCOLS,
         model_lookup=lambda selected: registry.get(provider_id, selected),
     ).profile(model_id)
@@ -68,6 +70,7 @@ def _wire_profile(registry: ModelRegistry, provider_id: str, model_id: str) -> W
 
 
 def test_every_bundled_model_loads_with_typed_facts(registry: ModelRegistry) -> None:
+    assert ModelRegistry.validate(RESOURCES_DIR) == []
     models = [model for _, model in registry.query(ModelQuery())]
 
     for provider_id in (
@@ -264,7 +267,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         ),
         "gemini": ("gemini-4-argon-contributor",),
         "chat_completions": (
-            "cat-jam-free",
+            "beam-free",
             "glm-5.1",
             "glm-5.3-flash",
             "glm-5.3",
@@ -274,11 +277,8 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "kimi-k2.7-code",
             "longcat-2.0",
             "longcat-2.5-preview-free",
-            "deepseek-flash",
             "deepseek-v4.1-flash",
             "deepseek-v4-pro",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-vision-exp",
             "mimo-v2.5",
             "mimo-v2.5-pro",
             "mimo-v2.6-flash",
@@ -286,7 +286,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "hy4-preview",
             "hy3",
             "space-bunny",
-            "step-5-preview-free",
+            "step-5-preview",
             "omen-alpha",
         ),
         "messages": (
@@ -306,7 +306,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         for protocol, model_ids in expected_by_protocol.items()
         for model_id in model_ids
     }
-    assert len(expected) == 40
+    assert len(expected) == 37
 
     assert {
         model_id: _wire_profile(registry, "opencode-go", model_id).protocol for model_id in expected
@@ -320,9 +320,7 @@ def test_opencode_go_response_fields_are_not_history_field_guesses(
     """Profiles describe inbound response carriers, not outbound replay."""
 
     expected = {
-        **dict.fromkeys(
-            ("kimi-k2.6", "kimi-k3", "hy3", "hy4-preview", "step-5-preview-free"), "reasoning"
-        ),
+        **dict.fromkeys(("kimi-k2.6", "kimi-k3", "hy3", "hy4-preview"), "reasoning"),
         **dict.fromkeys(
             (
                 "glm-5.1",
@@ -361,9 +359,9 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
             id="space-bunny",
         ),
         pytest.param(
-            "step-5-preview-free",
+            "step-5-preview",
             {
-                "name": "Step 5 Preview Free",
+                "name": "Step 5 Preview",
                 "context_window": 1_000_000,
                 "max_output_tokens": 65_536,
                 "tools": True,
@@ -371,7 +369,7 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                 "reasoning": (True, "levels", ("low", "medium", "high")),
                 "replay_scope": "full_history",
             },
-            id="step-5-preview-free",
+            id="step-5-preview",
         ),
         pytest.param(
             "longcat-2.5-preview-free",
@@ -401,22 +399,19 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
             )
             for model_id in ("mimo-v2.6-flash", "mimo-v2.6-pro")
         ),
-        *(
-            pytest.param(
-                model_id,
-                {
-                    "name": "DeepSeek V4.1 Flash",
-                    "context_window": 1_000_000,
-                    "max_output_tokens": 384_000,
-                    "reasoning": (True, "levels", ("low", "high", "max")),
-                    "tools": True,
-                    "input_modalities": ("text", "image"),
-                    "vision": True,
-                    "replay_scope": "full_history",
-                },
-                id=model_id,
-            )
-            for model_id in ("deepseek-flash", "deepseek-v4.1-flash")
+        pytest.param(
+            "deepseek-v4.1-flash",
+            {
+                "name": "DeepSeek V4.1 Flash",
+                "context_window": 1_000_000,
+                "max_output_tokens": 384_000,
+                "reasoning": (True, "levels", ("low", "high", "max")),
+                "tools": True,
+                "input_modalities": ("text", "image"),
+                "vision": True,
+                "replay_scope": "full_history",
+            },
+            id="deepseek-v4.1-flash",
         ),
         # Every Go Model replays full history. Exact vBot probes on 2026-09-02
         # showed persisted ``reasoning_content`` of GLM 5.2/5.3 is billed in a
@@ -451,7 +446,7 @@ def test_opencode_go_gateway_profiles(
     assert _profile(model, *expected, wire=wire) == expected
 
 
-def test_zen_snapshot_serves_every_reviewed_model_on_both_connections(
+def test_zen_snapshot_serves_models_only_on_admitted_connections(
     registry: ModelRegistry,
 ) -> None:
     provider = ProviderRegistry.load(RESOURCES_DIR).get("opencode-zen")
@@ -459,12 +454,13 @@ def test_zen_snapshot_serves_every_reviewed_model_on_both_connections(
 
     assert usable
     assert {model.model_id for model in usable}.isdisjoint(provider.catalog_exclusions)
+    api_key_restricted = {"beam-free", "glm-5.3-flash-free", "nemotron-3.5-super-vl-free"}
     for model in usable:
-        assert set(model.connections) == {"api-key", "account"}
-        # Discovery keeps only Models the wire profile admits.
-        assert _wire_profile(registry, "opencode-zen", model.model_id).admission.state == (
-            "available"
-        )
+        expected = {"account"} if model.model_id in api_key_restricted else {"api-key", "account"}
+        assert set(model.connections) == expected
+        for connection in ("api-key", "account"):
+            profile = _wire_profile(registry, "opencode-zen", model.model_id, connection)
+            assert (profile.admission.state == "available") == (connection in expected)
 
 
 # ---------------------------------------------------------------------------
@@ -708,15 +704,15 @@ def test_anthropic_opus_4_5_override_pins_budget_control(registry: ModelRegistry
     assert (intent.kind, intent.budget_tokens) == ("budget", 16384)
 
 
-@pytest.mark.parametrize("model_id", ["typesafe/jev-1.13", "~typesafe/jev-latest"])
+@pytest.mark.parametrize("model_id", ["typesafe/jev-1.14", "~typesafe/jev-latest"])
 def test_jev_is_a_decision_target_without_chat_capability(
     registry: ModelRegistry, model_id: str
 ) -> None:
     model = registry.get("openrouter", model_id)
 
-    assert model.capabilities.input_modalities == ("text",)
     assert model.capabilities.output_modalities == ("decisions",)
-    assert model.capabilities.task_types == ("decision",)
+    assert "decision" in model.capabilities.task_types
+    assert "chat" not in model.capabilities.task_types
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,15 @@
     },
     "space-bunny-free": {
       "name": "Space Bunny Free"
+    },
+    "beam-free": {
+      "name": "Beam Free"
+    },
+    "glm-5.3-flash-free": {
+      "name": "GLM-5.3-Flash Free"
+    },
+    "nemotron-3.5-super-vl-free": {
+      "name": "Nemotron 3.5 Super VL Free"
     }
   }
 }

@@ -98,6 +98,9 @@ def test_bundled_catalog_models_are_admitted_on_their_reviewed_wire(
             "longcat-2.5-preview-free", RESPONSES_MODEL, True, id="hinted-free-tier-stream"
         ),
         pytest.param("fledge-alpha-free", CHAT_MODEL, False, id="fledge-free-tier-send"),
+        pytest.param("beam-free", CHAT_MODEL, False, id="beam-free-tier-send"),
+        pytest.param("glm-5.3-flash-free", CHAT_MODEL, True, id="glm-free-tier-stream"),
+        pytest.param("nemotron-3.5-super-vl-free", CHAT_MODEL, False, id="nemotron-free-tier-send"),
         pytest.param("claude-opus-4-1", MESSAGES_MODEL, True, id="hinted-retired-stream"),
         pytest.param("jev-1.13", CHAT_MODEL, False, id="unsupported-task-route"),
     ],

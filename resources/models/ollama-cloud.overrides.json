@@ -64,6 +64,18 @@
         },
         "nemotron-3-ultra": {
             "max_output_tokens": 65536
+        },
+        "beam": {
+            "name": "Beam"
+        },
+        "clef:27b": {
+            "name": "Clef 27B"
+        },
+        "deepseek-v4.1-flash:1017": {
+            "name": "DeepSeek V4.1 Flash 1017"
+        },
+        "muse-spark-open": {
+            "name": "Muse Spark Open"
         }
     }
 }

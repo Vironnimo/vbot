@@ -5582,6 +5582,56 @@
       "release_date": "2026-09-10",
       "temperature": true
     },
+    "deepseek/deepseek-v4.1-flash-1017": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "deepseek-flash",
+      "knowledge": "2025-05",
+      "last_updated": "2026-10-17",
+      "max_output_tokens": 384000,
+      "name": "DeepSeek V4.1 Flash 1017",
+      "release_date": "2026-10-17",
+      "temperature": true
+    },
+    "fireworks/ember-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "last_updated": "2026-09-22",
+      "max_output_tokens": 131072,
+      "name": "Ember-1",
+      "release_date": "2026-09-22"
+    },
     "google/deep-research-max-preview-04-2026": {
       "capabilities": {
         "input_modalities": [
@@ -8486,6 +8536,36 @@
         "source": "models.dev:meta/muse-spark-1.3"
       },
       "release_date": "2026-09-02",
+      "temperature": true
+    },
+    "meta/muse-spark-open": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "muse",
+      "knowledge": "2026-01-04",
+      "last_updated": "2026-10-15",
+      "max_output_tokens": 131072,
+      "name": "Muse Spark Open",
+      "release_date": "2026-10-15",
       "temperature": true
     },
     "meta/muse-wonder-1.0": {
@@ -14733,6 +14813,33 @@
       "name": "Arrow 2 Telos",
       "release_date": "2026-09-16"
     },
+    "reflection/beam-1.0-501b-a23b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1048576,
+      "family": "beam",
+      "knowledge": "2026-06-30",
+      "last_updated": "2026-10-16",
+      "max_output_tokens": 131072,
+      "name": "Beam 1.0 501B A23B",
+      "release_date": "2026-10-05",
+      "temperature": true
+    },
     "rekaai/reka-edge": {
       "capabilities": {
         "input_modalities": [
@@ -17212,6 +17319,7 @@
       "name": "GLM-4.5V",
       "pricing": {
         "rates": {
+          "cache_read": 0.11,
           "input": 0.6,
           "output": 1.8
         },
@@ -17286,6 +17394,7 @@
       "name": "GLM-4.6V",
       "pricing": {
         "rates": {
+          "cache_read": 0.05,
           "input": 0.3,
           "output": 0.9
         },

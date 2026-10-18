@@ -246,6 +246,8 @@ Probes through the real Runtime Adapter (`opencode-go:api-key`, `/chat/completio
 
 ## Catalog Integrity
 
+The 2026-10-18 refresh lists 37 Go Models. It adds `beam-free` and replaces the listed `step-5-preview-free` with `step-5-preview`; `cat-jam-free`, `deepseek-flash`, `deepseek-v4-flash`, and `deepseek-v4-flash-vision-exp` also leave the listing. Their partial Model Overrides are removed rather than retaining invalid Override-only entries; historical wire corrections remain available if an id returns. The [current Go table](https://opencode.ai/v2/docs/console/go/) names both new ids on Chat Completions. Both passed Adapter send/stream smoke requests with the API-key Connection on 2026-10-18, and Beam also passed an independent raw request. Their limits and effort ladders remain catalog facts and their wire status remains inferred; these checks establish basic access, not a full capability or replay audit. Step's new id has nonzero catalog pricing; do not carry the former free offer's price forward.
+
 The usable projection of the gateway's `/models` response applies `ProviderConfig.catalog_exclusions`. `hy3-preview`, `mimo-v2-omni`, and `mimo-v2-pro` remain excluded legacy ids; current official `hy4-preview`, `mimo-v2.5`, and `mimo-v2.5-pro` are included. The full refresh returned 36 raw ids on 2026-09-10, while the official endpoint table names 28 current Models and all 28 were present. Extra ids are gateway availability, not current protocol documentation; `omen-alpha` was later verified on the default Chat wire (Reappearing catalog ids).
 
 ## Prompt Caching

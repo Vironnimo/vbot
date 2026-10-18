@@ -1,6 +1,83 @@
 {
-  "fetched_at": "2026-10-15T12:31:06.749022+00:00",
+  "fetched_at": "2026-10-18T20:45:30.274913+00:00",
   "models": {
+    "beam": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": null,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        }
+      },
+      "name": "beam"
+    },
+    "clef:27b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "max_output_tokens": null,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        }
+      },
+      "name": "clef:27b"
+    },
     "deepseek-v4-pro:0813": {
       "capabilities": {
         "input_modalities": [
@@ -101,6 +178,60 @@
           "output": 0.6
         },
         "source": "models.dev:ollama-cloud/deepseek-v4.1-flash"
+      }
+    },
+    "deepseek-v4.1-flash:1017": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "deepseek-flash",
+      "max_output_tokens": 384000,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        },
+        "ollama_cloud": {
+          "interleaved_field": "reasoning_content"
+        }
+      },
+      "name": "deepseek-v4.1-flash:1017",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.003,
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:ollama-cloud/deepseek-v4.1-flash:1017"
       }
     },
     "gemma4:31b": {
@@ -733,6 +864,58 @@
           "output": 4.18
         },
         "source": "models.dev:ollama-cloud/mistral-large-4"
+      }
+    },
+    "muse-spark-open": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "muse",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        }
+      },
+      "name": "muse-spark-open",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 1.25,
+          "output": 4.25
+        },
+        "source": "models.dev:ollama-cloud/muse-spark-open"
       }
     },
     "nemotron-3-nano:30b": {

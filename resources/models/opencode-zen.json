@@ -1,6 +1,56 @@
 {
-  "fetched_at": "2026-10-15T12:31:08.815114+00:00",
+  "fetched_at": "2026-10-18T20:49:27.020174+00:00",
   "models": {
+    "beam-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "account"
+      ],
+      "context_window": 1048576,
+      "family": "beam",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_zen": {
+          "interleaved_field": "reasoning_content"
+        }
+      },
+      "name": "beam-free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode/beam-free"
+      }
+    },
     "big-pickle": {
       "capabilities": {
         "input_modalities": [
@@ -43,56 +93,6 @@
           "output": 0.0
         },
         "source": "models.dev:opencode/big-pickle"
-      }
-    },
-    "cat-jam-free": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key",
-        "account"
-      ],
-      "context_window": 262144,
-      "max_output_tokens": 131072,
-      "metadata": {
-        "opencode_zen": {
-          "interleaved_field": "reasoning_content"
-        }
-      },
-      "name": "cat-jam-free",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0,
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:opencode/cat-jam-free"
       }
     },
     "claude-fable-5": {
@@ -1713,6 +1713,57 @@
           "output": 0.5
         },
         "source": "models.dev:opencode/glm-5.3-flash"
+      }
+    },
+    "glm-5.3-flash-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "account"
+      ],
+      "context_window": 200000,
+      "family": "glm-flash",
+      "max_output_tokens": 32000,
+      "metadata": {
+        "opencode_zen": {
+          "interleaved_field": "reasoning_content"
+        }
+      },
+      "name": "glm-5.3-flash-free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode/glm-5.3-flash-free"
       }
     },
     "gpt-5": {
@@ -3389,61 +3440,6 @@
         "source": "models.dev:opencode/muse-spark-1.2"
       }
     },
-    "muse-spark-1.2-contributor-free": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video",
-          "pdf",
-          "audio"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key",
-        "account"
-      ],
-      "context_window": 1048576,
-      "family": "muse-free",
-      "max_output_tokens": 131072,
-      "metadata": {
-        "opencode_zen": {
-          "npm": "@ai-sdk/openai"
-        }
-      },
-      "name": "muse-spark-1.2-contributor-free",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0,
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:opencode/muse-spark-1.2-contributor-free"
-      }
-    },
     "muse-spark-1.3": {
       "capabilities": {
         "input_modalities": [
@@ -3499,61 +3495,6 @@
         "source": "models.dev:opencode/muse-spark-1.3"
       }
     },
-    "muse-spark-1.3-contributor-free": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video",
-          "pdf",
-          "audio"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key",
-        "account"
-      ],
-      "context_window": 1048576,
-      "family": "muse-free",
-      "max_output_tokens": 131072,
-      "metadata": {
-        "opencode_zen": {
-          "npm": "@ai-sdk/openai"
-        }
-      },
-      "name": "muse-spark-1.3-contributor-free",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0,
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:opencode/muse-spark-1.3-contributor-free"
-      }
-    },
     "nemotron-3.5-lightning-free": {
       "capabilities": {
         "input_modalities": [
@@ -3595,6 +3536,58 @@
           "output": 0.0
         },
         "source": "models.dev:opencode/nemotron-3.5-lightning-free"
+      }
+    },
+    "nemotron-3.5-super-vl-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "account"
+      ],
+      "context_window": 1048576,
+      "family": "nemotron-free",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_zen": {
+          "interleaved_field": "reasoning_content"
+        }
+      },
+      "name": "nemotron-3.5-super-vl-free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode/nemotron-3.5-super-vl-free"
       }
     },
     "qwen3.5-plus": {
@@ -3837,56 +3830,6 @@
           "output": 0.0
         },
         "source": "models.dev:opencode/space-bunny-free"
-      }
-    },
-    "step-5-preview-free": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key",
-        "account"
-      ],
-      "context_window": 1000000,
-      "max_output_tokens": 65536,
-      "metadata": {
-        "opencode_zen": {
-          "interleaved_field": "reasoning_content"
-        }
-      },
-      "name": "step-5-preview-free",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0,
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:opencode/step-5-preview-free"
       }
     },
     "test": {

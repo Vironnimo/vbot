@@ -171,6 +171,19 @@
       "note": "Exact FreeTierError observations: MiMo on 2026-09-22, LongCat on 2026-09-28, Fledge on 2026-10-02. No restriction is inferred for other free Models."
     },
     {
+      "when": {
+        "ids": ["beam-free", "glm-5.3-flash-free", "nemotron-3.5-super-vl-free"],
+        "connections": ["api-key"]
+      },
+      "set": {
+        "admission": {
+          "state": "restricted",
+          "message": "This Model rejected vBot access on OpenCode Zen. Choose another Model or Connection."
+        }
+      },
+      "note": "HTTP 403 FreeTierError through independent raw requests and Adapter send/stream on 2026-10-18. Only the API-key Connection was tested; account and other free ids retain their existing admission."
+    },
+    {
       "when": {"ids": ["jev-1.13", "jev-1.13-free"]},
       "set": {
         "admission": {
