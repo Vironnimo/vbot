@@ -15,6 +15,7 @@ import contextlib
 import dataclasses
 import errno
 import json
+import os
 import re
 import shutil
 import sys
@@ -953,34 +954,81 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
 
 
 @pytest.mark.parametrize(
-    ("error", "retryable", "fragment"),
+    ("error", "retryable", "fragment", "checking_workdir"),
     [
         (
             PermissionError(errno.EACCES, "Zugriff verweigert"),
             False,
             "pass that directory as workdir",
+            False,
         ),
-        (OSError(errno.ENOMEM, "Nicht genug Speicher"), True, "out of memory or process resources"),
-        (OSError(errno.ENOSPC, "Datenträger voll"), False, "Tell the user that the disk is full."),
-        (OSError(errno.EIO, "E/A-Fehler"), True, f"(operating system error {errno.EIO})"),
+        (
+            OSError(errno.ENOMEM, "Nicht genug Speicher"),
+            True,
+            "out of memory or process resources",
+            False,
+        ),
+        (
+            OSError(errno.ENOSPC, "Datenträger voll"),
+            False,
+            "Tell the user that the disk is full.",
+            False,
+        ),
+        (OSError(errno.EIO, "E/A-Fehler"), True, f"(operating system error {errno.EIO})", False),
         # The directory was removed after the call was checked.
-        (FileNotFoundError(errno.ENOENT, "Pfad nicht gefunden"), False, "is not an existing"),
+        (
+            FileNotFoundError(errno.ENOENT, "Pfad nicht gefunden"),
+            False,
+            "is not an existing",
+            False,
+        ),
+        (
+            PermissionError(errno.EACCES, "Zugriff verweigert"),
+            False,
+            "pass that directory as workdir",
+            True,
+        ),
+        (OSError(errno.EIO, "E/A-Fehler"), True, f"(operating system error {errno.EIO})", True),
     ],
-    ids=["access-denied", "out-of-resources", "disk-full", "other", "workdir-removed"],
+    ids=[
+        "access-denied",
+        "out-of-resources",
+        "disk-full",
+        "other",
+        "workdir-removed",
+        "workdir-unreadable",
+        "workdir-io-failure",
+    ],
 )
 @pytest.mark.asyncio
 async def test_a_shell_that_cannot_start_names_the_state_instead_of_the_raw_error(
-    shell: Shell, error: OSError, retryable: bool, fragment: str
+    shell: Shell,
+    error: OSError,
+    retryable: bool,
+    fragment: str,
+    checking_workdir: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workdir = shell.commands.cwd / "build"
     workdir.mkdir()
-    shell.launcher.gate = asyncio.Event()
-    call = shell.call({"command": "make", "workdir": "build"})
-    await eventually(lambda: bool(shell.launcher.argv), attempts=2000)
-    if isinstance(error, FileNotFoundError):
-        workdir.rmdir()
-    shell.launcher.error = error
-    shell.launcher.gate.set()
+    if checking_workdir:
+        stat = os.stat
+
+        def unavailable(path: Any, *args: Any, **kwargs: Any) -> Any:
+            if isinstance(path, (str, os.PathLike)) and Path(path) == workdir:
+                raise error
+            return stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", unavailable)
+        call = shell.call({"command": "make", "workdir": "build"})
+    else:
+        shell.launcher.gate = asyncio.Event()
+        call = shell.call({"command": "make", "workdir": "build"})
+        await eventually(lambda: bool(shell.launcher.argv), attempts=2000)
+        if isinstance(error, FileNotFoundError):
+            workdir.rmdir()
+        shell.launcher.error = error
+        shell.launcher.gate.set()
 
     failure = (await call)["error"]
     message = failure["message"]
@@ -991,6 +1039,8 @@ async def test_a_shell_that_cannot_start_names_the_state_instead_of_the_raw_erro
     assert str(error.strerror) not in message
     if isinstance(error, PermissionError):
         assert model_path(workdir) in message
+    if checking_workdir:
+        assert shell.launcher.argv == []
     # Out of resources, the Agent can free some by stopping its background commands.
     assert stop_calls(message) == ([{"action": "list"}] if error.errno == errno.ENOMEM else [])
 

@@ -42,6 +42,7 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplayPart,
 )
+from core.utils.file_status import is_dir_strict
 from core.utils.paths import model_path
 
 from ._shell_definition import (
@@ -653,7 +654,13 @@ def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore
             raise _call_error(str(error)) from error
     else:
         workdir = context.resolve_path(raw)
-    if not workdir.is_dir():
+    try:
+        directory = is_dir_strict(workdir)
+    except OSError:
+        # Launch owns host failures. Keep an unavailable path distinct from a
+        # missing one, so the manager reports the actual filesystem failure.
+        return workdir
+    if not directory:
         raise _call_error(_missing_workdir(workdir, given=bool(raw)))
     return workdir
 

@@ -71,6 +71,7 @@ from pathlib import Path
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
+from core.utils.file_status import is_dir_strict
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
@@ -771,7 +772,11 @@ class CommandManager:
                 generation_id = await self._checkpoints.capture_generation(owner)
                 if generation_id is None:
                     raise CommandNotStartedError("The Session that owned this command closed")
-            if not await self._run_blocking(cwd.is_dir):
+            try:
+                directory = await self._run_blocking(is_dir_strict, cwd)
+            except OSError as error:
+                raise CommandLaunchError("The workdir could not be checked") from error
+            if not directory:
                 raise CommandLaunchError(f"The workdir is not a directory: {model_path(cwd)}")
             if self._temporary_files is not None:
                 lease, log_fd = await self._run_blocking(open_log, self._temporary_files)
