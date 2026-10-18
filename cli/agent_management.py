@@ -319,6 +319,7 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         "agent:",
         f"id: {_string_or_default(agent.get('id'), '?')}",
         f"name: {_string_or_default(agent.get('name'), '?')}",
+        f"description: {_string_or_default(agent.get('description'), '-')}",
         f"model: {_string_or_default(agent.get('model'), '-')}",
         f"fallback_models: {_format_string_list(agent.get('fallback_models'))}",
         f"workspace: {_string_or_default(agent.get('workspace'), '-')}",

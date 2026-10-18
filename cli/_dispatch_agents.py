@@ -104,6 +104,8 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     changes: dict[str, Any] = {}
     if args.command == "update" and getattr(args, "name", None) is not None:
         changes["name"] = args.name
+    if getattr(args, "description", None) is not None:
+        changes["description"] = args.description
     if getattr(args, "clear_model", False):
         changes["model"] = ""
     elif args.model is not None:

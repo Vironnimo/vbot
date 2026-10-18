@@ -13,6 +13,7 @@ def agent_payload(agent_id: str = "coder") -> dict[str, Any]:
     return {
         "id": agent_id,
         "name": "Coder",
+        "description": "Implements focused code changes",
         "model": "openai/gpt-5.2",
         "fallback_models": ["anthropic/claude-sonnet-4"],
         "workspace": "C:/data/workspace-coder",
@@ -59,6 +60,7 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
     assert out.splitlines()[1:] == [
         "id: coder",
         "name: Coder",
+        "description: Implements focused code changes",
         "model: openai/gpt-5.2",
         "fallback_models: anthropic/claude-sonnet-4",
         "workspace: C:/data/workspace-coder",
@@ -95,6 +97,7 @@ def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> N
 
     code, out, _err = run_cli(
         "agent", "create", "writer", "Writer",
+        "--description", "Drafts texts",
         "--model", "openai/gpt-5.2",
         "--tool-access-mode", "selected",
         "--tool-allow", "read_file",
@@ -108,6 +111,7 @@ def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> N
             {
                 "id": "writer",
                 "name": "Writer",
+                "description": "Drafts texts",
                 "model": "openai/gpt-5.2",
                 "tool_access": {"mode": "selected", "allowed": ["read_file"]},
                 "allowed_skills": ["debugging"],

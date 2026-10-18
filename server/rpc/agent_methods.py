@@ -130,6 +130,17 @@ async def _get_agent(state: Any, params: JsonObject) -> JsonObject:
     return await _run_agent_operation(state, read)
 
 
+async def _suggest_agent_description(state: Any, params: JsonObject) -> JsonObject:
+    """Draft a description of an Identity Agent with its own Model; nothing is saved."""
+    _reject_unsupported(params, {"id"}, "agent.suggest_description")
+    agent_id = _required_string(params, "id")
+    try:
+        description = await state.runtime.suggest_agent_description(agent_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"description": description}
+
+
 def _create_agent_record(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
@@ -369,6 +380,7 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
 def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -> JsonObject:
     public_fields = {
         "name",
+        "description",
         "model",
         "fallback_models",
         "memory_prompt_mode",
@@ -423,11 +435,11 @@ def _ensure_agent_model_connections(state: Any, changes: JsonObject) -> None:
 
 
 def _validate_agent_field(key: str, value: Any) -> Any:
-    if key == "name":
+    if key in ("name", "description"):
         if value is not None and not isinstance(value, str):
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST,
-                "params.name must be a string or null",
+                f"params.{key} must be a string or null",
             )
         return value
     if key == "workspace":
@@ -609,6 +621,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "agent.list": list_agents,
         "agent.reorder": _reorder_agents,
         "agent.get": _get_agent,
+        "agent.suggest_description": _suggest_agent_description,
         "agent.create": _create_agent,
         "agent.update": _update_agent,
         "agent.rename": _rename_agent,

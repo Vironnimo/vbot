@@ -238,6 +238,7 @@ export default Object.freeze({
   'statistics.kind.session_title': 'Session titles',
   'statistics.kind.group_title': 'Group titles',
   'statistics.kind.extension_sampling': 'Extension sampling',
+  'statistics.kind.agent_description': 'Agent descriptions',
   'statistics.kind.other': 'Other Model request',
   'statistics.requestStatus.started': 'In progress',
   'statistics.requestStatus.completed': 'Completed',

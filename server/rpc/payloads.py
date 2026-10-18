@@ -207,6 +207,8 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
     return {
         "id": agent.id,
         "name": agent.name,
+        # What the Agent is for, written by the user; empty when none is set.
+        "description": getattr(agent, "description", ""),
         "model": agent.model,
         "fallback_models": list(getattr(agent, "fallback_models", ()) or ()),
         "workspace": agent.workspace,

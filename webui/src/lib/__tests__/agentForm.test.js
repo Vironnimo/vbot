@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AGENT_DESCRIPTION_MAX_LENGTH,
   AGENT_FORM_MODE_EDIT,
   THINKING_EFFORT_OPTIONS,
   agentIdValidationError,
@@ -17,6 +18,7 @@ describe('createAgentFormValues', () => {
     expect(createAgentFormValues()).toEqual({
       id: '',
       name: '',
+      description: '',
       model: '',
       fallback_models: [],
       workspace: '',
@@ -120,6 +122,7 @@ describe('normalizeAgentForm', () => {
     const result = normalizeAgentForm({
       id: ' coder ',
       name: ' Coder ',
+      description: ' Reviews code\n changes ',
       model: ' openai/gpt-4.1 ',
       fallback_models: [' openai/gpt-4.1-mini ', ' '],
       workspace: ' C:/workspace-coder ',
@@ -147,6 +150,7 @@ describe('normalizeAgentForm', () => {
     expect(result.payload).toEqual({
       id: 'coder',
       name: 'Coder',
+      description: 'Reviews code changes',
       model: 'openai/gpt-4.1',
       fallback_models: ['openai/gpt-4.1-mini'],
       temperature: 0.25,
@@ -175,6 +179,16 @@ describe('normalizeAgentForm', () => {
     expect(result.isValid).toBe(!error);
     expect(result.payload.id).toBe(id);
     expect(result.payload).not.toHaveProperty('name');
+    expect(result.payload).not.toHaveProperty('description');
+  });
+
+  it('refuses a description beyond the server limit', () => {
+    const result = normalizeAgentForm({
+      id: 'coder',
+      description: 'x'.repeat(AGENT_DESCRIPTION_MAX_LENGTH + 1),
+    });
+    expect(result.errors).toEqual({ description: 'too_long' });
+    expect(result.isValid).toBe(false);
   });
 
   it.each([
@@ -264,6 +278,7 @@ describe('normalizeAgentForm', () => {
       ).payload;
     const change = {
       name: 'Coder Prime',
+      description: 'Reviews code changes',
       workspace: 'D:/workspace-coder',
       root_project_id: 'vbot',
       custom_system_prompt_enabled: true,

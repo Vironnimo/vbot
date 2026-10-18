@@ -9,6 +9,7 @@
   import TextField from '../ui/TextField.svelte';
   import { createAgent } from '$lib/api.js';
   import {
+    AGENT_DESCRIPTION_MAX_LENGTH,
     AGENT_FORM_MODE_CREATE,
     createAgentFormValues,
     effortOptionsForReasoning,
@@ -184,6 +185,11 @@
     if (formErrors[fieldName] === 'required') {
       return t('agents.form.required');
     }
+    if (formErrors[fieldName] === 'too_long') {
+      return t('agents.form.descriptionTooLong', {
+        max: AGENT_DESCRIPTION_MAX_LENGTH,
+      });
+    }
     return t('errors.validation');
   }
 </script>
@@ -236,6 +242,30 @@
               onInput={(next) => {
                 formValues.name = next;
                 formErrors.name = '';
+                errorMessage = '';
+              }}
+            />
+          {/snippet}
+        </FormField>
+
+        <FormField
+          controlId="agent-create-description"
+          label={t('agents.form.description')}
+          help={t('agents.form.descriptionHelp')}
+          error={formErrors.description ? fieldError('description') : ''}
+        >
+          {#snippet children(field)}
+            <TextField
+              id={field.controlId}
+              invalid={field.invalid}
+              aria-describedby={field.describedBy}
+              value={formValues.description}
+              placeholder={t('agents.form.descriptionPlaceholder')}
+              maxlength={AGENT_DESCRIPTION_MAX_LENGTH}
+              disabled={isSaving}
+              onInput={(next) => {
+                formValues.description = next;
+                formErrors.description = '';
                 errorMessage = '';
               }}
             />

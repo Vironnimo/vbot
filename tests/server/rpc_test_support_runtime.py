@@ -197,8 +197,14 @@ class StubSkills:
             )
         ]
 
+    # The Agent's own Skills in a scoped registry.
+    always_allowed = frozenset({"debugging"})
+
     def list_all(self) -> list[StubSkill]:
         return list(self._skills)
+
+    def get(self, name: str) -> StubSkill:
+        return next(skill for skill in self._skills if skill.name == name)
 
     def filter_allowed(self, allowed_skills: list[str]) -> list[StubSkill]:
         return [
@@ -628,6 +634,11 @@ class StubRuntime:
 
     def get_adapter(self, connection: ConnectionRef) -> StubAdapter:
         return self.adapter
+
+    async def suggest_agent_description(self, agent_id: str) -> str:
+        from core.runtime._agent_description import suggest_agent_description
+
+        return await suggest_agent_description(cast(Any, self), agent_id)
 
     def _wire_profile_model(self, provider_id: str, model_id: str) -> Any:
         try:

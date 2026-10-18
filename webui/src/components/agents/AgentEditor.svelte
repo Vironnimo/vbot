@@ -1,5 +1,6 @@
 <script>
   import {
+    AGENT_DESCRIPTION_MAX_LENGTH,
     AGENT_FORM_MODE_CREATE,
     AGENT_FORM_MODE_EDIT,
     agentIdValidationError,
@@ -573,6 +574,12 @@
 
     if (formErrors[fieldName] === 'required') {
       return t('agents.form.required');
+    }
+
+    if (formErrors[fieldName] === 'too_long') {
+      return t('agents.form.descriptionTooLong', {
+        max: AGENT_DESCRIPTION_MAX_LENGTH,
+      });
     }
 
     return t('errors.validation');

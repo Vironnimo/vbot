@@ -99,6 +99,7 @@ def _no_models_dev_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
 class StubAgent:
     id: str
     name: str = "Coder Agent"
+    description: str = ""
     model: str = "openai/gpt-5.2"
     fallback_models: list[str] = field(default_factory=list)
     workspace: str = "C:/workspace"
@@ -228,6 +229,8 @@ class StubAgents:
         agent = self._get_raw(agent_id)
         if "name" in changes and not changes["name"]:
             changes["name"] = agent_id
+        if "description" in changes:
+            changes["description"] = changes["description"] or ""
         updated = StubAgent(**{**agent.__dict__, **changes})
         self._agents[agent_id] = updated
         return self.get(agent_id)

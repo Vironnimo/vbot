@@ -23,6 +23,7 @@ from core.agents import (
     is_librarian,
     validate_agent_file,
 )
+from core.agents._config import AGENT_DESCRIPTION_MAX_LENGTH
 from core.tools.availability import ToolAccess
 from core.tools.live import LIVE_TOOL_NAMES
 from core.utils.timestamps import is_canonical_timestamp
@@ -449,6 +450,21 @@ def test_tool_loading_persists_as_given_and_clears(store: AgentStore) -> None:
 
     assert store.update("coder", tool_loading=None).tool_loading is None
     assert "tool_loading" not in persisted(store, "coder")
+
+
+def test_description_persists_as_one_trimmed_line_and_clears(store: AgentStore) -> None:
+    store.create("coder", "Coder", description="  Reviews code changes  ")
+
+    assert store.get("coder").description == "Reviews code changes"
+    assert persisted(store, "coder")["description"] == "Reviews code changes"
+
+    # It reaches other Agents' System Prompts as one catalog line.
+    for invalid in ("Reviews\ncode", "x" * (AGENT_DESCRIPTION_MAX_LENGTH + 1), 42):
+        with pytest.raises(AgentError):
+            store.update("coder", description=invalid)
+
+    assert store.update("coder", description="").description == ""
+    assert "description" not in persisted(store, "coder")
 
 
 def test_workspace_inside_data_dir_persists_relative_and_follows_a_moved_data_dir(

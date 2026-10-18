@@ -38,6 +38,7 @@ from core.providers.token_getter import TokenGetter
 from core.providers.wire_observations import ObservedFacts
 from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
 from core.runs import RunNotFoundError
+from core.runtime._agent_description import suggest_agent_description
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
     AgentRenameServices,
@@ -272,6 +273,10 @@ class Runtime(RuntimeServiceGraph):
 
     async def _sample_extension(self, context: Any, request: dict[str, Any]) -> dict[str, Any]:
         return await sample_extension(self, context, request)
+
+    async def suggest_agent_description(self, agent_id: str) -> str:
+        """Draft a description of an Identity Agent with its own Model; nothing is saved."""
+        return await suggest_agent_description(self, agent_id)
 
     def activate_bootstrap(self) -> None:
         """Start eligible Bootstrap Runs after the serving lifespan is ready."""

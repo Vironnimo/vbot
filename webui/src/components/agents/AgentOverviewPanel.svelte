@@ -1,6 +1,10 @@
 <script>
   import { t } from '$lib/i18n.js';
-  import { AGENT_FORM_MODE_EDIT } from '$lib/agentForm.js';
+  import { suggestAgentDescription } from '$lib/api.js';
+  import {
+    AGENT_DESCRIPTION_MAX_LENGTH,
+    AGENT_FORM_MODE_EDIT,
+  } from '$lib/agentForm.js';
   import Button from '../ui/Button.svelte';
   import Dropdown from '../Dropdown.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -21,6 +25,28 @@
   } = $props();
 
   let projectDropdownOptions = $derived(buildProjectDropdownOptions());
+  let isSuggesting = $state(false);
+  let suggestError = $state('');
+
+  // Drafts a description from the saved Agent's files; the user reviews and
+  // saves it like any other edit.
+  async function suggestDescription() {
+    if (isSuggesting || !formValues.id) return;
+    isSuggesting = true;
+    suggestError = '';
+    try {
+      const result = await suggestAgentDescription(formValues.id);
+      if (typeof result?.description === 'string' && result.description) {
+        formValues.description = result.description;
+      }
+    } catch (error) {
+      suggestError = t('agents.form.descriptionSuggestError', {
+        error: error?.message || t('errors.generic'),
+      });
+    } finally {
+      isSuggesting = false;
+    }
+  }
 
   function buildProjectDropdownOptions() {
     const options = [
@@ -77,6 +103,55 @@
               value={formValues.name}
               onInput={(next) => (formValues.name = next)}
             />
+          </div>
+        </div>
+
+        <div class="s-row">
+          <div class="s-row-info">
+            <label class="s-row-label" for="agent-description">
+              {t('agents.form.description')}
+            </label>
+            <div class="s-row-desc" id="agent-description-help">
+              {t('agents.form.descriptionHelp')}
+            </div>
+            {#if formErrors.description || suggestError}
+              <p
+                class="agents-view__row-error"
+                id="agent-description-error"
+                role="alert"
+              >
+                {formErrors.description
+                  ? fieldError('description')
+                  : suggestError}
+              </p>
+            {/if}
+          </div>
+          <div class="s-row-control agents-view__field-with-action">
+            <TextField
+              id="agent-description"
+              invalid={Boolean(formErrors.description)}
+              aria-describedby={formErrors.description || suggestError
+                ? 'agent-description-help agent-description-error'
+                : 'agent-description-help'}
+              value={formValues.description}
+              placeholder={t('agents.form.descriptionPlaceholder')}
+              maxlength={AGENT_DESCRIPTION_MAX_LENGTH}
+              onInput={(next) => {
+                formValues.description = next;
+                suggestError = '';
+              }}
+            />
+            {#if formMode === AGENT_FORM_MODE_EDIT}
+              <Button
+                variant="tertiary"
+                onClick={suggestDescription}
+                disabled={isSuggesting}
+              >
+                {isSuggesting
+                  ? t('agents.form.descriptionSuggesting')
+                  : t('agents.form.descriptionSuggest')}
+              </Button>
+            {/if}
           </div>
         </div>
 
