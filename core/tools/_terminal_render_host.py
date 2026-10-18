@@ -2,8 +2,8 @@
 
 VT rendering is pure-Python CPU work proportional to program output. Each
 screen is a ``TerminalEmulator`` on a renderer worker: a subinterpreter loaded
-with only ``terminal_emulator.py`` and pyte. ``inline`` hosts render in the
-calling thread instead: deterministic tests, and the fallback when no
+with ``terminal_emulator.py``, its pure VT units and pyte. ``inline`` hosts
+render in the calling thread instead: deterministic tests, and the fallback when no
 subinterpreter can start.
 """
 

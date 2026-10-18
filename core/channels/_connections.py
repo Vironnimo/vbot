@@ -7,7 +7,6 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import TYPE_CHECKING
 
 from core.channels.adapter import (
     ChannelAdapter,
@@ -23,9 +22,6 @@ from core.channels.config import (
 from core.channels.engine import ChannelConversationEngine
 from core.channels.storage import ChannelStorage
 from core.utils.logging import get_logger
-
-if TYPE_CHECKING:
-    pass
 
 _ADAPTER_RESTART_INITIAL_DELAY_SECONDS = 1.0
 _ADAPTER_RESTART_MAX_DELAY_SECONDS = 30.0
