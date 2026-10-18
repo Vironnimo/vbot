@@ -118,6 +118,25 @@ async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Har
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
 
 
+async def test_batch_reports_completed_input_when_its_final_screenshot_fails(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await computer.computer(action="screenshot", view="display")
+
+    def fail_capture(*args):
+        raise computer_use.TargetError("test-owned-capture-unavailable")
+
+    monkeypatch.setattr(computer.target, "capture", fail_capture)
+    context = computer.context_for("computer_batch")
+    result = await computer.call("computer_batch", {"actions": [CLICK]}, context)
+    assert result["error"]["code"] == "computer_use_failed"
+    assert "test-owned-capture-unavailable" in result["error"]["message"]
+    # Each successful action keeps its evidence even though no final image exists.
+    assert "1. left_click at [200, 150]" in model_text(result)
+    assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
+    assert context.result_media == []
+
+
 async def test_batch_rechecks_image_geometry_after_earlier_input(computer: Harness) -> None:
     await computer.computer(action="screenshot")
 

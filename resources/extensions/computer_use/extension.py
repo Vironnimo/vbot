@@ -704,13 +704,20 @@ class ComputerUseService:
         if sent and actions[-1].name != "screenshot":
             try:
                 await self._pause(SETTLE_SECONDS)
+                lines.append(await self._on_worker(desktop.screenshot))
             except InputInterrupted:
                 raise TargetError(
                     f"{self._stopped_text()} after all {len(actions)} actions ran, before the "
                     f"final screenshot. {_STOPPED_ADVICE}\n" + "\n".join(lines),
                     "computer_use_interrupted",
                 ) from None
-            lines.append(await self._on_worker(desktop.screenshot))
+            except (CallRefusedError, TargetError) as error:
+                raise TargetError(
+                    f"All {len(actions)} actions ran, but the final screenshot failed: {error}. "
+                    "Take a screenshot before repeating any input.\nActions that ran:\n"
+                    + "\n".join(lines),
+                    error.code,
+                ) from None
         return f"Ran {len(actions)} actions:\n" + "\n".join(lines)
 
     async def _step(
