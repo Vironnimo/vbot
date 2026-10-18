@@ -142,9 +142,9 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         await coordinator.drain_activity()
         before = activity_path.read_text(encoding="utf-8")
         assert "Pending:" in before and "Delivered:" not in before
-        assert service.deliver_background_completions(parent_run, parent)
+        assert await service.deliver_background_completions(parent_run, parent)
         await asyncio.wait_for(receipt, 5)
-        assert not service.deliver_background_completions(parent_run, parent)
+        assert not await service.deliver_background_completions(parent_run, parent)
         answers = [m for m in await child.load_run_messages_async(run.id) if m.role == "assistant"]
         assert [m.content for m in answers] == ["MAIN_REPORT", "ADDENDUM"]
         [notice] = [m for m in parent.load() if m.role == "note"]
@@ -173,7 +173,7 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         )
         await later.wait()
         receipt = await asyncio.wait_for(submitted.get(), 5)
-        assert service.deliver_background_completions(parent_run, parent)
+        assert await service.deliver_background_completions(parent_run, parent)
         await receipt
         bodies = [str(m.content) for m in parent.load() if m.role == "note"]
         assert len(bodies) == 2

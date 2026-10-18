@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
-from core.chat import ChatLoop, MessageSender, ReplySurface
+from core.chat import ChatLoop, ChatMessage, MessageSender, ReplySurface
 from core.chat.content_blocks import ContentBlock
 from core.runs import (
     ActiveRunError,
@@ -160,9 +160,11 @@ class TriggerService:
         """Route idle-session completion Run replies through their latest accessor."""
         self._completion_delivery.set_run_relay(relay)
 
-    def deliver_background_completions(self, run: Run, session: ChatSession) -> bool:
-        """Inject ready completion results into an active Run's next Model request."""
-        return self._completion_delivery.deliver_to_request(run, session)
+    async def deliver_background_completions(
+        self, run: Run, session: ChatSession
+    ) -> ChatMessage | None:
+        """Commit ready results and return their Note for the next Model request."""
+        return await self._completion_delivery.deliver_to_request(run, session)
 
     async def aclose(self) -> None:
         """Stop and drain automatic background-completion delivery."""

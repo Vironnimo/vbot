@@ -275,8 +275,19 @@ class AgenticProgression:
                     await session.flush_deferred_notes_async()
                     raise
                 try:
+                    # Keep Notes already prepared by request hooks before the
+                    # completion's independently acknowledged durable append.
+                    preceding_notes = session.take_deferred_notes()
+                    if preceding_notes:
+                        await context.session_snapshot.append(session, preceding_notes)
+                    boundary_notes.extend(session.drain_pending_notes())
+                    session.begin_defer_notes()
                     try:
-                        self._dependencies.deliver_background_completions(run, session)
+                        completion_note = await self._dependencies.deliver_background_completions(
+                            run, session
+                        )
+                        if completion_note is not None:
+                            boundary_notes.append(completion_note)
                     except Exception:
                         _LOGGER.warning(
                             "Background completion injection failed for run %s",

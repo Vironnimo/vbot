@@ -27,7 +27,7 @@ from core.automation import (
 )
 from core.calendar import CalendarService
 from core.channels import ChannelService
-from core.chat import ChatLoop, ChatLoopDependencies, CommandDispatcher
+from core.chat import ChatLoop, ChatLoopDependencies, ChatMessage, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.compaction import CompactionService
 from core.database import (
@@ -64,7 +64,7 @@ from core.providers.providers import ProviderRegistry
 from core.providers.runtime import ProviderRuntime
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, Run
 from core.runtime._agent_rename import complete_pending_rename
 from core.runtime._bootstrap_services import (
     _agent_default_project,
@@ -95,7 +95,7 @@ from core.runtime._shutdown import clean_up_failed_startup
 from core.runtime.databases import RETIRED_CANONICAL_DATABASES
 from core.runtime.keep_awake import KeepAwakeController
 from core.secrets import settle_plaintext_credentials
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSession, ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import (
     DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
@@ -627,6 +627,17 @@ def bootstrap(runtime: Runtime) -> None:
         assert runtime._file_state is not None
         assert runtime._storage is not None
         assert runtime._image is not None
+
+        async def deliver_background_completions(
+            run: Run, session: ChatSession
+        ) -> ChatMessage | None:
+            service = runtime._trigger_service
+            return (
+                None
+                if service is None
+                else await service.deliver_background_completions(run, session)
+            )
+
         chat_dependencies = ChatLoopDependencies(
             agent_resolver=runtime._agent_resolver,
             projects=runtime._projects,
@@ -648,11 +659,7 @@ def bootstrap(runtime: Runtime) -> None:
             get_local_context_windows=runtime.local_context_windows,
             image_understanding_available=runtime._image.analysis_is_available,
             usage_recorder=runtime._usage_recorder,
-            deliver_background_completions=lambda run, session: (
-                runtime._trigger_service.deliver_background_completions(run, session)
-                if runtime._trigger_service is not None
-                else False
-            ),
+            deliver_background_completions=deliver_background_completions,
             get_command_manager=lambda: runtime._command_manager,
             subagent_reply_to_user=lambda address, message_id: (
                 runtime._subagent_coordinator.subagent_reply_to_user(address, message_id)

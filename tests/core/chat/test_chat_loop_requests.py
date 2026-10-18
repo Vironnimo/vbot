@@ -381,7 +381,13 @@ async def test_internal_run_sends_its_prompt_as_a_reminder_after_the_reply_surfa
     prompt = "Sub-agent batch completed.\n\nResults:\n- worker/sub-session: Done"
     # A note the request boundary adds joins the reminders the request already ends with.
     completion = "Background job finished."
-    runtime.deliver_background_completions = lambda _run, session: session.add_note(completion)
+
+    async def deliver_completion(_run: Any, session: Any) -> ChatMessage:
+        note = ChatMessage.note(completion)
+        await session.append_async(note)
+        return note
+
+    runtime.deliver_background_completions = deliver_completion
     loop = build_chat_loop(runtime)
 
     run = await loop.start_run(
