@@ -1,6 +1,6 @@
 # load_tools Tool
 
-`core/tools/load_tools.py` registers the internal Tool `load_tools(names)`. It returns the full definitions of On-demand Tools (`tools.md` -> Terms) as readable text, so an Agent whose `tool_loading` switch is on can call them correctly. The classification of On-demand Tools is `core/tools/on_demand.py`; how a load joins the prompt epoch is Chat's (`chat/request-building.md`).
+`core/tools/load_tools.py` registers the internal Tool `load_tools(names)`. It returns the full definitions of On-demand Tools (`tools.md` -> Terms) as readable text, so an Agent whose `tool_loading` switch is on can call them correctly. The classification of On-demand Tools is `core/tools/on_demand.py` (On-demand Tools, below); how a load joins the prompt epoch is Chat's (`chat/request-building.md`). This file also owns the Tool `summary` that lists a Tool where its definition is not shown (Tool summaries, below).
 
 ## Interfaces
 
@@ -9,6 +9,14 @@
 - Recording a load: the handler calls `context.record_loaded_tools(names)`; the call's owned effects (committed only for an `ok` result) pass `(tool_call_id, registry names)` to `ToolExecutionConfig.tool_load_registrar`. A failed call records nothing.
 - Unknown-Tool failures list loadable Tools and listed internal Tools among the available Tools (`ToolRegistry._unknown_tool_message`).
 - Chat: the Tool pin, the silent `loaded` note a successful call persists with its Tool Result, the `on_demand` note for a Tool that becomes loadable mid-epoch, and Compaction's handling -> `chat/request-building.md` -> Tool catalog per prompt epoch.
+
+## On-demand Tools
+
+`core/tools/on_demand.py::on_demand_tools` is the one classification Chat, `prompt.preview` and `scripts/tool_lab` share: every Tool except `load_tools`, the Session's granted Tools and the always-loaded Tools (the default set, or `always_loaded`; the file edit Tools count as one). Built-in Agents, fixed Tool sets, Tool access `none` and temporary Agents have none.
+
+## Tool summaries
+
+A Tool may register a one-sentence, Model-facing `summary` (`register(..., summary=...)`, also `api.register_tool` and live catalog declarations; at most 200 characters, whitespace collapsed). It lists the Tool where its full definition is not shown: the On-demand Tool list of the System Prompt and the `on_demand` Tool-change note. `tool_summary(tool, description=None)` returns it, else the first sentence of the description (the Definition Profile's when given): cut at the first `. ` or line break, whitespace collapsed, capped at 200 characters with an ellipsis. Every Tool an Agent can load on demand declares one: a few words naming what the Tool is for, such as `Manage the user's calendar.`, not a list of what it can do; the list is paid on every request, and the full definition arrives with `load_tools`. The first-sentence fallback serves only Tools whose opening sentence is already that short (`apply_patch`, `edit`, `write`), Live Tools (never on demand) and third-party Extension Tools without one. The MCP connection Tool's summary is its description heading (`MCP connection <id>: <about>.`), which a catalog change leaves alone. A summary naming another Tool uses its Model name. Coverage: `test_tools_registry.py::test_summary_lists_a_tool_by_its_declared_text_or_first_sentence`; `test_runtime_wiring.py::test_loadable_tools_declare_a_summary_unless_their_first_sentence_serves` keeps the fallback list exact.
 
 ## Result
 
@@ -49,5 +57,5 @@ Display: one identifier part listing the requested Model-facing names. Tests: `t
 | Block `You can also use the Tools listed below, but their definitions are not in your Tool list.` | Says the listed Tools are usable, so the Agent does not treat them as unavailable. |
 | Block ``Before you call one of them for the first time, load its definition with `load_tools`.`` | The required next action, and only once per Tool. |
 | Block `Load all Tools a task needs in one call.` | Keeps extra Model turns low. |
-| Block entries `- <name>: <summary>` | The Model-facing name to call and a few words to decide whether the task needs the Tool. The words are the Tool's own `summary` (`tools.md` -> Conventions), shorter than a description's opening sentence because the list is paid on every request. |
+| Block entries `- <name>: <summary>` | The Model-facing name to call and a few words to decide whether the task needs the Tool. The words are the Tool's own `summary` (Tool summaries, above), shorter than a description's opening sentence because the list is paid on every request. |
 | `on_demand` note ``Tool <name> is now available: <summary> Load its definition with `load_tools` before you call it.`` | A Tool enabled mid-epoch is not in the pinned block; the note gives the same facts and next action. |

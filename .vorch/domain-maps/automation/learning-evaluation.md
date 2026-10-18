@@ -1,6 +1,6 @@
 # Learning Evaluation
 
-Read when running, extending or interpreting the learning evaluation of Reflection reviews, `/learn` and Librarian passes: cases, scoring, text packs, reports. Review orchestration itself is in `../automation.md` -> Reflection, the Librarian in `../automation.md` -> Librarian.
+Read when running, extending or interpreting the learning evaluation of Reflection reviews, `/learn` and Librarian passes: cases, scoring, text packs, reports. Review orchestration itself is in `reflection.md`, the Librarian in `librarian.md`.
 
 ## Owner and entry points
 
@@ -8,6 +8,20 @@ Read when running, extending or interpreting the learning evaluation of Reflecti
 - `learning_fixture.py` (`EvalWorker`) owns the disposable vBot fixture, prompt rendering and dispatch; `learning_scoring.py` the programmatic scoring; `learning_texts.py` the learning texts, text packs and brief assembly (`brief_text`); `learning_eval.py` reports, `export-pack` and `compare`.
 - The smoke test is `test_learning_evaluation_runs_a_text_pack_arm_and_compares_reports` in `tests/scripts/test_provider_probe.py` (scripted adapter, no Provider).
 - Keep packs and reports outside the repository, by convention under `~/.cache/vbot-evals/learning/` (`packs/`, `reports/`).
+
+## Running
+
+The entry point is `scripts/probe_provider_tool_call.py --scenario reflection_workflow`; brief and Run changes reach an evaluation through their production owners (Fidelity to production).
+
+```
+# export the current texts as a pack (edit a copy for a candidate arm)
+python -m scripts.provider_probe.learning_eval export-pack ~/.cache/vbot-evals/learning/packs/<name>
+# run one arm; omit --text-pack for the checkout's texts
+python scripts/probe_provider_tool_call.py --scenario reflection_workflow --repetitions 3 \
+  --text-pack <pack> --reflection-report ~/.cache/vbot-evals/learning/reports/<arm>.json
+# compare two arms with equal attempt counts per (case, scope)
+python -m scripts.provider_probe.learning_eval compare <a>.json <b>.json
+```
 
 ## Evaluation rules
 

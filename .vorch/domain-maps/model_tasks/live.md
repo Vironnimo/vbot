@@ -1,6 +1,6 @@
 # Live voice
 
-Read for Live voice calls: the `live_voice` Task Model, the call lifecycle and owner socket, the Live Agents and their Sessions, handed-on requests, and the trust rules of what the voice model hears. The Live Tools and Run announcements are in `model_tasks/live-operator.md`; provider wire details in `model_tasks/live-wires.md`. The built-in Live Agents themselves (creation, Tools, hidden surfaces) are in `agent.md` -> Built-in Agents. Shared task-client authentication/retry belongs to `providers.md`; Chat and Terminal behavior remain in their existing domains.
+Read for Live voice calls: the `live_voice` Task Model, the call lifecycle and owner socket, the Live Agents and their Sessions, handed-on requests, and the trust rules of what the voice model hears. The Live Tools and Run announcements are in `model_tasks/live-operator.md`; provider wire details in `model_tasks/live-wires.md`. The built-in Live Agents themselves (creation, Tools, hidden surfaces) are in `agent.md` -> Built-in Agents. Shared task-client authentication/retry belongs to `providers/request-policy.md` -> Provider-backed task clients; Chat and Terminal behavior remain in their existing domains.
 
 ## Ownership
 

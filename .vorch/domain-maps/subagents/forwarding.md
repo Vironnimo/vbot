@@ -1,0 +1,27 @@
+# Sub-Agent Answer Forwarding
+
+How a Sub-Agent's answers reach its Parent: forwarding at Run end, reply-target changes, `message_parent`, the delivery notices and the activity file that records them.
+
+## Forwarding
+
+Forwarding follows `subagent`, `system`, `user` and `channel` Runs in linked Sessions. When a Run ends, it selects complete text answers addressed to Parent under that exact Run id, in persistence order, each headed by its Message id. A failed, interrupted or cancelled Run also includes its latest partial text if Parent-directed. A returned answer is a fallback only when not persisted. The terminal Run summary snapshots the final target: an outcome without Parent answers is forwarded only if the terminal target is Parent. The section carries the Sub-Agent id/title, Run id, outcome and selected answers, without repeating the Agent/Session address already returned at start, in one `subagent:<run_id>` notice. A cancelled Run counts as completed only if its last User/Assistant/Tool/error entry is a complete answer; Notes and post-answer Compaction do not invalidate completion. Facts name its unfinished commands, terminals and working children, plus other direct children whose Parent-directed answers are pending. Silenced Runs and missing Parent Sessions are dropped. Target changes after persistence cannot redirect earlier answers; mixed-recipient answers in one steered Run are filtered individually.
+
+## Recipient changes
+
+On Run start and steering, Chat selects `parent` for Parent input and `user` for other external input (`subagent_input_reply_target`); internal or already-persisted input keeps the current target. The Session write lock orders the switch with input persistence. A transition to user replies adds `SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER` before the message and invokes `report_subagent_user_input` after commit. Its non-waking Parent notice is best effort and skipped if Parent replies have already resumed. Repeated user input needs no additional notice until the target changed back to Parent. Parent reminders announce that final answers now go to Parent. The Parent link and all controls remain intact.
+
+## message_parent
+
+`message_parent` submits a section to Parent (waking it) without ending the turn. Accepted submission restores Parent replies under the Session write lock before the call succeeds, even if the calling Run is cancelled during that write. Success returns `status: "queued"`, a `delivery_id` shared with the Parent section and activity log, and a note announcing the target. Acceptance is distinct from confirmed persistence. Refusals: `not_a_subagent`, `parent_not_found`, and `delivery_unavailable` for immediate rejection; rejection leaves the target unchanged.
+
+## Delivery notices
+
+Deliveries go through `TriggerService.submit_completion`: forwarded answers use notice id `subagent:<run_id>` and the Run's execution owner. `on_persisted` marks the terminal Run read only if its terminal reply target was Parent, leaving a later user-directed answer unread. Explicit Parent messages use fresh notice ids. The reply-target notice `subagent-user-reply:<message_id>` has `wake=False`: persisted without starting a Run; an active Parent reads it at its next boundary.
+
+## Activity file
+
+One Markdown file per Sub-Agent Session under `<data_dir>/artifacts/temp/subagents/`, created on first use (by `run`, `send`, or the first followed Run in this process) and recording every followed Run in start order. It holds visible Assistant output (deltas live, finalized output as fallback) and one line per Tool call with name, display summary and state; user and Parent messages, Reasoning, Tool arguments and results never enter it. The lease is held while a Run is followed or a Parent delivery is pending; the next Run or delivery reopens it (`TemporaryFileManager.reopen`, recreating a removed file), so the 24 h retention counts from the last Run or delivery to finish. Delivery entries carry the delivery id, Run id, Parent address and answer Message ids: pending on submission, delivered only after the coordinator confirms persistence in the Parent Session, failed or cancelled otherwise. Delivered is not a Model read receipt. These status writes remain available after the Run watcher closes and never use the droppable Assistant-output buffer. All file I/O runs on the process-wide `subagent-activity` `OrderedWorker`: text is handed off at most every 250 ms and at once when a Run ends; beyond 256 pending chunks a chunk of only Assistant text is dropped and a missing-activity note marks the gap (headings, Tool and status lines are always written); a watcher its Run evicts for lagging still writes the Run's outcome. `drain_activity()` waits until the text so far is on disk; Runtime shutdown awaits it after the Run manager closed. Failures affect only observability. Coverage: `tests/core/subagents/test_activity.py`.
+
+## Coverage
+
+Forwarding regression coverage: `tests/core/subagents/test_answer_delivery.py` runs a real ChatLoop, Run manager, Session store and completion coordinator with a controlled Provider. It verifies two answers around steering in one Run (Parent-to-Parent, Parent-to-user and user-to-Parent), selective delivery with no later replay, unread user answers, and a real `message_parent` restoring delivery within a user Run. Cancellation, failure and interruption coverage lives in `test_subagents.py`; delivery retention and terminal states in `test_activity.py`.

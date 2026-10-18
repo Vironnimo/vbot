@@ -28,7 +28,7 @@ Writers: `session.create` / `session.set_agent_overrides` (`server.md`), a new S
 
 ### Librarian Skill subject
 
-A Session of the built-in Librarian (`agent.md` -> Built-in Librarian) is bound to the Agent whose Skills it maintains by the Session metadata key `skill_agent_id` (`SKILL_AGENT_ID_KEY`). After the Session's overrides, `resolve_agent`/`resolve_agent_async` with that Session return the Librarian with `skill_agent_id` set to the subject and the subject's `allowed_skills`; Tools, Model settings, Memory mode and everything else stay the Librarian's. The binding is read only for an Identity Agent that `is_librarian`, so another Agent's Sessions, an unbound Librarian Session and Session-less resolution are the ordinary path. A subject that is no Identity Agent of the user any more (missing, or a built-in Agent) fails the resolution with `AgentResolutionError` (`SKILL_SUBJECT_MISSING_MESSAGE`: `This Session works on the Skills of Agent <id>, which no longer exists, so it cannot continue.`). `resolve_skill_scope(project_id, prompt_project, agent)` takes the resolved Agent and returns `skill_subject_id(agent)` as the identity layer, so the Run's Skill registry and pinned catalog, triggers, Compaction's catalog refresh, Tool dispatch (`ToolContext.skill_agent_id`, `tools/skill.md`), `chat.commands` and `prompt.preview` resolve the subject's Skills. Behavior: `test_resolver_connections.py::test_a_librarian_session_runs_on_the_skills_of_its_bound_agent`, `test_resolver_scan_identity.py::test_resolve_skill_scope`, `tests/core/chat/test_chat_integration.py::test_a_librarian_session_works_on_the_skills_of_its_agent`.
+A Session of the built-in Librarian (`agent/builtin-agents.md` -> Built-in Librarian) is bound to the Agent whose Skills it maintains by the Session metadata key `skill_agent_id` (`SKILL_AGENT_ID_KEY`). After the Session's overrides, `resolve_agent`/`resolve_agent_async` with that Session return the Librarian with `skill_agent_id` set to the subject and the subject's `allowed_skills`; Tools, Model settings, Memory mode and everything else stay the Librarian's. The binding is read only for an Identity Agent that `is_librarian`, so another Agent's Sessions, an unbound Librarian Session and Session-less resolution are the ordinary path. A subject that is no Identity Agent of the user any more (missing, or a built-in Agent) fails the resolution with `AgentResolutionError` (`SKILL_SUBJECT_MISSING_MESSAGE`: `This Session works on the Skills of Agent <id>, which no longer exists, so it cannot continue.`). `resolve_skill_scope(project_id, prompt_project, agent)` takes the resolved Agent and returns `skill_subject_id(agent)` as the identity layer, so the Run's Skill registry and pinned catalog, triggers, Compaction's catalog refresh, Tool dispatch (`ToolContext.skill_agent_id`, `tools/skill.md`), `chat.commands` and `prompt.preview` resolve the subject's Skills. Behavior: `test_resolver_connections.py::test_a_librarian_session_runs_on_the_skills_of_its_bound_agent`, `test_resolver_scan_identity.py::test_resolve_skill_scope`, `tests/core/chat/test_chat_integration.py::test_a_librarian_session_works_on_the_skills_of_its_agent`.
 
 ## Model & Scalar Resolution
 
@@ -44,11 +44,13 @@ An explicit Run Model does not add another fallback tier: it replaces the alread
 
 Repository Model wishes pass through `Project.model_mappings`; already-usable qualified Models also resolve directly. Unmapped/unusable wishes use Project/global fallback with a translation finding. `inherit` uses the delegating caller's Model, recorded in the Sub-Agent Session override; direct starts use defaults. A vBot Model override still wins. `resolve_delegated_agent_async` applies inheritance before requiring a default Model.
 
-Temperature and thinking effort use:
+Temperature, top_p and thinking effort use:
 
 ```text
 per-Agent override -> repository Agent -> Project default -> global default -> Provider default or None
 ```
+
+`""` (effort) and `0.0` (sampling) are real stopping values, not absent ones (`_resolution_values.py`).
 
 `effective_config()` exposes the chosen value and provenance (`override`, `agent`, `project_default`, `global_default`, or `null`) for model, temperature, top_p, and thinking effort. Preserve those labels as an API/UI contract when changing fallback behavior.
 
@@ -114,7 +116,8 @@ Texts (Agent- and user-visible; `_runtime_agent.py`, `resolver.py`):
 keep the configured Tool selection, Skill allowlist and prompt blocks unchanged,
 because Project ceilings bound only the Team (`projects.md`); preview constructs
 no Session binding. Evidence: `core/projects/resolver.py`,
-`tests/core/projects/test_resolver_config_agent.py`.
+`tests/core/projects/test_resolver_config_agent.py`, `tests/core/agents/test_temporary.py`
+and `tests/core/runtime/test_runtime_extension_host.py`.
 
 - Add or reorder a fallback tier only in the resolver and update `effective_config()` provenance, RPC/UI presentation, and tests together.
 - Change model availability in the shared Models/Providers checker, not by adding a Project-only exception.

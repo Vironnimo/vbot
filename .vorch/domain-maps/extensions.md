@@ -34,19 +34,7 @@ Core cross-cutting terms live in `.vorch/GLOSSARY.md`; these terms are specific 
 - Filesystem name is Extension identity. Cross-root conflicts are first-wins: the first occurrence claims the name; later copies become visible `overridden` records and are never imported or registered. A disabled earlier copy still claims the name, so disabling cannot silently activate a later copy. An individually unreadable candidate or entry point keeps a failed record and its owner identity, protecting its Sessions from removal cleanup and blocking later copies. When a `.py` entry's kind cannot be checked, both possible identities (file stem and directory name) stay reserved until it becomes readable (`test_loader.py`, `test_runtime_extension_reload.py`).
 - Loading is two-phase. `register(api)` only collects declarations into an `ExtensionRecord`; successful async registrations finish deterministically before loaded records are applied in load order, while each async registration that exceeds the hard 10-second deadline becomes a failed record without blocking the remaining Extensions. Extension code never writes live registry tables directly.
 - Record status is one of `loaded`, `failed`, `disabled`, or `overridden`. Import, manifest (including I/O, malformed JSON, or UTF-8 decoding), or registration failure isolates that Extension; a collision or apply error for one capability stays a non-fatal `capability_errors` diagnostic while the record remains loaded.
-- `API_VERSION` is the public contract version and is currently 15; API v2 adds Slash Command declarations, API v3 adds Extension-owned Tool Family declarations, and API v4 adds management operations, host capabilities, and live Tool catalogs; API v5 adds explicit opt-in Tools; API v6 adds page declarations and explicit Tool catalog visibility; API v7 adds owner-bound Extension databases (`host.open_database`); API v8 adds Tool result payloads (`ToolContext.attach_result_payload`, `host.load_result_payload`); API v9 adds Tool-gated prompt blocks (`register_prompt_block(..., requires_tool=...)`, `extensions/capabilities.md`); API v10 adds owner group listing and archiving (`temporary_agents.groups()`, `archive_group()`); API v11 adds OAuth browser redirects (`host.oauth_redirects`, below); API v12 adds server folder listing for pages (`extensionPageClient.listDirectory`, `webui.md`); API v13 adds Tool summaries (`api.register_tool(..., summary=...)`, `tools.md` -> Conventions); API v14 replaces `definition_change_note` with declared Tool-change announcements (`announce_changes`, `tools.md` -> Tool changes in a Session): a changed Tool definition reaches a Session mid-epoch only for the parts its Tool names. API v15 adds asynchronous Tool-Agent resolution, canonical deferred-call receipts and manifest-declared offline document validators (below). An optional directory-form `extension.json` may add display metadata and an `api_version`; a manifest requiring a newer version fails that Extension.
-
-## Offline document validation
-
-API 15 directory Extensions declare `config_documents` in `extension.json`: a mapping
-from owner-state-relative glob patterns to `module:function` file validators. Core
-`doctor config` discovers these in normal first-wins root order, even when disabled,
-then loads only the named module under an isolated package path; it never runs the
-Extension's `__init__`, `register` or startup. The callable receives the absolute
-Path and returns `JsonValidationReport`. Patterns cannot escape the owner's state
-directory. Declaration/import/validation failures become diagnostics; an in-scope
-known document without its owner's validator also reports an error. Implementation:
-`core/extensions/config_validation.py`; evidence: `tests/core/settings/test_validation.py`.
+- `API_VERSION` (`core/extensions/_declarations.py`) is the public contract version, currently 15. Bump it when the Extension contract changes in a way third-party Extensions can detect through their manifest `api_version`, and record what the new version adds in `extensions/management.md` -> API versions. An optional directory-form `extension.json` may add display metadata, an `api_version` and `config_documents` validators (`extensions/management.md` -> Offline document validation); a manifest requiring a newer version fails that Extension.
 
 ## Cross-task contracts
 
@@ -54,93 +42,25 @@ Runtime callback dispatch uses `invoke_extension_handler`: synchronous lifecycle
 
 - `ExtensionAPI` is the declaration facade. `api.config` is the register-time snapshot for structural choices; `api.get_config()` and `api.resolve_credential()` are live per-call reads for values that can change without rebuilding code.
 - `ExtensionRegistry` is the sole owner of records, hook dispatch tables, interaction-prefix routing, capability application, diagnostics, startup/shutdown, and deactivation primitives. `CommandDispatcher` remains the sole owner of Command validation, recognition, scheduling, execution, and neutral outcomes after the registry applies declarations.
-- Page declarations resolve once per registration at load; an entry outside its Extension root becomes a capability diagnostic, not a page. `current_page(identity, page_id)` answers page-scoped validation from memory: another or retired epoch, an owner no longer loaded, or an undeclared page yields `None`, and the entry file is not consulted. `page_declarations()` also requires the entry file on disk, so its callers (page listing, asset delivery) run it off the Event Loop (`tests/core/extensions/test_registration.py`, `test_runtime.py`).
 - Ordinary Hook, Command, lifecycle, and interaction handlers may be synchronous or asynchronous. Their dispatch isolates failures. Session-owning Extensions instead use the explicit required Session runtime contract; failed delivery propagates to the owned Run. Completion notifications run after the durable outcome is committed; failures remain observable in logs and the terminal `completion_notification_errors` field without undoing that commit.
 - Capability collisions never override an existing owner. Built-ins and earlier-loaded Extensions win; skipped capabilities are diagnosed on the affected records.
 - Configuration values are live, but declaration structure is registration-bound. Config-only saves require no reload; enabling or explicit reload rebuilds the layer; disabling a loaded Extension removes its live effects and fires shutdown under the same runtime lock.
-- Packaged installs may append one managed user dependency site before normal Extension discovery. It is data-dir owned and selected only when its complete runtime inventory and Python ABI fingerprint match the active release; a recipe change requires server restart. A development checkout loads Extensions without that site.
+- Packaged installs may append one managed user dependency site before discovery; a recipe change needs a server restart, not an Extension Reload (`extensions/management.md` -> Startup and shutdown).
 - Callback-data prefixes `run` (wakes the Agent through Channels) and `chk` (Channel checklist items) are reserved by the runtime. `ExtensionRegistry` refuses Extension ownership of reserved prefixes; all other interaction prefixes remain first-wins Extension capabilities.
 
-API 6 adds owner-bound temporary execution groups, hidden Session Tools and prompt blocks, receipt-bearing request callbacks, and isolated page declarations. `core/agents/temporary.py` owns creation/admission/drain and exact receipt/history/usage reads; it never creates Identity workspaces. Every private Tool declaration must retain its exact current registration; a missing or collided declaration blocks the Session capability. The binding's `tool_access.denied` may then remove individual private Tools from its grant set. Private denials are excluded from ordinary Tool/Project validation, while ordinary selections cannot grant private Tools. Prompt inspection and execution use the same selected grants. Their input types use the shared Tool representation normalization and validation contract; owner-specific call repairs use their argument normalizer, and public catalogs exclude them while collision detection and teardown retain them. Quiesce drains owned work before declarations are removed; a drain past its deadline is logged and left running uncancelled while removal proceeds, and the retired registration fails closed. Evidence: `tests/core/agents/test_temporary.py`, `tests/core/extensions/test_deactivate.py`, and `tests/core/chat/test_chat_loop_extension_tools.py`.
+## Owner-bound host
 
-The optional host `inspect_prompt(config, project_id)` capability previews a
-temporary configuration with the owner's private Tools, the selected Project's
-context and Model-specific Tool routing. It returns combined text, rendered block details
-and Tool definitions without creating a Session or Run. `catalog()` includes
-public System Prompt block metadata. The bundled Swarm uses these capabilities
-for explicit prompt composition; see `extensions/swarm.md` and
-`tests/core/runtime/test_runtime_extension_host.py`.
+Each loaded Extension reaches Runtime services only through its owner-bound host and the owned-execution capabilities (`extensions/host.md`; owned-Session storage and authority: `sessions/owned-execution.md`). Invariants every Extension change must keep:
 
-Group titles: `temporary_agents.title_group(group_id, source_text)` stores a local
-title immediately (the request's first paragraph without a Markdown heading marker,
-bounded like a Session's local title, so a brief's heading does not run into its
-body), then lets the Runtime's shared Session title generator replace it
-(configured Title Model, else the approximately cheapest group participant Model by
-catalog input+output rate, else the first participant; one attempt, failures keep
-the local title). It awaits the Model call, so owners run it in the background.
-`group_titles(group_ids)` reads stored titles within the caller's owner namespace.
-Titles are canonical Session data (see `sessions.md`), so Statistics keeps showing
-them after the Extension is disabled. Evidence: `test_titles.py`,
-`test_runtime_extension_host.py`.
+- Private Session Tools of a temporary execution group must keep their exact current registration; a missing or collided declaration blocks the Session capability, ordinary selections never grant them, and public catalogs exclude them.
+- While its Extension is installed (loaded, failed, disabled or overridden), only the owner removes its Sessions. Owners no longer installed in any root get their live Sessions archived at the next load, before startup handlers run.
+- Owner-scoped capabilities (group titles, Tool result payloads, deferred-call receipts, databases) stay within the calling owner, and a retired registration's host capabilities fail closed.
+- Deferred Tool outcomes are delivered once per receipt through Sessions; recovery never restarts a Run or repeats a mutation.
+- Only Extension Tools attach Tool result payloads, and only inside a Session; elsewhere the Extension returns the data inline.
 
-Owner-managed Session lifetime: while its Extension is installed - loaded, failed,
-disabled or overridden - only the owner can remove its Sessions; ordinary archive,
-move, delete and Project removal refuse them (`sessions/owned-execution.md`). API 10
-lets an owner reconcile: `temporary_agents.groups(after="", limit=100)` pages its
-group ids that still have live participant Sessions, and `archive_group(group_id)`
-(closed groups only, else `ValueError("group_not_closed")`) archives them under a
-no-Run guard as one `owner_group` archive entry (`archive.md`; listed and purgeable,
-not restorable, purged by the retention sweep once the user's retention period
-ends), keeping history, bindings and usage attribution; `delete_group` still
-removes an archived group. Both close each live participant's Terminal Sessions and shell commands first,
-like an ordinary Session removal (`release_temporary_group`), then remove the Scratch
-Areas of the removed root Sessions after the archive/delete succeeds. A participant
-that is only a Sub-Agent retains its live Parent's area. Once an Extension is removed from every root, nothing
-could manage its Sessions any more, so `ExtensionRuntime` archives the live ones of
-every owner name without a registry record (entry reason `extension_removed`) before
-startup handlers run, at initial startup and after each reload (`ExtensionHostFactory.archive_uninstalled_owner_groups`,
-logged at WARNING per owner). It skips this when a scan root was missing or unreadable
-(`ExtensionRegistry.installed_names()` is `None`), since absence then proves nothing,
-and leaves a group with active or queued work live until the next load. Failures are
-logged and never block the Extension layer. An archived participant cannot be
-re-created, so a returning owner deletes such groups. Evidence:
-`test_runtime_extension_host.py`, `test_runtime_extension_reload.py`.
+## Extension databases
 
-Extension databases (API 7): an owner-bound host offers `await host.open_database(name, schema_sql, migrations=(), retired_indexes=())`, returning a kernel `Database` (`database.md`) for the canonical database `ext.<owner>.<name>` at `<data-dir>/extension-data/<owner>/<name>.db` with the shared Extension application id at format generation 1. `name` and the Extension id must be lowercase safe ids (`core.utils.ids.is_safe_id`), else `ValueError`; a second open of an already open name is refused. First open creates and registers it in the data-store marker; reopening applies the kernel's additive reconcile and named migrations, so schema changes stay additive. `core/extensions/databases.py::ExtensionDatabases`, created by `ExtensionHostFactory`, owns the handles per registration identity: `ExtensionRegistry` releases a registration after that owner's shutdown handlers in `fire_shutdown` (Runtime shutdown, reload) and `deactivate` (live disable), closing its handles; a released registration can never open again, and the reloaded Extension opens anew. `Runtime.canonical_databases()` includes the open handles, so data snapshots copy them online; registered but unopened ones are copied from their files. Offline tools (CLI data-store status/restore, updater snapshot) never declare Extension specs, because that would execute Extension code: they verify Extension members by kernel identity and integrity only, without owner facts or schema compatibility checks. The returned `Database` carries the kernel's `read_async`/`write_async`/`run_async`, so an Extension runs its blocking work on that database's own worker pool instead of a private one. Extensions import `Database`, `Migration` and `DatabaseError` from `core.extensions.databases` and never open SQLite files, `core.database` internals or `core.sessions` storage themselves. Runtime shutdown closes any handle a release missed. No uninstall flow exists: removing an Extension (deleting it from an Extension root) archives its owner-managed Sessions at the next load (above) but leaves its databases registered and their files in place, so data snapshots keep copying them; once a registered file is gone too, data snapshots and update snapshots refuse with the release command (`database.md`). `ExtensionDatabases.unregister(name)`, reached through `Runtime.unregister_extension_database`, RPC `data_store.unregister` and `vbot data-store unregister <name> --yes`, moves the files to quarantine and drops the registration; it is refused while a registration has the database open or is opening it, and an open that starts meanwhile waits, then creates a new, empty database. A disabled but installed Extension's database can be released too; its next open starts empty. Opening point: the owner-bound host is bound only when `ExtensionRuntime.startup` fires startup handlers from the server lifespan after Runtime bootstrap (and again after a reload), so the earliest open is an `api.operations.startup` handler (the Swarm Extension opens there). Safe startup modes (`--verification-only`, test instances) load no Extensions (`core/runtime/_bootstrap.py`) and fire no startup handlers, so an updater's candidate verification never opens, migrates or auto-restores an Extension database, and an Extension open failure never triggers the automatic data rollback. Startup handlers are fail-open: an open failure is logged as the handler's error and the server still starts healthy, with that Extension lacking its database. Automatic restore of a missing or corrupt Extension database happens at that open; the operator path is `vbot data-store snapshot restore <id> --database ext.<owner>.<name> --yes`, which checks only kernel identity and integrity and leaves reconcile, migrations and any refusal to the Extension's next open after the restart (`database.md` -> Conventions). Evidence: `tests/core/extensions/test_extension_databases.py`, `tests/core/runtime/test_runtime_extension_databases.py`.
-
-Deferred Tool outcomes (API 15): owner-bound hosts expose `capture_tool_call(context)`
-for an opaque receipt tied to this Extension's exact canonical invocation;
-`restore_tool_call(receipt)` resolves only its original live Session generation,
-following moves and Agent renames, never a fork or reused address. It returns `None`
-once the ordinary Tool Result exists or the original invocation is no longer live.
-`deliver_tool_outcome(receipt, content)` commits one persisted note with an atomic
-receipt; repeating identical delivery is a no-op, conflicting content is refused.
-The producer quotes external content and does not add reminder tags. Recovery never
-restarts the Run or repeats a mutation. Domain task state belongs in the Extension's
-database. Canonical receipts and exact source validation belong to Sessions
-(`sessions.md`); Runtime rechecks the current registration and resolves Agent, working
-Project and paths off the Event Loop. `resolve_tool_agent_async(context)` is the
-async host capability for ordinary policy and sampling resolution; the synchronous
-capability remains for compatibility. Evidence: `test_runtime_extension_host.py`,
-`test_runtime_mcp_access.py`.
-
-Tool result payloads (API 8): an Extension Tool running in a Session keeps JSON data beside its Tool Result with `context.attach_result_payload(payload) -> payload_id` (`res_` plus 16 base32 characters; readers accept any safe opaque id, `is_safe_id`). `context.result_payloads_available` is false outside a Session (management, CLI, direct calls), where attaching raises `RuntimeError`; the Extension then returns the data inline. Chat stages the payload and stores it with the Tool Result in one transaction (`chat/run-execution.md`, `sessions.md`): a handler that raises, returns an invalid result or is cancelled leaves none, a returned failure keeps them. The owner is the attaching Tool's Extension; core Tools cannot attach. The owner-bound `await host.load_result_payload(context, payload_id)` returns the decoded payload, or `None` unless it belongs to this Extension and its Tool Result is in the calling Session's current view (own, fork-inherited, or materialized after an ancestor's deletion); it raises `ValueError` once the registration is no longer current. The Extension adds its own policy check (MCP: `extensions/mcp.md`). Source: `core/runtime/_extension_host.py`; evidence: `tests/core/runtime/test_runtime_extension_host.py`, `tests/core/chat/test_tool_result_payloads.py`, `tests/core/sessions/test_tool_result_payloads.py`.
-
-OAuth browser redirects (API 11): `host.oauth_redirects` is the Runtime's `OAuthRedirects` (`core/extensions/oauth_redirects.py`), or `None` without a Runtime. An Extension that sends the user's browser to an authorization server uses `callback_url` as its redirect URI when it is not `None`, awaits `expect(state)` for the redirect query and calls `discard(state)` when it stops waiting. The server binds `callback_url` at startup and passes `GET /api/oauth/callback` queries to `deliver` (`server.md`); only a pending, unexpired `state` (`DEFAULT_TTL_SECONDS`, 600 s) matches, each one once, so a stray or replayed request completes nothing and cancels nothing. `callback_url` is `None` when the server listens only on an address that is not this machine's loopback or wildcard address; the Extension then needs another way back, such as the user pasting the redirected address (MCP: `extensions/mcp.md`). Evidence: `tests/core/extensions/test_oauth_redirects.py`, `tests/server/test_app_http.py`.
-
-Every live Extension-owned Session counts in global Statistics under the reserved
-actor key `extension:<owner>`, never under its synthetic participant Agent id; see
-`statistics.md`.
-
-## Ownership and source routing
-
-- Public API, registration identity, hooks, and lifecycle: `core/extensions/extensions.py`. Internal `_declarations.py` owns declaration/record values and diagnostics; `_api.py` collects declarations; `_loading.py` owns filesystem discovery/import and registration deadlines; `_callbacks.py` owns bounded callback execution.
-- `_capabilities.py` applies declared Tools, Commands, Recall backends, and Prompt blocks to their existing owners, including collision diagnosis and identity-safe Tool removal. Its installer receives the registry records, without access to the ExtensionRegistry or Runtime.
-- Neutral channel-interaction types and reserved prefixes: `core/extensions/interactions.py`
-- Settings field parsing and config validation: `core/extensions/settings_schema.py`
-- Bootstrap construction and cross-domain callback wiring: `core/runtime/runtime.py`; serialized rebuild, disable, registry swap, and lifecycle ordering: `core/extensions/runtime.py`
-- Management and secret RPC projection: `server/rpc/extensions_methods.py`, with disabled/config persistence in `server/rpc/settings_methods.py` and the Settings domain
-- Bundled implementations: `resources/extensions/`; examples: `resources/skills/vbot-docs/assets/extensions/`
+An Extension opens its databases only through `await host.open_database(name, schema_sql, ...)`: each is the canonical kernel database `ext.<owner>.<name>` under `<data-dir>/extension-data/<owner>/`, with additive schema changes and handles that die with the registration. Extensions never open SQLite files, `core.database` internals or `core.sessions` storage themselves. Opening point, snapshots, restore and unregister: `extensions/databases.md`; kernel side: `database.md`.
 
 ## Constraints and gotchas
 
@@ -160,8 +80,10 @@ This domain owns the bundled-page paragraphs of the `vbot-docs` Skill's page ref
 Read these only when your task matches - not by default.
 
 - Authoring an Extension or adapting a runnable template -> `resources/skills/vbot-docs/references/extensions.md` (pages and owned Sessions: `resources/skills/vbot-docs/references/extension-pages.md`) and `resources/skills/vbot-docs/assets/extensions/` (repository-relative); bundled usage guidance -> `resources/skills/vbot-docs/references/extension-usage.md`
-- Adding or changing hooks, Command/Tool/Recall/Prompt capabilities, channel interactions, dispatch decisions, collision behavior, or handler payloads -> `extensions/capabilities.md`
-- Changing discovery, manifests, records, settings schemas, secret handling, visibility, enable/disable, startup/shutdown, or full reload -> `extensions/management.md`
+- Adding or changing hooks, Command/Tool/Recall/Prompt capabilities, page declarations, channel interactions, dispatch decisions, collision behavior, or handler payloads -> `extensions/capabilities.md`
+- Changing discovery, manifests, `config_documents` validators, records, settings schemas, secret handling, visibility, enable/disable, startup/shutdown, the managed dependency site, or full reload, or bumping `API_VERSION` -> `extensions/management.md`
+- Changing an owner-bound host capability: temporary execution groups and private Session Tools, prompt inspection, group titles, owner-managed Session removal and archiving, deferred Tool outcomes, Tool result payloads, or OAuth browser redirects -> `extensions/host.md`
+- Changing how an Extension opens, migrates, snapshots, restores or unregisters its databases -> `extensions/databases.md`
 - Changing Computer Use, its opt-in Tools, the access mode and app approvals, screenshots and coordinates, the desktop target, or desktop input -> `extensions/computer-use.md`
 - Restoring the archived Browser Use Extension or locating its replacement -> `extensions/browser-use.md`
 - Changing the bundled Home Assistant Extension, its four Tools, settings, readiness, retry behavior, or security constraints -> `extensions/homeassistant.md`

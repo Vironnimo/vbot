@@ -1,0 +1,11 @@
+# Image Conversion
+
+How the shared `ImageConverter` (`core/attachments/images.py`) prepares an image for a destination: dimension and byte ceilings, format choice, color and frame handling, decoding budget, failure classes, workers and caches. Chat's use of it for request media: `chat/request-building.md` -> Content Blocks, mentions, and media.
+
+## Preparation
+
+`core/attachments/images.py::ImageConverter` accepts source bytes/MIME, destination MIME types, and optional encoded-file byte and maximum-dimension ceilings; it owns no Provider facts. Every image is format-checked and decoded, including supported formats. Valid native inputs within the ceilings remain byte-identical. `PreparedImage` returns encoded bytes/type, original/sent dimensions and conversion/loss flags; its optional note explains changed copies while original files stay untouched.
+
+Preparation fits a known dimension ceiling while preserving aspect ratio, then tries PNG, lossless WebP, and JPEG without chroma subsampling (white background for transparency). A concrete byte ceiling enables reduced JPEG quality or further bounded resize attempts. Orientation is corrected and ICC profiles are preserved, transforming profiled CMYK to sRGB. Native multi-frame files remain intact when accepted and within limits; any needed conversion or reduction refuses to discard frames/pages. A 32-million-pixel decoding budget covers all frames/pages, including native inputs. Classified failures distinguish unreadable data, decoding-size limits, unsupported destinations, multi-frame conversion and encoded-size failure, with recovery text appropriate to each cause.
+
+`convert()` uses one bounded worker; `prepare()` is the blocking entrypoint for Provider payload builders already running in a bounded worker. A per-instance lock protects their shared caches. A 256-entry validation cache retains hashes/dimensions only; per-instance converted-output caches hold at most 32 MiB and key by content hash, source MIME, destination formats and both ceilings. Pillow and pillow-heif are core dependencies; the HEIF plugin disables thumbnail substitution. Regression coverage: `tests/core/attachments/test_images.py`, plus Chat/read routing and fallback in `tests/core/chat/test_chat_integration_images.py` and `tests/core/chat/test_chat_loop_fallback.py`.

@@ -4,11 +4,11 @@ The sanctioned runtime channels through which the kernel informs the Model, and 
 
 ## Overview
 
-Everything the Model sees at runtime arrives through one of eight channels. They differ on two axes: **durability** (persisted Session record vs request-time-only) and **trust** (kernel-authored constants vs quoted external content). Chat owns the request-rendering mechanics; producers only persist records or declare content through their own domain APIs.
+Everything the Model sees at runtime arrives through one of ten channels. They differ on two axes: **durability** (persisted Session record vs request-time-only) and **trust** (kernel-authored constants vs quoted external content). Chat owns the request-rendering mechanics; producers only persist records or declare content through their own domain APIs.
 
 The core term System Reminder lives in `.vorch/GLOSSARY.md`.
 
-These eight channels describe canonical vBot Agent/Chat communication. A Live voice call gives its voice model attributed Run updates through provider-native ephemeral context appends; it never injects them into a vBot Session. Its instructions, trust boundary, and lifecycle are owned by `model_tasks/live.md`.
+These ten channels describe canonical vBot Agent/Chat communication. A Live voice call gives its voice model attributed Run updates through provider-native ephemeral context appends; it never injects them into a vBot Session. Its instructions, trust boundary, and lifecycle are owned by `model_tasks/live.md`.
 
 ## Channels
 
@@ -17,7 +17,7 @@ These eight channels describe canonical vBot Agent/Chat communication. A Live vo
 | Persisted note (`role: "note"`) | Session history | `chat.md` + `chat/request-building.md` - embedded into provider requests as a synthetic user message wrapped in `<system-reminder>` tags |
 | Reply-surface reminder | Append-only tagged chronology | `chat/request-building.md` - appended by Chat at executor start; producers only pass the surface value |
 | Input-origin reminder | Request-time only, hidden | `chat/request-building.md` - added for `input_origin` `speech_transcription` or `live_voice` |
-| Skill announcement | Once per Prompt Epoch | `skills.md` - tail note when a Skill becomes available+allowed |
+| Skill announcement | Once per Prompt Epoch | `chat/request-building.md` -> Skills and prompt-cache stability - tail note when a Skill becomes available+allowed (term: `skills.md` -> Skill Availability Announcement) |
 | Tool-change announcement | Persisted note, once per change within a Prompt Epoch | `chat/request-building.md` -> Tool catalog per prompt epoch - `[tool-change]` note when a Tool is enabled, removed or changes its parameters while the Tool list stays pinned |
 | Prompt-block change announcement | Persisted note, at most one per Run within a Prompt Epoch | `chat/request-building.md` -> Dynamic prompt blocks per prompt epoch - `[prompt-block-change]` note at Run start when a contributed Tool/Extension block, temporary Session block or Channel list is added, removed or renders differently |
 | Interruption notice | Request-time only, derived from a persisted `run_summary` | `chat/run-execution.md` -> Interruption - one sentence naming why the previous turn stopped, before the next input |

@@ -59,6 +59,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | usage.md | `core/usage/` | Durable Model request accounting, historical Usage import |
 | memory.md | `core/memory/` | Pinned memory service, workspace memory files |
 | settings.md | `core/settings/` | Settings schemas, validation, update sections |
+| json-documents.md | cross-cutting | Generation 1 contract of every durable JSON document: versioning, unknown fields, write guard, snapshot freeze |
 | prompts.md | `core/prompts/` | System Prompt assembly, fragments, variables |
 | attachments.md | `core/attachments/` | Blob storage, MIME sniffing, text extraction |
 | extensions.md | `core/extensions/` | Extension kernel boundary, loading/lifecycle, management operations, live Tool catalogs, bundled MCP |

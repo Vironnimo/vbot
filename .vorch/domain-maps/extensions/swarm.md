@@ -44,8 +44,8 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   transactions. It receives canonical receipt lookups; it must
   not open the Session database directly. Its database handle comes from
   `host.open_database("swarm", SCHEMA_SQL)` at startup (kernel database
-  `ext.swarm.swarm`, file `extension-data/swarm/swarm.db`; `extensions.md` ->
-  Extension databases). Swarm never opens SQLite files itself, and the host
+  `ext.swarm.swarm`, file `extension-data/swarm/swarm.db`;
+  `extensions/databases.md`). Swarm never opens SQLite files itself, and the host
   closes the handle after shutdown.
 - `agent_text.py` and `wiki_text.py` own the scoped Tool definitions and reviewed
   runtime wording. Outside the Extension, `core/tools/_swarm_references.py` names the

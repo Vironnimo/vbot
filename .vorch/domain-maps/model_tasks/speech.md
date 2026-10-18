@@ -193,7 +193,7 @@ microphone Sessions.
 (`LocalSpeechExecutor.setups`, reached through `SpeechService.local_setup_for(target)`):
 the target's engine environment, then its pinned Model.
 It extends `LocalSetup` (`local_setup.py`), which local embeddings share: status,
-job lifecycle, receipts, the Model fetch (`model_tasks.md` -> Overview) and the uv
+job lifecycle, receipts, the Model fetch (`model_tasks/local-engines.md`) and the uv
 recipe installer (`_install_recipe`) live there;
 the server-interpreter STT path and the TTS verification stay in `speech_setup.py`.
 Targets of one engine share its environment under `DataDirectoryLayout.speech_engines`
@@ -221,7 +221,7 @@ during installation, failure and the verified restart-required state. Developmen
 rechecks package metadata; managed STT/TTS require the environment interpreter, the base
 Python its `pyvenv.cfg` names (`python_missing` once that is gone, e.g. after the application
 was installed again) with the `major.minor` the environment requires (`python_changed`
-otherwise; `model_tasks.md` -> Overview): for STT the server's (it has no recipe: its worker
+otherwise; `model_tasks/local-engines.md` -> Installation job): for STT the server's (it has no recipe: its worker
 imports vBot source), for TTS its recipe's `python`, else also the server's. They also
 require a
 `verified.json` completion receipt, written atomically only after successful verification
@@ -315,7 +315,7 @@ setup isolation, sizes sharing an environment with their own Models, and availab
 
 ## Provider Wire Behavior
 
-Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient` subclasses `core.providers.task_client.ProviderTaskClient`, which owns the shared plumbing (constructor tuple, `from_runtime` target resolution, auth headers, POST/classify/parse cycle, retry policy - see `providers.md`); `core/model_tasks/speech_providers.py` owns only the speech payload shapes and response parsing.
+Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient` subclasses `core.providers.task_client.ProviderTaskClient`, which owns the shared plumbing (constructor tuple, `from_runtime` target resolution, auth headers, POST/classify/parse cycle, retry policy - see `providers/request-policy.md` -> Provider-backed task clients); `core/model_tasks/speech_providers.py` owns only the speech payload shapes and response parsing.
 
 `ProviderSpeechClient.transcription_input_policy()` supplies the supported source
 formats and vBot request ceilings to preparation. OpenAI's format allowlist follows
@@ -386,7 +386,7 @@ PCM artifacts retain all samples, and failed/cancelled streams release workers.
   waits for the running engine call, bounded for worker children (Local engines). Ordinary JSON clients remain supported.
   Coverage: `tests/server/test_speech_endpoints.py`.
 - Status and install of every local speech target go through the generic
-  `task_model.local_setup_status/install {target}` (`model_tasks.md` -> Contracts),
+  `task_model.local_setup_status/install {target}` (`model_tasks/local-engines.md` -> Generic local engine RPCs),
   as do `task_model.local_memory_status` and `local_unload`.
   `speech.local_setup_restart {target}` in `server/rpc/task_model_methods.py` requires
   one exact local speech target (missing, non-`local/` or unknown -> `invalid_request`),

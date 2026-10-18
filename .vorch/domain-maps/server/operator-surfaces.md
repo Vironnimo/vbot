@@ -1,0 +1,19 @@
+# Server: operator surfaces
+
+The operator RPCs for background activity, the data store, the Recall index and Statistics: `server/activity.py` with `activity_methods.py`, `data_store_methods.py`, `recall_methods.py` and `statistics_methods.py`.
+
+## Background activity
+
+`server/activity.py` `ActivityMonitor` (built in `_initialize_app_state` as `app.state.activity`, started and closed in the lifespan) lists the long-running server work Settings > General shows in one place. Once per second it reads, from memory only, the owners' reports - `SpeechService`/`EmbeddingService.local_activities()` (each `LocalSetup.activity()`), `ChannelService.setup_activities()` (WhatsApp support installs) - plus the semantic Recall status the existing Recall listener bridge feeds it (`set_recall_status`), and publishes `activity_status {activities}` only when the list changed. An entry is `{id, kind, label, state, phase, error, message, progress?, target?, task_type?, eta_seconds?}`: `kind` `local_model_install` (id `local_setup:<target>`), `whatsapp_setup` (`whatsapp_setup:<channel>`) or `recall_index` (`recall_index`); `state` `running|action_required|failed|completed`, sorted in that order; `progress {completed, total, unit}` with `unit` `bytes` or `items`. A Recall indexing pass appears only from `RECALL_BACKLOG_SHOWN` (50) waiting texts and then stays until it ends, also while `retrying` (phase `retrying`); a Recall `error` is a failed entry. Owners keep reporting finished work as `completed` (`LocalSetup` after an install in this process, WhatsApp `ready`, Recall `idle`); the list shows it for `COMPLETED_VISIBLE_S` (8 s) only when the same id was running in the previous tick. Work that stops running without such a report, such as a cancelled installation, leaves the list at once. Failed and restart entries stay until the work runs again, is no longer reported, or a client dismisses them; a dismissal hides the entry for every client until then and never changes the work. The list is server memory only. `activity_methods.py` serves `activity.list {}` and `activity.dismiss {id}`, both returning `{activities}`. Cancel goes through the owner (`task_model.local_setup_cancel`, `model_tasks.md`). Tests: `tests/server/test_activity.py`.
+
+## Data store
+
+- `data_store_methods.py` exposes the operator-safe `data_store.status` (optional boolean `verify_search`, default false: explicitly check Session search coverage on the Session database pool before returning the otherwise cheap status; evidence semantics in `sessions/search.md`), `data_store.snapshot_create` (`reason`: `manual`, `rpc`, `update` or `recovery`; returns `{snapshot}`; a failed attempt's error carries the recorded snapshot-health reason), `data_store.incident_acknowledge` (returns the new status; an unknown incident is `invalid_request`), and `data_store.unregister` (`name` of a registered Extension database; returns `{unregistered: {name, database_id, quarantine}}` via `Runtime.unregister_extension_database`; a core or unregistered name is `invalid_request`, an open database `domain_error`) RPCs. It delegates to the database kernel (`database.md`) with `Runtime.canonical_databases()` on its own bounded worker pool, returns no database content, and publishes `resource_changed(kind="data_store")` after successful mutations. `error_mapping.py` maps every kernel `DatabaseError` to `domain_error` and a superseded acknowledgement (`IncidentConflictError`) to `invalid_request`.
+
+## Recall index
+
+- `recall_methods.py` serves `recall.status` and `recall.rebuild_index` (no parameters; both return `IndexStatus.to_dict()` from `Runtime.recall`, the rebuild after dropping every vector) and leaves the indexing schedule to Recall (`recall.md` -> Semantic Indexing).
+
+## Statistics
+
+- Statistics methods validate windows, cache the service on app state, and offload reconciliation to workers without owning index semantics (`statistics.md`).

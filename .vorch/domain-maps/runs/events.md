@@ -1,0 +1,25 @@
+# Run Events
+
+Run event constants, transient types, sequencing, replay retention, the shared event stream and the in-memory `RunTimeline`. Event payloads belong to the domains that emit them (`runs.md` -> Events).
+
+## Event constants and transient types
+
+Most stable event constants live in `core.runs` (`run.py`): lifecycle (`run_started`, `run_completed`, `run_failed`, `run_cancelled`, `run_interrupted`; the last four form `TERMINAL_EVENT_TYPES`), stable output (`user_message_persisted`, `reasoning`, `tool_call_started`, `tool_call_result`, `assistant_output`, `error_message_persisted`, `model_fallback_activated`, `goal_event_recorded`, `model_step_usage`, `run_change_stats`, `provider_request_status`, `compaction_started`, `compaction_aborted`, `compaction_completed`) and transient activity (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_output`, `provider_heartbeat`, `stream_attempt_restarted`). The Run emits `run_controls_changed` itself (`runs.md` -> Cross-Domain Contracts). `subagent_session_started` and `subagent_status_changed` are emitted on a Run timeline too, but their constants belong to `core.subagents` because the Sub-Agent domain owns their payloads.
+
+`TRANSIENT_EVENT_TYPES` are the transient activity types above plus the speech Tool's `speech_playback` announcement: high-rate fragments that matter only to a consumer following the Run live, none of them Session history. `provider_request_status`, `model_step_usage` and `run_change_stats` are not transient.
+
+## Sequencing and replay
+
+Every emitted event increments the Run-local `sequence`, including transient deltas. Sequences are monotonic for that Run and are never reused when old events fall out of the retained replay window. `Run.subscribe(after_sequence=...)` replays retained events with larger sequence numbers, then follows live events until a terminal event; late subscribers can only replay the retained window, and lagging live subscribers are evicted instead of building unbounded queues. `Run.last_sequence` is the newest emitted sequence (0 before the first event); read it for a watermark instead of `Run.events`, which copies the window on every access.
+
+**Finished-Run replay retention.** A running Run retains its bounded live window (the newest `DEFAULT_RUN_EVENT_RETENTION_LIMIT`, 4096, events). When the terminal event is published, the window shrinks to the settled ending: the terminal event plus the unbroken run of non-transient events right before it, at most `FINISHED_RUN_REPLAY_LIMIT` (16) in total. Because `provider_request_status`, `model_step_usage` and `run_change_stats` are not transient, a streamed final step still ends with its `assistant_output`, and a short non-streamed Run (<= 16 events) keeps its whole timeline. The ending is a contiguous sequence suffix, so a late subscriber receives it as an ordinary replay head and ends cleanly on the terminal event; a cursor at or beyond the terminal sequence yields nothing. Everything that must see the full timeline subscribes while the Run is running: the server event bridge (via the Run-start callback), Channel relays, sub-agent activity and an SSE stream opened before the end. Durable history is the source for everything else. Each of the up to `DEFAULT_COMPLETED_RUN_RETENTION_LIMIT` (512) retained terminal Runs therefore costs O(1) events; that lookup retention stays because cancel races, `chat.cancel`, SSE reconnects, sub-agent status, automation cancellation checks and Extension owned-Run inspection resolve recently finished Runs by id. Coverage: `test_finished_run_replays_only_its_settled_ending` (`tests/core/runs/test_runs_lifecycle.py`), `test_sse_endpoint_replays_a_finished_run_ending_after_the_requested_sequence` (`tests/server/test_sse.py`).
+
+Cancellation suppression (`runs.md` -> Interfaces, `Run.emit`) never removes events already emitted: they stay replayable until the terminal event shrinks the window to the settled ending.
+
+## Shared event stream
+
+`core/event_stream.py` owns the shared replay/live handoff, sequence de-duplication, bounded subscriber queues, and lag eviction used by Run timelines, the server event bus and Terminal streams. Its producers publish contiguous sequences. A subscription's first event may start beyond the requested cursor (replay head); after that, a sequence gap - events that left retention while a slow subscriber replayed or caught up - evicts the subscriber exactly like a live-queue overflow, so SSE/WebSocket clients reconnect instead of silently skipping events (`tests/core/test_event_stream.py`). Run remains the owner of event creation, Run-local sequencing, cancellation suppression, and terminal-event semantics; do not move those domain rules into the generic stream.
+
+## RunTimeline
+
+`core/runs/_timeline.py::RunTimeline` folds visible events at emission, before the bounded raw replay window can discard them, and is released on settlement. Ownership, the semantic contract and the timeline protocol: `chat/timeline.md`.
