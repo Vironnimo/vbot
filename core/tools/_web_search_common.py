@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import re
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -66,14 +67,6 @@ def _normalize_domains(raw: Any, field: str = "domains") -> tuple[list[str], str
             normalized.append(domain)
 
     return normalized, None
-
-
-def _build_search_query(query: str, domains: list[str], exclude: list[str] | None = None) -> str:
-    terms = [query]
-    if domains:
-        terms.append(" OR ".join(f"site:{domain}" for domain in domains))
-    terms.extend(f"-site:{domain}" for domain in exclude or ())
-    return " ".join(terms)
 
 
 def _unique(values: list[str]) -> list[str]:
@@ -177,24 +170,6 @@ def _url_matches_domains(url: str, domains: list[str]) -> bool:
     )
 
 
-def _restrict_results_to_domains(
-    results: list[dict[str, Any]],
-    domains: list[str],
-    count: int,
-    exclude: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """Keep results inside ``domains`` (when given) and outside ``exclude``."""
-    kept = []
-    for result in results:
-        url = _normalize_text(result.get("url"))
-        if domains and not _url_matches_domains(url, domains):
-            continue
-        if exclude and _url_matches_domains(url, exclude):
-            continue
-        kept.append(result)
-    return kept[:count]
-
-
 def _clean_snippet(raw: Any) -> str:
     """Normalize provider display text: drop HTML tags and unescape entities.
 
@@ -210,3 +185,61 @@ def _clean_snippet(raw: Any) -> str:
     from bs4 import BeautifulSoup
 
     return BeautifulSoup(text, "html.parser").get_text().strip()
+
+
+@dataclass(frozen=True)
+class WebSearchRequest:
+    """One constrained search shared by every engine adapter."""
+
+    query: str
+    domains: list[str]
+    exclude: list[str]
+    count: int
+    page: int
+    recency: str
+
+    @staticmethod
+    def resolve_sites(
+        query: str, raw_domains: Any, raw_exclude: Any
+    ) -> tuple[str, list[str], list[str], list[tuple[str, str]], str | None]:
+        domains, error = _normalize_domains(raw_domains)
+        if error is not None:
+            return query, [], [], [], error
+        exclude, error = _normalize_domains(raw_exclude, field="exclude_domains")
+        if error is not None:
+            return query, [], [], [], error
+        widened: list[tuple[str, str]] = []
+        if not domains and not exclude:
+            query, domains, exclude, widened = split_site_operators(query)
+        both = [domain for domain in domains if domain in exclude]
+        if both:
+            return (
+                query,
+                domains,
+                exclude,
+                widened,
+                (
+                    f"{both[0]} is both required and excluded. Keep it in domains or in "
+                    "exclude_domains, not both."
+                ),
+            )
+        return query, domains, exclude, widened, None
+
+    def operator_query(self) -> str:
+        terms = [self.query]
+        if self.domains:
+            terms.append(" OR ".join(f"site:{domain}" for domain in self.domains))
+        terms.extend(f"-site:{domain}" for domain in self.exclude)
+        return " ".join(terms)
+
+    def restrict(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep results inside required domains and outside excluded ones."""
+        kept = []
+        for result in results:
+            url = _normalize_text(result.get("url"))
+            if self.domains and not _url_matches_domains(url, self.domains):
+                continue
+            if self.exclude and _url_matches_domains(url, self.exclude):
+                continue
+            kept.append(result)
+        return kept[: self.count]

@@ -7,7 +7,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from core.search_config import (
@@ -35,9 +35,8 @@ from core.tools._web_search_arguments import (
 )
 from core.tools._web_search_common import (
     _MAX_DOMAIN_FILTERS,
-    _normalize_domains,
+    WebSearchRequest,
     _normalize_text,
-    split_site_operators,
 )
 from core.tools._web_search_providers import (
     _search_brave,
@@ -155,7 +154,12 @@ def _normalize_web_search_arguments(arguments: Any) -> Any:
     return normalize_web_search_arguments(_WEB_SEARCH_RUNTIME_CONTRACT, arguments)
 
 
-SearchFunction = Callable[..., Awaitable[tuple[dict[str, Any] | None, HttpRequestFailure | None]]]
+type SearchResult = tuple[dict[str, Any] | None, HttpRequestFailure | None]
+type SearchFunction = Callable[[WebSearchRequest], Awaitable[SearchResult]]
+
+
+class _KeyedSearch(Protocol):
+    def __call__(self, request: WebSearchRequest, *, api_key: str) -> Awaitable[SearchResult]: ...
 
 
 @dataclass(frozen=True)
@@ -165,12 +169,12 @@ class _Provider:
     search: Callable[[str, dict[str, Any]], SearchFunction]
 
 
-def _keyed(search: SearchFunction) -> Callable[[str, dict[str, Any]], SearchFunction]:
+def _keyed(search: _KeyedSearch) -> Callable[[str, dict[str, Any]], SearchFunction]:
     def bind(api_key: str, settings: dict[str, Any]) -> SearchFunction:
         del settings
 
-        async def run(**request: Any) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
-            return await search(api_key=api_key, **request)
+        async def run(request: WebSearchRequest) -> SearchResult:
+            return await search(request, api_key=api_key)
 
         return run
 
@@ -180,8 +184,8 @@ def _keyed(search: SearchFunction) -> Callable[[str, dict[str, Any]], SearchFunc
 def _searxng(api_key: str, settings: dict[str, Any]) -> SearchFunction:
     del api_key
 
-    async def run(**request: Any) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
-        return await _search_searxng(base_url=settings["searxng"]["base_url"], **request)
+    async def run(request: WebSearchRequest) -> SearchResult:
+        return await _search_searxng(request, base_url=settings["searxng"]["base_url"])
 
     return run
 
@@ -464,23 +468,11 @@ async def web_search_handler(
     if not query:
         return _invalid('Pass the search words as query, for example {"query": "python asyncio"}.')
 
-    domains, domains_error = _normalize_domains(arguments.get("domains"))
-    if domains_error is not None:
-        return _invalid(domains_error)
-    exclude, exclude_error = _normalize_domains(
-        arguments.get("exclude_domains"), field="exclude_domains"
+    query, domains, exclude, widened, sites_error = WebSearchRequest.resolve_sites(
+        query, arguments.get("domains"), arguments.get("exclude_domains")
     )
-    if exclude_error is not None:
-        return _invalid(exclude_error)
-    widened: list[tuple[str, str]] = []
-    if not domains and not exclude:
-        query, domains, exclude, widened = split_site_operators(query)
-    both = [domain for domain in domains if domain in exclude]
-    if both:
-        return _invalid(
-            f"{both[0]} is both required and excluded. Keep it in domains or in "
-            "exclude_domains, not both."
-        )
+    if sites_error is not None:
+        return _invalid(sites_error)
 
     settings, settings_error = _resolve_web_search_settings(settings_resolver)
     if settings_error is not None or settings is None:
@@ -516,12 +508,7 @@ async def web_search_handler(
     search = provider.search(api_key, settings)
     try:
         payload, failure = await search(
-            query=query,
-            domains=domains,
-            exclude=exclude,
-            count=count,
-            page=page,
-            recency=recency,
+            WebSearchRequest(query, domains, exclude, count, page, recency)
         )
     except _ResponseTooLargeError as error:
         return tool_failure("response_too_large", str(error), retryable=False)
