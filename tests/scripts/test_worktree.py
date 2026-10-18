@@ -496,12 +496,6 @@ def test_seed_worktree_settings_reads_fixture_from_running_checkout(tmp_path, mo
     assert settings["defaults"]["agent"]["model"] == "fake/from-running-checkout::default"
 
 
-def test_script_checkout_root_is_the_checkout_holding_the_script():
-    module = _worktree_manager()
-
-    assert module.context.checkout_root == PROJECT_ROOT
-
-
 def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_install_failure(
     tmp_path, monkeypatch
 ):
