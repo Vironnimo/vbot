@@ -10,12 +10,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.channels import channel_database_spec
-from core.channels._state_schema import DATABASE_NAME as CHANNELS_DATABASE_NAME
+from core.channels import CHANNEL_DATABASE_NAME, channel_database_spec
 from core.database import DatabaseSpec, canonical_database_path
 from core.providers.usage_history import DATABASE_NAME as PROVIDER_USAGE_DATABASE_NAME
 from core.providers.usage_history import provider_usage_database_spec
-from core.sessions._store_schema import session_database_spec
+from core.sessions import session_database_spec
 from core.sessions.schema import DATABASE_NAME as SESSIONS_DATABASE_NAME
 from core.usage import usage_database_spec
 
@@ -25,7 +24,9 @@ from core.usage import usage_database_spec
 RETIRED_CANONICAL_DATABASES = ("decisions",)
 
 
-def canonical_database_specs(data_dir: Path) -> tuple[DatabaseSpec, ...]:
+def canonical_database_specs(
+    data_dir: Path, *, verify_search: bool = False
+) -> tuple[DatabaseSpec, ...]:
     """Declarations of every canonical database this vBot owns in ``data_dir``.
 
     Extension databases (``ext.<owner>.<name>``) are declared only when their
@@ -33,12 +34,18 @@ def canonical_database_specs(data_dir: Path) -> tuple[DatabaseSpec, ...]:
     would mean running Extension code in an offline tool. Offline tools verify
     them by kernel identity and integrity only, without owner facts or schema
     compatibility checks.
+
+    ``verify_search`` opts into the Session owner's read-only full search-coverage
+    health check; ordinary declarations use its lightweight lifecycle status.
     """
     return (
-        session_database_spec(canonical_database_path(data_dir, SESSIONS_DATABASE_NAME)),
+        session_database_spec(
+            canonical_database_path(data_dir, SESSIONS_DATABASE_NAME),
+            verify_search=verify_search,
+        ),
         provider_usage_database_spec(
             canonical_database_path(data_dir, PROVIDER_USAGE_DATABASE_NAME)
         ),
-        channel_database_spec(canonical_database_path(data_dir, CHANNELS_DATABASE_NAME)),
+        channel_database_spec(canonical_database_path(data_dir, CHANNEL_DATABASE_NAME)),
         usage_database_spec(canonical_database_path(data_dir, "model_usage")),
     )

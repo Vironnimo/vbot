@@ -1014,6 +1014,13 @@ async def test_runtime_imports_history_and_registers_canonical_accounting(config
     specs = {spec.name: spec for spec in canonical_database_specs(config.data_dir)}
     assert specs["provider_usage"].path == config.data_dir / "provider-usage.db"
     assert specs["provider_usage"].profile == "canonical"
+    verified_specs = {
+        spec.name: spec for spec in canonical_database_specs(config.data_dir, verify_search=True)
+    }
+    assert specs.keys() == verified_specs.keys()
+    assert specs["sessions"].path == config.data_dir / "sessions.db"
+    assert specs["channels"].path == config.data_dir / "channels.db"
+    assert all(verified_specs[name].path == spec.path for name, spec in specs.items())
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     try:

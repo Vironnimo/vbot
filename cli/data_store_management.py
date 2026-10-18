@@ -899,11 +899,7 @@ def _local_status(data_dir: Path, *, verify_search: bool = False) -> dict[str, A
     from core.database import data_store_status as read_status
     from core.secrets import SecretStore, secret_store_health
 
-    specs = _specs_by_name(data_dir)
-    if verify_search:
-        from core.sessions._store_schema import session_database_spec
-
-        specs["sessions"] = session_database_spec(data_dir / "sessions.db", verify_search=True)
+    specs = _specs_by_name(data_dir, verify_search=verify_search)
     return read_status(
         data_dir,
         specs=specs.values(),
@@ -911,10 +907,12 @@ def _local_status(data_dir: Path, *, verify_search: bool = False) -> dict[str, A
     )
 
 
-def _specs_by_name(data_dir: Path) -> dict[str, DatabaseSpec]:
+def _specs_by_name(data_dir: Path, *, verify_search: bool = False) -> dict[str, DatabaseSpec]:
     from core.runtime.databases import canonical_database_specs
 
-    return {spec.name: spec for spec in canonical_database_specs(data_dir)}
+    return {
+        spec.name: spec for spec in canonical_database_specs(data_dir, verify_search=verify_search)
+    }
 
 
 def _registered_ids(data_dir: Path) -> dict[str, str] | None:
