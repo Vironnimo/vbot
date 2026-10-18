@@ -18,15 +18,36 @@ import re
 import shlex
 import sys
 from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import cache
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import Any
 
-from core.tools._powershell import powershell_literal
+from core.projects import ProjectStore
+from core.tools._path_suggestions import similar_entries
+from core.tools._powershell import (
+    powershell_literal,
+)
+from core.tools._workdir import ProjectWorkdirError, is_project_workdir, project_workdir
+from core.tools.arguments import optional_number, optional_string
+from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
-from core.tools.tools import JsonObject, ToolDisplayPart
+from core.tools.shell_environment import (
+    inherited_value,
+)
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplayPart,
+)
+from core.utils.paths import model_path
+
+from ._shell_definition import (
+    SHELL_DEFAULT_WAIT_SECONDS,
+    SHELL_MAX_WAIT_SECONDS,
+)
 
 TIMEOUT_MS_PARAMETER: JsonObject = {"type": "number", "minimum": 0}
 ENV_PARAMETER: JsonObject = {"type": "object"}
@@ -522,3 +543,135 @@ def shell_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
 
 def _not_run(problem: str) -> str:
     return f"{SHELL_MODEL_NAME} was not run: {problem}"
+
+
+@dataclass(frozen=True)
+class _ShellCall:
+    command: str
+    description: str | None
+    workdir: Path
+    # How long the call waits; *timeout_given* when the Agent chose it.
+    wait_seconds: float
+    timeout_given: bool
+    background: bool
+    variables: dict[str, str]
+    credential_names: tuple[str, ...]
+    notes: tuple[str, ...]
+
+
+def _call_error(problem: str) -> ToolContractError:
+    return ToolContractError(f"{SHELL_MODEL_NAME} was not run: {problem}")
+
+
+def _parse_call(
+    context: ToolContext,
+    arguments: JsonObject,
+    projects: ProjectStore | None,
+    *,
+    terminal_available: bool,
+) -> _ShellCall:
+    notes: list[str] = []
+    command = arguments.get("command")
+    if not isinstance(command, str) or not command.strip():
+        raise _call_error("command is required; pass the command line to run as a string.")
+    description = optional_string(arguments.get("description"), field_name="description")
+    background = arguments.get("run_in_background") is True
+    timeout, note = resolve_timeout(
+        optional_number(arguments.get("timeout"), field_name="timeout"),
+        optional_number(arguments.get("timeout_ms"), field_name="timeout_ms"),
+    )
+    if note is not None:
+        notes.append(note)
+    if timeout is not None and timeout < 0:
+        raise _call_error("timeout must be 0 or more seconds.")
+    wait_seconds, timeout_given = SHELL_DEFAULT_WAIT_SECONDS, False
+    # A call in the background does not wait: its timeout has nothing to bound.
+    if timeout is not None and not background:
+        if timeout == 0:
+            notes.append(
+                f"timeout 0 was read as omitted, so the call waits up to "
+                f"{SHELL_DEFAULT_WAIT_SECONDS:g} seconds."
+            )
+        elif timeout > SHELL_MAX_WAIT_SECONDS:
+            notes.append(
+                f"timeout {timeout:g} is more than {SHELL_MAX_WAIT_SECONDS:g} seconds, the "
+                f"longest a call waits, so it was read as {SHELL_MAX_WAIT_SECONDS:g}."
+            )
+            wait_seconds, timeout_given = SHELL_MAX_WAIT_SECONDS, True
+        else:
+            wait_seconds, timeout_given = timeout, True
+    no_effect = arguments.get(NO_EFFECT_FIELDS)
+    if isinstance(no_effect, dict):
+        notes.extend(no_effect_notes(no_effect, terminal=terminal_available))
+
+    workdir = _workdir(context, arguments, projects)
+
+    granted = frozenset(bash_allowed_env_keys(context.tool_settings)) | frozenset(
+        context.skill_env_keys
+    )
+    env = arguments.get("env")
+    if env is not None and not isinstance(env, dict):
+        raise _call_error("env must be an object of variable names and values.")
+    try:
+        variables, env_credentials = split_env_object(env, granted)
+    except ValueError as error:
+        raise ToolContractError(str(error)) from error
+    raw_keys = arguments.get("env_keys")
+    try:
+        requested = normalize_env_keys(raw_keys, field_name="env_keys") if raw_keys else []
+    except ValueError as error:
+        raise _call_error(f"env_keys is invalid: {error}") from error
+    credential_names = list(dict.fromkeys([*requested, *env_credentials]))
+    ungranted = [name for name in credential_names if name not in granted]
+    if ungranted:
+        unknown = [name for name in ungranted if inherited_value(name) is None]
+        if unknown:
+            raise ToolContractError(unknown_env_keys_message(unknown, granted))
+        notes.append(inherited_env_keys_note(ungranted))
+    return _ShellCall(
+        command=command,
+        description=description.strip() if description and description.strip() else None,
+        workdir=workdir,
+        wait_seconds=wait_seconds,
+        timeout_given=timeout_given,
+        background=background,
+        variables=variables,
+        credential_names=tuple(name for name in credential_names if name in granted),
+        notes=tuple(notes),
+    )
+
+
+def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore | None) -> Path:
+    raw = optional_string(arguments.get("workdir"), field_name="workdir")
+    if not raw:
+        workdir = context.effective_cwd
+    elif is_project_workdir(raw):
+        # Not advertised; the Projects block names each Project's directory path.
+        try:
+            return project_workdir(projects, raw)
+        except ProjectWorkdirError as error:
+            raise _call_error(str(error)) from error
+    else:
+        workdir = context.resolve_path(raw)
+    if not workdir.is_dir():
+        raise _call_error(_missing_workdir(workdir, given=bool(raw)))
+    return workdir
+
+
+def _missing_workdir(workdir: Path, *, given: bool) -> str:
+    """The failure for a missing directory; *given* when the call named it as workdir."""
+    if not given:
+        return (
+            f"the working directory {model_path(workdir)} is not an existing directory. Pass an "
+            "existing directory as workdir."
+        )
+    if workdir.exists():
+        return (
+            f"workdir {model_path(workdir)} is a file, not a directory. Pass the directory it "
+            "is in, or omit workdir to use the working directory."
+        )
+    message = f"workdir {model_path(workdir)} is not an existing directory."
+    nearby = similar_entries(workdir, kind="dirs")
+    if nearby:
+        message += f" Similar directories: {', '.join(model_path(path) for path in nearby)}."
+    return f"{message} Pass an existing directory, or omit workdir to use the working directory."

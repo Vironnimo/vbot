@@ -14,6 +14,7 @@ outlives its call and gets a snapshot of the Tools named at the command's start.
 
 from __future__ import annotations
 
+import errno
 import json
 import re
 import sys
@@ -24,16 +25,28 @@ from core.tools._background_tasks_arguments import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.command_manager import (
     COMMAND_HEAD_CHARS,
     COMMAND_TAIL_CHARS,
+    CommandCapacityError,
+    CommandLaunchError,
+    CommandNotStartedError,
     CommandReport,
     CommandTranscript,
     StopReason,
 )
 from core.tools.file_state import os_error_reason
-from core.tools.model_names import BASH_TOOL_NAME
+from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
 from core.tools.process_tree import RunningProcess
 from core.tools.shell_hints import HINT_TOOL_NAMES, annotate_failure
-from core.tools.tools import JsonObject, ToolContext
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    tool_failure,
+)
+from core.utils.logging import get_logger
 from core.utils.paths import model_path
+
+from ._shell_arguments import _missing_workdir, _ShellCall
+
+_LOGGER = get_logger("tools.shell")
 
 SHELL_TOOL_NAME = BASH_TOOL_NAME
 TERMINAL_TOOL_NAME = "terminal"
@@ -726,3 +739,134 @@ __all__ = [
     "stop_with",
     "stopped_because",
 ]
+
+
+class _NotStartedError(Exception):
+    """The shell could not be started for a reason other than the call; nothing ran."""
+
+    def __init__(self, result: JsonObject) -> None:
+        super().__init__(result["error"]["message"])
+        self.result = result
+
+
+def _cannot_start(problem: str) -> _NotStartedError:
+    """The shell cannot be started on this host for this command; a retry fails the same way."""
+    return _NotStartedError(
+        tool_failure(
+            "command_not_started", f"{SHELL_MODEL_NAME} was not run: {problem}", retryable=False
+        )
+    )
+
+
+def _start_failure(
+    error: Exception, call: _ShellCall, context: ToolContext, names: ToolNames
+) -> JsonObject:
+    """The failure for a command the manager did not start."""
+    if isinstance(error, CommandCapacityError):
+        message = (
+            f"{SHELL_MODEL_NAME} was not run: vBot already runs {error.limit} commands, the "
+            "most it runs at once."
+        )
+        if names(BACKGROUND_TASKS_TOOL_NAME):
+            message += (
+                f' Find your background commands with {BACKGROUND_TASKS_TOOL_NAME} {{"action": '
+                '"list"}, stop the ones you no longer need with action "stop", then run the '
+                "command again."
+            )
+        else:
+            message += " Run the command again once one of your background commands has exited."
+        return tool_failure("command_limit", message, retryable=True)
+    if isinstance(error, CommandNotStartedError):
+        return tool_failure(
+            "command_not_started",
+            f"{SHELL_MODEL_NAME} was not run: this turn was cancelled, or vBot is shutting down.",
+            retryable=False,
+        )
+    if not call.workdir.is_dir():
+        # The directory was removed after the call was checked.
+        given = call.workdir != context.effective_cwd
+        return tool_failure(
+            "command_not_started",
+            f"{SHELL_MODEL_NAME} was not run: {_missing_workdir(call.workdir, given=given)}",
+            retryable=False,
+        )
+    _LOGGER.warning("Starting a shell command failed", exc_info=error)
+    problem, retryable = _launch_problem(error, call, names)
+    return tool_failure(
+        "command_not_started", f"{SHELL_MODEL_NAME} was not run: {problem}", retryable=retryable
+    )
+
+
+# Operating system errors a start can meet, by errno and by Windows error code.
+_NO_RESOURCES_ERRNOS = frozenset({errno.ENOMEM, errno.EAGAIN, errno.EMFILE, errno.ENFILE})
+
+
+_NO_RESOURCES_WINERRORS = frozenset({4, 8, 14, 1450, 1455})
+
+
+_DISK_FULL_ERRNOS = frozenset({errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)})
+
+
+_DISK_FULL_WINERRORS = frozenset({39, 112})
+
+
+def _launch_problem(error: Exception, call: _ShellCall, names: ToolNames) -> tuple[str, bool]:
+    """What kept the command from starting and what to do, and whether a retry can help.
+
+    The operating system's own message is in the host's language and names no
+    next step: the text names the state it reports instead.
+    """
+    os_error = _os_error(error)
+    # A launch error is the shell process's; any other is the output file's.
+    process = isinstance(error, CommandLaunchError)
+    if os_error is None:
+        return f"vBot could not start the shell. {RUN_AGAIN} vBot's log has the details.", True
+    winerror = getattr(os_error, "winerror", None)
+    if os_error.errno in _NO_RESOURCES_ERRNOS or winerror in _NO_RESOURCES_WINERRORS:
+        problem = "the system is out of memory or process resources, so the shell could not start."
+        if names(BACKGROUND_TASKS_TOOL_NAME):
+            return (
+                f"{problem} Stop the background commands you no longer need (find them with "
+                f'{BACKGROUND_TASKS_TOOL_NAME} {{"action": "list"}}), then run the command again; '
+                "if it fails the same way, tell the user.",
+                True,
+            )
+        return f"{problem} {RUN_AGAIN}", True
+    if os_error.errno in _DISK_FULL_ERRNOS or winerror in _DISK_FULL_WINERRORS:
+        return (
+            "the disk is full, so vBot could not write the command's output. Tell the user that "
+            "the disk is full.",
+            False,
+        )
+    if isinstance(os_error, PermissionError):
+        if process:
+            return (
+                f"access was denied when vBot started the shell in {model_path(call.workdir)}. "
+                "If the command can run in another directory, pass that directory as workdir; "
+                "otherwise tell the user.",
+                False,
+            )
+        return (
+            "access was denied to vBot's data directory, where the command's output is written. "
+            "Tell the user.",
+            False,
+        )
+    code = winerror if winerror is not None else os_error.errno
+    detail = f" (operating system error {code})" if code is not None else ""
+    if process:
+        problem = f"the operating system could not start the shell{detail}."
+    else:
+        problem = f"vBot could not create the file for the command's output{detail}."
+    return f"{problem} {RUN_AGAIN}", True
+
+
+def _os_error(error: BaseException) -> OSError | None:
+    """The operating system error *error* is or was caused by, if any."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, OSError):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
+    return None
