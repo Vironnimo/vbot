@@ -1,8 +1,9 @@
 <script>
   // Inline change summary ("3 files changed, +12 -4") whose hover card lists
   // every changed file grouped by folder, with its own line counts and a Copy
-  // action for its full path.
-  // Shared by the Run footer and the Session information panel.
+  // action for its full path. With `list`, the file list shows in place of
+  // the summary and its card, for the Session information panel's Changes
+  // card. Shared by the Run footer and the Session information panel.
   import {
     changeStatsParts,
     changedFilesCard,
@@ -12,7 +13,12 @@
 
   import CopyButton from '../ui/CopyButton.svelte';
 
-  let { stats = null, placement = 'top', class: className = '' } = $props();
+  let {
+    stats = null,
+    placement = 'top',
+    list = false,
+    class: className = '',
+  } = $props();
 
   let parts = $derived(changeStatsParts(stats));
   let card = $derived(changedFilesCard(stats));
@@ -58,7 +64,118 @@
   {/each}
 {/snippet}
 
-{#if parts.length > 0}
+{#snippet files()}
+  <div class="changed-files-card__header">
+    <div class="changed-files-card__heading">
+      <span class="changed-files-card__title">{card.title}</span>
+      <span class="changed-files-card__totals">
+        <span
+          class="changed-files-card__added"
+          class:changed-files-card__total--zero={card.added === 0}
+          >+{card.added}</span
+        >
+        <span
+          class="changed-files-card__removed"
+          class:changed-files-card__total--zero={card.removed === 0}
+          >-{card.removed}</span
+        >
+      </span>
+    </div>
+    {#if card.rootSegments.length > 0}
+      <!-- Break the shared directory only after a separator. -->
+      <div
+        class="changed-files-card__root"
+        use:tooltip={list
+          ? {
+              text: card.rootSegments.join(''),
+              mono: true,
+              placement,
+              whenTruncated: true,
+            }
+          : null}
+      >
+        <bdi
+          >{#each card.rootSegments as segment, index (index)}{#if index > 0 && !list}<wbr
+              />{/if}{segment}{/each}</bdi
+        >
+      </div>
+    {/if}
+  </div>
+  <ul
+    class="changed-files-card__list"
+    style:grid-template-columns={listColumns(card.countKinds)}
+  >
+    {#each card.groups as group (group.directory)}
+      {#if group.directory}
+        <li class="changed-files-card__group">
+          <span class="changed-files-card__folder">
+            <svg
+              class="changed-files-card__folder-icon"
+              viewBox="0 0 16 16"
+              width="13"
+              height="13"
+              aria-hidden="true"
+            >
+              <path
+                d="M1.75 3.5h4.1l1.5 1.6h6.9v7.4H1.75z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <!-- Long folders lose their start, keeping the nearest
+                 folder names visible. -->
+            <span class="changed-files-card__directory"
+              ><bdi>{group.directory}</bdi></span
+            >
+            <span class="changed-files-card__folder-files"
+              >{folderFilesLabel(group.rows.length)}</span
+            >
+          </span>
+          {@render counts(group, true)}
+          <span></span>
+        </li>
+      {/if}
+      {#each group.rows as row (row.path)}
+        <li
+          class="changed-files-card__row"
+          class:changed-files-card__row--nested={group.directory}
+        >
+          <span
+            class="changed-files-card__name"
+            use:tooltip={{
+              text: row.path,
+              mono: true,
+              placement: list ? placement : 'right',
+              whenTruncated: true,
+            }}>{row.name}</span
+          >
+          {@render counts(row, false)}
+          <CopyButton
+            text={row.path}
+            class="changed-files-card__copy"
+            label={t('chat.changedFiles.copyPath', { name: row.name })}
+            copiedLabel={t('chat.changedFiles.pathCopied')}
+          />
+        </li>
+      {/each}
+    {/each}
+  </ul>
+  {#if card.unlisted > 0}
+    <p class="changed-files-card__unlisted">
+      {unlistedLabel(card.unlisted)}
+    </p>
+  {/if}
+{/snippet}
+
+{#if list}
+  {#if card}
+    <div class="changed-files-list {className}">
+      {@render files()}
+    </div>
+  {/if}
+{:else if parts.length > 0}
   <!-- The summary is focusable so keyboard users reach the file card. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_static_element_interactions -->
   <span
@@ -82,96 +199,7 @@
         use:floatingHoverCard={{ placement, openOnPress: true }}
       >
         {#if activated}
-          <div class="changed-files-card__header">
-            <div class="changed-files-card__heading">
-              <span class="changed-files-card__title">{card.title}</span>
-              <span class="changed-files-card__totals">
-                <span
-                  class="changed-files-card__added"
-                  class:changed-files-card__total--zero={card.added === 0}
-                  >+{card.added}</span
-                >
-                <span
-                  class="changed-files-card__removed"
-                  class:changed-files-card__total--zero={card.removed === 0}
-                  >-{card.removed}</span
-                >
-              </span>
-            </div>
-            {#if card.rootSegments.length > 0}
-              <!-- Break the shared directory only after a separator. -->
-              <div class="changed-files-card__root">
-                {#each card.rootSegments as segment, index (index)}{#if index > 0}<wbr
-                    />{/if}{segment}{/each}
-              </div>
-            {/if}
-          </div>
-          <ul
-            class="changed-files-card__list"
-            style:grid-template-columns={listColumns(card.countKinds)}
-          >
-            {#each card.groups as group (group.directory)}
-              {#if group.directory}
-                <li class="changed-files-card__group">
-                  <span class="changed-files-card__folder">
-                    <svg
-                      class="changed-files-card__folder-icon"
-                      viewBox="0 0 16 16"
-                      width="13"
-                      height="13"
-                      aria-hidden="true"
-                    >
-                      <path
-                        d="M1.75 3.5h4.1l1.5 1.6h6.9v7.4H1.75z"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.3"
-                        stroke-linejoin="round"
-                      />
-                    </svg>
-                    <!-- Long folders lose their start, keeping the nearest
-                         folder names visible. -->
-                    <span class="changed-files-card__directory"
-                      ><bdi>{group.directory}</bdi></span
-                    >
-                    <span class="changed-files-card__folder-files"
-                      >{folderFilesLabel(group.rows.length)}</span
-                    >
-                  </span>
-                  {@render counts(group, true)}
-                  <span></span>
-                </li>
-              {/if}
-              {#each group.rows as row (row.path)}
-                <li
-                  class="changed-files-card__row"
-                  class:changed-files-card__row--nested={group.directory}
-                >
-                  <span
-                    class="changed-files-card__name"
-                    use:tooltip={{
-                      text: row.path,
-                      mono: true,
-                      placement: 'right',
-                      whenTruncated: true,
-                    }}>{row.name}</span
-                  >
-                  {@render counts(row, false)}
-                  <CopyButton
-                    text={row.path}
-                    class="changed-files-card__copy"
-                    label={t('chat.changedFiles.copyPath', { name: row.name })}
-                    copiedLabel={t('chat.changedFiles.pathCopied')}
-                  />
-                </li>
-              {/each}
-            {/each}
-          </ul>
-          {#if card.unlisted > 0}
-            <p class="changed-files-card__unlisted">
-              {unlistedLabel(card.unlisted)}
-            </p>
-          {/if}
+          {@render files()}
         {/if}
       </div>
     {/if}
@@ -232,6 +260,56 @@
     overflow-wrap: normal;
     white-space: normal;
     cursor: default;
+  }
+
+  /* In place, the list takes its container's width; the container shows the
+     totals already. */
+  .changed-files-list {
+    min-width: 0;
+    font-size: var(--fs-body-sm);
+  }
+
+  .changed-files-list .changed-files-card__totals {
+    display: none;
+  }
+
+  .changed-files-list .changed-files-card__list {
+    overflow: visible;
+  }
+
+  .changed-files-list .changed-files-card__header {
+    padding: 0 4px 6px;
+  }
+
+  .changed-files-list .changed-files-card__title {
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+    font-weight: 500;
+  }
+
+  /* The shared directory keeps one line and loses its start first; its
+     tooltip names it in full. */
+  .changed-files-list .changed-files-card__root {
+    contain: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+  }
+
+  .changed-files-list .changed-files-card__list {
+    margin: 4px 0 0;
+  }
+
+  .changed-files-list .changed-files-card__group,
+  .changed-files-list .changed-files-card__row {
+    min-height: 24px;
+    padding-left: 4px;
+  }
+
+  .changed-files-list .changed-files-card__row--nested {
+    padding-left: 23px;
   }
 
   .changed-files-card__header {

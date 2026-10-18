@@ -357,6 +357,7 @@
 
   let showSessionDrawer = $state(false);
   let activityPanelOpen = $state(false);
+  let activityRunningCount = $state(0);
   // Counts the Sessions this area's drafts created; each one refreshes the
   // Session list.
   let createdSessions = $state(0);
@@ -951,6 +952,11 @@
     onNewSession={navigation.handleNewSession}
     {otherArea}
     actions={workspaceActions}
+    infoPanelOpen={activityPanelOpen}
+    infoPanelId={`${componentId}-info`}
+    infoToggleId={`${componentId}-info-toggle`}
+    infoRunningCount={activityRunningCount}
+    onToggleInfoPanel={() => (activityPanelOpen = !activityPanelOpen)}
   />
 
   {#if target.projectAgentActive}
@@ -1242,6 +1248,9 @@
       </div>
       <ChatActivityPanel
         bind:open={activityPanelOpen}
+        onRunningCountChange={(count) => (activityRunningCount = count)}
+        id={`${componentId}-info`}
+        toggleId={`${componentId}-info-toggle`}
         timelineItems={activeTimelineItems}
         subAgentStatuses={chatState.subAgentStatuses}
         subAgentWork={chatState.subAgentWork}
