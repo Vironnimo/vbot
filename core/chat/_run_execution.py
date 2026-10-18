@@ -586,7 +586,7 @@ class RunExecution:
         state = context.request_state
         if scratch is None or state is None or context.run.run_kind not in SCRATCH_RUN_KINDS:
             return False
-        catalog = await self._requests.live_tool_catalog(
+        catalog = await self._requests.tool_catalog.live_tool_catalog(
             context,
             known=state.allowed_tool_names,
             told=state.tool_epoch.known_names if state.tool_epoch is not None else (),

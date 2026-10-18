@@ -1,6 +1,6 @@
 # Compaction Strategies and Checkpoints
 
-How the Compaction Engine (`core/compaction/compaction.py`, `_model_request.py`) builds one checkpoint: the Model call and its target, both Strategies, Tail selection, checkpoint content, the User quote, summary acceptance and Usage recording. The checkpoint contract, the epoch endings and Policy resolution are in `compaction.md`.
+How the Compaction Engine (`core/compaction/compaction.py`, `_tail.py`, `_model_request.py`) builds one checkpoint: the Model call and its target, both Strategies, Tail selection, checkpoint content, the User quote, summary acceptance and Usage recording. The checkpoint contract, the epoch endings and Policy resolution are in `compaction.md`.
 
 ## Model call
 

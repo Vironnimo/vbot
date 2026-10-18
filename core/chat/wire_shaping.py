@@ -15,38 +15,75 @@ response-only — canonical Session history is never written from this module.
 
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal
 
 from core.chat._effort_epoch import EffortState, effort_change_from_note
 from core.chat._message_history import reply_surface_from_note
 from core.chat._prompt_block_epoch import prompt_block_change_from_note
+from core.chat._request_images import (
+    _IMAGE_BUDGET_NOTE as _IMAGE_BUDGET_NOTE,
+)
+from core.chat._request_images import (
+    PINNED_IMAGE_RETIREMENT_SLOT as PINNED_IMAGE_RETIREMENT_SLOT,
+)
+from core.chat._request_images import (
+    RequestImageBudget as RequestImageBudget,
+)
+from core.chat._request_images import (
+    _ImageAddress as _ImageAddress,
+)
+from core.chat._request_images import (
+    _ImageKey as _ImageKey,
+)
+from core.chat._request_images import (
+    _request_images as _request_images,
+)
+from core.chat._request_images import (
+    _RequestImage as _RequestImage,
+)
+from core.chat._request_images import (
+    _retirement_addresses as _retirement_addresses,
+)
+from core.chat._request_images import (
+    limit_request_images as limit_request_images,
+)
+from core.chat._response_ingestion import (
+    _assistant_message_from_response as _assistant_message_from_response,
+)
+from core.chat._response_ingestion import (
+    _complete_usage_with_estimates as _complete_usage_with_estimates,
+)
+from core.chat._response_ingestion import (
+    _nullable_response_string as _nullable_response_string,
+)
+from core.chat._response_ingestion import (
+    _optional_usage_token_count as _optional_usage_token_count,
+)
+from core.chat._response_ingestion import (
+    _parse_response_tool_calls as _parse_response_tool_calls,
+)
+from core.chat._response_ingestion import (
+    _response_phase as _response_phase,
+)
+from core.chat._response_ingestion import (
+    _response_reasoning_meta as _response_reasoning_meta,
+)
 from core.chat._tool_epoch import render_tool_change, tool_change_from_note
-from core.chat.errors import ChatMessageValidationError, ImageBudgetExceededError
+from core.chat.errors import ChatMessageValidationError
 from core.chat.messages import (
     COMPACTION_SKILL_NOTE_PREFIX,
     COMPACTION_SUMMARY_NOTE_PREFIX,
-    USAGE_INPUT_TOKENS_ESTIMATED_FIELD,
-    USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD,
     ChatMessage,
     JsonObject,
     MessageSender,
-    ToolCall,
     error_kind_llm_visible,
-    usage_token_is_estimated,
 )
 from core.providers.adapter import (
-    TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD,
-    TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD,
-    TOOL_CALL_REJECTION_FIELD,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     neutralize_system_reminder_tags,
-    normalize_tool_call_candidates,
 )
 from core.providers.effort_updates import (
     EFFORT_BASE_KWARG,
@@ -71,8 +108,7 @@ from core.sessions import (
     is_tool_change_note,
     skill_context_note_payload,
 )
-from core.tools import model_tool_name, registry_tool_name, tool_failure
-from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
+from core.tools import model_tool_name, tool_failure
 
 INTERRUPTED_TOOL_RESULT_CODE = "result_unavailable"
 INTERRUPTED_TOOL_RESULT_MESSAGE = (
@@ -151,225 +187,6 @@ UNTRUSTED_CHANNEL_MESSAGES_HEADER = (
 )
 
 # Session prompt pin holding the image addresses this prompt epoch retired.
-# Compaction starts a new epoch without it.
-PINNED_IMAGE_RETIREMENT_SLOT = "pinned_image_retirement"
-_IMAGE_BUDGET_NOTE = (
-    "[This image was supplied in an earlier Model request and has now been omitted "
-    "to make room for more images. Its file path remains available. "
-    "Read the file again if you need to inspect it.]"
-)
-
-
-# (role, message identity, block index): where an image sits in every request.
-_ImageAddress = tuple[str, str, int]
-# The address plus a payload digest: which exact pixels a response acknowledged.
-_ImageKey = tuple[str, str, int, str]
-
-
-@dataclass(frozen=True)
-class _RequestImage:
-    message_index: int
-    field: str
-    block_index: int
-    address: _ImageAddress | None
-    key: _ImageKey | None
-    size: int
-
-
-def _request_images(messages: list[JsonObject]) -> list[_RequestImage]:
-    images: list[_RequestImage] = []
-    for message_index, message in enumerate(messages):
-        role = message.get("role")
-        if role not in {"user", "tool"}:
-            continue
-        field = TOOL_RESULT_CONTENT_BLOCKS_FIELD if role == "tool" else "content"
-        content = message.get(field)
-        if not isinstance(content, list):
-            continue
-        for block_index, block in enumerate(content):
-            if (
-                isinstance(block, dict)
-                and block.get("type") == "media"
-                and str(block.get("media_type", "")).startswith("image/")
-                and isinstance(block.get("base64"), str)
-            ):
-                identity = message.get("id") or message.get("tool_call_id")
-                address: _ImageAddress | None = None
-                key: _ImageKey | None = None
-                if isinstance(identity, str) and identity:
-                    address = (str(role), identity, block_index)
-                    # Hashes retain no pixels. Changed hook content or format conversion
-                    # at the same address must be delivered before it becomes eligible.
-                    digest = hashlib.sha256(block["media_type"].encode())
-                    digest.update(block["base64"].encode())
-                    key = (*address, digest.hexdigest())
-                images.append(
-                    _RequestImage(
-                        message_index, field, block_index, address, key, len(block["base64"])
-                    )
-                )
-    return images
-
-
-def _retirement_addresses(pin: JsonObject | None) -> set[_ImageAddress]:
-    entries = pin.get("images") if isinstance(pin, dict) else None
-    if not isinstance(entries, list):
-        return set()
-    return {
-        (entry[0], entry[1], entry[2])
-        for entry in entries
-        if isinstance(entry, list)
-        and len(entry) == 3
-        and isinstance(entry[0], str)
-        and isinstance(entry[1], str)
-        and isinstance(entry[2], int)
-    }
-
-
-@dataclass
-class RequestImageBudget:
-    """Which images a Session's requests still carry, shared by rebuilds and fallback.
-
-    Every image stays in every request until a Provider limit forces room: a
-    documented image count (``image_limit``) or a rejected body size. Then the
-    oldest delivered images are retired until the request holds at most half
-    that limit, so retirements stay rare and the request prefix before the
-    oldest retired image stays cached. Retired images render as a fixed note.
-
-    The retired addresses persist in the Session's prompt epoch
-    (``PINNED_IMAGE_RETIREMENT_SLOT``), so later Runs render the same notes,
-    and Compaction starts over. Images from before the Run count as
-    delivered; a fresh image is never retired before a successful response
-    acknowledged it (``record_delivered``).
-
-    Projection is pure unless remember=True is used on the live request view.
-    """
-
-    _delivered: set[_ImageKey] = field(default_factory=set)
-    _retired: set[_ImageAddress] = field(default_factory=set)
-    _restored: bool = False
-    _unsaved: bool = False
-
-    @property
-    def restored(self) -> bool:
-        return self._restored
-
-    def restore(
-        self,
-        pin: JsonObject | None,
-        messages: list[JsonObject],
-        *,
-        current_user_message_id: str | None,
-    ) -> None:
-        """Start from the Session's retirements; earlier images count as delivered."""
-        self._restored = True
-        self._retired |= _retirement_addresses(pin)
-        self._delivered.update(
-            image.key
-            for image in _request_images(messages)
-            if image.key is not None
-            and messages[image.message_index].get("id") != current_user_message_id
-        )
-
-    def take_unsaved_pin(self) -> JsonObject | None:
-        """Return the pin value once new retirements need persisting, else ``None``."""
-        if not self._unsaved:
-            return None
-        self._unsaved = False
-        return {"images": [list(address) for address in sorted(self._retired)]}
-
-    def record_delivered(self, messages: list[JsonObject]) -> None:
-        self._delivered.update(image.key for image in _request_images(messages) if image.key)
-
-    def project(
-        self,
-        messages: list[JsonObject],
-        *,
-        image_limit: int | None = None,
-        remember: bool = False,
-    ) -> list[JsonObject]:
-        """Apply retirements and keep the request within *image_limit* images."""
-        return self._project(messages, image_limit=image_limit, remember=remember)
-
-    def shrink(
-        self,
-        messages: list[JsonObject],
-        *,
-        max_bytes: int | None,
-        image_limit: int | None = None,
-    ) -> list[JsonObject]:
-        """Retire images after a body-size rejection; unchanged when none can go.
-
-        Retires the oldest delivered images until the image data takes at most
-        half of *max_bytes*, or half of its current size when the limit is
-        unknown, and always at least one.
-        """
-        return self._project(
-            messages, image_limit=image_limit, remember=True, shrink=True, max_bytes=max_bytes
-        )
-
-    def _project(
-        self,
-        messages: list[JsonObject],
-        *,
-        image_limit: int | None,
-        remember: bool,
-        shrink: bool = False,
-        max_bytes: int | None = None,
-    ) -> list[JsonObject]:
-        images = _request_images(messages)
-        active = [image for image in images if image.address not in self._retired]
-        # Oldest first: retiring the oldest keeps the longest cached prefix intact.
-        delivered = [image for image in active if image.key in self._delivered]
-        retiring: list[_RequestImage] = []
-        if image_limit is not None and len(active) > image_limit:
-            fresh = len(active) - len(delivered)
-            if fresh > image_limit:
-                raise ImageBudgetExceededError(fresh, image_limit)
-            retiring = delivered[: len(active) - max(image_limit // 2, fresh)]
-        if shrink:
-            image_bytes = sum(image.size for image in active) - sum(
-                image.size for image in retiring
-            )
-            target = (max_bytes if max_bytes is not None else image_bytes) // 2
-            for count, image in enumerate(delivered[len(retiring) :]):
-                if count and image_bytes <= target:
-                    break
-                retiring.append(image)
-                image_bytes -= image.size
-        retired = self._retired | {image.address for image in retiring if image.address}
-        if remember and len(retired) > len(self._retired):
-            self._retired = retired
-            self._unsaved = True
-        result = list(messages)
-        copied: set[int] = set()
-        for image in images:
-            if image.address not in retired:
-                continue
-            index, field_name = image.message_index, image.field
-            if index not in copied:
-                result[index] = dict(messages[index])
-                copied.add(index)
-            if result[index][field_name] is messages[index][field_name]:
-                result[index][field_name] = list(messages[index][field_name])
-            result[index][field_name][image.block_index] = {
-                "type": "text",
-                "text": _IMAGE_BUDGET_NOTE,
-            }
-        return result
-
-
-def limit_request_images(
-    messages: list[JsonObject],
-    *,
-    budget: RequestImageBudget | None = None,
-    image_limit: int | None = None,
-    remember: bool = False,
-) -> list[JsonObject]:
-    """Apply the Session's image retirements and the route's image-count limit."""
-    return (budget if budget is not None else RequestImageBudget()).project(
-        messages, image_limit=image_limit, remember=remember
-    )
 
 
 def _message_to_request_dict(
@@ -729,7 +546,7 @@ def _assemble_request_history(
         messages, replay_policy=replay_policy, agent_model=agent_model
     ):
         if isinstance(part, tuple):
-            request_messages.extend(_notes_to_request_messages(list(part)))
+            request_messages.extend(note_request_messages(list(part)))
         elif part.role == "tool":
             request_messages.append(_message_to_request_dict(part))
         else:
@@ -906,19 +723,17 @@ def extend_request_with_notes(
     trailing_ids = {note.id for group in groups for note in group}
     rendered: list[JsonObject] = []
     for group in groups:
-        rendered.extend(
-            _notes_to_request_messages([note for note in group if note.id not in new_ids])
-        )
+        rendered.extend(note_request_messages([note for note in group if note.id not in new_ids]))
     if rendered and request_messages[-len(rendered) :] != rendered:
-        request_messages.extend(_notes_to_request_messages(list(notes)))
+        request_messages.extend(note_request_messages(list(notes)))
         return
     if rendered:
         del request_messages[-len(rendered) :]
     request_messages.extend(
-        _notes_to_request_messages([note for note in notes if note.id not in trailing_ids])
+        note_request_messages([note for note in notes if note.id not in trailing_ids])
     )
     for group in groups:
-        request_messages.extend(_notes_to_request_messages(list(group)))
+        request_messages.extend(note_request_messages(list(group)))
 
 
 def notes_missing_from_request(
@@ -959,7 +774,7 @@ def notes_missing_from_request(
     ):
         if isinstance(part, tuple):
             group.extend(part)
-            rendered.extend(_notes_to_request_messages(list(part)))
+            rendered.extend(note_request_messages(list(part)))
             continue
         request_index = request_indices.get(part.id)
         if request_index is not None:
@@ -1040,7 +855,7 @@ def _synthesize_interrupted_tool_result(tool_call: JsonObject) -> JsonObject:
     }
 
 
-def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
+def note_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
     """Render a run of drained notes as request messages, in note order.
 
     Ordinary notes fold into synthetic ``<system-reminder>`` user messages as
@@ -1172,173 +987,3 @@ def _system_reminder_body(message: ChatMessage) -> str:
         if content.startswith(prefix):
             return content.removeprefix(prefix)
     return content
-
-
-def _sanitize_unpaired_surrogates(text: str) -> str:
-    """Replace unpaired UTF-16 surrogate code points a Model may emit.
-
-    Models served via Ollama (Kimi, GLM, Qwen) can return lone surrogates
-    (U+D800–U+DFFF) in their output; those crash ``json.dumps`` with
-    ``ensure_ascii=False`` at the session persistence boundary. A Python
-    ``str`` never carries paired surrogates — an astral character is one code
-    point — so every ``U+D800–U+DFFF`` code point in a str is lone by
-    definition and becomes exactly one replacement character.
-    """
-
-    return _UNPAIRED_SURROGATE_PATTERN.sub("\ufffd", text)
-
-
-# Lone surrogate code points: impossible to encode to UTF-8 and illegal in JSON
-# written with ensure_ascii=False.
-_UNPAIRED_SURROGATE_PATTERN = re.compile("[\ud800-\udfff]")
-
-
-def _assistant_message_from_response(
-    model: str,
-    response: JsonObject,
-    *,
-    reasoning_scope: str | None = None,
-    reasoning_timing: JsonObject | None = None,
-    interrupted: bool = False,
-    interruption_cause: str | None = None,
-    message_id: str | None = None,
-) -> ChatMessage:
-    tool_calls = _parse_response_tool_calls(response.get("tool_calls"))
-    reasoning = _nullable_response_string(response, "reasoning")
-    reasoning_meta = _response_reasoning_meta(response)
-    content = _nullable_response_string(response, "content")
-    return ChatMessage.assistant(
-        model=model,
-        content=_sanitize_unpaired_surrogates(content) if content else content,
-        reasoning=_sanitize_unpaired_surrogates(reasoning) if reasoning else reasoning,
-        reasoning_meta=reasoning_meta,
-        reasoning_summary=(
-            [_sanitize_unpaired_surrogates(part) for part in response["reasoning_summary"]]
-            if isinstance(response.get("reasoning_summary"), list)
-            and all(isinstance(part, str) for part in response["reasoning_summary"])
-            else None
-        ),
-        reasoning_scope=(
-            reasoning_scope if reasoning is not None or reasoning_meta is not None else None
-        ),
-        reasoning_timing=reasoning_timing if reasoning is not None else None,
-        phase=_response_phase(response),
-        usage=response.get("usage"),
-        tool_calls=tool_calls,
-        interrupted=interrupted,
-        interruption_cause=interruption_cause,
-        message_id=message_id,
-    )
-
-
-def _complete_usage_with_estimates(
-    message: ChatMessage,
-    request_messages: list[JsonObject],
-    *,
-    estimated_input_tokens: int | None = None,
-) -> ChatMessage:
-    """Fill only missing usage counters, mark each as estimated, and summarize in ``estimated``."""
-
-    usage = dict(message.usage or {})
-    reported_input_tokens = _optional_usage_token_count(usage.get("input_tokens"))
-    if reported_input_tokens is None or (reported_input_tokens == 0 and request_messages):
-        estimated_input = estimated_input_tokens
-        if estimated_input is None:
-            estimated_input, _ = estimate_request_input_tokens(request_messages)
-        usage["input_tokens"] = estimated_input
-        usage[USAGE_INPUT_TOKENS_ESTIMATED_FIELD] = True
-
-    if _optional_usage_token_count(usage.get("output_tokens")) is None:
-        estimated_output, _ = estimate_message_tokens(message.to_dict())
-        usage["output_tokens"] = estimated_output
-        usage[USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD] = True
-
-    if usage_token_is_estimated(usage, "input_tokens") or usage_token_is_estimated(
-        usage, "output_tokens"
-    ):
-        usage["estimated"] = True
-    else:
-        usage.pop("estimated", None)
-    return replace(message, usage=usage)
-
-
-def _optional_usage_token_count(value: Any) -> int | None:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        return None
-    return value
-
-
-def _nullable_response_string(response: JsonObject, key: str) -> str | None:
-    value = response.get(key)
-    if value is None or isinstance(value, str):
-        return value
-    raise ChatMessageValidationError(f"assistant response {key} must be a string or null")
-
-
-def _response_reasoning_meta(response: JsonObject) -> JsonObject | None:
-    reasoning_meta = response.get("reasoning_meta")
-    if reasoning_meta is None:
-        return None
-    if not isinstance(reasoning_meta, dict):
-        raise ChatMessageValidationError("assistant response reasoning_meta must be an object")
-    return dict(reasoning_meta)
-
-
-def _response_phase(response: JsonObject) -> str | None:
-    phase = response.get("phase")
-    if phase is not None:
-        if not isinstance(phase, str):
-            raise ChatMessageValidationError("assistant response phase must be a string or null")
-        return phase
-    reasoning_meta = response.get("reasoning_meta")
-    if not isinstance(reasoning_meta, dict):
-        return None
-    response_output = reasoning_meta.get("response_output")
-    if not isinstance(response_output, list):
-        return None
-    for item in response_output:
-        if not isinstance(item, dict) or item.get("type") != "message":
-            continue
-        item_phase = item.get("phase")
-        if isinstance(item_phase, str) and item_phase:
-            return item_phase
-    return None
-
-
-def _parse_response_tool_calls(value: Any) -> list[ToolCall] | None:
-    """Normalize every recognizable Provider call, including malformed attempts."""
-
-    if value is None:
-        return None
-
-    if isinstance(value, list):
-        raw_calls = value
-    elif isinstance(value, dict):
-        # A Provider occasionally collapses a one-element Tool Call array into
-        # an object. It is still addressable, so preserve it as one attempt.
-        raw_calls = [value]
-    else:
-        # Provider response-shape corruption must not turn a Tool-level problem
-        # into a Run-level failure. Preserve one synthetic rejected attempt so
-        # the Model receives a correlated failure Result and can recover.
-        raw_calls = [{"arguments": value}]
-
-    tool_calls: list[ToolCall] = []
-    for index, raw_call in enumerate(raw_calls):
-        call = raw_call if isinstance(raw_call, dict) else {}
-        candidates = normalize_tool_call_candidates(
-            tool_call_id=call.get("id"),
-            name=call.get("name"),
-            arguments=call.get("arguments"),
-            fallback_id=f"tool_call_{index}",
-            rejection=call.get(TOOL_CALL_REJECTION_FIELD),
-            argument_sequence_index=call.get(TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD),
-            argument_sequence_length=call.get(TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD),
-        )
-        for candidate in candidates:
-            name = candidate.get("name")
-            if isinstance(name, str):
-                # The Model may know a Tool under its host-specific name.
-                candidate = {**candidate, "name": registry_tool_name(name)}
-            tool_calls.append(ToolCall.from_dict(candidate))
-    return tool_calls or None

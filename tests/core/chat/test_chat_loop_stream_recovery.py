@@ -247,7 +247,7 @@ async def test_reasoning_only_stop_recovers_with_a_visible_continuation(
 ) -> None:
     recovery_sentinel = "test-owned output-integrity recovery"
     monkeypatch.setattr(
-        "core.chat.request_runner.OUTPUT_INTEGRITY_RECOVERY_NOTE", recovery_sentinel
+        "core.chat._stream_response.OUTPUT_INTEGRITY_RECOVERY_NOTE", recovery_sentinel
     )
     misrouted = "Answer text routed as reasoning."
     adapter = StubAdapter(

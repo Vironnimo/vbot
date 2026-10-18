@@ -75,7 +75,7 @@ Every emitted event, transient deltas included, increments the Run-local `sequen
 
 ## Internal source routing
 
-`runs.py` owns `ChatRunManager`, admission guards and Queue lifecycle; `run.py` one Run's events, cancellation, terminal state and the shared execution records; `_timeline.py` `RunTimeline`. Public imports go through `core.runs`.
+`runs.py` owns `ChatRunManager`, admission guards and Queue lifecycle; the package exports records and constants directly from `run.py`; `run.py` one Run's events, cancellation, terminal state and the shared execution records; `_timeline.py` `RunTimeline`. Public imports go through `core.runs`.
 
 ## References
 

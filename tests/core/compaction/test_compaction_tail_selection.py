@@ -11,8 +11,8 @@ from core.chat import ChatMessage, ToolCall
 from core.chat._message_history import effective_compaction_messages
 from core.chat.wire_shaping import (
     _embed_notes_into_request,
-    _notes_to_request_messages,
     _restore_in_run_assistant_reasoning,
+    note_request_messages,
 )
 from core.compaction import (
     CompactionError,
@@ -285,7 +285,7 @@ def test_working_tail_keeps_delivered_notes_only_when_the_request_renders_them_e
         assert plan.boundary_id == "n-delivery"
         assert list(plan.retained_messages) == [delivery, reply]
         assert plan.request_start is not None
-        assert live[plan.request_start :] == [*_notes_to_request_messages([delivery]), live[-1]]
+        assert live[plan.request_start :] == [*note_request_messages([delivery]), live[-1]]
         assert live[plan.request_start - 1]["id"] == "t-1"
 
 
