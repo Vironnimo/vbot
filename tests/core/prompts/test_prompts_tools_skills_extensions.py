@@ -17,7 +17,11 @@ from core.tools.file_state import FileReadState
 from core.tools.load_tools import register_load_tools_tool
 from core.tools.project import register_project_tool
 from core.tools.shell import register_shell_tool
-from core.tools.subagent import register_subagent_tools
+from core.tools.subagent import (
+    TARGET_CHOICE_RULE,
+    TARGET_DESCRIPTION_MAX_CHARACTERS,
+    register_subagent_tools,
+)
 from core.tools.tools import ToolPromptBlockRegistry
 from core.utils.paths import model_path
 from tests.core.prompts.prompts_test_support import (
@@ -313,7 +317,12 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
                     agent_id="reviewer",
                     name="Reviewer",
                     description="Reviews completed work.",
-                )
+                ),
+                SubAgentPromptTarget(
+                    agent_id="planner",
+                    name="Planner",
+                    description="Plans the work. " + "word " * 60 + "TAIL",
+                ),
             ]
 
     tools = ToolRegistry()
@@ -329,9 +338,14 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
 
     prompt = manager.build_system_prompt(allowed, agent_project_id="vbot")
     denied_prompt = manager.build_system_prompt(denied, agent_project_id="vbot")
-    for value in ("reviewer", "Reviewer", "Reviews completed work."):
+    for value in ("reviewer", "Reviewer", "Reviews completed work.", TARGET_CHOICE_RULE):
         assert value in prompt
         assert value not in denied_prompt
+    # A long repository description keeps its start, cut at a word.
+    [planner_line] = [line for line in prompt.splitlines() if "`planner`" in line]
+    assert "Plans the work." in planner_line and planner_line.endswith("word...")
+    assert "TAIL" not in prompt
+    assert len(planner_line.split(" — ")[-1]) <= TARGET_DESCRIPTION_MAX_CHARACTERS + 3
 
 
 def test_subagent_block_stays_visible_without_additional_targets(
@@ -360,6 +374,7 @@ def test_subagent_block_stays_visible_without_additional_targets(
     denied = manager.build_system_prompt(_agent(workspace, allowed_tools=[]))
 
     assert prompt != denied
+    assert TARGET_CHOICE_RULE not in prompt
 
 
 def test_project_choices_belong_to_the_tool_not_the_system_prompt(

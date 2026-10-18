@@ -54,7 +54,14 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "{execution_guidance}"
 )
 
-TARGET_CHOICES_TEMPLATE = "Additional Agents:\n\n{subagent_list}"
+# Shown under the list only, since it concerns no Agent while the list is empty.
+TARGET_CHOICE_RULE = (
+    "Choose one of these Agents only when the user or your task names it or its "
+    "description fits the task; for any other work you delegate, use your own Agent."
+)
+TARGET_CHOICES_TEMPLATE = "Additional Agents:\n\n{subagent_list}\n\n{choice_rule}"
+# Repository descriptions can run to paragraphs; a catalog line keeps their start.
+TARGET_DESCRIPTION_MAX_CHARACTERS = 200
 NO_ADDITIONAL_SUBAGENTS_TEXT = "No additional Agents are available."
 EXECUTION_GUIDANCE = (
     "Continue other work while Sub-Agents run. When you need their answers to proceed, end "
@@ -399,23 +406,26 @@ def _render_subagent_prompt_block(context: Any, coordinator: SubAgentCoordinator
     targets = coordinator.prompt_targets(context.agent, context.agent_project_id)
     entries = tuple((target.agent_id, _subagent_target_line(target)) for target in targets)
     target_choices = (
-        TARGET_CHOICES_TEMPLATE.replace("{subagent_list}", "\n".join(line for _, line in entries))
+        TARGET_CHOICES_TEMPLATE.replace(
+            "{subagent_list}", "\n".join(line for _, line in entries)
+        ).replace("{choice_rule}", TARGET_CHOICE_RULE)
         if entries
         else NO_ADDITIONAL_SUBAGENTS_TEXT
     )
+    # The rule comes and goes with the list, so a change between an empty and a
+    # filled list tells the whole block instead of its entries alone.
+    frame = f"{TARGET_CHOICE_RULE}\n{EXECUTION_GUIDANCE}" if entries else EXECUTION_GUIDANCE
     return RenderedBlock(
         text=SUBAGENT_PROMPT_BLOCK_TEMPLATE.replace("{target_choices}", target_choices).replace(
             "{execution_guidance}", EXECUTION_GUIDANCE
         ),
-        catalog=BlockCatalog(
-            title=SUBAGENT_CATALOG_TITLE, entries=entries, frame=EXECUTION_GUIDANCE
-        ),
+        catalog=BlockCatalog(title=SUBAGENT_CATALOG_TITLE, entries=entries, frame=frame),
     )
 
 
 def _subagent_target_line(target: SubAgentPromptTarget) -> str:
     name = _single_line(target.name) or target.agent_id
-    description = _single_line(target.description)
+    description = _capped(_single_line(target.description))
     suffix = f" — {name}"
     if description:
         suffix = f"{suffix} — {description}"
@@ -424,6 +434,14 @@ def _subagent_target_line(target: SubAgentPromptTarget) -> str:
 
 def _single_line(value: str) -> str:
     return " ".join(value.split())
+
+
+def _capped(description: str) -> str:
+    """The description's start, cut at a word, when it exceeds the catalog limit."""
+    if len(description) <= TARGET_DESCRIPTION_MAX_CHARACTERS:
+        return description
+    cut = description[: TARGET_DESCRIPTION_MAX_CHARACTERS + 1].rsplit(" ", 1)[0]
+    return f"{cut.rstrip(' ,;:.')}..."
 
 
 __all__ = [
