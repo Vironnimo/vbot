@@ -318,16 +318,36 @@ def begin_runtime_model_database_refresh(
     )
 
 
-def begin_system_model_database_refresh(system_resources_dir: Path) -> ModelDatabaseRefresh:
-    """Create an isolated copy of the system Model DB for a release refresh."""
+def begin_system_model_database_refresh(
+    system_resources_dir: Path, *, provider_ids: Collection[str]
+) -> ModelDatabaseRefresh:
+    """Stage the shipped catalogs and Overrides for a release refresh.
+
+    ``provider_ids`` limits generated Provider catalogs to the
+    shared Providers selected by the caller. Old instance catalogs are omitted
+    even when this refresh fetches only one unrelated Provider.
+    """
 
     system_models_dir = system_resources_dir / MODEL_DATABASE_DIRECTORY_NAME
     staging_resources_dir = (
         system_resources_dir.parent / f".{system_resources_dir.name}-model-db-refresh-{uuid4().hex}"
     )
     staging_models_dir = staging_resources_dir / MODEL_DATABASE_DIRECTORY_NAME
+
+    def skip_unshipped_catalogs(directory: str, names: list[str]) -> set[str]:
+        ignored = _skip_legacy_raw_dumps(directory, names)
+        if Path(directory) == system_models_dir:
+            ignored.update(
+                name
+                for name in names
+                if name.endswith(_JSON_SUFFIX)
+                and is_provider_file(name)
+                and name.removesuffix(_JSON_SUFFIX) not in provider_ids
+            )
+        return ignored
+
     if system_models_dir.is_dir():
-        shutil.copytree(system_models_dir, staging_models_dir, ignore=_skip_legacy_raw_dumps)
+        shutil.copytree(system_models_dir, staging_models_dir, ignore=skip_unshipped_catalogs)
     else:
         staging_models_dir.mkdir(parents=True)
     system_manifest = read_model_database_manifest(system_models_dir)

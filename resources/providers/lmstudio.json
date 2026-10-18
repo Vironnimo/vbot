@@ -4,6 +4,7 @@
   "adapter": "lmstudio",
   "base_url": "http://localhost:1234",
   "models_endpoint": "/api/v1/models",
+  "catalog_scope": "instance",
   "connections": [
     {
       "id": "local",

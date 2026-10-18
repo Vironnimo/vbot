@@ -272,21 +272,31 @@ def test_discarded_runtime_refresh_leaves_published_database_untouched(tmp_path:
 def test_system_refresh_is_unpublished_until_complete_commit(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
     system_models_dir = resources_dir / "models"
-    _write_catalogs(system_models_dir, ["openai.json", "anthropic.json", "seed.json"])
+    instance_catalogs = ["ollama.json", "lmstudio.json", "custom.json"]
+    _write_catalogs(
+        system_models_dir, ["openai.json", "anthropic.json", "seed.json", *instance_catalogs]
+    )
     system_models_dir.joinpath("openai.overrides.json").write_text("{}", encoding="utf-8")
     write_model_database_manifest(
         system_models_dir,
         source=MODEL_DATABASE_SOURCE_SYSTEM,
-        catalogs={"openai.json": _JULY_20, "anthropic.json": _JULY_20},
+        catalogs={
+            "openai.json": _JULY_20,
+            "anthropic.json": _JULY_20,
+            **dict.fromkeys(instance_catalogs, _JULY_20),
+        },
     )
 
-    refresh = begin_system_model_database_refresh(resources_dir)
+    refresh = begin_system_model_database_refresh(
+        resources_dir, provider_ids={"openai", "anthropic", "seed"}
+    )
     refresh.resources_dir.joinpath("models", "openai.json").write_text(
         "new",
         encoding="utf-8",
     )
 
     assert system_models_dir.joinpath("openai.json").read_text(encoding="utf-8") != "new"
+    assert all((system_models_dir / name).exists() for name in instance_catalogs)
 
     manifest = refresh.commit(providers=["openai"])
 

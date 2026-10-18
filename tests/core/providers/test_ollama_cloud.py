@@ -319,7 +319,7 @@ async def test_request_body_limit_counts_exact_wire_bytes_before_io(
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": 'GrÃ¼ÃŸe ðŸ˜€ "\\\n'},
+                {"type": "text", "text": 'Grüße 😀 "\\\n'},
                 {"type": "media", "media_type": "image/png", "base64": ""},
             ],
         }
@@ -329,7 +329,7 @@ async def test_request_body_limit_counts_exact_wire_bytes_before_io(
         "tools": [
             {
                 "name": "test",
-                "description": "Tool Ã¤",
+                "description": "Tool ä",
                 "parameters": {"type": "object", "properties": {}},
             }
         ],
@@ -434,7 +434,7 @@ async def test_stream_surfaces_reasoning_and_omits_zero_input_usage() -> None:
     await adapter.aclose()
 
 
-_OLD_REASONING = "EXACT old Reasoning: Ã¤Ã¶Ã¼\nline two\n"
+_OLD_REASONING = "EXACT old Reasoning: äöü\nline two\n"
 
 
 @pytest.mark.parametrize(
