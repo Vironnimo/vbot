@@ -4,7 +4,7 @@ How `ToolRegistry` registers and publishes Tools and how `ToolExecutor` dispatch
 
 ## Source
 
-The public `tools.py` entry point retains Tool registration, dispatch, scheduling, and prompt-block collection. Internal units own immutable definitions (`_tool_definitions.py`), per-call context (`_tool_context.py`), presentation metadata (`_tool_display.py`, `tools/display.md`), and result-envelope validation (`_tool_results.py`). These are internal parts of the existing Tools owner; public imports remain stable.
+The public `tools.py` entry point retains registration and dispatch; `_tool_execution.py` owns executor/batch scheduling and cancellation hooks, `_tool_workers.py` bounded blocking work, and `_tool_prompt_blocks.py` prompt-block declarations. Other internal units own definitions (`_tool_definitions.py`), per-call context (`_tool_context.py`), presentation (`_tool_display.py`, `tools/display.md`), and result validation (`_tool_results.py`). The package facade loads public exports and module attributes on first access and caches their original identities; public imports remain stable.
 
 ## Registration
 
