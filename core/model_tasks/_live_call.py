@@ -43,6 +43,7 @@ from core.model_tasks._live_wire import (
     RELAY_BYTES_PER_MS,
     JsonObject,
     LiveWire,
+    PlaybackReceipt,
     WireAudio,
     WireCaption,
     WireClosed,
@@ -284,32 +285,26 @@ class LiveCallSession:
                 )
         self._audio_ready.set()
 
-    def report_playback(
-        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
-    ) -> None:
+    def report_playback(self, receipt: PlaybackReceipt) -> None:
         """Apply one owner report without blocking the socket's microphone pump."""
         if self._relay and not self._closing and not self._done.is_set():
             self._spawn(
-                self._update_playback(generation, played_samples, enabled, cleared),
+                self._update_playback(receipt),
                 name=f"live-call-playback:{self._log_id}",
             )
 
     def reset_playback(self) -> None:
         """An owner disappeared or dropped output; retire its pending audio."""
-        self.report_playback(0, 0, enabled=False, cleared=True)
+        self.report_playback(PlaybackReceipt(0, 0, enabled=False, cleared=True))
 
     def sync_playback(self) -> None:
         """Give a newly attached owner the current relay generation."""
         if self._relay:
             self._publish({"type": "playback_clear", "generation": self._playback_generation})
 
-    async def _update_playback(
-        self, generation: int, played_samples: int, enabled: bool, cleared: bool
-    ) -> None:
+    async def _update_playback(self, receipt: PlaybackReceipt) -> None:
         async def send() -> None:
-            events = await self._wire.update_playback(
-                generation, played_samples, enabled=enabled, cleared=cleared
-            )
+            events = await self._wire.update_playback(receipt)
             for event in events:
                 self._handle(event)
 

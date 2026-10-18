@@ -15,7 +15,7 @@ audio flows:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -155,6 +155,48 @@ WireEvent = (
 )
 
 
+@dataclass(frozen=True)
+class PlaybackReceipt:
+    """One accessor's confirmed rendered prefix in a relay generation.
+
+    Generation zero reports initial readiness or owner loss. Retired-generation
+    receipts can finish a clear, but cannot change current playback readiness.
+    """
+
+    generation: int
+    played_samples: int
+    enabled: bool
+    cleared: bool = False
+
+    def __post_init__(self) -> None:
+        for value in (self.generation, self.played_samples):
+            if type(value) is not int or not 0 <= value <= 0xFFFFFFFF:
+                raise ValueError("Playback positions must be uint32 integers")
+        if not isinstance(self.enabled, bool) or not isinstance(self.cleared, bool):
+            raise ValueError("Playback flags must be booleans")
+
+    @classmethod
+    def from_owner_frame(cls, frame: Mapping[str, Any]) -> PlaybackReceipt | None:
+        """Parse the owner report; malformed frames remain silently ignored."""
+        try:
+            return cls(
+                generation=frame["generation"],
+                played_samples=frame["played_samples"],
+                enabled=frame["enabled"],
+                cleared=frame.get("cleared", False),
+            )
+        except KeyError, ValueError:
+            return None
+
+    def confirmed_prefix(self, produced_samples: int, previous: int) -> int:
+        """Keep only actual produced samples, without regressing a confirmed prefix."""
+        return max(previous, min(self.played_samples, produced_samples))
+
+    def controls_generation(self, generation: int) -> bool:
+        """Initial readiness and the current generation may change playback state."""
+        return self.generation in {0, generation}
+
+
 class LiveWire(Protocol):
     """One provider call with a joined control channel."""
 
@@ -181,9 +223,7 @@ class LiveWire(Protocol):
         """Forward microphone PCM (relay media only); dropped before the session runs."""
         ...
 
-    async def update_playback(
-        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
-    ) -> list[WireEvent]:
+    async def update_playback(self, receipt: PlaybackReceipt) -> list[WireEvent]:
         """Apply the accessor's rendered audio prefix; return any playback reset."""
         ...
 

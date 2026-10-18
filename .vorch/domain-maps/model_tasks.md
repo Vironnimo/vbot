@@ -1,6 +1,6 @@
 # Task Models
 
-The single deep task module: bindings from specialized task types to concrete provider or local targets, plus the task execution services that run them.
+Specialized Task Model bindings, target discovery and execution.
 
 ## Overview
 

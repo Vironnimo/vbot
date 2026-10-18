@@ -18,6 +18,7 @@ from core.model_tasks._live_brief import live_tool_guidance, voice_instructions
 from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import ControlJoinError, OpenAIBackend
 from core.model_tasks._live_wire import (
+    PlaybackReceipt,
     WireAudio,
     WireCaption,
     WireClosed,
@@ -102,10 +103,8 @@ class FakeWire:
             raise self.audio_error
         self.audio.append(pcm)
 
-    async def update_playback(
-        self, generation: int, played_samples: int, *, enabled: bool, cleared: bool = False
-    ) -> list[Any]:
-        self.sent.append(("playback", generation, played_samples, enabled, cleared))
+    async def update_playback(self, receipt: PlaybackReceipt) -> list[Any]:
+        self.sent.append(("playback", receipt))
         return []
 
     async def request_close(self) -> None:
@@ -842,12 +841,12 @@ async def test_relay_audio_flows_only_while_live():
     assert host.of_type("playback_clear") == [{"type": "playback_clear", "generation": 3}]
     call.sync_playback()
     assert host.of_type("playback_clear")[-1] == {"type": "playback_clear", "generation": 3}
-    call.report_playback(3, 120, enabled=True)
+    call.report_playback(PlaybackReceipt(3, 120, enabled=True))
     call.reset_playback()
     await _until(lambda: len([sent for sent in wire.sent if sent[0] == "playback"]) == 2)
     assert [sent for sent in wire.sent if sent[0] == "playback"] == [
-        ("playback", 3, 120, True, False),
-        ("playback", 0, 0, False, True),
+        ("playback", PlaybackReceipt(3, 120, True, False)),
+        ("playback", PlaybackReceipt(0, 0, False, True)),
     ]
     await call.close()
     call.push_audio(b"\x04\x00")

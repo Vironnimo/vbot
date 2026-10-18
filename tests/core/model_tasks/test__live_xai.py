@@ -15,6 +15,7 @@ from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from websockets.http11 import Response
 
 from core.model_tasks._live_wire import (
+    PlaybackReceipt,
     WireAudio,
     WireCaption,
     WireClosed,
@@ -81,7 +82,7 @@ def _session(*, clock: Clock | None = None) -> XaiSession:
         tools=[*TOOLS, REQUEST_TOOL], clock=clock or Clock(), wall_clock=lambda: 1000.0
     )
     session.receive({"type": "session.updated", "session": {}})
-    session.playback(1, 0, enabled=True)
+    session.playback(PlaybackReceipt(0, 0, enabled=True))
     return session
 
 
@@ -463,7 +464,10 @@ def test_speaking_waits_for_reported_playback_not_elapsed_wall_time():
     clock = Clock()
     session = _session(clock=clock)
     session.receive(_created("r1"))
-    session.receive(_audio("a1", "r1", 2 * ONE_SECOND))
+    session.receive(_audio("a1", "r1", ONE_SECOND))
+    # Reports cannot confirm audio the Provider has not produced yet.
+    session.playback(PlaybackReceipt(1, 0xFFFFFFFF, enabled=True))
+    session.receive(_audio("a1", "r1", ONE_SECOND))
     session.receive(_call("r1", "c1"))
     session.receive(_done("r1"))
 
@@ -471,8 +475,8 @@ def test_speaking_waits_for_reported_playback_not_elapsed_wall_time():
     assert session.next_deadline() is None
     clock.now += 200
     assert session.tick() == []
-    assert session.playback(1, 24_000, enabled=True).commands == []
-    assert session.playback(1, 48_000, enabled=True).commands == [
+    assert session.playback(PlaybackReceipt(1, 24_000, enabled=True)).commands == []
+    assert session.playback(PlaybackReceipt(1, 48_000, enabled=True)).commands == [
         {"type": "response.create", "event_id": "vbot_rc_1"}
     ]
 
@@ -560,7 +564,7 @@ def test_a_stalled_response_stops_blocking_the_gate():
     session = _session(clock=clock)
     session.receive(_created("r1"))
     session.receive(_audio("a1", "r1", 100))
-    session.playback(1, 50, enabled=True)
+    session.playback(PlaybackReceipt(1, 50, enabled=True))
 
     assert _creates(session.announce("vBot update: {}")) == []
     clock.now += 30.0
@@ -624,7 +628,7 @@ def test_barge_in_clears_playback_truncates_at_the_played_audio_and_fences_the_r
     assert step.commands == []
     # The playback clock differs from wire receipt; the final clear receipt
     # says only 500 ms were rendered, even though 1250 ms elapsed.
-    confirmed = session.playback(1, 12_000, enabled=True, cleared=True)
+    confirmed = session.playback(PlaybackReceipt(1, 12_000, enabled=True, cleared=True))
     assert confirmed.commands == [
         {
             "type": "conversation.item.truncate",
@@ -643,7 +647,7 @@ def test_barge_in_removes_unheard_audio_but_preserves_fully_played_items(played)
     session.receive(_created("r1"))
     session.receive(_audio("a1", "r1", ONE_SECOND))
     session.receive(_done("r1"))
-    session.playback(1, played, enabled=True)
+    session.playback(PlaybackReceipt(1, played, enabled=True))
     clearing = session.receive(_SPEECH_STARTED)
     assert clearing.events == [WirePlaybackClear(2)]
     clock.now += 0.5  # The lost owner cannot supply a final receipt.
@@ -683,9 +687,9 @@ def test_playback_receipts_map_to_each_item_and_old_generations_cannot_resume_au
     session.receive(_done("r1"))
     assert first.events[0].start_samples == 0
     assert second.events[0].start_samples == 24_000
-    session.playback(1, 30_000, enabled=True)
+    session.playback(PlaybackReceipt(1, 30_000, enabled=True))
 
-    muted = session.playback(1, 30_000, enabled=False, cleared=True)
+    muted = session.playback(PlaybackReceipt(1, 12_000, enabled=False, cleared=True))
     assert muted.events == [WirePlaybackClear(2)]
     assert muted.commands == [
         {
@@ -695,7 +699,7 @@ def test_playback_receipts_map_to_each_item_and_old_generations_cannot_resume_au
             "audio_end_ms": 250,
         }
     ]
-    session.playback(1, 48_000, enabled=True, cleared=True)
+    session.playback(PlaybackReceipt(1, 48_000, enabled=True, cleared=True))
     session.receive(_created("r2"))
     assert session.receive(_audio("a3", "r2", ONE_SECOND)).events == []
     hidden = session.receive(_done("r2"))
@@ -708,7 +712,7 @@ def test_playback_receipts_map_to_each_item_and_old_generations_cannot_resume_au
             "audio_end_ms": 0,
         }
     ]
-    session.playback(3, 0, enabled=True)
+    session.playback(PlaybackReceipt(3, 0, enabled=True))
     session.receive(_created("r3"))
     resumed = session.receive(_audio("a4", "r3", 100))
     assert resumed.events == [WireAudio("a4", bytes(100), generation=3, start_samples=0)]
@@ -718,8 +722,8 @@ def test_disconnected_playback_preserves_only_its_confirmed_prefix_and_does_not_
     session = _session()
     session.receive(_created("r1"))
     session.receive(_audio("a1", "r1", ONE_SECOND))
-    session.playback(1, 6000, enabled=True)
-    lost = session.playback(0, 0, enabled=False, cleared=True)
+    session.playback(PlaybackReceipt(1, 6000, enabled=True))
+    lost = session.playback(PlaybackReceipt(0, 0, enabled=False, cleared=True))
     assert lost.commands[0]["audio_end_ms"] == 250
     # Generation can continue at the Provider while playback is disabled;
     # a Tool still runs, while its unseen speech retains the original cut.
@@ -987,7 +991,7 @@ async def test_socket_events_are_normalized_and_the_wire_answers_on_the_socket()
 async def test_the_wire_closes_on_max_duration_and_speaks_after_playback_drains():
     socket = FakeSocket()
     wire = await _open(FakeConnect(socket))
-    await wire.update_playback(1, 0, enabled=True)
+    await wire.update_playback(PlaybackReceipt(1, 0, enabled=True))
     events: list[Any] = []
 
     async def read() -> None:
@@ -1004,7 +1008,7 @@ async def test_the_wire_closes_on_max_duration_and_speaks_after_playback_drains(
             await asyncio.sleep(0.005)
     await wire.announce("vBot update: {}")
     assert _creates(socket.sent) == []
-    await wire.update_playback(1, 2400, enabled=True)
+    await wire.update_playback(PlaybackReceipt(1, 2400, enabled=True))
     assert len(_creates(socket.sent)) == 1
     socket.push({"type": "error", "error": {"type": "max_duration", "message": "120 minutes"}})
     async with asyncio.timeout(2):
