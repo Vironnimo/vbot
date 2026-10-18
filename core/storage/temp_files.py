@@ -14,6 +14,7 @@ from pathlib import Path
 from threading import Event, RLock
 
 from core.storage.layout import DataDirectoryLayout
+from core.utils.file_status import is_link_status
 from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -169,6 +170,10 @@ class TemporaryFileManager:
         for category, retention in self._retention.items():
             category_dir = self.root / category
             try:
+                for directory in (self.root.parent, self.root, category_dir):
+                    status = directory.stat(follow_symlinks=False)
+                    if is_link_status(status) or not stat.S_ISDIR(status.st_mode):
+                        raise OSError("Temporary-file cleanup requires real directories")
                 with os.scandir(category_dir) as listing:
                     entries = list(listing)
             except FileNotFoundError:
@@ -191,11 +196,18 @@ class TemporaryFileManager:
                     # Listing data preselects without a per-file system call on
                     # Windows (one stat elsewhere); it can lag behind a file
                     # still open elsewhere, so a fresh stat confirms each removal.
-                    if not entry.is_file() or entry.stat().st_mtime >= expires_before:
+                    if (
+                        not entry.is_file(follow_symlinks=False)
+                        or entry.stat(follow_symlinks=False).st_mtime >= expires_before
+                    ):
                         continue
                     candidate = Path(entry.path)
-                    current = candidate.stat()
-                    if stat.S_ISREG(current.st_mode) and current.st_mtime < expires_before:
+                    current = candidate.stat(follow_symlinks=False)
+                    if (
+                        not is_link_status(current)
+                        and stat.S_ISREG(current.st_mode)
+                        and current.st_mtime < expires_before
+                    ):
                         candidate.unlink()
                 except OSError as error:
                     _LOGGER.warning(

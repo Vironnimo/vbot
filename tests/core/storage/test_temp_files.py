@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from core.storage import DataDirectoryLayout, TemporaryFileManager
+from tests.directory_links import link_directory
 
 
 def _age(path: Path, *, seconds: float) -> None:
@@ -88,6 +89,30 @@ def test_sweep_applies_category_retention_and_spares_active_files(tmp_path: Path
     assert not expired_subagent.path.exists()
     assert retained_command.path.exists()
     assert not expired_command.path.exists()
+
+
+@pytest.mark.parametrize("redirected", ["artifacts", "temp", "commands"])
+def test_sweep_never_follows_redirected_category_directories(
+    tmp_path: Path, redirected: str
+) -> None:
+    data_dir = tmp_path / "data"
+    manager = TemporaryFileManager(data_dir)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    parts = ["artifacts", "temp", "commands"]
+    depth = parts.index(redirected)
+    link = data_dir.joinpath(*parts[: depth + 1])
+    category = outside.joinpath(*parts[depth + 1 :])
+    link.parent.mkdir(parents=True, exist_ok=True)
+    category.mkdir(parents=True, exist_ok=True)
+    operator_file = category / "unrelated.log"
+    operator_file.write_text("must survive", encoding="utf-8")
+    _age(operator_file, seconds=100 * 60 * 60)
+    link_directory(link, outside)
+
+    manager.sweep()
+
+    assert operator_file.read_text(encoding="utf-8") == "must survive"
 
 
 def test_finish_is_idempotent_and_restarts_retention_clock(tmp_path: Path) -> None:
