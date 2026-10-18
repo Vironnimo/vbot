@@ -59,10 +59,6 @@ _EXCERPT_LEADS = (
 )
 
 
-class ReplayError(ValueError):
-    """The corpus or its output location cannot be used as given."""
-
-
 @dataclass(frozen=True, slots=True)
 class HistoryCall:
     """One Tool call of a Session, with what the replay needs of it."""
