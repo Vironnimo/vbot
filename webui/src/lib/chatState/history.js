@@ -71,9 +71,14 @@ export function loadHistory(sessionState, messages, options = {}) {
     sessionState.status = CHAT_STATUS_IDLE;
     sessionState.streamError = '';
   }
-  const lastUsage = findLastUsage(sessionState.messages);
-  if (lastUsage) {
-    sessionState.usage = lastUsage;
+  // A newer live Model step owns the last-turn projection.
+  if (!options.preserveUsage) {
+    if (Object.hasOwn(options, 'lastUsage')) {
+      sessionState.usage = options.lastUsage;
+    } else {
+      const lastUsage = findLastUsage(sessionState.messages);
+      if (lastUsage) sessionState.usage = lastUsage;
+    }
   }
   // Whole-session totals come from the server (the loaded page may be a
   // slice); terminal run events refresh them between history loads.

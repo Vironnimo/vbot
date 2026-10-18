@@ -124,6 +124,7 @@ describe('History reads', () => {
         next_after: 'cursor-1',
         incremental: false,
         session_usage: { input_tokens: 10 },
+        last_usage: { input_tokens: 8 },
         context_usage: { used_tokens: 5 },
         compaction_policy: policy,
         background_command_statuses: { cmd_one: 'completed' },
@@ -165,6 +166,7 @@ describe('History reads', () => {
     });
     expect(source.messages.map((message) => message.id)).toEqual(['reply']);
     expect(source.sessionUsage).toEqual({ input_tokens: 10 });
+    expect(source.usage).toEqual({ input_tokens: 8 });
     expect(source.contextUsage).toEqual({ used_tokens: 5 });
     expect(source.compactionPolicy).toBe(policy);
     expect(source.backgroundCommandStatuses).toEqual({
@@ -178,13 +180,16 @@ describe('History reads', () => {
     const loading = controller.loadHistoryForSession('alpha', 'source');
     const changedPolicy = { ...policy, enabled: false };
     controller.applySessionCompactionPolicy('alpha', 'source', changedPolicy);
+    source.usage = { input_tokens: 20 };
     pendingHistory.resolve({
       messages: [{ id: 'next', role: 'assistant', content: 'Next' }],
       incremental: true,
       compaction_policy: policy,
+      last_usage: { input_tokens: 12 },
     });
     await loading;
     expect(source.compactionPolicy).toBe(changedPolicy);
+    expect(source.usage).toEqual({ input_tokens: 20 });
     expect(source.messages.at(-1).id).toBe('next');
   });
 
@@ -213,6 +218,7 @@ describe('History reads', () => {
         incremental: true,
         has_newer: true,
         context_usage: { used_tokens: 7 },
+        last_usage: { input_tokens: 11 },
         background_command_statuses: { cmd_one: 'completed' },
         background_commands_still_running: ['cmd_one'],
         subagent_background_commands: [
@@ -243,6 +249,7 @@ describe('History reads', () => {
     const source = chatState.sessions['alpha::source'];
     expect(loadChatHistory).toHaveBeenCalledTimes(3);
     expect(source.historyAfter).toBe('cursor-3');
+    expect(source.usage).toEqual({ input_tokens: 11 });
     expect(source.backgroundCommandStatuses).toEqual({
       cmd_one: { status: 'completed', stillRunning: false },
       cmd_two: { status: 'failed', stillRunning: false },

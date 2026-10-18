@@ -251,11 +251,15 @@ export function createChatRpcMock({
           : sourceMessages;
         const response = {
           session_id: params.session_id,
-          // Like the server, a windowed read (`child_limit`) carries no Run
-          // summaries in `messages`; finished Runs arrive in `runs`.
+          // Windowed transport keeps only raw User records; the semantic
+          // items carry visible bodies and last_usage carries accounting.
           messages: params.child_limit
-            ? pageMessages.filter((entry) => entry.role !== 'run_summary')
+            ? pageMessages.filter((entry) => entry.role === 'user')
             : pageMessages,
+          last_usage:
+            pageMessages.findLast(
+              (entry) => entry.role === 'assistant' && entry.usage,
+            )?.usage ?? null,
           runs: pageMessages
             .filter((entry) => entry.role === 'run_summary')
             .map((entry) => ({
