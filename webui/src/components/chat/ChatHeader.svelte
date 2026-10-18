@@ -52,10 +52,28 @@
     onNewSession = () => {},
     // Actions for this Chat area at the bar's end, such as Split.
     actions = undefined,
+    // The Session information panel at the right: whether it is open, its id,
+    // the toggle's id, how much work runs (marked on the toggle), and the
+    // toggle itself. The toggle sits at the bar's very end.
+    infoPanelOpen = false,
+    infoPanelId = undefined,
+    infoToggleId = undefined,
+    infoRunningCount = 0,
+    onToggleInfoPanel = () => {},
     // Open in split view for an Agent tab (`{ label, open(target) }`); null
     // leaves the tabs without a context menu.
     otherArea = null,
   } = $props();
+
+  let infoToggleLabel = $derived(
+    infoPanelOpen
+      ? t('chat.activity.close')
+      : infoRunningCount === 1
+        ? t('chat.activity.openOneRunning')
+        : infoRunningCount > 1
+          ? t('chat.activity.openManyRunning', { count: infoRunningCount })
+          : t('chat.activity.open'),
+  );
 
   // The open Agent tab menu (../ui/ContextMenu.svelte), or null.
   let agentMenu = $state(null);
@@ -523,11 +541,28 @@
       <span class="chat-header__empty">{t('chat.noAgents')}</span>
     {/if}
   </div>
-  {#if actions}
-    <div class="chat-header__area-actions">
-      {@render actions()}
-    </div>
-  {/if}
+  <div class="chat-header__area-actions">
+    {@render actions?.()}
+    <Button
+      id={infoToggleId}
+      variant="secondary"
+      icon
+      class="chat-header__action chat-header__info-toggle"
+      ariaLabel={infoToggleLabel}
+      tooltip={infoToggleLabel}
+      aria-expanded={infoPanelOpen}
+      aria-controls={infoPanelOpen ? infoPanelId : undefined}
+      onClick={() => onToggleInfoPanel()}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M15 4v16" />
+      </svg>
+      {#if infoRunningCount > 0}
+        <span class="chat-header__info-running" aria-hidden="true"></span>
+      {/if}
+    </Button>
+  </div>
 </header>
 
 <ContextMenu menu={agentMenu} onClose={() => (agentMenu = null)} />
@@ -560,6 +595,21 @@
     flex-shrink: 0;
     align-items: center;
     gap: 2px;
+  }
+
+  /* Work running in the Session marks the information toggle. */
+  :global(.chat-header__info-toggle) {
+    position: relative;
+  }
+
+  .chat-header__info-running {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--amber);
   }
 
   .chat-header__session-actions {

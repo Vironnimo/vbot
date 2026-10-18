@@ -76,8 +76,21 @@ function runItem(items, id = 'assistant-run') {
   return { id, type: 'assistant_run', items };
 }
 
-function rail() {
-  return document.querySelector('.chat-activity__rail');
+function panel() {
+  return document.querySelector('.chat-activity');
+}
+
+function cardToggle(key) {
+  return document.querySelector(
+    `[data-card="${key}"] .chat-activity__card-toggle`,
+  );
+}
+
+function cardSummary(key) {
+  return document
+    .querySelector(`[data-card="${key}"] .chat-activity__card-summary`)
+    .textContent.replace(/\s+/g, ' ')
+    .trim();
 }
 
 function taskRows() {
@@ -156,6 +169,7 @@ describe('ChatActivityPanel', () => {
 
   beforeEach(() => {
     document.body.innerHTML = '';
+    localStorage.clear();
     init('en');
     mountedComponent = null;
   });
@@ -177,9 +191,10 @@ describe('ChatActivityPanel', () => {
     flushSync();
   }
 
+  // Opens the panel with its finished work unfolded.
   function openPanel(props) {
-    mountPanel(props);
-    rail().click();
+    mountPanel({ open: true, ...props });
+    document.querySelector('.chat-activity__finished-toggle')?.click();
     flushSync();
   }
 
@@ -260,14 +275,12 @@ describe('ChatActivityPanel', () => {
   it('lists running work above finished work, each row naming its kind and state', () => {
     const { props } = sessionTasks();
     mountPanel(props);
-    expect(rail().getAttribute('aria-expanded')).toBe('false');
-    expect(document.querySelector('.chat-activity__panel')).toBeNull();
+    expect(panel()).toBeNull();
+    openPanel(props);
 
-    rail().click();
-    flushSync();
-
-    expect(rail().getAttribute('aria-expanded')).toBe('true');
-    expect(document.querySelector('.chat-activity__title')).not.toBeNull();
+    expect(cardSummary('tasks')).toBe(
+      `${t('chat.activity.runningCount', { count: 2 })} · ${t('chat.activity.finishedCount', { count: 5 })}`,
+    );
     const running = document.querySelector('.chat-activity__group--running');
     const finished = document.querySelector('.chat-activity__group--finished');
     expect([...document.querySelectorAll('.chat-activity__group')]).toEqual([
@@ -353,25 +366,21 @@ describe('ChatActivityPanel', () => {
         }),
       );
     }
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    flushSync();
-    expect(document.querySelector('.chat-activity__panel')).toBeNull();
   });
 
-  it('closes from its header button and moves focus between rail and panel', () => {
-    mountPanel();
-    rail().focus();
-    rail().click();
-    flushSync();
+  it('closes on Escape and hands focus from inside to its toggle', () => {
+    const toggle = document.createElement('button');
+    toggle.id = 'info-toggle';
+    document.body.append(toggle);
+    openPanel({ id: 'info', toggleId: 'info-toggle' });
+    expect(panel().id).toBe('info');
+    expect(panel().getAttribute('aria-label')).toBe(t('chat.activity.label'));
 
-    const close = document.querySelector('.chat-activity__close');
-    expect(document.activeElement).toBe(close);
-    expect(close.getAttribute('aria-label')).toBe(t('chat.activity.close'));
-    close.click();
+    cardToggle('session').focus();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     flushSync();
-    expect(document.querySelector('.chat-activity__panel')).toBeNull();
-    expect(document.activeElement).toBe(rail());
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(toggle);
   });
 
   it('cancels only active work and navigates only from Sub-Agent links', async () => {
@@ -419,39 +428,16 @@ describe('ChatActivityPanel', () => {
     expect(onNavigateToSubAgent).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps panel identities separate in split Chat and restores focus on Escape', async () => {
-    mountPanel();
-    const second = mount(ChatActivityPanel, { target: document.body });
-    try {
-      flushSync();
-      const toggles = [...document.querySelectorAll('.chat-activity__rail')];
-      toggles.forEach((button) => button.click());
-      flushSync();
-      const panels = [...document.querySelectorAll('.chat-activity__panel')];
-      expect(new Set(panels.map((panel) => panel.id)).size).toBe(2);
-      panels.forEach((panel, index) => {
-        expect(toggles[index].getAttribute('aria-controls')).toBe(panel.id);
-        expect(panel.getAttribute('aria-label')).toBe(t('chat.activity.label'));
-      });
-      panels[1].setAttribute('tabindex', '-1');
-      panels[1].focus();
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-      flushSync();
-      expect(document.activeElement).toBe(toggles[1]);
-    } finally {
-      await unmount(second);
-    }
-  });
-
   it('shows calm empty states when the Session has no work or changes', () => {
     openPanel({ timelineItems: [], reflectionTasks: [], sessionStats: null });
 
-    expect(
-      document.querySelector('.chat-activity__empty').textContent,
-    ).toContain(t('chat.activity.empty'));
-    expect(
-      document.querySelector('.chat-activity__stats-empty').textContent.trim(),
-    ).toBe(t('chat.activity.overview.noChanges'));
+    expect(cardSummary('tasks')).toBe(t('chat.activity.empty'));
+    expect(cardSummary('changes')).toBe(t('chat.activity.overview.noChanges'));
+    // Cards without details have nothing to unfold.
+    for (const key of ['tasks', 'changes']) {
+      expect(cardToggle(key).disabled).toBe(true);
+      expect(cardToggle(key).hasAttribute('aria-expanded')).toBe(false);
+    }
     expect(
       document.querySelector(
         '.chat-activity__group, .chat-activity__parent-link',
@@ -484,9 +470,6 @@ describe('ChatActivityPanel', () => {
       expect(
         document.querySelectorAll('[data-cancel-kind="command"]'),
       ).toHaveLength(commandStatus === 'running' ? 1 : 0);
-      rail().click();
-      flushSync();
-      expect(document.querySelector('.chat-activity__panel')).toBeNull();
     },
   );
 
@@ -503,9 +486,6 @@ describe('ChatActivityPanel', () => {
       onNavigateToParentSession,
     });
 
-    expect(
-      document.querySelector('.chat-activity__parent h3').textContent.trim(),
-    ).toBe(t('chat.activity.parentSession'));
     const parentLink = document.querySelector('.chat-activity__parent-link');
     expect(parentLink.textContent.trim()).toBe('Original research');
     expect(parentLink.getAttribute('aria-label')).toBe(
@@ -522,21 +502,19 @@ describe('ChatActivityPanel', () => {
   it('asks for the Session change stats while open and shows them', () => {
     const onSessionStatsWanted = vi.fn();
     mountPanel({ onSessionStatsWanted });
-    flushSync();
     expect(onSessionStatsWanted).toHaveBeenLastCalledWith(false);
+    unmount(mountedComponent);
 
-    rail().click();
-    flushSync();
+    openPanel({ onSessionStatsWanted });
     expect(onSessionStatsWanted).toHaveBeenLastCalledWith(true);
-    // Until the first read answers, the section claims neither changes nor none.
-    expect(document.querySelector('.chat-activity__stats-value')).toBeNull();
-    expect(document.querySelector('.chat-activity__stats-empty')).toBeNull();
-    rail().click();
+    // Until the first read answers, the panel claims neither changes nor none.
+    expect(document.querySelector('[data-card="changes"]')).toBeNull();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     flushSync();
     expect(onSessionStatsWanted).toHaveBeenLastCalledWith(false);
   });
 
-  it('names the Session and gives its overview above the tasks', () => {
+  it('sums up the Session, its usage and changes in cards above the tasks', () => {
     openPanel({
       session: {
         displayName: 'Release notes',
@@ -566,8 +544,15 @@ describe('ChatActivityPanel', () => {
     });
 
     expect(
-      document.querySelector('.chat-activity__title').textContent.trim(),
+      [...document.querySelectorAll('.chat-activity__card')].map(
+        (card) => card.dataset.card,
+      ),
+    ).toEqual(['session', 'usage', 'changes', 'tasks']);
+    expect(
+      document.querySelector('.chat-activity__session-name').textContent.trim(),
     ).toBe('Release notes');
+    expect(cardSummary('usage')).toBe('$1.25');
+    expect(cardSummary('changes')).toBe('+8 -2');
     const facts = Object.fromEntries(
       [...document.querySelectorAll('.chat-activity__fact')].map((fact) => [
         fact.querySelector('dt').textContent.trim(),
@@ -575,12 +560,11 @@ describe('ChatActivityPanel', () => {
       ]),
     );
     expect(Object.keys(facts)).toEqual([
+      t('chat.activity.overview.started'),
+      t('chat.activity.overview.lastActive'),
       t('chat.activity.overview.tokens'),
       t('chat.activity.overview.cache'),
       t('chat.activity.overview.cost'),
-      t('chat.activity.overview.changes'),
-      t('chat.activity.overview.started'),
-      t('chat.activity.overview.lastActive'),
     ]);
     // Usage and changes cover the Session and its Sub-Agents.
     expect(
@@ -591,15 +575,47 @@ describe('ChatActivityPanel', () => {
     );
     expect(facts[t('chat.activity.overview.cache')].textContent).toBe('75%');
     expect(facts[t('chat.activity.overview.cost')].textContent).toBe('$1.25');
-    const filesChanged = `${t('chat.changeStats.filesMany', { count: 2 })},`;
+    // The changed files show in the card itself.
     expect(
       [
-        ...facts[t('chat.activity.overview.changes')].querySelectorAll(
-          '.change-stats__part',
+        ...document.querySelectorAll(
+          '[data-card="changes"] .changed-files-card__name',
         ),
-      ].map((part) => part.textContent),
-    ).toEqual([filesChanged, '+8', '-2']);
-    expect(document.querySelector('.chat-activity__stats-empty')).toBeNull();
+      ].map((name) => name.textContent),
+    ).toEqual(['a.txt', 'b.txt']);
+  });
+
+  it('folds a card from its header and remembers it in this browser', async () => {
+    openPanel({
+      usage: {
+        session: { input_tokens: 1000, output_tokens: 20 },
+        subAgents: {},
+        total: { input_tokens: 1000, output_tokens: 20 },
+        subAgentCount: 0,
+      },
+    });
+    // Without a cost, the header sums up the tokens.
+    expect(cardSummary('usage')).toBe(
+      t('chat.activity.usage.tokensTotal', { count: '1K' }),
+    );
+    expect(cardToggle('usage').getAttribute('aria-expanded')).toBe('true');
+
+    cardToggle('usage').click();
+    flushSync();
+    expect(cardToggle('usage').getAttribute('aria-expanded')).toBe('false');
+    expect(
+      document.querySelector('[data-card="usage"] .chat-activity__card-body'),
+    ).toBeNull();
+
+    await unmount(mountedComponent);
+    openPanel({
+      usage: {
+        total: { input_tokens: 1000, output_tokens: 20 },
+        subAgentCount: 0,
+      },
+    });
+    expect(cardToggle('usage').getAttribute('aria-expanded')).toBe('false');
+    expect(cardToggle('session').getAttribute('aria-expanded')).toBe('true');
   });
 
   it('opens the Sub-Agents below a Sub-Agent and their Sessions', () => {
@@ -670,15 +686,22 @@ describe('ChatActivityPanel', () => {
     });
   });
 
-  it('shortens a long Finished section to its newest entries until asked', () => {
+  it('folds finished work until asked and then shows its newest entries', () => {
     const finished = Array.from({ length: 7 }, (_, index) =>
       backgroundCommandTask({
         id: `done-${index}`,
         command: `step ${index}`,
       }),
     );
-    openPanel({ timelineItems: [runItem(finished)] });
+    mountPanel({ open: true, timelineItems: [runItem(finished)] });
 
+    const toggle = document.querySelector('.chat-activity__finished-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.textContent).toContain('7');
+    expect(taskRows()).toHaveLength(0);
+
+    toggle.click();
+    flushSync();
     const more = document.querySelector('.chat-activity__more');
     expect(taskRows()).toHaveLength(5);
     expect(more.getAttribute('aria-expanded')).toBe('false');

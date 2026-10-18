@@ -60,7 +60,7 @@ async function openFromDrawer(title) {
 }
 
 async function openSessionInfoLink(selector, text) {
-  document.querySelector('.chat-activity__rail').click();
+  document.querySelector('.chat-header__info-toggle').click();
   flushSync();
   await waitForCondition(
     () => document.querySelector(selector)?.textContent.trim() === text,
@@ -172,12 +172,13 @@ describe('ChatView Sessions', () => {
       const props = reactiveProps({ sessionsRefreshToken: 0 });
       await chat.mountChat(props);
       const statsText = () =>
-        document.querySelector('.chat-activity__stats-value')?.textContent ??
-        '';
+        document.querySelector(
+          '[data-card="changes"] .chat-activity__card-summary',
+        )?.textContent ?? '';
 
       // Closed, the panel asks for nothing.
       expect(rpcCalls('session.change_stats')).toEqual([]);
-      document.querySelector('.chat-activity__rail').click();
+      document.querySelector('.chat-header__info-toggle').click();
       flushSync();
       await waitForCondition(() => statsText().includes('+3'));
       const session = { agent_id: 'alpha', session_id: 'session-1' };
@@ -188,7 +189,7 @@ describe('ChatView Sessions', () => {
       expect(rpcCalls('subagent.tree')).toEqual([session]);
       await waitForCondition(() =>
         document
-          .querySelector('.chat-activity__facts')
+          .querySelector('[data-card="usage"] .chat-activity__facts')
           ?.textContent.includes('7K'),
       );
 
@@ -1213,7 +1214,12 @@ describe('ChatView Sessions', () => {
           ],
         });
 
-        document.querySelector('.chat-activity__rail').click();
+        document.querySelector('.chat-header__info-toggle').click();
+        // Finished work waits folded.
+        await waitForCondition(() =>
+          document.querySelector('.chat-activity__finished-toggle'),
+        );
+        document.querySelector('.chat-activity__finished-toggle').click();
         await waitForCondition(() =>
           document.querySelector('.chat-activity__task-link'),
         );

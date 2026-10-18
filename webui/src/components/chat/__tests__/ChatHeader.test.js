@@ -255,13 +255,18 @@ describe('ChatHeader', () => {
     expect(onSelectAgent).toHaveBeenCalledTimes(1);
   });
 
-  it('toggles the Session list, starts a Session and ends with the area actions', () => {
+  it('toggles the Session list, starts a Session and ends with the area actions and the Session info toggle', () => {
     const onToggleSessionList = vi.fn();
     const onNewSession = vi.fn();
+    const onToggleInfoPanel = vi.fn();
     mountHeader({
       sessionListOpen: true,
       onToggleSessionList,
       onNewSession,
+      infoPanelId: 'info',
+      infoToggleId: 'info-toggle',
+      infoRunningCount: 2,
+      onToggleInfoPanel,
       actions: createRawSnippet(() => ({
         render: () =>
           '<button type="button" class="area-action">Split</button>',
@@ -276,9 +281,18 @@ describe('ChatHeader', () => {
     button(t('chat.newSession')).click();
     expect(onToggleSessionList).toHaveBeenCalledTimes(1);
     expect(onNewSession).toHaveBeenCalledTimes(1);
-    expect(
-      document.querySelector('.chat-header').lastElementChild.textContent,
-    ).toBe('Split');
+    const areaActions = document.querySelector('.chat-header').lastElementChild;
+    expect(areaActions.firstElementChild.textContent).toBe('Split');
+    // Closed, the toggle names the running work and marks it.
+    const info = areaActions.lastElementChild;
+    expect(info.id).toBe('info-toggle');
+    expect(info.getAttribute('aria-label')).toBe(
+      t('chat.activity.openManyRunning', { count: 2 }),
+    );
+    expect(info.getAttribute('aria-expanded')).toBe('false');
+    expect(info.querySelector('.chat-header__info-running')).not.toBeNull();
+    info.click();
+    expect(onToggleInfoPanel).toHaveBeenCalledTimes(1);
   });
 
   describe('Project Teams', () => {

@@ -1,10 +1,11 @@
 <script>
-  import { flushSync, onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
 
   import {
     activitySections,
     backgroundCommandStatusDetails,
+    changedFilesCard,
     backgroundTasks,
     reflectionChangeItems,
     reflectionElapsedLabel,
@@ -73,8 +74,13 @@
     // output view.
     onLoadCommandOutput = null,
     // Whether the panel is open; Chat reserves room for it beside the
-    // timeline while it is.
+    // timeline while it is. The Chat header's toggle (`toggleId`) opens and
+    // closes it; Escape closes it too.
     open = $bindable(false),
+    id = undefined,
+    toggleId = undefined,
+    // Reports how much work runs, for the toggle's running marker.
+    onRunningCountChange = () => {},
   } = $props();
 
   const cancellingTaskIds = new SvelteSet();
@@ -98,9 +104,13 @@
   // Running work first, then finished work; each entry names its kind.
   let sections = $derived(activitySections(tasks, reflectionTasks));
   let runningTaskCount = $derived(sections.running.length);
-  // A long Finished section shows its newest entries until the user asks for
-  // all of them; view state only.
+  $effect(() => {
+    onRunningCountChange(runningTaskCount);
+  });
+  // Finished work stays folded until the user opens it, and then shows its
+  // newest entries until the user asks for all of them; view state only.
   const FINISHED_PREVIEW = 5;
+  let showFinished = $state(false);
   let showAllFinished = $state(false);
   let visibleFinished = $derived(
     showAllFinished
@@ -112,26 +122,41 @@
   });
 
   const panelId = $props.id();
-  const railElement = () => document.getElementById(`${panelId}-toggle`);
 
-  // The rail hides while the panel is open, and the panel's own close button
-  // takes its place; focus moves between the two so keyboard users keep it.
-  const openPanel = () => {
-    const railHadFocus = document.activeElement === railElement();
-    open = true;
-    flushSync();
-    if (railHadFocus) {
-      document.getElementById(`${panelId}-close`)?.focus();
+  // Closing with focus inside the panel hands focus to the header's toggle,
+  // so keyboard users keep their place.
+  const closePanel = () => {
+    const panel = id ? document.getElementById(id) : null;
+    const focusInside = panel?.contains(document.activeElement);
+    open = false;
+    if (focusInside) {
+      document.getElementById(toggleId)?.focus();
     }
   };
 
-  const closePanel = () => {
-    const rail = railElement();
-    const focusInside = rail?.parentElement?.contains(document.activeElement);
-    open = false;
-    flushSync();
-    if (focusInside) {
-      rail.focus();
+  // The cards this browser folded, by card key; every card starts open.
+  const COLLAPSED_CARDS_KEY = 'vbot.chat.sessionInfo.collapsedCards';
+  let collapsedCards = $state(readCollapsedCards());
+
+  function readCollapsedCards() {
+    try {
+      const parsed = JSON.parse(
+        localStorage.getItem(COLLAPSED_CARDS_KEY) || '{}',
+      );
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  const toggleCard = (key) => {
+    collapsedCards = { ...collapsedCards, [key]: !collapsedCards[key] };
+    try {
+      localStorage.setItem(COLLAPSED_CARDS_KEY, JSON.stringify(collapsedCards));
+    } catch {
+      // localStorage unavailable (private browsing, storage quota)
     }
   };
 
@@ -441,6 +466,9 @@
           }
         : null;
     return {
+      totalTokens: t('chat.activity.usage.tokensTotal', {
+        count: formatTokens(input + output, locale),
+      }),
       tokens: tokens(total),
       tokensSplit: split(tokens),
       cache:
@@ -458,14 +486,6 @@
   function nonNegative(value) {
     return Number.isFinite(value) && value > 0 ? value : 0;
   }
-
-  let railLabel = $derived(
-    runningTaskCount === 1
-      ? t('chat.activity.openOneRunning')
-      : runningTaskCount > 1
-        ? t('chat.activity.openManyRunning', { count: runningTaskCount })
-        : t('chat.activity.open'),
-  );
 </script>
 
 {#snippet statusIcon(task)}
@@ -901,77 +921,61 @@
   </div>
 {/snippet}
 
-<div class:chat-activity--open={open} class="chat-activity">
-  <Button
-    id={`${panelId}-toggle`}
-    variant="tertiary"
-    class="chat-activity__rail"
-    ariaLabel={railLabel}
-    tooltip={{ text: railLabel, placement: 'left' }}
-    aria-expanded={open}
-    aria-controls={panelId}
-    onClick={() => (open ? closePanel() : openPanel())}
+<!-- A card of the panel: a header that names it, sums it up and folds it,
+     and its details below. A card without details has no fold. -->
+{#snippet card(key, title, summary, body)}
+  {@const expanded = Boolean(body) && !collapsedCards[key]}
+  <section
+    class="chat-activity__card"
+    data-card={key}
+    aria-labelledby={`${panelId}-${key}-title`}
   >
-    <svg
-      class="chat-activity__rail-arrow"
-      viewBox="0 0 16 16"
-      width="14"
-      height="14"
-      aria-hidden="true"
-    >
-      <path d="m10 4-4 4 4 4" />
-    </svg>
-    {#if runningTaskCount > 0}
-      <span class="chat-activity__rail-dot" aria-hidden="true"></span>
-    {/if}
-  </Button>
-
-  {#if open}
-    <aside
-      id={panelId}
-      class="chat-activity__panel"
-      aria-label={t('chat.activity.label')}
-    >
-      <header class="chat-activity__header">
-        <h2
-          class="chat-activity__title"
-          use:tooltip={{
-            text: session?.displayName ?? '',
-            whenTruncated: true,
-            placement: 'left',
-          }}
-        >
-          {session?.displayName ?? t('chat.activity.title')}
-        </h2>
-        <Button
-          id={`${panelId}-close`}
-          variant="tertiary"
-          icon
-          class="chat-activity__close"
-          ariaLabel={t('chat.activity.close')}
-          tooltip={{ text: t('chat.activity.close'), placement: 'left' }}
-          aria-expanded="true"
-          aria-controls={panelId}
-          onClick={closePanel}
-        >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            <path d="m6 4 4 4-4 4" />
-          </svg>
-        </Button>
-      </header>
-
-      <div class="chat-activity__body">
-        {#if parentSession}
-          <section
-            class="chat-activity__parent"
-            aria-labelledby={`${panelId}-parent-title`}
+    <h3 id={`${panelId}-${key}-title`} class="chat-activity__card-heading">
+      <Button
+        variant="tertiary"
+        class="chat-activity__card-toggle"
+        disabled={!body}
+        aria-expanded={body ? expanded : undefined}
+        aria-controls={expanded ? `${panelId}-${key}-body` : undefined}
+        onClick={() => toggleCard(key)}
+      >
+        <span class="chat-activity__card-title">{title}</span>
+        <span class="chat-activity__card-summary">{@render summary()}</span>
+        {#if body}
+          <svg
+            class="chat-activity__disclosure chat-activity__card-chevron"
+            viewBox="0 0 16 16"
+            width="12"
+            height="12"
+            aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg
           >
-            <h3
-              id={`${panelId}-parent-title`}
-              class="chat-activity__group-title"
-            >
-              {t('chat.activity.parentSession')}
-            </h3>
+        {/if}
+      </Button>
+    </h3>
+    {#if expanded}
+      <div id={`${panelId}-${key}-body`} class="chat-activity__card-body">
+        {@render body()}
+      </div>
+    {/if}
+  </section>
+{/snippet}
+
+{#snippet sessionSummary()}
+  {#if session?.lastActiveAt}
+    {formatRelativeTime(session.lastActiveAt)}
+  {/if}
+{/snippet}
+
+{#snippet sessionBody()}
+  <p class="chat-activity__session-name">
+    {session?.displayName ?? t('chat.activity.title')}
+  </p>
+  {#if parentSession || session?.createdAt || session?.lastActiveAt}
+    <dl class="chat-activity__facts">
+      {#if parentSession}
+        <div class="chat-activity__fact">
+          <dt>{t('chat.activity.parentSession')}</dt>
+          <dd>
             <Button
               variant="tertiary"
               class="chat-activity__parent-link"
@@ -980,8 +984,8 @@
             >
               <svg
                 viewBox="0 0 16 16"
-                width="14"
-                height="14"
+                width="12"
+                height="12"
                 aria-hidden="true"
               >
                 <path d="M6.5 4 2.5 8l4 4" />
@@ -998,223 +1002,242 @@
                 {parentSession.displayName}
               </span>
             </Button>
-          </section>
+          </dd>
+        </div>
+      {/if}
+      {#if session?.createdAt}
+        <div class="chat-activity__fact">
+          <dt>{t('chat.activity.overview.started')}</dt>
+          <dd>{formatAbsoluteTime(session.createdAt)}</dd>
+        </div>
+      {/if}
+      {#if session?.lastActiveAt}
+        <div class="chat-activity__fact">
+          <dt>{t('chat.activity.overview.lastActive')}</dt>
+          <dd>{formatAbsoluteTime(session.lastActiveAt)}</dd>
+        </div>
+      {/if}
+    </dl>
+  {/if}
+{/snippet}
+
+{#snippet usageSummary()}
+  {usageFacts.cost || usageFacts.totalTokens}
+{/snippet}
+
+{#snippet usageBody()}
+  <dl class="chat-activity__facts">
+    <div class="chat-activity__fact">
+      <dt>{t('chat.activity.overview.tokens')}</dt>
+      <dd use:tooltip={usageFacts.tokensSplit}>{usageFacts.tokens}</dd>
+    </div>
+    {#if usageFacts.cache}
+      <div class="chat-activity__fact">
+        <dt>{t('chat.activity.overview.cache')}</dt>
+        <dd>{usageFacts.cache}</dd>
+      </div>
+    {/if}
+    {#if usageFacts.cost}
+      <div class="chat-activity__fact">
+        <dt>{t('chat.activity.overview.cost')}</dt>
+        <dd use:tooltip={usageFacts.costSplit}>{usageFacts.cost}</dd>
+      </div>
+    {/if}
+  </dl>
+  {#if usage?.subAgentCount > 0}
+    <!-- Usage and changes cover the Sub-Agents too. -->
+    <p class="chat-activity__scope">
+      {usage.subAgentCount === 1
+        ? t('chat.activity.overview.withSubAgentsOne')
+        : t('chat.activity.overview.withSubAgentsMany', {
+            count: usage.subAgentCount,
+          })}
+    </p>
+  {/if}
+{/snippet}
+
+<!-- Until the first read answers, the panel claims neither changes nor
+     none. -->
+{#snippet changesSummary()}
+  {#if sessionStats}
+    <span class="chat-activity__totals">
+      <span
+        class="chat-activity__added"
+        class:chat-activity__total--zero={sessionStats.added === 0}
+        >+{sessionStats.added}</span
+      >
+      <span
+        class="chat-activity__removed"
+        class:chat-activity__total--zero={sessionStats.removed === 0}
+        >-{sessionStats.removed}</span
+      >
+    </span>
+  {:else if sessionStats === null}
+    {t('chat.activity.overview.noChanges')}
+  {/if}
+{/snippet}
+
+{#snippet changesBody()}
+  <ChangeStats stats={sessionStats} list placement="left" />
+{/snippet}
+
+{#snippet tasksSummary()}
+  {#if sections.running.length > 0}
+    <span class="chat-activity__running-summary">
+      <span class="chat-activity__working-dot" aria-hidden="true"></span>
+      {t('chat.activity.runningCount', { count: sections.running.length })}
+    </span>
+  {/if}
+  {#if sections.finished.length > 0}
+    <span
+      >{sections.running.length > 0 ? '· ' : ''}{t(
+        'chat.activity.finishedCount',
+        { count: sections.finished.length },
+      )}</span
+    >
+  {/if}
+  {#if sections.running.length === 0 && sections.finished.length === 0}
+    {t('chat.activity.empty')}
+  {/if}
+{/snippet}
+
+{#snippet taskEntries(entries)}
+  <ul class="chat-activity__task-list">
+    {#each entries as entry (entry.key)}
+      <li>
+        {#if entry.kind === 'reflection'}
+          {@render reflectionRow(entry.row)}
+        {:else}
+          {@render taskRow(entry.task)}
         {/if}
+      </li>
+    {/each}
+  </ul>
+{/snippet}
 
-        <section
-          class="chat-activity__overview"
-          aria-labelledby={`${panelId}-overview-title`}
+<!-- Running work shows at once; finished work waits folded below it. -->
+{#snippet tasksBody()}
+  {#if sections.running.length > 0}
+    <div class="chat-activity__group chat-activity__group--running">
+      {@render taskEntries(sections.running)}
+    </div>
+  {/if}
+  {#if sections.finished.length > 0}
+    <div class="chat-activity__group chat-activity__group--finished">
+      <Button
+        variant="tertiary"
+        class="chat-activity__finished-toggle"
+        aria-expanded={showFinished}
+        aria-controls={showFinished ? `${panelId}-finished` : undefined}
+        onClick={() => (showFinished = !showFinished)}
+      >
+        <svg
+          class="chat-activity__disclosure"
+          viewBox="0 0 16 16"
+          width="10"
+          height="10"
+          aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
         >
-          <h3
-            id={`${panelId}-overview-title`}
-            class="chat-activity__group-title"
-          >
-            {t('chat.activity.overview.title')}
-            {#if usage?.subAgentCount > 0}
-              <!-- Usage and changes below cover the Sub-Agents too. -->
-              <span class="chat-activity__scope"
-                >{usage.subAgentCount === 1
-                  ? t('chat.activity.overview.withSubAgentsOne')
-                  : t('chat.activity.overview.withSubAgentsMany', {
-                      count: usage.subAgentCount,
-                    })}</span
-              >
-            {/if}
-          </h3>
-          <dl class="chat-activity__facts">
-            {#if usageFacts}
-              <div class="chat-activity__fact">
-                <dt>{t('chat.activity.overview.tokens')}</dt>
-                <dd use:tooltip={usageFacts.tokensSplit}>
-                  {usageFacts.tokens}
-                </dd>
-              </div>
-              {#if usageFacts.cache}
-                <div class="chat-activity__fact">
-                  <dt>{t('chat.activity.overview.cache')}</dt>
-                  <dd>{usageFacts.cache}</dd>
-                </div>
-              {/if}
-              {#if usageFacts.cost}
-                <div class="chat-activity__fact">
-                  <dt>{t('chat.activity.overview.cost')}</dt>
-                  <dd use:tooltip={usageFacts.costSplit}>{usageFacts.cost}</dd>
-                </div>
-              {/if}
-            {/if}
-            <!-- Until the first read answers, the panel claims neither
-                 changes nor none. -->
-            {#if sessionStats !== undefined}
-              <div class="chat-activity__fact">
-                <dt>{t('chat.activity.overview.changes')}</dt>
-                <dd class="chat-activity__stats-value">
-                  {#if sessionStats}
-                    <!-- The panel sits at the right edge, so its card opens
-                         to the left. -->
-                    <ChangeStats stats={sessionStats} placement="left" />
-                  {:else}
-                    <span class="chat-activity__stats-empty"
-                      >{t('chat.activity.overview.noChanges')}</span
-                    >
-                  {/if}
-                </dd>
-              </div>
-            {/if}
-            {#if session?.createdAt}
-              <div class="chat-activity__fact">
-                <dt>{t('chat.activity.overview.started')}</dt>
-                <dd>{formatAbsoluteTime(session.createdAt)}</dd>
-              </div>
-            {/if}
-            {#if session?.lastActiveAt}
-              <div class="chat-activity__fact">
-                <dt>{t('chat.activity.overview.lastActive')}</dt>
-                <dd
-                  use:tooltip={{
-                    text: formatAbsoluteTime(session.lastActiveAt),
-                    placement: 'left',
-                  }}
-                >
-                  {formatRelativeTime(session.lastActiveAt)}
-                </dd>
-              </div>
-            {/if}
-          </dl>
-        </section>
-
-        <div class="chat-activity__tasks">
-          {#if tasks.length === 0 && reflectionTasks.length === 0}
-            <p class="chat-activity__empty">
-              {t('chat.activity.empty')}
-            </p>
-          {:else}
-            {#each [['running', sections.running, sections.running], ['finished', sections.finished, visibleFinished]] as [section, entries, shown] (section)}
-              {#if entries.length > 0}
-                <section
-                  class={`chat-activity__group chat-activity__group--${section}`}
-                  aria-labelledby={`${panelId}-${section}`}
-                >
-                  <h3
-                    id={`${panelId}-${section}`}
-                    class="chat-activity__group-title"
-                  >
-                    {section === 'running'
-                      ? t('chat.activity.running')
-                      : t('chat.activity.finished')}
-                    <span class="chat-activity__count">{entries.length}</span>
-                  </h3>
-                  <ul class="chat-activity__task-list">
-                    {#each shown as entry (entry.key)}
-                      <li>
-                        {#if entry.kind === 'reflection'}
-                          {@render reflectionRow(entry.row)}
-                        {:else}
-                          {@render taskRow(entry.task)}
-                        {/if}
-                      </li>
-                    {/each}
-                  </ul>
-                  {#if section === 'finished' && entries.length > FINISHED_PREVIEW}
-                    <Button
-                      variant="tertiary"
-                      class="chat-activity__more"
-                      aria-expanded={showAllFinished}
-                      onClick={() => (showAllFinished = !showAllFinished)}
-                    >
-                      {showAllFinished
-                        ? t('chat.activity.showFewer')
-                        : t('chat.activity.showAll', {
-                            count: entries.length,
-                          })}
-                    </Button>
-                  {/if}
-                </section>
-              {/if}
-            {/each}
+        {t('chat.activity.finished')}
+        <span class="chat-activity__count">{sections.finished.length}</span>
+      </Button>
+      {#if showFinished}
+        <div id={`${panelId}-finished`}>
+          {@render taskEntries(visibleFinished)}
+          {#if sections.finished.length > FINISHED_PREVIEW}
+            <Button
+              variant="tertiary"
+              class="chat-activity__more"
+              aria-expanded={showAllFinished}
+              onClick={() => (showAllFinished = !showAllFinished)}
+            >
+              {showAllFinished
+                ? t('chat.activity.showFewer')
+                : t('chat.activity.showAll', {
+                    count: sections.finished.length,
+                  })}
+            </Button>
           {/if}
         </div>
-      </div>
-    </aside>
+      {/if}
+    </div>
   {/if}
-</div>
+{/snippet}
+
+{#if open}
+  <aside {id} class="chat-activity" aria-label={t('chat.activity.label')}>
+    {@render card(
+      'session',
+      t('chat.activity.title'),
+      sessionSummary,
+      sessionBody,
+    )}
+    {#if usageFacts}
+      {@render card(
+        'usage',
+        t('chat.activity.usage.title'),
+        usageSummary,
+        usageBody,
+      )}
+    {/if}
+    {#if sessionStats !== undefined}
+      {@render card(
+        'changes',
+        t('chat.activity.overview.changes'),
+        changesSummary,
+        changedFilesCard(sessionStats) ? changesBody : null,
+      )}
+    {/if}
+    {@render card(
+      'tasks',
+      t('chat.activity.tasks.title'),
+      tasksSummary,
+      sections.running.length + sections.finished.length > 0 ? tasksBody : null,
+    )}
+  </aside>
+{/if}
 
 <ContextMenu menu={taskMenu} onClose={() => (taskMenu = null)} />
 
 <style>
+  /* Open, the panel is a full-height column of cards at the right edge,
+     the counterpart of the Session list on the left. It lies over the chat
+     while the area is too narrow to give both their room... */
   .chat-activity {
     position: absolute;
     z-index: 30;
-    top: 50%;
-    right: 8px;
-    width: 24px;
-    height: 40px;
-    transform: translateY(-50%);
-  }
-
-  /* Open, the panel is a full-height column at the right edge, the
-     counterpart of the Session list on the left. It lies over the chat
-     while the area is too narrow to give both their room... */
-  .chat-activity--open {
     top: 0;
     right: 0;
     bottom: 0;
     display: flex;
     width: min(var(--chat-activity-width), calc(100% - 48px));
-    height: auto;
+    min-height: 0;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    padding: 8px;
+    background: var(--bg);
     box-shadow: var(--floating-elevation);
-    transform: none;
+    scrollbar-width: thin;
   }
 
-  /* ...and docks beside it otherwise, so the chat centers in the rest and
-     keeps its scrollbar. Beside a docked Session list it needs more room. */
+  /* ...and docks beside it otherwise, so the chat centers in the rest. Beside
+     a docked Session list it needs more room. */
   @container chat-area (min-width: 740px) {
-    .chat-activity--open {
+    .chat-activity {
       position: relative;
       flex: 0 0 var(--chat-activity-width);
       box-shadow: none;
     }
   }
   @container chat-area (min-width: 740px) and (max-width: 1019px) {
-    :global(.chat-view__content-shell:has(> .session-drawer))
-      .chat-activity--open {
+    :global(.chat-view__content-shell:has(> .session-drawer)) .chat-activity {
       position: absolute;
       flex: none;
       box-shadow: var(--floating-elevation);
     }
   }
 
-  :global(.chat-activity__rail.btn-tertiary) {
-    position: absolute;
-    top: 50%;
-    right: 0;
-    display: flex;
-    width: 24px;
-    min-width: 24px;
-    height: 40px;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--secondary-surface);
-    color: var(--text-med);
-    transform: translateY(-50%);
-  }
-
-  /* The open panel carries its own close button in its header. */
-  .chat-activity--open :global(.chat-activity__rail.btn-tertiary) {
-    display: none;
-  }
-
-  :global(.chat-activity__rail.btn-tertiary:hover) {
-    color: var(--text-hi);
-    background: var(--surface-2);
-  }
-  .chat-activity__rail-arrow {
-    flex: 0 0 14px;
-  }
-
-  .chat-activity__rail-arrow,
   .chat-activity__disclosure {
     fill: none;
     stroke: currentColor;
@@ -1222,87 +1245,99 @@
     stroke-linecap: round;
     stroke-linejoin: round;
   }
-  .chat-activity__rail-dot {
-    position: absolute;
-    top: 5px;
-    right: 4px;
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: var(--amber);
-  }
-  .chat-activity__panel {
-    display: flex;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    flex-direction: column;
-    overflow: hidden;
-    border-left: 1px solid var(--border);
+
+  /* A card: its header sums it up, its body holds the details. */
+  .chat-activity__card {
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
     background: var(--surface);
   }
-  /* Matches the Session list's header. */
-  .chat-activity__header {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    justify-content: space-between;
-    gap: 4px;
-    padding: 3px;
-    border-bottom: 1px solid var(--border);
+  .chat-activity__card-heading {
+    margin: 0;
+    font: inherit;
   }
-  :global(.chat-activity__close.btn-tertiary.btn-icon) {
-    width: 28px;
-    min-width: 28px;
-    height: 28px;
-    min-height: 28px;
+  :global(.chat-activity__card-toggle.btn-tertiary) {
+    width: 100%;
+    min-height: 36px;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 0 10px 0 12px;
     border: 0;
-    color: var(--text-lo);
-  }
-  :global(.chat-activity__close.btn-tertiary.btn-icon:hover) {
-    background: var(--surface-2);
+    border-radius: var(--r-lg);
     color: var(--text-hi);
+    font-size: var(--fs-body-sm);
+    font-weight: 500;
   }
-  :global(.chat-activity__close svg) {
-    fill: none;
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    stroke-width: 1.5;
+  :global(.chat-activity__card-toggle.btn-tertiary:hover:not(:disabled)) {
+    background: var(--surface-2);
   }
-  .chat-activity__title {
+  /* A card without details is no control, only its header. */
+  :global(.chat-activity__card-toggle.btn-tertiary:disabled) {
+    opacity: 1;
+    cursor: default;
+  }
+  .chat-activity__card-title {
+    flex: 0 0 auto;
+  }
+  .chat-activity__card-summary {
+    display: flex;
     min-width: 0;
     flex: 1;
-    margin: 0;
-    padding: 5px 8px;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
     overflow: hidden;
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: var(--fs-label-md);
-    font-weight: 500;
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
+    font-weight: 400;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .chat-activity__body {
+  .chat-activity__card-chevron {
+    flex: 0 0 12px;
+    color: var(--text-lo);
+    transition: transform 120ms ease;
+  }
+  :global(.chat-activity__card-toggle[aria-expanded='false'])
+    .chat-activity__card-chevron {
+    transform: rotate(-90deg);
+  }
+  .chat-activity__card-body {
     display: flex;
-    min-height: 0;
-    flex: 1;
     flex-direction: column;
-    gap: 14px;
-    overflow-y: auto;
-    padding: 10px 8px 12px;
-    scrollbar-width: thin;
+    gap: 6px;
+    padding: 2px 8px 10px;
+  }
+  .chat-activity__session-name {
+    display: -webkit-box;
+    margin: 0;
+    padding: 0 4px;
+    overflow: hidden;
+    color: var(--text-hi);
+    font-size: var(--fs-body-sm);
+    line-height: 1.35;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow-wrap: anywhere;
   }
   :global(.chat-activity__parent-link.btn-tertiary) {
-    width: 100%;
-    justify-content: flex-start;
-    gap: 8px;
-    padding: 6px 8px;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 20px;
+    justify-content: flex-end;
+    gap: 5px;
+    margin-left: auto;
+    padding: 0 2px;
     border: 0;
-    color: var(--text-med);
+    color: var(--text-hi);
+    font-size: inherit;
+    font-weight: 400;
   }
   :global(.chat-activity__parent-link svg) {
-    flex: 0 0 14px;
+    flex: 0 0 12px;
     fill: none;
     stroke: currentColor;
     stroke-linecap: round;
@@ -1318,10 +1353,10 @@
   .chat-activity__facts {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
-    gap: 4px 12px;
+    gap: 2px 12px;
     margin: 0;
-    padding: 4px 8px 0;
-    font-size: var(--fs-body-sm);
+    padding: 0 4px;
+    font-size: var(--fs-label-sm);
     font-variant-numeric: tabular-nums;
   }
   .chat-activity__fact {
@@ -1332,23 +1367,64 @@
     color: var(--text-lo);
   }
   .chat-activity__fact dd {
-    display: flex;
     min-width: 0;
-    min-height: 22px;
-    align-items: center;
     margin: 0;
     overflow: hidden;
     color: var(--text-hi);
+    line-height: 20px;
+    text-align: right;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .chat-activity__stats-empty {
+  .chat-activity__scope {
+    margin: 0;
+    padding: 0 4px;
+    color: var(--text-lo);
+    font-size: var(--fs-label-sm);
+  }
+  .chat-activity__totals {
+    display: inline-flex;
+    gap: 6px;
+  }
+  .chat-activity__added {
+    color: var(--green);
+  }
+  .chat-activity__removed {
+    color: var(--red);
+  }
+  .chat-activity__total--zero {
+    color: var(--text-lo);
+  }
+  .chat-activity__running-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text-hi);
+  }
+  :global(.chat-activity__finished-toggle.btn-tertiary) {
+    min-height: 26px;
+    gap: 6px;
+    padding: 0 4px;
+    border: 0;
     color: var(--text-med);
+    font-size: var(--fs-label-sm);
+    font-weight: 500;
+  }
+  :global(.chat-activity__finished-toggle.btn-tertiary:hover) {
+    background: var(--surface-2);
+    color: var(--text-hi);
+  }
+  :global(.chat-activity__finished-toggle[aria-expanded='true'])
+    .chat-activity__disclosure {
+    transform: rotate(90deg);
+  }
+  .chat-activity__group--running + .chat-activity__group--finished {
+    margin-top: 4px;
   }
   :global(.chat-activity__more.btn-tertiary) {
     min-height: 0;
     margin: 4px 0 0;
-    padding: 3px 8px;
+    padding: 3px 4px;
     border: 0;
     color: var(--text-med);
     font-size: var(--fs-label-sm);
@@ -1357,32 +1433,6 @@
   :global(.chat-activity__more.btn-tertiary:hover) {
     background: var(--surface-2);
     color: var(--text-hi);
-  }
-  .chat-activity__empty {
-    margin: 0;
-    padding: 8px;
-    color: var(--text-med);
-    font-size: var(--fs-body-sm);
-  }
-  .chat-activity__group-title {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin: 0;
-    padding: 4px 8px;
-    color: var(--text-med);
-    font-family: var(--font-ui);
-    font-size: var(--fs-body-sm);
-    font-weight: 500;
-  }
-  .chat-activity__scope {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--text-lo);
-    font-size: var(--fs-label-sm);
-    font-weight: 400;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   .chat-activity__count {
     color: var(--text-lo);
