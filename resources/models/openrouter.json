@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-18T20:45:34.267115+00:00",
+  "fetched_at": "2026-10-18T21:04:06.535906+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -19588,7 +19588,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -19596,9 +19596,13 @@
           "supported": false
         },
         "supported_parameters": [
+          "logprobs",
           "max_tokens",
+          "response_format",
           "stop",
-          "temperature"
+          "structured_outputs",
+          "temperature",
+          "top_logprobs"
         ],
         "supported_voices": [],
         "task_types": [
@@ -19611,9 +19615,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 81920,
+      "context_window": 262144,
       "family": "morph",
-      "max_output_tokens": 38000,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
