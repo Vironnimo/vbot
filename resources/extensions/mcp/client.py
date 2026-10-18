@@ -26,6 +26,7 @@ from ._callbacks import ServerRequests
 from ._calls import _CURRENT_CALL, _Call
 from ._calls import InvalidToolResultError as InvalidToolResultError
 from ._calls import InvocationNotSentError as InvocationNotSentError
+from ._calls import SubscriptionEndedError as SubscriptionEndedError
 from ._calls import UnsupportedOperationError as UnsupportedOperationError
 from ._events import ConnectionEvents
 from ._protocol import TASK_OPERATIONS as TASK_OPERATIONS
@@ -768,7 +769,11 @@ class ConnectionRunner:
             return
         if isinstance(
             error,
-            InvalidToolResultError | TaskEndedError | TaskUnknownError | UnsupportedOperationError,
+            InvalidToolResultError
+            | TaskEndedError
+            | TaskUnknownError
+            | UnsupportedOperationError
+            | SubscriptionEndedError,
         ):
             # The server's own account of the call, or vBot's refusal to send it,
             # whatever happens to the connection.

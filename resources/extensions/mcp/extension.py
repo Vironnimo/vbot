@@ -631,6 +631,7 @@ class MCPService:
             READ_OPERATIONS,
             InvalidToolResultError,
             InvocationNotSentError,
+            SubscriptionEndedError,
             UnsupportedOperationError,
         )
 
@@ -644,6 +645,8 @@ class MCPService:
             return self._not_sent(runner, error)
         except InvalidToolResultError as error:
             return await self._invalid_result(runner, context, error, source=source)
+        except SubscriptionEndedError as error:
+            return tool_failure("mcp_subscription_ended", str(error), retryable=False)
         except TaskEndedError as error:
             detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
             return tool_failure("mcp_task_ended", MCP_MESSAGES["task_ended"].format(detail=detail))

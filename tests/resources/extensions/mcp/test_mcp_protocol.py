@@ -1233,6 +1233,19 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
             with pytest.raises(ValueError):
                 await subscribing
         assert "test://pending" not in runner._protocol._resource_subscriptions
+        # Both calls are admitted together: unsubscribe can cancel the watch
+        # before its coroutine has started at all.
+        async with asyncio.timeout(2):
+            subscribing = asyncio.create_task(
+                runner.invoke("resources/subscribe", {"uri": "test://cancel-before-start"})
+            )
+            unsubscribing = asyncio.create_task(
+                runner.invoke("resources/unsubscribe", {"uri": "test://cancel-before-start"})
+            )
+            await unsubscribing
+            with pytest.raises(ValueError):
+                await subscribing
+        assert "test://cancel-before-start" not in runner._protocol._resource_subscriptions
     finally:
         release_pending.set()
         if subscribing is not None:

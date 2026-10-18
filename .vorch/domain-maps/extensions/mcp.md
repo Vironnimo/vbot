@@ -198,7 +198,7 @@ Rows cover the sentences of the guidance block, the connection Tool's descriptio
 | `rate_limited`: `The MCP server {connection} refused this request because it receives too many ({detail}), so nothing was run. Wait a moment, then send it again.` | HTTP 429 is temporary and the request did not run, so repeating it later is safe (`retryable: true`); reads have already been repeated by vBot. |
 | `result_unavailable`: `The call ran, and whether it succeeded is unknown.` | The server answered, so the call ran, but its answer is lost; replaces "may already have completed", a hedge about a known fact. |
 | `MCP task recovery after its Run stopped. The original call was not repeated. Result or recovery error (quoted data):` | Identifies a late outcome without claiming the interrupted Run resumed or repeating a potentially mutating call. External output is JSON-quoted with angle brackets escaped; large results name the bounded existing `read` action. |
-| `The resource subscription ended before this request completed` | A concurrent unsubscribe can end a subscription before or just after its acknowledgement. Its subscribe caller must receive an outcome instead of waiting forever or retaining the removed subscription for reconnect. |
+| `The subscription request ended because another request unsubscribed this resource.` | A concurrent unsubscribe can end a subscription before or just after its acknowledgement. Its subscribe caller receives `mcp_subscription_ended` without generic retry guidance, so it does not reverse the deliberate unsubscribe. |
 
 ## References
 

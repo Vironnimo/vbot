@@ -7,6 +7,7 @@ import json
 import pytest
 
 from core.tools.contracts import ToolContractError
+from resources.extensions.mcp._calls import SubscriptionEndedError
 from resources.extensions.mcp._tasks import TaskEndedError
 from resources.extensions.mcp.client import InvocationNotSentError
 from tests.resources.extensions.mcp.mcp_test_support import (
@@ -517,6 +518,12 @@ UNKNOWN_OUTCOME = (
             f"mcp_call_unconfirmed): test-owned-timeout. {UNKNOWN_OUTCOME}",
         ),
         (
+            "resources/subscribe",
+            {"uri": "test://resource"},
+            SubscriptionEndedError,
+            "mcp_subscription_ended): test-owned-timeout\nretryable: false",
+        ),
+        (
             "tools/call",
             {"value": "sentinel"},
             ValueError,
@@ -532,7 +539,7 @@ UNKNOWN_OUTCOME = (
             "current state. A call that only reads is safe to repeat.",
         ),
     ],
-    ids=["read", "operation", "tool", "task-ended"],
+    ids=["read", "operation", "subscription-ended", "tool", "task-ended"],
 )
 async def test_calls_without_a_result_are_not_repeated_and_say_whether_repeating_is_safe(
     context_service, host, monkeypatch, operation, arguments, error, expected
