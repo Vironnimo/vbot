@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from core.utils.errors import ConfigError
+from core.utils.file_status import is_file_strict
 
 # core.settings loads lazily inside the functions that read settings.json, so
 # light callers (the CLI parser reads DEFAULT_HOST) skip its import chain.
@@ -40,12 +41,11 @@ def _read_worktree_data_dir(
 
     candidate = _WORKTREE_FILE if worktree_file is None else worktree_file
     path = Path(candidate)
-    if not path.exists():
-        return None
-
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    except FileNotFoundError:
+        return None
+    except (UnicodeError, json.JSONDecodeError) as error:
         _LOGGER.warning("Ignoring invalid worktree marker '%s': %s", path, error)
         return None
 
@@ -65,7 +65,7 @@ def _find_worktree_file_from_cwd() -> Path | None:
     """Return the current-directory worktree marker when present."""
 
     marker = Path.cwd() / ".vbot-worktree"
-    if marker.is_file():
+    if is_file_strict(marker):
         return marker
     return None
 

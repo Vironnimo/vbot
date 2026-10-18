@@ -142,6 +142,16 @@ def project_timeline_history(
 ) -> JsonObject:
     """Add complete semantic elements to an already public History response."""
     response = {**history_response, "timeline_version": TIMELINE_VERSION}
+    last_usage = next(
+        (
+            message["usage"]
+            for message in reversed(history_response.get("messages") or [])
+            if message.get("role") == "assistant" and isinstance(message.get("usage"), dict)
+        ),
+        None,
+    )
+    if last_usage is not None or not history_response.get("incremental"):
+        response["last_usage"] = last_usage
     items = history_timeline(history_response.get("messages") or [])
     if active_run_snapshot is not None:
         run_id = active_run_snapshot["run_id"]

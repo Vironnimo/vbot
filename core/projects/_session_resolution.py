@@ -339,13 +339,15 @@ class SessionResolution:
         )
         return result
 
-    def _apply_overrides(self, agent: RuntimeAgent, overrides: AgentOverrides) -> RuntimeAgent:
+    def _apply_overrides(
+        self, agent: RuntimeAgent, overrides: AgentOverrides, *, require_model: bool = True
+    ) -> RuntimeAgent:
         """Return an immutable runtime view with only the overridden fields replaced."""
         if overrides.is_empty:
             return agent
 
         changes = overrides.agent_changes()
-        if overrides.model is not None:
+        if require_model and overrides.model is not None:
             self._owner._model_checker.require_configured(overrides.model)
         if isinstance(agent, ConfigAgent):
             return replace(agent, **changes)

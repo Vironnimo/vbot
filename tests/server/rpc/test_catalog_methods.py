@@ -99,8 +99,13 @@ def _state(
     }
 
     async def resolve_agent_async(
-        project_id: str | None, agent_id: str, *, session_id: str | None = None
+        project_id: str | None,
+        agent_id: str,
+        *,
+        session_id: str | None = None,
+        require_model: bool = True,
     ) -> object:
+        assert not require_model
         if not resolvable:
             from core.projects import AgentResolutionError
 
@@ -162,6 +167,38 @@ async def test_identity_agent_address_filters_by_agent_allowed_skills() -> None:
     result = await _list_commands(state, {"agent_id": "main"})
 
     assert _skill_names(result) == ["debugging"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("project_agent", [False, True])
+async def test_command_catalog_remains_available_with_an_unusable_session_model(
+    tmp_path: Path, project_agent: bool
+) -> None:
+    from core.chat import CommandDispatcher
+    from tests.server.rpc.project_methods_test_support import _make_repo, _make_state
+
+    state = _make_state(tmp_path)
+    runtime = state.runtime
+    if project_agent:
+        repo = _make_repo(tmp_path, "vbot", "builder.md")
+        runtime.projects.create("vbot", "vBot", repo)
+        agent_id, project_id, address = "builder", "vbot", "builder@vbot"
+    else:
+        runtime.agents.create("coder", "Coder", model="openai/gpt-5.2")
+        agent_id, project_id, address = "coder", None, "coder"
+    session = runtime.sessions.create(agent_id, project_id=project_id)
+    runtime.sessions.set_metadata(
+        session.address, {"agent_overrides": {"model": "openai/unavailable"}}
+    )
+    runtime.skills_for = lambda *_args: _Registry(["debugging"])
+    state.command_dispatcher = CommandDispatcher(state.chat_runs)
+    try:
+        result = await _list_commands(
+            state, {"agent_id": address, "session_id": session.id, "reply_surface": "tui"}
+        )
+        assert any(item["name"] == "model" for item in result["items"])
+    finally:
+        runtime.sessions.close()
 
 
 @pytest.mark.asyncio

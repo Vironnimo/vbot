@@ -310,7 +310,10 @@ async def test_busy_session_queues_the_message_and_signals_the_queue(
         }
     ]
     assert resource_changes(state, "queue") == [
-        {"kind": "queue", "scope": {"agent_id": "builder", "session_id": "s1"}}
+        {
+            "kind": "queue",
+            "scope": {"agent_id": "builder", "project_id": "vbot", "session_id": "s1"},
+        }
     ]
     # The Run the item starts later reaches the event bus like a direct start.
     dequeued = finished_run("run-dequeued", project_id="vbot")
@@ -664,7 +667,10 @@ async def test_busy_session_queues_while_other_sessions_keep_running(
         assert len(adapter.requests) == 1
         assert adapter.stream_requests == []
         assert resource_changes(state, "queue") == [
-            {"kind": "queue", "scope": {"agent_id": "coder", "session_id": "session-one"}}
+            {
+                "kind": "queue",
+                "scope": {"agent_id": "coder", "project_id": None, "session_id": "session-one"},
+            }
         ]
         assert state.chat_runs.remove_queued("coder", "session-one", item["id"], project_id=None)
     finally:

@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing, suppress
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 import psutil  # type: ignore[import-untyped]
 
@@ -16,7 +16,7 @@ from core.runs import RUN_AGENT_ACTIVITY_FIELD, RunStatus
 from core.utils.timestamps import format_canonical_timestamp
 from core.utils.workers import finish_despite_cancel
 from server._app_lifecycle import _app_chat_runs
-from server._http_dependencies import Request, WebSocket
+from server._http_dependencies import Request, StreamingResponse, WebSocket
 from server.clients import ClientEntry, ClientRegistry
 from server.events import (
     RESOURCE_KIND_CLIENTS,
@@ -49,6 +49,21 @@ REPLAY_STATUS_RESUMED = "resumed"
 REPLAY_STATUS_GAP = "gap"
 
 REPLAY_STATUS_EPOCH_CHANGED = "epoch_changed"
+
+
+class _RunStreamingResponse(StreamingResponse):  # type: ignore[misc]
+    """Close the Run subscription and its pending waits when a socket send fails."""
+
+    def __init__(self, content: AsyncGenerator[str], **kwargs: Any) -> None:
+        super().__init__(content, **kwargs)
+        self._run_stream = content
+
+    @override
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await finish_despite_cancel(self._run_stream.aclose())
 
 
 async def _stream_websocket_events(

@@ -17,8 +17,12 @@ The server side of the chat RPCs: `server/rpc/chat_methods.py` owns submission, 
 
 `chat.timeline` exposes authoritative semantic conversation items and existing History/Session facts. `/api/runs/{id}/timeline` sends a fresh snapshot and bounded-rate patches through `server/timeline.py`; raw History and Run-event APIs remain available. See `chat/timeline.md` for identity, paging, recovery and sanitization contracts.
 
+Its `last_usage` preserves the newest public Assistant Usage before child windowing drops raw Assistant records. Replacement reads without Usage return null; incremental reads without new Assistant Usage omit the field so accessors keep the preceding turn's value.
+
 ## Queue and work
 
 `chat.queue_update` accepts an optional `reply_surface` when an accessor edits queued input. Omission preserves the original surface; an explicit terminal/WebUI surface replaces it with the edited input. Listing or selecting a Steer does not change the captured surface.
+
+Public Queue mutations publish `resource_changed(kind="queue")` with the full Session scope (`project_id`, bare `agent_id`, `session_id`); the TUI refreshes the addressed conversation when another accessor changes it.
 
 `chat.work {agent_id, session_id}` serves the Sub-Agent coordinator's live work snapshot of the Session's subtree (`subagents.md` -> Interfaces, `work_snapshot`), independently of paged History. Accessors refresh it from existing Run, command, Queue and Terminal events and reconnects.

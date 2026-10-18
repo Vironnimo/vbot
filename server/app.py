@@ -80,6 +80,7 @@ from server._streams import (
     _queues_snapshot,
     _register_ws_client,
     _replay_after_sequence,
+    _RunStreamingResponse,
     _server_identity,
     _sse_run_events,
     _stream_websocket_events,
@@ -482,7 +483,7 @@ def create_app(
         except RunNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         after_sequence = _replay_after_sequence(request)
-        return StreamingResponse(
+        return _RunStreamingResponse(
             _sse_run_events(
                 run,
                 after_sequence=after_sequence,
@@ -588,7 +589,7 @@ def create_app(
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
-        return StreamingResponse(
+        return _RunStreamingResponse(
             _sse_run_events(
                 inspection.run,
                 after_sequence=claims["after_sequence"],

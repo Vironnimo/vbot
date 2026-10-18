@@ -11,6 +11,7 @@ from typing import Any, cast, override
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
+from starlette.requests import ClientDisconnect
 
 from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
@@ -20,7 +21,7 @@ from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT, ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import SessionAddress
 from core.tools import FileReadState, register_read_tool
 from server import _streams
-from server._streams import _sse_run_events
+from server._streams import _RunStreamingResponse, _sse_run_events
 from server.app import create_app
 from server.file_delivery import FileDelivery
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
@@ -262,6 +263,8 @@ def test_sse_endpoint_replays_a_finished_run_ending_after_the_requested_sequence
         "verification_shutdown",
         "shutdown",
         "already_stopping",
+        "socket_error",
+        "socket_cancel",
     ],
 )
 async def test_sse_stream_close_removes_run_subscriber(
@@ -269,6 +272,28 @@ async def test_sse_stream_close_removes_run_subscriber(
 ) -> None:
     run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
     shutdown = asyncio.Event()
+    if ending in {"socket_error", "socket_cancel"}:
+        initial_tasks = asyncio.all_tasks()
+        stream = _sse_run_events(run, shutdown_event=shutdown, heartbeat_interval_seconds=0)
+        response = _RunStreamingResponse(stream, media_type="text/event-stream")
+
+        async def send(message: dict[str, Any]) -> None:
+            if message["type"] == "http.response.body":
+                if ending == "socket_error":
+                    raise OSError("socket closed")
+                raise asyncio.CancelledError
+
+        async def receive() -> dict[str, Any]:
+            await asyncio.Future()
+            raise AssertionError("unreachable")
+
+        error = ClientDisconnect if ending == "socket_error" else asyncio.CancelledError
+        with pytest.raises(error):
+            await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+        assert run.subscriber_count == 0
+        assert run.status.value == "running"
+        assert not [task for task in asyncio.all_tasks() - initial_tasks if not task.done()]
+        return
     stream = _sse_run_events(
         run, shutdown_event=shutdown, include_file_urls=ending == "verification_shutdown"
     )

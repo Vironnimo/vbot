@@ -83,6 +83,8 @@ The exact emitters remain source-of-truth in `server/rpc/*_methods.py`, `server/
 
 On process shutdown, the host's `shutdown_event` ends ordinary and Extension Run streams even while they wait for an event; pending reads and shutdown watchers are drained and the Run subscription is closed. Ending the transport does not cancel the Run: lifespan teardown does that afterwards, so its terminal event need not reach the closing stream. Durable History retains the settled outcome. See `server/process-lifecycle.md` -> Shutdown ordering.
 
+The raw Run SSE response explicitly closes its generator after send failure or cancellation, including while it is suspended at a heartbeat; its subscription and pending reads never wait for garbage collection.
+
 Owner-scoped Extension Run streams additionally include `file_urls`: verified file capabilities found in the sanitized event, using the same public-payload projector as Extension History. The Event Loop scans each event for `/api/files/` URL candidates; only an event with a candidate verifies it on the bounded file-preview worker pool, while every other event (each text delta) carries `file_urls: []` without a pool hop. `extensions.page_run` returns the canonical `participant_id` with the stream capability so the host can keep those grants within its selected History scope; ordinary Run streams retain their existing payload shape.
 
 `/ws/logs` is separate from the shared bus. It subscribes to one log file using the cursor returned by `log.read`, preventing the read-to-subscribe gap, and emits file append/reset plus catalog updates. Log transport behavior belongs in `logs.md`; it has no bus epoch or Run semantics.

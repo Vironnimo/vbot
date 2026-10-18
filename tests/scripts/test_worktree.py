@@ -50,7 +50,8 @@ def test_worktree_source_uses_canonical_initializer_without_local_template() -> 
     assert "OPENAI_API_KEY" not in source
 
 
-def test_scan_used_ports_tolerates_non_object_marker_and_settings_json(tmp_path):
+@pytest.mark.parametrize("settings_port", [8455, True, False, 0, -1, 65_536])
+def test_scan_used_ports_tolerates_non_object_marker_and_settings_json(tmp_path, settings_port):
     module = worktree_ports
     worktrees_dir = tmp_path / ".worktrees"
     worktrees_dir.mkdir(parents=True)
@@ -78,13 +79,13 @@ def test_scan_used_ports_tolerates_non_object_marker_and_settings_json(tmp_path)
     valid_data_dir = tmp_path / "valid-data"
     valid_data_dir.mkdir()
     (valid_data_dir / "settings.json").write_text(
-        json.dumps({"server_port": 8455}),
+        json.dumps({"server_port": settings_port}),
         encoding="utf-8",
     )
     valid_worktree = worktrees_dir / "valid"
     valid_worktree.mkdir()
     (valid_worktree / module.WORKTREE_FILE_NAME).write_text(
-        json.dumps({"data_dir": str(valid_data_dir)}),
+        json.dumps({"data_dir": str(valid_data_dir), "server_port": 8454}),
         encoding="utf-8",
     )
 
@@ -97,7 +98,7 @@ def test_scan_used_ports_tolerates_non_object_marker_and_settings_json(tmp_path)
 
     ports = module.scan_used_ports(worktrees_dir)
 
-    assert ports == {8455, 8456}
+    assert ports == ({8454, 8455, 8456} if settings_port == 8455 else {8454, 8456})
 
 
 def test_find_free_port_starts_after_main_dev_port(tmp_path, monkeypatch):

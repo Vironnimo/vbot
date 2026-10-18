@@ -78,7 +78,7 @@ MYPY_PLATFORMS = ("win32", "linux")
 # there; mypy checks their standard-library use.
 OLDER_PYTHON_FILES = ("core/model_tasks/speech_worker.py",)
 OLDER_PYTHON_VERSION = "3.13"
-MYPY_LINE_PATTERN = re.compile(r"^(?P<path>[^:\n]+?):\d+(?::\d+)?: (?P<kind>error|note):")
+MYPY_LINE_PATTERN = re.compile(r"^(?P<path>.+?):\d+(?::\d+)?: (?P<kind>error|note):")
 
 
 class StepResult(NamedTuple):

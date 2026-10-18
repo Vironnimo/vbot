@@ -193,7 +193,9 @@ async def _command_skill_suggestions(
         return await _CATALOG_WORKERS.run(_sorted_filtered_skills, state.runtime.skills, ["*"])
     agent_id, project_id = address
     resolver = state.runtime.agent_resolver
-    agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
+    agent = await resolver.resolve_agent_async(
+        project_id, agent_id, session_id=session_id, require_model=False
+    )
     try:
         working_project = await resolver.resolve_working_project_async(
             project_id, agent, session_id=session_id, requested=working_project_id

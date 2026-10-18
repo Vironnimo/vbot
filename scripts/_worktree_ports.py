@@ -50,7 +50,11 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
 
         try:
             recorded_port = data.get(SERVER_PORT_KEY)
-            if isinstance(recorded_port, int) and not isinstance(recorded_port, bool):
+            if (
+                isinstance(recorded_port, int)
+                and not isinstance(recorded_port, bool)
+                and 1 <= recorded_port <= 65_535
+            ):
                 ports.add(recorded_port)
             raw_data_dir = data.get(DATA_DIR_KEY, "")
             if not isinstance(raw_data_dir, str) or not raw_data_dir:
@@ -62,7 +66,7 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
             if not isinstance(settings, dict):
                 continue
             port = settings.get(SERVER_PORT_KEY)
-            if isinstance(port, int):
+            if isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65_535:
                 ports.add(port)
             providers = settings.get("providers")
             if not isinstance(providers, dict):
