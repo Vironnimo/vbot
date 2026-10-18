@@ -24,7 +24,7 @@ from core.models.database import (
 )
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
-from core.providers.accounts import ConnectionRef
+from core.providers.accounts import Account, ConnectionRef
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.errors import NetworkError, ProviderAuthError
 from core.providers.providers import ProviderRegistry
@@ -870,10 +870,8 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
     provider = copilot_provider(oauth_connection(), models_endpoint="/models")
     state = oauth_provider_state(tmp_path, provider)
     state.runtime.token_store.save(
-        "github-copilot",
-        "oauth",
+        Account("github-copilot", "oauth", account_id),
         OAuthToken(access_token="stale-token", extra={"github_oauth_token": "github-secret"}),
-        account_id=account_id,
     )
     refreshed: dict[str, Any] = {}
     state.runtime.provider_credentials = ProviderCredentialResolver(
@@ -900,14 +898,11 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
         def __init__(
             self,
             token_store: Any,
-            provider_id: str,
-            connection_id: str,
+            account: Account,
             config: Any,
-            *,
-            account_id: str,
         ) -> None:
-            self.args = (token_store, provider_id, connection_id, config)
-            refreshed["account_id"] = account_id
+            self.args = (token_store, account.provider_id, account.local_connection_id, config)
+            refreshed["account_id"] = account.account_id
 
         async def __call__(self) -> str:
             refreshed["getter_args"] = self.args

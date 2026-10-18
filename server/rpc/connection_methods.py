@@ -8,6 +8,7 @@ from typing import Any
 from core.providers.accounts import (
     CREDENTIAL_KEY_ACCOUNT_SEPARATOR,
     DEFAULT_ACCOUNT_ID,
+    Account,
     account_id_from_credential_key,
     compose_connection_id,
     derive_credential_key,
@@ -557,11 +558,7 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
                 publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
 
         session = await engine.connect(
-            provider_id,
-            connection.id,
-            oauth_config,
-            on_complete,
-            account_id=account_id,
+            Account(provider_id, connection.id, account_id), oauth_config, on_complete
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -587,14 +584,14 @@ async def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
         token_store = _runtime_token_store(state.runtime)
         # Existence, not a load: disconnect must also remove a token file that fails to load.
         had_token = await _CONNECTION_WORKERS.run(
-            token_store.exists, provider_id, connection.id, account_id=account_id
+            token_store.exists, Account(provider_id, connection.id, account_id)
         )
         engine = getattr(state, "device_flow_engine", None)
-        flow_active = _device_flow_active(engine, provider_id, connection.id, account_id)
+        flow_active = _device_flow_active(engine, Account(provider_id, connection.id, account_id))
         if engine is not None:
-            await engine.cancel_flow_and_wait(provider_id, connection.id, account_id)
+            await engine.cancel_flow_and_wait(Account(provider_id, connection.id, account_id))
         await _CONNECTION_WORKERS.run(
-            token_store.delete, provider_id, connection.id, account_id=account_id
+            token_store.delete, Account(provider_id, connection.id, account_id)
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -630,9 +627,9 @@ async def _provider_connection_status(state: Any, params: JsonObject) -> JsonObj
         token_store = _runtime_token_store(state.runtime)
         engine = getattr(state, "device_flow_engine", None)
         connected = await _CONNECTION_WORKERS.run(
-            token_store.has_valid_token, provider_id, connection.id, account_id=account_id
+            token_store.has_valid_token, Account(provider_id, connection.id, account_id)
         )
-        flow_active = _device_flow_active(engine, provider_id, connection.id, account_id)
+        flow_active = _device_flow_active(engine, Account(provider_id, connection.id, account_id))
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 

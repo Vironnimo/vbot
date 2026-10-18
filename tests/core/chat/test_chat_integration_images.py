@@ -26,13 +26,13 @@ from core.chat._run_state import (
 )
 from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.errors import ImageBudgetExceededError
-from core.providers._http_shared import prepare_request
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     estimate_wire_request_input_tokens,
 )
 from core.providers.errors import ProviderRequestTooLargeError
+from core.providers.http import prepare_request
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.tools import read_media_artifact, tool_success
 from tests.core.chat.chat_integration_test_support import FakeAdapter, JsonObject, StartRuntime

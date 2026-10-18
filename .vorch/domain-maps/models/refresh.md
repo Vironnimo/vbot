@@ -24,6 +24,8 @@ The manual refresh stages, validates, publishes and discards its copy on the `mo
 
 A single-Provider refresh that refreshes no Connection reports why: the first discovery error, else the disabled catalog Connections by id, else missing credentials. The manual refresh RPC reads the configured bundled root from `runtime.storage.resources_dir`, the same StorageManager initialized at Runtime startup. Do not probe Runtime-private path resolvers; regression coverage exercises both refresh targets against a started Runtime with a custom resources path (`tests/server/rpc/test_model_methods_refresh.py`).
 
+`ModelsDevCatalog.model(models_dev_id, wire_id)` binds an exact Provider Model once. Its `ModelsDevModel` view owns canonical pointers, reasoning, limits, modalities, family, protocol hints and pricing; missing entries and absent facts retain their existing `None` semantics.
+
 ## Typed reasoning derivation
 
 `capabilities.reasoning` is derived at refresh from models.dev `reasoning_options` - effort option wins over budget over toggle; the canonical ladder lifts from the lab provider only, never unioned across providers; a deviating provider gets its ladder stamped on its provider file while a conforming one inherits canonically. At a canonical join without deviation, refresh keeps an Adapter-reported control description (one with a `control`, e.g. Anthropic's live capability tree) and allows a bare true/unknown support flag to inherit the fuller control description. An explicit false or an endpoint-reported control remains authoritative, including during carry-forward; absent optional reasoning booleans stay unknown. When the endpoint support is unknown, an exact Provider support flag beats a contradictory canonical flag. During a complete public-feed outage, the surviving canonical file is read only to decide whether dropping a fresh support flag for inheritance is safe; no canonical or override values are copied into the generated Provider record. Adapter facts outside the control description (`mandatory`, from OpenRouter's `reasoning.mandatory`) survive in every case.
@@ -40,5 +42,5 @@ Connection-aware refresh preserves each surviving Connection's effective window 
 
 ## Source and tests
 
-- Roots, manifest, selection and staging: `core/models/database.py`; refresh pipeline `core/models/discovery.py`, `core/models/models_dev.py`; RPC `server/rpc/model_methods.py`; maintainer refresh `scripts/refresh_model_db.py`
+- Roots, manifest, selection and staging: `core/models/database.py`; refresh orchestration `core/models/discovery.py`, catalog HTTP `_discovery_http.py`, Connection projection `_discovery_projection.py`, models.dev facts `core/models/models_dev.py`; RPC `server/rpc/model_methods.py`; maintainer refresh `scripts/refresh_model_db.py`
 - Tests: `tests/server/rpc/test_model_methods_refresh.py`, Model DB and discovery tests under `tests/core/models/`

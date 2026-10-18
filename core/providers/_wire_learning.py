@@ -34,13 +34,13 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from core.providers._http_shared import (
+from core.providers.errors import ProviderAuthError, ProviderError
+from core.providers.http import (
     PreparedRequest,
     RequestPlan,
     prepare_request,
     revise_request,
 )
-from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.reasoning import detail_names_rejected_effort, split_inline_reasoning
 from core.providers.reasoning_dialects import ReasoningCarriers, dialect_carriers
 from core.providers.wire_profile import WireProfile

@@ -17,10 +17,10 @@ import httpx._content
 import pytest
 import respx
 
-from core.providers import _http_shared
-from core.providers._http_shared import PreparedRequest
+from core.providers import http
 from core.providers.adapter import request_input_budget, resolve_request_input_budget
 from core.providers.errors import ProviderRequestTooLargeError
+from core.providers.http import PreparedRequest
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.wire_profile import RequestRules
 
@@ -137,7 +137,7 @@ class _Preparation:
     def record(self, monkeypatch: pytest.MonkeyPatch) -> None:
         apply_body = RequestRules.apply_body
         encode = httpx._content.json_dumps
-        hop = _http_shared._REQUEST_BODY_WORKERS.run
+        hop = http._REQUEST_BODY_WORKERS.run
 
         def record_build(rules: RequestRules, payload: dict[str, Any]) -> None:
             budget = resolve_request_input_budget(self.model_id, -1)
@@ -154,7 +154,7 @@ class _Preparation:
 
         monkeypatch.setattr(RequestRules, "apply_body", record_build)
         monkeypatch.setattr(httpx._content, "json_dumps", record_encoding)
-        monkeypatch.setattr(_http_shared._REQUEST_BODY_WORKERS, "run", count_hop)
+        monkeypatch.setattr(http._REQUEST_BODY_WORKERS, "run", count_hop)
 
     @property
     def build_threads(self) -> list[int]:
@@ -376,14 +376,14 @@ async def test_cancelling_request_preparation_never_sends_late(
     loop = asyncio.get_running_loop()
     started = asyncio.Event()
     release = threading.Event()
-    encode = _http_shared._encode_json_body
+    encode = http._encode_json_body
 
     def blocked_encode(payload: dict[str, Any]) -> bytes:
         loop.call_soon_threadsafe(started.set)
         assert release.wait(timeout=5)
         return encode(payload)
 
-    monkeypatch.setattr(_http_shared, "_encode_json_body", blocked_encode)
+    monkeypatch.setattr(http, "_encode_json_body", blocked_encode)
     async with make_adapter() as adapter:
         with respx.mock(assert_all_called=False) as router:
             route = router.post(OPENAI_URL).mock(return_value=_reply(streaming))

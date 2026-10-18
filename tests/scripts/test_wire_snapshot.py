@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import core.providers._http_shared as http_shared
+import core.providers.http as http_shared
 from scripts import wire_snapshot
 
 

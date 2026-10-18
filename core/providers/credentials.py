@@ -22,6 +22,7 @@ from collections.abc import Callable, Mapping
 
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
+    Account,
     ProviderAccount,
     account_id_from_credential_key,
     derive_credential_key,
@@ -261,7 +262,7 @@ class ProviderCredentialResolver:
         if self._uses_token_store(connection):
             token = None
             if self._token_store is not None:
-                token = self._token_store.load(provider_id, connection.id, account_id=account_id)
+                token = self._token_store.load(Account(provider_id, connection.id, account_id))
             if token is not None:
                 return token.access_token
             raise ConfigError(
@@ -351,7 +352,7 @@ class ProviderCredentialResolver:
             ProviderAccount(
                 id=account_id,
                 usable=self._token_store.has_valid_token(
-                    provider_id, connection.id, account_id=account_id
+                    Account(provider_id, connection.id, account_id)
                 ),
                 source="oauth",
             )

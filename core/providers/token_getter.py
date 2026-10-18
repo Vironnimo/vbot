@@ -11,9 +11,9 @@ from urllib.parse import urlparse
 
 import httpx
 
-from core.providers._http_shared import wrap_network_error
-from core.providers.accounts import DEFAULT_ACCOUNT_ID
+from core.providers.accounts import Account
 from core.providers.errors import ProviderAuthError, ProviderError, ProviderRateLimitError
+from core.providers.http import wrap_network_error
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
 from core.providers.providers import (
     MINIMAX_OAUTH_DEVICE_FLOW,
@@ -150,39 +150,26 @@ class OAuthTokenGetter:
     def __init__(
         self,
         token_store: TokenStore,
-        provider_id: str,
-        local_connection_id: str,
+        account: Account,
         oauth_config: OAuthConfig,
         client: httpx.AsyncClient | None = None,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
         self._token_store = token_store
-        self._provider_id = provider_id
-        self._local_connection_id = local_connection_id
+        self._account = account
         self._oauth_config = oauth_config
-        self._account_id = account_id
         self._client = client
-        self._lock = token_store.refresh_lock(
-            provider_id,
-            local_connection_id,
-            account_id=account_id,
-        )
+        self._lock = token_store.refresh_lock(account)
 
     async def __call__(self) -> str:
         """Return a valid OAuth-backed API token, refreshing when needed."""
 
         async with self._lock:
-            token = await self._token_store.load_async(
-                self._provider_id,
-                self._local_connection_id,
-                account_id=self._account_id,
-            )
+            token = await self._token_store.load_async(self._account)
             if token is None:
                 _LOGGER.warning(
                     "No usable OAuth token (provider=%s connection=%s) — reconnect required",
-                    self._provider_id,
-                    self._local_connection_id,
+                    self._account.provider_id,
+                    self._account.local_connection_id,
                 )
                 raise ProviderAuthError("No OAuth token — please connect this provider first")
             if not _is_expiring(token):
@@ -212,11 +199,7 @@ class OAuthTokenGetter:
                 return None
 
         async with self._lock:
-            token = await self._token_store.load_async(
-                self._provider_id,
-                self._local_connection_id,
-                account_id=self._account_id,
-            )
+            token = await self._token_store.load_async(self._account)
             if token is None:
                 raise ProviderAuthError("No OAuth token — please connect this provider first")
             if token.access_token != rejected_access_token and not _is_expiring(token):
@@ -233,8 +216,8 @@ class OAuthTokenGetter:
         _LOGGER.warning(
             "OAuth token expired with no refresh path (provider=%s connection=%s) — "
             "reconnect required",
-            self._provider_id,
-            self._local_connection_id,
+            self._account.provider_id,
+            self._account.local_connection_id,
         )
         raise ProviderAuthError("OAuth token expired — please reconnect")
 
@@ -318,28 +301,14 @@ class OAuthTokenGetter:
                 and not isinstance(exc, _InconclusiveRejectionError)
                 and self._oauth_config.device_flow in ROTATING_REFRESH_DEVICE_FLOWS
             ):
-                await self._token_store.replace_if_current_async(
-                    self._provider_id,
-                    self._local_connection_id,
-                    token,
-                    None,
-                    account_id=self._account_id,
-                )
+                await self._token_store.replace_if_current_async(self._account, token, None)
             self._log_refresh_failure(exc)
             raise
         return await settle_before_cancelling(self._save_refreshed_token(token, refreshed_token))
 
     async def _save_refreshed_token(self, original: OAuthToken, refreshed: OAuthToken) -> str:
-        if not await self._token_store.replace_if_current_async(
-            self._provider_id,
-            self._local_connection_id,
-            original,
-            refreshed,
-            account_id=self._account_id,
-        ):
-            current = await self._token_store.load_async(
-                self._provider_id, self._local_connection_id, account_id=self._account_id
-            )
+        if not await self._token_store.replace_if_current_async(self._account, original, refreshed):
+            current = await self._token_store.load_async(self._account)
             if current is not None and not _is_expiring(current):
                 return current.access_token
             raise ProviderAuthError(
@@ -352,15 +321,15 @@ class OAuthTokenGetter:
         # Routine and frequent: only a failed refresh reaches the INFO log.
         _LOGGER.debug(
             "Refreshed OAuth token (provider=%s connection=%s)",
-            self._provider_id,
-            self._local_connection_id,
+            self._account.provider_id,
+            self._account.local_connection_id,
         )
 
     def _log_refresh_failure(self, exc: Exception) -> None:
         _LOGGER.warning(
             "OAuth token refresh failed (provider=%s connection=%s): %s",
-            self._provider_id,
-            self._local_connection_id,
+            self._account.provider_id,
+            self._account.local_connection_id,
             exc,
         )
 

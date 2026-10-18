@@ -17,7 +17,7 @@ import httpx
 import pytest
 import respx
 
-import core.models.discovery as discovery_module
+import core.models._discovery_http as discovery_module
 from core.models.discovery import ModelDiscoveryError, build_discovery_request, refresh_models
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.models.models_dev import ModelsDevCatalog

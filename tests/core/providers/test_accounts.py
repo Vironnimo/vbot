@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.providers.accounts import (
+    Account,
     account_id_from_credential_key,
     compose_connection_id,
     derive_credential_key,
@@ -66,11 +67,20 @@ def test_unrelated_or_ambiguous_keys_name_no_account(base_key: str, env_key: str
 
 @pytest.mark.parametrize(
     ("account_id", "connection_id"),
-    [(None, "openai:api-key"), ("work", "openai:api-key:work")],
+    [
+        (None, "openai:api-key"),
+        ("default", "openai:api-key:default"),
+        ("work", "openai:api-key:work"),
+    ],
 )
 def test_compose_and_split_connection_ids(account_id: str | None, connection_id: str) -> None:
     assert compose_connection_id("openai", "api-key", account_id) == connection_id
     assert split_connection_id("openai", connection_id) == ("api-key", account_id)
+    if account_id is not None:
+        account = Account("openai", "api-key", account_id)
+        assert account.connection_id == connection_id
+        assert {account: "credential"}[Account("openai", "api-key", account_id)] == "credential"
+        assert account != Account("other", "api-key", account_id)
 
 
 @pytest.mark.parametrize(
@@ -84,3 +94,18 @@ def test_compose_and_split_connection_ids(account_id: str | None, connection_id:
 def test_split_rejects_malformed_connection_ids(connection_id: str) -> None:
     with pytest.raises(ConfigError):
         split_connection_id("openai", connection_id)
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "connection_id", "account_id"),
+    [
+        pytest.param("../outside", "oauth", "default", id="provider"),
+        pytest.param("github-copilot", "../oauth", "default", id="connection"),
+        pytest.param("github-copilot", "oauth", "../escape", id="account"),
+    ],
+)
+def test_resolved_account_rejects_invalid_identity(
+    provider_id: str, connection_id: str, account_id: str
+) -> None:
+    with pytest.raises(ValueError):
+        Account(provider_id, connection_id, account_id)

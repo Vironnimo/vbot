@@ -1,6 +1,6 @@
 """The offline wire: a recording mock transport and the patches that route all traffic to it.
 
-Every Provider HTTP client is built by ``core.providers._http_shared.build_async_client``;
+Every Provider HTTP client is built by ``core.providers.http.build_async_client``;
 the snapshot replaces that builder with one whose client uses an
 ``httpx.MockTransport`` bound to :class:`WireRecorder`. Bare ``httpx`` clients
 (the OAuth token exchange) reach the same recorder through the default async
@@ -21,7 +21,7 @@ from typing import Any, Literal
 import httpx
 import websockets.asyncio.client
 
-import core.providers._http_shared as http_shared
+import core.providers.http as http_shared
 from scripts._wire_snapshot.canned import canned_chat_response, protocol_for_path
 from scripts._wire_snapshot.records import Masker
 

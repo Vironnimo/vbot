@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, override
 import httpx
 
 from core.models.models import Model
-from core.providers._http_shared import classify_http_status
 from core.providers.adapter import (
     ModelLookup,
 )
@@ -22,6 +21,7 @@ from core.providers.errors import (
     ProviderError,
 )
 from core.providers.gemini_compatible import GeminiCompatibleAdapter
+from core.providers.http import classify_http_status
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig

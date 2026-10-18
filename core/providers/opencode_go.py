@@ -10,16 +10,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, override
 import httpx
 
 from core.models.models import Model
-from core.providers._http_shared import (
-    PreparedRequest,
-    classify_http_status,
-    connect_streaming_with_retry,
-    decode_response_json,
-    format_http_error_detail,
-    iter_stream_lines,
-    json_body_headers,
-    wrap_network_error,
-)
 from core.providers._responses_profile import (
     RESPONSES_REASONING_FIELDS,
     profile_responses_policy,
@@ -44,6 +34,16 @@ from core.providers.github_copilot_responses import (
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
     responses_returned_reasoning,
+)
+from core.providers.http import (
+    PreparedRequest,
+    classify_http_status,
+    connect_streaming_with_retry,
+    decode_response_json,
+    format_http_error_detail,
+    iter_stream_lines,
+    json_body_headers,
+    wrap_network_error,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig

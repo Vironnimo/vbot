@@ -15,17 +15,17 @@ import httpx
 from core.attachments import sniff_media_type
 from core.model_tasks.image_types import ImageInput
 from core.model_tasks.music_types import MusicGenerationResult
-from core.providers._http_shared import (
-    iter_sse_data,
-    parse_sse_json_data,
-    wrap_network_error,
-)
 from core.providers.errors import (
     NetworkError,
     ProviderContentRefusedError,
     ProviderError,
     ProviderOutcomeUnknownError,
     classify_in_band_provider_error,
+)
+from core.providers.http import (
+    iter_sse_data,
+    parse_sse_json_data,
+    wrap_network_error,
 )
 from core.providers.task_client import (
     ProviderTaskClient,

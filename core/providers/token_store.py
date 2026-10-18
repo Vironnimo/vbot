@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from threading import RLock
@@ -29,14 +28,18 @@ from core.json_documents import (
     render_json_document,
     validate_format_version,
 )
-from core.providers.accounts import ACCOUNT_ID_PATTERN, DEFAULT_ACCOUNT_ID, sorted_account_ids
+from core.providers.accounts import (
+    ACCOUNT_ID_PATTERN,
+    DEFAULT_ACCOUNT_ID,
+    Account,
+    sorted_account_ids,
+)
 from core.secrets import OAUTH_TOKENS, SecretStore, SecretStoreError, SecretTransaction
 from core.utils.errors import ConfigError
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
-TOKEN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ACCOUNT_FILE_SEPARATOR = "--"
 OAUTH_TOKEN_FORMAT_VERSION = 1
 # ``extra`` is keyed by data (Provider-specific metadata), so only the root has fields.
@@ -101,24 +104,17 @@ class TokenStore:
 
     def __init__(self, secrets: SecretStore) -> None:
         self._secrets = secrets
-        self._refresh_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+        self._refresh_locks: dict[Account, asyncio.Lock] = {}
         self._mutation_lock = RLock()
         self._unusable = LoggedConditions()
 
     def refresh_lock(
         self,
-        provider_id: str,
-        local_connection_id: str,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
+        account: Account,
     ) -> asyncio.Lock:
         """Return the shared refresh lock for one Provider Connection Account."""
 
-        key = (
-            self._validate_token_id("provider_id", provider_id),
-            self._validate_token_id("local_connection_id", local_connection_id),
-            self._validate_account_id(account_id),
-        )
+        key = account
         with self._mutation_lock:
             lock = self._refresh_locks.get(key)
             if lock is None:
@@ -128,11 +124,8 @@ class TokenStore:
 
     def save(
         self,
-        provider_id: str,
-        local_connection_id: str,
+        account: Account,
         token: OAuthToken,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
         """Persist *token* for the provider connection account.
 
@@ -141,7 +134,7 @@ class TokenStore:
         fails to load, or when the Secret Store cannot be written.
         """
 
-        token_id = self._token_id(provider_id, local_connection_id, account_id)
+        token_id = account.token_id
         payload = self._token_to_dict(token)
         with self._mutation_lock:
             try:
@@ -153,23 +146,15 @@ class TokenStore:
 
     async def save_async(
         self,
-        provider_id: str,
-        local_connection_id: str,
+        account: Account,
         token: OAuthToken,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
         """Persist a login off the Event Loop, settling writes before cancellation."""
-        await _TOKEN_WORKERS.run(
-            self.save, provider_id, local_connection_id, token, account_id=account_id
-        )
+        await _TOKEN_WORKERS.run(self.save, account, token)
 
     def load(
         self,
-        provider_id: str,
-        local_connection_id: str,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
+        account: Account,
     ) -> OAuthToken | None:
         """Load a token for the provider connection account, if one exists.
 
@@ -177,7 +162,7 @@ class TokenStore:
         including while the Secret Store is unavailable.
         """
 
-        token_id = self._token_id(provider_id, local_connection_id, account_id)
+        token_id = account.token_id
         try:
             text = self._secrets.entry(OAUTH_TOKENS, token_id)
         except SecretStoreError as error:
@@ -196,41 +181,30 @@ class TokenStore:
 
     def exists(
         self,
-        provider_id: str,
-        local_connection_id: str,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
+        account: Account,
     ) -> bool:
         """Return whether a token is stored, without loading it."""
 
-        token_id = self._token_id(provider_id, local_connection_id, account_id)
+        token_id = account.token_id
         return token_id in self._secrets.entry_names(OAUTH_TOKENS)
 
     async def load_async(
         self,
-        provider_id: str,
-        local_connection_id: str,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
+        account: Account,
     ) -> OAuthToken | None:
         """Read current credentials without store work on the Event Loop."""
-        return await _TOKEN_WORKERS.run(
-            self.load, provider_id, local_connection_id, account_id=account_id
-        )
+        return await _TOKEN_WORKERS.run(self.load, account)
 
     def delete(
         self,
-        provider_id: str,
-        local_connection_id: str,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
+        account: Account,
     ) -> None:
         """Delete the token for a provider connection account, if it exists.
 
         Raises :class:`OAuthTokenFileError` when the Secret Store cannot be written.
         """
 
-        token_id = self._token_id(provider_id, local_connection_id, account_id)
+        token_id = account.token_id
         with self._mutation_lock:
             try:
                 self._secrets.remove_entry(OAUTH_TOKENS, token_id)
@@ -239,12 +213,9 @@ class TokenStore:
 
     def replace_if_current(
         self,
-        provider_id: str,
-        local_connection_id: str,
+        account: Account,
         expected: OAuthToken,
         replacement: OAuthToken | None,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> bool:
         """Apply a delayed refresh only while its source credentials remain current.
 
@@ -253,39 +224,31 @@ class TokenStore:
         replacement credentials after its own exchange fails.
         """
         with self._mutation_lock:
-            if self.load(provider_id, local_connection_id, account_id=account_id) != expected:
+            if self.load(account) != expected:
                 return False
             if replacement is None:
-                self.delete(provider_id, local_connection_id, account_id=account_id)
+                self.delete(account)
             else:
-                self.save(provider_id, local_connection_id, replacement, account_id=account_id)
+                self.save(account, replacement)
             return True
 
     async def replace_if_current_async(
         self,
-        provider_id: str,
-        local_connection_id: str,
+        account: Account,
         expected: OAuthToken,
         replacement: OAuthToken | None,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> bool:
         """Settle an atomic credential comparison/publication off the Event Loop."""
         return await _TOKEN_WORKERS.run(
             self.replace_if_current,
-            provider_id,
-            local_connection_id,
+            account,
             expected,
             replacement,
-            account_id=account_id,
         )
 
     def has_valid_token(
         self,
-        provider_id: str,
-        local_connection_id: str,
-        *,
-        account_id: str = DEFAULT_ACCOUNT_ID,
+        account: Account,
     ) -> bool:
         """Return whether a token exists and is usable without user interaction.
 
@@ -293,9 +256,9 @@ class TokenStore:
         starts or changes, not on every check.
         """
 
-        token_id = self._token_id(provider_id, local_connection_id, account_id)
+        token_id = account.token_id
         try:
-            token = self.load(provider_id, local_connection_id, account_id=account_id)
+            token = self.load(account)
         except OAuthTokenFileError as error:
             if self._unusable.started(token_id, str(error)):
                 _LOGGER.warning("Stored OAuth token is unusable: %s", error)
@@ -313,7 +276,7 @@ class TokenStore:
     def list_account_ids(self, provider_id: str, local_connection_id: str) -> list[str]:
         """Return stored account ids for the connection, default first then sorted."""
 
-        base = self._token_id(provider_id, local_connection_id, DEFAULT_ACCOUNT_ID)
+        base = Account(provider_id, local_connection_id).token_id
         prefix = f"{base}{_ACCOUNT_FILE_SEPARATOR}"
         account_ids: list[str] = []
         for token_id in self._secrets.entry_names(OAUTH_TOKENS):
@@ -347,34 +310,6 @@ class TokenStore:
             body, version=OAUTH_TOKEN_FORMAT_VERSION, sort_keys=OAUTH_TOKEN_FORMAT.sort_keys
         )
         transaction.set(OAUTH_TOKENS, token_id, text)
-
-    def _token_id(self, provider_id: str, local_connection_id: str, account_id: str) -> str:
-        safe_provider_id = self._validate_token_id("provider_id", provider_id)
-        safe_connection_id = self._validate_token_id(
-            "local_connection_id",
-            local_connection_id,
-        )
-        safe_account_id = self._validate_account_id(account_id)
-        token_id = f"{safe_provider_id}-{safe_connection_id}"
-        if safe_account_id != DEFAULT_ACCOUNT_ID:
-            token_id = f"{token_id}{_ACCOUNT_FILE_SEPARATOR}{safe_account_id}"
-        return token_id
-
-    def _validate_token_id(self, field_name: str, value: str) -> str:
-        if not TOKEN_ID_PATTERN.fullmatch(value):
-            raise ValueError(
-                f"OAuth token {field_name} must contain only letters, numbers, underscores, "
-                "or hyphens, and must start with a letter or number"
-            )
-        return value
-
-    def _validate_account_id(self, value: str) -> str:
-        if not ACCOUNT_ID_PATTERN.fullmatch(value):
-            raise ValueError(
-                "OAuth token account_id must contain only lowercase letters, digits, or "
-                "underscores, start with a letter or digit, and be at most 32 characters"
-            )
-        return value
 
     def _token_to_dict(self, token: OAuthToken) -> dict[str, object]:
         return {

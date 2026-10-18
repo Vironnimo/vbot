@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from core.providers.accounts import Account
 from core.providers.auth_flow import DeviceFlowSession
 from core.providers.providers import OAuthConfig
 from core.providers.token_store import OAuthToken
@@ -36,13 +37,15 @@ class StubDeviceFlowEngine:
 
     async def connect(
         self,
-        provider_id: str,
-        local_connection_id: str,
+        account: Account,
         oauth_config: OAuthConfig,
         on_complete: Any,
-        *,
-        account_id: str = "default",
     ) -> DeviceFlowSession:
+        provider_id, local_connection_id, account_id = (
+            account.provider_id,
+            account.local_connection_id,
+            account.account_id,
+        )
         self.started.append((provider_id, local_connection_id, oauth_config, account_id))
         self.completions.append(on_complete)
         self.active.add((provider_id, local_connection_id, account_id))
@@ -54,22 +57,16 @@ class StubDeviceFlowEngine:
             interval=5,
         )
 
-    def is_flow_active(self, provider_id: str, connection_id: str, account_id: str) -> bool:
-        return (provider_id, connection_id, account_id) in self.active
+    def is_flow_active(self, account: Account) -> bool:
+        return (account.provider_id, account.local_connection_id, account.account_id) in self.active
 
-    async def cancel_flow_and_wait(
-        self, provider_id: str, connection_id: str, account_id: str = "default"
-    ) -> None:
-        self.cancel_flow(provider_id, connection_id, account_id)
+    async def cancel_flow_and_wait(self, account: Account) -> None:
+        self.cancel_flow(account)
 
-    def cancel_flow(
-        self,
-        provider_id: str,
-        local_connection_id: str,
-        account_id: str = "default",
-    ) -> None:
-        self.cancelled.append((provider_id, local_connection_id, account_id))
-        self.active.discard((provider_id, local_connection_id, account_id))
+    def cancel_flow(self, account: Account) -> None:
+        identity = (account.provider_id, account.local_connection_id, account.account_id)
+        self.cancelled.append(identity)
+        self.active.discard(identity)
 
 
 def _oauth_state(tmp_path: Path) -> Any:
@@ -100,7 +97,7 @@ async def test_provider_connect_starts_the_account_device_flow(
         "account": account_id,
     }
     assert engine.started == [("github-copilot", "oauth", oauth_config(), account_id)]
-    assert engine.is_flow_active("github-copilot", "oauth", account_id)
+    assert engine.is_flow_active(Account("github-copilot", "oauth", account_id))
     # Starting the flow does not establish the Connection yet: no reload signal.
     assert resource_changes(state) == []
 
@@ -142,10 +139,8 @@ async def test_provider_disconnect_deletes_only_the_account_token_and_cancels_it
     token_store = state.runtime.token_store
     for account_id in ("default", "work"):
         token_store.save(
-            "github-copilot",
-            "oauth",
+            Account("github-copilot", "oauth", account_id),
             OAuthToken(access_token=f"{account_id}-token"),
-            account_id=account_id,
         )
     account_id = account or "default"
 
@@ -157,8 +152,8 @@ async def test_provider_disconnect_deletes_only_the_account_token_and_cancels_it
         "account": account_id,
         "status": "disconnected",
     }
-    assert token_store.load("github-copilot", "oauth", account_id=account_id) is None
-    assert token_store.load("github-copilot", "oauth", account_id=kept) is not None
+    assert token_store.load(Account("github-copilot", "oauth", account_id)) is None
+    assert token_store.load(Account("github-copilot", "oauth", kept)) is not None
     assert state.device_flow_engine.cancelled == [("github-copilot", "oauth", account_id)]
     assert resource_changes(state) == [{"kind": "providers"}]
 
@@ -181,10 +176,7 @@ async def test_provider_disconnect_removes_a_stored_token_that_fails_to_load(
 async def test_provider_connection_status_reports_per_account_state(tmp_path: Path) -> None:
     state = _oauth_state(tmp_path)
     state.runtime.token_store.save(
-        "github-copilot",
-        "oauth",
-        OAuthToken(access_token="work-token"),
-        account_id="work",
+        Account("github-copilot", "oauth", "work"), OAuthToken(access_token="work-token")
     )
     state.device_flow_engine.active.add(("github-copilot", "oauth", "work"))
 

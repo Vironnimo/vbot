@@ -35,8 +35,8 @@ from core.model_tasks._live_wire import (
     websocket_url,
 )
 from core.model_tasks._live_xai_session import Clock, XaiSession
-from core.providers._http_shared import classify_http_status
 from core.providers.errors import NetworkError, ProviderError
+from core.providers.http import classify_http_status
 from core.providers.task_client import ProviderTaskClient
 from core.providers.token_getter import OAuthRequestRecovery
 from core.utils.ids import new_id

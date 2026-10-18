@@ -29,7 +29,7 @@ Go uses `OPENCODE_API_KEY`, including named Account suffixes, in common with Zen
 
 ## Provider facts come from the models.dev section (rebuilt 2026-09-16)
 
-The opencode-go endpoint returns **bare ids** - no context window, output cap, modalities, family, or reasoning info. But models.dev carries a per-provider **`opencode-go` section** with all of those, so refresh pulls them into the generated `opencode-go.json` (`discovery._enrich_provider_model` via `models_dev.provider_limits` / `provider_modalities` / `provider_family` / `provider_reasoning_supported` / `provider_npm`):
+The opencode-go endpoint returns **bare ids** - no context window, output cap, modalities, family, or reasoning info. But models.dev carries a per-provider **`opencode-go` section** with all of those, so refresh pulls them into the generated `opencode-go.json` (`_discovery_projection.py` through the bound `ModelsDevCatalog.model()` fact view):
 
 - **Limits**: the gateway's own `context.window` / `output` - which legitimately deviate from the lab (e.g. `glm-5` output **32768** vs the canonical 131072; `minimax-m3` **1000000/131072**). "Fill, don't overwrite": a provider that *did* report a limit keeps it.
 - **Modalities**: widened to the models.dev set as a strict **superset** of what the endpoint reported (add, never drop) - so `minimax-m3`/`kimi`/`qwen*-plus` are correctly image/video-capable; `vision` is kept consistent.

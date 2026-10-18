@@ -15,6 +15,7 @@ import pytest
 import respx
 
 from core.providers import token_getter
+from core.providers.accounts import Account
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -84,12 +85,11 @@ def _assert_sanitized(*texts: str) -> None:
 @pytest.mark.asyncio
 async def test_unexpired_stored_token_is_returned_without_refresh(store: TokenStore) -> None:
     store.save(
-        "github-copilot",
-        "oauth",
+        Account("github-copilot", "oauth"),
         OAuthToken("stored-access", "refresh", datetime.now(UTC) + timedelta(minutes=5)),
     )
 
-    getter = OAuthTokenGetter(store, "github-copilot", "oauth", github_oauth_config())
+    getter = OAuthTokenGetter(store, Account("github-copilot", "oauth"), github_oauth_config())
 
     assert await getter() == "stored-access"
 
@@ -111,8 +111,8 @@ async def test_unrefreshable_token_requires_reconnect(
     """A missing token, or an exchange token without a configured exchange, needs reconnect."""
 
     if stored is not None:
-        store.save("github-copilot", "oauth", stored)
-    getter = OAuthTokenGetter(store, "github-copilot", "oauth", github_oauth_config())
+        store.save(Account("github-copilot", "oauth"), stored)
+    getter = OAuthTokenGetter(store, Account("github-copilot", "oauth"), github_oauth_config())
 
     with (
         caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
@@ -197,11 +197,9 @@ async def test_expired_token_refreshes_through_the_flow_and_publishes_to_its_acc
 ) -> None:
     case = REFRESH_FLOWS[flow]
     reply = case.reply()
-    store.save(
-        "provider", "subscription", expired_token(extra=case.stored_extra), account_id="work"
-    )
+    store.save(Account("provider", "subscription", "work"), expired_token(extra=case.stored_extra))
     route = respx.post(case.config.token_url).mock(return_value=httpx.Response(200, json=reply))
-    getter = OAuthTokenGetter(store, "provider", "subscription", case.config, account_id="work")
+    getter = OAuthTokenGetter(store, Account("provider", "subscription", "work"), case.config)
     loop_thread = threading.get_ident()
     operations: list[str] = []
     load, publish = store.load, store.replace_if_current
@@ -229,12 +227,12 @@ async def test_expired_token_refreshes_through_the_flow_and_publishes_to_its_acc
     assert request_body(request) == case.request
     for header, value in case.headers.items():
         assert request.headers[header] == value
-    stored = store.load("provider", "subscription", account_id="work")
+    stored = store.load(Account("provider", "subscription", "work"))
     assert stored is not None
     assert (stored.access_token, stored.refresh_token) == (reply["access_token"], "rotated-refresh")
     assert stored.extra == case.refreshed_extra
     assert seconds_until(stored.expires_at) == pytest.approx(case.expires_in, abs=10)
-    assert store.load("provider", "subscription") is None
+    assert store.load(Account("provider", "subscription")) is None
     # A routine refresh is DEBUG detail and never names the Provider Account.
     assert _getter_logs(caplog) == []
     [refreshed] = _getter_logs(caplog, logging.DEBUG)
@@ -258,18 +256,18 @@ async def test_expired_token_refreshes_through_the_flow_and_publishes_to_its_acc
 async def test_unusable_expiry_falls_back_and_still_publishes_the_rotated_token(
     store: TokenStore, expiry_fields: dict[str, object], expires_in: int
 ) -> None:
-    store.save("opencode-zen", "account", expired_token())
+    store.save(Account("opencode-zen", "account"), expired_token())
     respx.post(OPENCODE_TOKEN_URL).mock(
         return_value=httpx.Response(
             200,
             json={"access_token": "fresh-access", "refresh_token": "rotated", **expiry_fields},
         )
     )
-    getter = OAuthTokenGetter(store, "opencode-zen", "account", opencode_oauth_config())
+    getter = OAuthTokenGetter(store, Account("opencode-zen", "account"), opencode_oauth_config())
 
     assert await getter() == "fresh-access"
 
-    stored = store.load("opencode-zen", "account")
+    stored = store.load(Account("opencode-zen", "account"))
     assert stored is not None
     assert stored.refresh_token == "rotated"
     assert seconds_until(stored.expires_at) == pytest.approx(expires_in, abs=10)
@@ -312,10 +310,10 @@ async def test_copilot_exchange_refresh_is_coalesced_and_keeps_only_trusted_endp
     expires_in: int | None,
     endpoint: str | None,
 ) -> None:
-    store.save("github-copilot", "oauth", COPILOT_TOKEN)
+    store.save(Account("github-copilot", "oauth"), COPILOT_TOKEN)
     route = respx.get(COPILOT_TOKEN_EXCHANGE_URL).mock(return_value=httpx.Response(200, json=reply))
     getter = OAuthTokenGetter(
-        store, "github-copilot", "oauth", github_oauth_config(token_exchange=True)
+        store, Account("github-copilot", "oauth"), github_oauth_config(token_exchange=True)
     )
 
     assert await asyncio.gather(getter(), getter()) == [reply["token"]] * 2
@@ -326,7 +324,7 @@ async def test_copilot_exchange_refresh_is_coalesced_and_keeps_only_trusted_endp
     assert headers["Authorization"] == "Bearer github-secret"
     assert headers["Copilot-Integration-Id"] == "vscode-chat"
     assert headers["Editor-Version"] == "vscode/1.128.0"
-    stored = store.load("github-copilot", "oauth")
+    stored = store.load(Account("github-copilot", "oauth"))
     assert stored is not None
     assert stored.access_token == reply["token"]
     expected_extra = {"github_oauth_token": "github-secret"}
@@ -347,14 +345,17 @@ async def test_copilot_exchange_refresh_is_coalesced_and_keeps_only_trusted_endp
 @respx.mock
 @pytest.mark.asyncio
 async def test_injected_client_serves_refresh_and_stays_open(store: TokenStore) -> None:
-    store.save("github-copilot", "oauth", COPILOT_TOKEN)
+    store.save(Account("github-copilot", "oauth"), COPILOT_TOKEN)
     route = respx.get(COPILOT_TOKEN_EXCHANGE_URL).mock(
         return_value=httpx.Response(200, json={"token": "fresh"})
     )
 
     async with httpx.AsyncClient(verify=shared_ssl_context()) as client:
         getter = OAuthTokenGetter(
-            store, "github-copilot", "oauth", github_oauth_config(token_exchange=True), client
+            store,
+            Account("github-copilot", "oauth"),
+            github_oauth_config(token_exchange=True),
+            client,
         )
         assert await getter() == "fresh"
         assert not client.is_closed
@@ -377,12 +378,12 @@ async def test_owned_refresh_client_is_closed_after_its_request(
             created.append(self)
 
     monkeypatch.setattr(token_getter.httpx, "AsyncClient", RecordingClient)
-    store.save("github-copilot", "oauth", COPILOT_TOKEN)
+    store.save(Account("github-copilot", "oauth"), COPILOT_TOKEN)
     respx.get(COPILOT_TOKEN_EXCHANGE_URL).mock(
         return_value=httpx.Response(200, json={"token": "fresh"})
     )
     getter = OAuthTokenGetter(
-        store, "github-copilot", "oauth", github_oauth_config(token_exchange=True)
+        store, Account("github-copilot", "oauth"), github_oauth_config(token_exchange=True)
     )
 
     assert await getter() == "fresh"
@@ -402,7 +403,7 @@ async def test_cancelled_refresh_still_persists_the_rotated_credentials(
     store: TokenStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = nous_oauth_config()
-    store.save("nous", "subscription", expired_token())
+    store.save(Account("nous", "subscription"), expired_token())
     respx.post(config.token_url).mock(return_value=httpx.Response(200, json=_ROTATED))
     entered, release = asyncio.Event(), asyncio.Event()
     publish = store.replace_if_current_async
@@ -413,13 +414,13 @@ async def test_cancelled_refresh_still_persists_the_rotated_credentials(
         return await publish(*args, **kwargs)
 
     monkeypatch.setattr(store, "replace_if_current_async", delayed_publish)
-    task = asyncio.create_task(OAuthTokenGetter(store, "nous", "subscription", config)())
+    task = asyncio.create_task(OAuthTokenGetter(store, Account("nous", "subscription"), config)())
     await entered.wait()
     task.cancel()
     release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    token = store.load("nous", "subscription")
+    token = store.load(Account("nous", "subscription"))
     assert token is not None
     assert token.refresh_token == "rotated-refresh"
 
@@ -469,7 +470,7 @@ async def test_delayed_refresh_cannot_revive_or_remove_replaced_credentials(
 ) -> None:
     """Disconnect or reconnect during the token request supersedes its result."""
 
-    store.save("provider", "oauth", stored, account_id="work")
+    store.save(Account("provider", "oauth", "work"), stored)
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def respond(_request: httpx.Request) -> httpx.Response:
@@ -479,14 +480,14 @@ async def test_delayed_refresh_cannot_revive_or_remove_replaced_credentials(
 
     route = respx.route(url=config.token_exchange_url or config.token_url)
     route.mock(side_effect=respond)
-    getter = OAuthTokenGetter(store, "provider", "oauth", config, account_id="work")
+    getter = OAuthTokenGetter(store, Account("provider", "oauth", "work"), config)
     pending = asyncio.create_task(getter())
     try:
         await asyncio.wait_for(entered.wait(), timeout=5)
         if replacement is None:
-            store.delete("provider", "oauth", account_id="work")
+            store.delete(Account("provider", "oauth", "work"))
         else:
-            store.save("provider", "oauth", replacement, account_id="work")
+            store.save(Account("provider", "oauth", "work"), replacement)
         release.set()
 
         if replacement is not None and reply.status_code == 200:
@@ -498,8 +499,8 @@ async def test_delayed_refresh_cannot_revive_or_remove_replaced_credentials(
         release.set()
         await asyncio.gather(pending, return_exceptions=True)
 
-    assert store.load("provider", "oauth", account_id="work") == replacement
-    assert store.load("provider", "oauth") is None
+    assert store.load(Account("provider", "oauth", "work")) == replacement
+    assert store.load(Account("provider", "oauth")) is None
 
 
 # ---------------------------------------------------------------------------
@@ -544,9 +545,9 @@ async def test_malformed_token_endpoint_json_is_fatal_provider_error_and_keeps_t
 ) -> None:
     """A non-JSON 2xx reply is malformed output: not replayed and never a quarantine."""
 
-    store.save("provider", "oauth", stored)
+    store.save(Account("provider", "oauth"), stored)
     route = respx.route(url=config.token_exchange_url or config.token_url).mock(return_value=reply)
-    getter = OAuthTokenGetter(store, "provider", "oauth", config)
+    getter = OAuthTokenGetter(store, Account("provider", "oauth"), config)
 
     with pytest.raises(ProviderError) as caught:
         await getter()
@@ -556,7 +557,7 @@ async def test_malformed_token_endpoint_json_is_fatal_provider_error_and_keeps_t
     if not auth_failure:
         assert isinstance(caught.value.__cause__, ValueError)
     assert route.call_count == 1
-    assert store.load("provider", "oauth") == stored
+    assert store.load(Account("provider", "oauth")) == stored
 
 
 @respx.mock
@@ -580,13 +581,13 @@ async def test_terminal_refresh_failure_reports_status_and_oauth_error_code(
     """
 
     original = expired_token()
-    store.save("provider", "subscription", original)
+    store.save(Account("provider", "subscription"), original)
     route = respx.post(config.token_url).mock(
         return_value=httpx.Response(
             400, json={"error": "invalid_grant", "error_description": _LEAKY_DESCRIPTION}
         )
     )
-    getter = OAuthTokenGetter(store, "provider", "subscription", config)
+    getter = OAuthTokenGetter(store, Account("provider", "subscription"), config)
 
     with (
         caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
@@ -601,7 +602,7 @@ async def test_terminal_refresh_failure_reports_status_and_oauth_error_code(
     assert all(record.exc_info is None for record in caplog.records)
     _assert_sanitized(message, *warnings)
     assert route.call_count == 1
-    assert store.load("provider", "subscription") == (None if quarantined else original)
+    assert store.load(Account("provider", "subscription")) == (None if quarantined else original)
 
 
 @respx.mock
@@ -633,12 +634,12 @@ async def test_refresh_failure_keeps_only_a_valid_oauth_error_code(
     body: object,
     expected_detail: str,
 ) -> None:
-    store.save("openai", "subscription", expired_token())
+    store.save(Account("openai", "subscription"), expired_token())
     reply = (
         httpx.Response(401, text=body) if isinstance(body, str) else httpx.Response(401, json=body)
     )
     respx.post(OPENAI_TOKEN_URL).mock(return_value=reply)
-    getter = OAuthTokenGetter(store, "openai", "subscription", openai_oauth_config())
+    getter = OAuthTokenGetter(store, Account("openai", "subscription"), openai_oauth_config())
 
     with (
         caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
@@ -679,13 +680,13 @@ async def test_retryable_refresh_failure_is_sanitized_and_keeps_token(
     expected_message: str,
 ) -> None:
     original = expired_token()
-    store.save("xai", "subscription", original)
+    store.save(Account("xai", "subscription"), original)
     respx.post(XAI_TOKEN_URL).mock(
         return_value=httpx.Response(
             status_code, json={"error": error_code, "error_description": _LEAKY_DESCRIPTION}
         )
     )
-    getter = OAuthTokenGetter(store, "xai", "subscription", xai_oauth_config())
+    getter = OAuthTokenGetter(store, Account("xai", "subscription"), xai_oauth_config())
 
     with (
         caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
@@ -700,7 +701,7 @@ async def test_retryable_refresh_failure_is_sanitized_and_keeps_token(
     warnings = _getter_logs(caplog, logging.WARNING)
     assert any(expected_message in warning for warning in warnings)
     _assert_sanitized(message, *warnings)
-    assert store.load("xai", "subscription") == original
+    assert store.load(Account("xai", "subscription")) == original
 
 
 @respx.mock
@@ -722,13 +723,13 @@ async def test_server_side_refresh_failure_is_not_an_authentication_failure(
     """A server-side failure is neither replayed nor reported as a login to reconnect."""
 
     original = expired_token()
-    store.save("provider", "subscription", original)
+    store.save(Account("provider", "subscription"), original)
     route = respx.post(config.token_url).mock(
         return_value=httpx.Response(
             status_code, json={"error": "server_error", "error_description": _LEAKY_DESCRIPTION}
         )
     )
-    getter = OAuthTokenGetter(store, "provider", "subscription", config)
+    getter = OAuthTokenGetter(store, Account("provider", "subscription"), config)
 
     with (
         caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
@@ -742,7 +743,7 @@ async def test_server_side_refresh_failure_is_not_an_authentication_failure(
     assert f"HTTP {status_code}, server_error" in message
     _assert_sanitized(message, *_getter_logs(caplog, logging.WARNING))
     assert route.call_count == 1
-    assert store.load("provider", "subscription") == original
+    assert store.load(Account("provider", "subscription")) == original
 
 
 @respx.mock
@@ -814,19 +815,19 @@ async def test_rotating_refresh_is_never_replayed_and_preserves_token(
 
     monkeypatch.setattr(retry, "_sleep", record_wait)
     original = expired_token()
-    store.save("provider", "subscription", original)
+    store.save(Account("provider", "subscription"), original)
     outcome = (
         {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
     )
     route = respx.post(config.token_url).mock(**outcome)
-    getter = OAuthTokenGetter(store, "provider", "subscription", config)
+    getter = OAuthTokenGetter(store, Account("provider", "subscription"), config)
 
     with pytest.raises(NetworkError if isinstance(failure, Exception) else ProviderError):
         await getter()
 
     assert route.call_count == 1
     assert retry_waits == []
-    assert store.load("provider", "subscription") == original
+    assert store.load(Account("provider", "subscription")) == original
 
 
 @respx.mock
@@ -859,12 +860,12 @@ async def test_rotating_refresh_is_never_replayed_and_preserves_token(
 async def test_rotating_refresh_rejection_quarantines_the_login(
     store: TokenStore, config: OAuthConfig, reply: httpx.Response
 ) -> None:
-    store.save("provider", "subscription", expired_token())
+    store.save(Account("provider", "subscription"), expired_token())
     route = respx.post(config.token_url).mock(return_value=reply)
-    getter = OAuthTokenGetter(store, "provider", "subscription", config)
+    getter = OAuthTokenGetter(store, Account("provider", "subscription"), config)
 
     with pytest.raises(ProviderAuthError):
         await getter()
 
     assert route.call_count == 1
-    assert store.load("provider", "subscription") is None
+    assert store.load(Account("provider", "subscription")) is None

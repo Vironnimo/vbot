@@ -1,7 +1,7 @@
 """Provider debug recorder for vBot.
 
 A :class:`ProviderDebugRecorder` is attached to a Provider adapter. The
-shared HTTP capture transport (see ``core/providers/_http_shared.py``)
+shared HTTP capture transport (see ``core/providers/http.py``)
 calls :meth:`begin_capture` for HTTP requests; a stateful non-HTTP
 transport may feed the same recorder directly. The capture builds one
 canonical trace (see ``.vorch/domain-maps/debug.md``), applies structured

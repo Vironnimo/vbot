@@ -13,7 +13,7 @@ from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.models.database import ModelDatabaseRefresh, begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
 from core.providers._wire_profile_files import WireProfileFile
-from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
+from core.providers.accounts import DEFAULT_ACCOUNT_ID, Account, ConnectionRef, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter, is_local_provider_base_url
 from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.credentials import ProviderCredentialResolver
@@ -246,9 +246,7 @@ class ProviderRuntime:
             except ConfigError:
                 resolved_account_id = DEFAULT_ACCOUNT_ID
         token = self._token_store.load(
-            connection.provider_id,
-            connection_config.id,
-            account_id=resolved_account_id,
+            Account(connection.provider_id, connection_config.id, resolved_account_id)
         )
         return {} if token is None else dict(token.extra)
 
@@ -554,10 +552,8 @@ class ProviderRuntime:
                 )
             return OAuthTokenGetter(
                 self._token_store,
-                provider_id,
-                connection_config.id,
+                Account(provider_id, connection_config.id, resolved_account_id),
                 connection_config.oauth,
-                account_id=resolved_account_id,
             )
         raise ConfigError(
             f"Unknown connection type '{connection_config.type}' for provider '{provider_id}' "

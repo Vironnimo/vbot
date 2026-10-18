@@ -18,6 +18,7 @@ import respx
 
 from core.models.discovery import ModelDiscoveryError, refresh_models
 from core.models.models import ModelRegistry
+from core.providers.accounts import Account
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.providers import OAuthConfig, ProviderConfig
 from core.providers.token_getter import OAuthTokenGetter
@@ -104,8 +105,7 @@ async def test_openai_subscription_catalog_renews_a_rejected_token_once(
     (tmp_path / "data").mkdir()
     store = TokenStore(SecretStore(tmp_path / "data"))
     store.save(
-        "openai",
-        "subscription",
+        Account("openai", "subscription"),
         OAuthToken(
             access_token=old_token,
             refresh_token="test-refresh-secret",
@@ -142,7 +142,7 @@ async def test_openai_subscription_catalog_renews_a_rejected_token_once(
     )
     resources_dir = tmp_path / "resources"
 
-    getter = OAuthTokenGetter(store, "openai", "subscription", oauth)
+    getter = OAuthTokenGetter(store, Account("openai", "subscription"), oauth)
     if (initial_status, retry_status) == (401, 200):
         result = await refresh_models(
             config, getter, resources_dir, credential_connection=connection
@@ -169,7 +169,7 @@ async def test_openai_subscription_catalog_renews_a_rejected_token_once(
         ][:expected_catalog_calls]
     )
     if expected_refresh_calls:
-        saved = store.load("openai", "subscription")
+        saved = store.load(Account("openai", "subscription"))
         assert saved is not None
         assert (saved.access_token, saved.refresh_token) == (
             new_token,

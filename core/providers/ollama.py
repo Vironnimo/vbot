@@ -39,18 +39,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 import httpx
 
 from core.models.models import Model
-from core.providers._http_shared import (
-    RequestPlan,
-    build_async_client,
-    classify_http_status,
-    connect_streaming_with_retry,
-    decode_response_json,
-    iter_stream_lines,
-    json_body_headers,
-    parse_sse_json_data,
-    prepare_request,
-    wrap_network_error,
-)
 from core.providers._ollama_catalog import (
     _capability_names,
     _enrich_from_show,
@@ -88,6 +76,18 @@ from core.providers.adapter import (
     ProviderAdapter,
 )
 from core.providers.errors import NetworkError, ProviderError
+from core.providers.http import (
+    RequestPlan,
+    build_async_client,
+    classify_http_status,
+    connect_streaming_with_retry,
+    decode_response_json,
+    iter_stream_lines,
+    json_body_headers,
+    parse_sse_json_data,
+    prepare_request,
+    wrap_network_error,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_REPLAY_FIDELITY_META_ONLY,

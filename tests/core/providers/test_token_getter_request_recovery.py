@@ -15,6 +15,7 @@ import pytest
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.accounts import Account
 from core.providers.adapter import ProviderAdapter
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -83,7 +84,9 @@ async def test_unrecognized_403_is_not_a_token_rejection(
 ) -> None:
     """Only xAI's exact bad-credentials 403 renews; others do not even load the token."""
 
-    getter = OAuthTokenGetter(TokenStore(SecretStore(tmp_path)), "provider", "oauth", config)
+    getter = OAuthTokenGetter(
+        TokenStore(SecretStore(tmp_path)), Account("provider", "oauth"), config
+    )
     # No token exists, so reading one would raise instead of returning None.
     assert (
         await getter.refresh_after_rejection("token", status_code=403, response_body=body) is None
@@ -112,10 +115,8 @@ async def test_concurrent_rejected_requests_share_one_account_refresh(
 
     store = TokenStore(SecretStore(tmp_path))
     store.save(
-        "provider",
-        "oauth",
+        Account("provider", "oauth", "work"),
         OAuthToken(OLD_TOKEN, "old-refresh", datetime.now(UTC) + timedelta(days=1), stored_extra),
-        account_id="work",
     )
     renewal = respx.route(url=config.token_exchange_url or config.token_url).mock(
         return_value=httpx.Response(
@@ -147,7 +148,7 @@ async def test_concurrent_rejected_requests_share_one_account_refresh(
     inference = respx.post("https://inference.example/request").mock(side_effect=serve)
 
     async def invoke(client: httpx.AsyncClient) -> Any:
-        getter = OAuthTokenGetter(store, "provider", "oauth", config, account_id="work")
+        getter = OAuthTokenGetter(store, Account("provider", "oauth", "work"), config)
         recovery = OAuthRequestRecovery(getter, BEARER)
 
         async def request() -> Any:
@@ -166,12 +167,12 @@ async def test_concurrent_rejected_requests_share_one_account_refresh(
     assert results == [{"ok": True}] * 4
     assert inference.call_count == 8
     assert renewal.call_count == 1
-    saved = store.load("provider", "oauth", account_id="work")
+    saved = store.load(Account("provider", "oauth", "work"))
     assert saved is not None
     assert saved.access_token == NEW_TOKEN
     # A Copilot exchange keeps the refresh token; refresh grants rotate it.
     assert saved.refresh_token == ("old-refresh" if config.token_exchange_url else "new-refresh")
-    assert store.load("provider", "oauth") is None
+    assert store.load(Account("provider", "oauth")) is None
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +541,7 @@ async def test_adapter_asks_its_oauth_getter_for_each_request(
     connection = _oauth_connection(bundled.get(wire.provider_id))
     assert connection.oauth is not None
     store = TokenStore(SecretStore(tmp_path))
-    store.save(wire.provider_id, connection.id, expired_token())
+    store.save(Account(wire.provider_id, connection.id), expired_token())
     respx.post(connection.oauth.token_url).mock(
         return_value=httpx.Response(
             200,
@@ -554,7 +555,7 @@ async def test_adapter_asks_its_oauth_getter_for_each_request(
     route = respx.post(_url(bundled, wire, False)).mock(
         return_value=_success_response(wire.protocol, streaming=False)
     )
-    getter = OAuthTokenGetter(store, wire.provider_id, connection.id, connection.oauth)
+    getter = OAuthTokenGetter(store, Account(wire.provider_id, connection.id), connection.oauth)
     adapter = _adapter(bundled, wire, getter)
 
     try:

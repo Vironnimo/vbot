@@ -129,6 +129,49 @@ def compose_connection_id(
 
 
 @dataclass(frozen=True)
+class Account:
+    """One resolved credential slot, including its Connection and durable token key.
+
+    Unlike ConnectionRef, this identity never defers Account selection. The
+    token key is the established Secret Store spelling, independent of the
+    public compositional Connection address.
+    """
+
+    provider_id: str
+    local_connection_id: str
+    account_id: str = DEFAULT_ACCOUNT_ID
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("provider_id", self.provider_id),
+            ("local_connection_id", self.local_connection_id),
+        ):
+            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", value):
+                raise ValueError(
+                    f"OAuth token {field_name} must contain only letters, numbers, underscores, "
+                    "or hyphens, and must start with a letter or number"
+                )
+        if not isinstance(self.account_id, str) or not ACCOUNT_ID_PATTERN.fullmatch(
+            self.account_id
+        ):
+            raise ValueError(
+                "OAuth token account_id must contain only lowercase letters, digits, or "
+                "underscores, start with a letter or digit, and be at most 32 characters"
+            )
+
+    @property
+    def connection_id(self) -> str:
+        """The exact public address, with its resolved Account suffix."""
+        return compose_connection_id(self.provider_id, self.local_connection_id, self.account_id)
+
+    @property
+    def token_id(self) -> str:
+        """The stable Generation 1 Secret Store key for this credential slot."""
+        base = f"{self.provider_id}-{self.local_connection_id}"
+        return base if self.account_id == DEFAULT_ACCOUNT_ID else f"{base}--{self.account_id}"
+
+
+@dataclass(frozen=True)
 class ConnectionRef:
     """Address of one exact Provider Connection target.
 

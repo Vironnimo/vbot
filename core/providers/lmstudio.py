@@ -16,13 +16,13 @@ from core.models.models import (
     ReasoningCapabilities,
     text_embedding_capabilities,
 )
-from core.providers._http_shared import (
+from core.providers.adapter import ModelLookup
+from core.providers.errors import CatalogEntrySkipped, ProviderError
+from core.providers.http import (
     classify_http_status,
     decode_response_json,
     wrap_network_error,
 )
-from core.providers.adapter import ModelLookup
-from core.providers.errors import CatalogEntrySkipped, ProviderError
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.token_getter import TokenGetter

@@ -32,6 +32,8 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 
 **Definition:** A named credential slot on one Connection, addressed `provider:connection[:account]`; the omitted Account resolves deterministically to the first usable slot (`default`, then sorted named Accounts).
 
+`accounts.py::Account` validates a resolved slot and composes public addresses and stable token keys; OAuth lifecycle and token operations take this value.
+
 **Not:** A product user identity or a distinct Model catalog.
 
 ### Usable
@@ -42,7 +44,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 
 ### ConnectionRef
 
-**Definition:** Frozen address of one exact Provider Connection target - `provider_id` plus the compositional `provider:connection[:account]` string - passed as one value through the Runtime adapter/token seams (`get_adapter`, `get_connection_token_getter`, `get_connection_token_extra`) and their consumers. Lives in `core/providers/accounts.py`.
+**Definition:** Frozen Provider Connection selection (`provider_id` plus `provider:connection[:account]`) used by Runtime adapter/token seams and their consumers. An omitted Account resolves later; it differs from `Account` (`accounts.py`).
 
 **Not:** A `ConnectionConfig` (the resolved configuration record) or a credential-resolver query: resolver methods keep the optional-`connection_id` form where `None` means "any Connection of the Provider".
 
@@ -63,7 +65,8 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - Completed responses and stream finishes carry one canonical terminal outcome. `normalize_tool_call_candidates()` preserves every recognizable Tool attempt in order and marks malformed names or arguments with canonical rejection metadata instead of dropping the Call or raising during Chat finalization (`providers/request-policy.md` -> Adapter ownership). Valid arguments leave intake as plain JSON values with recursively sorted object keys - the form the Session store persists - so the in-Run follow-up, a later Run, a fork and Compaction serialize the same call identically on every wire; no consumer depends on the Model's key order (`test_valid_arguments_become_recursively_key_sorted_json_values`).
 - Raw SSE event names, response chunks, opaque auth state, and Provider payloads never escape the Adapter layer. Adapters treat the request messages they receive, including every nested value, as read-only: Chat passes its live request view without copying it, so wire-only changes (id rewrites, cache markers, dropped fields) go into copies or freshly built payload objects.
 - `ProviderAdapter.estimate_request_input_tokens()` is the single Adapter-owned seam for local Context budgeting: output-limit clamps, Chat's measured pre-send guard, and automatic Compaction all ask it for the selected Model's actual wire footprint (estimator shape contract: `providers/request-policy.md` -> Request limits and context).
-- Source routing (`core/providers/`): config, registry and context-window helpers `providers.py`; Accounts `accounts.py`; credentials and usability `credentials.py`; OAuth `token_store.py`, `token_getter.py`, `auth_flow.py`; Adapter contract `adapter.py`; compatible bases `openai_compatible.py` and `anthropic_compatible.py`; reasoning policy `reasoning.py`; selector map `adapter_types.py`; Adapter construction, tokens, local Context and catalog refresh, wire profile reads `runtime.py::ProviderRuntime` (`Runtime.get_adapter()` and related methods delegate to it). Internal layout: `providers/request-policy.md` -> Source and tests.
+- `core/providers/http.py` is the public HTTP surface for Adapters, task clients and discovery: request preparation, clients, retries, errors and stream framing.
+- Source routing: `providers.py` owns config/registry; `accounts.py` Account identity; `credentials.py` credential selection/usability; `adapter.py` the Adapter contract. OAuth layout: `providers/connections.md` -> Source and tests; wire/transport layout: `providers/request-policy.md` -> Source and tests. `ProviderRuntime` owns live Adapter/token construction, Context and catalog refresh behind the Runtime facade.
 
 ## Conventions and gotchas
 
