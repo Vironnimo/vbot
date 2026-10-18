@@ -12,7 +12,7 @@ Runtime SQLite connections have no native busy wait; the kernel owns bounded tra
 
 `is_closed()` observes the monotonic closed flag without taking the transaction lock, so async admission and cached disposable handles never block the Event Loop behind a writer. `close()` stops reader admission, waits for connection opening/disposal to finish, closes pooled and checked-out readers, and keeps writer closure serialized with the current transaction. It does not wait for read callbacks; a reader reaching its transaction boundary after shutdown starts fails as unavailable. Reader closure and permit release have one owner even when shutdown overlaps a reader's cleanup.
 
-The test seam `SYNCHRONOUS_OVERRIDE` (`core/database/database.py`) replaces both profiles' `synchronous` levels wherever the kernel opens a database (PROJECT.md -> Testing -> Disk syncs). A new database is built in a temporary file with `synchronous=OFF`, then fsynced once and published under its name by an atomic rename, so building it syncs only once.
+The test seam `SYNCHRONOUS_OVERRIDE` (`core/database/database.py`) replaces both profiles' `synchronous` levels wherever the kernel opens a database (`development/testing.md` -> Filesystem isolation). A new database is built in a temporary file with `synchronous=OFF`, then fsynced once and published under its name by an atomic rename, so building it syncs only once.
 
 ## Transaction control
 
@@ -20,7 +20,7 @@ Every kernel connection opens with `isolation_level=None` under Python's legacy 
 
 ## Journal policy
 
-Journal policy is per SQLite build (`required_journal_mode()`): WAL unless the build carries the WAL-reset bug, in which case rollback-journal (DELETE) mode is used and an existing WAL file is never live-downgraded. The policy logs one INFO line per process (SQLite version, reason), not one per database; each existing WAL database kept on such a build logs a WARNING once per process. Packaged Windows runtimes pin a fixed WAL-safe SQLite, and the Linux package build refuses a runtime whose SQLite is not WAL-safe (`cli/application.md`); development interpreters must match them, which `scripts/push.py` and the performance scripts check (PROJECT.md -> Development -> Setup).
+Journal policy is per SQLite build (`required_journal_mode()`): WAL unless the build carries the WAL-reset bug, in which case rollback-journal (DELETE) mode is used and an existing WAL file is never live-downgraded. The policy logs one INFO line per process (SQLite version, reason), not one per database; each existing WAL database kept on such a build logs a WARNING once per process. Packaged Windows runtimes pin a fixed WAL-safe SQLite, and the Linux package build refuses a runtime whose SQLite is not WAL-safe (`cli/application.md`); development interpreters must match them, which `scripts/push.py` and the performance scripts check (`development.md` -> Interpreter and SQLite).
 
 ## Gotchas
 

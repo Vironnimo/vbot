@@ -31,8 +31,8 @@ change to the packages or to the lint or format configuration lints and
 format-checks every source.
 
 Staged domain maps are checked with ``scripts/domain_maps.py``: non-ASCII prose and
-References entries that name no file block; a root map above its size budget that
-the change makes larger is reported without blocking.
+References entries that name no file block; a root map or ``.vorch/PROJECT.md``
+above its size budget that the change makes larger is reported without blocking.
 """
 
 from __future__ import annotations
@@ -456,7 +456,7 @@ def check_frontend(root: Path, staged: list[str], dirty: set[str]) -> list[StepR
 
 def check_domain_maps(root: Path, staged: list[str]) -> list[StepResult]:
     """Check the staged domain-map files (``scripts/domain_maps.py``)."""
-    if not any(domain_maps.is_map(path) for path in staged):
+    if not any(domain_maps.is_checked(path) for path in staged):
         return []
     findings = domain_maps.staged_findings(root, staged)
     blocking = [str(finding) for finding in findings if finding.blocking]

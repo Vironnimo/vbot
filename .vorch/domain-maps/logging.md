@@ -51,7 +51,7 @@ asyncio Task names follow the same rules: they appear in asyncio's own log lines
 
 - `vbot.*` loggers reach the daily files at the configured level. Other libraries' loggers (asyncio, httpx, Channel libraries) reach them only at WARNING and above, under their own logger name, through the router `LogManager` adds to the root logger - never through `logging.lastResort` on stderr. Windows' Proactor `_call_connection_lost` ConnectionResetError callback noise is written at DEBUG.
 - The server process (`server/main.py`) owns the one start line and one stop line; the Runtime only contributes its startup summary, so a Runtime embedded without the server (scripts, tests) logs its lifecycle at DEBUG (`server.md`).
-- Tests that assert log output own the behavior they assert (for example "no external id is logged"); do not add tests that merely pin a message's wording (`PROJECT.md` -> Testing).
+- Tests that assert log output own the behavior they assert (for example "no external id is logged"); do not add tests that merely pin a message's wording (`development/testing.md` -> Assertions and timing).
 
 ## References
 
