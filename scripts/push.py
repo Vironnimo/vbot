@@ -49,12 +49,16 @@ if sys.path[:1] != [str(_checkout_root)]:
     sys.path.insert(0, str(_checkout_root))
 
 from cli.application.runtime_sqlite import interpreter_problem  # noqa: E402
-from scripts import commit_check, worktree  # noqa: E402
+from scripts import commit_check  # noqa: E402
+from scripts._worktree_context import WorktreeContext  # noqa: E402
+from scripts._worktree_removal import PUSH_DIR_PREFIX, WorktreeRemoval  # noqa: E402
 from scripts._worktree_seed import (  # noqa: E402
     seed_native_resources,
     seed_type_check_cache,
     seed_webui_packages,
 )
+
+_worktrees = WorktreeRemoval(WorktreeContext.from_checkout(_checkout_root))
 
 REMOTE = "origin"
 BRANCH = "main"
@@ -299,7 +303,7 @@ def _linux_pytest_step(checkout: Path, log: TextIO) -> Step:
 
 def _provide_webui_packages(checkout: Path, log: TextIO) -> Step | None:
     """Give *checkout* packages matching its lock; return the failed install, or None."""
-    if seed_webui_packages(worktree.PROJECT_ROOT, checkout):
+    if seed_webui_packages(_worktrees.context.project_root, checkout):
         return None
     print(
         "installing the webui dependencies: the primary checkout's differ from this "
@@ -329,8 +333,8 @@ def run_checks(checkout: Path, log: TextIO) -> list[Step]:
     problem = interpreter_problem(checkout)
     record(Step("sqlite", problem is None, 0.0, problem or ""))
     print("preparing the checkout (copies dependencies, no output until done)...", flush=True)
-    seed_type_check_cache(worktree.PROJECT_ROOT, checkout)
-    seed_native_resources(worktree.PROJECT_ROOT, checkout)
+    seed_type_check_cache(_worktrees.context.project_root, checkout)
+    seed_native_resources(_worktrees.context.project_root, checkout)
     engine = _command_step("search engine", [python, "-m", "cli.search_runtime"], checkout, log)
     if not engine.passed:
         record(engine)
@@ -405,7 +409,7 @@ def _unpushable(root: Path, commit: str) -> str | None:
 
 def check_and_push(commit: str, *, push: bool) -> int:
     """Check *commit* in a private checkout; push it to origin's main when everything passed."""
-    root = worktree.PROJECT_ROOT
+    root = _worktrees.context.project_root
     subject = _git(root, "log", "-1", "--format=%s", commit).stdout.strip()
     print(f"Checking {commit[:12]} ({subject})", flush=True)
     if push:
@@ -419,10 +423,10 @@ def check_and_push(commit: str, *, push: bool) -> int:
 
     start = time.monotonic()
     log_path = _new_log(root, commit)
-    worktree.sweep_private_checkouts(worktree.WORKTREES_DIR)
+    _worktrees.sweep_private_checkouts(_worktrees.context.worktrees_dir)
     with (
         log_path.open("w", encoding="utf-8") as log,
-        worktree.private_checkout(worktree.PUSH_DIR_PREFIX, commit[:12]) as checkout,
+        _worktrees.private_checkout(PUSH_DIR_PREFIX, commit[:12]) as checkout,
     ):
         log.write(f"push check of {commit} ({subject}) in {checkout}\n\n")
         created = _git(root, "worktree", "add", "--detach", str(checkout), commit)
@@ -480,7 +484,9 @@ def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
-    commit = _git(worktree.PROJECT_ROOT, "rev-parse", "-q", "--verify", f"{BRANCH}^{{commit}}")
+    commit = _git(
+        _worktrees.context.project_root, "rev-parse", "-q", "--verify", f"{BRANCH}^{{commit}}"
+    )
     if commit.returncode != 0:
         print(f"error: the repository has no {BRANCH} branch")
         return 1

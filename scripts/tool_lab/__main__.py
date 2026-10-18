@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scripts.tool_lab import definitions, probe, replay, sessions
 from scripts.tool_lab._lab_runtime import DEFAULT_AGENT_ID, lab_runtime, utf8_console
-from scripts.tool_lab._replay_history import ReplayError, SessionStats
+from scripts.tool_lab._replay_history import SessionStats
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -185,7 +185,7 @@ def _replay(args: argparse.Namespace) -> int:
                 args.corpus, out, tool=args.tool, select=select, limit=args.limit, jobs=args.jobs
             )
         )
-    except (ReplayError, sessions.SessionsSourceError) as error:
+    except (replay.ReplayError, sessions.SessionsSourceError) as error:
         print(f"Cannot replay: {error}", file=sys.stderr)
         return 2
     print(summary)

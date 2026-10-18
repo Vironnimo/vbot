@@ -177,7 +177,7 @@ def provision_dependencies(runtime: Path, lock: Path) -> None:
 
 def check_runtime(runtime: Path) -> None:
     """Run the packaged interpreter: it must import the app and use a WAL-safe SQLite."""
-    from core.database._connections import is_wal_reset_vulnerable
+    from core.database import is_wal_reset_vulnerable
 
     result = subprocess.run(
         [

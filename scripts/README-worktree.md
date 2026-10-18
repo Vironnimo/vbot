@@ -16,7 +16,7 @@ The short version:
 
 `scripts/worktree.py` manages parallel vBot checkouts under `.worktrees/`.
 
-The entrypoint owns checkout creation/removal and merge orchestration. Private `_worktree_lock.py`, `_worktree_ports.py`, `_worktree_records.py`, `_worktree_seed.py`, and `_worktree_args.py` own portable locks/repair keepers and their leases, paired-port selection, marker/Git read projections, dependency seeding from another checkout, and command grammar. Behavioral tests are grouped under `tests/scripts/test_worktree*.py`, with reusable repository fixtures in `worktree_helpers.py`.
+The entrypoint owns checkout creation, listing and command dispatch. `WorktreeContext` (`_worktree_context.py`) supplies explicit repository and executing-checkout identity, subprocesses and port locking. `WorktreeMerge` (`_worktree_merge.py`) owns merge landing, rollback and repair transactions; `WorktreeRemoval` (`_worktree_removal.py`) owns service shutdown, data ownership and checkout cleanup, including the private checkouts used by the push check. Private `_worktree_lock.py`, `_worktree_ports.py`, `_worktree_records.py`, `_worktree_seed.py`, and `_worktree_args.py` own portable locks/repair keepers and their leases, paired-port selection, marker/Git read projections, dependency seeding from another checkout, and command grammar. Behavioral tests are grouped under `tests/scripts/test_worktree*.py`, with reusable repository fixtures in `worktree_helpers.py`.
 
 For each created worktree it does all of the following:
 

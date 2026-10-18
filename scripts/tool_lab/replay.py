@@ -58,21 +58,24 @@ from core.tools.arguments import split_text_lines
 from core.tools.tools import ToolCall, ToolExecutionConfig, ToolExecutor, _checked_arguments
 from core.utils.file_status import is_link_status, stat_or_none
 from scripts.tool_lab._lab_runtime import DEFAULT_AGENT_ID, lab_runtime
+from scripts.tool_lab._replay_evidence import HistoryCall, session_histories
 from scripts.tool_lab._replay_history import (
-    ROOT_TOKEN,
     Dispatched,
-    HistoryCall,
-    ReplayError,
     SessionReplay,
     SessionStats,
-    session_histories,
 )
+from scripts.tool_lab._replay_paths import ROOT_TOKEN
 from scripts.tool_lab.definitions import tool_definitions
 from scripts.tool_lab.probe import _VBOT_ROOT, model_view
 from scripts.tool_lab.sessions import Filters, _normalized
 
 if TYPE_CHECKING:
     from _typeshed import HasFileno
+
+
+class ReplayError(ValueError):
+    """The corpus or its output location cannot be used as given."""
+
 
 CORPUS_NAME = "corpus.jsonl"
 CLASSES = ("same", "fixed", "wrong", "regressed", "still_failing", "unknown")

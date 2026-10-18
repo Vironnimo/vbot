@@ -71,52 +71,88 @@ def _extract_openai_message(message: dict[str, Any]) -> TurnResult:
     )
 
 
-async def _run_turn(
-    adapter: Any,
-    model_id: str,
-    messages: list[dict[str, Any]],
-    *,
-    tools: list[dict[str, Any]] | None,
-    effort: str = "max",
-) -> TurnResult:
-    kwargs: dict[str, Any] = {"tools": tools} if tools else {}
-    raw = await adapter.send(
-        messages,
-        model_id=model_id,
-        temperature=1.0,
-        thinking_effort=effort,
-        **adapter.request_context_kwargs(agent_id="model-audit", session_id="reasoning-replay"),
-        **kwargs,
-    )
-    normalized = adapter.normalize_response(raw, model_id=model_id)
-    message = normalized
-    return _extract_openai_message(message)
+@dataclass(frozen=True)
+class ReplayTarget:
+    """One exact probe target, with identical settings for rendering and sending.
 
+    ``temperature=None`` preserves the Responses roundtrip scenario's deliberate
+    omission; other scenarios use the probe's fixed sampling value. Histories
+    and policy experiments belong to the scenario, never to the target.
+    """
 
-def _build_exact_payload(
-    adapter: Any,
-    messages: list[dict[str, Any]],
-    model_id: str,
-    *,
-    tools: list[dict[str, Any]] | None,
-    effort: str,
-) -> dict[str, Any]:
-    """Build the payload for the same model-selected wire used by ``send``."""
+    adapter: Any
+    model_id: str
+    effort: str
+    temperature: float | None = 1.0
 
-    protocol = adapter.wire_profile(model_id).protocol
-    kwargs: dict[str, Any] = {
-        "temperature": 1.0,
-        "thinking_effort": effort,
-    }
-    if tools:
-        kwargs["tools"] = tools
-    if protocol == "messages":
-        # A multi-wire Adapter delegates Messages to its inner Messages adapter.
-        messages_wire = getattr(adapter, "_messages", adapter)
-        return dict(messages_wire._build_payload(messages, model_id, **kwargs))
-    if protocol == "responses":
-        return dict(adapter._build_responses_payload(messages, model_id=model_id, **kwargs))
-    return dict(adapter._build_payload(messages, model_id, **kwargs))
+    def _request_kwargs(self, tools: list[dict[str, Any]] | None) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {"thinking_effort": self.effort}
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        if tools:
+            kwargs["tools"] = tools
+        return kwargs
+
+    async def send(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Send through the selected Adapter and normalize its complete reply."""
+        raw = await self.adapter.send(
+            messages,
+            model_id=self.model_id,
+            **self.adapter.request_context_kwargs(
+                agent_id="model-audit", session_id="reasoning-replay"
+            ),
+            **self._request_kwargs(tools),
+        )
+        normalized: dict[str, Any] = self.adapter.normalize_response(raw, model_id=self.model_id)
+        return normalized
+
+    async def turn(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None,
+    ) -> TurnResult:
+        """Measure readable reasoning, Tool calls and input accounting for one turn."""
+        return _extract_openai_message(await self.send(messages, tools=tools))
+
+    def render(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Build the payload for the same Model-selected wire used by ``send``."""
+        protocol = self.adapter.wire_profile(self.model_id).protocol
+        kwargs = self._request_kwargs(tools)
+        if protocol == "messages":
+            # A multi-wire Adapter delegates Messages to its inner Messages adapter.
+            messages_wire = getattr(self.adapter, "_messages", self.adapter)
+            return dict(messages_wire._build_payload(messages, self.model_id, **kwargs))
+        if protocol == "responses":
+            return dict(
+                self.adapter._build_responses_payload(messages, model_id=self.model_id, **kwargs)
+            )
+        return dict(self.adapter._build_payload(messages, self.model_id, **kwargs))
+
+    @property
+    def encrypted_reasoning_expected(self) -> bool:
+        return (
+            model_reasoning_supported(getattr(self.adapter, "_model_lookup", None), self.model_id)
+            is not False
+        )
+
+    @property
+    def client_tools_expected(self) -> bool:
+        model_lookup = getattr(self.adapter, "_model_lookup", None)
+        if model_lookup is None:
+            return True
+        model = model_lookup(self.model_id.split("::", 1)[0])
+        return model is None or model.capabilities.tools
 
 
 def _assistant_wire_carriers(payload: dict[str, Any]) -> list[str]:
@@ -151,18 +187,6 @@ def _responses_output_items(message: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(output, list) or not all(isinstance(item, dict) for item in output):
         return []
     return output
-
-
-def _encrypted_reasoning_expected(adapter: Any, model_id: str) -> bool:
-    return model_reasoning_supported(getattr(adapter, "_model_lookup", None), model_id) is not False
-
-
-def _client_tools_expected(adapter: Any, model_id: str) -> bool:
-    model_lookup = getattr(adapter, "_model_lookup", None)
-    if model_lookup is None:
-        return True
-    model = model_lookup(model_id.split("::", 1)[0])
-    return model is None or model.capabilities.tools
 
 
 def _shape_session(

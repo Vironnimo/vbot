@@ -23,659 +23,36 @@ relative spellings of the same file reveal it, else by themselves.
 
 from __future__ import annotations
 
-import json
-import posixpath
-import re
-import sqlite3
 from collections import Counter, defaultdict
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.providers.adapter import tool_result_text
 from core.tools._line_diff import line_opcodes
-from core.tools._patch_report import edit_outcome
 from core.tools._patch_requests import normalize_patch_arguments, patch_operations
-from core.tools._patch_syntax import _HEADER, _MOVE_TO, _clean_path
-from core.tools._read_arguments import normalize_read_arguments
-from core.tools.apply_patch import patch_targets
 from core.tools.arguments import split_text_lines
 from core.tools.syntax_check import warning_for_edited_file
+from scripts.tool_lab._replay_evidence import (
+    HistoryCall,
+    Recorded,
+    View,
+    patch_evidence,
+    read_view,
+    recorded,
+)
+from scripts.tool_lab._replay_paths import (
+    SessionPaths,
+    call_paths,
+    infer_cwd,
+    rewrite_paths,
+)
 
-# Stands for the replay root in rewritten absolute paths; ``run`` substitutes it.
-ROOT_TOKEN = "{replay-root}"
 # Recorded failures that depend on the machine, not on the call and the file text.
 ENVIRONMENTAL_CODES = frozenset({"file_write_error", "file_modified_since_read", "file_changed"})
 # A later edit this close (in Tool calls) that revises added lines marks a suspect success.
 SUSPECT_WINDOW = 6
-_FILE_TOOLS = ("read", "apply_patch", "edit", "write")
 _FULL_STATUSES = frozenset({"applied", "unchanged"})
-
-_HISTORY_SQL = """
-SELECT e.session_key, s.session_id, s.agent_id, r.run_id, e.seq, c.ordinal, e.created_at, e.model,
-       c.name, c.result_ok, COALESCE(c.error_code, c.rejection_code) AS error_code,
-       CASE WHEN c.name IN ('read', 'apply_patch', 'edit', 'write') THEN p.arguments_json END
-         AS arguments_json,
-       CASE WHEN c.name IN ('read', 'apply_patch', 'edit', 'write') THEN rt.content END
-         AS result
-FROM tool_calls AS c
-JOIN entries AS e ON e.entry_key = c.entry_key
-JOIN sessions AS s ON s.session_key = e.session_key
-JOIN tool_call_payloads AS p ON p.call_key = c.call_key
-LEFT JOIN runs AS r ON r.run_key = e.run_key
-LEFT JOIN entry_text AS rt ON rt.entry_key = c.result_entry_key
-WHERE e.session_key IN (
-    SELECT DISTINCT e2.session_key FROM tool_calls AS c2
-    JOIN entries AS e2 ON e2.entry_key = c2.entry_key
-    WHERE c2.name = 'apply_patch')
-ORDER BY e.session_key, e.seq, c.ordinal
-"""
-
-_DRIVE = re.compile(r"[A-Za-z]:/")
-_GUTTER = re.compile(r"(\d+)(?::(\d+))?\| (.*)", re.DOTALL)
-_READ_HINT = re.compile(r"\[Showing lines \d+-\d+(?: of (\d+))?\.")
-_BEYOND = re.compile(r"\[Offset \d+ is beyond end of file \((\d+) lines\)")
-_EMPTY_READ = re.compile(r"\[.+ is empty\.\]")
-_CONTINUES = " [line continues;"
-_REPLACEMENT = "\ufffd"
-_WRITTEN = re.compile(r"(Created|Replaced the content of) (.+) \((?:(\d+) lines?|empty)\)\.")
-_DELETED = re.compile(r"Deleted (.+)\.")
-_MOVED = re.compile(r"Moved (.+) to (.+)\.")
-_UPDATED = re.compile(r"Updated (.+?)(?: and moved it to (.+))?:")
-_GUARDED = re.compile(
-    r"(?:Failed: |Error \(\w+\): )?(.+) already exists and (?:this Session has not read it|"
-    r"was not read with read in this conversation|it changed after this Session last read it), "
-    r"so it was not replaced\."
-)
-_STALE = re.compile(r"(.+) changed after this Session last read it; the change used its")
-_EXCERPT_LEADS = (
-    "The closest text",
-    "Where it occurs:",
-    "so copy all of",
-    "The unchanged lines match",
-    "The unchanged lines occur",
-)
-
-
-class ReplayError(ValueError):
-    """The corpus or its output location cannot be used as given."""
-
-
-@dataclass(frozen=True, slots=True)
-class HistoryCall:
-    """One Tool call of a Session, with what the replay needs of it."""
-
-    session_key: int
-    session_id: str
-    agent_id: str
-    run_id: str | None
-    seq: int
-    ordinal: int
-    created_at: str
-    model: str | None
-    name: str
-    ok: bool | None
-    error_code: str | None
-    arguments_json: str | None
-    result: str | None
-
-    def arguments(self) -> Any:
-        try:
-            return json.loads(self.arguments_json) if self.arguments_json else None
-        except json.JSONDecodeError:
-            return None
-
-    def envelope(self) -> dict[str, Any] | None:
-        try:
-            value = json.loads(self.result) if self.result else None
-        except json.JSONDecodeError:
-            return None
-        return value if isinstance(value, dict) and isinstance(value.get("ok"), bool) else None
-
-
-def session_histories(database: Path) -> Iterator[list[HistoryCall]]:
-    """Yield, per Session with an apply_patch call, all its Tool calls in order."""
-    connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row
-    try:
-        current: list[HistoryCall] = []
-        for row in connection.execute(_HISTORY_SQL):
-            call = HistoryCall(
-                session_key=row["session_key"],
-                session_id=row["session_id"],
-                agent_id=row["agent_id"],
-                run_id=row["run_id"],
-                seq=row["seq"],
-                ordinal=row["ordinal"],
-                created_at=row["created_at"],
-                model=row["model"],
-                name=row["name"],
-                ok=None if row["result_ok"] is None else bool(row["result_ok"]),
-                error_code=row["error_code"],
-                arguments_json=row["arguments_json"],
-                result=row["result"],
-            )
-            if current and current[-1].session_key != call.session_key:
-                yield current
-                current = []
-            current.append(call)
-        if current:
-            yield current
-    finally:
-        connection.close()
-
-
-# --- Recorded results -------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class Recorded:
-    """How a call ended when it ran: ``status`` is applied, partial, unchanged or failed."""
-
-    ok: bool | None
-    status: str
-    error_code: str | None
-    text: str
-    notes: tuple[str, ...]
-
-    def as_json(self) -> dict[str, Any]:
-        return {
-            "ok": self.ok,
-            "status": self.status,
-            "error_code": self.error_code,
-            "text": self.text,
-            "notes": list(self.notes),
-        }
-
-
-def recorded(call: HistoryCall) -> Recorded:
-    """Read a recorded result: plain-text ``content`` since 2026-09-26, structured before."""
-    envelope = call.envelope()
-    text = str(tool_result_text(call.result)) if call.result else ""
-    if envelope is None or not envelope["ok"]:
-        return Recorded(False if envelope else call.ok, "failed", call.error_code, text, ())
-    data = envelope.get("data")
-    data = data if isinstance(data, dict) else {}
-    notes: list[str] = []
-    if isinstance(data.get("content"), str):
-        notes = [line[6:] for line in data["content"].split("\n") if line.startswith("Note: ")]
-    for entry in data.get("files") or ():
-        if isinstance(entry, dict):
-            notes.extend(str(warning) for warning in entry.get("warnings") or ())
-    # Results carry their outcome only in their text since 2026-10; earlier ones
-    # recorded it as ``status``.
-    status = data.get("status")
-    if status is None and isinstance(data.get("content"), str):
-        status = edit_outcome(data["content"])
-    if status == "success":
-        results = [entry for entry in data.get("results") or () if isinstance(entry, dict)]
-        no_ops = {"unchanged", "already_applied"}
-        quiet = results and all(entry.get("status") in no_ops for entry in results)
-        status = "unchanged" if quiet else "applied"
-    if status not in {"applied", "partial", "unchanged"}:
-        status = "applied"
-    return Recorded(True, str(status), None, text, tuple(notes))
-
-
-# --- Views of a file ----------------------------------------------------------------
-
-
-@dataclass(slots=True)
-class View:
-    """What one observation shows of a file at one moment.
-
-    ``content`` is the whole text with LF line breaks; ``lines`` maps a line
-    number to (first character shown, text shown, whether only a prefix shows).
-    ``ending_unknown`` marks content shown without its final line break;
-    ``final_newline`` tells, when known, whether the last line ends with one.
-    """
-
-    content: str | None = None
-    absent: bool = False
-    lines: dict[int, tuple[int, str, bool]] = field(default_factory=dict)
-    total: int | None = None
-    ending_unknown: bool = False
-    final_newline: bool | None = None
-
-    @property
-    def full(self) -> bool:
-        return self.content is not None or self.absent
-
-    def says_anything(self) -> bool:
-        return self.full or bool(self.lines) or self.total is not None
-
-    def garbled(self) -> bool:
-        """Whether it shows replacement characters: text that was not UTF-8."""
-        if self.content is not None and _REPLACEMENT in self.content:
-            return True
-        return any(_REPLACEMENT in shown for _character, shown, _cut in self.lines.values())
-
-    def complete_lines(self) -> str | None:
-        """The whole text when the shown lines cover every line uncut, else None.
-
-        Without word on the final line break, the text ends with one.
-        """
-        if self.total is None or len(self.lines) != self.total:
-            return None
-        shown = []
-        for number in range(1, self.total + 1):
-            entry = self.lines.get(number)
-            if entry is None or entry[0] != 1 or entry[2]:
-                return None
-            shown.append(entry[1])
-        return "\n".join(shown) + ("" if self.final_newline is False else "\n")
-
-    def agrees(self, content: str | None) -> bool:
-        if self.absent:
-            return content is None
-        if content is None:
-            return False
-        text = plain_text(content)
-        if self.content is not None:
-            if self.ending_unknown:
-                return text.removesuffix("\n") == self.content.removesuffix("\n")
-            return text == self.content
-        lines = split_text_lines(text)
-        if self.total is not None and len(lines) != self.total:
-            return False
-        if self.final_newline is not None and text.endswith("\n") != self.final_newline:
-            return False
-        for number, (character, shown, prefix) in self.lines.items():
-            if number > len(lines):
-                return False
-            line = lines[number - 1][character - 1 :]
-            if not (line.startswith(shown) if prefix else line == shown):
-                return False
-        return True
-
-    def add_gutter(self, line: str, *, prefix: bool = False, clipped: bool = True) -> bool:
-        """Add one ``N| text`` line; return whether it was one.
-
-        ``clipped``: a trailing ``...`` marks a line cut at the preview width.
-        """
-        match = _GUTTER.fullmatch(line)
-        if match is None:
-            return False
-        number, character, shown = int(match[1]), int(match[2] or 1), match[3]
-        cut = prefix or character > 1
-        if clipped and shown.endswith("..."):
-            shown, cut = shown[:-3], True
-        if _CONTINUES in shown:
-            shown, cut = shown.split(_CONTINUES, 1)[0], True
-        self.lines[number] = (character, shown, cut)
-        return True
-
-
-def plain_text(content: str) -> str:
-    """Text as ``read`` shows it: no BOM, every line break a LF."""
-    return content.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
-
-
-def read_view(text: str) -> View | None:
-    """What a successful ``read`` result shows of its file, or None when it shows no text.
-
-    ``read`` adds a hint only when it stops before the end of the file, so
-    numbered lines without one run to the end. Every shown line keeps its own
-    line break; a last line without one is followed by a blank line before a
-    hint.
-    """
-    stripped = text.strip()
-    if _EMPTY_READ.fullmatch(stripped):
-        return View(content="")
-    beyond = _BEYOND.match(stripped)
-    if beyond:
-        return View(total=int(beyond[1]))
-    lines = text.split("\n")
-    hint = _READ_HINT.match(lines[-1]) if lines else None
-    view = View()
-    if hint:
-        view.total = int(hint[1]) if hint[1] else None
-        lines = lines[:-1]
-    blank = bool(lines) and lines[-1] == ""
-    body = lines[:-1] if blank else lines
-    numbers: list[int | None] = []
-    for line in body:
-        match = _GUTTER.fullmatch(line)
-        numbers.append(int(match[1]) if match is not None and match[2] is None else None)
-        view.add_gutter(line, clipped=False)
-    first = numbers[0] if numbers else None
-    if first is None or numbers != list(range(first, first + len(numbers))):
-        return view if view.says_anything() else None
-    last = first + len(numbers) - 1
-    if not hint:
-        if first == 1:
-            shown = [view.lines[number][1] for number in range(1, last + 1)]
-            return View(content="\n".join(shown) + ("\n" if blank else ""))
-        view.total, view.final_newline = last, blank
-    elif view.total == last:
-        view.final_newline = not blank
-    return view
-
-
-# --- Evidence in apply_patch results ----------------------------------------------------
-
-
-@dataclass(slots=True)
-class PatchEvidence:
-    """What a recorded apply_patch result shows, by the file labels it uses.
-
-    ``excerpts`` are failure excerpts whose file is the call's only file.
-    """
-
-    before: dict[str, View] = field(default_factory=dict)
-    after: dict[str, View] = field(default_factory=dict)
-    excerpts: View = field(default_factory=View)
-    guarded: set[str] = field(default_factory=set)
-    shown: set[str] = field(default_factory=set)
-    stale: set[str] = field(default_factory=set)
-    replaced: set[str] = field(default_factory=set)
-
-
-def patch_evidence(envelope: dict[str, Any] | None) -> PatchEvidence:
-    evidence = PatchEvidence()
-    if envelope is None:
-        return evidence
-    data = envelope.get("data")
-    if envelope["ok"] and isinstance(data, dict) and isinstance(data.get("files"), list):
-        _structured_evidence(data, evidence)
-        return evidence
-    if envelope["ok"] and isinstance(data, dict) and isinstance(data.get("content"), str):
-        _text_evidence(data["content"], evidence)
-    elif not envelope["ok"] and isinstance(envelope.get("error"), dict):
-        error = envelope["error"]
-        text = f"Error ({error.get('code')}): {error.get('message', '')}"
-        if isinstance(error.get("content"), str):
-            text += "\n" + error["content"]
-        _text_evidence(text, evidence)
-    return evidence
-
-
-def _text_evidence(text: str, evidence: PatchEvidence) -> None:
-    """Read a plain-text result: changed regions, written files, refusals, excerpts."""
-    mode: str | None = None
-    label = ""
-    guard: list[str] = []
-
-    def close_guard() -> None:
-        if guard:
-            numbers = [_GUTTER.fullmatch(line) for line in guard]
-            if all(
-                m is not None and m[2] is None and int(m[1]) == i for i, m in enumerate(numbers, 1)
-            ):
-                content = "\n".join(m[3] for m in numbers if m is not None)
-                evidence.before[label] = View(content=content, ending_unknown=True)
-                evidence.shown.add(label)
-        guard.clear()
-
-    for line in text.split("\n"):
-        if mode is not None and _GUTTER.fullmatch(line):
-            if mode == "guard":
-                guard.append(line)
-            elif mode == "after":
-                evidence.after.setdefault(label, View()).add_gutter(line)
-            else:
-                evidence.excerpts.add_gutter(line, prefix=True)
-            continue
-        if mode in {"after", "excerpt"} and _is_separator(line):
-            continue
-        if mode == "guard":
-            close_guard()
-        mode = None
-        if match := _UPDATED.fullmatch(line):
-            mode, label = "after", match[2] or match[1]
-        elif match := _WRITTEN.fullmatch(line):
-            evidence.after[match[2]] = View(total=int(match[3] or 0))
-            if match[1] == "Created":
-                evidence.before[match[2]] = View(absent=True)
-            else:
-                evidence.replaced.add(match[2])
-        elif (match := _DELETED.fullmatch(line)) or (match := _MOVED.fullmatch(line)):
-            evidence.after[match[1]] = View(absent=True)
-        elif line.startswith("Note: ") and (match := _STALE.match(line[6:])):
-            evidence.stale.add(match[1])
-        elif match := _GUARDED.match(line):
-            evidence.guarded.add(match[1])
-            if "Its current content follows" in line:
-                mode, label = "guard", match[1]
-        elif any(lead in line for lead in _EXCERPT_LEADS) and line.endswith(":"):
-            mode = "excerpt"
-    if mode == "guard":
-        close_guard()
-
-
-def _is_separator(line: str) -> bool:
-    """A line between shown regions of a result: ``--`` or a note on lines left out."""
-    shown_out = line.startswith("[") and "not shown]" in line
-    return line == "--" or line.startswith("-- (") or shown_out
-
-
-def _structured_evidence(data: dict[str, Any], evidence: PatchEvidence) -> None:
-    """Read a structured result (before 2026-09-26): previews and failure candidates."""
-    for entry in data["files"]:
-        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-            continue
-        label = entry["path"]
-        if entry.get("action") == "delete":
-            evidence.after[label] = View(absent=True)
-            continue
-        for region in entry.get("preview") or ():
-            if not isinstance(region, dict):
-                continue
-            for side, views in (("before", evidence.before), ("after", evidence.after)):
-                if side == "before" and entry.get("action") == "add":
-                    continue
-                lines = [line for line in region.get(side) or () if isinstance(line, str)]
-                start = region.get(f"{side}_line")
-                cut = set(region.get(f"{side}_truncated_lines") or ())
-                view = views.setdefault(label, View())
-                for offset, line in enumerate(lines):
-                    if isinstance(start, int):
-                        number = start + offset
-                        view.lines[number] = (1, line, number in cut)
-                    else:
-                        view.add_gutter(line)
-    for result in data.get("results") or ():
-        error = result.get("error") if isinstance(result, dict) else None
-        if not isinstance(error, dict) or not isinstance(result.get("path"), str):
-            continue
-        for candidate in error.get("candidates") or ():
-            if not isinstance(candidate, dict) or candidate.get("truncated"):
-                continue
-            first, text = candidate.get("line"), candidate.get("text")
-            if isinstance(first, int) and isinstance(text, str):
-                view = evidence.before.setdefault(result["path"], View())
-                for offset, line in enumerate(text.split("\n")):
-                    view.lines[first + offset] = (1, line, True)
-
-
-# --- Paths ---------------------------------------------------------------------------
-
-
-def _normal(name: str) -> str | None:
-    """A path spelling with ``/`` separators and no ``.``/``..`` steps, or None if unusable."""
-    text = name.strip().replace("\\", "/")
-    if not text or "\x00" in text or text.startswith(("~", "//")):
-        return None
-    absolute = bool(_DRIVE.match(text)) or text.startswith("/")
-    text = posixpath.normpath(text)
-    if text in {".", "/"} or _DRIVE.fullmatch(text + "/"):
-        return None
-    if not absolute and (text == ".." or text.startswith("../") or ":" in text):
-        return None
-    return text
-
-
-def _is_absolute(normal: str) -> bool:
-    return bool(_DRIVE.match(normal)) or normal.startswith("/")
-
-
-@dataclass(frozen=True, slots=True)
-class SessionPaths:
-    """Path keys and replay locations of one Session's file names."""
-
-    cwd: str | None
-
-    def key(self, name: str) -> str | None:
-        normal = _normal(name)
-        if normal is None:
-            return None
-        if _is_absolute(normal):
-            return normal.lower()
-        return f"{self.cwd}/{normal.lower()}" if self.cwd else f"./{normal.lower()}"
-
-    def workspace(self, name: str) -> str | None:
-        """Where the replay keeps the file, relative to its root (``cwd/...`` or ``abs/...``)."""
-        normal = _normal(name)
-        if normal is None:
-            return None
-        if not _is_absolute(normal):
-            return f"cwd/{normal}"
-        if self.cwd and normal.lower().startswith(self.cwd + "/"):
-            return f"cwd/{normal[len(self.cwd) + 1 :]}"
-        if _DRIVE.match(normal):
-            return f"abs/{normal[0].lower()}/{normal[3:]}"
-        return f"abs/_{normal}"
-
-
-def call_paths(name: str, arguments: Any) -> list[str]:
-    """The file names a read or file-edit call gives, as spelled."""
-    if name == "read":
-        try:
-            normalized = normalize_read_arguments(arguments)
-        except Exception:
-            return []
-        path = normalized.get("path") if isinstance(normalized, dict) else None
-        return [path] if isinstance(path, str) else []
-    try:
-        return patch_targets(arguments)
-    except Exception:
-        return _header_paths(arguments)
-
-
-def _header_paths(value: Any) -> list[str]:
-    """File names in V4A header lines, for patches the parser refuses."""
-    if isinstance(value, dict):
-        return [path for item in value.values() for path in _header_paths(item)]
-    if isinstance(value, list):
-        return [path for item in value for path in _header_paths(item)]
-    if not isinstance(value, str):
-        return []
-    paths: list[str] = []
-    for line in value.split("\n"):
-        line = line.rstrip("\r")
-        if header := _HEADER.fullmatch(line):
-            source, _arrow, destination = _clean_path(header[2]).partition(" -> ")
-            paths.extend(_clean_path(part) for part in (source, destination) if part.strip())
-        elif move := _MOVE_TO.fullmatch(line):
-            paths.append(_clean_path(move[1]))
-    return [path for path in paths if path]
-
-
-def result_labels(envelope: dict[str, Any] | None) -> list[str]:
-    """The file labels a successful apply_patch result names."""
-    if envelope is None or not envelope["ok"] or not isinstance(envelope.get("data"), dict):
-        return []
-    data = envelope["data"]
-    labels = [
-        entry["path"]
-        for key in ("files", "results")
-        for entry in data.get(key) or ()
-        if isinstance(entry, dict) and isinstance(entry.get("path"), str)
-    ]
-    if isinstance(data.get("content"), str):
-        for line in data["content"].split("\n"):
-            for pattern in (_UPDATED, _WRITTEN, _DELETED, _MOVED):
-                if match := pattern.fullmatch(line):
-                    labels.extend(
-                        group
-                        for group in match.groups()
-                        if group
-                        and not group.isdigit()
-                        and not group.startswith(("Created", "Replaced"))
-                    )
-    return labels
-
-
-def infer_cwd(calls: list[HistoryCall]) -> str | None:
-    """The Session's working directory, when absolute and relative spellings reveal it.
-
-    Strong evidence: a result labels a file relative to the working directory
-    that the call named absolutely, or the reverse. Otherwise at least two
-    relative names with a folder must each end an absolute name the same way.
-    """
-    strong: Counter[str] = Counter()
-    absolute: set[str] = set()
-    relative: set[str] = set()
-    for call in calls:
-        if call.name not in _FILE_TOOLS:
-            continue
-        names = [n for n in map(_normal, call_paths(call.name, call.arguments())) if n]
-        for normal in names:
-            (absolute if _is_absolute(normal) else relative).add(normal.lower())
-        if call.name != "apply_patch":
-            continue
-        for label in filter(None, map(_normal, result_labels(call.envelope()))):
-            for normal in names:
-                first, second = normal.lower(), label.lower()
-                if _is_absolute(second) and not _is_absolute(first):
-                    first, second = second, first
-                mixed = _is_absolute(first) and not _is_absolute(second)
-                if mixed and first.endswith("/" + second):
-                    strong[first[: -len(second) - 1]] += 1
-    if strong:
-        return strong.most_common(1)[0][0]
-    weak: Counter[str] = Counter()
-    for name in relative:
-        if "/" not in name:
-            continue
-        for full in absolute:
-            if full.endswith("/" + name):
-                weak[full[: -len(name) - 1]] += 1
-    if weak:
-        best, votes = weak.most_common(1)[0]
-        if votes >= 2:
-            return best
-    return None
-
-
-def rewrite_paths(value: Any, replacements: dict[str, str]) -> Any:
-    """Replace file names in path fields and patch header lines; content stays literal."""
-    if not replacements:
-        return value
-    if isinstance(value, dict):
-        return {key: rewrite_paths(item, replacements) for key, item in value.items()}
-    if isinstance(value, list):
-        return [rewrite_paths(item, replacements) for item in value]
-    if not isinstance(value, str):
-        return value
-    if value.strip() in replacements:
-        return value.replace(value.strip(), replacements[value.strip()])
-    lines = value.split("\n")
-    changed = False
-    ordered = sorted(replacements.items(), key=lambda item: -len(item[0]))
-    for index, line in enumerate(lines):
-        bare = line.rstrip("\r")
-        if not (
-            _HEADER.fullmatch(bare)
-            or _MOVE_TO.fullmatch(bare)
-            or bare.startswith(("--- ", "+++ ", "diff --git ", "rename from ", "rename to "))
-        ):
-            continue
-        new = bare
-        for old, replacement in ordered:
-            pattern = rf"(?<![^\s:'\"`>]){re.escape(old)}(?=$|[\s'\"`]|\s*->)"
-            new = re.sub(pattern, _literal(replacement), new)
-        if new != bare:
-            lines[index] = new + line[len(bare) :]
-            changed = True
-    return "\n".join(lines) if changed else value
-
-
-def _literal(text: str) -> Callable[[re.Match[str]], str]:
-    """A ``re.sub`` replacement that inserts ``text`` as it is, backslashes included."""
-    return lambda _match: text
-
 
 # --- Simulation -----------------------------------------------------------------------
 
@@ -875,7 +252,7 @@ class SessionReplay:
         keys = {name: self.paths.key(name) for name in names}
         known_keys = {key for key in keys.values() if key is not None}
         evidence = patch_evidence(call.envelope())
-        resolve = self._label_resolver(keys)
+        resolve = self.paths.label_resolver(keys)
         # What the result shows of the files as they were when the call ran.
         agreed: dict[str, str] = {}
         for label, view in evidence.before.items():
@@ -910,26 +287,6 @@ class SessionReplay:
             if (key := resolve(label)) is not None and view.says_anything():
                 self._observe(key, view, "result")
 
-    def _label_resolver(self, keys: dict[str, str | None]) -> Callable[[str], str | None]:
-        values = {key for key in keys.values() if key is not None}
-
-        def resolve(label: str) -> str | None:
-            key = self.paths.key(label)
-            if key in values:
-                return key
-            normal = _normal(label)
-            if normal is None:
-                return None
-            lower = normal.lower()
-            matches = {
-                value
-                for value in values
-                if value.endswith("/" + lower) or lower.endswith("/" + value.removeprefix("./"))
-            }
-            return matches.pop() if len(matches) == 1 else None
-
-        return resolve
-
     def _case(
         self,
         index: int,
@@ -960,9 +317,9 @@ class SessionReplay:
             location = self.paths.workspace(name)
             assert location is not None
             workspace.setdefault(key, location)
-        replacements = self._replacements(keys, workspace)
+        replacements = self.paths.replacements(keys, workspace)
         replay_arguments = rewrite_paths(arguments, replacements)
-        if not self._rewritten(replay_arguments, set(workspace.values())):
+        if not self.paths.rewritten(replay_arguments, set(workspace.values())):
             self.stats.skipped["path rewrite"] += 1
             return None
         files = []
@@ -998,34 +355,6 @@ class SessionReplay:
             self._awaiting.append(case)
         self._cases.append(case)
         return case
-
-    def _replacements(
-        self, keys: dict[str, str | None], workspace: dict[str, str]
-    ) -> dict[str, str]:
-        replacements: dict[str, str] = {}
-        for name, key in keys.items():
-            normal = _normal(name)
-            if key is None or normal is None or not _is_absolute(normal):
-                continue
-            location = workspace[key]
-            if "\\" in name and "/" not in name:
-                replacements[name] = ROOT_TOKEN + "\\" + location.replace("/", "\\")
-            else:
-                replacements[name] = f"{ROOT_TOKEN}/{location}"
-        return replacements
-
-    def _rewritten(self, arguments: dict[str, Any], expected: set[str]) -> bool:
-        """Whether every file the rewritten call names is one of the replay's files."""
-        found = set()
-        for name in call_paths("apply_patch", arguments):
-            if name.startswith(ROOT_TOKEN):
-                found.add(name[len(ROOT_TOKEN) + 1 :].replace("\\", "/"))
-            else:
-                normal = _normal(name)
-                if normal is None or _is_absolute(normal):
-                    return False
-                found.add(f"cwd/{normal}")
-        return {path.lower() for path in found} == {path.lower() for path in expected}
 
     def _first_actions(self, arguments: Any) -> dict[str, str]:
         """For each file key, how the call first touches it: add, delete, move, update, into."""
@@ -1077,7 +406,7 @@ class SessionReplay:
                 self._lose(key)
             self._resolve(index, call, set(workspace), resolved=False)
             return
-        replacements = self._replacements(keys, workspace)
+        replacements = self.paths.replacements(keys, workspace)
         replay_arguments = rewrite_paths(arguments, replacements)
         files: dict[str, str | None] = {}
         for key, location in workspace.items():

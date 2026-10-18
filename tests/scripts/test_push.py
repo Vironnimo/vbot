@@ -61,8 +61,8 @@ def origin(_template: Path, tmp_path: Path) -> Path:
 @pytest.fixture
 def repo(origin: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo = origin.parent / "repo"
-    monkeypatch.setattr(push.worktree, "PROJECT_ROOT", repo)
-    monkeypatch.setattr(push.worktree, "WORKTREES_DIR", repo / ".worktrees")
+    monkeypatch.setattr(push._worktrees.context, "project_root", repo)
+    monkeypatch.setattr(push._worktrees.context, "worktrees_dir", repo / ".worktrees")
     return repo
 
 
@@ -114,7 +114,7 @@ def test_push_sends_the_checked_commit_only_when_every_check_passes(
     assert _git(origin, "rev-parse", "main") == (main if pushes else before)
     # The private checkout is gone; its log stays.
     assert _git(repo, "worktree", "list", "--porcelain").count("worktree ") == 1
-    assert not list((repo / ".worktrees").glob(f"{push.worktree.PUSH_DIR_PREFIX}*"))
+    assert not list((repo / ".worktrees").glob(f"{push.PUSH_DIR_PREFIX}*"))
     log = Path(output.split("Complete output: ")[1].splitlines()[0])
     assert log.is_file()
     if not passed:

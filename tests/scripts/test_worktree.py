@@ -17,9 +17,13 @@ from core.sessions.store import SessionStore
 from core.storage import StorageManager
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.utils.config import DEFAULT_PORT
+from scripts import _worktree_context as worktree_context
 from scripts import _worktree_ports as worktree_ports
+from scripts import _worktree_records as worktree_records
+from scripts import _worktree_removal as worktree_removal
 from scripts import _worktree_seed as worktree_seed
-from tests.scripts.worktree_helpers import MODULE_PATH, PROJECT_ROOT, _load_worktree_module
+from scripts import worktree as worktree_entry
+from tests.scripts.worktree_helpers import MODULE_PATH, PROJECT_ROOT, _worktree_manager
 
 
 def _patch_create_environment(monkeypatch, module, tmp_path: Path) -> None:
@@ -28,12 +32,12 @@ def _patch_create_environment(monkeypatch, module, tmp_path: Path) -> None:
     ``PROJECT_ROOT`` also locates the Git common dir that holds the port
     allocation lock, so it is redirected along with the worktree and home dirs.
     """
-    monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
-    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
-    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
-    monkeypatch.setattr(module, "DATA_ROOT", tmp_path / "data")
+    monkeypatch.setattr(module.context, "project_root", tmp_path)
+    monkeypatch.setattr(module.context, "worktrees_dir", tmp_path / ".worktrees")
+    monkeypatch.setattr(worktree_entry, "find_free_port", lambda _worktrees_dir: 8422)
+    monkeypatch.setattr(worktree_context.shutil, "which", lambda _name: "npm")
+    monkeypatch.setattr(worktree_context.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(module.context, "data_root", tmp_path / "data")
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
@@ -108,7 +112,7 @@ def test_find_free_port_starts_after_main_dev_port(tmp_path, monkeypatch):
 
 
 def test_run_command_defaults_to_project_root(monkeypatch):
-    module = _load_worktree_module()
+    module = _worktree_manager()
     calls = []
 
     class FakeResult:
@@ -127,9 +131,9 @@ def test_run_command_defaults_to_project_root(monkeypatch):
         )
         return FakeResult()
 
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(worktree_context.subprocess, "run", fake_run)
 
-    result = module._run_command(["git", "status"])
+    result = module.context.run_command(["git", "status"])
 
     assert result == (0, "")
     assert calls == [
@@ -137,7 +141,7 @@ def test_run_command_defaults_to_project_root(monkeypatch):
             "command": ["git", "status"],
             "capture_output": True,
             "text": True,
-            "cwd": module.PROJECT_ROOT,
+            "cwd": module.context.project_root,
             "check": False,
         }
     ]
@@ -145,8 +149,8 @@ def test_run_command_defaults_to_project_root(monkeypatch):
 
 @pytest.mark.parametrize("name", ["../outside", "dev", "DEV", "dEv.", "task."])
 def test_cmd_create_rejects_unsafe_name(tmp_path, monkeypatch, name):
-    module = _load_worktree_module()
-    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+    module = _worktree_manager()
+    monkeypatch.setattr(module.context, "worktrees_dir", tmp_path / ".worktrees")
 
     commands = []
 
@@ -154,9 +158,9 @@ def test_cmd_create_rejects_unsafe_name(tmp_path, monkeypatch, name):
         commands.append(command)
         return 0, ""
 
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.context, "run_command", fake_run_command)
 
-    result = module.cmd_create(argparse.Namespace(name=name, from_branch=None))
+    result = module.create(argparse.Namespace(name=name, from_branch=None))
 
     assert result == 1
     assert commands == []
@@ -188,7 +192,7 @@ def _write_installed_packages(webui_path: Path, packages: dict[str, dict[str, ob
 
 
 def test_cmd_create_installs_webui_packages_without_building(tmp_path, monkeypatch):
-    module = _load_worktree_module()
+    module = _worktree_manager()
 
     name = "fresh-worktree"
     worktrees_dir = tmp_path / ".worktrees"
@@ -205,9 +209,9 @@ def test_cmd_create_installs_webui_packages_without_building(tmp_path, monkeypat
             webui_path.mkdir(parents=True, exist_ok=True)
         return 0, ""
 
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.context, "run_command", fake_run_command)
 
-    result = module.cmd_create(argparse.Namespace(name=name, from_branch="main"))
+    result = module.create(argparse.Namespace(name=name, from_branch="main"))
 
     assert result == 0
     # Without packages to copy from the primary checkout, npm installs them;
@@ -216,11 +220,11 @@ def test_cmd_create_installs_webui_packages_without_building(tmp_path, monkeypat
     assert ["npm", "run", "build"] not in [command for command, _cwd in commands]
     assert not (worktree_path / ".vorch" / "WORKTREE.md").exists()
     # The port allocation lock lands in the scratch repository, not the real one.
-    assert (tmp_path / ".git" / module.PORT_ALLOCATION_LOCK_NAME).is_file()
+    assert (tmp_path / ".git" / worktree_context.PORT_ALLOCATION_LOCK_NAME).is_file()
 
 
 def test_cmd_create_copies_primary_webui_packages_and_native_resources(tmp_path, monkeypatch):
-    module = _load_worktree_module()
+    module = _worktree_manager()
 
     name = "seeded-packages"
     worktree_path = tmp_path / ".worktrees" / name
@@ -243,9 +247,9 @@ def test_cmd_create_copies_primary_webui_packages_and_native_resources(tmp_path,
             _write_webui_lock(webui_path, _LOCKED_PACKAGES)
         return 0, ""
 
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.context, "run_command", fake_run_command)
 
-    assert module.cmd_create(argparse.Namespace(name=name, from_branch="main")) == 0
+    assert module.create(argparse.Namespace(name=name, from_branch="main")) == 0
 
     assert not [command for command, _cwd in commands if command[0] == "npm"]
     assert (webui_path / "node_modules" / "vite" / "package.json").is_file()
@@ -287,7 +291,7 @@ def test_seed_webui_packages_copies_only_a_tree_matching_the_worktree_lock(
 def test_cmd_create_reports_branch_in_output(
     tmp_path, monkeypatch, capsys, from_branch, expected_branch
 ):
-    module = _load_worktree_module()
+    module = _worktree_manager()
 
     name = "fresh-worktree"
     worktrees_dir = tmp_path / ".worktrees"
@@ -303,16 +307,16 @@ def test_cmd_create_reports_branch_in_output(
             webui_path.mkdir(parents=True, exist_ok=True)
         return 0, ""
 
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.context, "run_command", fake_run_command)
 
-    result = module.cmd_create(argparse.Namespace(name=name, from_branch=from_branch))
+    result = module.create(argparse.Namespace(name=name, from_branch=from_branch))
 
     assert result == 0
     assert f"branch: {expected_branch}" in capsys.readouterr().out
 
 
 def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monkeypatch):
-    module = _load_worktree_module()
+    module = _worktree_manager()
 
     name = "seeded-worktree"
     worktrees_dir = tmp_path / ".worktrees"
@@ -327,9 +331,9 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
             webui_path.mkdir(parents=True, exist_ok=True)
         return 0, ""
 
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.context, "run_command", fake_run_command)
 
-    result = module.cmd_create(argparse.Namespace(name=name, from_branch="main"))
+    result = module.create(argparse.Namespace(name=name, from_branch="main"))
 
     assert result == 0
     # A worktree's data directory starts without credentials.
@@ -352,21 +356,23 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
     assert ready_marker.databases["sessions"].format_generation == 1
     assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
     assert not (data_dir / "agents" / "main").exists()
-    marker = json.loads((worktree_path / module.WORKTREE_FILE_NAME).read_text(encoding="utf-8"))
-    assert module._owns_data_dir(worktree_path, data_dir, marker)
+    marker = json.loads(
+        (worktree_path / worktree_records.WORKTREE_FILE_NAME).read_text(encoding="utf-8")
+    )
+    assert module.removal.owns_data_dir(worktree_path, data_dir, marker)
     # The marker keeps the port, so a later delete stops the right server even
     # when the settings lose it.
     assert marker["server_port"] == 8422
 
     # Successful creation claims precisely this root, so ordinary cleanup removes it.
-    monkeypatch.setattr(module, "_stop_worktree_services", lambda *_args: None)
-    monkeypatch.setattr(module, "_terminate_worktree_processes", lambda _path: [])
-    assert module.cmd_delete(argparse.Namespace(name=name, force=True)) == 0
+    monkeypatch.setattr(module.removal, "stop_worktree_services", lambda *_args: None)
+    monkeypatch.setattr(module.removal, "_terminate_worktree_processes", lambda _path: [])
+    assert module.removal.delete(argparse.Namespace(name=name, force=True)) == 0
     assert not data_dir.exists()
 
 
 def test_cmd_create_holds_port_lock_until_marker_and_settings_are_durable(tmp_path, monkeypatch):
-    module = _load_worktree_module()
+    module = _worktree_manager()
     name = "locked-allocation"
     worktrees_dir = tmp_path / ".worktrees"
     worktree_path = worktrees_dir / name
@@ -384,7 +390,7 @@ def test_cmd_create_holds_port_lock_until_marker_and_settings_are_durable(tmp_pa
             json.loads((data_dir / "settings.json").read_text(encoding="utf-8"))["server_port"]
             == 8422
         )
-        assert (worktree_path / module.WORKTREE_FILE_NAME).is_file()
+        assert (worktree_path / worktree_records.WORKTREE_FILE_NAME).is_file()
         observed.append("released")
 
     def fake_run_command(command, *, cwd=None):
@@ -392,10 +398,10 @@ def test_cmd_create_holds_port_lock_until_marker_and_settings_are_durable(tmp_pa
             webui_path.mkdir(parents=True, exist_ok=True)
         return 0, ""
 
-    monkeypatch.setattr(module, "_port_allocation_lock", recording_lock)
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.context, "port_allocation_lock", recording_lock)
+    monkeypatch.setattr(module.context, "run_command", fake_run_command)
 
-    assert module.cmd_create(argparse.Namespace(name=name, from_branch="main")) == 0
+    assert module.create(argparse.Namespace(name=name, from_branch="main")) == 0
     assert observed == ["entered", "released"]
 
 
@@ -412,7 +418,7 @@ def test_find_free_port_skips_server_when_paired_provider_port_is_bound(tmp_path
 
 
 def test_seed_worktree_settings_preserves_existing_user_values(tmp_path):
-    module = _load_worktree_module()
+    module = _worktree_manager()
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
         json.dumps(
@@ -437,7 +443,7 @@ def test_seed_worktree_settings_preserves_existing_user_values(tmp_path):
 def test_seeded_task_model_options_validate_against_loaded_option_schemas(tmp_path):
     """Saving seeded Specialized Models must not fail on an untouched fixture option."""
 
-    module = _load_worktree_module()
+    module = _worktree_manager()
     resources_path = PROJECT_ROOT / "resources"
     storage = StorageManager(tmp_path, resources_dir=resources_path)
     module.seed_worktree_settings(storage.settings_path, server_port=8422)
@@ -465,7 +471,7 @@ def test_seeded_task_model_options_validate_against_loaded_option_schemas(tmp_pa
 
 
 def test_seed_worktree_settings_reads_fixture_from_running_checkout(tmp_path, monkeypatch):
-    module = _load_worktree_module()
+    module = _worktree_manager()
     fixture_relative = Path("scripts") / "fake-provider-settings.json"
     fixture = json.loads((PROJECT_ROOT / fixture_relative).read_text(encoding="utf-8"))
 
@@ -480,8 +486,8 @@ def test_seed_worktree_settings_reads_fixture_from_running_checkout(tmp_path, mo
     main_repository = tmp_path / "main-repository"
     write_checkout(script_checkout, "fake/from-running-checkout::default")
     write_checkout(main_repository, "fake/from-main-repository::default")
-    monkeypatch.setattr(module, "__file__", str(script_checkout / "scripts" / "worktree.py"))
-    monkeypatch.setattr(module, "PROJECT_ROOT", main_repository)
+    monkeypatch.setattr(module.context, "checkout_root", script_checkout)
+    monkeypatch.setattr(module.context, "project_root", main_repository)
     settings_path = tmp_path / "data" / "settings.json"
 
     module.seed_worktree_settings(settings_path, server_port=8422)
@@ -490,16 +496,10 @@ def test_seed_worktree_settings_reads_fixture_from_running_checkout(tmp_path, mo
     assert settings["defaults"]["agent"]["model"] == "fake/from-running-checkout::default"
 
 
-def test_script_checkout_root_is_the_checkout_holding_the_script():
-    module = _load_worktree_module()
-
-    assert module._script_checkout_root() == PROJECT_ROOT
-
-
 def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_install_failure(
     tmp_path, monkeypatch
 ):
-    module = _load_worktree_module()
+    module = _worktree_manager()
 
     name = "failing-worktree"
     worktrees_dir = tmp_path / ".worktrees"
@@ -522,9 +522,9 @@ def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_install_failure
             return 1, "install failed"
         return 0, ""
 
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.context, "run_command", fake_run_command)
 
-    result = module.cmd_create(argparse.Namespace(name=name, from_branch=None))
+    result = module.create(argparse.Namespace(name=name, from_branch=None))
 
     assert result == 1
     assert (["git", "worktree", "remove", "--force", str(worktree_path)], None) in commands
@@ -533,7 +533,7 @@ def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_install_failure
 
 
 def test_cmd_create_refuses_preexisting_data_dir_before_creating_worktree(tmp_path, monkeypatch):
-    module = _load_worktree_module()
+    module = _worktree_manager()
 
     name = "preexisting-data"
     worktrees_dir = tmp_path / ".worktrees"
@@ -556,10 +556,10 @@ def test_cmd_create_refuses_preexisting_data_dir_before_creating_worktree(tmp_pa
     def fake_rmtree(path, ignore_errors):
         removed_paths.append((Path(path), ignore_errors))
 
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module.shutil, "rmtree", fake_rmtree)
+    monkeypatch.setattr(module.context, "run_command", fake_run_command)
+    monkeypatch.setattr(worktree_context.shutil, "rmtree", fake_rmtree)
 
-    result = module.cmd_create(argparse.Namespace(name=name, from_branch=None))
+    result = module.create(argparse.Namespace(name=name, from_branch=None))
 
     assert result == 1
     assert commands == []
@@ -570,9 +570,11 @@ def test_cmd_create_refuses_preexisting_data_dir_before_creating_worktree(tmp_pa
 
 
 def test_iter_worktree_entries_lists_marker_backed_worktrees(tmp_path, monkeypatch):
-    module = _load_worktree_module()
+    module = _worktree_manager()
     worktrees_dir = tmp_path / ".worktrees"
-    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda path: f"{path.name}-branch")
+    monkeypatch.setattr(
+        worktree_records, "_read_worktree_branch_name", lambda path: f"{path.name}-branch"
+    )
 
     first_data_dir = tmp_path / "data" / "alpha"
     first_data_dir.mkdir(parents=True)
@@ -582,21 +584,21 @@ def test_iter_worktree_entries_lists_marker_backed_worktrees(tmp_path, monkeypat
     )
     first_worktree = worktrees_dir / "alpha"
     first_worktree.mkdir(parents=True)
-    (first_worktree / module.WORKTREE_FILE_NAME).write_text(
+    (first_worktree / worktree_records.WORKTREE_FILE_NAME).write_text(
         json.dumps({"data_dir": str(first_data_dir), "managed_branch": True}),
         encoding="utf-8",
     )
 
     second_worktree = worktrees_dir / "beta"
     second_worktree.mkdir()
-    (second_worktree / module.WORKTREE_FILE_NAME).write_text(
+    (second_worktree / worktree_records.WORKTREE_FILE_NAME).write_text(
         json.dumps({"data_dir": str(tmp_path / "missing"), "managed_branch": False}),
         encoding="utf-8",
     )
 
     recorded_worktree = worktrees_dir / "gamma"
     recorded_worktree.mkdir()
-    (recorded_worktree / module.WORKTREE_FILE_NAME).write_text(
+    (recorded_worktree / worktree_records.WORKTREE_FILE_NAME).write_text(
         json.dumps(
             {"data_dir": str(tmp_path / "gone-data"), "managed_branch": True, "server_port": 8424}
         ),
@@ -606,9 +608,9 @@ def test_iter_worktree_entries_lists_marker_backed_worktrees(tmp_path, monkeypat
     ignored_worktree = worktrees_dir / "no-marker"
     ignored_worktree.mkdir()
 
-    trash_worktree = worktrees_dir / f"{module.TRASH_DIR_PREFIX}gone-123"
+    trash_worktree = worktrees_dir / f"{worktree_removal.TRASH_DIR_PREFIX}gone-123"
     trash_worktree.mkdir()
-    (trash_worktree / module.WORKTREE_FILE_NAME).write_text(
+    (trash_worktree / worktree_records.WORKTREE_FILE_NAME).write_text(
         json.dumps({"data_dir": str(tmp_path / "gone"), "managed_branch": True}),
         encoding="utf-8",
     )
@@ -644,7 +646,6 @@ def test_iter_worktree_entries_lists_marker_backed_worktrees(tmp_path, monkeypat
 
 
 def test_list_uncommitted_paths_returns_porcelain_lines(monkeypatch):
-    module = _load_worktree_module()
 
     class FakeResult:
         returncode = 0
@@ -656,9 +657,9 @@ def test_list_uncommitted_paths_returns_porcelain_lines(monkeypatch):
         calls.append(command)
         return FakeResult()
 
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(worktree_context.subprocess, "run", fake_run)
 
-    lines = module._list_uncommitted_paths(Path("C:/repo/.worktrees/task"))
+    lines = worktree_records._list_uncommitted_paths(Path("C:/repo/.worktrees/task"))
 
     assert lines == [" M webui/src/App.svelte", "?? docs/plans/task.md"]
     assert calls == [["git", "-C", str(Path("C:/repo/.worktrees/task")), "status", "--porcelain"]]
