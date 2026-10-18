@@ -634,15 +634,30 @@ def _prune(root: Path, backups: list[ConfigBackup], *, unreadable: int, now: dat
 
 
 def _delete_unreferenced_objects(root: Path, referenced: set[str]) -> None:
+    objects = root / _OBJECTS_DIRECTORY
+    for path in (root, objects):
+        status = stat_or_none(path, follow_symlinks=False)
+        if status is None or is_link_status(status) or not stat.S_ISDIR(status.st_mode):
+            return
     try:
-        with os.scandir(root / _OBJECTS_DIRECTORY) as listing:
-            directories = [entry for entry in listing if entry.is_dir()]
+        with os.scandir(objects) as listing:
+            directories = [
+                entry
+                for entry in listing
+                if not is_link_status(entry.stat(follow_symlinks=False))
+                and entry.is_dir(follow_symlinks=False)
+            ]
     except FileNotFoundError:
         return
     for directory in directories:
         with os.scandir(directory.path) as entries:
             for entry in entries:
-                if entry.name not in referenced:
+                status = entry.stat(follow_symlinks=False)
+                if (
+                    entry.name not in referenced
+                    and not is_link_status(status)
+                    and stat.S_ISREG(status.st_mode)
+                ):
                     Path(entry.path).unlink(missing_ok=True)
 
 

@@ -92,7 +92,8 @@ from core.database.errors import (
 from core.database.marker import (
     MarkerEntry,
     acquire_operation_lock,
-    maintenance,
+    maintenance_locked,
+    operation_lock,
     read_marker,
     register_database_locked,
     require_no_maintenance,
@@ -643,6 +644,31 @@ def restore_data_snapshot(
     describe.
     """
     data_dir = Path(data_dir)
+    with operation_lock(data_dir):
+        return _restore_data_snapshot_locked(
+            data_dir,
+            snapshot_dir,
+            specs=specs,
+            names=names,
+            documents=documents,
+            retire_unlisted=retire_unlisted,
+            cause=cause,
+            check_only=check_only,
+        )
+
+
+def _restore_data_snapshot_locked(
+    data_dir: Path,
+    snapshot_dir: Path,
+    *,
+    specs: Iterable[DatabaseSpec],
+    names: Iterable[str] | None,
+    documents: bool,
+    retire_unlisted: bool,
+    cause: str,
+    check_only: bool,
+) -> SnapshotRestore:
+    """Plan and restore while the caller continuously holds the operation lock."""
     marker = read_marker(data_dir)
     if marker is None:
         raise DatabaseFormatError(
@@ -691,41 +717,35 @@ def restore_data_snapshot(
             manifest.snapshot_id, selected, document_plan, retired, tuple(registered)
         )
     document_result: DocumentRestore | None = None
-    with maintenance(data_dir, RESTORE_OPERATION, resume=True):
-        lock = acquire_operation_lock(data_dir)
-        if lock is None:
-            raise DatabaseUnavailableError("the data-store operation lock is busy")
-        try:
-            detected_at = utc_now_timestamp()
-            for name in selected:
-                if not _restore_member_locked(
-                    data_dir,
-                    name,
-                    snapshot_dir,
-                    manifest,
-                    manifest.members[name],
-                    known_specs.get(name),
-                    cause=cause,
-                    failure_detected_at=detected_at,
-                ):
-                    raise DatabaseUnavailableError(
-                        f"the {name} member could not be restored; it is open or changed"
-                    )
-                if name in registered:
-                    member = manifest.members[name]
-                    register_database_locked(
-                        data_dir, name, MarkerEntry(member.database_id, member.format_generation)
-                    )
-            _retire_databases_locked(data_dir, retired)
-            if document_members is not None:
-                document_result = restore_documents(
-                    data_dir,
-                    snapshot_dir,
-                    document_members,
-                    quarantine_batch=_new_quarantine_path(data_dir, DOCUMENT_QUARANTINE_NAME),
+    with maintenance_locked(data_dir, RESTORE_OPERATION, resume=True):
+        detected_at = utc_now_timestamp()
+        for name in selected:
+            if not _restore_member_locked(
+                data_dir,
+                name,
+                snapshot_dir,
+                manifest,
+                manifest.members[name],
+                known_specs.get(name),
+                cause=cause,
+                failure_detected_at=detected_at,
+            ):
+                raise DatabaseUnavailableError(
+                    f"the {name} member could not be restored; it is open or changed"
                 )
-        finally:
-            lock.release()
+            if name in registered:
+                member = manifest.members[name]
+                register_database_locked(
+                    data_dir, name, MarkerEntry(member.database_id, member.format_generation)
+                )
+        _retire_databases_locked(data_dir, retired)
+        if document_members is not None:
+            document_result = restore_documents(
+                data_dir,
+                snapshot_dir,
+                document_members,
+                quarantine_batch=_new_quarantine_path(data_dir, DOCUMENT_QUARANTINE_NAME),
+            )
     _LOGGER.info(
         "Restored data snapshot (snapshot=%s databases=%s%s retired=%s registered=%s cause=%s)",
         manifest.snapshot_id,

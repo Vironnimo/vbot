@@ -11,6 +11,7 @@ import sqlite3
 import stat
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -626,6 +627,35 @@ def test_operator_restore_checks_the_request_and_every_selected_member_first(
     assert path.read_bytes() == original
     assert read_maintenance(data_dir) is None
     assert read_incident(data_dir, "notes") is None
+
+
+def test_operator_restore_excludes_other_operations_while_planning(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = snapshot_with_notes(data_dir, "saved")
+    planning = threading.Event()
+    proceed = threading.Event()
+    real_read = recovery_module.read_marker
+
+    def read(path: Path) -> Any:
+        marker = real_read(path)
+        planning.set()
+        assert proceed.wait(2)
+        return marker
+
+    monkeypatch.setattr(recovery_module, "read_marker", read)
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        restoring = workers.submit(restore_data_snapshot, data_dir, snapshot)
+        try:
+            assert planning.wait(2)
+            competing = acquire_operation_lock(data_dir, timeout=0.001)
+            if competing is not None:
+                competing.release()
+            assert competing is None
+        finally:
+            proceed.set()
+        assert restoring.result().databases == ("notes",)
+    assert read_maintenance(data_dir) is None
 
 
 def test_the_restore_id_changes_with_each_restore_and_survives_reopening(data_dir: Path) -> None:

@@ -25,6 +25,7 @@ successful activation the snapshot is stale.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,10 +41,11 @@ from core.database.errors import (
 from core.database.marker import (
     describe_missing_databases,
     marker_path,
+    operation_lock,
     read_maintenance,
     read_marker,
 )
-from core.database.recovery import SnapshotRestore, restore_data_snapshot
+from core.database.recovery import SnapshotRestore, _restore_data_snapshot_locked
 from core.database.snapshots import (
     create_data_snapshot,
     read_manifest,
@@ -211,31 +213,36 @@ def restore_update_snapshot(
     data_dir = Path(data_dir)
     specs = tuple(specs)
     snapshot_dir = snapshot_root(data_dir) / snapshot.snapshot_id
-    try:
-        _require_restorable(data_dir, snapshot_dir, snapshot)
-        restore_data_snapshot(
+    with ExitStack() as operation:
+        try:
+            operation.enter_context(operation_lock(data_dir))
+            _require_restorable(data_dir, snapshot_dir, snapshot)
+            _restore_data_snapshot_locked(
+                data_dir,
+                snapshot_dir,
+                specs=specs,
+                names=None,
+                documents=True,
+                retire_unlisted=True,
+                cause=cause,
+                check_only=True,
+            )
+        except UpdateRollbackRefusedError:
+            raise
+        except (DatabaseError, OSError, ValueError) as exc:
+            raise UpdateRollbackRefusedError(
+                f"the pre-update snapshot {snapshot.snapshot_id} cannot be restored: {exc}"
+            ) from exc
+        return _restore_data_snapshot_locked(
             data_dir,
             snapshot_dir,
             specs=specs,
+            names=None,
             documents=True,
             retire_unlisted=True,
             cause=cause,
-            check_only=True,
+            check_only=False,
         )
-    except UpdateRollbackRefusedError:
-        raise
-    except (DatabaseError, OSError, ValueError) as exc:
-        raise UpdateRollbackRefusedError(
-            f"the pre-update snapshot {snapshot.snapshot_id} cannot be restored: {exc}"
-        ) from exc
-    return restore_data_snapshot(
-        data_dir,
-        snapshot_dir,
-        specs=specs,
-        documents=True,
-        retire_unlisted=True,
-        cause=cause,
-    )
 
 
 def _require_restorable(data_dir: Path, snapshot_dir: Path, snapshot: UpdateSnapshot) -> None:
