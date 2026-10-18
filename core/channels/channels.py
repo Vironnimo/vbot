@@ -39,6 +39,7 @@ from core.config_validation import (
 from core.extensions import InteractionButton, InteractionEvent, InteractionResponder
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.agents.agents import AgentStore
@@ -1553,31 +1554,23 @@ def _with_migrated_chat_id(
 
 
 async def _settle(work: Awaitable[object], failure_message: str) -> None:
-    """Await ``work`` to its end even when cancelled meanwhile, then re-raise the cancellation.
-
-    A failure of ``work`` is logged with ``failure_message``, not raised: this
-    runs compensation while another exception is already propagating.
-    """
+    """Finish compensation before cancellation, logging its failure without replacing the cause."""
     task = asyncio.ensure_future(work)
-    cancelled = False
-    while not task.done():
+    if task.cancelled():
+        return
+
+    async def compensate() -> None:
         try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            cancelled = True
-        except Exception:
-            break
-    if not task.cancelled():
-        error = task.exception()
-        if error is not None:
+            await task
+        except Exception as error:
             _LOGGER.error(
                 "%s: %s",
                 failure_message,
                 error,
                 exc_info=(type(error), error, error.__traceback__),
             )
-    if cancelled:
-        raise asyncio.CancelledError
+
+    await settle_before_cancelling(compensate())
 
 
 def _get_running_loop_or_none() -> asyncio.AbstractEventLoop | None:

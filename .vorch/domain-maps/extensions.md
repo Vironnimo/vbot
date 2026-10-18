@@ -40,6 +40,8 @@ Core cross-cutting terms live in `.vorch/GLOSSARY.md`; these terms are specific 
 
 ## Cross-task contracts
 
+The package facade loads public exports on first access and caches their identity; lightweight imports such as OAuth redirects do not load the registry, discovery or management stack.
+
 Runtime callback dispatch uses `invoke_extension_handler`: synchronous lifecycle, Hook, Command, Interaction, and Extension Tool handlers run in bounded workers, while coroutine handlers stay on the Event Loop and must yield normally. Ordinary Hook/lifecycle/interaction dispatch remains ordered and fail-open. Hook and interaction dispatch warn after at least one second wall time; this is diagnostic, not a timeout or cancellation mechanism. Successful startup and shutdown do not emit duration warnings; lifecycle exceptions remain error logs. Waits for startup, shutdown and Session-owner quiesce have a hard deadline (`invoke_lifecycle_handler`, 30 s each), so no Extension can hold startup, reload, disable or shutdown indefinitely, nor a Settings save that waits for them (`extensions/management.md` -> Startup and shutdown). Required Session runtime callbacks propagate failures and revalidate their exact registration after awaits.
 
 - `ExtensionAPI` is the declaration facade. `api.config` is the register-time snapshot for structural choices; `api.get_config()` and `api.resolve_credential()` are live per-call reads for values that can change without rebuilding code.
