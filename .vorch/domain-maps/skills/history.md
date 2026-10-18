@@ -49,3 +49,5 @@ Conflict rule (conservative): a revision is refused while a later revision outsi
 ## Tests
 
 `tests/core/skills/test_skill_history.py` (format, outside changes, background rules, pins, archive, revert), `tests/core/tools/test_skill_manage.py` (background guards, `absorbed_into`), `tests/core/tools/test_skill.py` (archived names), `tests/server/rpc/test_skill_methods.py`, `tests/cli/test_cli_skill.py`, and the WebUI `components/skills/__tests__/skillsView.test.js`.
+
+`SkillRevision.attended` identifies revisions by a person, an attended Agent or an outside edit; the Librarian uses it for activity without importing private actor literals.

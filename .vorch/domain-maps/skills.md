@@ -80,8 +80,6 @@ Write scope (v1 is data-dir only - vBot never writes the repo as runtime state):
 
 ## Interfaces
 
-- `resolve_package_resource(root, resource)` resolves a portable package-relative resource, refusing generated/internal paths and resolved escapes before the reader checks existence or content. `SkillRevision.attended` identifies revisions whose writers count as attended activity for Skill aging.
-
 - `core/skills/runtime.py::SkillRuntime` owns global scan layers, Project/Agent/shared resolution, manager inventory and scoped registry caches; `Runtime` exposes delegates and only recomposes Tools/Prompts after a registry replacement.
 - `Runtime.refresh_skills_for(project_id, identity_agent_id=None)` is the explicit Compaction refresh seam (full reload plus invalidation); normal consumers use cached `skills_for(...)` and must not imitate rescans.
 - `format_skill_catalog_entries` renders the one path-free catalog text of the `skill` Tool's list, the `core:skills` block and the new-Skill reminder: only available+allowed Skills of the registry live activation uses (`skills/loading.md` -> Catalog rendering).

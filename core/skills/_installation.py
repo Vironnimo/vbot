@@ -212,7 +212,7 @@ def install_package(
             )
         destination.parent.mkdir(parents=True, exist_ok=True)
         history = SkillHistory(destination.parent)
-        authoring._observe(history, name, destination if exists else None, writer)
+        authoring._revisions._observe(history, name, destination if exists else None, writer)
         # The temporary directory is a sibling, guaranteeing publication on one filesystem.
         transaction = Path(tempfile.mkdtemp(prefix=".skill-install-", dir=destination.parent))
         preserve_backup = False
@@ -263,9 +263,9 @@ def install_package(
                         )
                     # On a failed write, preserve the original error and leave residue inert.
         if exists:
-            revision = authoring._commit(history, name, destination, writer, "change")
+            revision = authoring._revisions._commit(history, name, destination, writer, "change")
         else:
-            revision = authoring._commit(
+            revision = authoring._revisions._commit(
                 history, name, destination, writer, "create", origin=writer.actor
             )
         return replace_result(result, revision=revision)
