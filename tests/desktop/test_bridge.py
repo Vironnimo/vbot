@@ -15,14 +15,15 @@ import pytest
 from desktop import connection as desktop_connection
 from desktop.bridge import BridgeError, DesktopBridge, configure_bridge_logging
 from desktop.connection import ConnectionController
-from desktop.main import DesktopProbeResult, DesktopTarget
 from desktop.page_events import PageEventDispatcher
 from desktop.page_permissions import PagePermissions
+from desktop.probe import DesktopProbeResult, DesktopTarget
 from desktop.restart import RestartError
 from desktop.speech.microphone import MicrophoneService
 from desktop.system_actions import DesktopSystemActions
 from desktop.wakeword.config import VoiceConfigError
-from desktop.wakeword.controller import VoiceControlError, VoiceController
+from desktop.wakeword.contracts import VoiceControlError
+from desktop.wakeword.controller import VoiceController
 from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordModelError
 
 VOICE_METHODS = {

@@ -29,8 +29,11 @@ from desktop import settings as desktop_settings
 from desktop.speech.capture import AudioCapture, CaptureStatus
 from desktop.speech.microphone import MicrophoneService
 from desktop.wakeword.config import PhraseConfig, VoiceConfigError
-from desktop.wakeword.controller import VoiceControlError, VoiceController, VoiceRuntime
+from desktop.wakeword.contracts import VoiceControlError
+from desktop.wakeword.controller import VoiceController
 from desktop.wakeword.detection import DETECTION_CHUNK_SAMPLES
+from desktop.wakeword.listener import VoiceRuntime
+from desktop.wakeword.server_client import VoiceServerClient
 from tests.desktop.speech.speech_test_support import (
     FakeEchoStage,
     FakeInputStream,
@@ -774,13 +777,38 @@ def test_an_active_phrase_whose_model_is_gone_can_still_be_removed(
     assert [phrase["model_id"] for phrase in status["phrases"]] == [OKAY]
 
 
+@pytest.mark.parametrize("checking", [False, True], ids=["ready", "check-in-flight"])
 def test_a_routing_change_applies_without_reopening_the_microphone(
     voice_rig: Callable[..., Rig],
+    monkeypatch: pytest.MonkeyPatch,
+    checking: bool,
 ) -> None:
-    rig = voice_rig()
-    rig.wait_ready()
+    entered = threading.Event()
+    release = threading.Event()
+    calls: list[None] = []
+    original = VoiceServerClient.speech_readiness
 
-    status = rig.voice.update_config({"default_session_behavior": "new"})
+    def check(client: VoiceServerClient) -> str | None:
+        calls.append(None)
+        result = original(client)
+        entered.set()
+        assert release.wait(2), "test did not release the readiness check"
+        return result
+
+    if checking:
+        monkeypatch.setattr(VoiceServerClient, "speech_readiness", check)
+    rig = voice_rig()
+    try:
+        if checking:
+            wait_until(entered.is_set)
+        else:
+            rig.wait_ready()
+        status = rig.voice.update_config({"default_session_behavior": "new"})
+    finally:
+        release.set()
+    if checking:
+        wait_until(lambda: len(calls) >= 2, message="routing did not repeat the in-flight check")
+    rig.wait_ready()
     rig.say_command()
     sent = rig.sink.wait_for_event("sent")
 
