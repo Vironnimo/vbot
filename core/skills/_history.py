@@ -156,6 +156,11 @@ class SkillRevision:
     followed: tuple[SkillReference, ...] = ()
 
     @property
+    def attended(self) -> bool:
+        """Whether a person, attended Agent, or outside edit made this revision."""
+        return self.actor in {"human", "agent", EXTERNAL_ACTOR}
+
+    @property
     def moves(self) -> bool:
         """Whether the revision started, ended or moved the Skill's live package."""
         return self.kind in ("baseline", "create") or self.live is not None

@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from core.runtime.runtime import Runtime
-from core.skills import authoring as authoring_module
+from core.skills import _authoring_documents as authoring_module
 from core.skills.authoring import HUMAN_WRITER
 from core.skills.policy import SkillPackageRef
 from core.tools import SKILL_MANAGE_TOOL_NAME, ToolContext

@@ -52,9 +52,9 @@ def _stop_at_next_wait(
 
 async def _run(service: CronService, job: CronJob) -> None:
     if job.schedule_type == "once":
-        await service._run_once_job(job)
+        await service._scheduler._run_once_job(job)
     else:
-        await service._run_recurring_job(job, job.schedule_type)
+        await service._scheduler._run_recurring_job(job, job.schedule_type)
 
 
 _SCHEDULES: dict[str, tuple[dict[str, Any], int]] = {
@@ -180,7 +180,7 @@ async def test_a_fire_delayed_before_admission_reports_its_actual_start(
 
         monkeypatch.setattr(service._run_slots, "acquire", observed_acquire)
     else:
-        save = service._save_jobs_after_fire
+        save = service._execution._save_jobs_after_fire
 
         async def delayed_save(job_id: str) -> bool:
             if not waiting.is_set():
@@ -188,7 +188,7 @@ async def test_a_fire_delayed_before_admission_reports_its_actual_start(
                 await resume.wait()
             return await save(job_id)
 
-        monkeypatch.setattr(service, "_save_jobs_after_fire", delayed_save)
+        monkeypatch.setattr(service._execution, "_save_jobs_after_fire", delayed_save)
 
     try:
         service.start()

@@ -363,7 +363,7 @@ def _kill_on_write(store: AgentStore, monkeypatch: pytest.MonkeyPatch, agent_id:
 
 
 def _kill_on_order(store: AgentStore, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(store, "_write_agent_order", _die)
+    monkeypatch.setattr(store._roster, "_write_agent_order", _die)
 
 
 _KILL_POINTS: dict[str, Callable[[AgentStore, pytest.MonkeyPatch], None]] = {

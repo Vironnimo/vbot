@@ -48,6 +48,8 @@ The format-neutral repository definition supplied by a Source adapter: Agent id,
 
 **Not:** An Agent type, Project membership, a Working Project or default Project, or a current-working-directory change; an explicit load changes none of those, and every one-shot `bash` call must set `workdir` again.
 
+`resolver.py` keeps the public resolution facade and Identity/Config/temporary Agent chains. `_session_resolution.py` owns Session overrides and Working Project binding, `_team_resolution.py` owns fresh Profiles, Team scans and translation, and `_project_context.py` owns prompt/Skill scope projection; they remain internal parts of the resolver.
+
 ## Boundary & Invariants
 
 - `project_id` is stable and names the Project Anchor; `cwd` is a mutable pointer to the repository. Repository equality and working-directory equality never establish Project identity.

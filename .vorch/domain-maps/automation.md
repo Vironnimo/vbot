@@ -14,6 +14,8 @@ An objective the user sets for one Session with `/goal`. While it is active, the
 
 ## Interfaces
 
+- `CronProjection` is the public detached Cron projection used by Calendar consumers; it carries no mutation authority.
+
 - `TriggerService` is DI-wired with the Runtime's one ChatLoop; programmatic Runs stream through the same SSE path as normal sends.
 - Calendar events drive Cron jobs of schedule type `event` (Conventions -> Event jobs); the calendar keeps events only and runs nothing (`calendar.md`). `CronService` reads it through the narrow `EventCalendar` protocol (`_cron_events.py`: `get_event`, `iter_occurrences`, `system_timezone_name`, `add_changed_callback`) and serves the calendar's `EventJobs` protocol (`core/calendar/event_jobs.py`: `check_event_change`, `event_deleted`). Runtime builds the calendar first, passes it as `CronService(calendar=)` and binds the service back with `CalendarService.bind_event_jobs`; the calendar never imports automation.
 - `trigger_run(...)` starts or queues through the trigger loop, forwarding reply surface, static Tool ceiling, live denial resolver, per-Run Tool-iteration limit, persistence hook, Run origin/kind, and activity policy through every admission path. No `session_id` creates a Session only after target/model/provider preflight passes, so a rejected trigger never leaves an empty Session. That path also accepts the new Session's `working_project_id` and creation `actor`, passing both to Chat's owning admission method. Channels supply `RunKind.CHANNEL`, Cron `RunKind.CRON`, Bootstrap internal `RunKind.SYSTEM` with activity disabled; `internal=True` persists a note instead of a visible turn. Attention opt-out is explicit - neither `internal` nor run kind alone implies exclusion.

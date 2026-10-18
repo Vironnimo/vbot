@@ -103,7 +103,7 @@ Profile Skill rules narrow the effective Skills. Permitted available preloads in
 - `session_working_project_async(address)` does the same for one Session address (a missing Session: the Workspace); Sub-Agent `send` uses it (`subagents.md`).
 - Chat admission and Compaction, prompt preview, `chat.commands`, `files.list` and `@`-mentions, `session.create` and commands for a new Session resolve through these; Runtime's Extension cwd, which has no Session, uses `new_session_working_project`. `resolve_prompt_project` validates the resolved Project's repository for the prompt, and `resolve_skill_scope` uses that same Project for Project Skills.
 
-Texts (Agent- and user-visible; `_runtime_agent.py`, `resolver.py`):
+Texts (Agent- and user-visible; `_runtime_agent.py`, `_session_resolution.py`):
 
 - `WORKING_PROJECT_MISSING_MESSAGE`: `This Session works in Project {project_id}, which no longer exists. Restore the Project to continue this Session, or start a new Session.`
 - `DEFAULT_PROJECT_MISSING_MESSAGE`: `Agent {agent_id} starts new Sessions in Project {project_id}, which no longer exists. Choose another default Project for the Agent.`
@@ -127,7 +127,7 @@ and `tests/core/runtime/test_runtime_extension_host.py`.
 
 ## Source & Tests
 
-- Resolution orchestration and working-Project helpers: `core/projects/resolver.py`
+- Resolution orchestration: `core/projects/resolver.py`; Session overrides and Working Project binding: `_session_resolution.py`; Team freshness and translation: `_team_resolution.py`; prompt/Skill scopes: `_project_context.py`
 - Resolved Agent contracts and Session Agent overrides: `core/projects/_runtime_agent.py`
 - Capability ceilings, scalar fallback and effective provenance: `core/projects/_resolution_values.py`
 - Model usability and Connection gating: `ModelConfigurationChecker` in `core/projects/_model_configuration.py` (public imports remain available through `core.projects` and `resolver.py`)

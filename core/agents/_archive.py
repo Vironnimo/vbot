@@ -57,6 +57,7 @@ from core.utils.tree_move import move_tree
 if TYPE_CHECKING:
     from core.agents.agents import AgentStore
 
+
 _LOGGER = get_logger("agents")
 
 # One removed or restored delegation grant: the holder's id and immutable
@@ -77,7 +78,7 @@ def archive_files(store: AgentStore, agent_id: str, tree: Path) -> Iterator[Arch
             raise BuiltinAgentError(f"The {agent.name} is built into vBot and cannot be deleted")
         _delegation.retire(store, agent_id)
         agent = store._read_agent_config(store._require_agent_path(agent_id))
-        order = store._load_agent_order()
+        order = store._roster._load_agent_order()
         roster_index = (
             order.agent_ids.index(agent_id)
             if order is not None and agent_id in order.agent_ids
@@ -188,7 +189,7 @@ def restore_target_problem(store: AgentStore, target_id: str) -> str | None:
         target_id.casefold() in BUILTIN_AGENT_IDS.values()
         or has_id_entry(store.data_dir / "agents", target_id)
         or os.path.lexists(store._agent_dir(target_id))
-        or target_id in store._pending_rename_ids()
+        or target_id in store._renames._pending_rename_ids()
     ):
         return "agent_id_taken"
     return None
@@ -435,14 +436,14 @@ def place_in_roster(store: AgentStore, agent_id: str, index: int | None) -> None
     with store._change():
         try:
             store.list_with_order()
-            order = store._load_agent_order()
+            order = store._roster._load_agent_order()
             if order is None or index is None:
                 return
             agent_ids = [item for item in order.agent_ids if item != agent_id]
             agent_ids.insert(min(max(index, 0), len(agent_ids)), agent_id)
             if tuple(agent_ids) == order.agent_ids:
                 return
-            store._write_agent_order(
+            store._roster._write_agent_order(
                 _AgentOrderDocument(agent_ids=tuple(agent_ids), revision=order.revision + 1)
             )
         except (AgentError, OSError) as error:

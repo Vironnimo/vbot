@@ -16,6 +16,8 @@ import pytest
 
 import core.automation.cron as cron_module
 from core.automation import _cron_claims as cron_claims
+from core.automation import _cron_execution as cron_execution
+from core.automation import _cron_scheduler as cron_scheduler
 from core.automation import _cron_timing as cron_timing
 from core.automation.cron import (
     CronJobInPastError,
@@ -62,7 +64,7 @@ async def test_start_creates_tasks_for_active_jobs_only(
         except asyncio.CancelledError:
             raise
 
-    monkeypatch.setattr(service, "_run_recurring_job", hold_cron_task)
+    monkeypatch.setattr(service._scheduler, "_run_recurring_job", hold_cron_task)
 
     # Act
     service.start()
@@ -100,7 +102,7 @@ async def test_cron_service_aclose_awaits_cancelled_job_tasks(
             cancelled.set()
             raise
 
-    monkeypatch.setattr(service, "_run_recurring_job", hold_cron_task)
+    monkeypatch.setattr(service._scheduler, "_run_recurring_job", hold_cron_task)
 
     service.start()
     await asyncio.wait_for(started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
@@ -138,7 +140,7 @@ async def test_unexpected_scheduler_task_failure_restarts_active_recurring_job(
         restarted.set()
         await asyncio.Future()
 
-    monkeypatch.setattr(service, "_run_recurring_job", fail_scheduler_task)
+    monkeypatch.setattr(service._scheduler, "_run_recurring_job", fail_scheduler_task)
 
     with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
         service.start()
@@ -178,7 +180,7 @@ async def test_run_once_job_fires_in_its_project_and_marks_completed(
 
     # Act
     with caplog.at_level(logging.INFO, logger="vbot.automation.cron"):
-        await service._run_once_job(job)
+        await service._scheduler._run_once_job(job)
 
     # Assert
     trigger_service.trigger_run.assert_awaited_once_with(
@@ -215,7 +217,7 @@ async def test_trigger_waits_for_run_and_records_execution_health(tmp_path: Path
         cron_expression="0 9 * * *",
     )
 
-    succeeded = await service._trigger_job_run(job)
+    succeeded = await service._execution._trigger_job_run(job)
 
     assert succeeded is True
     run.wait.assert_awaited_once_with()
@@ -240,8 +242,8 @@ async def test_persistent_save_failure_does_not_hang_the_firing_task(
     fired state unpersisted for as long as the storage fault lasted.
     """
     service, trigger_service = make_service(tmp_path)
-    monkeypatch.setattr(cron_module, "_POST_FIRE_SAVE_MAX_ATTEMPTS", 2)
-    monkeypatch.setattr(cron_module, "_POST_FIRE_SAVE_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(cron_execution, "_POST_FIRE_SAVE_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(cron_execution, "_POST_FIRE_SAVE_RETRY_SECONDS", 0.0)
     run = SimpleNamespace(id="run-one", wait=AsyncMock(return_value=None))
     trigger_service.trigger_run.return_value = run
     job = await service.create_job(
@@ -257,7 +259,7 @@ async def test_persistent_save_failure_does_not_hang_the_firing_task(
     monkeypatch.setattr(service, "_write_jobs", broken_write)
 
     with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
-        succeeded = await asyncio.wait_for(service._trigger_job_run(job), timeout=5)
+        succeeded = await asyncio.wait_for(service._execution._trigger_job_run(job), timeout=5)
 
     assert succeeded is True
     assert service.get_job(job.id).last_outcome == "success"
@@ -324,7 +326,7 @@ async def test_recurring_job_stops_after_consecutive_failures(
     remaining_runs: int,
 ) -> None:
     service, trigger_service = make_service(tmp_path)
-    monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
+    monkeypatch.setattr(cron_execution, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
     arrange(trigger_service)
     job = await service.create_job(
         agent_id="agent-one",
@@ -337,9 +339,9 @@ async def test_recurring_job_stops_after_consecutive_failures(
     )
 
     with caplog.at_level(logging.WARNING, logger="vbot.automation.cron"):
-        assert await service._trigger_job_run(job) is False
+        assert await service._execution._trigger_job_run(job) is False
         assert service.get_job(job.id).status == "active"
-        assert await service._trigger_job_run(job) is False
+        assert await service._execution._trigger_job_run(job) is False
 
     updated = service.get_job(job.id)
     assert updated.status == "failed"
@@ -384,7 +386,7 @@ async def test_pre_admission_trigger_failures_neither_stop_nor_consume_a_recurri
     burning the fatal budget.
     """
     service, trigger_service = make_service(tmp_path)
-    monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
+    monkeypatch.setattr(cron_execution, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
     trigger_service.trigger_run.side_effect = error
     job = await service.create_job(
         agent_id="agent-one",
@@ -395,7 +397,7 @@ async def test_pre_admission_trigger_failures_neither_stop_nor_consume_a_recurri
     )
 
     for _ in range(5):
-        assert await service._trigger_job_run(job) is False
+        assert await service._execution._trigger_job_run(job) is False
 
         updated = service.get_job(job.id)
         assert updated.status == "active"
@@ -428,7 +430,7 @@ async def test_run_once_job_retries_trigger_failure_without_completing(
     trigger_service.trigger_run.side_effect = [RuntimeError("boom"), None]
 
     # Act
-    await service._run_once_job(job)
+    await service._scheduler._run_once_job(job)
 
     # Assert
     assert trigger_service.trigger_run.await_count == 2
@@ -463,15 +465,15 @@ async def test_run_once_job_abandons_after_attempt_limit_with_backoff(
     trigger_service.trigger_run.side_effect = RuntimeError("agent deleted")
 
     # Act
-    await service._run_once_job(job)
+    await service._scheduler._run_once_job(job)
 
     # Assert: a permanently failing once job stops after the attempt cap instead
     # of looping forever, backing off exponentially between attempts.
-    assert trigger_service.trigger_run.await_count == cron_module._ONCE_MAX_FIRE_ATTEMPTS
+    assert trigger_service.trigger_run.await_count == cron_scheduler._ONCE_MAX_FIRE_ATTEMPTS
     backoff_delays = [delay for delay in sleep_delays if delay > 0]
     expected_backoff = [
         cron_timing._once_retry_delay(attempt)
-        for attempt in range(1, cron_module._ONCE_MAX_FIRE_ATTEMPTS)
+        for attempt in range(1, cron_scheduler._ONCE_MAX_FIRE_ATTEMPTS)
     ]
     assert backoff_delays == expected_backoff
     updated = service.get_job(job.id)
@@ -490,7 +492,7 @@ async def test_failed_once_job_can_be_re_enabled(tmp_path: Path) -> None:
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
     )
-    await service._abandon_once_job(job.id, cron_module._ONCE_MAX_FIRE_ATTEMPTS)
+    await service._scheduler._abandon_once_job(job.id, cron_scheduler._ONCE_MAX_FIRE_ATTEMPTS)
     assert service.get_job(job.id).status == "failed"
 
     # Act: unlike a completed job, a failed job can be re-enabled to retry.
@@ -577,7 +579,7 @@ async def test_run_once_job_retries_completed_save_without_refiring(
     monkeypatch.setattr(service, "_write_jobs", fail_first_save_after_fire)
 
     # Act
-    await service._run_once_job(job)
+    await service._scheduler._run_once_job(job)
 
     # Assert
     trigger_service.trigger_run.assert_awaited_once_with(
@@ -615,7 +617,7 @@ async def test_start_completes_claimed_once_job_without_refiring(
     def fail_if_once_task_starts(_job: cron_module.CronJob) -> None:
         raise AssertionError("claimed once job should not start")
 
-    monkeypatch.setattr(restarted_service, "_start_job_task", fail_if_once_task_starts)
+    monkeypatch.setattr(restarted_service._scheduler, "_start_job_task", fail_if_once_task_starts)
 
     # Act
     restarted_service.start()
@@ -662,7 +664,7 @@ async def test_start_holds_only_the_once_job_with_an_unreadable_fire_claim(
     claim_path.write_bytes(claim_bytes)
     restarted_service, restarted_trigger_service = make_service(tmp_path)
     start_job_task = Mock()
-    monkeypatch.setattr(restarted_service, "_start_job_task", start_job_task)
+    monkeypatch.setattr(restarted_service._scheduler, "_start_job_task", start_job_task)
 
     with caplog.at_level(logging.WARNING, logger="vbot.automation.cron"):
         restarted_service.start()
@@ -700,7 +702,7 @@ async def test_start_keeps_cron_available_when_reconciliation_save_fails(
     cron_claims.write(service._once_fire_claims_dir, claimed, datetime.now(UTC).isoformat())
     restarted_service, restarted_trigger_service = make_service(tmp_path)
     start_job_task = Mock()
-    monkeypatch.setattr(restarted_service, "_start_job_task", start_job_task)
+    monkeypatch.setattr(restarted_service._scheduler, "_start_job_task", start_job_task)
     real_save = restarted_service._save_jobs
     monkeypatch.setattr(
         restarted_service, "_save_jobs", Mock(side_effect=CronStorageError("disk busy"))
@@ -738,13 +740,13 @@ async def test_removed_queued_fire_settles_without_killing_scheduler(
     trigger.trigger_run.side_effect = RunCancelledError("removed")
     if schedule_type == "once":
         monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock(return_value=True))
-        await service._run_once_job(job)
+        await service._scheduler._run_once_job(job)
         assert service.get_job(job.id).status == "failed"
         assert not list(service._once_fire_claims_dir.glob("*.json"))
     else:
-        assert await service._trigger_job_run(job) is False
+        assert await service._execution._trigger_job_run(job) is False
         assert service.get_job(job.id).status == "active"
-        assert await service._trigger_job_run(job) is False
+        assert await service._execution._trigger_job_run(job) is False
         assert trigger.trigger_run.await_count == 2
 
 
@@ -824,7 +826,7 @@ async def test_fire_saves_off_the_loop_and_an_edit_lands_after_them(
     )
     writes = _BlockedJobWrites(monkeypatch)
 
-    firing = asyncio.create_task(service._trigger_job_run(job))
+    firing = asyncio.create_task(service._execution._trigger_job_run(job))
     try:
         assert await asyncio.to_thread(writes.entered.wait, 5)
         assert not firing.done()
@@ -891,7 +893,7 @@ async def test_job_paused_during_the_fire_save_does_not_fire(
     )
     writes = _BlockedJobWrites(monkeypatch)
 
-    firing = asyncio.create_task(service._trigger_job_run(job))
+    firing = asyncio.create_task(service._execution._trigger_job_run(job))
     try:
         assert await asyncio.to_thread(writes.entered.wait, 5)
         editing = asyncio.create_task(service.update_job(job.id, status="paused"))

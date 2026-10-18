@@ -4,6 +4,8 @@ How Skill packages are scanned, parsed and checked: `SkillRegistry.load` and its
 
 ## Scans and registry caches
 
+`runtime.py` retains scoped registries, cache publication and sharing. `_global_scanning.py` owns global root ordering, policy exclusions and scans; `_inventory.py` owns manager inventory, package selection/disable and access projections, using the same runtime registry builders.
+
 Non-obvious `SkillRegistry.load` behaviors: a scan root whose own path contains `SKILL.md` is a **package root** contributing exactly that package (how shared layers insert without scanning an owner's home); missing roots contribute nothing and one root's enumeration failure degrades to diagnostics without blocking startup; `environment` snapshots requirement-check inputs (defaults `os.environ`); `excluded_packages` (resolved Skill home, name) pairs skip exactly those packages before they claim their name, so a later root's same-named package loads, and keep them readable via `excluded_skills()` - runtime passes the Skill Policy's turned-off packages, editor loads omit them; `allowlist_exclusions` (Agent Skill Exclusions) instead keeps packages loaded and only narrows the allowlist grant.
 
 An Identity Agent with exclusions always resolves such a scoped registry; the per-(Project, Agent) cache entry is reused only while it carries the Agent's current `excluded_skills`, so `agent.update` or a hand edit of `agent.json` needs no explicit invalidation (`test_runtime_skills.py`).
@@ -15,6 +17,8 @@ Scoped Project/Agent scans publish only if no invalidation or credential refresh
 Shared layers are package roots inserted between the Project and global layers in sorted order (owner id, then Skill name), so first-found among same-named shared Skills is deterministic.
 
 `SkillScan` shares source discovery and parsed metadata within one operation, never across refreshes; scoped registry builds reuse its reads for their name sets and shared packages (the inventory's use: `skills/manager.md`). Resource discovery (`core/skills/skills.py::scan_skill_resources`) excludes generated/VCS directories, links (Windows junctions included) and internal install receipts.
+
+`core.skills.resolve_package_resource(root, resource)` resolves a portable package-relative resource, refusing generated/internal paths and resolved escapes before the reader checks existence or content. It preserves confined redirects; read/paging errors remain with the Tool.
 
 ## Catalog rendering
 

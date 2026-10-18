@@ -10,7 +10,7 @@ from typing import Any, Literal, override
 
 import pytest
 
-import core.memory.memory as memory_module
+import core.memory._file_backend as memory_module
 from core.agents import AgentStore
 from core.memory import MemoryError
 from core.memory._history import MemoryHistory

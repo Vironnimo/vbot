@@ -122,7 +122,7 @@ async def test_each_occurrence_runs_the_prompt_once_with_the_event_as_context(
     job = await _event_job(services, event.id, "start - 30m")
     _let_time_pass(services, job.id, monkeypatch, until=_local("2030-01-20T00:00"))
 
-    await services.cron._run_event_job(job)
+    await services.cron._scheduler._run_event_job(job)
 
     calls = services.trigger.trigger_run.await_args_list
     assert [call.args for call in calls] == [("agent-one", _PROMPT, None)] * 2
@@ -200,7 +200,7 @@ async def test_an_occurrence_missed_while_vbot_was_off_starts_late_while_its_win
     services.clock.now = _local(back_at)
     _let_time_pass(services, job.id, monkeypatch, until=services.clock.now)
 
-    await services.cron._run_event_job(job)
+    await services.cron._scheduler._run_event_job(job)
 
     assert [text.split(" to ")[0] for text in _event_times(services)] == fired
     assert all("is starting late" in note for note in _notes(services))
@@ -215,7 +215,7 @@ async def test_an_occurrence_due_before_the_job_existed_is_not_owed(
     job = await _event_job(services, event.id, "start - 1h")
     waits = _let_time_pass(services, job.id, monkeypatch, until=_local("2030-02-01T00:00"))
 
-    await services.cron._run_event_job(job)
+    await services.cron._scheduler._run_event_job(job)
 
     services.trigger.trigger_run.assert_not_awaited()
     # Nothing lies ahead: the job waits for a calendar change and can no longer fire.
@@ -238,7 +238,7 @@ async def test_changed_and_removed_occurrences_move_or_skip_the_job(
     await services.calendar.delete_occurrence(f"{event.id}_20300121T0900", actor="test")
     _let_time_pass(services, job.id, monkeypatch, until=_local("2030-02-01T00:00"))
 
-    await services.cron._run_event_job(job)
+    await services.cron._scheduler._run_event_job(job)
 
     assert [text.split(" to ")[0] for text in _event_times(services)] == [
         "2030-01-07T09:00",
@@ -272,7 +272,7 @@ async def test_a_calendar_change_wakes_the_job_to_follow_a_moved_event(
 
     monkeypatch.setattr(cron_timing, "_sleep_until_utc", wait)
 
-    await services.cron._run_event_job(job)
+    await services.cron._scheduler._run_event_job(job)
 
     assert woken == [True]
     assert waits[:2] == [_local("2030-01-10T15:00"), _local("2030-01-10T17:00")]
@@ -313,7 +313,7 @@ async def test_event_admission_rechecks_the_occurrence_after_waiting(
 
     monkeypatch.setattr(cron_timing, "_sleep_until_utc", reach_first_due)
     saving, release = asyncio.Event(), asyncio.Event()
-    save = services.cron._save_jobs_after_fire
+    save = services.cron._execution._save_jobs_after_fire
     first = True
 
     async def held_save(job_id: str) -> bool:
@@ -329,7 +329,7 @@ async def test_event_admission_rechecks_the_occurrence_after_waiting(
         for _ in range(4):
             await services.cron._run_slots.acquire()
     else:
-        monkeypatch.setattr(services.cron, "_save_jobs_after_fire", held_save)
+        monkeypatch.setattr(services.cron._execution, "_save_jobs_after_fire", held_save)
     # Establish a settled scan before the selected occurrence comes due.
     services.clock.now = _local("2030-01-10T08:30")
     services.cron.start()
