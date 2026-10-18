@@ -1,10 +1,15 @@
 # Channel Send Tool
 
+`core/tools/channel.py` retains registration, preparation and delivery orchestration.
+`_channel_targets.py` owns Channel selection and destination resolution;
+`_channel_payloads.py` owns file, button and checklist payload validation and uses
+Attachments' public `sniff_media_type` operation.
+
 Sends messages and every file delivery through the calling Agent's messaging Channels.
 
 ## Interfaces
 
-- Tool name: `channel_send`. Source: `core/tools/channel.py` (handler, profile, Channel and target resolution, file reading) and `core/tools/_channel_send_arguments.py` (context-free argument reading, refusal and call rendering).
+- Tool name: `channel_send`. `core/tools/_channel_send_arguments.py` owns context-free argument reading, refusal and call rendering.
 - Registration: `register_channel_send_tool(registry, channel_service, chat_sessions, *, max_attachment_size_bytes)` - the runtime passes the active `AttachmentStore.max_size_bytes` (the `attachment_max_size_bytes` setting).
 - Canonical schema: one open flat object without `required`: `channel_id`, `message`, `platform_target`, `thread_id`, `file_paths`, `buttons`, `checklist`, `done_label`. `channel_id` may be omitted when the Agent owns exactly one enabled Channel. The handler requires at least one of `message` or `file_paths`, refuses buttons or a checklist together with files, and refuses fields the selected Channel's platform does not support. Unadvertised parameters (`unadvertised_parameters`, never in the Provider definition): `action` (`send` | `list`), `channel` (a Channel id or platform name) and `target` (`chat`, `channel`, `channel:chat` or `channel:chat:thread`, where `channel` is an owned Channel id or a platform name). Unknown keys follow the shared dispatch rule (`tools.md` -> Unknown fields).
 - Model-facing profile: built deterministically from the platforms of the calling Agent's persisted enabled Channel configs; it shows those platforms' fields and never names a Channel. The Agent's Channels are listed by the System Prompt block `core:channels`, which is pinned per prompt epoch and announces added or removed Channels (`prompts.md`, `chat/request-building.md` -> Dynamic prompt blocks per prompt epoch). Fields per platform (`_CHANNEL_PROFILE_FIELDS`): Telegram all eight; Slack and Mattermost all but `buttons`, `checklist` and `done_label`; Discord and WhatsApp `channel_id`, `message`, `platform_target`, `file_paths`. Mixed profiles expose the union. No profile emits `oneOf`, conditional schemas, or `additionalProperties`. Disabled or other-Agent Channels are absent, and an Agent with no enabled owned Channel does not see the Tool. The profile key is the sorted platform list, so neither Adapter liveness nor another Channel on a known platform perturbs Provider bytes. The Tool declares `announce_changes=["parameters"]`: a Channel on a new platform brings that platform's fields, such as `buttons` for Telegram, and a Session that knows the Tool hears of them at its next request boundary (`tools.md` -> Tool changes in a Session).
