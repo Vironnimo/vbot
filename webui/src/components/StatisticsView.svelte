@@ -19,8 +19,7 @@
     STATISTICS_TABS,
     formatDateTime,
     isStatisticsRange,
-    statisticsReportKey,
-    statisticsReportParams,
+    StatisticsReportQuery,
     statisticsTabForPlace,
     statisticsTabLabel,
   } from '$lib/statisticsView.js';
@@ -59,13 +58,12 @@
   const locale = $derived(activeLocaleTag());
   const timeZone = $derived(dateTimePrefs.timeZone);
   const reportTab = $derived(activeTab === 'limits' ? null : activeTab);
-  const entry = $derived(
-    reportTab
-      ? statisticsReport(statisticsReportKey(reportTab, range, timeZone))
-      : null,
+  const query = $derived(
+    reportTab ? new StatisticsReportQuery(reportTab, range, timeZone) : null,
   );
-  const extensionsKey = $derived(
-    statisticsReportKey('extensions', range, timeZone),
+  const entry = $derived(query ? statisticsReport(query.key) : null);
+  const extensionsQuery = $derived(
+    new StatisticsReportQuery('extensions', range, timeZone),
   );
   const tabs = $derived(
     STATISTICS_TABS.filter(
@@ -89,11 +87,9 @@
   // Every visit of a report tab, range or time zone revalidates its report;
   // a request already in flight for the same key is kept.
   $effect(() => {
-    const tab = reportTab;
-    const selectedRange = range;
-    const zone = timeZone;
-    if (!tab) return;
-    untrack(() => load(tab, selectedRange, zone));
+    const selected = query;
+    if (!selected) return;
+    untrack(() => requestStatisticsReport(selected));
   });
 
   // The Extensions tab shows only when the Extensions section reports
@@ -102,28 +98,19 @@
   // previous range's answer decides.
   $effect(() => {
     const settled = !entry || !entry.loading;
-    const extensions = statisticsReport(extensionsKey);
+    const extensions = statisticsReport(extensionsQuery.key);
     if (extensions.report) {
       extensionsVisible =
         (extensions.report.extensions?.extensions?.length ?? 0) > 0;
       return;
     }
     if (!settled || extensions.loading || extensions.error) return;
-    const selectedRange = range;
-    const zone = timeZone;
-    untrack(() => load('extensions', selectedRange, zone));
+    const selected = extensionsQuery;
+    untrack(() => requestStatisticsReport(selected));
   });
 
-  function load(tab, selectedRange, zone, force = false) {
-    return requestStatisticsReport(
-      statisticsReportKey(tab, selectedRange, zone),
-      statisticsReportParams(tab, selectedRange, zone),
-      { force },
-    );
-  }
-
   function refresh() {
-    if (reportTab) load(reportTab, range, timeZone, true);
+    if (query) requestStatisticsReport(query, { force: true });
   }
 
   function showTab(tab) {

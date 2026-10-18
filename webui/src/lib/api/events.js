@@ -82,6 +82,22 @@ const TERMINAL_RUN_EVENT_TYPES = new Set([
   'run_interrupted',
 ]);
 
+// Protocol classifications shared by stream and WebSocket consumers. State
+// transitions remain owned by each consumer.
+const RUN_SERVER_EVENT_TYPES = new Set([
+  'run_started',
+  'run_output',
+  ...TERMINAL_RUN_EVENT_TYPES,
+]);
+
+export function isTerminalRunEvent(type) {
+  return TERMINAL_RUN_EVENT_TYPES.has(type);
+}
+
+export function isRunServerEvent(type) {
+  return RUN_SERVER_EVENT_TYPES.has(type);
+}
+
 export function subscribeRunEvents(sseUrl, handlers = {}, options = {}) {
   requireNonEmptyString(sseUrl, 'SSE URL must be a non-empty string');
   const EventSourceClass = options.EventSource ?? globalThis.EventSource;
@@ -143,10 +159,7 @@ export function subscribeRunEvents(sseUrl, handlers = {}, options = {}) {
         return;
       }
       handlers.onEvent?.({ type: eventType, data: parsed, rawEvent: event });
-      if (
-        (options.closeOnTerminal ?? true) &&
-        TERMINAL_RUN_EVENT_TYPES.has(eventType)
-      ) {
+      if ((options.closeOnTerminal ?? true) && isTerminalRunEvent(eventType)) {
         close();
       }
     };

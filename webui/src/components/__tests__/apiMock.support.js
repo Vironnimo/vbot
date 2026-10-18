@@ -1,3 +1,4 @@
+import { isTerminalRunEvent, isRunServerEvent } from '../../lib/api/events.js';
 import { accessLossFromClose } from '../../lib/api/accessLoss.js';
 
 export function rpcBackedApiMock(rpcMock, overrides = {}) {
@@ -10,6 +11,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
   });
 
   return {
+    isTerminalRunEvent,
+    isRunServerEvent,
     openFilePreview: (source) => call('file.preview_open', { source }),
     getFilePreviewRevision: (token) => call('file.preview_revision', { token }),
     rpc: (...args) => rpcMock(...args),

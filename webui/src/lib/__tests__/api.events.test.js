@@ -45,41 +45,44 @@ describe('subscribeRunEvents()', () => {
     );
   });
 
-  it('delivers named SSE Run events and closes on a terminal event', () => {
-    const onEvent = vi.fn();
-    const onError = vi.fn();
-    const connection = subscribeRunEvents(
-      '/api/runs/run-one/events',
-      { onEvent, onError },
-      { EventSource: MockEventSource, baseUrl: 'http://localhost:8420/' },
-    );
+  it.each(['run_completed', 'run_cancelled', 'run_failed', 'run_interrupted'])(
+    'delivers named SSE Run events and closes on %s',
+    (terminalType) => {
+      const onEvent = vi.fn();
+      const onError = vi.fn();
+      const connection = subscribeRunEvents(
+        '/api/runs/run-one/events',
+        { onEvent, onError },
+        { EventSource: MockEventSource, baseUrl: 'http://localhost:8420/' },
+      );
 
-    connection.source.emit('reasoning', {
-      data: JSON.stringify({ payload: { text: 'thinking' } }),
-    });
-    connection.source.emit('run_completed', {
-      data: JSON.stringify({ payload: { status: 'done' } }),
-    });
-    connection.close();
+      connection.source.emit('reasoning', {
+        data: JSON.stringify({ payload: { text: 'thinking' } }),
+      });
+      connection.source.emit(terminalType, {
+        data: JSON.stringify({ payload: { status: 'done' } }),
+      });
+      connection.close();
 
-    expect(connection.source.url).toBe(
-      'http://localhost:8420/api/runs/run-one/events',
-    );
-    expect(onEvent.mock.calls.map(([event]) => event)).toEqual([
-      {
-        type: 'reasoning',
-        data: { payload: { text: 'thinking' } },
-        rawEvent: expect.any(Object),
-      },
-      {
-        type: 'run_completed',
-        data: { payload: { status: 'done' } },
-        rawEvent: expect.any(Object),
-      },
-    ]);
-    expect(connection.source.closeCount).toBe(1);
-    expect(onError).not.toHaveBeenCalled();
-  });
+      expect(connection.source.url).toBe(
+        'http://localhost:8420/api/runs/run-one/events',
+      );
+      expect(onEvent.mock.calls.map(([event]) => event)).toEqual([
+        {
+          type: 'reasoning',
+          data: { payload: { text: 'thinking' } },
+          rawEvent: expect.any(Object),
+        },
+        {
+          type: terminalType,
+          data: { payload: { status: 'done' } },
+          rawEvent: expect.any(Object),
+        },
+      ]);
+      expect(connection.source.closeCount).toBe(1);
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     [RUN_EVENT_ASSISTANT_OUTPUT_DELTA, { content_delta: 'hel' }],

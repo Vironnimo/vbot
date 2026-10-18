@@ -1,5 +1,5 @@
 import { formatAgentAddress } from './agentAddress.js';
-import { invalidateCatalogReads } from './api.js';
+import { invalidateCatalogReads, isRunServerEvent } from './api.js';
 import { mergeBoundedEntries } from './clientCaches.js';
 import { noteInvalidation } from './clientMetrics.js';
 import {
@@ -42,14 +42,6 @@ const SERVER_UNAVAILABLE_NOTICE_DELAY_MS = 1000;
 const SERVER_RESTORED_NOTICE_DURATION_MS = 1400;
 const SERVER_NOTICE_OFFLINE = 'offline';
 const SERVER_NOTICE_RESTORED = 'restored';
-const RUN_SERVER_EVENT_TYPES = new Set([
-  'run_started',
-  'run_output',
-  'run_completed',
-  'run_cancelled',
-  'run_failed',
-  'run_interrupted',
-]);
 
 // A `session.delete` names the archived Session and its landing in the
 // `sessions` scope. Every event yields a fresh object so a repeated deletion
@@ -248,7 +240,7 @@ export function createAppController({
       );
       return;
     }
-    if (RUN_SERVER_EVENT_TYPES.has(event.type)) {
+    if (isRunServerEvent(event.type)) {
       runEvents.append(event);
       return;
     }

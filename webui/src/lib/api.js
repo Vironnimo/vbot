@@ -45,6 +45,8 @@ export {
   RUN_EVENT_CHANGE_STATS,
   RUN_STREAM_HEARTBEAT_EVENT,
   RUN_EVENT_TYPES,
+  isTerminalRunEvent,
+  isRunServerEvent,
   subscribeRunEvents,
   subscribeServerEvents,
   subscribeLogEvents,

@@ -1,14 +1,6 @@
+import { isRunServerEvent } from '../api.js';
 import { formatAgentAddress } from '../agentAddress.js';
 import { isReflectionRunKind } from '../chatTimelinePresentation.js';
-
-const RUN_SERVER_EVENT_TYPES = new Set([
-  'run_started',
-  'run_output',
-  'run_completed',
-  'run_cancelled',
-  'run_failed',
-  'run_interrupted',
-]);
 
 // The Run event a WebSocket Run server event mirrors, addressed like Session
 // state; null for an event that names no Run event, Run or sequence.
@@ -16,7 +8,7 @@ export function runEventFromServerEvent(serverEvent) {
   const payload = serverEvent?.payload ?? {};
   const runEventType = payload.run_event_type;
   if (
-    !RUN_SERVER_EVENT_TYPES.has(serverEvent?.type) ||
+    !isRunServerEvent(serverEvent?.type) ||
     !runEventType ||
     !payload.run_id ||
     (payload.run_event_sequence !== 0 && !payload.run_event_sequence)

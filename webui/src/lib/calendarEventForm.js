@@ -10,6 +10,7 @@
 // date) and keeps any other rule unchanged as custom text.
 
 import { addDaysToKey, isDayKey } from './calendarView.js';
+import { timeZoneOffsetMilliseconds as zoneOffset } from './dateTimePrefs.svelte.js';
 
 export const WEEKDAY_CODES = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su'];
 const FREQUENCIES = {
@@ -409,33 +410,6 @@ function zoneInstant(naive, timeZone) {
   // The offset at the guessed instant, then at the instant it gives.
   const guess = asUtc - zoneOffset(asUtc, timeZone);
   return asUtc - zoneOffset(guess, timeZone);
-}
-
-// How far `timeZone`'s wall clock is ahead of UTC at an instant, in ms.
-function zoneOffset(instant, timeZone) {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23',
-    })
-      .formatToParts(new Date(instant))
-      .map((part) => [part.type, Number(part.value)]),
-  );
-  const wall = Date.UTC(
-    parts.year,
-    parts.month - 1,
-    parts.day,
-    parts.hour,
-    parts.minute,
-    parts.second,
-  );
-  return wall - Math.floor(instant / 1000) * 1000;
 }
 
 // `<prefix>_date` and `<prefix>_time` of an instant on `timeZone`'s wall clock.

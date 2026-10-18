@@ -1,12 +1,7 @@
+import { isTerminalRunEvent } from './api.js';
 import { reconnectBackoffDelay } from './backoff.js';
 
 const HEARTBEAT_TIMEOUT_MS = 25_000;
-const TERMINAL_EVENTS = new Set([
-  'run_completed',
-  'run_cancelled',
-  'run_failed',
-  'run_interrupted',
-]);
 
 // The Extension host owns this lifecycle; page code still owns its History
 // projection and refreshes it through the existing invalidation bridge.
@@ -91,7 +86,7 @@ export function createExtensionRunStream({
           }
           onEvent(event);
           if (
-            TERMINAL_EVENTS.has(event.type) ||
+            isTerminalRunEvent(event.type) ||
             (timeline && event.data?.terminal)
           )
             close();
