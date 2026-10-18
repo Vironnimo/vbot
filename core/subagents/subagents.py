@@ -500,11 +500,16 @@ class SubAgentCoordinator:
                     address,
                     executor,
                     admission=_admission(
-                        context, new_subagent_id, _child_working_project(context, target_project_id)
+                        context,
+                        new_subagent_id,
+                        _child_working_project(context, target_project_id),
+                        expected_session_generation_id=session.generation_id,
                     ),
                 )
+                await run.wait_admitted()
             except Exception:
-                await _remove_unstarted_session(runtime, address)
+                assert session.generation_id is not None
+                await _remove_unstarted_session(runtime, address, session.generation_id)
                 raise
         activity = await self._activities.ensure(address)
         activity_file = self._activities.path(address)

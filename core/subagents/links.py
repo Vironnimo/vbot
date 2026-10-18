@@ -123,9 +123,28 @@ def link_session(
 ) -> None:
     """Store the Parent link of a new Sub-Agent Session."""
 
-    def update(metadata: dict[str, Any]) -> None:
-        metadata[SUBAGENT_SESSION_META_KEY] = True
-        metadata[SUBAGENT_PARENT_META_KEY] = {
+    values = _link_metadata(
+        subagent_id=subagent_id,
+        parent=parent,
+        run_id=run_id,
+        tool_call_id=tool_call_id,
+        tool_call_index=tool_call_index,
+    )
+    sessions.mutate_metadata(address, lambda metadata: metadata.update(values))
+
+
+def _link_metadata(
+    *,
+    subagent_id: str,
+    parent: SessionAddress,
+    run_id: str,
+    tool_call_id: str | None,
+    tool_call_index: int | None,
+) -> dict[str, Any]:
+    """Build the Parent-link fields for creation or explicit linking."""
+    return {
+        SUBAGENT_SESSION_META_KEY: True,
+        SUBAGENT_PARENT_META_KEY: {
             "id": subagent_id,
             "agent_id": parent.agent_id,
             "session_id": parent.session_id,
@@ -133,9 +152,8 @@ def link_session(
             "tool_call_id": tool_call_id,
             "tool_call_index": tool_call_index,
             "project_id": parent.project_id,
-        }
-
-    sessions.mutate_metadata(address, update)
+        },
+    }
 
 
 def _link_from_metadata(address: SessionAddress, metadata: dict[str, Any]) -> SubAgentLink | None:

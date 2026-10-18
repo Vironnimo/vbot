@@ -9,11 +9,45 @@ import pytest
 
 from core.chat import ChatMessage
 from core.runs import Run, RunAdmissionBlockedError
+from core.sessions import SessionAddress
 from core.subagents.links import find_link
 from tests.core.subagents.subagents_test_support import SubAgentHarness
 from tests.core.subagents.subagents_test_support import harness as harness
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.mark.parametrize("replace", [False, True], ids=["archived", "replaced"])
+async def test_run_does_not_recreate_a_generation_archived_before_admission(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, replace: bool
+) -> None:
+    start = harness.manager.start
+    created: list[SessionAddress] = []
+
+    async def archive_before_start(address: SessionAddress, executor, **kwargs):
+        created.append(address)
+        async with harness.manager.session_admission_guard(address):
+            await harness.sessions.archive(address)
+            if replace:
+                replacement = harness.sessions.create(
+                    address.agent_id, address.session_id, project_id=address.project_id
+                )
+                replacement.append(ChatMessage.user("replacement history"))
+        return await start(address, executor, **kwargs)
+
+    monkeypatch.setattr(harness.manager, "start", archive_before_start)
+    result = await harness.call({"description": "Review", "content": "not executed"})
+    await harness.settle()
+
+    assert result["ok"] is False
+    [address] = created
+    assert harness.sessions.exists(address) is replace
+    assert all(turn.run is None for turn in harness.loop.turns)
+    assert harness.manager.waiting_work_count() == 0
+    if replace:
+        assert [message.content for message in harness.sessions.get(address).load()] == [
+            "replacement history"
+        ]
 
 
 @pytest.mark.parametrize("replace", [False, True], ids=["archived", "replaced"])

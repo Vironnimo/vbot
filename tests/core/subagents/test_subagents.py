@@ -79,7 +79,18 @@ async def _background_command(
     return command_id
 
 
-async def test_run_starts_a_linked_subagent_in_the_background(harness: SubAgentHarness) -> None:
+async def test_run_starts_a_linked_subagent_in_the_background(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshots: list[dict[str, Any]] = []
+    create = harness.sessions.create
+
+    def observed_create(*args: Any, **kwargs: Any) -> Any:
+        session = create(*args, **kwargs)
+        snapshots.append(harness.sessions.get_metadata(session.address))
+        return session
+
+    monkeypatch.setattr(harness.sessions, "create", observed_create)
     harness.loop.hold("review")
 
     data = await harness.spawn("review", agent_id="worker")
@@ -96,6 +107,10 @@ async def test_run_starts_a_linked_subagent_in_the_background(harness: SubAgentH
         harness.parent.session_id,
     )
     assert harness.sessions.get_metadata(child)["auto_title"] == "Do review"
+    [created] = snapshots
+    assert created["auto_title"] == "Do review"
+    assert created["auto_title_initialized"] is True
+    assert created[SUBAGENT_PARENT_META_KEY] == link
     [turn] = harness.loop.turns
     assert (turn.content, turn.parent_agent_input) == ("review", True)
     await harness.until(lambda: turn.run is not None)

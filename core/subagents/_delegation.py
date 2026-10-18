@@ -22,6 +22,8 @@ from core.runs import (
 )
 from core.sessions import (
     AGENT_DEFAULT_PROJECT,
+    SESSION_AUTO_TITLE_INITIALIZED_KEY,
+    SESSION_AUTO_TITLE_KEY,
     SessionAddress,
     TemporarySessionBinding,
 )
@@ -43,7 +45,7 @@ from core.subagents.forwarding import (
 )
 from core.subagents.links import (
     SubAgentLink,
-    link_session,
+    _link_metadata,
     read_link,
 )
 from core.tools.availability import subagent_allowed_agents
@@ -169,40 +171,43 @@ def _open_subagent_session(
 ) -> ChatSession:
     """Create the Sub-Agent Session, title it, link it to its Parent and store *overrides*.
 
-    Blocking. One unit of Session work, so a cancelled Parent never leaves a
-    created Sub-Agent Session without its Parent link. The Session works in
+    Blocking. One creation transaction keeps title, Parent link and settings
+    together even when storage fails. The Session works in
     :func:`_child_working_project`.
     """
     sessions = runtime.chat_sessions
-    session = sessions.create(
+    metadata = AgentOverrides.from_stored(overrides).session_metadata()
+    metadata.update(
+        _link_metadata(
+            subagent_id=subagent_id,
+            parent=_caller(context),
+            run_id=context.run_id,
+            tool_call_id=context.tool_call_id,
+            tool_call_index=context.tool_call_index,
+        )
+    )
+    metadata[SESSION_AUTO_TITLE_KEY] = title
+    metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
+    return sessions.create(
         agent_id,
         project_id=project_id,
-        metadata=AgentOverrides.from_stored(overrides).session_metadata(),
+        metadata=metadata,
         working_project_id=(
             AGENT_DEFAULT_PROJECT
             if project_id is not None
             else _child_working_project(context, project_id)
         ),
     )
-    address = session.address
-    sessions.set_auto_title(address, title)
-    link_session(
-        sessions,
-        address,
-        subagent_id=subagent_id,
-        parent=_caller(context),
-        run_id=context.run_id,
-        tool_call_id=context.tool_call_id,
-        tool_call_index=context.tool_call_index,
-    )
-    return session
 
 
-async def _remove_unstarted_session(runtime: RuntimeServices, address: SessionAddress) -> None:
-    """Remove a Sub-Agent Session whose first Run could not start."""
+async def _remove_unstarted_session(
+    runtime: RuntimeServices, address: SessionAddress, generation_id: str
+) -> None:
+    """Discard only the unused generation whose first Run could not start."""
     sessions = runtime.chat_sessions
     try:
-        await sessions.run_async(sessions.delete, address)
+        async with runtime.chat_run_manager.session_admission_guard(address):
+            await sessions.run_async(sessions.discard_unused, address, generation_id)
     except Exception:
         _LOGGER.warning(
             "Could not remove a Sub-Agent Session whose Run did not start (session=%s)",
