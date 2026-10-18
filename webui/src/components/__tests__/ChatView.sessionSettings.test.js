@@ -239,6 +239,47 @@ describe('ChatView Session settings', () => {
       expect(rpcCalls('agent.update')).toEqual([]);
     });
 
+    it('keeps a newer Agent selection when a draft move waits for the Project scan', async () => {
+      const scan = {
+        team: [{ agent_id: 'builder', display_name: 'Builder' }],
+        report: { clean: true, findings: [] },
+      };
+      const reading = Promise.withResolvers();
+      showProjectMock.mockReturnValue(reading.promise);
+      rpcMock.mockImplementation(
+        settingsRpcMock({
+          agents: [draftAgent(), draftAgent({ id: 'beta', name: 'Beta' })],
+        }),
+      );
+      const parent = createChatViewParentHarness();
+      await chat.mountChat(
+        parent.props(['agent', 'project'], {
+          projects: [{ ...PROJECTS[0], scan }, PROJECTS[1]],
+        }),
+        { ready: null },
+      );
+      await waitForCondition(() => pickerText('Agent') === 'Alpha');
+      setInputValue(document.querySelector('.msg-input'), 'Alpha draft');
+      flushSync();
+      await choose('Agent', 'Builder');
+      expect(showProjectMock).toHaveBeenCalled();
+
+      agentPill('Beta').click();
+      flushSync();
+      await waitForCondition(() => pickerText('Agent') === 'Beta');
+      setInputValue(document.querySelector('.msg-input'), 'Beta draft');
+      flushSync();
+      reading.resolve({ project: { project_id: 'vbot' }, scan });
+      await settle();
+
+      expect(selectedAgentName()).toBe('Beta');
+      expect(document.querySelector('.msg-input').value).toBe('Beta draft');
+      agentPill('Alpha').click();
+      flushSync();
+      await waitForCondition(() => pickerText('Agent') === 'Alpha');
+      expect(document.querySelector('.msg-input').value).toBe('Alpha draft');
+    });
+
     it.each([
       ['a chosen Project', 'Docs', 'docs', false],
       ['the Workspace', 'Workspace', null, false],

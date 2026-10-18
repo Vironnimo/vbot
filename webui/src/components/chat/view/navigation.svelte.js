@@ -8,7 +8,7 @@ import {
   ensureSessionState,
   setAgents,
 } from '../../../lib/chatState.js';
-import { tick, untrack } from 'svelte';
+import { onDestroy, tick, untrack } from 'svelte';
 import { createSessionProvenance } from './provenance.svelte.js';
 
 export function createChatViewNavigation(context) {
@@ -24,6 +24,10 @@ export function createChatViewNavigation(context) {
 
   let handledSessionNavigationKey = '';
   let sessionNavigationVersion = 0;
+
+  onDestroy(() => {
+    sessionNavigationVersion += 1;
+  });
 
   let subAgentSessionActive = $derived(
     Boolean(viewingSessionId) && viewingSubAgentSession,
@@ -691,6 +695,7 @@ export function createChatViewNavigation(context) {
     if (context.chatState.loadingHistory || !agentAddress) {
       return;
     }
+    const version = sessionNavigationVersion;
     if (
       keepEmptySession &&
       !context.target.activeDraft() &&
@@ -709,6 +714,9 @@ export function createChatViewNavigation(context) {
           agentAddress,
           sessionId: '',
         });
+        // A Project scan can outlive this selection or the Chat area itself.
+        // Only this navigation may replace the shown Session or move a draft.
+        if (sessionNavigationVersion !== version) return;
       } else {
         moveToIdentityAgent({ bareAgentId: agentAddress });
       }
