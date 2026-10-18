@@ -1148,9 +1148,15 @@ def test_replace_failure_is_bounded_and_keeps_other_operations(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", ["write", "apply_patch"])
-async def test_parent_file_obstruction_is_reported_without_changing_it(tmp_path, monkeypatch, tool):
+@pytest.mark.parametrize("parent_kind", ["file", "directory", "unreadable", "io_failure"])
+async def test_parent_file_obstruction_is_reported_without_changing_it(
+    tmp_path, monkeypatch, tool, parent_kind
+):
     obstruction = tmp_path / "parent"
-    obstruction.write_bytes(b"keep")
+    if parent_kind == "file":
+        obstruction.write_bytes(b"keep")
+    else:
+        obstruction.mkdir()
     requested = obstruction / "child.txt"
     # Windows reaches mkdir after observing the child as missing; POSIX can
     # report ENOTDIR while observing it. Exercise the Windows failure on both.
@@ -1159,15 +1165,28 @@ async def test_parent_file_obstruction_is_reported_without_changing_it(tmp_path,
     def missing_child(path):
         return file_changes_module._ABSENT if path == requested else snapshot(path)
 
-    mkdir = Path.mkdir
-
-    def obstructed(path, *args, **kwargs):
-        if path == obstruction:
-            raise FileExistsError(errno.EEXIST, "already exists", str(obstruction))
-        return mkdir(path, *args, **kwargs)
-
     monkeypatch.setattr(file_changes_module, "_snapshot", missing_child)
-    monkeypatch.setattr(Path, "mkdir", obstructed)
+    if parent_kind != "file":
+        # Python 3.14's non-strict is_dir returns False when a directory's
+        # status cannot be read. mkdir then preserves its original EEXIST.
+        isdir = os.path.isdir
+
+        def unchecked(path):
+            return False if Path(path) == obstruction else isdir(path)
+
+        monkeypatch.setattr(os.path, "isdir", unchecked)
+    if parent_kind in {"unreadable", "io_failure"}:
+        stat = os.stat
+        error_type, code = (
+            (PermissionError, errno.EACCES) if parent_kind == "unreadable" else (OSError, errno.EIO)
+        )
+
+        def unavailable(path, *args, **kwargs):
+            if isinstance(path, (str, os.PathLike)) and Path(path) == obstruction:
+                raise error_type(code, "localized test failure", str(obstruction))
+            return stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", unavailable)
     arguments = (
         {"path": "parent/child.txt", "content": "new"}
         if tool == "write"
@@ -1176,7 +1195,17 @@ async def test_parent_file_obstruction_is_reported_without_changing_it(tmp_path,
     result = await call(tmp_path, arguments, name=tool)
 
     assert result["error"]["code"] == "file_write_error"
-    assert "parent is a file, not a directory" in text(result)
-    assert "it already exists" not in text(result)
-    assert obstruction.read_bytes() == b"keep"
+    if parent_kind == "file":
+        assert "parent is a file, not a directory" in text(result)
+        assert "it already exists" not in text(result)
+        assert obstruction.read_bytes() == b"keep"
+    else:
+        assert "parent is a file" not in text(result)
+        assert "does not exist" not in text(result)
+        assert "parent" in text(result)
+        assert "localized test failure" not in text(result)
+        if parent_kind in {"unreadable", "io_failure"}:
+            assert "could not be checked" in text(result)
+        monkeypatch.undo()
+        assert obstruction.is_dir()
     assert not requested.exists()

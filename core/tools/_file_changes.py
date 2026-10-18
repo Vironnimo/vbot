@@ -48,6 +48,7 @@ from core.tools.file_state import (
 from core.tools.model_names import model_tool_name
 from core.tools.search import display_search_path
 from core.tools.tools import JsonObject, ToolContext
+from core.utils.file_status import is_file_strict
 
 _BOM = b"\xef\xbb\xbf"
 _WRITE_FAILED = "Could not change {path}: {reason}. Check this path before resending this change."
@@ -273,7 +274,17 @@ def _write_failure(path: Path, error: OSError, batch: ChangeBatch) -> JsonObject
     if isinstance(error, FileExistsError) and error.filename:
         obstruction = Path(error.filename)
         if obstruction in path.parents:
-            reason = f"{batch.shown(obstruction)} is a file, not a directory"
+            reason = _os_reason(error, batch)
+            try:
+                parent_is_file = is_file_strict(obstruction)
+            except OSError as check_error:
+                reason = (
+                    f"{batch.shown(obstruction)} could not be checked: "
+                    f"{os_error_reason(check_error)}"
+                )
+            else:
+                if parent_is_file:
+                    reason = f"{batch.shown(obstruction)} is a file, not a directory"
     failure: JsonObject = {
         "code": "file_write_error",
         "message": (_WRITE_BUSY if held_open else _WRITE_FAILED).format(
