@@ -68,19 +68,6 @@ from core.providers._chat_completions_wire import (
     _to_openai_message,
     _to_openai_user_content_part,
 )
-from core.providers._http_shared import (
-    PreparedRequest,
-    RequestPlan,
-    build_async_client,
-    classify_http_status,
-    connect_streaming_with_retry,
-    decode_response_json,
-    format_http_error_detail,
-    iter_sse_events,
-    json_body_headers,
-    parse_sse_json_data,
-    wrap_network_error,
-)
 from core.providers._tool_calls import WIRE_TOOL_CALL_ID_PROFILES, normalize_tool_call_ids
 from core.providers._wire_learning import (
     execute_learning_from_rejections,
@@ -95,6 +82,19 @@ from core.providers.adapter import (
 from core.providers.errors import (
     NetworkError,
     ProviderError,
+)
+from core.providers.http import (
+    PreparedRequest,
+    RequestPlan,
+    build_async_client,
+    classify_http_status,
+    connect_streaming_with_retry,
+    decode_response_json,
+    format_http_error_detail,
+    iter_sse_events,
+    json_body_headers,
+    parse_sse_json_data,
+    wrap_network_error,
 )
 from core.providers.providers import (
     AuthConfig,

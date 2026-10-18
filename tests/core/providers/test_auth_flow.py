@@ -22,6 +22,7 @@ import pytest_asyncio
 import respx
 
 from core.providers import auth_flow
+from core.providers.accounts import Account
 from core.providers.auth_flow import (
     DEVICE_CODE_GRANT_TYPE,
     MINIMAX_OAUTH_GRANT_TYPE,
@@ -243,19 +244,19 @@ async def test_device_flow_polls_until_granted_and_stores_the_account_token(
     completion = Completion()
 
     with caplog.at_level(logging.INFO, logger="vbot.providers.auth_flow"):
-        session = await engine.connect("provider", "oauth", config, completion, account_id="work")
+        session = await engine.connect(Account("provider", "oauth", "work"), config, completion)
         assert await completion.wait() is True
 
     assert session == case["session"]
     assert request_body(authorization.calls.last.request) == case["authorization_body"]
     assert [request_body(call.request) for call in polling.calls] == [case["token_body"]] * 2
     assert poll_waits == [session.interval]
-    token = store.load("provider", "oauth", account_id="work")
+    token = store.load(Account("provider", "oauth", "work"))
     assert token is not None
     assert (token.access_token, token.refresh_token) == ("access", "refresh")
     assert token.extra == case["extra"]
     assert seconds_until(token.expires_at) == pytest.approx(case["granted"]["expires_in"], abs=5)
-    assert store.load("provider", "oauth") is None
+    assert store.load(Account("provider", "oauth")) is None
     logs = _auth_logs(caplog)
     assert "OAuth provider connected (provider=provider connection=oauth)" in logs
     assert all("work" not in message and "access" not in message for message in logs)
@@ -289,7 +290,7 @@ async def test_openai_flow_polls_usercode_then_exchanges_the_authorization_code(
     )
     completion = Completion(awaitable=True)
 
-    session = await engine.connect("openai", "subscription", config, completion)
+    session = await engine.connect(Account("openai", "subscription"), config, completion)
 
     assert await completion.wait() is True
     assert session == DeviceFlowSession(
@@ -307,7 +308,7 @@ async def test_openai_flow_polls_usercode_then_exchanges_the_authorization_code(
         "code_verifier": "verifier",
         "redirect_uri": OPENAI_REDIRECT_URI,
     }
-    token = store.load("openai", "subscription")
+    token = store.load(Account("openai", "subscription"))
     assert token is not None
     assert (token.access_token, token.refresh_token) == (access_token, "refresh")
     assert token.extra == {"chatgpt_account_id": "acct_openai"}
@@ -352,7 +353,9 @@ async def test_minimax_flow_uses_pkce_state_and_millisecond_fields(
     )
     completion = Completion()
 
-    session = await engine.connect("minimax", "subscription", minimax_oauth_config(), completion)
+    session = await engine.connect(
+        Account("minimax", "subscription"), minimax_oauth_config(), completion
+    )
 
     assert await completion.wait() is True
     assert (session.device_code, session.user_code, session.verification_uri) == (
@@ -380,7 +383,7 @@ async def test_minimax_flow_uses_pkce_state_and_millisecond_fields(
         hashlib.sha256(token_form["code_verifier"].encode()).digest()
     )
     assert authorization_form["code_challenge"] == challenge.decode().rstrip("=")
-    token = store.load("minimax", "subscription")
+    token = store.load(Account("minimax", "subscription"))
     assert token is not None
     assert (token.access_token, token.refresh_token) == ("minimax-access", "minimax-refresh")
     assert seconds_until(token.expires_at) == pytest.approx(900, abs=5)
@@ -404,9 +407,11 @@ async def test_minimax_authorization_with_foreign_state_is_rejected(
     )
 
     with pytest.raises(DeviceFlowTerminalError, match="state_mismatch"):
-        await engine.connect("minimax", "subscription", minimax_oauth_config(), Completion())
+        await engine.connect(
+            Account("minimax", "subscription"), minimax_oauth_config(), Completion()
+        )
 
-    assert not engine.is_flow_active("minimax", "subscription")
+    assert not engine.is_flow_active(Account("minimax", "subscription"))
 
 
 @respx.mock
@@ -437,7 +442,7 @@ async def test_copilot_flow_exchanges_the_github_token_before_storing(
     completion = Completion()
 
     await engine.connect(
-        "github-copilot", "oauth", github_oauth_config(token_exchange=True), completion
+        Account("github-copilot", "oauth"), github_oauth_config(token_exchange=True), completion
     )
 
     assert await completion.wait() is exchange_succeeds
@@ -445,7 +450,7 @@ async def test_copilot_flow_exchanges_the_github_token_before_storing(
     assert headers["Authorization"] == "Bearer github-oauth-secret"
     assert headers["Copilot-Integration-Id"] == "vscode-chat"
     assert headers["Editor-Version"] == "vscode/1.128.0"
-    token = store.load("github-copilot", "oauth")
+    token = store.load(Account("github-copilot", "oauth"))
     if not exchange_succeeds:
         assert token is None
         return
@@ -476,7 +481,7 @@ async def test_polling_waits_the_interval_and_slow_down_adds_five_seconds(
     )
     completion = Completion()
 
-    await engine.connect("github-copilot", "oauth", github_oauth_config(), completion)
+    await engine.connect(Account("github-copilot", "oauth"), github_oauth_config(), completion)
 
     assert await completion.wait() is True
     assert poll_waits == [7, 12, 12]
@@ -526,12 +531,12 @@ async def test_polling_ends_unsuccessfully_without_storing_a_token(
     polling = respx.post(config.token_url).mock(side_effect=replies)
     completion = Completion()
 
-    await engine.connect("provider", "oauth", config, completion)
+    await engine.connect(Account("provider", "oauth"), config, completion)
 
     assert await completion.wait() is False
     assert polling.call_count == len(replies)
     assert poll_waits == []
-    assert store.load("provider", "oauth") is None
+    assert store.load(Account("provider", "oauth")) is None
 
 
 @respx.mock
@@ -558,7 +563,7 @@ async def test_polling_crash_still_reports_failure_and_is_logged(
     logger.addHandler(handler)
     completion = Completion()
     try:
-        await engine.connect("github-copilot", "oauth", github_oauth_config(), completion)
+        await engine.connect(Account("github-copilot", "oauth"), github_oauth_config(), completion)
         assert await completion.wait() is False
         # Closing right after the crash must not swallow the task's failure report.
         await engine.aclose()
@@ -566,8 +571,8 @@ async def test_polling_crash_still_reports_failure_and_is_logged(
     finally:
         logger.removeHandler(handler)
 
-    assert store.load("github-copilot", "oauth") is None
-    assert not engine.is_flow_active("github-copilot", "oauth")
+    assert store.load(Account("github-copilot", "oauth")) is None
+    assert not engine.is_flow_active(Account("github-copilot", "oauth"))
 
 
 # ---------------------------------------------------------------------------
@@ -592,27 +597,27 @@ async def test_pending_authorization_is_owned_and_stoppable(
     respx.post(GITHUB_DEVICE_AUTH_URL).mock(side_effect=authorize)
     polling = respx.post(GITHUB_TOKEN_URL).mock(return_value=PENDING)
     pending = asyncio.create_task(
-        engine.connect("provider", "oauth", github_oauth_config(), Completion())
+        engine.connect(Account("provider", "oauth"), github_oauth_config(), Completion())
     )
     try:
         await asyncio.wait_for(started.wait(), timeout=5)
-        assert engine.is_flow_active("provider", "oauth")
+        assert engine.is_flow_active(Account("provider", "oauth"))
 
         if stop == "cancel":
-            engine.cancel_flow("provider", "oauth")
+            engine.cancel_flow(Account("provider", "oauth"))
         elif stop == "close":
             await engine.aclose()
         else:
-            await engine.connect("provider", "oauth", github_oauth_config(), Completion())
+            await engine.connect(Account("provider", "oauth"), github_oauth_config(), Completion())
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(pending, timeout=5)
 
         if stop == "replace":
             await parked_polls.next()
-            assert engine.is_flow_active("provider", "oauth")
+            assert engine.is_flow_active(Account("provider", "oauth"))
             assert polling.call_count == 1
         else:
-            assert not engine.is_flow_active("provider", "oauth")
+            assert not engine.is_flow_active(Account("provider", "oauth"))
             assert polling.call_count == 0
     finally:
         release.set()
@@ -632,14 +637,14 @@ async def test_flow_stopped_before_polling_starts_never_polls(
     polling = respx.post(GITHUB_TOKEN_URL).mock(return_value=PENDING)
     completion = Completion()
 
-    await engine.connect("provider", "oauth", github_oauth_config(), completion)
-    assert engine.is_flow_active("provider", "oauth")
+    await engine.connect(Account("provider", "oauth"), github_oauth_config(), completion)
+    assert engine.is_flow_active(Account("provider", "oauth"))
     if stop == "cancel":
-        engine.cancel_flow("provider", "oauth")
-        assert not engine.is_flow_active("provider", "oauth")
+        engine.cancel_flow(Account("provider", "oauth"))
+        assert not engine.is_flow_active(Account("provider", "oauth"))
     await engine.aclose()
 
-    assert not engine.is_flow_active("provider", "oauth")
+    assert not engine.is_flow_active(Account("provider", "oauth"))
     assert polling.call_count == 0
     assert completion.outcomes == []
 
@@ -658,11 +663,11 @@ async def test_replacing_one_account_flow_keeps_other_accounts_and_close_drains_
     polling = respx.post(GITHUB_TOKEN_URL).mock(return_value=PENDING)
     config = github_oauth_config()
 
-    await engine.connect("provider", "oauth", config, Completion())
+    await engine.connect(Account("provider", "oauth"), config, Completion())
     await parked_polls.next()
-    await engine.connect("provider", "oauth", config, Completion(), account_id="work")
+    await engine.connect(Account("provider", "oauth", "work"), config, Completion())
     await parked_polls.next()
-    await engine.connect("provider", "oauth", config, Completion())
+    await engine.connect(Account("provider", "oauth"), config, Completion())
     await parked_polls.next()
 
     assert [request_body(call.request)["device_code"] for call in polling.calls] == [
@@ -671,18 +676,18 @@ async def test_replacing_one_account_flow_keeps_other_accounts_and_close_drains_
         "device-3",
     ]
     assert parked_polls.cancelled == 1  # the replaced default-Account poll
-    assert engine.is_flow_active("provider", "oauth")
-    assert engine.is_flow_active("provider", "oauth", "work")
+    assert engine.is_flow_active(Account("provider", "oauth"))
+    assert engine.is_flow_active(Account("provider", "oauth", "work"))
 
-    engine.cancel_flow("provider", "oauth", "work")
+    engine.cancel_flow(Account("provider", "oauth", "work"))
 
-    assert not engine.is_flow_active("provider", "oauth", "work")
-    assert engine.is_flow_active("provider", "oauth")
+    assert not engine.is_flow_active(Account("provider", "oauth", "work"))
+    assert engine.is_flow_active(Account("provider", "oauth"))
 
     await engine.aclose()
 
     assert parked_polls.cancelled == 3
-    assert not engine.is_flow_active("provider", "oauth")
+    assert not engine.is_flow_active(Account("provider", "oauth"))
 
 
 @respx.mock
@@ -694,7 +699,7 @@ async def test_closed_engine_rejects_new_authorization(engine: DeviceFlowEngine)
     await engine.aclose()
 
     with pytest.raises(RuntimeError, match="closed"):
-        await engine.connect("provider", "oauth", github_oauth_config(), Completion())
+        await engine.connect(Account("provider", "oauth"), github_oauth_config(), Completion())
 
     assert authorization.call_count == 0
 
@@ -706,14 +711,14 @@ async def test_disconnect_after_authorization_response_cannot_start_polling(
 ) -> None:
     def authorize(_request: httpx.Request) -> httpx.Response:
         # The response is ready, but connect's continuation has not run yet.
-        asyncio.get_running_loop().call_soon(engine.cancel_flow, "provider", "oauth")
+        asyncio.get_running_loop().call_soon(engine.cancel_flow, Account("provider", "oauth"))
         return httpx.Response(200, json=GITHUB_AUTHORIZATION)
 
     respx.post(GITHUB_DEVICE_AUTH_URL).mock(side_effect=authorize)
     polling = respx.post(GITHUB_TOKEN_URL).mock(return_value=PENDING)
 
     with pytest.raises(asyncio.CancelledError):
-        await engine.connect("provider", "oauth", github_oauth_config(), Completion())
+        await engine.connect(Account("provider", "oauth"), github_oauth_config(), Completion())
     await engine.aclose()
 
     assert polling.call_count == 0
@@ -731,7 +736,7 @@ async def test_cancelled_connect_retires_the_authorization_verifier(
     """
 
     async def authorize(*_args: object, **_kwargs: object) -> DeviceFlowSession:
-        engine._minimax_code_verifiers[("provider", "oauth", "default", "user")] = "verifier"
+        engine._minimax_code_verifiers[(Account("provider", "oauth"), "user")] = "verifier"
         asyncio.get_running_loop().call_soon(pending.cancel)
         if not response_ready:
             # Cancellation can also arrive during HTTP-client cleanup after
@@ -744,13 +749,13 @@ async def test_cancelled_connect_retires_the_authorization_verifier(
         patch.object(engine, "_poll_until_complete", AsyncMock()) as poll,
     ):
         pending = asyncio.create_task(
-            engine.connect("provider", "oauth", minimax_oauth_config(), Completion())
+            engine.connect(Account("provider", "oauth"), minimax_oauth_config(), Completion())
         )
         with pytest.raises(asyncio.CancelledError):
             await pending
 
     assert not engine._minimax_code_verifiers
-    assert not engine.is_flow_active("provider", "oauth")
+    assert not engine.is_flow_active(Account("provider", "oauth"))
     poll.assert_not_awaited()
 
 
@@ -786,18 +791,18 @@ async def test_cancel_flow_waits_for_an_admitted_token_save(
 
     monkeypatch.setattr(store, "save", held_save)
     completion = Completion()
-    await engine.connect("provider", "oauth", config, completion)
+    await engine.connect(Account("provider", "oauth"), config, completion)
     draining: asyncio.Task[None] | None = None
     try:
         await asyncio.wait_for(saving.wait(), 1)
-        draining = asyncio.create_task(engine.cancel_flow_and_wait("provider", "oauth"))
+        draining = asyncio.create_task(engine.cancel_flow_and_wait(Account("provider", "oauth")))
         await asyncio.sleep(0)
         assert not draining.done()
     finally:
         release.set()
     assert draining is not None
     await draining
-    assert store.load("provider", "oauth") is not None
-    store.delete("provider", "oauth")
-    assert not store.exists("provider", "oauth")
+    assert store.load(Account("provider", "oauth")) is not None
+    store.delete(Account("provider", "oauth"))
+    assert not store.exists(Account("provider", "oauth"))
     assert completion.outcomes == []

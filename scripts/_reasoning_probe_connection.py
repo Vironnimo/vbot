@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from core.models.models import ModelRegistry
+from core.providers.accounts import Account
 from core.providers.ollama import OllamaCloudAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
@@ -86,7 +87,7 @@ def _select_probe_connection(
         for connection in provider_config.connections
         if connection.type == "oauth"
         and connection.oauth is not None
-        and token_store.has_valid_token(provider_config.id, connection.id)
+        and token_store.has_valid_token(Account(provider_config.id, connection.id))
     ]
     if len(usable_oauth) == 1:
         return usable_oauth[0]
@@ -117,15 +118,14 @@ def _probe_token_getter(
         return StaticTokenGetter(_load_api_key(env_name, data_dir)), f"api_key:{env_name}"
     if connection.type == "oauth" and connection.oauth is not None:
         token_store = TokenStore(_secret_store(data_dir))
-        if not token_store.has_valid_token(provider_config.id, connection.id):
+        if not token_store.has_valid_token(Account(provider_config.id, connection.id)):
             raise SystemExit(
                 f"no usable OAuth token for {provider_config.id}:{connection.id} under {data_dir}"
             )
         return (
             OAuthTokenGetter(
                 token_store,
-                provider_config.id,
-                connection.id,
+                Account(provider_config.id, connection.id),
                 connection.oauth,
             ),
             "oauth",

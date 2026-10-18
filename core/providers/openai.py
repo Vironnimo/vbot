@@ -18,23 +18,11 @@ import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
 from core.models.models import (
-    Capabilities,
     Model,
-    ReasoningCapabilities,
-    text_embedding_capabilities,
 )
 from core.providers._codex_websocket import (
     CodexWebSocket,
     _CodexWebSocketTransportError,
-)
-from core.providers._http_shared import (
-    PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
-    PreparedRequest,
-    connect_streaming_with_retry,
-    format_http_error_detail,
-    iter_stream_lines,
-    post_json_with_retry,
-    wrap_network_error,
 )
 from core.providers._openai_constants import (
     _CODEX_CACHE_SCOPE_MAX_LENGTH,
@@ -68,11 +56,8 @@ from core.providers._openai_constants import (
 )
 from core.providers._openai_policy import (
     _is_platform_chat_or_embedding_model,
-    _normalize_catalog_raw,
-    _optional_mapping,
-    _string_set,
-    _subscription_capability_supported,
-    _subscription_supported_parameters,
+    normalize_catalog_entry,
+    normalize_subscription_catalog_entry,
 )
 from core.providers._responses_profile import (
     RESPONSES_DOCUMENT_TYPES,
@@ -99,6 +84,15 @@ from core.providers.github_copilot_responses import (
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
     responses_returned_reasoning,
+)
+from core.providers.http import (
+    PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
+    PreparedRequest,
+    connect_streaming_with_retry,
+    format_http_error_detail,
+    iter_stream_lines,
+    post_json_with_retry,
+    wrap_network_error,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
@@ -268,80 +262,11 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         raw: Mapping[str, Any],
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
-        """Normalize a Codex or Platform chat/embedding listing entry."""
-
-        model_id = raw.get("id")
-        if isinstance(model_id, str) and model_id.startswith(_PLATFORM_EMBEDDING_PREFIX):
-            # Only the third generation supports shortened vectors (``dimensions``).
-            return Model(
-                model_id=model_id,
-                name=model_id,
-                capabilities=text_embedding_capabilities(
-                    ("dimensions",) if model_id.startswith("text-embedding-3-") else ()
-                ),
-                context_window=None,
-                max_output_tokens=None,
-            )
-        normalized_raw = _normalize_catalog_raw(raw)
-        base_model = OpenAICompatibleAdapter.normalize_catalog_entry(normalized_raw, defaults)
+        base_model = normalize_catalog_entry(raw, defaults)
         if cls is OpenAIAdapter and raw.get("object") == "model":
-            # The public Model object reports identity/ownership, not capabilities.
-            # Keep missing facts unknown so catalog enrichment and wire defaults
-            # decide, rather than persisting Codex's assumed reasoning support.
+            # Public Platform identity objects report no subscription capabilities.
             return base_model
-        capabilities = _optional_mapping(normalized_raw.get("capabilities"))
-        supports = _optional_mapping(capabilities.get("supports"))
-        raw_parameters = _string_set(normalized_raw.get("supported_parameters"))
-        tools_supported = _subscription_capability_supported(
-            raw_parameters,
-            base_model.capabilities.tools,
-            (normalized_raw, capabilities, supports),
-            ("supports_tools", "tools", "tool_calls", "function_calling"),
-            DISCOVERY_TOOL_PARAMETER_NAMES,
-        )
-        json_supported = _subscription_capability_supported(
-            raw_parameters,
-            base_model.capabilities.json_mode or not raw_parameters,
-            (normalized_raw, capabilities, supports),
-            (
-                "supports_json_mode",
-                "json_mode",
-                "supports_structured_outputs",
-                "structured_outputs",
-            ),
-            DISCOVERY_JSON_PARAMETER_NAMES,
-        )
-        reasoning_supported = _subscription_capability_supported(
-            raw_parameters,
-            base_model.capabilities.reasoning.supported or not raw_parameters,
-            (normalized_raw, capabilities, supports),
-            ("supports_reasoning", "reasoning_supported", "reasoning"),
-            DISCOVERY_REASONING_PARAMETER_NAMES,
-        )
-
-        return Model(
-            model_id=base_model.model_id,
-            name=base_model.name,
-            capabilities=Capabilities(
-                vision=base_model.capabilities.vision,
-                tools=tools_supported,
-                json_mode=json_supported,
-                reasoning=ReasoningCapabilities(supported=reasoning_supported),
-                input_modalities=base_model.capabilities.input_modalities,
-                output_modalities=base_model.capabilities.output_modalities,
-                supported_parameters=tuple(
-                    _subscription_supported_parameters(
-                        raw_parameters,
-                        tools_supported,
-                        json_supported,
-                        reasoning_supported,
-                    )
-                ),
-            ),
-            context_window=base_model.context_window,
-            max_output_tokens=base_model.max_output_tokens,
-            metadata=base_model.metadata,
-        )
+        return normalize_subscription_catalog_entry(raw, base_model)
 
     @override
     def request_context_kwargs(
@@ -1017,7 +942,6 @@ def _responses_stream_state() -> ResponsesStreamState:
 
 
 # Platform embedding Model ids; the ``/models`` listing has no other fact.
-_PLATFORM_EMBEDDING_PREFIX = "text-embedding-"
 
 
 def _is_codex_connection(connection: ConnectionConfig | None) -> bool:

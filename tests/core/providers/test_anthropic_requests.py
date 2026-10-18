@@ -13,13 +13,13 @@ import respx
 from PIL import Image, PngImagePlugin
 
 from core.providers import AnthropicCompatibleAdapter
-from core.providers._http_shared import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     request_input_budget,
 )
 from core.providers.errors import ProviderError, ProviderRequestTooLargeError
+from core.providers.http import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 

@@ -23,11 +23,6 @@ from uuid import uuid4
 import httpx
 
 from core.debug import DebugContext, ProviderDebugRecorder
-from core.providers._http_shared import (
-    build_async_client,
-    classify_http_status,
-    wrap_network_error,
-)
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter_types import openai_compatible_base_url
 from core.providers.errors import (
@@ -35,6 +30,11 @@ from core.providers.errors import (
     ProviderError,
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
+)
+from core.providers.http import (
+    build_async_client,
+    classify_http_status,
+    wrap_network_error,
 )
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async

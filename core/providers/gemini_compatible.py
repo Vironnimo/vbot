@@ -24,7 +24,13 @@ from core.providers._gemini_wire import (
     gemini_input_payload,
     gemini_returned_reasoning,
 )
-from core.providers._http_shared import (
+from core.providers._responses_profile import take_reasoning_renderer
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
+from core.providers.errors import NetworkError, ProviderError
+from core.providers.http import (
     PreparedRequest,
     RequestPlan,
     connect_streaming_with_retry,
@@ -34,12 +40,6 @@ from core.providers._http_shared import (
     parse_sse_json_data,
     wrap_network_error,
 )
-from core.providers._responses_profile import take_reasoning_renderer
-from core.providers._wire_learning import (
-    execute_learning_from_rejections,
-    stream_learning_from_rejections,
-)
-from core.providers.errors import NetworkError, ProviderError
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.token_getter import OAuthRequestRecovery
 from core.providers.wire_profile import Protocol

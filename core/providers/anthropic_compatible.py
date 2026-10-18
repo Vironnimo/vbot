@@ -25,18 +25,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 import httpx
 
 from core.attachments.images import ImageConverter
-from core.providers._http_shared import (
-    PreparedRequest,
-    RequestPlan,
-    build_async_client,
-    classify_http_status,
-    connect_streaming_with_retry,
-    decode_response_json,
-    iter_sse_data,
-    json_body_headers,
-    parse_sse_json_data,
-    wrap_network_error,
-)
 from core.providers._messages_constants import (
     ANTHROPIC_ERROR_STOP_REASONS,
     ANTHROPIC_OVERLOADED_STATUS,
@@ -87,6 +75,18 @@ from core.providers.adapter import (
 )
 from core.providers.effort_updates import apply_effort_updates, effort_levels, is_effort_update
 from core.providers.errors import NetworkError
+from core.providers.http import (
+    PreparedRequest,
+    RequestPlan,
+    build_async_client,
+    classify_http_status,
+    connect_streaming_with_retry,
+    decode_response_json,
+    iter_sse_data,
+    json_body_headers,
+    parse_sse_json_data,
+    wrap_network_error,
+)
 from core.providers.providers import (
     AuthConfig,
     ProviderConfig,

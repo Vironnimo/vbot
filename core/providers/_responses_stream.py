@@ -7,7 +7,6 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.providers._http_shared import split_stream_lines
 from core.providers._responses_output import (
     _assistant_phase_from_output,
     _extract_output_text_parts,
@@ -38,6 +37,7 @@ from core.providers.errors import (
     classify_in_band_error_type,
     in_band_error_text,
 )
+from core.providers.http import split_stream_lines
 from core.providers.reasoning import merge_reasoning_meta
 
 

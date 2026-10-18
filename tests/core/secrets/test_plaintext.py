@@ -11,6 +11,7 @@ import pytest
 
 from core.database import capture_config_backup, list_config_backups, write_bootstrap_marker
 from core.database import config_backups as config_backups_module
+from core.providers.accounts import Account
 from core.providers.token_store import TokenStore
 from core.secrets import (
     CREDENTIALS,
@@ -77,7 +78,7 @@ def test_an_import_mirrors_the_plaintext_files_and_changes_none_of_them(tmp_path
         "OPENAI_API_KEY": "sk-openai-later",
         "SPLIT_VALUE": "one two",
     }
-    login = TokenStore(store).load("github-copilot", "oauth")
+    login = TokenStore(store).load(Account("github-copilot", "oauth"))
     assert login is not None and login.access_token == "token-value"
     assert store.status().import_pending
     # A rolled-back update leaves the previous version its files.

@@ -14,10 +14,10 @@ What it produces:
   no union across providers);
 * the per-model **provider reasoning** the discovery layer stamps onto each
   ``<provider>.json`` model (its own ``reasoning_options``-derived control, which
-  may *deviate* from the lab spec), via :func:`provider_reasoning_block`;
+  may *deviate* from the lab spec), via :attr:`ModelsDevModel.reasoning_block`;
 * the **auto canonical pointer** for a provider model whose wire-id exactly
   matches a canonical provider section (via the provider's models.dev id), via
-  :func:`auto_canonical_pointer`.
+  :attr:`ModelsDevModel.canonical_pointer`.
 
 The runtime read path never imports this module — refresh does.
 
@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +47,7 @@ from core.models.models import (
     REASONING_CONTROL_ON_OFF,
 )
 from core.models.pricing import TokenPricing
-from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers.http import classify_http_status, wrap_network_error
 from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -171,7 +172,13 @@ class ModelsDevCatalog:
 
         return self._providers
 
-    def provider_model(self, models_dev_id: str, wire_id: str) -> Mapping[str, Any] | None:
+    def model(self, models_dev_id: str, wire_id: str) -> ModelsDevModel:
+        """Bind the exact Provider/Model entry once for all fact projections."""
+        return ModelsDevModel(
+            self, models_dev_id, wire_id, self._provider_model(models_dev_id, wire_id)
+        )
+
+    def _provider_model(self, models_dev_id: str, wire_id: str) -> Mapping[str, Any] | None:
         """Return one provider section's model by exact wire-id, or ``None``.
 
         The exact-match lookup the deterministic join relies on — no fuzzy
@@ -188,6 +195,233 @@ class ModelsDevCatalog:
             return None
         model = models.get(wire_id)
         return model if isinstance(model, Mapping) else None
+
+
+@dataclass(frozen=True)
+class ModelsDevModel:
+    """Bound fact view of one exact Provider Model, including absent catalog entries.
+
+    Projection keeps missing facts unknown and compares reasoning control with
+    the canonical lab before deciding whether the Provider has a deviation.
+    """
+
+    catalog: ModelsDevCatalog
+    models_dev_id: str
+    wire_id: str
+    _entry: Mapping[str, Any] | None
+
+    @property
+    def present(self) -> bool:
+        return self._entry is not None
+
+    @property
+    def reasoning_control(self) -> dict[str, Any] | None:
+        return (
+            derive_reasoning_control(_reasoning_options_of(self._entry))
+            if self._entry is not None
+            else None
+        )
+
+    @property
+    def canonical_id(self) -> str | None:
+        pointer = self.canonical_pointer
+        return (
+            pointer
+            if pointer is not None
+            else (self.wire_id if self.wire_id in self.catalog.models else None)
+        )
+
+    @property
+    def canonical_reasoning_supported(self) -> bool | None:
+        canonical = self.catalog.models.get(self.canonical_id or "")
+        return canonical.get("reasoning") if isinstance(canonical, Mapping) else None
+
+    @property
+    def canonical_pointer(self) -> str | None:
+        """Return the auto ``canonical`` pointer for a provider model, or ``None``.
+
+        A safe, deterministic exact-match only: when the provider's models.dev
+        section (looked up by ``models_dev_id``) contains the exact ``wire_id``, the
+        canonical id is ``"<models_dev_id>/<wire_id>"`` *if and only if* that id is a
+        real key in the canonical layer. No fuzzy matching — a missed pointer is not
+        damage (the at-load join also covers exact canonical-id wire-ids).
+
+        Note: this is the lab-style pointer (``lab/model``). It is written into
+        ``<provider>.json`` only for the provider that *is* the lab for that model;
+        for resellers (OpenRouter, etc.) the wire-id usually already equals the
+        canonical id, which the at-load exact-canonical-id match resolves without a
+        stored pointer.
+        """
+
+        if self._entry is None:
+            return None
+        candidate = f"{self.models_dev_id}/{self.wire_id}"
+        if candidate in self.catalog.models:
+            return candidate
+        return None
+
+    @property
+    def reasoning_block(self) -> dict[str, Any] | None:
+        """Return the per-provider reasoning block when the provider DEVIATES.
+
+        Reads the provider's own ``reasoning_options`` (per-provider ``control``
+        derivation runs here too) and compares against the lab spec. Returns the
+        full typed reasoning block to stamp on the ``<provider>.json`` model ONLY
+        when the provider reports a control that differs from the lab spec — so the
+        canonical inheritance handles the common (non-deviating) case and the
+        provider layer stays minimal. Returns ``None`` when the provider does not
+        deviate (or carries no usable options), letting the model inherit the
+        canonical ladder at load.
+        """
+
+        provider_model = self._entry
+        if provider_model is None:
+            return None
+        provider_control = derive_reasoning_control(_reasoning_options_of(provider_model))
+        if provider_control is None:
+            return None
+
+        canonical_id = f"{self.models_dev_id}/{self.wire_id}"
+        lab_control = (
+            lift_canonical_ladder(self.catalog, canonical_id)
+            if canonical_id in self.catalog.models
+            else None
+        )
+        if provider_control == lab_control:
+            return None
+        # ``supported`` and the control derive from the SAME models.dev provider
+        # section, so the stamped block is always internally consistent. Sourcing
+        # ``supported`` from the adapter's normalization instead would let a thin
+        # provider (whose bare ``/models`` endpoint reports no reasoning) produce an
+        # invalid ``supported: false`` block carrying an effort ladder.
+        return {"supported": bool(provider_model.get("reasoning")), **provider_control}
+
+    @property
+    def interleaved_field(self) -> str | None:
+        """Return the per-model reasoning RESPONSE field, or ``None`` (Phase 5).
+
+        Projects the provider section's models.dev ``interleaved`` value into the
+        field-name selector the adapter reads from ``metadata.<provider>.\
+        interleaved_field``: ``{"field": "reasoning_content"}`` /
+        ``{"field": "reasoning_details"}`` → that field name. Bare ``interleaved:
+        true`` (no field-name override) and an absent ``interleaved`` both yield
+        ``None`` so the adapter keeps its hardcoded default-key scan (graceful).
+        """
+
+        provider_model = self._entry
+        if provider_model is None:
+            return None
+        interleaved = provider_model.get("interleaved")
+        if not isinstance(interleaved, Mapping):
+            return None
+        field_name = interleaved.get(_MODELS_DEV_INTERLEAVED_FIELD_KEY)
+        return field_name if isinstance(field_name, str) and field_name else None
+
+    @property
+    def limits(self) -> tuple[int | None, int | None]:
+        """Return ``(context_window, max_output_tokens)`` from the provider's section.
+
+        A gateway/aggregator endpoint often returns bare ids with NO limits (e.g.
+        opencode-go's ``/models`` reports neither a context window nor an output cap),
+        but models.dev carries the per-provider section with the real limits THAT
+        PROVIDER offers — which may legitimately differ from the canonical base, since
+        a provider can cap the window or the output (e.g. opencode-go ``glm-5`` output
+        32768 vs the canonical 131072). Refresh projects these into the provider layer
+        so the on-disk ``<provider>.json`` carries the provider's own limits rather
+        than a hand-guessed override. Returns ``(None, None)`` when the provider
+        section has no entry for ``wire_id`` or no ``limit`` block.
+        """
+
+        provider_model = self._entry
+        if provider_model is None:
+            return None, None
+        raw_limit = provider_model.get("limit")
+        limit: Mapping[str, Any] = raw_limit if isinstance(raw_limit, Mapping) else {}
+        return _optional_int(limit.get("context")), _optional_int(limit.get("output"))
+
+    @property
+    def modalities(self) -> tuple[list[str], list[str]] | None:
+        """Return ``(input_modalities, output_modalities)`` from the provider section.
+
+        A bare gateway endpoint reports no modalities, so the adapter falls back to a
+        text-only default; models.dev's per-provider section carries the real ones
+        (e.g. opencode-go ``minimax-m3`` is ``text/image/video``). The caller applies
+        these only when they are a strict SUPERSET of what the endpoint reported, so
+        enrichment can only ADD modalities, never drop a real one the endpoint knew.
+        Returns ``None`` when the provider section has no entry or no modalities.
+        """
+
+        provider_model = self._entry
+        if provider_model is None:
+            return None
+        modalities = provider_model.get("modalities")
+        if not isinstance(modalities, Mapping):
+            return None
+        input_modalities = [m for m in _string_list(modalities.get("input")) if m]
+        output_modalities = [m for m in _string_list(modalities.get("output")) if m]
+        if not input_modalities and not output_modalities:
+            return None
+        return input_modalities, output_modalities
+
+    @property
+    def reasoning_supported(self) -> bool | None:
+        """Return the bare ``reasoning`` capability flag from the provider's section.
+
+        models.dev marks each provider model reasoning-capable with a top-level
+        ``reasoning`` boolean (independent of whether it publishes a control ladder in
+        ``reasoning_options``). The caller fills unknown endpoint support with this
+        exact fact, without treating an absent flag as a denial. Returns ``None``
+        when the provider section has no entry or no boolean reasoning flag.
+        """
+
+        provider_model = self._entry
+        if provider_model is None:
+            return None
+        supported = provider_model.get("reasoning")
+        return supported if isinstance(supported, bool) else None
+
+    @property
+    def family(self) -> str | None:
+        """Return the model ``family`` from the provider's models.dev section, or ``None``.
+
+        A bare gateway endpoint reports no family; models.dev's per-provider section
+        carries one. Projected into the provider layer so ``Model.family`` is populated
+        without the canonical join (which a gateway wire-id usually cannot reach).
+        """
+
+        provider_model = self._entry
+        if provider_model is None:
+            return None
+        family = provider_model.get("family")
+        return family if isinstance(family, str) and family else None
+
+    @property
+    def npm(self) -> str | None:
+        """Return the per-model AI SDK package (``provider.npm``) of one provider Model.
+
+        A gateway that serves several wire protocols names the client package per
+        Model (e.g. OpenCode Zen ``gpt-5.4`` → ``@ai-sdk/openai``); wire profiles map
+        it to a protocol. Only the per-model value counts: the section-wide ``npm``
+        is the provider's default client, not a fact about one Model, so a Model
+        without its own package yields ``None``.
+        """
+
+        provider_model = self._entry
+        if provider_model is None:
+            return None
+        provider = provider_model.get("provider")
+        npm = provider.get("npm") if isinstance(provider, Mapping) else None
+        return npm if isinstance(npm, str) and npm else None
+
+    @property
+    def pricing(self) -> dict[str, Any] | None:
+        """Project this exact Provider's rates in USD per million tokens."""
+        entry = self._entry
+        pricing = TokenPricing.from_cost(
+            entry.get("cost") if entry is not None else None,
+            source=f"{_MODELS_DEV_PRICE_SOURCE_PREFIX}{self.models_dev_id}/{self.wire_id}",
+        )
+        return pricing.to_dict() if pricing is not None else None
 
 
 async def fetch_catalog(
@@ -357,14 +591,14 @@ def _refresh_provider_prices(
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
         for wire_id, record in payload.get("models", {}).items():
-            if catalog.provider_model(catalog_id, wire_id) is None:
+            if not catalog.model(catalog_id, wire_id).present:
                 # A missing entry is no price update; discovery keeps earlier
                 # enrichment for this exact Model while the public feed has a gap.
                 continue
             if _provider_catalog_price(record.get("pricing")):
                 # The Provider's own catalog price wins; its discovery refreshes it.
                 continue
-            pricing = provider_pricing(catalog, models_dev_id=catalog_id, wire_id=wire_id)
+            pricing = catalog.model(models_dev_id=catalog_id, wire_id=wire_id).pricing
             if pricing is not None:
                 record["pricing"] = pricing
             elif isinstance(record.get("pricing"), dict) and str(
@@ -490,232 +724,7 @@ def lift_canonical_ladder(catalog: ModelsDevCatalog, canonical_id: str) -> dict[
     lab, _, wire_id = canonical_id.partition("/")
     if not wire_id:
         return None
-    lab_model = catalog.provider_model(lab, wire_id)
-    if lab_model is None:
-        return None
-    return derive_reasoning_control(_reasoning_options_of(lab_model))
-
-
-def auto_canonical_pointer(
-    catalog: ModelsDevCatalog,
-    *,
-    models_dev_id: str,
-    wire_id: str,
-) -> str | None:
-    """Return the auto ``canonical`` pointer for a provider model, or ``None``.
-
-    A safe, deterministic exact-match only: when the provider's models.dev
-    section (looked up by ``models_dev_id``) contains the exact ``wire_id``, the
-    canonical id is ``"<models_dev_id>/<wire_id>"`` *if and only if* that id is a
-    real key in the canonical layer. No fuzzy matching — a missed pointer is not
-    damage (the at-load join also covers exact canonical-id wire-ids).
-
-    Note: this is the lab-style pointer (``lab/model``). It is written into
-    ``<provider>.json`` only for the provider that *is* the lab for that model;
-    for resellers (OpenRouter, etc.) the wire-id usually already equals the
-    canonical id, which the at-load exact-canonical-id match resolves without a
-    stored pointer.
-    """
-
-    if catalog.provider_model(models_dev_id, wire_id) is None:
-        return None
-    candidate = f"{models_dev_id}/{wire_id}"
-    if candidate in catalog.models:
-        return candidate
-    return None
-
-
-def provider_reasoning_block(
-    catalog: ModelsDevCatalog,
-    *,
-    models_dev_id: str,
-    wire_id: str,
-) -> dict[str, Any] | None:
-    """Return the per-provider reasoning block when the provider DEVIATES.
-
-    Reads the provider's own ``reasoning_options`` (per-provider ``control``
-    derivation runs here too) and compares against the lab spec. Returns the
-    full typed reasoning block to stamp on the ``<provider>.json`` model ONLY
-    when the provider reports a control that differs from the lab spec — so the
-    canonical inheritance handles the common (non-deviating) case and the
-    provider layer stays minimal. Returns ``None`` when the provider does not
-    deviate (or carries no usable options), letting the model inherit the
-    canonical ladder at load.
-    """
-
-    provider_model = catalog.provider_model(models_dev_id, wire_id)
-    if provider_model is None:
-        return None
-    provider_control = derive_reasoning_control(_reasoning_options_of(provider_model))
-    if provider_control is None:
-        return None
-
-    canonical_id = f"{models_dev_id}/{wire_id}"
-    lab_control = (
-        lift_canonical_ladder(catalog, canonical_id) if canonical_id in catalog.models else None
-    )
-    if provider_control == lab_control:
-        return None
-    # ``supported`` and the control derive from the SAME models.dev provider
-    # section, so the stamped block is always internally consistent. Sourcing
-    # ``supported`` from the adapter's normalization instead would let a thin
-    # provider (whose bare ``/models`` endpoint reports no reasoning) produce an
-    # invalid ``supported: false`` block carrying an effort ladder.
-    return {"supported": bool(provider_model.get("reasoning")), **provider_control}
-
-
-def interleaved_field(
-    catalog: ModelsDevCatalog,
-    *,
-    models_dev_id: str,
-    wire_id: str,
-) -> str | None:
-    """Return the per-model reasoning RESPONSE field, or ``None`` (Phase 5).
-
-    Projects the provider section's models.dev ``interleaved`` value into the
-    field-name selector the adapter reads from ``metadata.<provider>.\
-    interleaved_field``: ``{"field": "reasoning_content"}`` /
-    ``{"field": "reasoning_details"}`` → that field name. Bare ``interleaved:
-    true`` (no field-name override) and an absent ``interleaved`` both yield
-    ``None`` so the adapter keeps its hardcoded default-key scan (graceful).
-    """
-
-    provider_model = catalog.provider_model(models_dev_id, wire_id)
-    if provider_model is None:
-        return None
-    interleaved = provider_model.get("interleaved")
-    if not isinstance(interleaved, Mapping):
-        return None
-    field_name = interleaved.get(_MODELS_DEV_INTERLEAVED_FIELD_KEY)
-    return field_name if isinstance(field_name, str) and field_name else None
-
-
-def provider_limits(
-    catalog: ModelsDevCatalog,
-    *,
-    models_dev_id: str,
-    wire_id: str,
-) -> tuple[int | None, int | None]:
-    """Return ``(context_window, max_output_tokens)`` from the provider's section.
-
-    A gateway/aggregator endpoint often returns bare ids with NO limits (e.g.
-    opencode-go's ``/models`` reports neither a context window nor an output cap),
-    but models.dev carries the per-provider section with the real limits THAT
-    PROVIDER offers — which may legitimately differ from the canonical base, since
-    a provider can cap the window or the output (e.g. opencode-go ``glm-5`` output
-    32768 vs the canonical 131072). Refresh projects these into the provider layer
-    so the on-disk ``<provider>.json`` carries the provider's own limits rather
-    than a hand-guessed override. Returns ``(None, None)`` when the provider
-    section has no entry for ``wire_id`` or no ``limit`` block.
-    """
-
-    provider_model = catalog.provider_model(models_dev_id, wire_id)
-    if provider_model is None:
-        return None, None
-    raw_limit = provider_model.get("limit")
-    limit: Mapping[str, Any] = raw_limit if isinstance(raw_limit, Mapping) else {}
-    return _optional_int(limit.get("context")), _optional_int(limit.get("output"))
-
-
-def provider_modalities(
-    catalog: ModelsDevCatalog,
-    *,
-    models_dev_id: str,
-    wire_id: str,
-) -> tuple[list[str], list[str]] | None:
-    """Return ``(input_modalities, output_modalities)`` from the provider section.
-
-    A bare gateway endpoint reports no modalities, so the adapter falls back to a
-    text-only default; models.dev's per-provider section carries the real ones
-    (e.g. opencode-go ``minimax-m3`` is ``text/image/video``). The caller applies
-    these only when they are a strict SUPERSET of what the endpoint reported, so
-    enrichment can only ADD modalities, never drop a real one the endpoint knew.
-    Returns ``None`` when the provider section has no entry or no modalities.
-    """
-
-    provider_model = catalog.provider_model(models_dev_id, wire_id)
-    if provider_model is None:
-        return None
-    modalities = provider_model.get("modalities")
-    if not isinstance(modalities, Mapping):
-        return None
-    input_modalities = [m for m in _string_list(modalities.get("input")) if m]
-    output_modalities = [m for m in _string_list(modalities.get("output")) if m]
-    if not input_modalities and not output_modalities:
-        return None
-    return input_modalities, output_modalities
-
-
-def provider_reasoning_supported(
-    catalog: ModelsDevCatalog,
-    *,
-    models_dev_id: str,
-    wire_id: str,
-) -> bool | None:
-    """Return the bare ``reasoning`` capability flag from the provider's section.
-
-    models.dev marks each provider model reasoning-capable with a top-level
-    ``reasoning`` boolean (independent of whether it publishes a control ladder in
-    ``reasoning_options``). The caller fills unknown endpoint support with this
-    exact fact, without treating an absent flag as a denial. Returns ``None``
-    when the provider section has no entry or no boolean reasoning flag.
-    """
-
-    provider_model = catalog.provider_model(models_dev_id, wire_id)
-    if provider_model is None:
-        return None
-    supported = provider_model.get("reasoning")
-    return supported if isinstance(supported, bool) else None
-
-
-def provider_family(
-    catalog: ModelsDevCatalog,
-    *,
-    models_dev_id: str,
-    wire_id: str,
-) -> str | None:
-    """Return the model ``family`` from the provider's models.dev section, or ``None``.
-
-    A bare gateway endpoint reports no family; models.dev's per-provider section
-    carries one. Projected into the provider layer so ``Model.family`` is populated
-    without the canonical join (which a gateway wire-id usually cannot reach).
-    """
-
-    provider_model = catalog.provider_model(models_dev_id, wire_id)
-    if provider_model is None:
-        return None
-    family = provider_model.get("family")
-    return family if isinstance(family, str) and family else None
-
-
-def provider_npm(catalog: ModelsDevCatalog, *, models_dev_id: str, wire_id: str) -> str | None:
-    """Return the per-model AI SDK package (``provider.npm``) of one provider Model.
-
-    A gateway that serves several wire protocols names the client package per
-    Model (e.g. OpenCode Zen ``gpt-5.4`` → ``@ai-sdk/openai``); wire profiles map
-    it to a protocol. Only the per-model value counts: the section-wide ``npm``
-    is the provider's default client, not a fact about one Model, so a Model
-    without its own package yields ``None``.
-    """
-
-    provider_model = catalog.provider_model(models_dev_id, wire_id)
-    if provider_model is None:
-        return None
-    provider = provider_model.get("provider")
-    npm = provider.get("npm") if isinstance(provider, Mapping) else None
-    return npm if isinstance(npm, str) and npm else None
-
-
-def provider_pricing(
-    catalog: ModelsDevCatalog, *, models_dev_id: str, wire_id: str
-) -> dict[str, Any] | None:
-    """Project this exact Provider's rates in USD per million tokens."""
-    entry = catalog.provider_model(models_dev_id, wire_id)
-    pricing = TokenPricing.from_cost(
-        entry.get("cost") if entry is not None else None,
-        source=f"{_MODELS_DEV_PRICE_SOURCE_PREFIX}{models_dev_id}/{wire_id}",
-    )
-    return pricing.to_dict() if pricing is not None else None
+    return catalog.model(lab, wire_id).reasoning_control
 
 
 def _provider_catalog_price(pricing: Any) -> bool:
@@ -805,7 +814,7 @@ def _project_canonical_model(
         if field_name in model:
             record[field_name] = model[field_name]
     lab, _, wire_id = canonical_id.partition("/")
-    pricing = provider_pricing(catalog, models_dev_id=lab, wire_id=wire_id)
+    pricing = catalog.model(models_dev_id=lab, wire_id=wire_id).pricing
     if pricing is not None:
         record["pricing"] = pricing
     return record

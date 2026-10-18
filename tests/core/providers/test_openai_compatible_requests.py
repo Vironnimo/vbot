@@ -10,13 +10,13 @@ import httpx
 import pytest
 import respx
 
-from core.providers._http_shared import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     request_input_budget,
 )
 from core.providers.errors import ProviderError
+from core.providers.http import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
 from core.providers.openai_compatible import REASONING_PARAMETER_NAMES
 from core.providers.providers import AuthConfig, ConnectionConfig, resolve_request_output_limit
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY

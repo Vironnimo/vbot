@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 from typing import Any, cast
 
-from core.providers.accounts import ConnectionRef, split_connection_id
+from core.providers.accounts import Account, ConnectionRef, split_connection_id
 from core.providers.auth_flow import DeviceFlowEngine
 from core.providers.token_getter import (
     COPILOT_API_ENDPOINT_EXTRA_KEY,
@@ -79,7 +79,7 @@ async def _runtime_provider_credential(
         account_id=requested_account_id,
     )
     getter = OAuthTokenGetter(
-        token_store, provider_id, connection.id, connection.oauth, account_id=account_id
+        token_store, Account(provider_id, connection.id, account_id), connection.oauth
     )
     # Resolve expiring tokens before callers read token-derived endpoint metadata,
     # but keep recovery and per-attempt credential access alive through discovery.
@@ -219,15 +219,10 @@ def _device_flow_engine(state: Any) -> DeviceFlowEngine:
     return engine
 
 
-def _device_flow_active(
-    engine: Any,
-    provider_id: str,
-    local_connection_id: str,
-    account_id: str,
-) -> bool:
+def _device_flow_active(engine: Any, account: Account) -> bool:
     if engine is None:
         return False
-    return bool(engine.is_flow_active(provider_id, local_connection_id, account_id))
+    return bool(engine.is_flow_active(account))
 
 
 def _connection_accounts_response(

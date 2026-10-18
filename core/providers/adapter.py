@@ -236,7 +236,7 @@ class ProviderAdapter(ABC):
 
     When debug mode is enabled, the runtime passes a
     ``ProviderDebugRecorder`` into the adapter constructor; the adapter
-    builds its HTTP client through ``_http_shared.build_async_client``,
+    builds its HTTP client through ``http.build_async_client``,
     which wires HTTP capture into a single transport. A stateful non-HTTP
     transport may feed one canonical exchange directly to the same recorder;
     OpenAI Subscription WebSocket streaming is the sanctioned implementation.

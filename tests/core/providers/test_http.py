@@ -17,7 +17,15 @@ import respx
 
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
-from core.providers._http_shared import (
+from core.providers.errors import (
+    NetworkError,
+    ProviderAuthError,
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderRequestTooLargeError,
+    ProviderTimeoutError,
+)
+from core.providers.http import (
     PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
     build_async_client,
     build_streaming_request,
@@ -33,14 +41,6 @@ from core.providers._http_shared import (
     provider_streaming_timeout,
     split_stream_lines,
     wrap_network_error,
-)
-from core.providers.errors import (
-    NetworkError,
-    ProviderAuthError,
-    ProviderError,
-    ProviderRateLimitError,
-    ProviderRequestTooLargeError,
-    ProviderTimeoutError,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.utils.retry import caller_owns_retries

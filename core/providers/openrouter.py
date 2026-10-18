@@ -23,16 +23,6 @@ from core.providers._chat_completions_catalog import (
     _read_string,
     _read_string_list,
 )
-from core.providers._http_shared import (
-    PreparedRequest,
-    classify_http_status,
-    connect_streaming_with_retry,
-    decode_response_json,
-    format_http_error_detail,
-    iter_stream_lines,
-    json_body_headers,
-    wrap_network_error,
-)
 from core.providers._openrouter_catalog import (
     _embedding_catalog_pricing,
     _image_catalog_model,
@@ -89,6 +79,16 @@ from core.providers.github_copilot_responses import (
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
     responses_returned_reasoning,
+)
+from core.providers.http import (
+    PreparedRequest,
+    classify_http_status,
+    connect_streaming_with_retry,
+    decode_response_json,
+    format_http_error_detail,
+    iter_stream_lines,
+    json_body_headers,
+    wrap_network_error,
 )
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,

@@ -61,7 +61,7 @@ Custom Provider discovery has no automatic refresh. When the runtime Model DB is
 
 ## Source and tests
 
-- Provider fetch/normalization: `core/models/discovery.py`
+- Refresh orchestration: `core/models/discovery.py`; request construction/fetching `_discovery_http.py`; Connection projection/merge/enrichment `_discovery_projection.py`
 - Model layers and assembly: `core/models/`, `models.md`
 - Local sweep/reachability: `core/providers/runtime.py`, `server/rpc/model_methods.py`
 - Startup restore: `server/rpc/model_methods.py::start_installation_catalog_restore`, `tests/server/rpc/test_model_methods_refresh.py`

@@ -26,7 +26,6 @@ from typing import Any
 import httpx
 
 from core.database import Database, DatabaseError
-from core.providers._http_shared import classify_http_status
 from core.providers._usage_parsers import (
     _parse_copilot_usage,
     _parse_minimax_usage,
@@ -61,6 +60,7 @@ from core.providers._usage_types import (
     _SupportedConnection,
 )
 from core.providers.errors import ProviderAuthError
+from core.providers.http import classify_http_status
 from core.providers.openai import CODEX_EXTRA_HEADERS
 from core.providers.openai_subscription_auth import (
     CHATGPT_ACCOUNT_ID_EXTRA_KEY,

@@ -13,6 +13,7 @@ import respx
 
 from core.models.discovery import ModelDiscoveryError, refresh_models
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.accounts import Account
 from core.providers.errors import ProviderAuthError
 from core.providers.providers import (
     AuthConfig,
@@ -410,7 +411,7 @@ async def test_xai_403_recovers_only_exact_oauth_token_rejection(
         refresh_token="old-test-refresh",
         expires_at=datetime.now(UTC) + timedelta(days=1),
     )
-    store.save("xai", "subscription", original)
+    store.save(Account("xai", "subscription"), original)
     renews = outcome in {"success", "rejected_again"}
     refresh = respx.post(connection.oauth.token_url).mock(
         return_value=httpx.Response(
@@ -428,7 +429,7 @@ async def test_xai_403_recovers_only_exact_oauth_token_rejection(
         method=method, url=(connection.base_url or provider.base_url).rstrip("/") + endpoint
     ).mock(side_effect=[rejection, rejection if outcome == "rejected_again" else success])
 
-    getter = OAuthTokenGetter(store, "xai", "subscription", connection.oauth)
+    getter = OAuthTokenGetter(store, Account("xai", "subscription"), connection.oauth)
     credential: TokenGetter | str = "test-key" if outcome == "static_key" else getter
     if outcome == "success":
         assert await _invoke(consumer, provider, connection, credential, tmp_path)
@@ -438,7 +439,7 @@ async def test_xai_403_recovers_only_exact_oauth_token_rejection(
 
     assert route.call_count == (2 if renews else 1)
     assert refresh.call_count == (1 if renews else 0)
-    saved = store.load("xai", "subscription")
+    saved = store.load(Account("xai", "subscription"))
     if renews:
         assert saved is not None and saved.refresh_token == "new-test-refresh"
         assert route.calls[1].request.headers["Authorization"] == "Bearer new-test-token"

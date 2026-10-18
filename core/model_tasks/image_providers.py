@@ -11,8 +11,8 @@ from typing import Any, override
 import httpx
 
 from core.model_tasks.image_types import ImageGenerationResult, ImageInput, JsonObject
-from core.providers._http_shared import parse_sse_json_data, split_stream_lines
 from core.providers.errors import ProviderAuthError, ProviderContentRefusedError, ProviderError
+from core.providers.http import parse_sse_json_data, split_stream_lines
 from core.providers.openai import (
     CODEX_EXTRA_HEADERS,
     CODEX_RESPONSES_ENDPOINT,

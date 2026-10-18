@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from core.models.models import Model, ModelRegistry
+from core.providers.accounts import Account
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai_subscription_auth import openai_subscription_token_extra
@@ -138,7 +139,7 @@ async def build_environment(data_dir: Path) -> SnapshotEnvironment:
             enabled[f"{provider_id}:{connection.id}"] = True
             if connection.type == "oauth" and connection.oauth is not None:
                 token, token_secrets = _fake_oauth_token(config, connection.id)
-                token_store.save(provider_id, connection.id, token)
+                token_store.save(Account(provider_id, connection.id), token)
                 secret_values.update(token_secrets)
             elif connection.type in {"api_key", "oauth"} and connection.auth.credential_key:
                 key = connection.auth.credential_key

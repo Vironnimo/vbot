@@ -13,8 +13,8 @@ import httpx
 from core.attachments import sniff_media_type
 from core.model_tasks.image_types import ImageInput
 from core.model_tasks.video_types import VideoGenerationResult
-from core.providers._http_shared import decode_response_json
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
+from core.providers.http import decode_response_json
 from core.providers.task_client import (
     NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
     ProviderTaskClient,

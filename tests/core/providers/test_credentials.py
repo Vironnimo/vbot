@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from core.providers.accounts import Account
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import (
     AuthConfig,
@@ -150,9 +151,9 @@ def test_env_accounts_list_default_first_and_process_env_shadows_data_dir() -> N
 
 def test_token_store_and_keyless_connections_list_their_own_accounts(tmp_path: Path) -> None:
     token_store = TokenStore(SecretStore(tmp_path))
-    token_store.save("openai", "subscription", OAuthToken(access_token="default-token"))
+    token_store.save(Account("openai", "subscription"), OAuthToken(access_token="default-token"))
     token_store.save(
-        "openai", "subscription", OAuthToken(access_token="work-token"), account_id="work"
+        Account("openai", "subscription", "work"), OAuthToken(access_token="work-token")
     )
     resolver = _resolver(token_store=token_store)
 
@@ -218,7 +219,7 @@ def test_get_credentials_resolves_the_exact_or_first_usable_account(
 def test_oauth_credentials_come_from_the_account_token_file(tmp_path: Path) -> None:
     token_store = TokenStore(SecretStore(tmp_path))
     token_store.save(
-        "openai", "subscription", OAuthToken(access_token="work-token"), account_id="work"
+        Account("openai", "subscription", "work"), OAuthToken(access_token="work-token")
     )
     resolver = _resolver(token_store=token_store)
 

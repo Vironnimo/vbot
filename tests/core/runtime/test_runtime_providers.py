@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from core.providers.accounts import ConnectionRef
+from core.providers.accounts import Account, ConnectionRef
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import ProviderAuthError
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -549,10 +549,8 @@ async def test_get_adapter_reads_the_live_token_store_and_routing_settings(
         "copilot_api_endpoint": "https://api.enterprise.githubcopilot.com",
     }
     runtime.token_store.save(
-        "github-copilot",
-        "oauth",
+        Account("github-copilot", "oauth", "work"),
         OAuthToken(access_token="work-token", extra=extra),
-        account_id="work",
     )
 
     # Without an Account part, the first usable Account is bound, and its token
@@ -570,7 +568,9 @@ async def test_get_adapter_reads_the_live_token_store_and_routing_settings(
     with pytest.raises(ProviderAuthError):
         await pending._token_getter()  # type: ignore[attr-defined]
 
-    runtime.token_store.save("openai", "subscription", OAuthToken(access_token="oauth-access"))
+    runtime.token_store.save(
+        Account("openai", "subscription"), OAuthToken(access_token="oauth-access")
+    )
     subscription = ConnectionRef("openai", "openai:subscription")
     getter = runtime.get_connection_token_getter(subscription)
     assert isinstance(getter, OAuthTokenGetter)

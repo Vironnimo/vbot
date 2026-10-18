@@ -11,7 +11,6 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from core.providers._http_shared import _REQUEST_BODY_WORKERS
 from core.providers._openai_constants import (
     _CODEX_WEBSOCKET_CONNECT_TIMEOUT_SECONDS,
     _CODEX_WEBSOCKET_STATUS_CODE,
@@ -27,6 +26,7 @@ from core.providers.github_copilot_responses import (
     ResponsesStreamState,
     normalize_responses_stream_event,
 )
+from core.providers.http import _REQUEST_BODY_WORKERS
 from core.utils.tls import shared_ssl_context
 
 if TYPE_CHECKING:

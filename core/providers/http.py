@@ -1,9 +1,9 @@
-"""Shared HTTP error classification utilities for provider adapters.
+"""Public Provider HTTP plumbing for Adapters, task clients and catalog discovery.
 
-Private module — not exported from ``core.providers``.
-Provides common constants and functions used by both OpenAI-compatible
-and Anthropic adapters for classifying HTTP errors and wrapping network
-exceptions.
+Owns request preparation, shared client/transport construction, SSE framing,
+HTTP error classification and retries. Consumers use these operations instead
+of reproducing Provider transport policy; wire-specific codecs stay with their
+Adapters.
 """
 
 from __future__ import annotations

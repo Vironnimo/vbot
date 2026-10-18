@@ -9,7 +9,6 @@ canonical refresh, and shape verification.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,18 +19,10 @@ from core.models.models_dev import (
     MODELS_DEV_CATALOG_URL,
     ModelsDevCatalog,
     ModelsDevError,
-    auto_canonical_pointer,
     derive_reasoning_control,
     fetch_catalog,
-    interleaved_field,
     lift_canonical_ladder,
     project_canonical_models,
-    provider_family,
-    provider_limits,
-    provider_modalities,
-    provider_npm,
-    provider_reasoning_block,
-    provider_reasoning_supported,
     refresh_canonical_layer,
 )
 
@@ -175,44 +166,42 @@ def test_provider_sections_supply_the_facts_bare_endpoints_omit(
     openrouter_gemini = {"models_dev_id": "openrouter", "wire_id": "google/gemini-2.5-flash"}
     lab_v4 = {"models_dev_id": "deepseek", "wire_id": "deepseek-v4-pro"}
 
-    assert auto_canonical_pointer(catalog, **lab_v4) == "deepseek/deepseek-v4-pro"
+    assert catalog.model(**lab_v4).canonical_pointer == "deepseek/deepseek-v4-pro"
     # A deviating ladder is stamped with the section's own reasoning flag.
-    assert provider_reasoning_block(catalog, **openrouter_v4) == {
+    assert catalog.model(**openrouter_v4).reasoning_block == {
         "supported": True,
         "control": "levels",
         "levels": ["high", "xhigh"],
     }
     # The lab does not deviate from its own spec; the Model inherits it at load.
-    assert provider_reasoning_block(catalog, **lab_v4) is None
-    assert interleaved_field(catalog, **openrouter_v4) == "reasoning_content"
-    assert interleaved_field(catalog, **openrouter_gemini) is None
-    assert provider_limits(catalog, **openrouter_v4) == (1048576, 384000)
-    assert provider_modalities(catalog, **openrouter_gemini) == (
+    assert catalog.model(**lab_v4).reasoning_block is None
+    assert catalog.model(**openrouter_v4).interleaved_field == "reasoning_content"
+    assert catalog.model(**openrouter_gemini).interleaved_field is None
+    assert catalog.model(**openrouter_v4).limits == (1048576, 384000)
+    assert catalog.model(**openrouter_gemini).modalities == (
         ["text", "image", "audio", "video", "pdf"],
         ["text"],
     )
-    assert provider_family(catalog, **lab_v4) == "deepseek-thinking"
+    assert catalog.model(**lab_v4).family == "deepseek-thinking"
     # The section's default package is not a fact about one Model.
     assert catalog.providers["openrouter"]["npm"] == "@openrouter/ai-sdk-provider"
-    assert provider_npm(catalog, **openrouter_v4) is None
-    assert provider_reasoning_supported(catalog, **lab_v4) is True
+    assert catalog.model(**openrouter_v4).npm is None
+    assert catalog.model(**lab_v4).reasoning_supported is True
     assert (
-        provider_reasoning_supported(
-            catalog, models_dev_id="xai", wire_id="grok-4.20-0309-non-reasoning"
-        )
+        catalog.model(
+            models_dev_id="xai", wire_id="grok-4.20-0309-non-reasoning"
+        ).reasoning_supported
         is False
     )
     assert (
-        provider_reasoning_supported(
-            ModelsDevCatalog(
-                {
-                    "models": catalog.models,
-                    "providers": {**catalog.providers, "new": {"models": {"m": {}}}},
-                }
-            ),
-            models_dev_id="new",
-            wire_id="m",
+        ModelsDevCatalog(
+            {
+                "models": catalog.models,
+                "providers": {**catalog.providers, "new": {"models": {"m": {}}}},
+            }
         )
+        .model(models_dev_id="new", wire_id="m")
+        .reasoning_supported
         is None
     )
 
@@ -220,20 +209,20 @@ def test_provider_sections_supply_the_facts_bare_endpoints_omit(
 @pytest.mark.parametrize(
     ("lookup", "expected"),
     [
-        (auto_canonical_pointer, None),
-        (interleaved_field, None),
-        (provider_limits, (None, None)),
-        (provider_modalities, None),
-        (provider_family, None),
-        (provider_npm, None),
-        (provider_reasoning_supported, None),
+        ("canonical_pointer", None),
+        ("interleaved_field", None),
+        ("limits", (None, None)),
+        ("modalities", None),
+        ("family", None),
+        ("npm", None),
+        ("reasoning_supported", None),
     ],
 )
 def test_provider_section_lookups_tolerate_unknown_models(
-    catalog: ModelsDevCatalog, lookup: Callable[..., object], expected: object
+    catalog: ModelsDevCatalog, lookup: str, expected: object
 ) -> None:
-    assert lookup(catalog, models_dev_id="openrouter", wire_id="does/not-exist") == expected
-    assert lookup(catalog, models_dev_id="opencode-go", wire_id="x") == expected
+    assert getattr(catalog.model("openrouter", "does/not-exist"), lookup) == expected
+    assert getattr(catalog.model("opencode-go", "x"), lookup) == expected
 
 
 @pytest.mark.asyncio

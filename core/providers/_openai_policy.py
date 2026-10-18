@@ -5,6 +5,21 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from core.models.models import (
+    Capabilities,
+    Model,
+    ReasoningCapabilities,
+    text_embedding_capabilities,
+)
+from core.providers._openai_constants import (
+    DISCOVERY_JSON_PARAMETER_NAMES,
+    DISCOVERY_REASONING_PARAMETER_NAMES,
+    DISCOVERY_TOOL_PARAMETER_NAMES,
+)
+from core.providers.openai_compatible import OpenAICompatibleAdapter
+
+_PLATFORM_EMBEDDING_PREFIX = "text-embedding-"
+
 
 def _is_platform_chat_or_embedding_model(model_id: str) -> bool:
     """Admit new ids except recognizable non-chat endpoint families.
@@ -136,3 +151,83 @@ def _first_optional_bool(
                 if isinstance(supported, bool):
                     return supported
     return None
+
+
+def normalize_catalog_entry(
+    raw: Mapping[str, Any], defaults: Mapping[str, Any] | None = None
+) -> Model:
+    """Normalize a Codex or Platform chat/embedding listing entry."""
+
+    model_id = raw.get("id")
+    if isinstance(model_id, str) and model_id.startswith(_PLATFORM_EMBEDDING_PREFIX):
+        # Only the third generation supports shortened vectors (``dimensions``).
+        return Model(
+            model_id=model_id,
+            name=model_id,
+            capabilities=text_embedding_capabilities(
+                ("dimensions",) if model_id.startswith("text-embedding-3-") else ()
+            ),
+            context_window=None,
+            max_output_tokens=None,
+        )
+    return OpenAICompatibleAdapter.normalize_catalog_entry(_normalize_catalog_raw(raw), defaults)
+
+
+def normalize_subscription_catalog_entry(raw: Mapping[str, Any], base_model: Model) -> Model:
+    """Project Codex capability metadata over the normalized catalog identity."""
+    if "text_embedding" in base_model.capabilities.task_types:
+        return base_model
+    normalized_raw = _normalize_catalog_raw(raw)
+    capabilities = _optional_mapping(normalized_raw.get("capabilities"))
+    supports = _optional_mapping(capabilities.get("supports"))
+    raw_parameters = _string_set(normalized_raw.get("supported_parameters"))
+    tools_supported = _subscription_capability_supported(
+        raw_parameters,
+        base_model.capabilities.tools,
+        (normalized_raw, capabilities, supports),
+        ("supports_tools", "tools", "tool_calls", "function_calling"),
+        DISCOVERY_TOOL_PARAMETER_NAMES,
+    )
+    json_supported = _subscription_capability_supported(
+        raw_parameters,
+        base_model.capabilities.json_mode or not raw_parameters,
+        (normalized_raw, capabilities, supports),
+        (
+            "supports_json_mode",
+            "json_mode",
+            "supports_structured_outputs",
+            "structured_outputs",
+        ),
+        DISCOVERY_JSON_PARAMETER_NAMES,
+    )
+    reasoning_supported = _subscription_capability_supported(
+        raw_parameters,
+        base_model.capabilities.reasoning.supported or not raw_parameters,
+        (normalized_raw, capabilities, supports),
+        ("supports_reasoning", "reasoning_supported", "reasoning"),
+        DISCOVERY_REASONING_PARAMETER_NAMES,
+    )
+
+    return Model(
+        model_id=base_model.model_id,
+        name=base_model.name,
+        capabilities=Capabilities(
+            vision=base_model.capabilities.vision,
+            tools=tools_supported,
+            json_mode=json_supported,
+            reasoning=ReasoningCapabilities(supported=reasoning_supported),
+            input_modalities=base_model.capabilities.input_modalities,
+            output_modalities=base_model.capabilities.output_modalities,
+            supported_parameters=tuple(
+                _subscription_supported_parameters(
+                    raw_parameters,
+                    tools_supported,
+                    json_supported,
+                    reasoning_supported,
+                )
+            ),
+        ),
+        context_window=base_model.context_window,
+        max_output_tokens=base_model.max_output_tokens,
+        metadata=base_model.metadata,
+    )
