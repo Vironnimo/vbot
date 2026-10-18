@@ -41,6 +41,7 @@ from core.tools.tools import (
     ToolContext,
     tool_failure,
 )
+from core.utils.file_status import is_dir_strict
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
@@ -283,7 +284,11 @@ def not_run_problem(report: CommandReport) -> tuple[str, bool] | None:
     if report.not_run != "workdir_unavailable":
         return None
     path = model_path(report.workdir)
-    if not report.workdir.is_dir():
+    try:
+        directory = is_dir_strict(report.workdir)
+    except OSError:
+        directory = True
+    if not directory:
         # The directory was removed after the call was checked.
         return (
             f"the workdir {path} is no longer an existing directory. Pass an existing "
@@ -782,7 +787,11 @@ def _start_failure(
             f"{SHELL_MODEL_NAME} was not run: this turn was cancelled, or vBot is shutting down.",
             retryable=False,
         )
-    if not call.workdir.is_dir():
+    try:
+        directory = is_dir_strict(call.workdir)
+    except OSError:
+        directory = True
+    if not directory:
         # The directory was removed after the call was checked.
         given = call.workdir != context.effective_cwd
         return tool_failure(

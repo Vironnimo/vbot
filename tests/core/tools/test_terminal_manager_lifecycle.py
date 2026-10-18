@@ -706,7 +706,10 @@ async def test_execution_group_stop_keeps_unrelated_terminal_after_attachment_tr
 
 
 @pytest.mark.asyncio
-async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path: Path) -> None:
+@pytest.mark.parametrize("cancel_close", [False, True])
+async def test_execution_group_stop_drains_pending_terminal_launch(
+    tmp_path: Path, cancel_close: bool
+) -> None:
     started = threading.Event()
     release = threading.Event()
     factory = AdapterFactory()
@@ -733,6 +736,13 @@ async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path: Pat
         close = asyncio.create_task(manager.close_execution_group("fixture", "group", "epoch"))
         await asyncio.sleep(0)
         assert not close.done()
+        if cancel_close:
+            close.cancel()
+            await asyncio.sleep(0)
+            close.cancel()
+            await asyncio.sleep(0)
+            assert not close.done()
+            assert not launch.done()
         # A launch racing the drain is rejected while admission is closed.
         with pytest.raises(TerminalClosedError):
             await manager.spawn(
@@ -745,8 +755,23 @@ async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path: Pat
             )
         release.set()
         await launch
-        await close
+        if cancel_close:
+            with pytest.raises(asyncio.CancelledError):
+                await close
+        else:
+            await close
         assert not factory.adapters[0].alive
+        assert factory.adapters[0].closed
+        # Cleanup released the admission fence after every launch was owned.
+        late = await manager.spawn(
+            owner(),
+            ["fake"],
+            cwd=tmp_path,
+            env=None,
+            origin_run_id="late",
+            execution_owner=execution,
+        )
+        assert not late.finished
     finally:
         release.set()
         await asyncio.gather(launch, return_exceptions=True)

@@ -48,6 +48,7 @@ from core.tools.file_state import (
 from core.tools.model_names import model_tool_name
 from core.tools.search import display_search_path
 from core.tools.tools import JsonObject, ToolContext
+from core.utils.file_status import is_file_strict
 
 _BOM = b"\xef\xbb\xbf"
 _WRITE_FAILED = "Could not change {path}: {reason}. Check this path before resending this change."
@@ -265,14 +266,29 @@ def _os_reason(error: OSError, batch: ChangeBatch) -> str:
     return reason
 
 
-def _write_failure(path: str, error: OSError) -> JsonObject:
+def _write_failure(path: Path, error: OSError, batch: ChangeBatch) -> JsonObject:
     """Describe a failed write, delete or rename of the shown ``path``."""
     # Windows sharing and lock violations: another program holds the file open.
     held_open = getattr(error, "winerror", None) in {32, 33}
+    reason = os_error_reason(error)
+    if isinstance(error, FileExistsError) and error.filename:
+        obstruction = Path(error.filename)
+        if obstruction in path.parents:
+            reason = _os_reason(error, batch)
+            try:
+                parent_is_file = is_file_strict(obstruction)
+            except OSError as check_error:
+                reason = (
+                    f"{batch.shown(obstruction)} could not be checked: "
+                    f"{os_error_reason(check_error)}"
+                )
+            else:
+                if parent_is_file:
+                    reason = f"{batch.shown(obstruction)} is a file, not a directory"
     failure: JsonObject = {
         "code": "file_write_error",
         "message": (_WRITE_BUSY if held_open else _WRITE_FAILED).format(
-            path=path, reason=os_error_reason(error)
+            path=batch.shown(path), reason=reason
         ),
     }
     attempts = getattr(error, "attempts_made", None)
@@ -331,7 +347,7 @@ def _commit(
             batch.blocked.update(before)
             if isinstance(error, _PatchError):
                 return completed, _error_data(error, batch)
-            return completed, _write_failure(batch.shown(path), error)
+            return completed, _write_failure(path, error, batch)
         batch.before.setdefault(path, before[path])
         batch.after[path] = batch.observed[path] = target
         completed.append(batch.shown(path))
@@ -397,7 +413,10 @@ def _rename(
         _rename_entry(source, destination, before)
     except OSError as error:
         batch.blocked.update(before)
-        return [], _write_failure(batch.shown(source), error)
+        failed_path = source
+        if error.filename and Path(error.filename) in destination.parents:
+            failed_path = destination
+        return [], _write_failure(failed_path, error, batch)
     completed = [batch.shown(destination)]
     batch.before.setdefault(source, snapshot)
     if destination == source:

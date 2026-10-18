@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 
 import psutil  # type: ignore[import-untyped]
@@ -1058,16 +1059,42 @@ async def test_acknowledging_a_shown_end_withdraws_a_result_not_yet_handed_over(
 
 
 @pytest.mark.asyncio
-async def test_transferred_commands_deliver_to_their_new_session(harness: Harness) -> None:
+@pytest.mark.parametrize("before_submit", [False, True])
+async def test_transferred_commands_deliver_to_their_new_session(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, before_submit: bool
+) -> None:
     command_id, process = await harness.launch()
+    flushing = asyncio.Event()
+    flushed = asyncio.Event()
+    if before_submit:
+        flush = harness.manager._services.flush
+
+        async def paused_flush() -> None:
+            flushing.set()
+            await flushed.wait()
+            await flush()
+
+        monkeypatch.setattr(
+            harness.manager, "_services", replace(harness.manager._services, flush=paused_flush)
+        )
     submitted_id, submitted = await harness.launch()
     for background_id in (command_id, submitted_id):
         harness.manager.to_background(background_id, deliver=True)
     # Its result went to the old Session and is not delivered yet.
     submitted.exit(0)
     await harness.finish(submitted_id)
+    if before_submit:
+        await flushing.wait()
+        assert harness.sink.submissions == []
 
     assert await harness.manager.transfer_scope(OWNER, OTHER) == 2
+    flushed.set()
+    await eventually(lambda: len(harness.sink.submissions) == (1 if before_submit else 2))
+    # A durable status result in the moved Session withdraws its exact pending
+    # receipt, including when submission started only after the Session moved.
+    harness.manager.acknowledge(submitted_id)
+    await turns()
+    assert all(future.cancelled() for future in harness.sink.futures)
     identity = SessionAddress(None, "agent-old", "session-i")
     identity_id, identity_process = await harness.launch(owner=identity)
     assert await harness.manager.transfer_agent_scope("agent-old", "agent-new") == 1
@@ -1077,12 +1104,13 @@ async def test_transferred_commands_deliver_to_their_new_session(harness: Harnes
     await harness.finish(identity_id)
 
     assert [(s["notice_id"], s["address"]) for s in harness.sink.submissions] == [
-        (f"command:{submitted_id}", OWNER),
+        *([] if before_submit else [(f"command:{submitted_id}", OWNER)]),
         (f"command:{submitted_id}", OTHER),
         (f"command:{command_id}", OTHER),
     ]
     assert harness.sink.futures[0].cancelled()
-    assert harness.sink.submissions[0]["body"] == harness.sink.submissions[1]["body"]
+    if not before_submit:
+        assert harness.sink.submissions[0]["body"] == harness.sink.submissions[1]["body"]
     assert harness.manager.report(identity_id).owner == SessionAddress(
         None, "agent-new", "session-i"
     )

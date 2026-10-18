@@ -824,7 +824,6 @@ class CommandRecord:
 
     def _submit(self, sink: CompletionSink, body: str) -> None:
         """Submit the result *body* to the command's Session."""
-        self._delivered_to = self.owner
         self._delivered_body = body
         self._services.checkpoint(self.command_id)
 
@@ -834,9 +833,13 @@ class CommandRecord:
             await self._services.flush()
             if not self._delivering:
                 return
+            # A Session move can finish while the checkpoint is being saved.
+            # Withdrawal must name the exact address that receives the notice.
+            target = self.owner
+            self._delivered_to = target
             await self._await_delivery(
                 sink.submit_completion(
-                    self.owner,
+                    target,
                     notice_id=self.notice_id,
                     origin_run_id=self.origin_run_id,
                     body=body,
