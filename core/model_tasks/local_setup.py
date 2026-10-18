@@ -571,9 +571,13 @@ class LocalSetup:
             async def reap() -> None:
                 try:
                     if process.returncode is None:
-                        with suppress(ProcessLookupError):
-                            await kill_process_tree_async(process)
-                        await process.wait()
+                        try:
+                            with suppress(ProcessLookupError):
+                                await kill_process_tree_async(process)
+                        finally:
+                            # Even a failed native termination must not abandon
+                            # the child or admit another installer while it runs.
+                            await process.wait()
                 finally:
                     self._process = None
 
