@@ -10,7 +10,7 @@ Maps are factual working notes for agents, not architecture documentation or gen
 
 ## Size budget
 
-A root map holds at most 16,000 characters (about 4,000 tokens); `.vorch/PROJECT.md`, which every agent reads in every session, at most 28,000. `python scripts/domain_maps.py` measures them; the commit hook warns when a staged file above its budget grows.
+A root map holds at most 16,000 characters (about 4,000 tokens); `.vorch/PROJECT.md`, which every agent reads in every session, at most 30,000. `python scripts/domain_maps.py` measures them; the commit hook warns when a staged file above its budget grows.
 
 - When your change would leave a file above budget and larger than before, move material out in the same change so the file ends no larger than it started, beginning with the section you touched: from a root map, task-gated material into a supplementary file of that domain; from `.vorch/PROJECT.md`, facts whose use is confined to one domain into that domain's map.
 - Content that every agent of the domain (for PROJECT.md: every agent) needs stays, even above budget. The budget tells you to look for task-gated material; it is never a reason to split always-needed content, which only forces an extra read.

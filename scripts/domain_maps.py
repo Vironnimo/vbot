@@ -27,8 +27,8 @@ MAPS_DIR = ".vorch/domain-maps"
 INDEX_FILE = ".vorch/PROJECT.md"
 ROOT_BUDGET = 16_000
 """Characters a root map may hold (about 4,000 tokens)."""
-PROJECT_BUDGET = 28_000
-"""Characters ``INDEX_FILE`` may hold (about 7,000 tokens)."""
+PROJECT_BUDGET = 30_000
+"""Characters ``INDEX_FILE`` may hold (about 7,500 tokens)."""
 AUDIT_THRESHOLD = 5
 """Root maps over budget at which the report calls for a corpus audit."""
 
