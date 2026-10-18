@@ -277,7 +277,7 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
         _print(registration, lines=lines)
         return 0
     if args.area == "uninstall":
-        from cli.application.integration import uninstall
+        from cli.application.integration import RemovalMode, uninstall
 
         data = Path(install.server_data_directory) if install.server_data_directory else None
         if args.uninstall_mode is None:
@@ -296,7 +296,7 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
         if mode is None:
             print("uninstall: cancelled; no changes made")
             return 0
-        removal = uninstall(install, remove_data=mode == "all", data_only=mode == "data-only")
+        removal = uninstall(install, mode=RemovalMode(mode))
         lines = (
             [
                 "vBot data has been reset. The application is still installed.",

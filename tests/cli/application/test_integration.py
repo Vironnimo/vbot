@@ -13,7 +13,7 @@ import pytest
 
 from cli.application import integration
 from cli.application.autostart import UNIT_NAME, CommandRun, autostart, owned_unit, user_unit_dir
-from cli.application.integration import request_host_exit, uninstall
+from cli.application.integration import RemovalMode, request_host_exit, uninstall
 from cli.application.state import ApplicationError, Installation
 from cli.server_management import ServerState
 from core.utils.server_control import server_control_claim
@@ -256,7 +256,7 @@ def test_data_only_reset_preserves_application_autostart_and_running_state(
     ):
         result = uninstall(
             install,
-            data_only=True,
+            mode=RemovalMode.DATA,
             platform="win32",
             server_state=lambda _install: state,
             stop=stop,
@@ -300,8 +300,11 @@ def test_uninstall_refuses_data_inside_the_application_before_changes(
         uninstall(
             install,
             platform="linux",
-            data_only=mode == "data",
-            remove_data=mode == "all",
+            mode={
+                "application": RemovalMode.APPLICATION,
+                "data": RemovalMode.DATA,
+                "all": RemovalMode.ALL,
+            }[mode],
             stop=unexpected_change,
             exit_host=unexpected_change,
             remove_tree=unexpected_change,
@@ -310,10 +313,10 @@ def test_uninstall_refuses_data_inside_the_application_before_changes(
     assert sentinel.read_bytes() == b"keep"
 
 
-@pytest.mark.parametrize("data_only", [False, True], ids=["all", "data-only"])
+@pytest.mark.parametrize("mode", [RemovalMode.ALL, RemovalMode.DATA])
 @pytest.mark.parametrize("claim", ["another-port", "unreadable"])
 def test_data_removal_requires_every_server_claim_to_be_released(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_only: bool, claim: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: RemovalMode, claim: str
 ) -> None:
     install = _install(tmp_path / "app")
     data = Path(str(install.server_data_directory))
@@ -330,8 +333,7 @@ def test_data_removal_requires_every_server_claim_to_be_released(
         uninstall(
             install,
             platform="linux",
-            data_only=data_only,
-            remove_data=not data_only,
+            mode=mode,
             server_state=lambda _install: "absent",
             stop=lambda _install: SimpleNamespace(ok=True, message="stopped"),
             exit_host=lambda _install: None,
