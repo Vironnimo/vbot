@@ -25,10 +25,14 @@ services:
 - `core/tools/_search_query.py`: `interpret` turns the named fields and `args`
   into one `SearchQuery`, with mode, patterns, roots, globs, the rg arguments,
   context, page and notes.
-- `core/tools/_search_execution.py`: bounded, cancellable ripgrep children
-  (`native_lines`), the counting and listing passes, the JSON line pass,
-  diagnostic judgment (`_judge`), failure texts (`explain_failure`) and the regex
-  retry (`pattern_retry`).
+- `core/tools/_search_execution.py`: `SearchExecution` binds one native binary,
+  Tool context, budget and working directory for the counting, listing and JSON
+  line passes, name matching and native reference reads. It also owns diagnostic
+  judgment (`_judge`), failure texts (`explain_failure`) and regex retry
+  (`pattern_retry`).
+- `core/tools/_search_native.py`: bounded, cancellable ripgrep children
+  (`native_lines`), pipe readers, process lifetime and native resource bounds;
+  context-free picker listings use this same reader.
 - `core/tools/_search_results.py`: ordering, pages and rendering (`entry_page`,
   `content_window`, `content_page`) and the `summary`.
 - `core/tools/_search_hints.py`: when a pattern looks like file names

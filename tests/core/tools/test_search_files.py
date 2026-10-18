@@ -291,7 +291,7 @@ def test_the_record_bound_applies_to_each_listed_path_and_name(
 ) -> None:
     _write(tmp_path, dict.fromkeys(_FILES, "x\n"))
     # Each path or name ripgrep prints is shorter than the bound; all of them are longer.
-    monkeypatch.setattr("core.tools._search_execution.MAX_PROTOCOL_LINE", 32)
+    monkeypatch.setattr("core.tools._search_native.MAX_PROTOCOL_LINE", 32)
     assert set(_all_pages(tmp_path, arguments, limit=10000)) == expected
 
 
@@ -300,7 +300,7 @@ def test_a_result_over_the_record_bound_fails_naming_the_file_to_leave_out(
 ) -> None:
     _write(tmp_path, {"data/big.min.js": "needle " + "x" * 5000 + "\n", "src/a.py": "needle\n"})
     # The long line's match event exceeds the bound; every other record stays below it.
-    monkeypatch.setattr("core.tools._search_execution.MAX_PROTOCOL_LINE", 4096)
+    monkeypatch.setattr("core.tools._search_native.MAX_PROTOCOL_LINE", 4096)
 
     result = asyncio.run(dispatch(tmp_path, {"pattern": "needle"}))
 
@@ -338,7 +338,7 @@ def test_a_search_over_the_memory_bound_fails_with_advice_for_its_mode(
         def memory_info(self) -> SimpleNamespace:
             return SimpleNamespace(rss=MAX_CHILD_MEMORY + 1)
 
-    monkeypatch.setattr("core.tools._search_execution.psutil.Process", Oversized)
+    monkeypatch.setattr("core.tools._search_native.psutil.Process", Oversized)
 
     result = asyncio.run(dispatch(tmp_path, arguments))
 
@@ -762,7 +762,7 @@ async def test_a_failed_start_is_explained_in_english(
     if failure_at == "root":
         deny_access(project / "plain.txt")
     else:
-        monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", refuse)
+        monkeypatch.setattr("core.tools._search_native.subprocess.Popen", refuse)
     result = await dispatch(project, {"pattern": "needle", "path": "plain.txt"})
     assert result["error"]["code"] == "search_error"
     assert "Zugriff" not in result["error"]["message"]

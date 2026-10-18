@@ -12,55 +12,35 @@ from __future__ import annotations
 import base64
 import contextlib
 import errno
-import io
 import json
 import os
-import queue
 import re
-import subprocess
 import tempfile
-import threading
-import time
 import unicodedata
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-import psutil  # type: ignore[import-untyped]
-
 from core.tools._search_query import SearchQuery
 from core.tools.file_state import os_error_reason
-from core.utils.processes import subprocess_creation_flags
 
 if TYPE_CHECKING:
     # Annotations only: core.tools.search runs its listings through this module.
     from core.tools.search import SearchBudget
     from core.tools.tools import ToolContext
 
-# Bound on one output record, such as a JSON event or a listed path.
-MAX_PROTOCOL_LINE = 8 * 1024 * 1024
-# Bytes read from a child's output at once; the records they complete travel together.
-_READ_BYTES = 64 * 1024
-# Bound on one native command line; a longer path list runs in several batches.
-MAX_COMMAND_LINE_BYTES = 28000
-# Bound on a child's resident memory, and its polling interval; each poll is a process query.
-MAX_CHILD_MEMORY = 512 * 1024 * 1024
-MEMORY_POLL_SECONDS = 0.05
-# Bound on the entries one counting or listing pass collects before they are ordered.
-MAX_ENTRIES = 500_000
-# Bound on the bytes one counting or listing pass may print.
-MAX_SCAN_BYTES = 256 * 1024 * 1024
 
-# A --debug message naming a path ripgrep's walker skipped, and the kind of rule that
-# skipped it. File type filters skip files only and report every file, so their
-# messages are left out. A path can hold a line break outside Windows.
-_SKIPPED = re.compile(
-    rb"^rg: DEBUG\|ignore::walk\|.*?: ignoring (.*?): Ignore\(IgnoreMatch\((?!Types\()(\w+)",
-    re.DOTALL,
+from core.tools._search_native import MAX_CHILD_MEMORY as MAX_CHILD_MEMORY
+from core.tools._search_native import (
+    MAX_COMMAND_LINE_BYTES,
+    MAX_ENTRIES,
+    MAX_SCAN_BYTES,
+    native_lines,
 )
-# Bound on one --debug message kept for matching; a longer one is matched on its start.
-_DEBUG_MESSAGE_BYTES = 1024 * 1024
+from core.tools._search_native import MAX_PROTOCOL_LINE as MAX_PROTOCOL_LINE
+from core.tools._search_native import NativeOutcome as NativeOutcome
+from core.tools._search_native import SearchBoundError as SearchBoundError
 
 # Defaults that differ from ripgrep's own; later args items override them.
 DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
@@ -70,251 +50,6 @@ CACHES_EXCLUDED = "!__pycache__"
 _CACHE_NAMES = ("__pycache__", ".pyc", ".pyo")
 # Arguments that select files by type; --type-add and --type-clear only define types.
 _FILE_TYPE_FILTERS = ("--type=", "--type-not=")
-
-
-class SearchBoundError(RuntimeError):
-    """A native run stopped at a processing bound, so its output is unusable.
-
-    ``bound`` is ``"record"`` when one output record exceeded ``MAX_PROTOCOL_LINE``
-    and ``"memory"`` when the child exceeded ``MAX_CHILD_MEMORY``. ``path`` is the
-    absolute path of the file whose output record was too large, when known.
-    """
-
-    def __init__(self, bound: Literal["record", "memory"], path: Path | None = None) -> None:
-        if bound == "record":
-            message = f"A native search output record exceeds {MAX_PROTOCOL_LINE} bytes."
-        else:
-            message = f"A native search child exceeds {MAX_CHILD_MEMORY} bytes of memory."
-        super().__init__(message)
-        self.bound: Literal["record", "memory"] = bound
-        self.path = path
-
-
-@dataclass
-class NativeOutcome:
-    """How one native run ended, for callers that judge its diagnostics themselves."""
-
-    returncode: int | None = None
-    diagnostics: str = ""
-    interrupted: bool = False
-    # Paths ripgrep's walker skipped, as --debug reports them, in its own spelling.
-    skipped: list[bytes] = field(default_factory=list)
-    # The skipped paths that ignore files (.gitignore, .ignore, .rgignore) excluded.
-    ignored: list[bytes] = field(default_factory=list)
-
-
-def native_lines(
-    binary: Path,
-    arguments: list[str],
-    context: ToolContext | None,
-    budget: SearchBudget,
-    *,
-    cwd: Path | None = None,
-    outcome: NativeOutcome | None = None,
-    terminator: bytes = b"\n",
-) -> Generator[bytes]:
-    """Yield the child's output records, draining both pipes with bounded storage.
-
-    A record ends with ``terminator``, kept in the record: a line by default, a
-    path for ``--null`` listings and a name for ``--null-data``. Each record is
-    bounded at ``MAX_PROTOCOL_LINE``, never the whole output. Even a silent
-    process is interrupted. With ``outcome``, the exit code and diagnostics are
-    recorded there for the caller to judge. Without it, a failed run raises
-    ``RuntimeError``. A record over its bound or a child over its memory bound
-    raises ``SearchBoundError`` either way. A caller outside a Tool call passes no
-    ``context`` and its ``cwd``; only its budget stops the child then.
-    """
-    if context is None and cwd is None:
-        raise ValueError("A native search outside a Tool call needs its working directory.")
-    if len(terminator) != 1:
-        raise ValueError("A record terminator is one byte.")
-    cancelled = threading.Event()
-    if context is not None:
-        # The Run retains this callback until dispatch finishes on the Event Loop.
-        # Retaining Popen here would defer its Windows handle destructor to that
-        # thread. Native process operations and lifetime belong to this worker.
-        context.on_cancel(cancelled.set)
-
-    def keep_going() -> bool:
-        return budget.keep_going() and not cancelled.is_set()
-
-    if not keep_going():
-        if outcome is not None:
-            outcome.interrupted = True
-        return
-    # Each message holds the records one read completed. Shut down when this generator
-    # stops, which also releases an output thread blocked in put.
-    messages: queue.Queue[tuple[str, list[bytes]]] = queue.Queue(maxsize=8)
-    diagnostics = bytearray()
-
-    def kill(child: subprocess.Popen[bytes]) -> None:
-        with contextlib.suppress(OSError):
-            if child.poll() is None:
-                child.kill()
-
-    monitored = None
-
-    def put(kind: str, records: list[bytes]) -> bool:
-        """Queue one message; ``False`` once the consumer has stopped."""
-        try:
-            messages.put((kind, records))
-        except queue.ShutDown:
-            return False
-        return True
-
-    def output() -> None:
-        assert isinstance(stdout, io.BufferedIOBase)
-        try:
-            for records in _records(stdout, terminator):
-                if records is None:
-                    put("too_long", [])
-                    break
-                if not put("records", records):
-                    break
-        finally:
-            put("end", [])
-
-    def note_skip(message: bytearray) -> None:
-        skipped = _SKIPPED.match(message)
-        if skipped and outcome is not None and len(outcome.skipped) < MAX_ENTRIES:
-            outcome.skipped.append(skipped[1])
-            if skipped[2] == b"Gitignore":
-                outcome.ignored.append(skipped[1])
-
-    def errors() -> None:
-        assert stderr is not None
-        # A message starts with "rg: "; lines without it continue the previous one,
-        # such as the regex error inside a debug message about engine fallback, or
-        # the rest of a skipped path that holds a line break. So a debug message is
-        # matched once the next message starts, or at the end.
-        debug: bytearray | None = None
-        while line := stderr.readline(65536):
-            if line.startswith(b"rg: "):
-                if debug is not None:
-                    note_skip(debug)
-                debug = bytearray() if line.startswith(b"rg: DEBUG|") else None
-            if debug is not None:
-                debug += line[: _DEBUG_MESSAGE_BYTES - len(debug)]
-                continue
-            if len(diagnostics) < 8192:
-                diagnostics.extend(line[: 8192 - len(diagnostics)])
-        if debug is not None:
-            note_skip(debug)
-
-    threads = [
-        threading.Thread(target=output, daemon=True),
-        threading.Thread(target=errors, daemon=True),
-    ]
-    started_threads = []
-    next_memory_poll = 0.0
-    output_finished = False
-    if cwd is None:
-        assert context is not None
-        cwd = context.effective_cwd
-    process = subprocess.Popen(
-        [str(binary), "--no-config", *arguments],
-        cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=subprocess_creation_flags(),
-    )
-    try:
-        stdout, stderr = process.stdout, process.stderr
-        assert stdout is not None and stderr is not None
-        # A fast child may exit before psutil attaches. Its pipes and exit
-        # status still belong to Popen and must be drained normally.
-        with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-            monitored = psutil.Process(process.pid)
-        for thread in threads:
-            thread.start()
-            started_threads.append(thread)
-        while keep_going():
-            if monitored is not None and time.monotonic() >= next_memory_poll:
-                next_memory_poll = time.monotonic() + MEMORY_POLL_SECONDS
-                with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-                    if monitored.memory_info().rss > MAX_CHILD_MEMORY:
-                        raise SearchBoundError("memory")
-            try:
-                kind, records = messages.get(timeout=0.05)
-            except queue.Empty:
-                continue
-            if kind == "end":
-                output_finished = True
-                break
-            if kind == "too_long":
-                raise SearchBoundError("record")
-            yield from records
-        # EOF can precede process exit. Keep checking cancellation here as well
-        # instead of waiting for the entire remaining search budget at once.
-        while keep_going() and process.poll() is None:
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=0.05)
-        interrupted = budget.stopped or cancelled.is_set()
-        if interrupted:
-            kill(process)
-        threads[1].join(timeout=1)
-        text = diagnostics.decode("utf-8", errors="backslashreplace").strip()
-        if outcome is not None:
-            outcome.returncode = process.poll()
-            outcome.diagnostics = text
-            outcome.interrupted = interrupted
-            return
-        if output_finished and budget.timed_out:
-            raise RuntimeError("Search timed out; narrow paths or filters and retry.")
-        if process.returncode not in (0, 1) and not interrupted:
-            raise RuntimeError(
-                text
-                or "search_files could not complete the search: the search engine exited "
-                f"with code {process.returncode}. Retry the call."
-            )
-        if text and not interrupted:
-            raise RuntimeError(text)
-    finally:
-        try:
-            messages.shutdown(immediate=True)
-            kill(process)
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=2)
-            for thread in started_threads:
-                thread.join(timeout=2)
-            if process.stdout is not None:
-                process.stdout.close()
-            if process.stderr is not None:
-                process.stderr.close()
-        finally:
-            # Also release it if a consumer retains this generator's traceback.
-            # Reader threads hold only their pipes, never the process object.
-            del process
-
-
-def _records(stream: io.BufferedIOBase, terminator: bytes) -> Iterator[list[bytes] | None]:
-    """Yield the records each read of ``stream`` completes, each ending with ``terminator``.
-
-    A last record may lack its terminator. A record that exceeds
-    ``MAX_PROTOCOL_LINE`` is not read on: ``None`` takes its place and ends the
-    iteration.
-    """
-    pending = bytearray()
-    while chunk := stream.read1(_READ_BYTES):
-        # Only the new bytes can hold the terminator of the record in progress.
-        searched = len(pending)
-        pending += chunk
-        records: list[bytes] = []
-        start = 0
-        while (end := pending.find(terminator, searched)) >= 0:
-            if end + 1 - start > MAX_PROTOCOL_LINE:
-                break
-            records.append(bytes(pending[start : end + 1]))
-            start = searched = end + 1
-        del pending[:start]
-        if records:
-            yield records
-        if len(pending) > MAX_PROTOCOL_LINE:
-            yield None
-            return
-    if pending:
-        yield [bytes(pending)]
 
 
 @dataclass
@@ -403,159 +138,6 @@ def _pattern_arguments(patterns: list[str]) -> list[str]:
     return [token for pattern in patterns for token in ("-e", pattern)]
 
 
-def _collect(
-    binary: Path,
-    arguments: list[str],
-    scope: Scope,
-    context: ToolContext,
-    budget: SearchBudget,
-    terminator: bytes,
-) -> tuple[bytes, NativeOutcome, Literal["entries", "output"] | None]:
-    """Read one counting or listing pass, up to the first bound it reaches.
-
-    Each pass prints its entries with --null, so a record holding NUL is one
-    entry; the statistics after the counts hold none. Reading stops at the entry
-    after ``MAX_ENTRIES``, which shows that more follow and is left out, or at the
-    record that takes the output over ``MAX_SCAN_BYTES``. Stopping closes the
-    records, which ends the child. The third value names the bound that stopped it.
-    """
-    outcome = NativeOutcome()
-    chunks: list[bytes] = []
-    size = 0
-    entries = 0
-    stopped_by: Literal["entries", "output"] | None = None
-    records = native_lines(
-        binary, arguments, context, budget, cwd=scope.cwd, outcome=outcome, terminator=terminator
-    )
-    with contextlib.closing(records):
-        for record in records:
-            if b"\0" in record:
-                entries += 1
-                if entries > MAX_ENTRIES:
-                    stopped_by = "entries"
-                    break
-            chunks.append(record)
-            size += len(record)
-            if size > MAX_SCAN_BYTES:
-                stopped_by = "output"
-                break
-    return b"".join(chunks), outcome, stopped_by
-
-
-def count_scan(
-    binary: Path,
-    query: SearchQuery,
-    patterns: list[str],
-    scope: Scope,
-    context: ToolContext,
-    budget: SearchBudget,
-    cwd: Path,
-) -> ScanResult:
-    """Count matching lines (or matches) per file in one parallel pass."""
-    # With --null, a file list ends each path with NUL; counts still end with a newline.
-    terminator = b"\n"
-    if query.mode == "files_without_match":
-        selector = ["--files-without-match", "--null"]
-        terminator = b"\0"
-    else:
-        selector = [
-            # With -U ripgrep's line count merges matches unpredictably; count matches.
-            "--count-matches" if query.count_matches or query.multiline else "--count",
-            *(["--include-zero"] if query.include_zero and query.mode == "count" else []),
-            "--with-filename",
-            "--null",
-            "--stats",
-        ]
-    # No --debug: only a result without entries names the paths ignore files excluded,
-    # and ignored_scan walks for them then.
-    arguments = [
-        *_base_arguments(query, scope),
-        *selector,
-        *_pattern_arguments(patterns),
-        "--",
-        *scope.paths,
-    ]
-    data, outcome, stopped_by = _collect(binary, arguments, scope, context, budget, terminator)
-    result = _judge(outcome, scope, cwd)
-    result.stopped_by = stopped_by
-    if query.mode == "files_without_match":
-        result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
-    else:
-        result.entries, result.files_searched = _parse_counts(data)
-    return result
-
-
-def list_scan(
-    binary: Path,
-    query: SearchQuery,
-    scope: Scope,
-    context: ToolContext,
-    budget: SearchBudget,
-    cwd: Path,
-    *,
-    directories: bool = False,
-) -> ScanResult:
-    """List the files ripgrep would search, in one parallel pass.
-
-    The result names the paths ignore files excluded (``ignored``). For
-    ``directories``, only the excluding globs apply, since the others select
-    directory names, and the result also names every path ripgrep skipped.
-    """
-    if directories:
-        excluding = [glob for glob in query.globs if glob.startswith("!")]
-        skip_caches = skips_caches(query)
-        selection = [
-            *DEFAULT_ARGUMENTS,
-            *query.rg_args,
-            *rg_globs(excluding, scope.prefixes, skip_caches=skip_caches),
-        ]
-        report = True
-    else:
-        selection = _base_arguments(query, scope)
-        # --debug reports every file a file type leaves out, which costs several times
-        # the listing; with types, ignored_scan walks once more without them instead.
-        report = _without_file_types(selection) == selection
-    debug = ["--debug"] if report else []
-    arguments = [*selection, *debug, "--files", "--null", "--", *scope.paths]
-    data, outcome, stopped_by = _collect(binary, arguments, scope, context, budget, b"\0")
-    result = _judge(outcome, scope, cwd)
-    result.stopped_by = stopped_by
-    result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
-    if report:
-        result.skipped = _walk_paths(outcome.skipped, scope)
-        result.ignored = _walk_paths(outcome.ignored, scope)
-    else:
-        result.ignored = ignored_scan(binary, query, scope, context, budget)
-    return result
-
-
-def ignored_scan(
-    binary: Path, query: SearchQuery, scope: Scope, context: ToolContext, budget: SearchBudget
-) -> list[Path]:
-    """Return the paths ignore files exclude from the walk of the query's files.
-
-    ripgrep names them only in --debug reports, which also report every file a glob
-    or file type leaves out and so cost a search several times its own time. Only
-    results that show these paths run this walk. File types never apply to
-    directories and apply after ignore files, so the walk leaves them out and
-    skips the same paths. Its output is bounded like a listing's.
-    """
-    selection = _without_file_types(_base_arguments(query, scope))
-    arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
-    outcome = NativeOutcome()
-    records = native_lines(
-        binary, arguments, context, budget, cwd=scope.cwd, outcome=outcome, terminator=b"\0"
-    )
-    listed = size = 0
-    with contextlib.closing(records):
-        for record in records:
-            listed += 1
-            size += len(record)
-            if listed > MAX_ENTRIES or size > MAX_SCAN_BYTES:
-                break
-    return _walk_paths(outcome.ignored, scope)
-
-
 def _without_file_types(arguments: list[str]) -> list[str]:
     return [argument for argument in arguments if not argument.startswith(_FILE_TYPE_FILTERS)]
 
@@ -571,44 +153,6 @@ _MATCHING_FLAGS = re.compile(
     r"ignore-case|smart-case|word-regexp|line-regexp|auto-hybrid-regex|engine=.*|"
     r"(?:regex|dfa)-size-limit=.*)"
 )
-
-
-def match_names(
-    binary: Path,
-    query: SearchQuery,
-    patterns: list[str],
-    names: list[str],
-    context: ToolContext,
-    budget: SearchBudget,
-) -> set[str]:
-    """Return the names the patterns match, by ripgrep and with the query's matching flags.
-
-    Each name is matched as one whole text, so ``-x`` compares the entire name.
-    A rejected pattern raises ``SearchRefusedError`` like a content search, even
-    without names to match.
-    """
-    flags = [argument for argument in query.rg_args if _MATCHING_FLAGS.fullmatch(argument)]
-    with tempfile.TemporaryDirectory(prefix="vbot-names-") as directory:
-        source = Path(directory) / "names"
-        source.write_bytes(b"".join(os.fsencode(name) + b"\0" for name in names))
-        arguments = [
-            "--no-config",
-            *flags,
-            "--null-data",
-            "--no-filename",
-            "--no-line-number",
-            "--color=never",
-            *_pattern_arguments(patterns),
-            "--",
-            str(source),
-        ]
-        outcome = NativeOutcome()
-        lines = native_lines(binary, arguments, context, budget, outcome=outcome, terminator=b"\0")
-        with contextlib.closing(lines):
-            data = b"".join(lines)
-    if outcome.returncode not in (0, 1, None):
-        raise SearchRefusedError(outcome.diagnostics.strip().removeprefix("rg: "))
-    return {os.fsdecode(name) for name in data.split(b"\0") if name}
 
 
 def _parse_counts(data: bytes) -> tuple[list[tuple[bytes, int]], int | None]:
@@ -629,77 +173,6 @@ def _parse_counts(data: bytes) -> tuple[list[tuple[bytes, int]], int | None]:
     stats = data[position:].decode("utf-8", errors="replace")
     searched = re.search(r"^(\d+) files searched$", stats, re.MULTILINE)
     return entries, int(searched[1]) if searched else None
-
-
-def line_events(
-    binary: Path,
-    query: SearchQuery,
-    patterns: list[str],
-    scope: Scope,
-    paths: list[bytes],
-    max_count: int,
-    context: ToolContext,
-    budget: SearchBudget,
-    cwd: Path,
-) -> tuple[dict[bytes, list[dict[str, Any]]], list[str]]:
-    """Return ripgrep's match and context events for explicit files of one scope."""
-    base = [
-        *DEFAULT_ARGUMENTS,
-        *query.rg_args,
-        "--json",
-        "--max-count",
-        str(max_count),
-        *(["--before-context", str(query.before)] if query.before else []),
-        *(["--after-context", str(query.after)] if query.after else []),
-        *_pattern_arguments(patterns),
-        "--",
-    ]
-    length = sum(len(argument) + 3 for argument in base) + len(str(binary))
-    events: dict[bytes, list[dict[str, Any]]] = {}
-    warnings: list[str] = []
-    batch: list[str] = []
-    size = length
-
-    def execute() -> None:
-        outcome = NativeOutcome()
-        current: list[dict[str, Any]] | None = None
-        current_path: bytes | None = None
-        lines = native_lines(
-            binary, [*base, *batch], context, budget, cwd=scope.cwd, outcome=outcome
-        )
-        try:
-            with contextlib.closing(lines):
-                for line in lines:
-                    event = json.loads(line)
-                    kind = event["type"]
-                    if kind == "begin":
-                        current_path = _event_path(event["data"]["path"])
-                        current = events.setdefault(current_path, [])
-                    elif kind in {"match", "context"} and current is not None:
-                        current.append(event)
-                    elif kind == "end":
-                        current, current_path = None, None
-        except SearchBoundError as error:
-            # Only a match or context event can be that large; its file began before it.
-            if error.bound != "record" or current_path is None:
-                raise
-            path = Path(os.path.normpath(scope.cwd / os.fsdecode(current_path)))
-            raise SearchBoundError("record", path) from None
-        judged = _judge(outcome, scope, cwd)
-        warnings.extend(judged.warnings)
-
-    for path in paths:
-        argument = os.fsdecode(path)
-        argument_size = len(argument.encode("utf-8", errors="surrogateescape")) + 3
-        if batch and size + argument_size > MAX_COMMAND_LINE_BYTES:
-            execute()
-            batch.clear()
-            size = length
-        batch.append(argument)
-        size += argument_size
-    if batch:
-        execute()
-    return events, warnings
 
 
 def _event_path(value: dict[str, str]) -> bytes:
@@ -776,55 +249,6 @@ def _label(path: str, scope: Scope, cwd: Path) -> str:
         return absolute.relative_to(cwd).as_posix()
     except ValueError:
         return absolute.as_posix()
-
-
-def reference_text(
-    binary: Path, arguments: list[str], context: ToolContext, budget: SearchBudget
-) -> str:
-    """Return ripgrep's own reference output, such as its file type list."""
-    outcome = NativeOutcome()
-    lines = native_lines(binary, arguments, context, budget, outcome=outcome)
-    with contextlib.closing(lines):
-        text = b"".join(lines).decode("utf-8", errors="replace").strip()
-    if outcome.returncode not in (0, None):
-        raise SearchRefusedError(outcome.diagnostics.removeprefix("rg: ") or text)
-    return text
-
-
-def widen_type_case(
-    binary: Path, query: SearchQuery, context: ToolContext, budget: SearchBudget
-) -> None:
-    """Make the file types the query selects match names in any letter case.
-
-    ripgrep compares type globs case-sensitively even where file names are not,
-    so ``-t py`` would miss ``b.PY``. While globs ignore case (the default), each
-    selected type gets every glob of its definition again with letters in any case.
-    """
-    insensitive = True
-    for argument in [*DEFAULT_ARGUMENTS, *query.rg_args]:
-        if argument in {"--glob-case-insensitive", "--no-glob-case-insensitive"}:
-            insensitive = argument == "--glob-case-insensitive"
-    names = {
-        argument.split("=", 1)[1]
-        for argument in query.rg_args
-        if argument.startswith(("--type=", "--type-not="))
-    } - {"all"}
-    if not insensitive or not names:
-        return
-    definitions = [
-        argument
-        for argument in query.rg_args
-        if argument.startswith(("--type-add=", "--type-clear="))
-    ]
-    listing = reference_text(binary, [*definitions, "--type-list"], context, budget)
-    for line in listing.splitlines():
-        name, _, globs = line.partition(": ")
-        if name not in names:
-            continue
-        for glob in globs.split(", "):
-            widened = _any_case(glob)
-            if widened != glob:
-                query.rg_args.append(f"--type-add={name}:{widened}")
 
 
 def _any_case(glob: str) -> str:
@@ -1035,3 +459,299 @@ def _escape_unbalanced(pattern: str) -> str:
     for position in open_groups:
         out[position] = "\\("
     return "".join(out)
+
+
+class SearchExecution:
+    """Execute the bounded native phases belonging to one file search."""
+
+    def __init__(self, binary: Path, context: ToolContext, budget: SearchBudget, cwd: Path) -> None:
+        self.binary = binary
+        self.context = context
+        self.budget = budget
+        self.cwd = cwd
+
+    def _collect(
+        self, arguments: list[str], scope: Scope, terminator: bytes
+    ) -> tuple[bytes, NativeOutcome, Literal["entries", "output"] | None]:
+        """Read one counting or listing pass, up to the first bound it reaches.
+
+        Each pass prints its entries with --null, so a record holding NUL is one
+        entry; the statistics after the counts hold none. Reading stops at the entry
+        after ``MAX_ENTRIES``, which shows that more follow and is left out, or at the
+        record that takes the output over ``MAX_SCAN_BYTES``. Stopping closes the
+        records, which ends the child. The third value names the bound that stopped it.
+        """
+        outcome = NativeOutcome()
+        chunks: list[bytes] = []
+        size = 0
+        entries = 0
+        stopped_by: Literal["entries", "output"] | None = None
+        records = native_lines(
+            self.binary,
+            arguments,
+            self.context,
+            self.budget,
+            cwd=scope.cwd,
+            outcome=outcome,
+            terminator=terminator,
+        )
+        with contextlib.closing(records):
+            for record in records:
+                if b"\0" in record:
+                    entries += 1
+                    if entries > MAX_ENTRIES:
+                        stopped_by = "entries"
+                        break
+                chunks.append(record)
+                size += len(record)
+                if size > MAX_SCAN_BYTES:
+                    stopped_by = "output"
+                    break
+        return b"".join(chunks), outcome, stopped_by
+
+    def count_scan(self, query: SearchQuery, patterns: list[str], scope: Scope) -> ScanResult:
+        """Count matching lines (or matches) per file in one parallel pass."""
+        # With --null, a file list ends each path with NUL; counts still end with a newline.
+        terminator = b"\n"
+        if query.mode == "files_without_match":
+            selector = ["--files-without-match", "--null"]
+            terminator = b"\0"
+        else:
+            selector = [
+                # With -U ripgrep's line count merges matches unpredictably; count matches.
+                "--count-matches" if query.count_matches or query.multiline else "--count",
+                *(["--include-zero"] if query.include_zero and query.mode == "count" else []),
+                "--with-filename",
+                "--null",
+                "--stats",
+            ]
+        # No --debug: only a result without entries names the paths ignore files excluded,
+        # and ignored_scan walks for them then.
+        arguments = [
+            *_base_arguments(query, scope),
+            *selector,
+            *_pattern_arguments(patterns),
+            "--",
+            *scope.paths,
+        ]
+        data, outcome, stopped_by = self._collect(arguments, scope, terminator)
+        result = _judge(outcome, scope, self.cwd)
+        result.stopped_by = stopped_by
+        if query.mode == "files_without_match":
+            result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
+        else:
+            result.entries, result.files_searched = _parse_counts(data)
+        return result
+
+    def list_scan(
+        self, query: SearchQuery, scope: Scope, *, directories: bool = False
+    ) -> ScanResult:
+        """List the files ripgrep would search, in one parallel pass.
+
+        The result names the paths ignore files excluded (``ignored``). For
+        ``directories``, only the excluding globs apply, since the others select
+        directory names, and the result also names every path ripgrep skipped.
+        """
+        if directories:
+            excluding = [glob for glob in query.globs if glob.startswith("!")]
+            skip_caches = skips_caches(query)
+            selection = [
+                *DEFAULT_ARGUMENTS,
+                *query.rg_args,
+                *rg_globs(excluding, scope.prefixes, skip_caches=skip_caches),
+            ]
+            report = True
+        else:
+            selection = _base_arguments(query, scope)
+            # --debug reports every file a file type leaves out, which costs several times
+            # the listing; with types, ignored_scan walks once more without them instead.
+            report = _without_file_types(selection) == selection
+        debug = ["--debug"] if report else []
+        arguments = [*selection, *debug, "--files", "--null", "--", *scope.paths]
+        data, outcome, stopped_by = self._collect(arguments, scope, b"\0")
+        result = _judge(outcome, scope, self.cwd)
+        result.stopped_by = stopped_by
+        result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
+        if report:
+            result.skipped = _walk_paths(outcome.skipped, scope)
+            result.ignored = _walk_paths(outcome.ignored, scope)
+        else:
+            result.ignored = self.ignored_scan(query, scope)
+        return result
+
+    def ignored_scan(self, query: SearchQuery, scope: Scope) -> list[Path]:
+        """Return the paths ignore files exclude from the walk of the query's files.
+
+        ripgrep names them only in --debug reports, which also report every file a glob
+        or file type leaves out and so cost a search several times its own time. Only
+        results that show these paths run this walk. File types never apply to
+        directories and apply after ignore files, so the walk leaves them out and
+        skips the same paths. Its output is bounded like a listing's.
+        """
+        selection = _without_file_types(_base_arguments(query, scope))
+        arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
+        outcome = NativeOutcome()
+        records = native_lines(
+            self.binary,
+            arguments,
+            self.context,
+            self.budget,
+            cwd=scope.cwd,
+            outcome=outcome,
+            terminator=b"\0",
+        )
+        listed = size = 0
+        with contextlib.closing(records):
+            for record in records:
+                listed += 1
+                size += len(record)
+                if listed > MAX_ENTRIES or size > MAX_SCAN_BYTES:
+                    break
+        return _walk_paths(outcome.ignored, scope)
+
+    def match_names(self, query: SearchQuery, patterns: list[str], names: list[str]) -> set[str]:
+        """Return the names the patterns match, by ripgrep and with the query's matching flags.
+
+        Each name is matched as one whole text, so ``-x`` compares the entire name.
+        A rejected pattern raises ``SearchRefusedError`` like a content search, even
+        without names to match.
+        """
+        flags = [argument for argument in query.rg_args if _MATCHING_FLAGS.fullmatch(argument)]
+        with tempfile.TemporaryDirectory(prefix="vbot-names-") as directory:
+            source = Path(directory) / "names"
+            source.write_bytes(b"".join(os.fsencode(name) + b"\0" for name in names))
+            arguments = [
+                "--no-config",
+                *flags,
+                "--null-data",
+                "--no-filename",
+                "--no-line-number",
+                "--color=never",
+                *_pattern_arguments(patterns),
+                "--",
+                str(source),
+            ]
+            outcome = NativeOutcome()
+            lines = native_lines(
+                self.binary, arguments, self.context, self.budget, outcome=outcome, terminator=b"\0"
+            )
+            with contextlib.closing(lines):
+                data = b"".join(lines)
+        if outcome.returncode not in (0, 1, None):
+            raise SearchRefusedError(outcome.diagnostics.strip().removeprefix("rg: "))
+        return {os.fsdecode(name) for name in data.split(b"\0") if name}
+
+    def line_events(
+        self,
+        query: SearchQuery,
+        patterns: list[str],
+        scope: Scope,
+        paths: list[bytes],
+        max_count: int,
+    ) -> tuple[dict[bytes, list[dict[str, Any]]], list[str]]:
+        """Return ripgrep's match and context events for explicit files of one scope."""
+        base = [
+            *DEFAULT_ARGUMENTS,
+            *query.rg_args,
+            "--json",
+            "--max-count",
+            str(max_count),
+            *(["--before-context", str(query.before)] if query.before else []),
+            *(["--after-context", str(query.after)] if query.after else []),
+            *_pattern_arguments(patterns),
+            "--",
+        ]
+        length = sum(len(argument) + 3 for argument in base) + len(str(self.binary))
+        events: dict[bytes, list[dict[str, Any]]] = {}
+        warnings: list[str] = []
+        batch: list[str] = []
+        size = length
+
+        def execute() -> None:
+            outcome = NativeOutcome()
+            current: list[dict[str, Any]] | None = None
+            current_path: bytes | None = None
+            lines = native_lines(
+                self.binary,
+                [*base, *batch],
+                self.context,
+                self.budget,
+                cwd=scope.cwd,
+                outcome=outcome,
+            )
+            try:
+                with contextlib.closing(lines):
+                    for line in lines:
+                        event = json.loads(line)
+                        kind = event["type"]
+                        if kind == "begin":
+                            current_path = _event_path(event["data"]["path"])
+                            current = events.setdefault(current_path, [])
+                        elif kind in {"match", "context"} and current is not None:
+                            current.append(event)
+                        elif kind == "end":
+                            current, current_path = None, None
+            except SearchBoundError as error:
+                # Only a match or context event can be that large; its file began before it.
+                if error.bound != "record" or current_path is None:
+                    raise
+                path = Path(os.path.normpath(scope.cwd / os.fsdecode(current_path)))
+                raise SearchBoundError("record", path) from None
+            judged = _judge(outcome, scope, self.cwd)
+            warnings.extend(judged.warnings)
+
+        for path in paths:
+            argument = os.fsdecode(path)
+            argument_size = len(argument.encode("utf-8", errors="surrogateescape")) + 3
+            if batch and size + argument_size > MAX_COMMAND_LINE_BYTES:
+                execute()
+                batch.clear()
+                size = length
+            batch.append(argument)
+            size += argument_size
+        if batch:
+            execute()
+        return events, warnings
+
+    def reference_text(self, arguments: list[str]) -> str:
+        """Return ripgrep's own reference output, such as its file type list."""
+        outcome = NativeOutcome()
+        lines = native_lines(self.binary, arguments, self.context, self.budget, outcome=outcome)
+        with contextlib.closing(lines):
+            text = b"".join(lines).decode("utf-8", errors="replace").strip()
+        if outcome.returncode not in (0, None):
+            raise SearchRefusedError(outcome.diagnostics.removeprefix("rg: ") or text)
+        return text
+
+    def widen_type_case(self, query: SearchQuery) -> None:
+        """Make the file types the query selects match names in any letter case.
+
+        ripgrep compares type globs case-sensitively even where file names are not,
+        so ``-t py`` would miss ``b.PY``. While globs ignore case (the default), each
+        selected type gets every glob of its definition again with letters in any case.
+        """
+        insensitive = True
+        for argument in [*DEFAULT_ARGUMENTS, *query.rg_args]:
+            if argument in {"--glob-case-insensitive", "--no-glob-case-insensitive"}:
+                insensitive = argument == "--glob-case-insensitive"
+        names = {
+            argument.split("=", 1)[1]
+            for argument in query.rg_args
+            if argument.startswith(("--type=", "--type-not="))
+        } - {"all"}
+        if not insensitive or not names:
+            return
+        definitions = [
+            argument
+            for argument in query.rg_args
+            if argument.startswith(("--type-add=", "--type-clear="))
+        ]
+        listing = self.reference_text([*definitions, "--type-list"])
+        for line in listing.splitlines():
+            name, _, globs = line.partition(": ")
+            if name not in names:
+                continue
+            for glob in globs.split(", "):
+                widened = _any_case(glob)
+                if widened != glob:
+                    query.rg_args.append(f"--type-add={name}:{widened}")
