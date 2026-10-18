@@ -233,9 +233,10 @@ class AgentResolver:
         exist yet runs it with these overrides (the first Run of a new Session);
         it excludes ``session_id``.
 
-        ``require_model=False`` lets administration and catalogs inspect an
-        Agent's configuration without checking Model availability, including a
-        Session override. Run admission keeps the default availability checks.
+        ``require_model=False`` preserves Session Model overrides without
+        checking their availability. A Config Agent's default chain still skips
+        unavailable Models and returns an empty Model when exhausted. Run
+        admission keeps the default availability checks.
         """
         _require_one_override_source(session_id, new_session_overrides)
         address = None if session_id is None else _session_address(project_id, agent_id, session_id)
