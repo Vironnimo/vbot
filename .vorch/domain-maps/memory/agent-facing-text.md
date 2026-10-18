@@ -1,0 +1,17 @@
+# Memory Agent-facing text
+
+Why each sentence of the Agent-facing text the Memory domain owns exists: the `memory:guidance` System Prompt block, its cut notice (`_PROMPT_CUT_NOTICE`, `_PROMPT_CUT_LIST_HINT`) and the Memory size-limit refusal. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
+
+| Text | Reason |
+|---|---|
+| `Memory file <path> exceeds the 128 KiB limit. Nothing was changed. Inspect and shorten this file with file tools or a text editor before using Memory again.` | A hand-edited file could make both prompt assembly and `memory list` read and render unbounded input; refusal preserves every byte and gives a way to inspect and repair the file without partial Memory writes. |
+| `Memory holds facts that matter in every future Session, whatever the task.` (`memory:guidance`, `_MEMORY_GUIDANCE`) | Leads with the test for an entry: every entry costs prompt space in every Session. |
+| `Lessons about how to do one kind of task, including the user's preferences and corrections for that work, belong in that task's Skill, not in Memory, even when you cannot change Skills.` | The routing rule all learning texts share (`learning-routing.md`). Hermes moved preferences out of Memory into Skills after reviews wrote the same lesson to both stores until both hit their limits (Hermes 562ee8ab76, #30220); vBot's earlier texts routed style preferences to user Memory. |
+| `User Memory holds who the user is ... such as the language to reply in.` / `Agent Memory holds stable facts about the environment and projects; name the project when a fact applies only there.` | One example of an all-work preference keeps the user scope from collecting task preferences; naming the project keeps a project fact from steering other projects. |
+| `Leave out task progress, completed-work logs, facts that are easy to look up again, transient failures, guesses and secrets.` | The entries reviews and Agents most often wrote that never helped a later Session. |
+| `Write declarative facts, not instructions to yourself: ...` (two examples) | A stored imperative is read later as a current order and applied out of context. |
+| `Leave an equivalent entry alone, replace a superseded one and merge overlapping ones; the entries below can be older than the stored ones.` | Prevents duplicates and stale overwrites: the prompt shows the Session-start state. |
+| `When you can change Memory, save a worthwhile fact in the same turn, and say it was saved only after the Tool result confirms it.` | Agents announced saves that failed or never happened; the condition keeps read-only Memory from inviting calls. |
+| `A fact that belongs in Memory never goes into a Skill, even when you cannot change Memory.` | Closes the reverse misrouting when Memory is read-only. |
+| `[Not shown: {count} entries ({chars} characters) that do not fit the {budget}-character limit of this section.` (`_PROMPT_CUT_NOTICE`) | Marks the cut of a hand-edited scope: without it the Agent takes the shown entries for all of its Memory and acts against facts it cannot see. |
+| ``Call `memory` with action `list` and scope `{scope}` to see every entry.`` (`_PROMPT_CUT_LIST_HINT`) | Gives the way to the rest. Only when the Agent can call `memory`: a denied Tool is read-only Memory, and the pointer would name a Tool it cannot call. |

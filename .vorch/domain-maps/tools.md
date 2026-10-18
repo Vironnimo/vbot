@@ -29,7 +29,7 @@ Domain vocabulary. The core Tool term lives in `.vorch/GLOSSARY.md`.
 **Not:** A permission or a deferred Tool (`deferred=True`): an On-demand Tool is allowed and callable, only its definition is not shown until loaded.
 
 ### Failure modes F1-F6
-**Definition:** The codes that rows under `## Agent-facing text` cite for the failure a sentence prevents: F1 wrong choice (another Tool or the shell, or this Tool for the wrong job), F2 malformed call (wrong names or types, placeholders, missing fields), F3 wrong effect (wrong target, misread default or unit), F4 misread result (believes it is done, misses a truncation, polls, rereads to verify), F5 error loop (the error does not say how to fix the call), F6 context waste (long definitions, large or repeated results, extra round trips).
+**Definition:** The codes that rows of Agent-facing text tables cite for the failure a sentence prevents: F1 wrong choice (another Tool or the shell, or this Tool for the wrong job), F2 malformed call (wrong names or types, placeholders, missing fields), F3 wrong effect (wrong target, misread default or unit), F4 misread result (believes it is done, misses a truncation, polls, rereads to verify), F5 error loop (the error does not say how to fix the call), F6 context waste (long definitions, large or repeated results, extra round trips).
 **Not:** The failure codes of Tool results, such as `invalid_arguments`.
 
 ## Contracts

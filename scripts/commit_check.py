@@ -29,6 +29,10 @@ locked ones; the hook never installs packages itself. A staged package manifest
 that the lock does not record blocks until ``npm install`` updates the lock. A
 change to the packages or to the lint or format configuration lints and
 format-checks every source.
+
+Staged domain maps are checked with ``scripts/domain_maps.py``: non-ASCII prose and
+References entries that name no file block; a root map above its size budget that
+the change makes larger is reported without blocking.
 """
 
 from __future__ import annotations
@@ -49,7 +53,7 @@ from typing import NamedTuple
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts import _webui_packages  # noqa: E402
+from scripts import _webui_packages, domain_maps  # noqa: E402
 
 PYTHON_SUFFIXES = {".py", ".pyi"}
 ESLINT_SUFFIXES = {".js", ".mjs", ".cjs", ".svelte"}
@@ -450,6 +454,25 @@ def check_frontend(root: Path, staged: list[str], dirty: set[str]) -> list[StepR
     return results
 
 
+def check_domain_maps(root: Path, staged: list[str]) -> list[StepResult]:
+    """Check the staged domain-map files (``scripts/domain_maps.py``)."""
+    if not any(domain_maps.is_map(path) for path in staged):
+        return []
+    findings = domain_maps.staged_findings(root, staged)
+    blocking = [str(finding) for finding in findings if finding.blocking]
+    warnings = [str(finding) for finding in findings if not finding.blocking]
+    results = [
+        StepResult("domain maps", "FAIL", True, "\n".join(blocking))
+        if blocking
+        else StepResult("domain maps", "PASS", False)
+    ]
+    if warnings:
+        results.append(
+            StepResult("domain maps", "NOT BLOCKING: over size budget", False, "\n".join(warnings))
+        )
+    return results
+
+
 def _print_report(title: str, results: list[StepResult]) -> None:
     print(title)
     for result in results:
@@ -470,7 +493,11 @@ def main(root: Path = PROJECT_ROOT) -> int:
         return 0
     dirty = dirty_files(root)
     start = time.monotonic()
-    results = [*check_python(root, staged, dirty), *check_frontend(root, staged, dirty)]
+    results = [
+        *check_python(root, staged, dirty),
+        *check_frontend(root, staged, dirty),
+        *check_domain_maps(root, staged),
+    ]
     if not results:
         return 0
 

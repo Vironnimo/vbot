@@ -875,9 +875,9 @@ stopping, idle, needs_attention), so a Run that waits for messages or needs the
 user stays in view; Inactive Runs holds the rest (stopped, cancelled,
 interrupted, deleting, unknown). An empty group shows a compact EmptyState.
 This grouping does not close an idle execution group or disable its Board wakes.
-A Swarm row shows its name over its size and Model ("6 participants ·
-perf-model", or how many Models it mixes); a Run row shows a state dot and its
-title over its state and start ("Interrupted · 15 hours ago"). Row tooltips are
+A Swarm row shows its name over its size and Model
+(`6 participants · perf-model`, or how many Models it mixes); a Run row shows a state dot and its
+title over its state and start (`Interrupted · 15 hours ago`). Row tooltips are
 details cards: a Swarm's participant count per Model (summed over formation
 rows, provider path muted), and a Run's whole title, Swarm, state, start moment
 and size; `swarms.list` entries carry `name` from the profile snapshot for this
@@ -885,7 +885,7 @@ and size; `swarms.list` entries carry `name` from the profile snapshot for this
 A row opens its Swarm's editor or its Run. Its context menu (right click, the
 context-menu key or Shift+F10) only repeats actions reachable elsewhere: a
 Swarm's Edit, Start a Run (the start form with that Swarm, the goal focused) and
-Delete…, and a Run's menu as in its header. The pinned New Run row returns to
+`Delete…`, and a Run's menu as in its header. The pinned New Run row returns to
 the start form and is marked current while that form shows.
 At <=640px of iframe width a bar above the work area replaces the pane
 (`swarmSidebar.css`): one `SearchableDropdown` with the pane's entries, then
@@ -991,7 +991,7 @@ neither context use nor a failure reason, which Activity shows from History
 `discussion_ids` from the Store snapshot, including join/leave invalidations and
 discussions outside the selector's loaded page. Being addressed does not join a peer.
 A muted line below the header names the post a reply answers as a link and the
-participants a post addresses by display name ("In reply to #12 · To Samir").
+participants a post addresses by display name (`In reply to #12 · To Samir`).
 Write post opens the compose dialog for a new post; a post's Reply action (shown
 on hover or focus, always on touch screens) opens it with "In reply to #N" as a
 removable chip and sends the post's id as `reply_to`. The dialog addresses
@@ -1084,8 +1084,8 @@ list entry's title (the canonical group title, else the goal's first line) as
 plain text, then the Swarm it started from, its start (relative, with the absolute
 moment as tooltip; `swarms.get` carries `created_at` too, so a Run opened by link
 outside the loaded list shows it) and its size, then one row with the state chip, at most one
-lifecycle action and the Run's menu: Communication settings… (open Runs only),
-Run details and Delete…. Communication settings edits the Run's live `delivery`
+lifecycle action and the Run's menu: `Communication settings…` (open Runs only),
+Run details and `Delete…`. Communication settings edits the Run's live `delivery`
 with the editor's delivery fields and lists the valid changes under Proposed
 changes; Apply (`swarms.settings`) stays disabled while nothing changed or a
 batching limit is invalid, whose error shows only under its field.
@@ -1095,7 +1095,7 @@ a participant can resume (primary when the Run needs attention or was
 interrupted), so a failed participant beside running peers does not add a
 second button. A notice below the header names failed or interrupted
 participants as links to their Activity and, while others still work, carries
-Resume itself. Delete… is disabled with "Stop the Run first" while anything
+Resume itself. `Delete…` is disabled with "Stop the Run first" while anything
 works; confirming deletion of an open Run whose participants are all inactive
 stops it first, then deletes. After a deletion, the deleted row's neighbour in
 the pane (or New Run) takes focus, or the picker while a narrow page hides the

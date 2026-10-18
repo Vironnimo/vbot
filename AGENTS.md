@@ -9,7 +9,7 @@ At session start, read these core files completely unless their current contents
 
 Before working in or discussing a domain, read its root map under `.vorch/domain-maps/` (index in PROJECT.md), plus adjacent maps when ownership or contracts cross domains. Use them to locate owners, contracts, source, and tests. The task's `read:` list is a starting point; add a map only when the task reaches into its domain. Follow the root map's `## References` only for supplementary files whose triggers match the task; do not preload a supplementary folder. Supplementary files never replace the root map or enter the Domain Maps index.
 
-Before creating, editing, or auditing a domain map or supplementary file, read `.vorch/workflows/domain-map-workflow.md` in full unless its current contents are already in context. Ordinary map reading does not require that workflow.
+Before changing a domain map or supplementary file, read `.vorch/workflows/domain-map-workflow.md` up to `## Creating or restructuring a map` unless its current contents are already in context; read the rest too when you create, split, merge, rename or restructure a map. Ordinary map reading does not require that workflow.
 
 ## Interpret documentation
 
@@ -70,7 +70,7 @@ If a task requires a new dependency, **check first** that no existing dependency
 
 Maintain affected documentation as part of the task with small, factual updates:
 
-- `.vorch/PROJECT.md` — architecture, conventions, dev/test setup, domain-maps index, strategic context
+- `.vorch/PROJECT.md` — architecture, conventions, dev/test setup, domain-maps index, strategic context. Every agent reads it, so a fact whose use is confined to one domain goes into that domain's map instead
 - `.vorch/domain-maps/<domain>.md` — a domain's ownership, contracts, or documented behavior changes, including affected supplementary files, or a new domain emerges (a new domain also gets added to the domain-maps index in PROJECT.md)
 - `.vorch/GLOSSARY.md` — shared vocabulary under the Terminology rules below
 - `.vorch/FLAGGED.md` — git-ignored, never commit it; keep only confirmed, concrete, still-open concerns, with the evidence and affected behavior. Investigate a suspicion before adding it; when reviewing an existing suspicion, check it before removing it. Do not add pending Evals, missing live checks, speculative future failures, or completion notes. Append at the bottom, or fold into a related entry when one fits; delete an entry once its concern is resolved or verified fixed instead of annotating it.
@@ -81,7 +81,7 @@ Maintain affected documentation as part of the task with small, factual updates:
 
 `.vorch/GLOSSARY.md` holds the small shared vocabulary needed to interpret vBot correctly across tasks, especially terms easily confused with the coding agent's own environment or other systems, such as Agent, Tool, Session, and Workspace.
 
-Terms needed only within a domain belong in that domain map's `## Terms` section, even when the user mentions them. Document project-specific meanings and useful distinctions, not standard vocabulary or implementation: how a concept currently works belongs in its domain map. Give each term one canonical home; use references elsewhere.
+Terms needed only within a domain belong in that domain map's `## Terms` section, even when the user mentions them. Document project-specific meanings and useful distinctions, not standard vocabulary or implementation: how a concept currently works belongs in its domain map. A glossary entry is at most two sentences of definition plus a "Not ..." distinction where a misreading is realistic; it names the owning map instead of describing mechanisms, examples, paths or enumerations. Give each term one canonical home; use references elsewhere.
 
 Maintain terminology as part of relevant work when a missing, stale, or ambiguous definition could cause mistakes. Make clear, evidence-backed updates directly; no separate Skill or interview is required. Ask the user when competing meanings would materially affect the work, rather than silently establishing a new meaning.
 

@@ -331,3 +331,39 @@ def test_webui_checks_refuse_a_package_manifest_the_lock_does_not_record(
 
 def _write(root: Path, path: str, content: str) -> None:
     (root / path).write_bytes(content.encode("utf-8"))
+
+
+MAPS = "lib/maps"
+
+
+@pytest.mark.parametrize(
+    ("committed", "staged", "blocking", "warning"),
+    [
+        ("# Map\n", "# Map\n\nLabel `Waiting …` stays literal.\n", False, False),
+        ("# Map\n", "# Map\n\nA dash — in prose.\n", True, False),
+        ("# Map\n", "# Map\n\n## References\n\n- Adding -> `map/missing.md`\n", True, False),
+        ("# Map\n", "# Map\n" + "x" * 80 + "\n", False, True),
+        ("# Map\n" + "x" * 90 + "\n", "# Map\n" + "x" * 80 + "\n", False, False),
+    ],
+    ids=["literal in code span", "prose dash", "missing reference", "grows over budget", "shrinks"],
+)
+def test_staged_domain_maps_are_checked(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    committed: str,
+    staged: str,
+    blocking: bool,
+    warning: bool,
+) -> None:
+    monkeypatch.setattr(commit_check.domain_maps, "MAPS_DIR", MAPS)
+    monkeypatch.setattr(commit_check.domain_maps, "ROOT_BUDGET", 60)
+    (repo / MAPS).mkdir(parents=True)
+    _write(repo, f"{MAPS}/map.md", committed)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "map", "--no-verify")
+    _write(repo, f"{MAPS}/map.md", staged)
+    _git(repo, "add", ".")
+
+    assert commit_check.main(repo) == (1 if blocking else 0)
+    assert ("over size budget" in capsys.readouterr().out) is warning
