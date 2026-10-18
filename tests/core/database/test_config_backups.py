@@ -431,3 +431,30 @@ def test_purging_retired_files_rewrites_the_backups_and_deletes_their_contents(
     restore_config_backup(data_dir, first)
     assert _read(data_dir, "settings.json") == _settings("Europe/Berlin")
     assert purge_config_backup_files(data_dir, (".env", "oauth/*.json")) == ConfigBackupPurge()
+
+
+@pytest.mark.parametrize("redirected", ["root", "objects", "bucket"])
+def test_backup_object_collection_never_follows_directory_links(
+    data_dir: Path, tmp_path: Path, redirected: str
+) -> None:
+    root = config_backup_root(data_dir)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if redirected == "root":
+        link, target = root, outside
+        bucket = outside / "objects" / "ff"
+    elif redirected == "objects":
+        link, target = root / "objects", outside
+        bucket = outside / "ff"
+    else:
+        link, target = root / "objects" / "ff", outside
+        bucket = outside
+    link.parent.mkdir(parents=True, exist_ok=True)
+    bucket.mkdir(parents=True, exist_ok=True)
+    operator_file = bucket / "operator-file.txt"
+    operator_file.write_text("must survive", encoding="utf-8")
+    link_directory(link, target)
+
+    purge_config_backup_files(data_dir, (".env", "oauth/*.json"))
+
+    assert operator_file.read_text(encoding="utf-8") == "must survive"
