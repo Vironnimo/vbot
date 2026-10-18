@@ -155,12 +155,10 @@ class TerminalNotices:
         if trigger_service is None or attachment is None or origin_run_id is None:
             return
         delivery = trigger_service.submit_completion(
-            attachment.agent_id,
-            attachment.session_id,
+            attachment.address,
             notice_id=attention.notice_id,
             origin_run_id=origin_run_id,
             body=body,
-            project_id=attachment.project_id,
             execution_owner=execution_owner,
         )
         try:
@@ -203,10 +201,8 @@ class TerminalNotices:
             return
         if self._services.trigger_service is not None:
             self._services.trigger_service.cancel_completion(
-                attachment.agent_id,
-                attachment.session_id,
+                attachment.address,
                 notice_id=attention.notice_id,
-                project_id=attachment.project_id,
             )
         task.cancel()
 

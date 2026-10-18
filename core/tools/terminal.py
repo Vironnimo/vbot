@@ -356,7 +356,7 @@ async def _handle_start(
     overlay = None
     if scratch_areas is not None:
         try:
-            folder = await scratch_areas.folder_for(_address(owner))
+            folder = await scratch_areas.folder_for(owner.address)
         except ScratchUnavailableError:
             # The owner logged the failure; an optional Scratch folder must not
             # prevent the Agent's program from starting.
@@ -441,9 +441,7 @@ async def _subagent_holders(
     """
     if subagents is None or all(info.attachment in (None, owner) for info in terminals):
         return {}
-    return {
-        subagent.session: subagent.id for subagent in await subagents.subagents(_address(owner))
-    }
+    return {subagent.session: subagent.id for subagent in await subagents.subagents(owner.address)}
 
 
 def _attachment_fields(
@@ -452,7 +450,7 @@ def _attachment_fields(
     """``attached``, and ``subagent`` for a terminal a Sub-Agent of this Session holds."""
     attached = _attachment(info, owner)
     subagent = (
-        holders.get(_address(info.attachment))
+        holders.get(info.attachment.address)
         if attached == "other" and info.attachment is not None
         else None
     )
@@ -881,12 +879,6 @@ def _resolve_workdir(
 
 def _owner(context: ToolContext) -> TerminalOwner:
     return TerminalOwner(context.project_id, context.agent_id, context.session_id)
-
-
-def _address(owner: TerminalOwner) -> SessionAddress:
-    return SessionAddress(
-        project_id=owner.project_id, agent_id=owner.agent_id, session_id=owner.session_id
-    )
 
 
 def register_terminal_tool(

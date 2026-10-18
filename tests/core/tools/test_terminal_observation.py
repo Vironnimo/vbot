@@ -755,8 +755,8 @@ async def test_output_persistence_stays_off_loop_ordered_and_owned_until_closed(
     finally:
         release.set()
     observed = await snapshot
+    assert observed["screen"] == "retained output"
     if ending == "natural":
-        assert observed["screen"] == "retained output"
         factory.adapters[0].finish(0)
         await eventually(lambda: terminal_manager.terminal(terminal_id, OWNER).state == "exited")
     await terminal_manager.aclose()

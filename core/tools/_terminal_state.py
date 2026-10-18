@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from core.utils.log_conditions import LoggedConditions
 
 if TYPE_CHECKING:
+    from ._command_types import CompletionSink
     from ._terminal_render_host import TerminalScreen
 
 
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from core.event_stream import ReplayEventStream
+from core.sessions import SessionAddress
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -210,6 +212,10 @@ class TerminalOwner:
     agent_id: str
     session_id: str
 
+    @property
+    def address(self) -> SessionAddress:
+        return SessionAddress(self.project_id, self.agent_id, self.session_id)
+
 
 @dataclass(frozen=True, slots=True)
 class TerminalSessionView:
@@ -323,7 +329,7 @@ def _utc_now() -> datetime:
 class TerminalSessionServices:
     """What every Terminal Session of one manager shares."""
 
-    trigger_service: Any | None
+    trigger_service: CompletionSink | None
     reader_executor: ThreadPoolExecutor
     activity_quiet_seconds: float
     idle_seconds: float

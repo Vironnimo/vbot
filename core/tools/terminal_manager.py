@@ -189,6 +189,7 @@ class TerminalManager:
             render_host=self._render_host,
             scrollback_lines=scrollback_lines,
             process_observer=process_observer,
+            validate_pin=self._catalog.validate_pin,
         )
         self._services = TerminalSessionServices(
             trigger_service=trigger_service,
@@ -487,7 +488,6 @@ class TerminalManager:
         group_id: str | None = None,
         **options: Any,
     ) -> TerminalSession:
-        self._catalog.validate_pin(group_id)
         session = await self._factory.start(
             owner,
             argv,
@@ -533,9 +533,7 @@ class TerminalManager:
             for session in self._sessions.values()
             if not session.finished and session.lifecycle_owner is not None
         )
-        return {
-            SessionAddress(owner.project_id, owner.agent_id, owner.session_id) for owner in owners
-        }
+        return {owner.address for owner in owners}
 
     def terminal(self, terminal_id: str, owner: TerminalOwner) -> TerminalInfo:
         """Return a Terminal Session attached to the exact vBot Session."""

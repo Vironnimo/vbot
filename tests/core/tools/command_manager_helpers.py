@@ -201,26 +201,19 @@ class FakeSink:
         # Notice ids a delivery claimed: they can no longer be withdrawn.
         self.claimed: set[str] = set()
 
-    def submit_completion(self, agent_id: str, session_id: str, **kwargs: Any) -> Awaitable[None]:
-        self.submissions.append({"agent_id": agent_id, "session_id": session_id, **kwargs})
+    def submit_completion(self, address: SessionAddress, **kwargs: Any) -> Awaitable[None]:
+        self.submissions.append({"address": address, **kwargs})
         future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self.futures.append(future)
         return future
 
-    def cancel_completion(
-        self, agent_id: str, session_id: str, *, notice_id: str, project_id: str | None = None
-    ) -> bool:
+    def cancel_completion(self, address: SessionAddress, *, notice_id: str) -> bool:
         """Withdraw the pending submission of *notice_id* to this address."""
         self.cancellations.append(notice_id)
         if notice_id in self.claimed:
             return False
-        address = (agent_id, session_id, project_id)
         for submission, future in zip(self.submissions, self.futures, strict=True):
-            submitted_to = (
-                submission["agent_id"],
-                submission["session_id"],
-                submission.get("project_id"),
-            )
+            submitted_to = submission["address"]
             if submission["notice_id"] == notice_id and submitted_to == address:
                 if future.done():
                     return False

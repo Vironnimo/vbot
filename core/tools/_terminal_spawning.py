@@ -53,12 +53,14 @@ class TerminalSessionFactory:
         render_host: TerminalRenderHost,
         scrollback_lines: int,
         process_observer: ProcessTreeTracker | None,
+        validate_pin: Callable[[str | None], None],
     ) -> None:
         self._temporary_files = temporary_files
         self._adapter_factory = adapter_factory
         self._render_host = render_host
         self._scrollback_lines = scrollback_lines
         self._process_observer = process_observer
+        self._validate_pin = validate_pin
 
     async def start(
         self,
@@ -88,6 +90,7 @@ class TerminalSessionFactory:
         cwd = launch.cwd
         if not cwd.is_dir():
             raise ValueError(f"Terminal workdir is not a directory: {model_path(cwd)}")
+        self._validate_pin(group_id)
 
         log_path: Path | None = None
         log_handle: BinaryIO | None = None

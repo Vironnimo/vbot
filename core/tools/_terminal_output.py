@@ -18,6 +18,7 @@ from core.tools.terminal_emulator import (
 )
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
+from core.utils.workers import settle_before_cancelling
 
 from ._terminal_log import TerminalLog
 from ._terminal_notices import (
@@ -133,7 +134,10 @@ class TerminalOutput:
                     continue
                 if text:
                     async with self._lock:
-                        await consume(text)
+                        # Once received, the chunk owns its append, publication
+                        # and rendering together. Shutdown drains that unit
+                        # before it releases the Session lock.
+                        await settle_before_cancelling(consume(text))
         except EOFError, OSError:
             # Output ended (POSIX: every holder of the terminal closed it).
             return
