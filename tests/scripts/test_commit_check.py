@@ -336,33 +336,48 @@ def _write(root: Path, path: str, content: str) -> None:
 MAPS = "lib/maps"
 
 
+MAP = f"{MAPS}/map.md"
+PROJECT = "lib/PROJECT.md"
+
+
 @pytest.mark.parametrize(
-    ("committed", "staged", "blocking", "warning"),
+    ("path", "committed", "staged", "blocking", "warning"),
     [
-        ("# Map\n", "# Map\n\nLabel `Waiting …` stays literal.\n", False, False),
-        ("# Map\n", "# Map\n\nA dash — in prose.\n", True, False),
-        ("# Map\n", "# Map\n\n## References\n\n- Adding -> `map/missing.md`\n", True, False),
-        ("# Map\n", "# Map\n" + "x" * 80 + "\n", False, True),
-        ("# Map\n" + "x" * 90 + "\n", "# Map\n" + "x" * 80 + "\n", False, False),
+        (MAP, "# Map\n", "# Map\n\nLabel `Waiting …` stays literal.\n", False, False),
+        (MAP, "# Map\n", "# Map\n\nA dash — in prose.\n", True, False),
+        (MAP, "# Map\n", "# Map\n\n## References\n\n- Adding -> `map/missing.md`\n", True, False),
+        (MAP, "# Map\n", "# Map\n" + "x" * 80 + "\n", False, True),
+        (MAP, "# Map\n" + "x" * 90 + "\n", "# Map\n" + "x" * 80 + "\n", False, False),
+        (PROJECT, "# Project\n", "# Project\n" + "x" * 80 + "\n", False, True),
     ],
-    ids=["literal in code span", "prose dash", "missing reference", "grows over budget", "shrinks"],
+    ids=[
+        "literal in code span",
+        "prose dash",
+        "missing reference",
+        "grows over budget",
+        "shrinks",
+        "project grows over budget",
+    ],
 )
 def test_staged_domain_maps_are_checked(
     repo: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    path: str,
     committed: str,
     staged: str,
     blocking: bool,
     warning: bool,
 ) -> None:
     monkeypatch.setattr(commit_check.domain_maps, "MAPS_DIR", MAPS)
+    monkeypatch.setattr(commit_check.domain_maps, "INDEX_FILE", PROJECT)
     monkeypatch.setattr(commit_check.domain_maps, "ROOT_BUDGET", 60)
+    monkeypatch.setattr(commit_check.domain_maps, "PROJECT_BUDGET", 60)
     (repo / MAPS).mkdir(parents=True)
-    _write(repo, f"{MAPS}/map.md", committed)
+    _write(repo, path, committed)
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "map", "--no-verify")
-    _write(repo, f"{MAPS}/map.md", staged)
+    _write(repo, path, staged)
     _git(repo, "add", ".")
 
     assert commit_check.main(repo) == (1 if blocking else 0)

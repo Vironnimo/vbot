@@ -3,8 +3,9 @@
 
 A root map is the always-read layer of its domain: every agent working in the
 domain reads all of it, so its size is a budget (``ROOT_BUDGET``) that routine
-updates must not keep raising. The rules behind these checks live in
-``.vorch/workflows/domain-map-workflow.md``.
+updates must not keep raising. ``.vorch/PROJECT.md``, which every agent reads in
+every session, has its own budget (``PROJECT_BUDGET``). The rules behind these
+checks live in ``.vorch/workflows/domain-map-workflow.md``.
 
 ``python scripts/domain_maps.py`` prints the corpus report a domain-map audit
 starts from: root map sizes against the budget, routing defects and punctuation
@@ -26,6 +27,8 @@ MAPS_DIR = ".vorch/domain-maps"
 INDEX_FILE = ".vorch/PROJECT.md"
 ROOT_BUDGET = 16_000
 """Characters a root map may hold (about 4,000 tokens)."""
+PROJECT_BUDGET = 28_000
+"""Characters ``INDEX_FILE`` may hold (about 7,000 tokens)."""
 AUDIT_THRESHOLD = 5
 """Root maps over budget at which the report calls for a corpus audit."""
 
@@ -51,6 +54,18 @@ def is_map(path: str) -> bool:
 
 def is_root_map(path: str) -> bool:
     return is_map(path) and PurePosixPath(path).parent.as_posix() == MAPS_DIR
+
+
+def is_checked(path: str) -> bool:
+    """Return whether the commit check looks at *path*: a map or ``INDEX_FILE``."""
+    return is_map(path) or path == INDEX_FILE
+
+
+def budget_for(path: str) -> int | None:
+    """Return the size budget of an always-read file, or None for any other file."""
+    if path == INDEX_FILE:
+        return PROJECT_BUDGET
+    return ROOT_BUDGET if is_root_map(path) else None
 
 
 def prose_non_ascii(text: str) -> list[int]:
@@ -120,15 +135,15 @@ def staged_findings(root: Path, staged: Iterable[str]) -> list[Finding]:
     """Check the staged map files as they are in the working tree.
 
     Non-ASCII prose and References entries that name no file block. A root map
-    above ``ROOT_BUDGET`` that the change makes larger is reported without
-    blocking.
+    or ``INDEX_FILE`` above its budget that the change makes larger is reported
+    without blocking.
     """
     findings: list[Finding] = []
     for path in staged:
-        if not is_map(path):
+        if not is_checked(path):
             continue
         text = _read(root, path)
-        lines = prose_non_ascii(text)
+        lines = prose_non_ascii(text) if is_map(path) else []
         if lines:
             shown = ", ".join(str(number) for number in lines[:10])
             more = f" and {len(lines) - 10} more" if len(lines) > 10 else ""
@@ -140,16 +155,22 @@ def staged_findings(root: Path, staged: Iterable[str]) -> list[Finding]:
                     True,
                 )
             )
-        findings.extend(broken_references(root, path, text))
-        if is_root_map(path) and len(text) > ROOT_BUDGET:
+        if is_map(path):
+            findings.extend(broken_references(root, path, text))
+        budget = budget_for(path)
+        if budget is not None and len(text) > budget:
             before = _committed_size(root, path)
             if len(text) > before:
+                remedy = (
+                    "move facts whose use is confined to one domain into that domain's map"
+                    if path == INDEX_FILE
+                    else "move task-gated material of this domain into a supplementary file"
+                )
                 findings.append(
                     Finding(
                         path,
-                        f"root map grows from {before} to {len(text)} characters, above its "
-                        f"budget of {ROOT_BUDGET}; move task-gated material of this domain into "
-                        "a supplementary file so the map does not grow "
+                        f"grows from {before} to {len(text)} characters, above its budget of "
+                        f"{budget}; {remedy} so the file does not grow "
                         "(domain-map-workflow.md -> Size budget)",
                         False,
                     )
@@ -164,6 +185,8 @@ class Report:
     supplementary: dict[str, int]
     """Characters per supplementary file."""
     findings: list[Finding]
+    project_size: int
+    """Characters of ``INDEX_FILE``."""
 
 
 def corpus_report(root: Path) -> Report:
@@ -214,7 +237,9 @@ def corpus_report(root: Path) -> Report:
     )
 
     sizes = dict(sorted(((path, len(texts[path])) for path in roots), key=lambda item: -item[1]))
-    return Report(sizes, {path: len(texts[path]) for path in supplementary}, findings)
+    return Report(
+        sizes, {path: len(texts[path]) for path in supplementary}, findings, len(index_text)
+    )
 
 
 def format_report(report: Report) -> str:
@@ -230,6 +255,8 @@ def format_report(report: Report) -> str:
         f"{len(over)} over budget.",
         f"{len(report.supplementary)} supplementary files, "
         f"{sum(report.supplementary.values())} characters.",
+        f"{INDEX_FILE}: {report.project_size} characters (budget {PROJECT_BUDGET})"
+        + ("  OVER" if report.project_size > PROJECT_BUDGET else ""),
     ]
     if len(over) >= AUDIT_THRESHOLD:
         lines.append(
