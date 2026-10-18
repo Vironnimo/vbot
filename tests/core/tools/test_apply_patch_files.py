@@ -1147,7 +1147,7 @@ def test_replace_failure_is_bounded_and_keeps_other_operations(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool", ["write", "apply_patch"])
+@pytest.mark.parametrize("tool", ["write", "apply_patch", "link_move"])
 @pytest.mark.parametrize("parent_kind", ["file", "directory", "unreadable", "io_failure"])
 async def test_parent_file_obstruction_is_reported_without_changing_it(
     tmp_path, monkeypatch, tool, parent_kind
@@ -1158,6 +1158,8 @@ async def test_parent_file_obstruction_is_reported_without_changing_it(
     else:
         obstruction.mkdir()
     requested = obstruction / "child.txt"
+    if tool == "link_move":
+        link, target = _linked_file(tmp_path)
     # Windows reaches mkdir after observing the child as missing; POSIX can
     # report ENOTDIR while observing it. Exercise the Windows failure on both.
     snapshot = file_changes_module._snapshot
@@ -1187,12 +1189,13 @@ async def test_parent_file_obstruction_is_reported_without_changing_it(
             return stat(path, *args, **kwargs)
 
         monkeypatch.setattr(os, "stat", unavailable)
-    arguments = (
-        {"path": "parent/child.txt", "content": "new"}
-        if tool == "write"
-        else {"patch": "*** Add File: parent/child.txt\n+new"}
-    )
-    result = await call(tmp_path, arguments, name=tool)
+    if tool == "write":
+        arguments = {"path": "parent/child.txt", "content": "new"}
+    elif tool == "link_move":
+        arguments = {"patch": "*** Move File: link.txt -> parent/child.txt"}
+    else:
+        arguments = {"patch": "*** Add File: parent/child.txt\n+new"}
+    result = await call(tmp_path, arguments, name="write" if tool == "write" else "apply_patch")
 
     assert result["error"]["code"] == "file_write_error"
     if parent_kind == "file":
@@ -1209,3 +1212,6 @@ async def test_parent_file_obstruction_is_reported_without_changing_it(
         monkeypatch.undo()
         assert obstruction.is_dir()
     assert not requested.exists()
+    if tool == "link_move":
+        assert link.is_symlink()
+        assert target.read_bytes() == b"precious\n"

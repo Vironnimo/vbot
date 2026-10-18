@@ -413,7 +413,10 @@ def _rename(
         _rename_entry(source, destination, before)
     except OSError as error:
         batch.blocked.update(before)
-        return [], _write_failure(source, error, batch)
+        failed_path = source
+        if error.filename and Path(error.filename) in destination.parents:
+            failed_path = destination
+        return [], _write_failure(failed_path, error, batch)
     completed = [batch.shown(destination)]
     batch.before.setdefault(source, snapshot)
     if destination == source:
