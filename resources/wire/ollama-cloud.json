@@ -20,6 +20,7 @@
         "ids": [
           "deepseek-v4-pro:0813",
           "deepseek-v4.1-flash",
+          "deepseek-v4.1-flash:1017",
           "gemma4:31b",
           "glm-5.2",
           "glm-5.3",
@@ -68,9 +69,9 @@
       "note": "Earlier Reasoning is ignored on this gateway, so it is not replayed."
     },
     {
-      "when": {"ids": ["deepseek-v4.1-flash"]},
+      "when": {"ids": ["deepseek-v4.1-flash", "deepseek-v4.1-flash:1017"]},
       "set": {"media": {"types": ["image/jpeg", "image/png", "image/webp"]}},
-      "note": "DeepSeek V4.1 Flash carries JPEG, PNG and WebP images only."
+      "note": "DeepSeek V4.1 Flash carries JPEG, PNG and WebP images only. The 1017 version accepted all three and rejected GIF with HTTP 400 invalid image input on 2026-10-18."
     }
   ],
   "models": {

@@ -319,7 +319,7 @@ async def test_request_body_limit_counts_exact_wire_bytes_before_io(
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": 'Grüße 😀 "\\\n'},
+                {"type": "text", "text": 'GrÃ¼ÃŸe ðŸ˜€ "\\\n'},
                 {"type": "media", "media_type": "image/png", "base64": ""},
             ],
         }
@@ -329,7 +329,7 @@ async def test_request_body_limit_counts_exact_wire_bytes_before_io(
         "tools": [
             {
                 "name": "test",
-                "description": "Tool ä",
+                "description": "Tool Ã¤",
                 "parameters": {"type": "object", "properties": {}},
             }
         ],
@@ -434,7 +434,7 @@ async def test_stream_surfaces_reasoning_and_omits_zero_input_usage() -> None:
     await adapter.aclose()
 
 
-_OLD_REASONING = "EXACT old Reasoning: äöü\nline two\n"
+_OLD_REASONING = "EXACT old Reasoning: Ã¤Ã¶Ã¼\nline two\n"
 
 
 @pytest.mark.parametrize(
@@ -513,9 +513,10 @@ async def test_readable_reasoning_replays_under_exactly_one_carrier(
     await adapter.aclose()
 
 
+@pytest.mark.parametrize("model_id", [V41, "deepseek-v4.1-flash:1017"])
 @respx.mock
 @pytest.mark.asyncio
-async def test_v41_image_profile_converts_gif_before_cloud_request() -> None:
+async def test_v41_image_profile_converts_gif_before_cloud_request(model_id: str) -> None:
     adapter = bundled_cloud_adapter()
     route = respx.post(CLOUD_CHAT_URL).mock(
         return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
@@ -529,7 +530,7 @@ async def test_v41_image_profile_converts_gif_before_cloud_request() -> None:
         "base64": base64.b64encode(source.getvalue()).decode("ascii"),
     }
     try:
-        supported = adapter.wire_media_support(V41)
+        supported = adapter.wire_media_support(model_id)
         assert supported == frozenset({"image/png", "image/jpeg", "image/webp"})
         assert "image/gif" in adapter.wire_media_support("kimi-k3")
         parts = await ContentBlockResolver.resolve_tool_image(
@@ -540,7 +541,7 @@ async def test_v41_image_profile_converts_gif_before_cloud_request() -> None:
         with Image.open(io.BytesIO(base64.b64decode(parts[0]["base64"]))) as converted:
             assert converted.size == (12, 8)
             assert converted.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
-        await adapter.send([{"role": "user", "content": parts}], model_id=V41)
+        await adapter.send([{"role": "user", "content": parts}], model_id=model_id)
         assert sent_body(route)["messages"][0]["content"][0]["image_url"]["url"].startswith(
             "data:image/png;base64,"
         )
@@ -556,21 +557,24 @@ async def test_v41_image_profile_converts_gif_before_cloud_request() -> None:
         pytest.param(True, "none", "none", id="current-run-off"),
     ],
 )
+@pytest.mark.parametrize(
+    ("model_id", "output_limit"), [(V41, 393_216), ("deepseek-v4.1-flash:1017", 384_000)]
+)
 @respx.mock
 @pytest.mark.asyncio
 async def test_v41_replays_persisted_reasoning_on_fresh_adapter(
-    current_run: bool, effort: str, wire_effort: str
+    current_run: bool, effort: str, wire_effort: str, model_id: str, output_limit: int
 ) -> None:
-    """Protect the locally serialized contract verified live on 2026-09-11."""
+    """Protect the locally serialized contract verified live on 2026-09-11 and 2026-10-18."""
 
     adapter = bundled_cloud_adapter()
-    scope = f"ollama-cloud/{V41}::api-key"
+    scope = f"ollama-cloud/{model_id}::api-key"
     route = respx.post(CLOUD_CHAT_URL).mock(
         return_value=httpx.Response(200, json=CLOUD_TEXT_RESPONSE)
     )
     # Simulate the normalized response persisted by a previous Adapter/Run.
     assistant = assistant_turn_from_response(
-        f"ollama-cloud/{V41}",
+        f"ollama-cloud/{model_id}",
         {
             "content": None,
             "reasoning": "test-owned reasoning sentinel",
@@ -582,9 +586,9 @@ async def test_v41_replays_persisted_reasoning_on_fresh_adapter(
         reasoning_scope=scope,
     )
     restored = ChatMessage.from_dict(json.loads(json.dumps(assistant.to_dict())))
-    policy = adapter.reasoning_replay_policy(V41)
+    policy = adapter.reasoning_replay_policy(model_id)
     assert policy == "full_history"
-    assert adapter.reasoning_replay_fidelity(V41) == "readable_only"
+    assert adapter.reasoning_replay_fidelity(model_id) == "readable_only"
     question = ChatMessage.user("Check Berlin weather.")
     result = ChatMessage.tool(tool_call_id="call_weather", name="get_weather", content="20 C")
     if current_run:
@@ -598,19 +602,21 @@ async def test_v41_replays_persisted_reasoning_on_fresh_adapter(
                 question,
                 restored,
                 result,
-                ChatMessage.assistant(model=f"ollama-cloud/{V41}", content="20 C in Berlin."),
+                ChatMessage.assistant(model=f"ollama-cloud/{model_id}", content="20 C in Berlin."),
                 ChatMessage.user("Check again."),
             ],
             replay_policy=policy,
             agent_model=scope,
         )
     try:
-        await adapter.send(messages, model_id=V41, thinking_effort=effort, tools=[WEATHER_TOOL])
+        await adapter.send(
+            messages, model_id=model_id, thinking_effort=effort, tools=[WEATHER_TOOL]
+        )
         payload = sent_body(route)
         replayed = payload["messages"][1]
-        assert payload["model"] == V41
+        assert payload["model"] == model_id
         assert payload["reasoning_effort"] == wire_effort
-        assert payload["max_tokens"] == 393_216
+        assert payload["max_tokens"] == output_limit
         assert payload["tools"][0]["function"]["name"] == "get_weather"
         assert replayed["reasoning"] == "test-owned reasoning sentinel"
         assert "reasoning_content" not in replayed
