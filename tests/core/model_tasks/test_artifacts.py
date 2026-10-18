@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from core.model_tasks.artifacts import (
     StoredArtifact,
     TaskArtifactStore,
+    ensure_output_dir,
     validate_task_artifact_metadata_file,
+    write_generated_media_artifact,
 )
 from core.utils.errors import TaskError
 
@@ -175,3 +179,41 @@ def test_generated_media_ids_never_overwrite_colliding_files(
     assert result.id == f"{prefix}_000000000002"
     assert original.read_bytes() == b"keep"
     assert result.file_path.read_bytes() == b"new"
+
+
+@pytest.mark.parametrize("can_delete", [False, True])
+def test_output_preflight_accepts_write_only_folders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, can_delete: bool
+) -> None:
+    original_open, original_os_open, original_unlink = Path.open, os.open, Path.unlink
+
+    def open_write_only(path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        if path.parent == tmp_path and mode != "xb":
+            raise PermissionError("The output folder allows only exclusive writes")
+        return original_open(path, mode, *args, **kwargs)
+
+    def os_open_write_only(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        if (Path(path) == tmp_path or Path(path).parent == tmp_path) and (
+            not flags & os.O_WRONLY or flags & os.O_RDWR
+        ):
+            raise PermissionError("The output folder does not allow read access")
+        return original_os_open(path, flags, *args, **kwargs)
+
+    def unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path.parent == tmp_path and not can_delete:
+            raise PermissionError("The output folder does not allow deletion")
+        original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", open_write_only)
+        patch.setattr(os, "open", os_open_write_only)
+        patch.setattr(Path, "unlink", unlink)
+        directory = ensure_output_dir(tmp_path)
+        artifact = write_generated_media_artifact(
+            b"audio", output_dir=directory, extension="mp3", media_type="audio/mpeg"
+        )
+
+    assert artifact.file_path.read_bytes() == b"audio"
+    probes = list(tmp_path.glob(".vb_*.tmp"))
+    assert len(probes) == (0 if can_delete else 1)
+    assert all(probe.read_bytes() == b"" for probe in probes)

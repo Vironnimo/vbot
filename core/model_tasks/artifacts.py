@@ -12,7 +12,6 @@ as :class:`OutputWriteError`.
 from __future__ import annotations
 
 import errno
-import tempfile
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -277,19 +276,20 @@ class OutputWriteError(TaskError):
 def ensure_output_dir(output_dir: str | Path) -> Path:
     """Create the caller-selected output folder before a billed request is sent.
 
-    Create and close a temporary file to check an existing folder also permits
-    new files before paying for a Provider request.
+    Exclusively create a write-only empty probe, matching artifact permissions.
+    Remove it when allowed; a create-only output folder may retain the probe.
     """
 
     directory = Path(output_dir)
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryFile(dir=directory):
-            pass
+        probe = write_id_file(directory, ".vb", ".tmp", b"")
     except FileExistsError:
         raise OutputDirectoryError(directory, "a file with that name exists") from None
     except OSError as exc:
         raise OutputDirectoryError(directory, os_error_reason(exc)) from exc
+    with suppress(OSError):
+        probe.unlink()
     return directory
 
 

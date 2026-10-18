@@ -144,7 +144,7 @@ async def test_unusable_output_folder_fails_before_generating(
             monkeypatch.setattr(Path, "mkdir", deny)
         else:
             folder.mkdir()
-            monkeypatch.setattr(artifact_module.tempfile, "TemporaryFile", deny)
+            monkeypatch.setattr(Path, "open", deny)
     else:
         folder.write_text("a file, not a folder", encoding="utf-8")
 
