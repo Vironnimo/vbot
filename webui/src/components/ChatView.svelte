@@ -1012,6 +1012,7 @@
       {/if}
       <div
         class="chat-view__surface"
+        class:chat-view__surface--info-open={activityPanelOpen}
         style={`--chat-overlay-height: ${layout.footerOverlayHeight}px; --chat-scrollbar-width: ${layout.chatScrollbarWidth}px`}
       >
         <div class="chat-view__timeline-shell">
@@ -1245,43 +1246,43 @@
             {/if}
           </div>
         </div>
+        <ChatActivityPanel
+          bind:open={activityPanelOpen}
+          onRunningCountChange={(count) => (activityRunningCount = count)}
+          id={`${componentId}-info`}
+          toggleId={`${componentId}-info-toggle`}
+          timelineItems={activeTimelineItems}
+          subAgentStatuses={chatState.subAgentStatuses}
+          subAgentWork={chatState.subAgentWork}
+          onSubAgentWorkWanted={actions.handleSubAgentWorkWanted}
+          subAgentCommands={displayedSubAgentCommands}
+          backgroundCommandStatuses={target.activeSessionState
+            ?.backgroundCommandStatuses}
+          commandStatuses={displayedCommandStatuses}
+          reflectionTasks={reflectionTaskRows(target.activeSessionState)}
+          sessionStats={sessionInfo.stats}
+          session={sessionInfo.summary}
+          usage={sessionInfo.usage}
+          subAgentTree={sessionInfo.subAgents}
+          onSessionStatsWanted={sessionInfo.setWanted}
+          parentSession={navigation.sessionParentLink}
+          onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
+          otherArea={subAgentOtherArea}
+          onNavigateToParentSession={navigation.navigateToParentSession}
+          onOpenReflection={navigation.handleOpenReflection}
+          onLoadReflectionChanges={(row) =>
+            chatController.loadReflectionChanges(
+              target.activeSessionState,
+              row.runId,
+            )}
+          onUndoReflection={(row) =>
+            chatController.undoReflection(target.activeSessionState, row.runId)}
+          onCancelSubAgent={actions.handleCancelSubAgent}
+          onStopSubAgentWork={actions.handleStopSubAgentWork}
+          onStopBackgroundCommand={actions.handleStopBackgroundCommand}
+          onLoadCommandOutput={actions.loadCommandOutput}
+        />
       </div>
-      <ChatActivityPanel
-        bind:open={activityPanelOpen}
-        onRunningCountChange={(count) => (activityRunningCount = count)}
-        id={`${componentId}-info`}
-        toggleId={`${componentId}-info-toggle`}
-        timelineItems={activeTimelineItems}
-        subAgentStatuses={chatState.subAgentStatuses}
-        subAgentWork={chatState.subAgentWork}
-        onSubAgentWorkWanted={actions.handleSubAgentWorkWanted}
-        subAgentCommands={displayedSubAgentCommands}
-        backgroundCommandStatuses={target.activeSessionState
-          ?.backgroundCommandStatuses}
-        commandStatuses={displayedCommandStatuses}
-        reflectionTasks={reflectionTaskRows(target.activeSessionState)}
-        sessionStats={sessionInfo.stats}
-        session={sessionInfo.summary}
-        usage={sessionInfo.usage}
-        subAgentTree={sessionInfo.subAgents}
-        onSessionStatsWanted={sessionInfo.setWanted}
-        parentSession={navigation.sessionParentLink}
-        onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
-        otherArea={subAgentOtherArea}
-        onNavigateToParentSession={navigation.navigateToParentSession}
-        onOpenReflection={navigation.handleOpenReflection}
-        onLoadReflectionChanges={(row) =>
-          chatController.loadReflectionChanges(
-            target.activeSessionState,
-            row.runId,
-          )}
-        onUndoReflection={(row) =>
-          chatController.undoReflection(target.activeSessionState, row.runId)}
-        onCancelSubAgent={actions.handleCancelSubAgent}
-        onStopSubAgentWork={actions.handleStopSubAgentWork}
-        onStopBackgroundCommand={actions.handleStopBackgroundCommand}
-        onLoadCommandOutput={actions.loadCommandOutput}
-      />
     </div>
   {/if}
 </section>

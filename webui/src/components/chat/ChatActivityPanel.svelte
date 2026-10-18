@@ -1200,14 +1200,15 @@
 <ContextMenu menu={taskMenu} onClose={() => (taskMenu = null)} />
 
 <style>
-  /* Open, the panel is a full-height column of cards at the right edge,
-     the counterpart of the Session list on the left. It lies over the chat
-     while the area is too narrow to give both their room... */
+  /* Open, the panel is a full-height column of cards at the chat's right
+     side, left of the timeline's scrollbar, which stays at the window edge.
+     It lies over the chat while the chat is too narrow to give both their
+     room... */
   .chat-activity {
     position: absolute;
     z-index: 30;
     top: 0;
-    right: 0;
+    right: var(--chat-scrollbar-width, 0px);
     bottom: 0;
     display: flex;
     width: min(var(--chat-activity-width), calc(100% - 48px));
@@ -1221,20 +1222,10 @@
     scrollbar-width: thin;
   }
 
-  /* ...and docks beside it otherwise, so the chat centers in the rest. Beside
-     a docked Session list it needs more room. */
-  @container chat-area (min-width: 740px) {
+  /* ...and otherwise the chat keeps its width free (chatView.css). */
+  @container chat-surface (min-width: 740px) {
     .chat-activity {
-      position: relative;
-      flex: 0 0 var(--chat-activity-width);
       box-shadow: none;
-    }
-  }
-  @container chat-area (min-width: 740px) and (max-width: 1019px) {
-    :global(.chat-view__content-shell:has(> .session-drawer)) .chat-activity {
-      position: absolute;
-      flex: none;
-      box-shadow: var(--floating-elevation);
     }
   }
 

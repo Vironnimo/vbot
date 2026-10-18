@@ -42,6 +42,18 @@
   container: chat-area / inline-size;
 }
 
+/* The open Session-info panel lies over the chat's right side, left of the
+   timeline's scrollbar, which stays at the window edge. Where the chat has
+   room for both, the timeline's content and the composer keep the panel's
+   width free (`--chat-activity-reserve`) and center in the rest; a narrower
+   chat keeps the panel over it (ChatActivityPanel.svelte). */
+@container chat-surface (min-width: 740px) {
+  .chat-view__surface--info-open > .chat-view__timeline-shell,
+  .chat-view__surface--info-open > .chat-view__footer-stack {
+    --chat-activity-reserve: var(--chat-activity-width);
+  }
+}
+
 /* Icon actions in the Chat header: the Session list, New session and the
    area actions ChatWorkspace passes in. */
 .btn-secondary.btn-icon.chat-header__action {
@@ -89,7 +101,9 @@
   position: absolute;
   /* Ends before the timeline's scrollbar column so the scrollbar stays
       visible over its full height instead of disappearing behind us. */
-  right: var(--chat-scrollbar-width, 0px);
+  right: calc(
+    var(--chat-scrollbar-width, 0px) + var(--chat-activity-reserve, 0px)
+  );
   bottom: 0;
   left: 0;
   z-index: 3;

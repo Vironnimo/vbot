@@ -2,7 +2,9 @@
   flex: 1;
   overflow-y: auto;
   overflow-anchor: none;
-  padding: 28px 0;
+  /* The right side keeps room for an open Session-info panel
+     (`--chat-activity-reserve`, chatView.css). */
+  padding: 28px var(--chat-activity-reserve, 0px) 28px 0;
 }
 
 .date-sep {
