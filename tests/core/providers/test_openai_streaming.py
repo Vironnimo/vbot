@@ -133,9 +133,11 @@ async def test_codex_send_times_out_and_closes_the_response_when_its_stream_stal
 
     body = _TrackedStream(stall=True)
 
+    # The wait also covers preparing and connecting the request, which can take
+    # several milliseconds on a loaded test worker.
     with (
         respx.mock,
-        patch("core.providers.openai.PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS", 0.01),
+        patch("core.providers.openai.PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS", 0.2),
     ):
         respx.post(OPENAI_SUBSCRIPTION_URL).mock(return_value=httpx.Response(200, stream=body))
         with pytest.raises(ProviderTimeoutError):
