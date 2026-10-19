@@ -108,10 +108,11 @@ async def _reorder_agents(state: Any, params: JsonObject) -> JsonObject:
     if listing.order_changed:
         publish_resource_changed(state, RESOURCE_KIND_AGENTS)
         _LOGGER.debug("Agent order updated (agents=%s)", ",".join(agent_ids))
-    return _agent_list_response(state, listing)
+    return await _run_agent_operation(state, _agent_list_response, state, listing)
 
 
 def _agent_list_response(state: Any, listing: Any) -> JsonObject:
+    """Blocking: an Agent payload resolves its Model's Connection."""
     return {
         "agents": [_agent_response(state, agent) for agent in listing.agents],
         "order_revision": listing.order_revision,
@@ -282,7 +283,7 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    response = _agent_response(state, result.agent)
+    response = await _run_agent_operation(state, _agent_response, state, result.agent)
     response["rename"] = {
         "old_id": agent_id,
         "new_id": new_agent_id,
@@ -364,9 +365,12 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
         remaining_agents = await chat_sessions.run_async(state.runtime.agents.list)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    remaining = await _run_agent_operation(
+        state, lambda: [_agent_response(state, agent) for agent in remaining_agents]
+    )
     result = {
         "agent_id": agent_id,
-        "remaining_agents": [_agent_response(state, agent) for agent in remaining_agents],
+        "remaining_agents": remaining,
         "archive_entry_id": outcome.entry_id,
         "session_count": outcome.session_count,
         "external_workspace": outcome.external_workspace,

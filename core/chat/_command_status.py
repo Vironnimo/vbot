@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -22,6 +22,7 @@ from core.chat.commands import (
 from core.chat.messages import ChatMessage
 from core.chat.status_report import (
     STATUS_PLACEHOLDER,
+    ContextWindowResolver,
     ReasoningRenderDescriber,
     StatusActivity,
     StatusSessionFacts,
@@ -256,7 +257,7 @@ async def _execute_status(
     *,
     agent_resolver: AgentResolver | None,
     chat_runs: ChatRunManager,
-    local_context_windows_loader: Callable[[], Mapping[str, Any]] | None,
+    context_window_resolver: ContextWindowResolver | None,
     models: ModelRegistry | None,
     projects: ProjectStore | None,
     providers: ProviderRegistry | None,
@@ -313,7 +314,7 @@ async def _execute_status(
             context.project_id,
         ),
         working_project_id,
-        local_context_windows_loader=local_context_windows_loader,
+        context_window_resolver=context_window_resolver,
         models=models,
         projects=projects,
         providers=providers,
@@ -329,7 +330,7 @@ async def _execute_status_without_session(
     argument: str | None,
     *,
     agent_resolver: AgentResolver | None,
-    local_context_windows_loader: Callable[[], Mapping[str, Any]] | None,
+    context_window_resolver: ContextWindowResolver | None,
     models: ModelRegistry | None,
     projects: ProjectStore | None,
     providers: ProviderRegistry | None,
@@ -360,7 +361,7 @@ async def _execute_status_without_session(
         [],
         StatusActivity(activity="idle", run_id=None, created_at=None, updated_at=None),
         working_project_id,
-        local_context_windows_loader=local_context_windows_loader,
+        context_window_resolver=context_window_resolver,
         models=models,
         projects=projects,
         providers=providers,
@@ -408,7 +409,7 @@ async def _status_outcome(
     activity: StatusActivity,
     working_project_id: str | None,
     *,
-    local_context_windows_loader: Callable[[], Mapping[str, Any]] | None,
+    context_window_resolver: ContextWindowResolver | None,
     models: ModelRegistry | None,
     projects: ProjectStore | None,
     providers: ProviderRegistry | None,
@@ -417,15 +418,10 @@ async def _status_outcome(
     storage: Any | None,
     wire_profile_describer: WireProfileDescriber | None,
 ) -> CommandOutcome:
-    model_details = resolve_status_model_details(
-        agent,
-        models,
-        providers,
-        local_context_windows=_load_local_context_windows(
-            local_context_windows_loader=local_context_windows_loader
-        ),
-    )
     # Resolving the Connection reads credential state, so it runs off the loop.
+    model_details = await _COMMAND_WORKERS.run(
+        resolve_status_model_details, agent, models, providers, context_window_resolver
+    )
     wire_profile = await _COMMAND_WORKERS.run(
         resolve_status_wire_profile, agent, wire_profile_describer
     )
@@ -509,19 +505,6 @@ def _model_origin(project_id: str | None, source: str | None) -> str:
     if project_id is None:
         return _IDENTITY_MODEL_ORIGINS.get(source, _MODEL_ORIGIN_NOT_CONFIGURED)
     return _PROJECT_MODEL_ORIGINS.get(source, _MODEL_ORIGIN_NOT_CONFIGURED)
-
-
-def _load_local_context_windows(
-    *, local_context_windows_loader: Callable[[], Mapping[str, Any]] | None
-) -> Mapping[str, Any]:
-    """Return the live local-model window map, empty when no loader is wired."""
-    if local_context_windows_loader is None:
-        return {}
-    try:
-        return local_context_windows_loader()
-    except Exception:
-        _LOGGER.warning("Failed to load local-model context windows", exc_info=True)
-        return {}
 
 
 def _status_timezone(*, storage: Any | None) -> ZoneInfo | None:

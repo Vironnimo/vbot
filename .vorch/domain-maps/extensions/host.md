@@ -8,7 +8,7 @@ API 6 adds owner-bound temporary execution groups, hidden Session Tools and prom
 
 ## Prompt inspection
 
-The optional host `inspect_prompt(config, project_id)` capability previews a temporary configuration with the owner's private Tools, the selected Project's context and Model-specific Tool routing. It returns combined text, rendered block details and Tool definitions without creating a Session or Run. `catalog()` includes public System Prompt block metadata. The bundled Swarm uses these capabilities for explicit prompt composition; see `extensions/swarm.md` and `tests/core/runtime/test_runtime_extension_host.py`.
+The optional host `inspect_prompt(config, project_id)` capability previews a temporary configuration with the owner's private Tools, the selected Project's context and Model-specific Tool routing. It returns combined text, rendered block details and Tool definitions without creating a Session or Run. `catalog()` includes public System Prompt block metadata. Its `models` list each Model with the usable Connections it allows, in Provider order, and `context_window`: the raw window of the first of them, the Connection a bare Model binding resolves to (`Model.context_window_for`; `null` stays unknown). The bundled Swarm uses these capabilities for explicit prompt composition; see `extensions/swarm.md` and `tests/core/runtime/test_runtime_extension_host.py`.
 
 ## Group titles
 

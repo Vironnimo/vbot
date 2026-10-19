@@ -14,6 +14,7 @@ import pytest
 from core.chat import ChatMessage, CommandDispatcher
 from core.chat.status_report import (
     STATUS_PLACEHOLDER,
+    ContextWindowResolver,
     ReasoningIntent,
     StatusModelDetails,
     StatusWireProfile,
@@ -29,7 +30,7 @@ from core.chat.status_report import (
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolver, ProjectStore
-from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, ProviderConfig
+from core.providers.providers import ProviderConfig
 from core.providers.wire_observations import ObservedFacts
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress, SessionStatusSnapshot
@@ -152,6 +153,7 @@ def _status_dispatcher(
     messages: list[ChatMessage] | None = None,
     model: Model | None = None,
     wire_profile_describer: WireProfileDescriber | None = None,
+    context_window_resolver: ContextWindowResolver | None = None,
 ) -> tuple[CommandDispatcher, _StubResolver, _RecordingModels]:
     resolver = resolver or _StubResolver(_make_agent())
     models = _RecordingModels(model or _make_model())
@@ -163,6 +165,7 @@ def _status_dispatcher(
         projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
         started_at=_APP_STARTED,
         wire_profile_describer=wire_profile_describer,
+        context_window_resolver=context_window_resolver,
     )
     return dispatcher, resolver, models
 
@@ -201,10 +204,12 @@ def test_status_reports_the_identity_sessions_agent_model_and_cache() -> None:
         ),
     ]
     # A pinned connection suffix is stripped before the Model registry lookup.
+    windows = {"openai/gpt-5.2::primary": 272_000}
     dispatcher, resolver, models = _status_dispatcher(
         resolver=_StubResolver(_make_agent(model="openai/gpt-5.2::primary")),
         messages=messages,
         model=_make_model(name="GPT-5.2 Registry"),
+        context_window_resolver=lambda agent: windows[agent.model],
     )
 
     result = _execute_sync(dispatcher, "/status")
@@ -219,8 +224,9 @@ def test_status_reports_the_identity_sessions_agent_model_and_cache() -> None:
     assert f"Project: {STATUS_PLACEHOLDER}" in reply
     assert "Activity: idle" in reply
     assert f"Run created at: {STATUS_PLACEHOLDER}" in reply
-    # Context usage is the Session's Context projection, not the raw input.
-    assert "Context usage: 1276 / 200000" in reply
+    # Context usage is the Session's Context projection, not the raw input, in the
+    # window of the route the Agent's Model resolves to.
+    assert "Context usage: 1276 / 272000" in reply
     assert "Last request cache: read 800 / 1234 (64.8% hit), write 100" in reply
     assert "Session cache: read 800 / 1234 (64.8% hit), write 100" in reply
     assert "Current time:" in reply
@@ -679,20 +685,12 @@ def test_reported_thinking_effort_without_an_agent_is_unknown() -> None:
             ),
             None,
             {
-                "context_window": 200_000,
+                "context_window": 272_000,
                 "display_name": "GPT-5.2",
                 "reasoning_levels": _LADDER,
                 "reasoning_control": "levels",
             },
         ),
-        # A null window resolves through the Provider default, then the global floor,
-        # so /status shows the budget Compaction actually uses.
-        (
-            _make_model(context_window=None),
-            _provider(context_window=64_000),
-            {"context_window": 64_000},
-        ),
-        (_make_model(context_window=None), None, {"context_window": GLOBAL_CONTEXT_WINDOW_FLOOR}),
         (
             _make_model(recommended_temperature=1.0, recommended_top_p=0.95),
             _provider(defaults={"temperature": 0.7, "top_p": 0.9}),
@@ -704,15 +702,17 @@ def test_reported_thinking_effort_without_an_agent_is_unknown() -> None:
             },
         ),
     ],
-    ids=["reasoning-ladder", "provider-window", "global-floor-window", "sampling-tiers"],
+    ids=["reasoning-ladder", "sampling-tiers"],
 )
 def test_status_model_details_resolve_through_the_model_and_provider(
     model: Model, provider: ProviderConfig | None, expected: dict[str, Any]
 ) -> None:
+    # The window is the one of the route the Agent's Model resolves to.
     details = resolve_status_model_details(
         _make_agent(model="provider/gpt-5.2"),
         cast(ModelRegistry, _AnyModels(model)),
         cast(Any, _Providers(provider)) if provider is not None else None,
+        context_window_resolver=lambda agent: {"provider/gpt-5.2": 272_000}[agent.model],
     )
 
     assert {name: getattr(details, name) for name in expected} == expected

@@ -5,7 +5,7 @@ Reports current or targeted agent/session/runtime status through the same status
 ## Interfaces
 
 - Tool name: `status`
-- Registration: `register_status_tool(registry, agent_resolver, sessions, models, chat_runs, started_at, providers=None, projects=None, local_context_windows_loader=None, reasoning_render_describer=None, timezone_name_loader=None)` - resolves the target agent through the run-path `AgentResolver` seam (so a project session reports the resolved config agent), and uses the optional `ProjectStore` to label the session's project.
+- Registration: `register_status_tool(registry, agent_resolver, sessions, models, chat_runs, started_at, providers=None, projects=None, context_window_resolver=None, reasoning_render_describer=None, timezone_name_loader=None)` - resolves the target agent through the run-path `AgentResolver` seam (so a project session reports the resolved config agent), and uses the optional `ProjectStore` to label the session's project.
 - The model-facing schema is one flat object with optional `session_id` and `agent_id` (no `minLength`), `required: []`, and no `additionalProperties` keyword. Descriptions explain all three targeting forms; unknown arguments follow the shared rule (`tools.md` -> Unknown fields); the handler rejects malformed ones and requires `session_id` when selecting another Agent.
 - Targeting rules:
   - No arguments checks the calling Agent's current Tool Context Session.
@@ -17,7 +17,7 @@ Reports current or targeted agent/session/runtime status through the same status
 - The status text carries `Last request cache:` and `Session cache:` lines. They render provider-reported cache read/write tokens and hit rate only when cache fields are present on assistant usage whose input was measured (an estimated output alone does not exclude a turn); otherwise they render the placeholder, so providers without cache reporting do not look like a 0% hit.
 - The status text renders activity as `running` or `idle`; unknown/missing Agent or Session targets return failure envelopes.
 - Display: no summary. A status call must render as `status`, not `status ({})`.
-- The `Context usage:` line is the Session's Context projection, the value `chat.history` returns (`status_session_facts_from_snapshot` -> `latest_session_context_usage`), as `<tokens> / <window>`: the window the projection records, else the Agent's resolved window. A Session without a projection renders the placeholder; token counters alone are never shown as Context.
+- The `Context usage:` line is the Session's Context projection, the value `chat.history` returns (`status_session_facts_from_snapshot` -> `latest_session_context_usage`), as `<tokens> / <window>`: the window the projection records, else the window of the route the Agent's Model resolves to (`context_window_resolver`, wired to `resolve_agent_context_window`, `chat/usage.md`; run off the Event Loop because it reads credential state). A Session without a projection renders the placeholder; token counters alone are never shown as Context.
 - Both surfaces consume the Sessions-owned `status_snapshot`: SQL supplies Session start, User-turn count, latest Assistant Usage, whole-Session Usage/cache aggregates, the Context projection inputs, and no complete transcript. The Agent-callable Tool wraps its synchronous dependency gathering in the cancellation-safe Tool worker; `/status` uses the command worker path.
 
 ## Constraints & Gotchas

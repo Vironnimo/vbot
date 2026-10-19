@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.messages import ChatMessage
 from core.chat.usage import aggregate_session_usage, latest_session_context_usage
-from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
     REASONING_INTENT_DEFAULT,
@@ -143,6 +142,10 @@ class StatusWireProfile:
 # resolves to as chat resolves it, or ``None`` when it resolves to none.
 WireProfileDescriber = Callable[[RuntimeAgent], StatusWireProfile | None]
 
+# Runtime-wired seam: Agent -> the effective Context window of the route its
+# Model resolves to as chat resolves it, or ``None`` for an unknown Model.
+ContextWindowResolver = Callable[[RuntimeAgent], int | None]
+
 
 class _WireProfileOmitted(Enum):
     """Default of the status renderers' ``wire_profile``: the report has no wire lines."""
@@ -169,7 +172,7 @@ def resolve_status_model_details(
     agent: RuntimeAgent | None,
     models: ModelRegistry | None,
     providers: ProviderRegistry | None = None,
-    local_context_windows: Mapping[str, Any] | None = None,
+    context_window_resolver: ContextWindowResolver | None = None,
 ) -> StatusModelDetails:
     """Resolve model facts for status output from the model registry.
 
@@ -177,11 +180,11 @@ def resolve_status_model_details(
     ladder. A missing agent/registry/model yields empty details so status
     rendering degrades to placeholders instead of failing.
 
-    ``context_window`` is the *effective* window (user-set/capped for
-    flagged-local models, else the read-side default chain — see
-    :func:`resolve_effective_context_window`), so ``/status`` reports the budget
-    compaction actually uses rather than ``unknown`` for a window-less model.
-    It stays ``None`` only when no model could be resolved at all.
+    ``context_window`` is the effective window of the route the Agent's Model
+    resolves to (``context_window_resolver``): the Connection's own window
+    where the Model records one, the budget a Run on that route uses. It is
+    ``None`` when no model resolves or no resolver is wired. Reads credential
+    state, so callers run this off the Event Loop.
     """
     if agent is None or models is None:
         return StatusModelDetails(context_window=None, display_name=None)
@@ -210,13 +213,7 @@ def resolve_status_model_details(
 
     provider_config = _status_provider_config(providers, provider_id)
     return StatusModelDetails(
-        context_window=resolve_effective_context_window(
-            model.context_window,
-            provider_config,
-            model_metadata=model.metadata,
-            model_key=f"{provider_id}/{model_id}",
-            local_context_windows=local_context_windows,
-        ),
+        context_window=_status_context_window(agent, context_window_resolver),
         display_name=model.name,
         reasoning_levels=tuple(model.capabilities.reasoning.levels),
         reasoning_control=model.capabilities.reasoning.control,
@@ -226,6 +223,18 @@ def resolve_status_model_details(
         recommended_top_p=model.recommended_top_p,
         provider_default_top_p=_provider_default_number(provider_config, "top_p"),
     )
+
+
+def _status_context_window(
+    agent: RuntimeAgent, context_window_resolver: ContextWindowResolver | None
+) -> int | None:
+    if context_window_resolver is None:
+        return None
+    try:
+        return context_window_resolver(agent)
+    except Exception:
+        _LOGGER.warning("Failed to resolve the Context window for %s", agent.model, exc_info=True)
+        return None
 
 
 def _provider_default_number(provider_config: Any, key: str) -> float | None:

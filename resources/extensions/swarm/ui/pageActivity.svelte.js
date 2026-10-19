@@ -9,6 +9,7 @@ import {
   loadHistory,
   prependHistory,
 } from '../../../../webui/src/lib/chatState.js';
+import { nextContextUsage } from '../../../../webui/src/lib/chatState/sessionState.js';
 import { untrack } from 'svelte';
 import { failureText } from './failureText.js';
 
@@ -205,10 +206,13 @@ export function createSwarmPageActivity(host) {
         inspectedParticipant),
   );
 
+  // The window the participant's Context names, the one it fills; the
+  // catalog's window of its Model stands in while it names none.
   const contextWindow = $derived(
-    host.model.catalog.models?.find(
-      (model) => model.id === selectedParticipant?.model,
-    )?.context_window,
+    history?.data.context_usage?.context_window ??
+      host.model.catalog.models?.find(
+        (model) => model.id === selectedParticipant?.model,
+      )?.context_window,
   );
 
   // Why the inspected participant stopped when it failed or was interrupted
@@ -563,7 +567,12 @@ export function createSwarmPageActivity(host) {
           data: {
             ...history.data,
             ...(payload.context_usage
-              ? { context_usage: payload.context_usage }
+              ? {
+                  context_usage: nextContextUsage(
+                    history.data.context_usage,
+                    payload.context_usage,
+                  ),
+                }
               : {}),
             ...(payload.session_usage
               ? { session_usage: payload.session_usage }

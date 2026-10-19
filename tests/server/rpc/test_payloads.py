@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,9 +12,9 @@ from core.chat import ChatMessage
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.providers import LOCAL_CONTEXT_DEFAULT_CAP
 from server.rpc.payloads import (
+    _agent_context_window,
     _model_detail_response,
     _model_response,
-    _resolve_context_window,
     _visible_message,
     remove_opaque_provider_metadata,
 )
@@ -107,6 +108,8 @@ def test_model_list_and_detail_project_the_recommended_sampling(
 
 
 def _agent_window_state(model: Model, local_windows: dict[str, int]) -> SimpleNamespace:
+    """An ``ollama`` Provider whose usable Connection is ``cloud``, after ``local``."""
+
     class _Models:
         def get(self, provider_id: str, model_id: str) -> Model:
             if (provider_id, model_id) != ("ollama", model.model_id):
@@ -119,27 +122,58 @@ def _agent_window_state(model: Model, local_windows: dict[str, int]) -> SimpleNa
 
     class _Providers:
         def get(self, provider_id: str) -> Any:
-            raise KeyError(provider_id)
+            if provider_id != "ollama":
+                raise KeyError(provider_id)
+            return SimpleNamespace(
+                connections=[SimpleNamespace(id="local"), SimpleNamespace(id="cloud")],
+                context_window=None,
+            )
 
     return SimpleNamespace(
-        runtime=SimpleNamespace(models=_Models(), storage=_Storage(), providers=_Providers())
+        runtime=SimpleNamespace(
+            models=_Models(),
+            storage=_Storage(),
+            providers=_Providers(),
+            provider_credentials=SimpleNamespace(
+                is_usable=lambda _provider_id, connection_id: connection_id == "ollama:cloud"
+            ),
+        )
     )
 
 
 @pytest.mark.parametrize(
-    ("local_windows", "expected"),
+    ("model", "local_windows", "expected"),
     [
-        pytest.param({"ollama/ministral-3:8b": 16384}, 16384, id="user-setting"),
-        pytest.param({}, LOCAL_CONTEXT_DEFAULT_CAP, id="default-cap"),
+        pytest.param(
+            _model("ministral-3:8b", context_window=262144, metadata=_LOCAL),
+            {"ollama/ministral-3:8b": 16384},
+            16384,
+            id="user-setting",
+        ),
+        pytest.param(
+            _model("ministral-3:8b", context_window=262144, metadata=_LOCAL),
+            {},
+            LOCAL_CONTEXT_DEFAULT_CAP,
+            id="default-cap",
+        ),
+        # The window of the Connection the Agent's Model runs on, not the Model-wide one.
+        pytest.param(
+            replace(
+                _model("ministral-3:8b", context_window=500_000),
+                connection_context_windows={"cloud": 272_000},
+            ),
+            {},
+            272_000,
+            id="connection-window",
+        ),
     ],
 )
-def test_agent_payload_window_uses_the_effective_local_resolution(
-    local_windows: dict[str, int], expected: int
+def test_agent_payload_window_is_the_effective_window_of_its_route(
+    model: Model, local_windows: dict[str, int], expected: int
 ) -> None:
-    model = _model("ministral-3:8b", context_window=262144, metadata=_LOCAL)
     state = _agent_window_state(model, local_windows)
 
-    assert _resolve_context_window(state, "ollama/ministral-3:8b") == expected
+    assert _agent_context_window(state, SimpleNamespace(model="ollama/ministral-3:8b")) == expected
 
 
 def test_opaque_provider_metadata_and_file_references_never_reach_a_client() -> None:
