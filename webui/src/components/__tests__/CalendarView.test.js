@@ -124,6 +124,9 @@ function focusWithKeyboard(element) {
 
 function serveWindow(window, jobs = []) {
   rpcMock.mockImplementation((method) => {
+    if (method === 'calendar.create') {
+      return Promise.resolve({ event: calendarEvent() });
+    }
     if (method === 'calendar.window') {
       return Promise.resolve(window);
     }
@@ -436,6 +439,98 @@ describe('CalendarView', () => {
       ]);
     });
 
+    it.each([
+      ['create', 'success', 'replaced'],
+      ['create', 'failure', 'replaced'],
+      ['update', 'success', 'replaced'],
+      ['update', 'failure', 'replaced'],
+      ['create', 'success', 'edited'],
+      ['create', 'failure', 'edited'],
+      ['update', 'success', 'edited'],
+      ['update', 'failure', 'edited'],
+    ])(
+      'keeps a newer draft when an earlier %s finishes with %s and its form was %s',
+      async (operation, outcome, transition) => {
+        vi.useFakeTimers();
+        serveWindow(weeklyStandup());
+        const backend = rpcMock.getMockImplementation();
+        const pending = Promise.withResolvers();
+        let firstWrite = true;
+        rpcMock.mockImplementation((method, params) => {
+          if (method === `calendar.${operation}` && firstWrite) {
+            firstWrite = false;
+            return pending.promise;
+          }
+          return backend(method, params);
+        });
+        mountedComponent = await mountCalendarView();
+        if (operation === 'update') {
+          document.querySelector('.calendar-cell .calendar-entry').click();
+          flushSync();
+          button(
+            t('common.edit'),
+            document.querySelector('.modal-footer'),
+          ).click();
+        } else {
+          button(t('calendar.newEvent')).click();
+        }
+        flushSync();
+        typeInto('calendar-form-title-input', 'First draft');
+        button(
+          t(operation === 'update' ? 'common.save' : 'calendar.form.create'),
+        ).click();
+        await waitForCondition(
+          () => rpcCalls(`calendar.${operation}`).length === 1,
+        );
+        if (transition === 'replaced') {
+          button(t('common.cancel')).click();
+          flushSync();
+          button(t('calendar.newEvent')).click();
+          flushSync();
+          expect(button(t('calendar.form.create')).disabled).toBe(false);
+        }
+        typeInto('calendar-form-title-input', 'New draft');
+
+        if (outcome === 'success') pending.resolve({ event: { id: 'evt-1' } });
+        else pending.reject(new Error('previous-draft-failed'));
+        await vi.runAllTimersAsync();
+        flushSync();
+
+        expect(
+          document.getElementById('calendar-form-title-input')?.value,
+        ).toBe('New draft');
+        expect(document.querySelector('.calendar-detail')).toBeNull();
+        if (transition === 'replaced') {
+          expect(document.body.textContent).not.toContain(
+            'previous-draft-failed',
+          );
+          expect(button(t('calendar.form.create')).disabled).toBe(false);
+        } else {
+          expect(
+            document.body.textContent.includes('previous-draft-failed'),
+          ).toBe(outcome === 'failure');
+          const retryCreates = operation === 'create' && outcome === 'failure';
+          const save = button(
+            t(retryCreates ? 'calendar.form.create' : 'common.save'),
+          );
+          expect(save.disabled).toBe(false);
+          save.click();
+          await waitForCondition(
+            () => document.querySelector('.calendar-form') === null,
+          );
+          const writes = rpcCalls(
+            retryCreates ? 'calendar.create' : 'calendar.update',
+          );
+          expect(writes.at(-1)).toMatchObject({ title: 'New draft' });
+          if (outcome === 'success') {
+            expect(writes.at(-1)).toEqual({ id: 'evt-1', title: 'New draft' });
+            if (operation === 'create')
+              expect(rpcCalls('calendar.create')).toHaveLength(1);
+          }
+        }
+      },
+    );
+
     it('enters an all-day event by its last day and stores the day after', async () => {
       mountedComponent = await mountCalendarView();
       button(t('calendar.newEvent')).click();
@@ -591,6 +686,7 @@ describe('CalendarView', () => {
       // A single event has no occurrence to edit on its own.
       expect(document.querySelector('.calendar-edit-scope')).toBeNull();
 
+      typeInto('calendar-form-title-input', 'Dentist updated');
       button(t('common.save')).click();
       await waitForCondition(() => rpcCalls('calendar.update').length === 1);
 
@@ -599,12 +695,7 @@ describe('CalendarView', () => {
       expect(rpcCalls('calendar.update')).toEqual([
         {
           id: 'evt-1',
-          title: 'Dentist',
-          description: null,
-          location: 'Main Street 4',
-          start: '2026-09-23T09:00:00',
-          end: '2026-09-23T10:00:00',
-          rrule: null,
+          title: 'Dentist updated',
         },
       ]);
     });
@@ -638,8 +729,6 @@ describe('CalendarView', () => {
         {
           id: 'evt-1_20260923T0900',
           title: 'Standup with guests',
-          description: null,
-          location: null,
           start: '2026-09-23T10:00:00',
           end: '2026-09-23T10:30:00',
         },

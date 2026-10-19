@@ -1,3 +1,4 @@
+import { onDestroy } from 'svelte';
 import { useAutosaveContext } from '$lib/autosave.js';
 import { todayKey, eventById } from '$lib/calendarView.js';
 import {
@@ -28,6 +29,8 @@ export function createCalendarEventEditor(context) {
 
   let formMode = $state('create');
 
+  let formEventId = $state(null);
+
   // The occurrence an edit started from; its event is the edited series.
   let formOccurrence = $state(null);
 
@@ -41,6 +44,17 @@ export function createCalendarEventEditor(context) {
   let formError = $state('');
 
   let submitting = $state(false);
+  let formGeneration = 0;
+  let formBaseline = null;
+
+  onDestroy(() => {
+    formGeneration += 1;
+  });
+
+  function replaceForm() {
+    formGeneration += 1;
+    submitting = false;
+  }
 
   let detailOpen = $state(false);
 
@@ -61,10 +75,13 @@ export function createCalendarEventEditor(context) {
   }
 
   function openCreateNow(dayKey) {
+    replaceForm();
     formMode = 'create';
+    formEventId = null;
     formOccurrence = null;
     editScope = 'series';
     formValues = emptyEventForm(dayKey);
+    formBaseline = null;
     formError = '';
     formOpen = true;
   }
@@ -87,10 +104,13 @@ export function createCalendarEventEditor(context) {
     if (!event) {
       return;
     }
+    replaceForm();
     formMode = 'edit';
+    formEventId = occurrence.event_id;
     formOccurrence = occurrence;
     editScope = 'series';
     formValues = eventFormValues(event, context.viewState.systemTimeZone);
+    formBaseline = $state.snapshot(formValues);
     formError = '';
     detailOpen = false;
     formOpen = true;
@@ -114,6 +134,8 @@ export function createCalendarEventEditor(context) {
       }
       formValues = eventFormValues(event, zone);
     }
+    replaceForm();
+    formBaseline = $state.snapshot(formValues);
     editScope = scope;
     formError = '';
   }
@@ -171,25 +193,51 @@ export function createCalendarEventEditor(context) {
     }
     submitting = true;
     formError = '';
+    const generation = formGeneration;
+    const isCurrent = () => generation === formGeneration;
+    const submitted = $state.snapshot(formValues);
+    const unchanged = () =>
+      JSON.stringify(formValues) === JSON.stringify(submitted);
     try {
-      const payload = eventFormPayload(formValues, { repeats });
+      const payload = eventFormPayload(submitted, {
+        repeats,
+        baseline: formBaseline,
+      });
+      let createdOccurrence = null;
       if (formMode === 'edit') {
-        await context.controller.updateEvent(
-          repeats ? formOccurrence.event_id : formOccurrence.id,
-          payload,
-        );
+        if (Object.keys(payload).length) {
+          await context.controller.updateEvent(
+            repeats ? formEventId : formOccurrence.id,
+            payload,
+          );
+        }
       } else {
         const result = await context.controller.createEvent(payload);
-        const occurrence = context.viewState.occurrences.find(
-          (item) => item.event_id === result.event?.id,
+        if (!isCurrent()) return;
+        formMode = 'edit';
+        formEventId = result.event.id;
+        createdOccurrence = context.viewState.occurrences.find(
+          (item) => item.event_id === formEventId,
         );
-        if (occurrence) openDetail(occurrence);
       }
-      formOpen = false;
+      if (!isCurrent()) return;
+      // The response commits only the submitted snapshot. Later typing stays
+      // editable; after creation its next save updates the created event.
+      formBaseline = submitted;
+      if (!unchanged()) return;
+      if (createdOccurrence) {
+        await autosaveContext.requestTransition(() => {
+          if (!isCurrent() || !unchanged()) return;
+          openDetailNow(createdOccurrence);
+          formOpen = false;
+        });
+      } else {
+        formOpen = false;
+      }
     } catch (error) {
-      formError = error?.message ?? String(error);
+      if (isCurrent()) formError = error?.message ?? String(error);
     } finally {
-      submitting = false;
+      if (isCurrent()) submitting = false;
     }
   }
 
@@ -236,6 +284,7 @@ export function createCalendarEventEditor(context) {
       return formOpen;
     },
     set formOpen(value) {
+      if (!value) replaceForm();
       formOpen = value;
     },
     get formMode() {

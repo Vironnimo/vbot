@@ -115,7 +115,90 @@ describe('calendar event form', () => {
       end: '2026-09-08',
       rrule: null,
     });
+    expect(
+      eventFormPayload({ ...timed, location: '' }, { baseline: timed }),
+    ).toEqual({
+      location: null,
+    });
+    expect(
+      eventFormPayload({ ...timed, freq: 'none' }, { baseline: timed }),
+    ).toEqual({
+      rrule: null,
+    });
+    expect(eventFormPayload(timed, { baseline: timed })).toEqual({});
   });
+
+  it.each([
+    [
+      'America/New_York',
+      '2026-03-08',
+      '02:30',
+      '03:30',
+      '03:30',
+      '04:30',
+      '07:30',
+    ],
+    [
+      'Europe/Berlin',
+      '2026-03-29',
+      '02:30',
+      '03:30',
+      '03:30',
+      '04:30',
+      '01:30',
+    ],
+    [
+      'Australia/Lord_Howe',
+      '2026-10-04',
+      '02:15',
+      '03:15',
+      '02:45',
+      '03:45',
+      '15:45',
+    ],
+    [
+      'Europe/Berlin',
+      '2026-10-25',
+      '02:30',
+      '03:30',
+      '02:30',
+      '03:30',
+      '00:30',
+    ],
+  ])(
+    'edits a resolved DST span in %s without rewriting an untouched series',
+    (zone, day, startTime, endTime, shownStart, shownEnd, utcStart) => {
+      const stored = event({
+        start: `${day}T${startTime}:17`,
+        end: `${day}T${endTime}:17`,
+        tz_name: zone,
+        rrule: 'FREQ=DAILY;INTERVAL=1',
+      });
+      const baseline = eventFormValues(stored, zone);
+      expect(baseline).toMatchObject({
+        start_date: day,
+        start_time: shownStart,
+        end_date: day,
+        end_time: shownEnd,
+      });
+      expect(eventFormValues(stored, 'UTC').start_time).toBe(utcStart);
+      expect(eventFormProblem(baseline)).toBe('');
+      // Keeping times and rule out of a title-only patch preserves the
+      // nominal recurring time, seconds and original RRULE in storage.
+      expect(
+        eventFormPayload({ ...baseline, title: 'Updated' }, { baseline }),
+      ).toEqual({
+        title: 'Updated',
+      });
+      // Once a time changes, both endpoints describe the new resolved span.
+      expect(
+        eventFormPayload({ ...baseline, end_time: '05:00' }, { baseline }),
+      ).toEqual({
+        start: `${day}T${shownStart}:00`,
+        end: `${day}T05:00:00`,
+      });
+    },
+  );
 
   it.each([
     [
