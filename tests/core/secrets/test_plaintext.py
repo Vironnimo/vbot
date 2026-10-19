@@ -192,6 +192,57 @@ def test_a_file_with_entries_that_cannot_be_imported_stays_and_is_reported(
         assert text not in reason and text not in caplog.text
 
 
+@pytest.mark.parametrize("previous_import", ["none", "credentials", "template"])
+def test_a_template_without_credentials_is_neither_imported_nor_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, previous_import: str
+) -> None:
+    data_dir = _data_dir(tmp_path)
+    template = "# provider keys\nOPENAI_API_KEY=\n"
+    env = _write(data_dir, ".env", template)
+    store = open_store(tmp_path)
+    if previous_import == "credentials":
+        env.write_text("OPENAI_API_KEY=sk-openai\n", encoding="utf-8")
+        import_plaintext_credentials(store)
+        with monkeypatch.context() as older:
+            older.setattr(
+                config_backups_module,
+                "CONFIGURATION_FILE_PATTERNS",
+                (*config_backups_module.CONFIGURATION_FILE_PATTERNS, ".env"),
+            )
+            assert capture_config_backup(data_dir, reason="older") is not None
+        env.write_text(template, encoding="utf-8")
+    elif previous_import == "template":
+        # A record written by an earlier version must not authorize deletion
+        # of a file with no credentials either.
+        store.update(
+            lambda transaction: transaction.set_import_record(
+                {
+                    "sources": {
+                        ".env": {
+                            "fingerprint": transaction.fingerprint(env.read_bytes()),
+                            "entries": {},
+                        }
+                    }
+                }
+            )
+        )
+        retired = retire_plaintext_credentials(store)
+        assert retired is not None and retired.deleted == ()
+
+    imported = import_plaintext_credentials(store)
+
+    assert imported is not None and imported.sources == () and imported.credentials == ()
+    assert imported.removed == (("OPENAI_API_KEY",) if previous_import == "credentials" else ())
+    settle_plaintext_credentials(open_store(tmp_path), mode="normal")
+    assert env.read_text(encoding="utf-8") == template
+    assert store.import_record() is None
+    assert store.entries(CREDENTIALS) == {}
+    assert all(".env" not in backup.files for backup in list_config_backups(data_dir))
+    if previous_import == "none":
+        assert store.status().state == "absent"
+    assert ignored_plaintext_files(store) == (".env",)
+
+
 def test_retiring_deletes_only_unchanged_imported_files_and_their_backup_copies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -240,9 +291,20 @@ def test_retiring_deletes_only_unchanged_imported_files_and_their_backup_copies(
     assert warned == {changed, batch / "oauth" / "older-login.json"}
 
 
-@pytest.mark.parametrize("interruption", ["a file cannot be deleted", "the process dies"])
-def test_a_partial_or_interrupted_retire_never_lets_a_later_import_remove_credentials(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interruption: str
+@pytest.mark.parametrize(
+    ("interruption", "before_retry"),
+    [
+        ("a file cannot be deleted", "nothing"),
+        ("the process dies before the first deletion", "nothing"),
+        ("the process dies", "nothing"),
+        ("the process dies", "another import"),
+        ("the process dies", "file changed"),
+        ("the process dies", "directory linked"),
+        ("the process dies", "stored value changed"),
+    ],
+)
+def test_a_partial_or_interrupted_retire_retries_without_losing_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interruption: str, before_retry: str
 ) -> None:
     data_dir = _data_dir(tmp_path)
     env = _write(data_dir, ".env", "OPENAI_API_KEY=sk-openai\nBRAVE_API_KEY=brave\n")
@@ -254,16 +316,17 @@ def test_a_partial_or_interrupted_retire_never_lets_a_later_import_remove_creden
         pass
 
     unlink = Path.unlink
+    first_deletion = interruption == "the process dies before the first deletion"
 
     def failing_unlink(path: Path, missing_ok: bool = False) -> None:
-        if path == token:
-            if interruption == "the process dies":
+        if path == (env if first_deletion else token):
+            if interruption.startswith("the process dies"):
                 raise _Died
             raise PermissionError(13, "Access is denied", str(path))
         unlink(path, missing_ok=missing_ok)
 
     monkeypatch.setattr(Path, "unlink", failing_unlink)
-    if interruption == "the process dies":
+    if interruption.startswith("the process dies"):
         with pytest.raises(_Died):
             retire_plaintext_credentials(store)
     else:
@@ -272,17 +335,47 @@ def test_a_partial_or_interrupted_retire_never_lets_a_later_import_remove_creden
         assert retired.kept[TOKEN].startswith("cannot be deleted")
     monkeypatch.undo()
 
-    # The record never names a file once it is deleted.
-    assert not env.exists() and token.exists()
+    # Mirroring no longer owns these values, but a restart still knows which
+    # files await deletion, even when the process died before the first unlink.
+    assert env.exists() == first_deletion and token.exists()
     record = store.import_record()
-    assert record is not None and ".env" not in record["sources"]
-    # The next update's verification start imports what is left, removing nothing.
-    settle_plaintext_credentials(open_store(tmp_path), mode="verification")
-    mirrored = import_plaintext_credentials(open_store(tmp_path))
+    assert record is not None and record["sources"] == {}
+    assert TOKEN in record["retiring_sources"]
+    assert store.status().import_pending
+    assert ignored_plaintext_files(store) == ()
+    expected_token = TOKEN_TEXT
+    if before_retry == "another import":
+        # An explicit import preserves retirement metadata without restoring
+        # missing-source deletion authority, even when the file later disappears.
+        settle_plaintext_credentials(open_store(tmp_path), mode="verification")
+        mirrored = import_plaintext_credentials(open_store(tmp_path))
+        assert mirrored is not None and mirrored.removed == () and mirrored.sources == ()
+        assert store.import_record() == record
+        token.unlink()
+        assert import_plaintext_credentials(open_store(tmp_path)) is None
+    elif before_retry == "file changed":
+        token.write_text(TOKEN_TEXT.replace("token-value", "edited"), encoding="utf-8")
+    elif before_retry == "directory linked":
+        shared = tmp_path / "shared"
+        token.parent.replace(shared)
+        link_directory(token.parent, shared)
+    elif before_retry == "stored value changed":
+        expected_token = TOKEN_TEXT.replace("token-value", "rotated")
+        store.set_entry(OAUTH_TOKENS, "github-copilot-oauth", expected_token)
 
-    assert mirrored is not None and mirrored.removed == ()
+    settle_plaintext_credentials(open_store(tmp_path), mode="normal")
+
     assert store.entries(CREDENTIALS) == {"BRAVE_API_KEY": "brave", "OPENAI_API_KEY": "sk-openai"}
-    assert sorted(store.entries(OAUTH_TOKENS)) == ["github-copilot-oauth"]
+    assert store.entries(OAUTH_TOKENS) == {"github-copilot-oauth": expected_token}
+    assert not env.exists()
+    assert store.import_record() is None
+    if before_retry in {"file changed", "directory linked", "stored value changed"}:
+        assert token.exists()
+        assert ignored_plaintext_files(store) == (TOKEN,)
+        if before_retry == "directory linked":
+            assert (tmp_path / "shared" / token.name).read_text(encoding="utf-8") == TOKEN_TEXT
+    else:
+        assert not token.exists()
 
 
 def test_a_linked_plaintext_file_is_imported_but_never_deleted(tmp_path: Path) -> None:

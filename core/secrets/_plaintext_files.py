@@ -9,7 +9,7 @@ import stat
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from core.secrets.store import (
     CREDENTIAL_NAME_PATTERN,
@@ -199,14 +199,16 @@ def _inspect_for_report(root: Path, path: str, link: str | None) -> _Source | No
         return _Source(path, link=link, problems={path: f"cannot be read: {exc}"})
 
 
-def _recorded_sources(record: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+def _recorded_sources(
+    record: Mapping[str, Any], field: Literal["sources", "retiring_sources"] = "sources"
+) -> dict[str, dict[str, Any]]:
     """The record's plaintext source files as ``{path: {"fingerprint", "entries"}}``.
 
     A source of the first record format holds only its content fingerprint
     and records no entries: none of its values counts as put there by the
     import. A path that names no plaintext credential file is left out.
     """
-    sources = record.get("sources")
+    sources = record.get(field)
     result: dict[str, dict[str, Any]] = {}
     if not isinstance(sources, dict):
         return result
@@ -226,6 +228,11 @@ def _recorded_sources(record: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
                 },
             }
     return result
+
+
+def _pending_sources(record: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Every file awaiting retirement, including files no longer mirrored by imports."""
+    return {**_recorded_sources(record), **_recorded_sources(record, "retiring_sources")}
 
 
 def _parse_env(content: bytes) -> tuple[dict[str, str], dict[int, str]] | None:
