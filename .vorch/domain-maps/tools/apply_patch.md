@@ -160,6 +160,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   none, since that error is not the Agent's to find now. A parser's `RecursionError`
   or `MemoryError` instead says the change was applied but its syntax check could
   not finish; the completed write remains a successful Tool Result.
+  Python files whose first Python 3 parse error is syntax only Python 2 has
+  (`print` or `exec` statements, backticks, `<>`, `0777`, `10L`, `ur''`,
+  `raise E, "message"`, tuple parameters) are taken as Python 2 and not checked,
+  since vBot has no Python 2 parser (`syntax_check._is_python2_syntax`; valid
+  GIMP Python-Fu scripts warned on every write, Sessions 2026-10).
   A written line (a created or replaced file's lines, an Update's changed and
   added lines) holding at least 5 literal `\n` sequences followed by
   indentation, the first outside a quoted string (`#` or `//` outside a string

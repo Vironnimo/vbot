@@ -8,6 +8,12 @@ PyYAML); it is **not** a linter or a type checker, and it never blocks the
 write. Callers surface the returned message as a non-fatal
 warning in the success envelope so the model can fix what it just broke.
 
+Python is parsed with the Python 3 grammar. When its first error is syntax only
+Python 2 has (a ``print`` or ``exec`` statement, backticks, ``<>``, ``0777``,
+``10L``, ``ur''``, ``raise E, "message"``, tuple parameters), the file is taken
+as Python 2 and not checked, since there is no Python 2 parser: without this, every
+write to a valid GIMP Python-Fu script warned (Sessions, 2026-10).
+
 Two entry points mirror the two tools:
 
 - ``warning_for_written_file`` — Add replaces the whole file, so any parse
@@ -27,6 +33,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -50,6 +57,58 @@ class _Problem:
     column: int | None = None
 
 
+# Python 3's own messages for syntax only Python 2 has: print and exec
+# statements, octal literals such as 0777, ur"" strings and tuple parameters.
+_PYTHON2_MESSAGES = (
+    "Missing parentheses in call to 'print'",
+    "Missing parentheses in call to 'exec'",
+    "leading zeros in decimal integer literals are not permitted",
+    "'u' and 'r' prefixes are incompatible",
+    "Function parameters cannot be parenthesized",
+    "Lambda expression parameters cannot be parenthesized",
+)
+_LITERAL_ERRORS = frozenset(
+    {
+        "invalid decimal literal",
+        "invalid hexadecimal literal",
+        "invalid octal literal",
+        "invalid binary literal",
+    }
+)
+# A long literal such as 10L or 0xFFL.
+_LONG_LITERAL = re.compile(r"\b(?:0[xX][0-9a-fA-F]+|0[oObB][0-7]+|\d+)[lL]\b")
+# `x`, the repr shorthand: one pair of backticks, never a Markdown fence.
+_BACKTICK_REPR = re.compile(r"(?<!`)`[^`\n]+`")
+# A raise statement up to the comma of raise E, "message".
+_RAISE_BEFORE_COMMA = re.compile(r"(?:^|[;:])\s*raise\s[^;]*$")
+
+
+def _is_python2_syntax(error: SyntaxError) -> bool:
+    """Whether a Python 3 parse error is syntax only Python 2 has.
+
+    Python 3 names most of it in its messages; for the rest it reports a generic
+    error, and the source at the error's column decides.
+    """
+    if error.msg.startswith(_PYTHON2_MESSAGES):
+        return True
+    if error.text is None or not error.offset:
+        return False
+    text, column = error.text, error.offset - 1
+    if error.msg == "invalid syntax":
+        return (
+            text.startswith("<>", column)
+            or _BACKTICK_REPR.match(text, column) is not None
+            or (
+                text.startswith(",", column)
+                and _RAISE_BEFORE_COMMA.search(text, 0, column) is not None
+            )
+        )
+    if error.msg in _LITERAL_ERRORS:
+        # The parser names the literal's last digit, just before the L.
+        return any(match.start() <= column < match.end() for match in _LONG_LITERAL.finditer(text))
+    return False
+
+
 def _check_python(content: str) -> _Problem | None:
     # Parse the utf-8 *bytes*, not the str: a ``# coding:`` cookie in a str source
     # makes ast.parse raise "encoding declaration in Unicode string" — a false
@@ -57,6 +116,9 @@ def _check_python(content: str) -> _Problem | None:
     try:
         ast.parse(content.encode("utf-8"))
     except SyntaxError as error:
+        if _is_python2_syntax(error):
+            # A Python 2 file: there is no parser to check it with.
+            return None
         location = f" (line {error.lineno}, column {error.offset})" if error.lineno else ""
         return _Problem(
             f"{type(error).__name__}: {error.msg}{location}", error.lineno, error.offset

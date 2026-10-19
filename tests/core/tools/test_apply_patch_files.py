@@ -482,6 +482,19 @@ def test_parser_resource_failure_keeps_the_successful_file_change(
         # A full replacement is checked even where the original did not parse.
         (b"def old(\n", "file.py", "def new(", WRITE_WARNING + "SyntaxError"),
         (b"\xff\x00", "file.py", "def new(", WRITE_WARNING + "SyntaxError"),
+        # Python 2 files are not checked; Python 3 rejects their syntax.
+        (None, "plugin.py", 'def run(image):\n    print "Size:", image.width', None),
+        (None, "py2.py", 'exec "x = 1" in scope', None),
+        (None, "py2.py", "os.chmod(path, 0755)", None),
+        (None, "py2.py", 'pattern = ur"\\d+"', None),
+        (None, "py2.py", "def point(id, (x, y)):\n    return x", None),
+        (None, "py2.py", "label = `size`", None),
+        (None, "py2.py", "if a <> b:\n    pass", None),
+        (None, "py2.py", 'if a: raise ValueError, "bad"', None),
+        (None, "py2.py", "mask = 0xFFL", None),
+        # A Markdown fence is no Python 2 repr, and 1st is no long literal.
+        (None, "broken.py", "```python\nx = 1\n```", WRITE_WARNING + "SyntaxError"),
+        (None, "broken.py", "x = 1st_value", WRITE_WARNING + "SyntaxError"),
     ],
 )
 def test_written_files_are_syntax_checked(tmp_path, original, name, content, warning):
@@ -516,6 +529,8 @@ def test_written_files_are_syntax_checked(tmp_path, original, name, content, war
             "Warning: File was already syntactically invalid before this edit",
         ),
         ("def f(:\n    return 1\n", "@@\n-def f(:\n+def f():", None),
+        # A Python 2 file is not checked, so an edit to it gets no warning.
+        ('print "a"\nx = 1\n', '@@\n-x = 1\n+print "b"', None),
     ],
 )
 def test_edited_files_are_syntax_checked_without_blaming_earlier_errors(
