@@ -226,30 +226,32 @@ DEVICE_FLOWS = {
 @respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "uri",
+    ("flow", "uri"),
     [
-        "javascript:alert(1)",
-        "data:text/html,content",
-        "/relative",
-        "https://",
-        "https://host:bad",
-        None,
-        123,
+        ("standard", "javascript:alert(1)"),
+        ("standard", "data:text/html,content"),
+        ("standard", "/relative"),
+        ("standard", "https://"),
+        ("standard", "https://host:bad"),
+        ("standard", None),
+        ("standard", 123),
+        ("opencode", 123),
     ],
 )
 async def test_device_flow_rejects_non_web_verification_uris_before_polling(
-    engine: DeviceFlowEngine, uri: Any
+    engine: DeviceFlowEngine, flow: str, uri: Any
 ) -> None:
-    respx.post(GITHUB_DEVICE_AUTH_URL).mock(
+    config = DEVICE_FLOWS[flow]["config"]
+    respx.post(config.device_auth_url).mock(
         return_value=httpx.Response(
             200, json={**GITHUB_AUTHORIZATION, "verification_uri": uri, "verification_url": uri}
         )
     )
-    token_request = respx.post(GITHUB_TOKEN_URL).mock(return_value=PENDING)
+    token_request = respx.post(config.token_url).mock(return_value=PENDING)
     account = Account("github-copilot", "subscription", "default")
 
     with pytest.raises(DeviceFlowTerminalError):
-        await engine.connect(account, github_oauth_config(), on_complete=Completion())
+        await engine.connect(account, config, on_complete=Completion())
 
     assert not token_request.called
     assert not engine.is_flow_active(account)

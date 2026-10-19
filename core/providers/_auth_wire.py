@@ -248,7 +248,11 @@ def _device_session_from_response(
         or data.get("verification_uri")
         or data["verification_url"]
     )
-    if _is_opencode_flow(oauth_config) and verification_uri.startswith("/"):
+    if (
+        _is_opencode_flow(oauth_config)
+        and isinstance(verification_uri, str)
+        and verification_uri.startswith("/")
+    ):
         verification_uri = _opencode_server_url(oauth_config) + verification_uri
     return DeviceFlowSession(
         device_code=data["device_code"],
