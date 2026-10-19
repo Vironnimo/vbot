@@ -81,7 +81,7 @@ async def _over_codex_websocket(request: Mapping[str, Any]) -> _Sent:
     )
     connector = openai.FakeCodexWebSocketConnector([socket])
     adapter = openai.codex_adapter(
-        codex_websocket_connect=connector, model_lookup=openai.bundled_model_lookup()
+        responses_websocket_connect=connector, model_lookup=openai.bundled_model_lookup()
     )
     _bind_request_rules(adapter, paths.CODEX.model_id, request)
     stream = adapter.stream(_MESSAGES, model_id=paths.CODEX.model_id, conversation_id="a:s")

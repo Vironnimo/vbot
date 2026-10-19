@@ -436,7 +436,7 @@ async def test_codex_sse_cache_scope_headers_follow_the_request_context(
 ) -> None:
     """The cache affinity rides on headers only; no conversation means no blank headers."""
 
-    adapter = codex_adapter(codex_transport="sse")
+    adapter = codex_adapter(responses_transport="sse")
     request_kwargs = adapter.request_context_kwargs(**context) if context else {}
     if context:
         assert request_kwargs == {

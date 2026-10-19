@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.models.database import ModelDatabaseRefresh, begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
-from core.providers._codex_websocket import CodexTransports, codex_conversation_id
+from core.providers._responses_websocket import ResponsesTransports, responses_conversation_id
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, Account, ConnectionRef, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter, is_local_provider_base_url
@@ -102,7 +102,7 @@ class ProviderRuntime:
         # on the loop while worker threads read them.
         self._loaded_context_windows: dict[str, int] = {}
         self._loaded_context_lock = threading.Lock()
-        self._codex_transports = CodexTransports()
+        self._responses_transports = ResponsesTransports()
         self._wire_observations = self._load_wire_observations(storage)
         self._wire_profiles = WireProfiles(
             files=wire_profile_files(custom_providers, resources_path),
@@ -191,8 +191,8 @@ class ProviderRuntime:
 
     async def close_session_transports(self, sessions: Iterable[tuple[str, str]]) -> None:
         """Close the Provider connections kept open for these ``(agent_id, session_id)``."""
-        await self._codex_transports.close_conversations(
-            {codex_conversation_id(agent_id, session_id) for agent_id, session_id in sessions}
+        await self._responses_transports.close_conversations(
+            {responses_conversation_id(agent_id, session_id) for agent_id, session_id in sessions}
         )
 
     async def close_connection_transports(
@@ -203,15 +203,15 @@ class ProviderRuntime:
         ``connection_id`` is local (``subscription``); without it, every
         Connection of the Provider closes.
         """
-        await self._codex_transports.close_connection(provider_id, connection_id)
+        await self._responses_transports.close_connection(provider_id, connection_id)
 
     async def aclose_transports(self) -> None:
         """Close every kept-open Provider connection (Runtime shutdown)."""
-        await self._codex_transports.aclose()
+        await self._responses_transports.aclose()
 
     def abort_transports(self) -> None:
         """Drop every kept-open Provider connection without waiting (synchronous shutdown)."""
-        self._codex_transports.abort()
+        self._responses_transports.abort()
 
     def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
         provider_id = connection.provider_id
@@ -242,8 +242,8 @@ class ProviderRuntime:
             extra_kwargs["routing"] = self._storage.load_openrouter_routing_settings()
         if adapter_class is OpenAIAdapter:
             # A Session's Codex socket and continuation outlive the Run's Adapter.
-            extra_kwargs["codex_transports"] = self._codex_transports
-            extra_kwargs["codex_connection"] = (provider_id, connection_config.id)
+            extra_kwargs["responses_transports"] = self._responses_transports
+            extra_kwargs["responses_connection"] = (provider_id, connection_config.id)
 
         base_url = connection_config.base_url
         if adapter_class is GitHubCopilotAdapter:

@@ -61,18 +61,18 @@ PROMPT_CACHE_AFFINITY_ID_KWARG = "prompt_cache_affinity_id"
 
 _NORMALIZED_CODEX_STREAM_RESPONSE_KEY = "_normalized_codex_stream_response"
 
-_CODEX_TRANSPORT_AUTO: Literal["auto"] = "auto"
+_RESPONSES_TRANSPORT_AUTO: Literal["auto"] = "auto"
 
-_CODEX_TRANSPORT_SSE: Literal["sse"] = "sse"
+_RESPONSES_TRANSPORT_SSE: Literal["sse"] = "sse"
 
 _CODEX_CACHE_SCOPE_MAX_LENGTH = 64
 
-_CODEX_WEBSOCKET_CONNECT_TIMEOUT_SECONDS = 10.0
+_RESPONSES_WEBSOCKET_CONNECT_TIMEOUT_SECONDS = 10.0
 
-_CODEX_WEBSOCKET_STATUS_CODE = 101
+_RESPONSES_WEBSOCKET_STATUS_CODE = 101
 
-CodexTransport = Literal["auto", "sse"]
+ResponsesTransport = Literal["auto", "sse"]
 
-CodexWebSocketConnector = Callable[..., Awaitable[Any]]
+ResponsesWebSocketConnector = Callable[..., Awaitable[Any]]
 
-CodexWebSocketRoute = tuple[str, str, str]
+ResponsesWebSocketRoute = tuple[str, str, str]

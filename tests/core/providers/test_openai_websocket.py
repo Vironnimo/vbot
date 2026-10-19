@@ -1,6 +1,6 @@
-"""OpenAI Adapter Codex WebSocket transport: continuation, route isolation, fallback and tracing.
+"""OpenAI Adapter Responses WebSocket transport: continuation, route isolation, fallback, tracing.
 
-Every socket is an in-memory fake injected through ``codex_websocket_connect``.
+Every socket is an in-memory fake injected through ``responses_websocket_connect``.
 """
 
 from __future__ import annotations
@@ -24,12 +24,12 @@ import core.providers.http as http_module
 import core.providers.openai as openai_module
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
-from core.providers._codex_websocket import (
-    CODEX_SOCKET_IDLE_SECONDS,
-    CODEX_SOCKET_MAX_AGE_SECONDS,
-    CODEX_WEBSOCKET_RETRY_AFTER_SECONDS,
-    CodexRequestDigest,
-    codex_conversation_id,
+from core.providers._responses_websocket import (
+    RESPONSES_SOCKET_IDLE_SECONDS,
+    RESPONSES_SOCKET_MAX_AGE_SECONDS,
+    RESPONSES_WEBSOCKET_RETRY_AFTER_SECONDS,
+    ResponsesRequestDigest,
+    responses_conversation_id,
 )
 from core.providers.errors import (
     NetworkError,
@@ -38,11 +38,12 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderUsageLimitError,
 )
-from core.providers.openai import CODEX_WEBSOCKET_BETA, CodexTransports, OpenAIAdapter
+from core.providers.openai import CODEX_WEBSOCKET_BETA, OpenAIAdapter, ResponsesTransports
 from core.utils.tls import shared_ssl_context
 
 from .openai_test_support import (
     ACCOUNT_ID,
+    API_KEY,
     CODEX_TOOLS,
     OPENAI_SUBSCRIPTION_URL,
     SAMPLE_MESSAGES,
@@ -53,6 +54,7 @@ from .openai_test_support import (
     codex_adapter,
     codex_sse_response,
     jwt_with_account,
+    platform_adapter,
 )
 
 MODEL_ID = "gpt-5.6-terra"
@@ -151,6 +153,35 @@ async def _send(
     return adapter.normalize_response(await adapter.send(messages, **kwargs))
 
 
+async def _stream(
+    adapter: OpenAIAdapter,
+    messages: list[dict[str, Any]],
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Stream one turn as a Run does and assemble the fields a replay needs."""
+    kwargs.setdefault("model_id", MODEL_ID)
+    kwargs.setdefault("conversation_id", CONVERSATION_ID)
+    content: list[str] = []
+    reasoning: list[str] = []
+    turn: dict[str, Any] = {"reasoning_meta": None, "tool_calls": []}
+    async for delta in adapter.stream(messages, **kwargs):
+        if delta["type"] == "content_delta":
+            content.append(delta["text"])
+        elif delta["type"] == "reasoning_delta":
+            reasoning.append(delta["text"])
+        elif delta["type"] == "reasoning_meta":
+            turn["reasoning_meta"] = delta["reasoning_meta"]
+        elif delta["type"] == "tool_call_delta":
+            turn["tool_calls"].append(
+                {
+                    "id": delta["id"],
+                    "name": delta["name_delta"],
+                    "arguments": json.loads(delta["arguments_delta"]),
+                }
+            )
+    return {**turn, "content": "".join(content) or None, "reasoning": "".join(reasoning)}
+
+
 class _Clock:
     """A controlled monotonic clock for socket ages and SSE windows."""
 
@@ -232,7 +263,7 @@ async def test_codex_websocket_continuation_requires_unmodified_server_output(
     )
     websocket = FakeCodexWebSocket([events, _final_turn("resp_2"), _final_turn("resp_3")])
     connector = FakeCodexWebSocketConnector([websocket])
-    adapter = codex_adapter(codex_websocket_connect=connector)
+    adapter = codex_adapter(responses_websocket_connect=connector)
     conversation_id = "orchestrator:" + ("session-" * 20)
     request: dict[str, Any] = {
         "conversation_id": conversation_id,
@@ -333,7 +364,7 @@ async def test_codex_websocket_requires_final_output_evidence_for_continuation(
 ) -> None:
     websocket = FakeCodexWebSocket([[*events, _completed("resp_1", [])], _final_turn("resp_2")])
     connector = FakeCodexWebSocketConnector([websocket])
-    adapter = codex_adapter(codex_websocket_connect=connector)
+    adapter = codex_adapter(responses_websocket_connect=connector)
     try:
         first = await _send(adapter)
         await _send(adapter, [*SAMPLE_MESSAGES, first, {"role": "user", "content": "Continue"}])
@@ -354,7 +385,7 @@ async def test_closing_a_partial_codex_stream_releases_the_socket_for_the_next_r
     partial = FakeCodexWebSocket([[{"type": "response.output_text.delta", "delta": "partial"}]])
     replacement = FakeCodexWebSocket([_final_turn("resp_2")])
     connector = FakeCodexWebSocketConnector([partial, replacement])
-    adapter = codex_adapter(codex_websocket_connect=connector)
+    adapter = codex_adapter(responses_websocket_connect=connector)
     stream = cast(
         AsyncGenerator[dict[str, Any]],
         adapter.stream(SAMPLE_MESSAGES, model_id=MODEL_ID, conversation_id=CONVERSATION_ID),
@@ -388,7 +419,7 @@ async def test_codex_websocket_lost_continuation_reconnects_with_full_context(co
     )
     replacement_websocket = FakeCodexWebSocket([_final_turn("resp_2")])
     connector = FakeCodexWebSocketConnector([first_websocket, replacement_websocket])
-    adapter = codex_adapter(codex_websocket_connect=connector)
+    adapter = codex_adapter(responses_websocket_connect=connector)
 
     first = await _send(adapter, tools=CODEX_TOOLS)
     second = await _send(adapter, _messages_with_tool_result(first), tools=CODEX_TOOLS)
@@ -429,7 +460,7 @@ async def test_codex_websocket_never_chains_across_a_route_change(
     connector = FakeCodexWebSocketConnector([first_websocket, second_websocket])
     adapter = codex_adapter(
         RotatingTokenGetter([jwt_with_account(account) for account in accounts]),
-        codex_websocket_connect=connector,
+        responses_websocket_connect=connector,
     )
     shared: dict[str, Any] = {
         "prompt_cache_affinity_id": "shared-cache-lineage",
@@ -538,7 +569,7 @@ async def test_codex_error_events_follow_codex_retry_classification(
     """Unknown codes retry; known fatal codes and rejected requests stop; facts stay visible."""
 
     connector = FakeCodexWebSocketConnector([FakeCodexWebSocket([[event]])])
-    adapter = codex_adapter(codex_websocket_connect=connector)
+    adapter = codex_adapter(responses_websocket_connect=connector)
 
     with pytest.raises(ProviderError) as caught:
         await _send(adapter)
@@ -605,7 +636,7 @@ async def test_codex_error_frames_wait_as_long_as_the_provider_reports(
     """
 
     connector = FakeCodexWebSocketConnector([FakeCodexWebSocket([[event]])])
-    adapter = codex_adapter(codex_websocket_connect=connector)
+    adapter = codex_adapter(responses_websocket_connect=connector)
     adapter.display_timezone = ZoneInfo("Europe/Berlin")
 
     with pytest.raises(ProviderError) as caught:
@@ -642,7 +673,9 @@ async def test_a_rejection_event_before_the_first_delta_is_learned_on_a_fresh_so
     )
     replacement = FakeCodexWebSocket([_final_turn("resp_1"), _final_turn("resp_2")])
     connector = FakeCodexWebSocketConnector([rejected, replacement])
-    adapter = codex_adapter(codex_websocket_connect=connector, model_lookup=bundled_model_lookup())
+    adapter = codex_adapter(
+        responses_websocket_connect=connector, model_lookup=bundled_model_lookup()
+    )
 
     for _ in range(2):
         deltas = [
@@ -686,7 +719,7 @@ async def test_a_codex_websocket_failure_before_events_reconnects_then_continues
         first = FakeCodexWebSocket([_tool_call_turn("resp_1")])
         connections = [first, OSError("connection refused"), replacement]
     connector = FakeCodexWebSocketConnector(connections)
-    adapter = codex_adapter(codex_websocket_connect=connector)
+    adapter = codex_adapter(responses_websocket_connect=connector)
 
     turn = await _send(adapter, tools=CODEX_TOOLS)
     messages = _messages_with_tool_result(turn)
@@ -723,7 +756,7 @@ async def test_codex_websocket_failure_after_event_propagates_and_next_attempt_r
     )
     replacement = FakeCodexWebSocket([_final_turn("resp_1")])
     connector = FakeCodexWebSocketConnector([websocket, replacement])
-    adapter = codex_adapter(codex_websocket_connect=connector)
+    adapter = codex_adapter(responses_websocket_connect=connector)
 
     with respx.mock:  # never SSE
         with pytest.raises(NetworkError):
@@ -761,7 +794,7 @@ async def test_failed_codex_websockets_fall_back_to_sse_for_a_bounded_time(
     websocket = FakeCodexWebSocket([_final_turn("resp_ws")])
     connector = FakeCodexWebSocketConnector([*failures, websocket])
     adapter = codex_adapter(
-        codex_websocket_connect=connector, codex_transports=CodexTransports(clock=clock)
+        responses_websocket_connect=connector, responses_transports=ResponsesTransports(clock=clock)
     )
 
     with respx.mock:
@@ -775,7 +808,7 @@ async def test_failed_codex_websockets_fall_back_to_sse_for_a_bounded_time(
         if sse_window:
             await _send(adapter)
             assert (sse.call_count, len(connector.calls)) == (2, len(failures))
-            clock.now += CODEX_WEBSOCKET_RETRY_AFTER_SECONDS
+            clock.now += RESPONSES_WEBSOCKET_RETRY_AFTER_SECONDS
         assert (await _send(adapter))["content"] == "Done"
 
     assert len(connector.calls) == len(failures) + 1
@@ -809,21 +842,27 @@ def _screenshot_history(text: str = "Hello", screenshot: str = "aW1hZ2U=") -> li
     ]
 
 
+@pytest.mark.parametrize("connection", ["codex", "platform"])
 @pytest.mark.asyncio
-async def test_a_later_run_continues_the_session_socket_with_only_new_input() -> None:
+async def test_a_later_run_continues_the_session_socket_with_only_new_input(
+    connection: str,
+) -> None:
     """The Runtime's transports keep a Session's socket and continuation across Runs;
-    the next Run's own rendering of the same history, screenshots included, matches."""
+    the next Run's own rendering of the same history, screenshots included, matches.
+    The Platform's API key opens its documented WebSocket mode with the same
+    continuation, authenticated like its HTTP requests."""
 
-    transports = CodexTransports()
+    transports = ResponsesTransports()
     websocket = FakeCodexWebSocket([_tool_call_turn("resp_1"), _final_turn("resp_2")])
     connector = FakeCodexWebSocketConnector([websocket])
-    first_run = codex_adapter(codex_websocket_connect=connector, codex_transports=transports)
-    turn = await _send(first_run, _screenshot_history(), tools=CODEX_TOOLS)
+    make_adapter = codex_adapter if connection == "codex" else platform_adapter
+    first_run = make_adapter(responses_websocket_connect=connector, responses_transports=transports)
+    turn = await _stream(first_run, _screenshot_history(), tools=CODEX_TOOLS)
     await first_run.aclose()
     assert websocket.closed is False
 
-    next_run = codex_adapter(codex_websocket_connect=connector, codex_transports=transports)
-    await _send(
+    next_run = make_adapter(responses_websocket_connect=connector, responses_transports=transports)
+    await _stream(
         next_run, _messages_with_tool_result(turn, _screenshot_history()), tools=CODEX_TOOLS
     )
     await next_run.aclose()
@@ -831,6 +870,14 @@ async def test_a_later_run_continues_the_session_socket_with_only_new_input() ->
     assert len(connector.calls) == 1
     assert websocket.sent_payloads[1]["previous_response_id"] == "resp_1"
     assert websocket.sent_payloads[1]["input"] == [_TOOL_OUTPUT]
+    url, connect_kwargs = connector.calls[0]
+    headers = connect_kwargs["additional_headers"]
+    if connection == "platform":
+        assert url == "wss://api.openai.com/v1/responses"
+        assert headers == {"Authorization": f"Bearer {API_KEY}"}
+    else:
+        assert url == "wss://chatgpt.com/backend-api/codex/responses"
+        assert headers["chatgpt-account-id"] == ACCOUNT_ID
     await transports.aclose()
     assert websocket.closed is True
 
@@ -847,7 +894,7 @@ _CHANGED_TOOLS = [{**CODEX_TOOLS[0], "description": "Look up other data"}]
             {"token_getter": jwt_with_account() + "x"}, {}, {}, True, id="credentials-changed"
         ),
         pytest.param(
-            {"codex_connection": ("openai", "other")}, {}, {}, False, id="connection-changed"
+            {"responses_connection": ("openai", "other")}, {}, {}, False, id="connection-changed"
         ),
         pytest.param({}, {}, {"text": "Hello there"}, False, id="earlier-item-changed"),
         pytest.param({}, {}, {"screenshot": "b3RoZXI="}, False, id="nested-part-changed"),
@@ -865,16 +912,16 @@ async def test_a_changed_request_never_continues_an_earlier_runs_response(
     it, on the Session's socket. A socket opened with replaced credentials closes;
     others stay for the requests they still match."""
 
-    transports = CodexTransports()
+    transports = ResponsesTransports()
     first = FakeCodexWebSocket([_tool_call_turn("resp_1"), _final_turn("resp_2")])
     second = FakeCodexWebSocket([_final_turn("resp_2")])
     connector = FakeCodexWebSocketConnector([first, second])
-    adapter = codex_adapter(codex_websocket_connect=connector, codex_transports=transports)
+    adapter = codex_adapter(responses_websocket_connect=connector, responses_transports=transports)
     turn = await _send(adapter, _screenshot_history(), tools=CODEX_TOOLS)
     await adapter.aclose()
 
     adapter = codex_adapter(
-        codex_websocket_connect=connector, codex_transports=transports, **next_run
+        responses_websocket_connect=connector, responses_transports=transports, **next_run
     )
     await _send(
         adapter,
@@ -899,21 +946,21 @@ async def test_a_stale_session_socket_is_replaced_by_a_fresh_one(staleness: str)
     the backend is never reused; the next request goes in full on a new socket."""
 
     clock = _Clock()
-    transports = CodexTransports(
-        idle_seconds=2 * CODEX_SOCKET_MAX_AGE_SECONDS
+    transports = ResponsesTransports(
+        idle_seconds=2 * RESPONSES_SOCKET_MAX_AGE_SECONDS
         if staleness == "too-old"
-        else CODEX_SOCKET_IDLE_SECONDS,
+        else RESPONSES_SOCKET_IDLE_SECONDS,
         clock=clock,
     )
     first = FakeCodexWebSocket([_tool_call_turn("resp_1")])
     second = FakeCodexWebSocket([_final_turn("resp_2")])
     connector = FakeCodexWebSocketConnector([first, second])
-    adapter = codex_adapter(codex_websocket_connect=connector, codex_transports=transports)
+    adapter = codex_adapter(responses_websocket_connect=connector, responses_transports=transports)
     turn = await _send(adapter, tools=CODEX_TOOLS)
     if staleness == "idle-expired":
-        clock.now += CODEX_SOCKET_IDLE_SECONDS
+        clock.now += RESPONSES_SOCKET_IDLE_SECONDS
     elif staleness == "too-old":
-        clock.now += CODEX_SOCKET_MAX_AGE_SECONDS
+        clock.now += RESPONSES_SOCKET_MAX_AGE_SECONDS
     else:
         first.state = State.CLOSED
 
@@ -929,11 +976,11 @@ async def test_a_stale_session_socket_is_replaced_by_a_fresh_one(staleness: str)
 
 @pytest.mark.asyncio
 async def test_an_idle_session_socket_closes_when_its_idle_time_runs_out() -> None:
-    transports = CodexTransports(idle_seconds=0)
+    transports = ResponsesTransports(idle_seconds=0)
     websocket = FakeCodexWebSocket([_final_turn("resp_1")])
     adapter = codex_adapter(
-        codex_websocket_connect=FakeCodexWebSocketConnector([websocket]),
-        codex_transports=transports,
+        responses_websocket_connect=FakeCodexWebSocketConnector([websocket]),
+        responses_transports=transports,
     )
 
     await _send(adapter)
@@ -945,11 +992,11 @@ async def test_an_idle_session_socket_closes_when_its_idle_time_runs_out() -> No
 
 @pytest.mark.asyncio
 async def test_the_least_recently_used_idle_socket_closes_beyond_the_socket_limit() -> None:
-    transports = CodexTransports(max_sockets=2)
+    transports = ResponsesTransports(max_sockets=2)
     sockets = [FakeCodexWebSocket([_final_turn(f"resp_{n}")]) for n in range(3)]
     adapter = codex_adapter(
-        codex_websocket_connect=FakeCodexWebSocketConnector(list(sockets)),
-        codex_transports=transports,
+        responses_websocket_connect=FakeCodexWebSocketConnector(list(sockets)),
+        responses_transports=transports,
     )
 
     for n in range(3):
@@ -966,7 +1013,7 @@ async def test_closing_a_session_or_connection_closes_its_kept_sockets(closing: 
     """An archived Session or changed credentials end the sockets kept for them;
     a Connection close also gives it a fresh WebSocket attempt."""
 
-    transports = CodexTransports()
+    transports = ResponsesTransports()
     subscription, other = ("openai", "subscription"), ("openai", "other")
     kept = FakeCodexWebSocket([_final_turn("resp_1")])
     unrelated = FakeCodexWebSocket([_final_turn("resp_2")])
@@ -975,13 +1022,13 @@ async def test_closing_a_session_or_connection_closes_its_kept_sockets(closing: 
         connection,
         conversation_id,
     ) in (
-        (subscription, codex_conversation_id("orchestrator", "sess-42")),
+        (subscription, responses_conversation_id("orchestrator", "sess-42")),
         (subscription if closing == "session" else other, "orchestrator:sess-7"),
     ):
         adapter = codex_adapter(
-            codex_websocket_connect=connector,
-            codex_transports=transports,
-            codex_connection=connection,
+            responses_websocket_connect=connector,
+            responses_transports=transports,
+            responses_connection=connection,
         )
         await _send(adapter, conversation_id=conversation_id)
         await adapter.aclose()
@@ -1016,7 +1063,7 @@ async def test_codex_websocket_messages_arrive_deflated_from_the_request_worker(
         deflate_params=[("client_max_window_bits", "12")],
     )
     connector = FakeCodexWebSocketConnector([websocket])
-    adapter = codex_adapter(codex_websocket_connect=connector)
+    adapter = codex_adapter(responses_websocket_connect=connector)
 
     turn = await _send(adapter, tools=CODEX_TOOLS)
     await _send(adapter, _messages_with_tool_result(turn), tools=CODEX_TOOLS)
@@ -1044,23 +1091,23 @@ async def test_codex_websocket_requests_never_build_the_http_body(
     encoded: list[None] = []
     digest_threads: list[str] = []
     encode = http_module._encode_json_body
-    digest = openai_module.codex_request_digest
+    digest = openai_module.responses_request_digest
 
     def counting_encode(payload: dict[str, Any]) -> bytes:
         encoded.append(None)
         return encode(payload)
 
-    def recording_digest(payload: dict[str, Any]) -> CodexRequestDigest:
+    def recording_digest(payload: dict[str, Any]) -> ResponsesRequestDigest:
         digest_threads.append(threading.current_thread().name)
         return digest(payload)
 
     monkeypatch.setattr(http_module, "_encode_json_body", counting_encode)
-    monkeypatch.setattr(openai_module, "codex_request_digest", recording_digest)
+    monkeypatch.setattr(openai_module, "responses_request_digest", recording_digest)
     lost = {"type": "error", "error": {"code": "previous_response_not_found", "message": "Gone."}}
     websocket = FakeCodexWebSocket([_tool_call_turn("resp_1"), [lost]])
     replacement = FakeCodexWebSocket([_final_turn("resp_2")])
     adapter = codex_adapter(
-        codex_websocket_connect=FakeCodexWebSocketConnector([websocket, replacement])
+        responses_websocket_connect=FakeCodexWebSocketConnector([websocket, replacement])
     )
 
     turn = await _send(adapter, tools=CODEX_TOOLS)
@@ -1089,7 +1136,7 @@ async def test_codex_websocket_exchange_keeps_canonical_debug_trace(tmp_path: Pa
     connector = FakeCodexWebSocketConnector([websocket])
     debug_store = DebugTraceStore(tmp_path, trace_limit=10)
     adapter = codex_adapter(
-        codex_websocket_connect=connector,
+        responses_websocket_connect=connector,
         debug_recorder=ProviderDebugRecorder(debug_store),
     )
     adapter.set_debug_context(
