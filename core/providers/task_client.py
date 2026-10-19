@@ -37,6 +37,7 @@ from core.providers.http import (
     wrap_network_error,
 )
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
+from core.utils.http_status import parse_retry_after
 from core.utils.retry import retry_async
 from core.utils.workers import BoundedWorkerPool
 
@@ -610,15 +611,49 @@ def classify_task_response(
     Callers declare idempotency explicitly so replay-safe reads and billed
     non-idempotent generation cannot share the wrong retry branch: a status
     poll or result download GET may retry HTTP 500, a generation POST may not.
+    OpenRouter's in-flight budget 402 never reached a provider and is a
+    retryable rate limit for every policy.
     """
 
     detail = response.text if response.status_code >= 400 else ""
+    if _in_flight_budget_exhausted(response):
+        throttled = ProviderRateLimitError(
+            f"Rate limited by the in-flight spending budget: {response.status_code} {detail}"
+        )
+        throttled.status_code = response.status_code
+        throttled.retry_after = parse_retry_after(response.headers)
+        raise throttled
     classify_http_status(
         response.status_code,
         idempotent=idempotent,
         extra_retryable=set(extra_retryable_status_codes),
         detail=f"{response.status_code} {detail}".strip() if detail else str(response.status_code),
         response_headers=response.headers,
+    )
+
+
+def _in_flight_budget_exhausted(response: httpx.Response) -> bool:
+    """Whether a 402 is OpenRouter's in-flight budget, which a later attempt can pass.
+
+    OpenRouter holds each paid request's estimated cost against the balance and
+    rejects one that does not fit with 402 "before it reaches a provider", with
+    ``Retry-After``; ``weight_exceeds_budget`` never fits, and other
+    ``limit_source`` values (credits, key limit) need the user
+    (https://openrouter.ai/docs/api_reference/limits, read 2026-10-19).
+    """
+
+    if response.status_code != 402:
+        return False
+    try:
+        payload = response.json()
+    except ValueError, UnicodeError:
+        return False
+    error = payload.get("error") if isinstance(payload, Mapping) else None
+    metadata = error.get("metadata") if isinstance(error, Mapping) else None
+    return (
+        isinstance(metadata, Mapping)
+        and metadata.get("limit_source") == "openrouter_in_flight_budget"
+        and metadata.get("reason") != "weight_exceeds_budget"
     )
 
 
