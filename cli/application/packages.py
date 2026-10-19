@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import re
@@ -315,6 +316,10 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
             platform=current_platform(),
             access=install.access,
         )
+        if not local and manifest.get("channel") != install.channel:
+            raise ApplicationError(
+                f"Release package does not match the selected update channel '{install.channel}'."
+            )
         version_id = manifest["version_id"]
         destination = install.version(version_id)
         if destination.exists():
@@ -356,6 +361,10 @@ def download_release(
     expected = package_name(install.install_shape)
     with httpx.Client(timeout=60, follow_redirects=True, trust_env=False) as client:
         identity = _release_identity(client, f"{install.download_base}/{RELEASE_IDENTITY_ASSET}")
+        if identity.get("channel") != install.channel:
+            raise ApplicationError(
+                f"Release identity does not match the selected update channel '{install.channel}'."
+            )
         label = version_label(identity)
         if identity["version_id"] == install.version().name:
             if progress:
@@ -373,19 +382,22 @@ def download_release(
 
 def _release_identity(client: httpx.Client, url: str) -> dict[str, Any]:
     """Read the version identity every release publishes beside its packages."""
-    response = client.get(url)
-    if response.status_code == 404:
-        raise ApplicationError(
-            f"The channel's release publishes no {RELEASE_IDENTITY_ASSET} version identity, "
-            "so vbot update cannot install it"
-        )
-    response.raise_for_status()
-    if response.url.scheme != "https":
-        raise ApplicationError("Release download redirected to an insecure URL")
-    if len(response.content) > MAX_IDENTITY_BYTES:
-        raise ApplicationError("Release identity exceeds the size limit")
+    content = bytearray()
+    with client.stream("GET", url) as response:
+        if response.status_code == 404:
+            raise ApplicationError(
+                f"The channel's release publishes no {RELEASE_IDENTITY_ASSET} version identity, "
+                "so vbot update cannot install it"
+            )
+        response.raise_for_status()
+        if response.url.scheme != "https":
+            raise ApplicationError("Release download redirected to an insecure URL")
+        for chunk in response.iter_bytes(chunk_size=MAX_IDENTITY_BYTES + 1):
+            if len(content) + len(chunk) > MAX_IDENTITY_BYTES:
+                raise ApplicationError("Release identity exceeds the size limit")
+            content.extend(chunk)
     try:
-        value = response.json()
+        value = json.loads(content)
     except ValueError as exc:
         raise ApplicationError("Release identity is not valid JSON") from exc
     if not isinstance(value, dict) or value.get("schema_version") != 1:

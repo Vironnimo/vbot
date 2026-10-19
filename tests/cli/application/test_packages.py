@@ -11,10 +11,12 @@ import os
 import re
 import stat
 import zipfile
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -79,6 +81,7 @@ def _archive(
     hash_override: dict[str, str] | None = None,
     platform: str | None = None,
     access_protocol: object = None,
+    channel: str | None = None,
 ) -> Path:
     payload = _payload(shape=shape, marker=marker)
     files = {name: hashlib.sha256(data).hexdigest() for name, data in payload.items()}
@@ -94,6 +97,8 @@ def _archive(
         files.update(hash_override)
     if access_protocol is not None:
         manifest["server_access_protocol"] = access_protocol
+    if channel is not None:
+        manifest["channel"] = channel
     with zipfile.ZipFile(path, "w") as bundle:
         for name, data in payload.items():
             bundle.writestr(name, data)
@@ -119,10 +124,33 @@ def _sign(archive: Path, private_key: Ed25519PrivateKey) -> str:
     return base64.b64encode(public).decode("ascii")
 
 
-def test_signed_complete_release_stages_for_the_matching_installation(tmp_path: Path):
-    archive = _archive(tmp_path / "release.zip")
+@pytest.mark.parametrize(
+    ("channel", "published"),
+    [
+        ("release", "release"),
+        ("main", "main"),
+        ("release", "main"),
+        ("main", "release"),
+        ("release", None),
+    ],
+)
+def test_signed_complete_release_stages_only_for_the_matching_installation(
+    tmp_path: Path, channel: str, published: str | None
+):
+    archive = _archive(tmp_path / "release.zip", channel=published)
     key = Ed25519PrivateKey.generate()
-    install = _install(tmp_path / "install", public_key=_sign(archive, key))
+    install = replace(
+        _install(tmp_path / "install", public_key=_sign(archive, key)),
+        release_url=CHANNEL_URLS[channel],
+    )
+
+    if published != channel:
+        with pytest.raises(ApplicationError):
+            stage_package(install, archive)
+        assert not install.version(_VERSION).exists()
+        # An explicit local package can cross channels, even without metadata.
+        assert stage_package(install, archive, local=True) == _VERSION
+        return
 
     assert stage_package(install, archive) == _VERSION
     assert (
@@ -449,21 +477,70 @@ def test_authenticated_installation_requires_a_compatible_package_before_admissi
 _DOWNLOADS = "https://github.com/Vironnimo/vbot/releases"
 
 
+@pytest.mark.parametrize("oversized", [False, True])
+def test_download_bounds_release_identity_while_reading_and_closes_the_stream(
+    tmp_path: Path, oversized: bool
+) -> None:
+    respx = pytest.importorskip("respx")
+    install = _install(tmp_path / "install", public_key="key")
+    install.root.mkdir()
+    (install.root / "active-version").write_text("rel_active\n", encoding="ascii")
+    identity = json.dumps(
+        {"schema_version": 1, "version_id": "rel_active", "channel": "release"}
+    ).encode()
+
+    class Body(httpx.SyncByteStream):
+        closed = False
+
+        @override
+        def __iter__(self) -> Iterator[bytes]:
+            yield identity.ljust(packages.MAX_IDENTITY_BYTES, b" ")
+            if oversized:
+                yield b" "
+                raise AssertionError("The updater consumed data beyond the identity limit")
+
+        @override
+        def close(self) -> None:
+            self.closed = True
+
+    body = Body()
+    with respx.mock() as router:
+        router.get(f"{install.download_base}/{RELEASE_IDENTITY_ASSET}").mock(
+            return_value=httpx.Response(200, stream=body)
+        )
+        if oversized:
+            with pytest.raises(ApplicationError):
+                download_release(install, "upd_bounded")
+        else:
+            assert download_release(install, "upd_bounded") is None
+
+    assert body.closed
+    assert not (install.root / "downloads").exists()
+
+
 @pytest.mark.parametrize(
-    ("channel", "published", "version", "package_published"),
+    ("channel", "identity_channel", "published", "version", "package_published"),
     [
-        pytest.param("release", "rel_active", "1.0.0", True, id="already-active"),
-        pytest.param("release", "rel_newer", "1.0.0", True, id="newer-release"),
-        pytest.param("main", "rel_newer", "1.1.0.dev3", True, id="newer-main-build"),
-        pytest.param("release", "rel_newer", "1.0.0", False, id="no-package"),
+        pytest.param("release", "release", "rel_active", "1.0.0", True, id="already-active"),
+        pytest.param("release", "release", "rel_newer", "1.0.0", True, id="newer-release"),
+        pytest.param("main", "main", "rel_newer", "1.1.0.dev3", True, id="newer-main-build"),
+        pytest.param("release", "release", "rel_newer", "1.0.0", False, id="no-package"),
         # The version becomes the tag of the release download URL.
-        pytest.param("release", "rel_newer", "1.0.0/../../x", True, id="unsafe-version"),
+        pytest.param("release", "release", "rel_newer", "1.0.0/../../x", True, id="unsafe-version"),
         # A release without the identity names no version and is never downloaded.
-        pytest.param("release", None, "1.0.0", True, id="no-identity"),
+        pytest.param("release", "release", None, "1.0.0", True, id="no-identity"),
+        pytest.param("release", "main", "rel_newer", "1.0.0", True, id="other-channel"),
+        pytest.param("main", "release", "rel_active", "1.0.0", True, id="other-channel-active"),
+        pytest.param("release", None, "rel_newer", "1.0.0", True, id="no-channel"),
     ],
 )
 def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active(
-    tmp_path: Path, channel: str, published: str | None, version: str, package_published: bool
+    tmp_path: Path,
+    channel: str,
+    identity_channel: str | None,
+    published: str | None,
+    version: str,
+    package_published: bool,
 ) -> None:
     respx = pytest.importorskip("respx")
     install = replace(
@@ -480,7 +557,12 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
         "main": (f"{_DOWNLOADS}/download/main-build", f"{_DOWNLOADS}/download/main-build"),
     }[channel]
     storage = "https://release-assets.example"
-    identity = {"schema_version": 1, "version_id": published, "version": version}
+    identity = {
+        "schema_version": 1,
+        "version_id": published,
+        "version": version,
+        "channel": identity_channel,
+    }
     with respx.mock(assert_all_called=False) as router:
         identity_route = router.get(f"{identity_base}/{RELEASE_IDENTITY_ASSET}")
         if published:
@@ -498,10 +580,13 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
         router.get(f"{storage}/{archive}.sig").respond(content=b"sig")
         labels: list[str | None] = []
 
-        if published is None or not package_published or "/" in version:
-            with pytest.raises(
-                ApplicationError, match="publishes no|No matching signed|no valid release version"
-            ):
+        if (
+            published is None
+            or not package_published
+            or "/" in version
+            or identity_channel != channel
+        ):
+            with pytest.raises(ApplicationError):
                 download_release(install, "upd_test")
             assert not package.called
             return
