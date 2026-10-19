@@ -236,6 +236,11 @@ async def test_data_urls_are_decoded(workspace: Path, web: _Web, address: str) -
             "addresses can be fetched.",
         ),
         (
+            "http://100.64.0.1/cat.png",
+            "100.64.0.1 is a private or local network address; only public internet "
+            "addresses can be fetched.",
+        ),
+        (
             "https://user:secret@example.com/cat.png",
             "URLs containing a user name or password cannot be fetched; remove the "
             "credentials from the address.",

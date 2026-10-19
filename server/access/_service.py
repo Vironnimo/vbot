@@ -533,14 +533,27 @@ class AccessService:
         # What these devices approved but nobody claimed yet goes with them, before
         # the store write lets anything else run.
         self._withdraw_approvals(set(targets))
+
+        def remove() -> list[Device]:
+            # Earlier admitted creations may still be writing. Expand the cascade
+            # on the same ordered worker as removal, after those creations settle.
+            targets[:] = _with_ticket_browsers(store.devices(), device_ids, spare=spare)
+            return store.remove(targets)
+
         try:
-            removed = await _DEVICE_WRITES.call_async(lambda: store.remove(targets))
+            removed = await _DEVICE_WRITES.call_async(remove)
+        except asyncio.CancelledError:
+            self._changed()
+            raise
         except (DeviceStoreUnavailableError, OSError) as exc:
             # The devices are out of memory already; only the file kept them.
-            self.connections.revoke(set(targets))
             self._changed()
             raise _store_failure(exc) from None
-        closed = self.connections.revoke({device.id for device in removed})
+        finally:
+            # Include newly discovered ticket browsers, also when persistence
+            # failed or cancellation arrived while the worker was settling.
+            self._withdraw_approvals(set(targets))
+            closed = self.connections.revoke(set(targets))
         for device in removed:
             _LOGGER.info("Device revoked (device=%s actor=%s)", device.id, principal.actor)
         if closed:

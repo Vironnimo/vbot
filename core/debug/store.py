@@ -216,7 +216,7 @@ class DebugTraceStore:
         )
 
         self._ensure_directories()
-        previous = self._read_index()
+        previous = self._read_index() or []
         self._remove_unindexed_files(previous)
         entries = [item for item in previous if item.get("trace_id") != trace_id]
         entries.append(asdict(entry))
@@ -228,14 +228,20 @@ class DebugTraceStore:
             # Re-read publication state: a directory fsync can fail after
             # replacement already committed the new index.
             try:
-                self._remove_unindexed_files(self._read_index())
-            except OSError:
+                published = self._read_index()
+                if published is not None:
+                    self._remove_unindexed_files(published)
+            except OSError, ValueError:
                 _logger.warning("Failed to remove unindexed debug traces", exc_info=True)
             raise
         self._remove_unindexed_files(entries)
 
     def _list(self) -> list[dict[str, Any]]:
-        entries = self._read_index()
+        try:
+            entries = self._read_index() or []
+        except OSError, ValueError:
+            _logger.warning("Debug trace index is unreadable; traces left unchanged")
+            return []
         entries.sort(key=lambda entry: entry.get("timestamp", ""), reverse=True)
         return entries
 
@@ -273,26 +279,26 @@ class DebugTraceStore:
             raise InvalidTraceIdError("Invalid debug trace id")
         return self._traces_dir / f"{trace_id}.json"
 
-    def _read_index(self) -> list[dict[str, Any]]:
-        """Read and return the index entries, or an empty list on failure."""
-        if not self._index_path.is_file():
-            return []
+    def _read_index(self) -> list[dict[str, Any]] | None:
+        """Read the complete index; only a missing file returns ``None``.
+
+        An unreadable or malformed index cannot authorize orphan cleanup or
+        retention: a valid capture may belong to an entry we could not read.
+        """
         try:
-            with open(self._index_path, encoding="utf-8") as file:
+            with self._index_path.open(encoding="utf-8") as file:
                 data = json.load(file)
-        except OSError, json.JSONDecodeError:
-            _logger.warning("Debug trace index is unreadable; treating as empty")
-            return []
-        if not isinstance(data, list):
-            _logger.warning("Debug trace index has unexpected format; treating as empty")
-            return []
-        return [
-            entry
+        except FileNotFoundError:
+            return None
+        if not isinstance(data, list) or any(
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("trace_id"), str)
+            or _TRACE_ID_PATTERN.fullmatch(entry["trace_id"]) is None
+            or not isinstance(entry.get("timestamp"), str)
             for entry in data
-            if isinstance(entry, dict)
-            and isinstance(entry.get("trace_id"), str)
-            and _TRACE_ID_PATTERN.fullmatch(entry["trace_id"]) is not None
-        ]
+        ):
+            raise ValueError("Debug trace index has an invalid format")
+        return data
 
     def _write_index(self, entries: list[dict[str, Any]]) -> None:
         """Write the index entries to disk."""

@@ -24,7 +24,8 @@ import hashlib
 import json
 import os
 import threading
-from collections.abc import Collection, Iterable, Sequence
+from collections import Counter
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -346,6 +347,12 @@ def state_at(
 
 def diff_entries(before: Sequence[str], after: Sequence[str]) -> tuple[MemoryChange, ...]:
     """Describe how the entry list *before* became *after*, entry by entry."""
+    return _diff_values(before, after, lambda entry: entry)
+
+
+def _diff_values[T](
+    before: Sequence[T], after: Sequence[T], text: Callable[[T], str]
+) -> tuple[MemoryChange, ...]:
     changes: list[MemoryChange] = []
     matcher = difflib.SequenceMatcher(a=list(before), b=list(after), autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
@@ -355,21 +362,26 @@ def diff_entries(before: Sequence[str], after: Sequence[str]) -> tuple[MemoryCha
         for offset in range(paired):
             changes.append(
                 MemoryChange(
-                    "replaced", after[j1 + offset], i1 + offset, previous=before[i1 + offset]
+                    "replaced",
+                    text(after[j1 + offset]),
+                    i1 + offset,
+                    previous=text(before[i1 + offset]),
                 )
             )
         for index in range(i1 + paired, i2):
-            changes.append(MemoryChange("removed", before[index], index))
+            changes.append(MemoryChange("removed", text(before[index]), index))
         for index in range(j1 + paired, j2):
-            changes.append(MemoryChange("added", after[index], index))
+            changes.append(MemoryChange("added", text(after[index]), index))
     return tuple(changes)
 
 
 def apply_changes(entries: list[str], changes: Iterable[MemoryChange]) -> None:
-    """Apply recorded *changes* in order to *entries*, in place."""
-    for change in changes:
+    """Apply a revision's changes in their recorded coordinate systems, in place."""
+    changes = tuple(changes)
+    # Replacements and removals use the original positions; additions use the
+    # resulting positions. Inserting first can make a removal hit a moved copy.
+    for change in sorted(changes, key=lambda change: change.index, reverse=True):
         if change.op == "added":
-            entries.insert(min(max(change.index, 0), len(entries)), change.text)
             continue
         target = change.previous if change.op == "replaced" else change.text
         index = _position(entries, target, change.index)
@@ -379,6 +391,9 @@ def apply_changes(entries: list[str], changes: Iterable[MemoryChange]) -> None:
             entries.pop(index)
         else:
             entries[index] = change.text
+    for change in sorted(changes, key=lambda change: change.index):
+        if change.op == "added":
+            entries.insert(min(max(change.index, 0), len(entries)), change.text)
 
 
 @dataclass(frozen=True)
@@ -432,6 +447,181 @@ def later_touches(
     return conflicts
 
 
+@dataclass(frozen=True)
+class _TrackedEntry:
+    text: str
+    identity: object = field(default_factory=object)
+
+
+@dataclass(frozen=True)
+class _RevisionEntries:
+    before: tuple[_TrackedEntry, ...]
+    after: tuple[_TrackedEntry, ...]
+
+
+def _apply_tracked_changes(
+    before: Sequence[_TrackedEntry], changes: Sequence[MemoryChange]
+) -> list[_TrackedEntry]:
+    """Replay positions while retaining each surviving occurrence's identity."""
+    entries = list(before)
+    for change in sorted(changes, key=lambda item: item.index, reverse=True):
+        if change.op == "added":
+            continue
+        previous = change.previous if change.op == "replaced" else change.text
+        index = _position([entry.text for entry in entries], previous, change.index)
+        if index is not None:
+            if change.op == "removed":
+                entries.pop(index)
+            else:
+                entries[index] = _TrackedEntry(change.text, entries[index].identity)
+    for change in sorted(changes, key=lambda item: item.index):
+        if change.op == "added":
+            entries.insert(min(max(change.index, 0), len(entries)), _TrackedEntry(change.text))
+    return entries
+
+
+def _replay_tracked_entries(
+    revisions: Sequence[MemoryRevision],
+) -> tuple[dict[MemoryScope, list[_TrackedEntry]], dict[int, _RevisionEntries]]:
+    """Derive occurrence identities, including restores recorded by earlier reverts.
+
+    Nothing new is persisted: a revert's targets tell us which original entries
+    it restored. A damaged/incomplete history or an old incorrect revert keeps
+    its recorded state instead of inventing provenance that does not match it.
+    """
+    states: dict[MemoryScope, list[_TrackedEntry]] = {}
+    snapshots: dict[int, _RevisionEntries] = {}
+    known: dict[int, MemoryRevision] = {}
+    for revision in revisions:
+        before = states.get(revision.scope, [])
+        changes = revision.changes
+        if revision.entries is not None:
+            changes = diff_entries([entry.text for entry in before], revision.entries)
+        after = _apply_tracked_changes(before, changes)
+        if revision.kind == "revert" and all(item in known for item in revision.reverts):
+            restored = list(before)
+            conflicts: list[MemoryRevertConflict] = []
+            for target_id in sorted(revision.reverts, reverse=True):
+                target = known[target_id]
+                if target.scope == revision.scope:
+                    conflicts.extend(
+                        _revert_entries(
+                            restored, target, snapshots[target_id], tuple(known.values())
+                        )
+                    )
+            if not conflicts and [entry.text for entry in restored] == [
+                entry.text for entry in after
+            ]:
+                after = restored
+        snapshots[revision.id] = _RevisionEntries(tuple(before), tuple(after))
+        states[revision.scope] = after
+        known[revision.id] = revision
+    return states, snapshots
+
+
+def _revert_entries(
+    entries: list[_TrackedEntry],
+    target: MemoryRevision,
+    snapshot: _RevisionEntries,
+    revisions: Sequence[MemoryRevision],
+) -> list[MemoryRevertConflict]:
+    """Undo one revision against current occurrences, preserving unrelated edits."""
+    conflicts: list[MemoryRevertConflict] = []
+    # A recorded revert's text-only diff may describe a different moved copy
+    # than its semantic undo restored. Its reconstructed identities resolve
+    # that ambiguity when this revert is itself taken back.
+    changes = (
+        _diff_values(snapshot.before, snapshot.after, lambda entry: entry.text)
+        if target.kind == "revert"
+        else target.changes
+    )
+    removals = [change for change in changes if change.op == "removed"]
+    additions = sorted(
+        (change for change in changes if change.op == "added"),
+        key=lambda change: change.index,
+    )
+    before_text = [entry.text for entry in snapshot.before]
+    after_text = [entry.text for entry in snapshot.after]
+    positions = {entry.identity: index for index, entry in enumerate(entries)}
+    undo: list[tuple[int, _TrackedEntry | None]] = []
+    for change in changes:
+        if change.op == "removed":
+            continue
+        after_index = change.index
+        previous: _TrackedEntry | None = None
+        if change.op == "replaced":
+            # Replacement positions refer to the state before this revision.
+            after_index -= sum(item.index < change.index for item in removals)
+            for added in additions:
+                if added.index <= after_index:
+                    after_index += 1
+            before_index = _position(before_text, change.previous, change.index)
+            if before_index is not None:
+                previous = snapshot.before[before_index]
+        resolved_after = _position(after_text, change.text, after_index)
+        position = (
+            positions.get(snapshot.after[resolved_after].identity)
+            if resolved_after is not None
+            else None
+        )
+        if (
+            position is None
+            or entries[position].text != change.text
+            or (change.op == "replaced" and previous is None)
+        ):
+            later = _later_changes(revisions, target, change.text)
+            if change.op == "replaced" or later.replaced:
+                conflicts.append(MemoryRevertConflict(target.id, change, change.text, later.ids))
+            continue
+        undo.append((position, previous))
+    # Resolve occurrences before changing the list. A move removes its added
+    # occurrence before restoring the original one, even when texts are equal.
+    for position, previous in sorted(undo, key=lambda item: item[0], reverse=True):
+        if previous is None:
+            entries.pop(position)
+        else:
+            entries[position] = previous
+    original = Counter(before_text)
+    remaining = Counter(entry.text for entry in entries)
+    for change in sorted(removals, key=lambda change: change.index):
+        if remaining[change.text] >= original[change.text]:
+            continue
+        before_index = _position(before_text, change.text, change.index)
+        if before_index is None:
+            continue
+        positions = {entry.identity: index for index, entry in enumerate(entries)}
+        if snapshot.before[before_index].identity in positions:
+            # This removal was already undone. A later replacement of that
+            # restored occurrence must not be duplicated or overwritten.
+            continue
+        following = next(
+            (
+                positions[entry.identity]
+                for entry in snapshot.before[before_index + 1 :]
+                if entry.identity in positions
+            ),
+            None,
+        )
+        preceding = next(
+            (
+                positions[entry.identity]
+                for entry in reversed(snapshot.before[:before_index])
+                if entry.identity in positions
+            ),
+            None,
+        )
+        position = (
+            following
+            if following is not None
+            else preceding + 1
+            if preceding is not None
+            else min(max(change.index, 0), len(entries))
+        )
+        entries.insert(position, snapshot.before[before_index])
+        remaining[change.text] += 1
+    return conflicts
+
+
 def revert_revisions(
     states: dict[MemoryScope, list[str]],
     targets: Sequence[MemoryRevision],
@@ -439,35 +629,27 @@ def revert_revisions(
 ) -> tuple[dict[MemoryScope, list[str]], list[MemoryRevertConflict]]:
     """Take the *targets* back from the current *states*, newest first.
 
-    An added entry is removed, a removed entry is restored at its old position
-    and a replaced entry gets its previous text back. A change whose effect is
-    already gone (its added entry was removed, its removed entry exists again)
-    needs nothing. A change that later revisions built on - the entry was
-    replaced since, or a replacement was changed or removed - is a conflict;
-    *revisions* (the whole history) names those later revisions.
+    Added occurrences disappear, removed occurrences return beside their
+    surviving neighbors and replacements regain their previous entries. An
+    effect already gone needs nothing. Later edits of the same occurrence
+    conflict; unrelated entries with identical text never stand in for it.
     """
-    result = {scope: list(entries) for scope, entries in states.items()}
+    tracked, snapshots = _replay_tracked_entries(revisions)
+    for scope, entries in states.items():
+        before = tracked.get(scope, [])
+        tracked[scope] = _apply_tracked_changes(
+            before, diff_entries([entry.text for entry in before], entries)
+        )
     conflicts: list[MemoryRevertConflict] = []
     for target in sorted(targets, key=lambda revision: revision.id, reverse=True):
-        entries = result.setdefault(target.scope, [])
-        for change in reversed(target.changes):
-            if change.op == "removed":
-                if change.text not in entries:
-                    entries.insert(min(max(change.index, 0), len(entries)), change.text)
-                continue
-            index = _position(entries, change.text, change.index)
-            if index is None:
-                later = _later_changes(revisions, target, change.text)
-                if change.op == "replaced" or later.replaced:
-                    conflicts.append(
-                        MemoryRevertConflict(target.id, change, change.text, later.ids)
-                    )
-                continue
-            if change.op == "added":
-                entries.pop(index)
-            else:
-                entries[index] = change.previous or change.text
-    return result, conflicts
+        conflicts.extend(
+            _revert_entries(
+                tracked.setdefault(target.scope, []), target, snapshots[target.id], revisions
+            )
+        )
+    return {
+        scope: [entry.text for entry in entries] for scope, entries in tracked.items()
+    }, conflicts
 
 
 @dataclass(frozen=True)

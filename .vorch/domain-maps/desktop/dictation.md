@@ -45,9 +45,10 @@ Desktop settings section `dictation` (`desktop/settings.py`):
 
 ## Insertion
 
-`ClipboardTextInserter.insert(text, target_window)`:
+`ClipboardTextInserter.insert(text, target_window, cancel=take.cancelled)`:
 
 - Checks the target's focus and reachability (not elevated while the Desktop is not; an unknown elevation counts as elevated), then waits up to `MODIFIER_RELEASE_TIMEOUT_SECONDS` (2 s) for every modifier to be released. Only after that wait does it read the current clipboard text and publish the transcript, so a copy during the wait cannot replace what Ctrl+V pastes. It rechecks the original target's focus immediately before the synthetic Ctrl+V (`SendInput`); a failed check leaves the text in the clipboard (`inserted_to_clipboard`).
+- Cancellation stays active during the modifier wait and is checked immediately before writing the clipboard and sending Ctrl+V. A cancellation after publishing the transcript but before paste restores the previous text only if the clipboard sequence still belongs to that insert; it does not replace a newer copy. The controller handles the cancelled outcome without recording an insertion failure.
 - After a paste the previous clipboard text returns after `CLIPBOARD_RESTORE_DELAY_SECONDS` (0.8 s, timer `vbot-dictation-clipboard`) unless the clipboard changed meanwhile (`GetClipboardSequenceNumber`). Clipboard content other than text is not restored.
 - The raw transcript is inserted as returned (stripped); there is no post-processing.
 

@@ -790,6 +790,7 @@ def unregister_database(data_dir: Path, name: str) -> UnregisteredDatabase:
     if lock is None:
         raise DatabaseUnavailableError("the data-store operation lock is busy")
     try:
+        require_no_maintenance(data_dir)
         marker = read_marker(data_dir)
         if marker is None:
             raise DatabaseFormatError(
@@ -843,6 +844,7 @@ def retire_core_databases(data_dir: Path, names: Iterable[str]) -> tuple[Unregis
     if lock is None:
         raise DatabaseUnavailableError("the data-store operation lock is busy")
     try:
+        require_no_maintenance(data_dir)
         marker = read_marker(data_dir)
         if marker is None:
             raise DatabaseFormatError(

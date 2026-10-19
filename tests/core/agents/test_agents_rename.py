@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.agents import (
+    SKILL_AGENT_CREATED_AT_KEY,
     SKILL_AGENT_ID_KEY,
     Agent,
     AgentAlreadyExistsError,
@@ -54,7 +55,9 @@ def _seed(store: AgentStore) -> Agent:
         {"subagent_parent": {"agent_id": "coder", "session_id": "kept", "project_id": None}},
     )
     sessions.create("librarian", session_id="curating")
-    sessions.set_metadata(_CURATING, {SKILL_AGENT_ID_KEY: "coder"})
+    sessions.set_metadata(
+        _CURATING, {SKILL_AGENT_ID_KEY: "coder", SKILL_AGENT_CREATED_AT_KEY: created.created_at}
+    )
     return store.update(created.id, current_session_id="kept")
 
 
@@ -93,6 +96,7 @@ def _assert_agent_is(store: AgentStore, created: Agent, agent_id: str, other_id:
     assert sessions.list_addresses(None, agent_id=other_id) == []
     assert sessions.get_metadata(_CHILD)["subagent_parent"]["agent_id"] == agent_id
     assert sessions.metadata_value(_CURATING, SKILL_AGENT_ID_KEY) == agent_id
+    assert sessions.metadata_value(_CURATING, SKILL_AGENT_CREATED_AT_KEY) == created.created_at
     assert [listed.id for listed in store.list()] == [agent_id, "manager"]
     assert sorted(path.name for path in (store.data_dir / "agents").iterdir()) == sorted(
         [agent_id, "manager", "order.json", "retirements.json"]

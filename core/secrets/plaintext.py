@@ -157,7 +157,9 @@ def import_plaintext_credentials(
 ) -> PlaintextImport | None:
     """Copy the plaintext credential files into ``store`` and verify the result.
 
-    Returns ``None`` when the data directory holds no plaintext credential file.
+    Returns ``None`` when there are neither plaintext files nor recorded sources
+    to reconcile. An empty discovery still removes unchanged imported values of
+    recorded sources when ``remove_missing`` is true.
     Never changes a plaintext file. A store value that differs from a file's
     is replaced only when this pending import put it there; otherwise the
     store keeps it and the entry is a conflict. With ``remove_missing`` (an
@@ -170,7 +172,7 @@ def import_plaintext_credentials(
     """
     data_dir = store.data_dir
     found = _find_plaintext(data_dir)
-    if not found:
+    if not found and (not remove_missing or not _recorded_sources(store.import_record() or {})):
         return None
     sources = [
         source
@@ -216,6 +218,10 @@ def import_plaintext_credentials(
                     "fingerprint": transaction.fingerprint(source.content),
                     "entries": entries,
                 }
+        if not found and recorded:
+            # Normal startup must still retire plaintext copies in backups after
+            # the last source disappeared during a rolled-back update.
+            record = {**record, "backups_pending": True}
         _set_import_record(transaction, record, recorded_now)
         outcome.sources = tuple(sorted(recorded_now))
         return outcome

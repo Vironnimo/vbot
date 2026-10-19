@@ -264,19 +264,28 @@ class SessionResolution:
         except SessionNotFoundError:
             return None
 
-    def _bind_skill_subject(self, agent: RuntimeAgent, subject_id: Any) -> RuntimeAgent:
+    def _bind_skill_subject(
+        self, agent: RuntimeAgent, subject_id: Any, subject_created_at: Any
+    ) -> RuntimeAgent:
         """Return the Librarian as a bound Session runs it: on its subject Agent's Skills.
 
         The runtime view names the subject (``skill_agent_id``) and takes its Skill
         selection (``allowed_skills``), so the Skill catalog, triggers and the Skill
         Tools of that Session resolve the subject's Skills; nothing else changes.
         ``None`` (an unbound Session) keeps the Librarian's own Skills. A subject that
-        is not an Agent of the user any more refuses the Session.
+        is not the original Agent of the user any more refuses the Session.
         """
         if subject_id is None:
             return agent
         subject = self._owner._agents.find(subject_id) if isinstance(subject_id, str) else None
         if subject is None or subject.builtin is not None:
+            raise AgentResolutionError(SKILL_SUBJECT_MISSING_MESSAGE.format(agent_id=subject_id))
+        if not isinstance(subject_created_at, str) or not subject_created_at:
+            raise AgentResolutionError(
+                "This Librarian Session has no verified Agent identity. "
+                "Its history remains available; start a new Librarian pass to continue."
+            )
+        if subject.created_at != subject_created_at:
             raise AgentResolutionError(SKILL_SUBJECT_MISSING_MESSAGE.format(agent_id=subject_id))
         return replace(
             cast("Agent", agent),

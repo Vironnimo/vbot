@@ -227,7 +227,7 @@ def _resolve_fallback_candidate(
             fallback_provider_id,
             _model_connection_allowlist(dependencies, fallback_provider_id, _fallback_model_id),
         )
-    except ChatError:
+    except ChatError, ConfigError, KeyError:
         return None
 
     return fallback_model, fallback_provider_id, fallback_connection_id

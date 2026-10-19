@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from core.agents import LIBRARIAN_AGENT_ID, SKILL_AGENT_ID_KEY
+from core.agents import LIBRARIAN_AGENT_ID, SKILL_AGENT_CREATED_AT_KEY, SKILL_AGENT_ID_KEY
 from core.runs import MODEL_STEP_USAGE_EVENT, RUN_CHANGE_STATS_EVENT
 from core.skills.authoring import SkillAuthoringService
 from core.tools import tool_success
@@ -302,7 +302,13 @@ async def test_a_librarian_session_works_on_the_skills_of_its_agent(
         runtime.agents.update(LIBRARIAN_AGENT_ID, model="fake-provider/fake-model-v1")
         session = runtime.chat_sessions.create(LIBRARIAN_AGENT_ID)
         runtime.chat_sessions.mutate_metadata(
-            session.address, lambda metadata: metadata.update({SKILL_AGENT_ID_KEY: "coder"})
+            session.address,
+            lambda metadata: metadata.update(
+                {
+                    SKILL_AGENT_ID_KEY: "coder",
+                    SKILL_AGENT_CREATED_AT_KEY: runtime.agents.get("coder").created_at,
+                }
+            ),
         )
 
         await build_chat_loop(runtime).send(LIBRARIAN_AGENT_ID, "Tidy up", session_id=session.id)

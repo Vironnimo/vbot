@@ -28,7 +28,7 @@ from core.runs import (
     WaitingWorkAdmission,
 )
 from core.utils.logging import get_logger
-from core.utils.retry import retry_async
+from core.utils.retry import retry_async, sleep_for_retry
 from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
@@ -445,21 +445,32 @@ class ChannelReplies:
         recorded = tuple(reply_id for reply_id in reply_ids if reply_id is not None)
         if not recorded:
             return ()
-        claimed: list[str] = []
-        for reply_id in recorded:
+        for attempt in range(3):
+            claimed: list[str] = []
             try:
-                if await self._pending_replies.run_async(
-                    self._pending_replies.claim_reply, self._config.id, reply_id
-                ):
-                    claimed.append(reply_id)
-            except Exception as error:
-                # Without a claim the reply is still sent once by this engine.
-                _LOGGER.warning(
-                    "Channel owed reply not claimed (channel=%s): %s", self._config.id, error
+                for reply_id in recorded:
+                    if await self._pending_replies.run_async(
+                        self._pending_replies.claim_reply, self._config.id, reply_id
+                    ):
+                        claimed.append(reply_id)
+            except Exception:
+                # No transport send began. Release the known claims of a
+                # grouped notice so the retry can claim the whole group again.
+                for reply_id in claimed:
+                    await self._update_pending(self._pending_replies.release_reply, reply_id)
+                if attempt == 2:
+                    raise
+                _LOGGER.debug(
+                    "Channel reply claim failed; retrying (channel=%s attempt=%d)",
+                    self._config.id,
+                    attempt + 1,
+                    exc_info=True,
                 )
-                return ()
-        # Gone: the Channel was deleted or reset, or the reply was sent already.
-        return tuple(claimed) if claimed else None
+                await sleep_for_retry(attempt)
+            else:
+                # Gone: deleted/reset Channel, or replies already claimed or sent.
+                return tuple(claimed) if claimed else None
+        raise AssertionError("claim retry did not settle")
 
     async def _deliver(
         self,
@@ -483,7 +494,17 @@ class ChannelReplies:
             return
         while True:
             transport = await self.ready_transport()
-            claimed = await self._claim(reply_ids)
+            try:
+                claimed = await self._claim(reply_ids)
+            except Exception:
+                # Sending without a durable claim would leave an owed row that
+                # a later engine sends again. Keep it for that engine instead.
+                _LOGGER.warning(
+                    "Channel reply deferred: its send claim could not be recorded (channel=%s)",
+                    self._config.id,
+                    exc_info=True,
+                )
+                return
             if claimed is None:
                 return
             try:

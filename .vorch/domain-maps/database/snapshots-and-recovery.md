@@ -49,6 +49,8 @@ A registered database without its file is never skipped by a snapshot, because r
 
 ## Unregister and retire
 
+Both operations recheck the maintenance guard while holding the operation lock: a restore that fails while they wait must leave its files and registrations untouched.
+
 - `unregister_database` accepts only Extension names (`ext.<extension>.<name>`; a core name or an unregistered one is `ValueError`), refuses during maintenance, while the operation lock is busy, or while this process holds a connection to the file, then moves the bundle to quarantine (none when the file is gone) and drops the marker entry. It writes no incident. Earlier snapshots keep their copy, and a restore of that member registers it again. `Runtime.unregister_extension_database(name)` releases an Extension database through the one Extension database coordinator (`ExtensionDatabases.unregister`, `extensions/databases.md` -> Removal and unregister); the local CLI fallback calls it directly (`cli/data-store.md`).
 - `retire_core_databases` is the core-name counterpart, called only by normal Runtime startup with `core/runtime/databases.RETIRED_CANONICAL_DATABASES` (an update's verification start skips it, because the rollback needs every registration unchanged; a failure logs a WARNING and retries at the next start). It refuses Extension names, skips names that are not registered, and has the same maintenance, lock and open-connection refusals; each registered bundle moves to quarantine and leaves the marker, logged as one INFO `Retired database` line. Covered by `tests/core/database/test_recovery.py` and `tests/core/runtime/test_runtime_lifecycle.py`.
 

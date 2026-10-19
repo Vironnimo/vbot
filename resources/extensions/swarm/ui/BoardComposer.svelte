@@ -78,6 +78,7 @@
           autoGrow
           rows={4}
           value={board.postText}
+          disabled={board.posting}
           ariaLabel={t('swarm.compose.text')}
           placeholder={t('swarm.compose.placeholder')}
           onInput={(value) => (board.postText = value)}

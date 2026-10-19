@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -116,20 +117,36 @@ class _ChainRoute:
         return f"{self.provider_id}::{self.reference.partition('::')[2]}"
 
 
-def _resolve_chain_routes(dependencies: ChatLoopDependencies, agent: Any) -> list[_ChainRoute]:
-    """Resolve the Agent's fallback candidates into routes. Blocking."""
+def _resolve_chain_routes(
+    dependencies: ChatLoopDependencies, agent: Any, primary_reference: str
+) -> list[_ChainRoute]:
+    """Resolve and deduplicate the Agent's exact fallback routes. Blocking."""
     routes = []
+    seen = {primary_reference}
     for binding, provider_id, connection_id in _resolve_fallback_chain(dependencies, agent):
         _, model_id = _split_agent_model(binding)
+        try:
+            reference = _resolved_model_reference(
+                dependencies, provider_id, connection_id, model_id
+            )
+        except (ConfigError, VBotError, KeyError) as error:
+            _LOGGER.warning(
+                "Skipping unresolvable fallback model %r for agent %s (%s)",
+                binding,
+                getattr(agent, "id", "?"),
+                error,
+            )
+            continue
+        if reference in seen:
+            continue
+        seen.add(reference)
         routes.append(
             _ChainRoute(
                 binding=binding,
                 provider_id=provider_id,
                 connection_id=connection_id,
                 model_id=model_id,
-                reference=_resolved_model_reference(
-                    dependencies, provider_id, connection_id, model_id
-                ),
+                reference=reference,
             )
         )
     return routes
@@ -701,110 +718,115 @@ class RunExecution:
             model_id=primary.model_id,
             reference=primary.model_reference,
         )
-        # The chain resolves when the Run needs it: at once while the primary
-        # route cools down, otherwise only after it gave up.
-        configured = any(
-            candidate != agent.model for candidate in getattr(agent, "fallback_models", None) or ()
+        chain = await _CHAT_TRANSFORM_WORKERS.run(
+            _resolve_chain_routes, self._dependencies, agent, primary.model_reference
         )
-        chain: list[_ChainRoute] | None = None
         served: set[str] = set()
         excluded_scopes: set[str] = set()
+        acquired: dict[str, _ModelTarget] = {}
 
         def remaining() -> list[_ChainRoute]:
             candidates = [
                 route
-                for route in (primary_route, *(chain or ()))
+                for route in (primary_route, *chain)
                 if route.reference not in served and route.connection_scope not in excluded_scopes
             ]
             ready = [route for route in candidates if health.retry_at(route.reference) is None]
             return ready + [route for route in candidates if route not in ready]
 
-        async def resolve_chain() -> list[_ChainRoute]:
-            return await _CHAT_TRANSFORM_WORKERS.run(
-                _resolve_chain_routes, self._dependencies, agent
-            )
+        async def close_candidate(reference: str) -> None:
+            # Cancellation callbacks and normal cleanup share ownership, so a
+            # prefetched Adapter closes once even when both paths reach it.
+            candidate = acquired.pop(reference, None)
+            if candidate is not None:
+                await settle_before_cancelling(_close_adapter(candidate.adapter))
 
-        if configured and health.retry_at(primary_route.reference) is not None:
-            chain = await resolve_chain()
-        previous: _ChainRoute | None = None
-        first_failure: ProviderError | RunInterruptedError | None = None
-        last_failure: ProviderError | RunInterruptedError | None = None
-        while True:
-            if previous is not None and chain is None:
-                chain = await resolve_chain() if configured else []
-            order = remaining()
-            if not order:
-                break
-            route = order[0]
-            served.add(route.reference)
-            fallback_follows = len(order) > 1 if chain is not None else configured
-            if route is primary_route:
-                target = primary
-            else:
+        async def next_target() -> tuple[_ChainRoute, _ModelTarget] | None:
+            # Look ahead only as far as the next constructable route. An unusable
+            # escape route must not shorten the route that can actually serve.
+            for candidate in remaining():
+                if candidate is primary_route:
+                    return candidate, primary
+                if candidate.reference in acquired:
+                    return candidate, acquired[candidate.reference]
                 try:
                     target = await self._requests.targets.create(
-                        route.provider_id,
-                        route.connection_id,
-                        route.model_id,
-                        public_model=route.binding,
+                        candidate.provider_id,
+                        candidate.connection_id,
+                        candidate.model_id,
+                        public_model=candidate.binding,
                     )
-                except (ConfigError, VBotError) as construction_exc:
+                except (ConfigError, VBotError, KeyError) as construction_exc:
+                    served.add(candidate.reference)
                     _LOGGER.warning(
                         "Skipping fallback candidate %s for agent %s (%s)",
-                        route.binding,
+                        candidate.binding,
                         getattr(agent, "id", "?"),
                         construction_exc,
                     )
                     continue
+                acquired[candidate.reference] = target
+                adapters.push_async_callback(close_candidate, candidate.reference)
 
-                def _close_candidate_adapter(_adapter: Any = target.adapter) -> Any:
-                    return _close_adapter(_adapter)
+                def close_on_cancel(reference: str = candidate.reference) -> Any:
+                    return close_candidate(reference)
 
-                run.add_cancel_callback(_close_candidate_adapter)
-            try:
-                context.recovery.serve(
-                    route.reference,
-                    RoutePatience.for_route(
-                        fallback_follows=fallback_follows,
-                        failed_recently=health.failed_recently(route.reference),
-                    ),
-                )
-                if route is not primary_route or previous is not None:
-                    await self._switch_route(
-                        context,
-                        run,
-                        session,
-                        from_route=previous or primary_route,
-                        to_route=route,
-                        target=target,
-                        failure=last_failure,
-                    )
+                run.add_cancel_callback(close_on_cancel)
+                return candidate, target
+            return None
+
+        previous: _ChainRoute | None = None
+        first_failure: ProviderError | RunInterruptedError | None = None
+        last_failure: ProviderError | RunInterruptedError | None = None
+        async with AsyncExitStack() as adapters:
+            while selected := await next_target():
+                route, target = selected
+                served.add(route.reference)
                 try:
-                    completed = await self._progression._send_until_final(context, target)
-                except (ProviderError, RunInterruptedError) as failure:
-                    if context.recovery.completed(route.reference):
-                        health.recovered(route.reference)
-                    first_failure = first_failure or failure
-                    last_failure = failure
-                    scope = model_fallback_scope(failure)
-                    if scope is None:
-                        break
-                    if scope == "connection":
-                        excluded_scopes.add(route.connection_scope)
-                    elif fallback_follows and (
-                        isinstance(failure, RunInterruptedError) or failure.retryable
-                    ):
-                        health.failed(route.reference)
-                    previous = route
-                    continue
-                except (ChatError, ConfigError, VBotError) as failure:
-                    await _persist_run_error(run, session, failure)
-                    raise
-                health.recovered(route.reference)
-                return completed
-            finally:
-                if target is not primary:
-                    await _close_adapter(target.adapter)
+                    fallback_follows = await next_target() is not None
+                    context.recovery.serve(
+                        route.reference,
+                        RoutePatience.for_route(
+                            fallback_follows=fallback_follows,
+                            failed_recently=health.failed_recently(route.reference),
+                        ),
+                    )
+                    if route is not primary_route or previous is not None:
+                        await self._switch_route(
+                            context,
+                            run,
+                            session,
+                            from_route=previous or primary_route,
+                            to_route=route,
+                            target=target,
+                            failure=last_failure,
+                        )
+                    try:
+                        completed = await self._progression._send_until_final(context, target)
+                    except (ProviderError, RunInterruptedError) as failure:
+                        if context.recovery.completed(route.reference):
+                            health.recovered(route.reference)
+                        first_failure = first_failure or failure
+                        last_failure = failure
+                        scope = model_fallback_scope(failure)
+                        if scope is None:
+                            break
+                        if scope == "connection":
+                            excluded_scopes.add(route.connection_scope)
+                        elif fallback_follows and (
+                            isinstance(failure, RunInterruptedError) or failure.retryable
+                        ):
+                            health.failed(route.reference)
+                        previous = route
+                        continue
+                    except (ChatError, ConfigError, VBotError) as failure:
+                        await _persist_run_error(run, session, failure)
+                        raise
+                    health.recovered(route.reference)
+                    return completed
+                finally:
+                    if target is not primary:
+                        await close_candidate(route.reference)
         # A route always runs first, so a failure ended the loop.
         assert first_failure is not None and last_failure is not None
         if not isinstance(last_failure, RunInterruptedError):

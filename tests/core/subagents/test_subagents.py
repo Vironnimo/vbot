@@ -13,11 +13,12 @@ import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Literal, override
+from typing import Any, Literal, cast, override
 
 import pytest
 import pytest_asyncio
 
+import core.subagents.forwarding as forwarding_module
 import core.subagents.subagents as subagents_module
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
@@ -461,9 +462,31 @@ async def test_new_subagent_captures_the_running_parent_or_its_other_agent(
     assert await harness.resolver.session_overrides_async(child) == stored
 
 
+@pytest.mark.parametrize("failed_link_read", [None, 1, 2], ids=["available", "at-start", "at-end"])
 async def test_every_answer_reaches_the_parent_with_what_is_still_running(
-    harness: SubAgentHarness,
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, failed_link_read: int | None
 ) -> None:
+    read_link = forwarding_module.read_link
+    reads = 0
+
+    def unavailable_once(*args: Any, **kwargs: Any) -> Any:
+        nonlocal reads
+        reads += 1
+        if reads == failed_link_read:
+
+            def unavailable(_address: SessionAddress) -> Any:
+                raise DatabaseUnavailableError("temporary metadata failure")
+
+            return read_link(
+                cast(Any, SimpleNamespace(get_metadata=unavailable)), args[1], **kwargs
+            )
+        return read_link(*args, **kwargs)
+
+    async def retry(_attempt: int) -> None:
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(forwarding_module, "read_link", unavailable_once)
+    monkeypatch.setattr(forwarding_module, "sleep_for_retry", retry)
     harness.loop.answers["review"] = "Found two bugs."
     data = await harness.spawn("review")
     await harness.settle()

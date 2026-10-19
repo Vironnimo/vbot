@@ -42,7 +42,7 @@ from core.database import (
     unregister_database,
 )
 from core.database import recovery as recovery_module
-from core.database.marker import acquire_operation_lock
+from core.database.marker import OperationLock, acquire_operation_lock
 from core.database.recovery import (
     QUARANTINE_ROOT_NAME,
     auto_restore_if_needed,
@@ -826,8 +826,13 @@ def test_unregistering_releases_a_registration_whose_file_is_gone(data_dir: Path
     assert _registered(data_dir) == set()
 
 
+@pytest.mark.parametrize("release_core", [False, True], ids=["unregister", "retire"])
+@pytest.mark.parametrize("guard_after_precheck", [False, True], ids=["guard-present", "guard-late"])
 def test_unregistering_is_refused_for_core_unknown_open_or_maintenance(
     data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    release_core: bool,
+    guard_after_precheck: bool,
 ) -> None:
     snapshot_with_notes(data_dir, "core")
     snapshot_with_notes(data_dir, "extension", name=_EXTENSION)
@@ -846,12 +851,35 @@ def test_unregistering_is_refused_for_core_unknown_open_or_maintenance(
             unregister_database(data_dir, _EXTENSION)
     finally:
         database.close()
-    with (
-        maintenance(data_dir, "restore"),
-        pytest.raises(DatabaseFormatError, match="maintenance is incomplete"),
-    ):
-        unregister_database(data_dir, _EXTENSION)
 
+    def release() -> None:
+        if release_core:
+            retire_core_databases(data_dir, ("notes",))
+        else:
+            unregister_database(data_dir, _EXTENSION)
+
+    core_path = notes_spec(data_dir).path
+    core_original = core_path.read_bytes()
+    if guard_after_precheck:
+
+        def acquire_after_failed_maintenance(root: Path) -> OperationLock | None:
+            # Deterministically place a failed operation between the caller's
+            # initial guard check and its acquisition of the operation lock.
+            with pytest.raises(RuntimeError), maintenance(root, "restore"):
+                raise RuntimeError("interrupted restore")
+            return acquire_operation_lock(root)
+
+        monkeypatch.setattr(
+            recovery_module, "acquire_operation_lock", acquire_after_failed_maintenance
+        )
+        with pytest.raises(DatabaseFormatError):
+            release()
+        assert read_maintenance(data_dir) is not None
+    else:
+        with maintenance(data_dir, "restore"), pytest.raises(DatabaseFormatError):
+            release()
+
+    assert core_path.read_bytes() == core_original
     assert path.read_bytes() == original
     assert _registered(data_dir) == {"notes", _EXTENSION}
     assert not quarantine_root(data_dir).exists()

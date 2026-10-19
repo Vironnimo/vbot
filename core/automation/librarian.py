@@ -23,8 +23,9 @@ A pass has two parts:
    (``core.agents``: its own Model and Model settings, only the Tools ``skill``
    and ``skill_manage``) gets one internal Run of kind ``librarian`` in a new
    Session of its own. The Session's metadata binds it to the Agent
-   (``SKILL_AGENT_ID_KEY``), so the Librarian's Tools and System Prompt work on
-   that Agent's Skills there; it is titled ``Skills of <Agent name> · <date>``.
+   (``SKILL_AGENT_ID_KEY`` plus ``SKILL_AGENT_CREATED_AT_KEY``), so the
+   Librarian's Tools and System Prompt work on that Agent's Skills there; it is
+   titled ``Skills of <Agent name> · <date>``.
    The Run reads the Librarian brief and may merge and fix the candidates. The
    Session is kept: the user can open it and go on talking with the Librarian
    about that Agent's Skills.
@@ -71,6 +72,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.agents import (
     LIBRARIAN_AGENT_ID,
+    SKILL_AGENT_CREATED_AT_KEY,
     SKILL_AGENT_ID_KEY,
     AgentNotFoundError,
     LibrarianProblem,
@@ -150,6 +152,7 @@ class _ActivePass:
     trigger: PassTrigger
     # The name of the Agent whose Skills the pass curates, for its Session title and brief.
     agent_name: str = ""
+    agent_created_at: str = ""
     task: asyncio.Task[None] | None = field(default=None, repr=False)
     finished: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     base: LibrarianState | None = None
@@ -354,6 +357,11 @@ class LibrarianService:
         # An unreadable state document refuses here, before any Skill changes.
         await _LIBRARIAN_WORKERS.run(self._read_state, agent_id)
         problem, reason = await _LIBRARIAN_WORKERS.run(self._blocked, agent_id, agent)
+        agent_created_at = ""
+        if reason is None:
+            agent_created_at = await _LIBRARIAN_WORKERS.run(
+                self._runtime.agents.capture_creation_identity, agent_id
+            )
         # Shutdown can finish while admission waits for the blocking checks.
         if self._closed:
             raise LibrarianBusyError("The Librarian is shutting down.")
@@ -374,7 +382,7 @@ class LibrarianService:
             raise LibrarianBusyError(
                 "The Librarian has an active or queued Run; start the pass when it is idle."
             )
-        active = self._begin(agent_id, "manual", agent)
+        active = self._begin(agent_id, "manual", agent, agent_created_at=agent_created_at)
         active.task = asyncio.get_running_loop().create_task(
             self._guarded_pass(agent_id, active), name=f"librarian-pass:{agent_id}"
         )
@@ -461,10 +469,13 @@ class LibrarianService:
             return usage
         if usage is None:
             usage = await self._skill_usage()
+        agent_created_at = await _LIBRARIAN_WORKERS.run(
+            self._runtime.agents.capture_creation_identity, agent_id
+        )
         # Checked again after the last await, so no Run or manual pass starts in between.
         if self._closed or self._busy(agent_id):
             return usage
-        active = self._begin(agent_id, "schedule", agent)
+        active = self._begin(agent_id, "schedule", agent, agent_created_at=agent_created_at)
         active.usage = usage
         await self._guarded_pass(agent_id, active)
         return usage if active.run_id is None else None
@@ -554,11 +565,14 @@ class LibrarianService:
         passes.sort(key=lambda record: str(record["started_at"]), reverse=True)
         return problem, passes[:LIBRARIAN_OVERVIEW_PASSES]
 
-    def _begin(self, agent_id: str, trigger: PassTrigger, agent: Any) -> _ActivePass:
+    def _begin(
+        self, agent_id: str, trigger: PassTrigger, agent: Any, *, agent_created_at: str
+    ) -> _ActivePass:
         active = _ActivePass(
             started_at=format_canonical_timestamp(self._clock()),
             trigger=trigger,
             agent_name=str(getattr(agent, "name", "") or agent_id),
+            agent_created_at=agent_created_at,
         )
         self._active[agent_id] = active
         self._announce()
@@ -816,6 +830,7 @@ class LibrarianService:
             working_project_id=None,
             metadata={
                 SKILL_AGENT_ID_KEY: agent_id,
+                SKILL_AGENT_CREATED_AT_KEY: active.agent_created_at,
                 SESSION_AUTO_TITLE_KEY: title,
                 SESSION_AUTO_TITLE_INITIALIZED_KEY: True,
             },

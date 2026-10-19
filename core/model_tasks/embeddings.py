@@ -36,6 +36,7 @@ from core.model_tasks.embeddings_local import (
     LocalEmbeddingUnavailableError,
 )
 from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
+from core.model_tasks.model_tasks import TaskModelTargetRef, public_provider_target_id
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
@@ -372,12 +373,22 @@ class EmbeddingService:
             await self._local.aclose()
 
     @staticmethod
-    def _space_identity(target_ref: Any, options: JsonObject) -> EmbeddingSpaceIdentity:
+    def _space_identity(
+        target_ref: TaskModelTargetRef, options: JsonObject
+    ) -> EmbeddingSpaceIdentity:
+        # Keep the common persisted spelling stable while making equivalent
+        # Connection spellings share one space. An explicit Account remains
+        # distinct from deferred Account selection, including "default".
+        target = public_provider_target_id(
+            target_ref.provider_id, target_ref.model_id, target_ref.local_connection_id
+        )
+        if target_ref.account_id:
+            target = f"{target}:{target_ref.account_id}"
         try:
             encoded = json.dumps(
                 {
                     "contract_version": _EMBEDDING_SPACE_CONTRACT_VERSION,
-                    "target": target_ref.target,
+                    "target": target,
                     "options": options,
                     "profile": embedding_profile(target_ref.model_id).space_identity(),
                 },

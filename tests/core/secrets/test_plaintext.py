@@ -50,7 +50,10 @@ def _contents(*paths: Path) -> dict[Path, bytes | None]:
     return {path: path.read_bytes() if path.exists() else None for path in paths}
 
 
-def test_an_import_mirrors_the_plaintext_files_and_changes_none_of_them(tmp_path: Path) -> None:
+@pytest.mark.parametrize("remove_all_sources", [False, True])
+def test_an_import_mirrors_the_plaintext_files_and_changes_none_of_them(
+    tmp_path: Path, remove_all_sources: bool
+) -> None:
     data_dir = _data_dir(tmp_path)
     env = _write(
         data_dir,
@@ -93,16 +96,28 @@ def test_an_import_mirrors_the_plaintext_files_and_changes_none_of_them(tmp_path
     store.set_entry(CREDENTIALS, "ANTHROPIC_API_KEY", "sk-ant-set-in-the-webui")
     env.write_text("OPENAI_API_KEY=sk-rotated\nANTHROPIC_API_KEY=sk-ant-stale\n", encoding="utf-8")
     token.unlink()
+    if remove_all_sources:
+        env.unlink()
+        # Explicit conversion never removes values, even with no remaining files.
+        assert import_plaintext_credentials(open_store(tmp_path), remove_missing=False) is None
+        assert store.entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai-later"
     mirrored = import_plaintext_credentials(open_store(tmp_path))
 
     assert mirrored is not None
-    assert mirrored.removed == ("SPLIT_VALUE", "oauth/github-copilot-oauth")
-    assert mirrored.conflicts == ("ANTHROPIC_API_KEY",)
+    assert mirrored.removed == (
+        *(("OPENAI_API_KEY",) if remove_all_sources else ()),
+        "SPLIT_VALUE",
+        "oauth/github-copilot-oauth",
+    )
+    assert mirrored.conflicts == (() if remove_all_sources else ("ANTHROPIC_API_KEY",))
     assert store.entries(CREDENTIALS) == {
         "ANTHROPIC_API_KEY": "sk-ant-set-in-the-webui",
-        "OPENAI_API_KEY": "sk-rotated",
+        **({} if remove_all_sources else {"OPENAI_API_KEY": "sk-rotated"}),
     }
     assert store.entries(OAUTH_TOKENS) == {}
+    if remove_all_sources:
+        record = store.import_record()
+        assert record is not None and record["sources"] == {} and record["backups_pending"]
 
     # `convert` imports without removing anything, and never over a newer value.
     env.write_text("ANTHROPIC_API_KEY=sk-ant-stale\n", encoding="utf-8")
@@ -112,7 +127,7 @@ def test_an_import_mirrors_the_plaintext_files_and_changes_none_of_them(tmp_path
     assert (converted.removed, converted.conflicts) == ((), ("ANTHROPIC_API_KEY",))
     assert store.entries(CREDENTIALS) == {
         "ANTHROPIC_API_KEY": "sk-ant-set-in-the-webui",
-        "OPENAI_API_KEY": "sk-rotated",
+        **({} if remove_all_sources else {"OPENAI_API_KEY": "sk-rotated"}),
     }
 
 

@@ -12,7 +12,7 @@ An Identity Agent with exclusions always resolves such a scoped registry; the pe
 
 Scoped Project/Agent scans publish only if no invalidation or credential refresh occurred during I/O; cache access and publication are synchronized without holding the lock during scans (`test_runtime_skill_cache_races.py`). Global and scoped scans share the same global root ordering and origin rules.
 
-`SkillRegistry.always_allowed` is scoped metadata: Identity registries contain private names minus the Agent's `excluded_skills`, plus the active Project's effective names. `SkillRegistry.allowlist_exclusions` holds the Identity Agent's `excluded_skills`; `filter_allowed`, `is_allowed` and the dependency checks of `availability_for` subtract it from the allowlist grant before adding `always_allowed` back (`test_skills.py`).
+`SkillRegistry.always_allowed` is scoped metadata: Identity registries contain enabled private names minus the Agent's `excluded_skills`, plus the active Project's effective names. A disabled private package grants nothing to a same-named global, bundled or shared replacement; that replacement needs its ordinary allowlist grant. The private name set uses the same `SkillScan` and package exclusions as the resolved registry. `SkillRegistry.allowlist_exclusions` holds the Identity Agent's `excluded_skills`; `filter_allowed`, `is_allowed` and the dependency checks of `availability_for` subtract it from the allowlist grant before adding `always_allowed` back (`test_skills.py`).
 
 Shared layers are package roots inserted between the Project and global layers in sorted order (owner id, then Skill name), so first-found among same-named shared Skills is deterministic.
 

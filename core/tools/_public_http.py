@@ -308,7 +308,7 @@ def _is_blocked_ip(address: IpAddress) -> bool:
         return _is_blocked_ip(address.ipv4_mapped)
 
     return (
-        address.is_private
+        not address.is_global
         or address.is_loopback
         or address.is_link_local
         or address.is_multicast

@@ -21,7 +21,7 @@ Read this reference when you change semantic indexing: triggers, passes, batchin
 
 ## Embedding space changes
 
-A pass whose binding names another space than the pinned header drops every vector first (`reset_vectors`, logged with `reason=binding`), so a binding change re-embeds everything even when nothing was waiting; a dimension that differs from the pinned header re-pins (`use_space`), which requeues everything; a pass that moves space more than `_MAX_SPACE_MOVES` (3) times stops as `space_unstable`. A response from a binding other than the one the pass started with restarts the pass.
+A pass whose binding names another space than the pinned header drops every vector first (`reset_vectors`, logged with `reason=binding`), so a change of embedding identity re-embeds everything even when nothing was waiting; equivalent target spellings keep their space (`model_tasks/embeddings.md` -> Interfaces). A dimension that differs from the pinned header re-pins (`use_space`), which requeues everything; a pass that moves space more than `_MAX_SPACE_MOVES` (3) times stops as `space_unstable`. A response from a binding other than the one the pass started with restarts the pass.
 
 ## Status and logs
 

@@ -61,18 +61,7 @@ export function eventFormValues(event, systemTimeZone = 'UTC') {
   const allDay = Boolean(event.all_day);
   const times = allDay
     ? allDayTimes(event.start, event.end)
-    : {
-        ...wallClockFields(
-          'start',
-          zoneInstant(event.start, event.tz_name || systemTimeZone),
-          systemTimeZone,
-        ),
-        ...wallClockFields(
-          'end',
-          zoneInstant(event.end, event.tz_name || systemTimeZone),
-          systemTimeZone,
-        ),
-      };
+    : timedEventFields(event, systemTimeZone);
   return {
     title: event.title ?? '',
     description: event.description ?? '',
@@ -169,10 +158,13 @@ export function eventFormProblem(values, { repeats = true } = {}) {
   return '';
 }
 
-// The `calendar.create` / `calendar.update` fields of valid values. One
-// occurrence (`repeats: false`) takes no rule; a whole event always sends
-// one, so clearing the repetition stops it.
-export function eventFormPayload(values, { repeats = true } = {}) {
+// The `calendar.create` / `calendar.update` fields of valid values. An edit
+// with a baseline sends only changed fields. One occurrence (`repeats:
+// false`) takes no rule; clearing a series' repetition sends a null rule.
+export function eventFormPayload(
+  values,
+  { repeats = true, baseline = null } = {},
+) {
   const payload = {
     title: values.title.trim(),
     description: values.description.trim() || null,
@@ -187,6 +179,19 @@ export function eventFormPayload(values, { repeats = true } = {}) {
   }
   if (repeats) {
     payload.rrule = buildRrule(values);
+  }
+  if (baseline) {
+    const previous = eventFormPayload(baseline, { repeats });
+    // A title-only edit must keep the nominal series times, rule and seconds
+    // the form may display differently. A deliberate time edit writes both
+    // ends: a resolved DST-gap start now anchors the entered duration.
+    if (payload.start === previous.start && payload.end === previous.end) {
+      delete payload.start;
+      delete payload.end;
+    }
+    for (const key of ['title', 'description', 'location', 'rrule']) {
+      if (payload[key] === previous[key]) delete payload[key];
+    }
   }
   return payload;
 }
@@ -393,9 +398,8 @@ function dayOfMonth(dayKey) {
 // Wall clocks
 // ---------------------------------------------------------------------------
 
-// The UTC milliseconds of a naive local time ("YYYY-MM-DDTHH:MM:SS") in
-// `timeZone`. A time skipped by a DST change resolves past the gap.
-function zoneInstant(naive, timeZone) {
+// Treat a naive local time as UTC to do wall-clock arithmetic.
+function naiveWallMilliseconds(naive) {
   const match =
     /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(
       String(naive ?? ''),
@@ -406,10 +410,41 @@ function zoneInstant(naive, timeZone) {
   const [year, month, day, hour, minute, second] = match
     .slice(1)
     .map((part) => Number(part ?? 0));
-  const asUtc = Date.UTC(year, month - 1, day, hour, minute, second);
-  // The offset at the guessed instant, then at the instant it gives.
-  const guess = asUtc - zoneOffset(asUtc, timeZone);
-  return asUtc - zoneOffset(guess, timeZone);
+  return Date.UTC(year, month - 1, day, hour, minute, second);
+}
+
+function zoneInstant(wall, timeZone) {
+  if (!Number.isFinite(wall)) return Number.NaN;
+  const day = 86400000;
+  const candidates = [
+    ...new Set(
+      [-day, 0, day].map((shift) => wall - zoneOffset(wall + shift, timeZone)),
+    ),
+  ].sort((left, right) => left - right);
+  // Overlaps use the first instant (fold=0); gaps use the old offset, which
+  // round-trips forward by the gap, matching Calendar's resolve_local_span.
+  return (
+    candidates.find(
+      (instant) => instant + zoneOffset(instant, timeZone) === wall,
+    ) ?? candidates.at(-1)
+  );
+}
+
+function timedEventFields(event, systemTimeZone) {
+  const zone = event.tz_name || systemTimeZone;
+  const nominalStart = naiveWallMilliseconds(event.start);
+  const nominalEnd = naiveWallMilliseconds(event.end);
+  const start = zoneInstant(nominalStart, zone);
+  // A skipped start moves the whole span; resolving its nominal end alone
+  // would shorten the event or even make both ends equal in the editor.
+  const shiftedStart = Number.isFinite(start)
+    ? start + zoneOffset(start, zone)
+    : Number.NaN;
+  const end = zoneInstant(shiftedStart + nominalEnd - nominalStart, zone);
+  return {
+    ...wallClockFields('start', start, systemTimeZone),
+    ...wallClockFields('end', end, systemTimeZone),
+  };
 }
 
 // `<prefix>_date` and `<prefix>_time` of an instant on `timeZone`'s wall clock.

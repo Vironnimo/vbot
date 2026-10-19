@@ -225,7 +225,7 @@ export function buildChannelCreatePayload(form) {
   };
 }
 
-export function buildChannelUpdatePayload(form) {
+export function buildChannelUpdatePayload(form, baseline = null) {
   const source = ensureForm(form, 'update');
   const payload = {
     id: requiredText(source.id, 'id'),
@@ -275,6 +275,21 @@ export function buildChannelUpdatePayload(form) {
 
   if (!hasUpdates) {
     throw new TypeError('At least one channel field is required for update');
+  }
+
+  // An editor owns only the fields it changed. An invalidation can still be
+  // in flight when a save starts, so sending the whole form could restore an
+  // Agent binding or access rule another accessor already changed.
+  if (baseline) {
+    const previous = buildChannelUpdatePayload(baseline);
+    for (const key of Object.keys(payload)) {
+      if (
+        key !== 'id' &&
+        JSON.stringify(payload[key]) === JSON.stringify(previous[key])
+      ) {
+        delete payload[key];
+      }
+    }
   }
 
   return payload;

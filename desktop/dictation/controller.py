@@ -46,6 +46,7 @@ from typing import Any, Protocol
 
 from desktop import settings as desktop_settings
 from desktop.dictation.insertion import (
+    INSERT_CANCELLED,
     INSERT_CLIPBOARD,
     INSERT_PASTED,
     ClipboardTextInserter,
@@ -524,7 +525,9 @@ class DictationController:
     def _insert(self, take: _Take, text: str) -> None:
         if not text:
             raise _Failed(NOTICE_NOTHING_HEARD)
-        outcome = self._inserter().insert(text, take.target_window)
+        outcome = self._inserter().insert(text, take.target_window, cancel=take.cancelled)
+        if outcome == INSERT_CANCELLED:
+            raise _Cancelled
         if outcome == INSERT_PASTED:
             logger.info("Dictation inserted %d characters", len(text))
             return

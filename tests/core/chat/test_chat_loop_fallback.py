@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -29,6 +30,7 @@ from core.runs import (
     ERROR_MESSAGE_PERSISTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     STREAM_ATTEMPT_RESTARTED_EVENT,
+    RunCancelledError,
     RunStatus,
 )
 from core.tools import (
@@ -161,11 +163,16 @@ async def test_route_scoped_failure_switches_to_the_fallback_for_this_run(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fallback_models",
+    [[], ["ghost-provider/missing"], [f"{PRIMARY}::api-key"], [f"{PRIMARY}::api-key:default"]],
+    ids=["none", "unresolvable", "same-route", "same-account"],
+)
 async def test_rate_limit_without_a_fallback_fails_the_run_after_same_model_recovery(
-    tmp_path: Path, recovery_waits: list[float]
+    tmp_path: Path, recovery_waits: list[float], fallback_models: list[str]
 ) -> None:
     adapter = StubAdapter([ProviderRateLimitError("too many requests")] * 9)
-    runtime = _fallback_runtime(tmp_path, adapter, fallback_models=[])
+    runtime = _fallback_runtime(tmp_path, adapter, fallback_models=fallback_models)
 
     with pytest.raises(ProviderRateLimitError, match="too many requests"):
         await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
@@ -315,7 +322,7 @@ class _RecordingAdapter(StubAdapter):
 
 @pytest.mark.asyncio
 async def test_fallback_chain_skips_unresolvable_candidates_and_cascades_in_order(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     primary = StubAdapter([ProviderRateLimitError("primary rate limited")])
     # Both resolvable candidates share anthropic:api-key, so one adapter serves them in order.
@@ -327,10 +334,25 @@ async def test_fallback_chain_skips_unresolvable_candidates_and_cascades_in_orde
     )
     chain = [
         "ghost-provider/no-such-model",
+        "anthropic/missing-account::api-key:removed",
         "anthropic/first-resort::api-key",
         "anthropic/last-resort::api-key",
     ]
     runtime = _fallback_runtime(tmp_path, primary, candidates, fallback_models=chain)
+    credentials = runtime.provider_credentials
+    usable = credentials.is_usable
+    resolve_account = credentials.resolve_account_id
+
+    def is_usable(provider_id: str, connection_id: str) -> bool:
+        return connection_id == "anthropic:api-key:removed" or usable(provider_id, connection_id)
+
+    def account(provider_id: str, connection_id: str, account_id: str | None = None) -> str:
+        if account_id == "removed":
+            raise ConfigError("Account removed after the usability check")
+        return cast(str, resolve_account(provider_id, connection_id, account_id))
+
+    monkeypatch.setattr(credentials, "is_usable", is_usable)
+    monkeypatch.setattr(credentials, "resolve_account_id", account)
 
     assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -347,22 +369,38 @@ async def test_fallback_chain_skips_unresolvable_candidates_and_cascades_in_orde
 
 
 @pytest.mark.asyncio
-async def test_candidate_whose_adapter_cannot_be_built_is_skipped(tmp_path: Path) -> None:
-    primary = StubAdapter([ProviderRateLimitError("primary rate limited")])
+@pytest.mark.parametrize("successor", [False, True], ids=["no-route-left", "another-route"])
+async def test_candidate_whose_adapter_cannot_be_built_is_skipped(
+    tmp_path: Path, successor: bool
+) -> None:
+    last_resort = "openai/last-resort::api-key"
+    failure = ProviderRateLimitError("primary rate limited")
+    primary = StubAdapter(
+        [failure, {"content": "Recovered", "tool_calls": None}] if successor else [failure] * 9
+    )
     runtime = _fallback_runtime(
-        tmp_path, primary, raise_on_connection={"anthropic:api-key": ConfigError("bad credential")}
+        tmp_path,
+        primary,
+        fallback_models=[FALLBACK, *([last_resort] if successor else [])],
+        raise_on_connection={"anthropic:api-key": ConfigError("bad credential")},
     )
 
-    # The broken candidate is never activated; the Run fails with the last actual
-    # send failure, the primary's original error.
-    with pytest.raises(ProviderRateLimitError, match="primary rate limited"):
-        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+    operation = build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+    if successor:
+        assert (await operation).content == "Recovered"
+        assert [request["model_id"] for request in primary.requests] == ["gpt-5.2", "last-resort"]
+    else:
+        # A broken escape route never removes the primary's normal retries.
+        with pytest.raises(ProviderRateLimitError, match="primary rate limited"):
+            await operation
+        assert len(primary.requests) == 9
 
     run = last_run(runtime)
-    assert run.status == RunStatus.FAILED
-    assert persisted_roles(history(runtime)) == ["user", "error"]
-    assert ERROR_MESSAGE_PERSISTED_EVENT in await event_types(runtime, run)
-    assert await _fallback_events(runtime, run) == []
+    assert run.status == (RunStatus.COMPLETED if successor else RunStatus.FAILED)
+    assert await _fallback_events(runtime, run) == ([(PRIMARY, last_resort)] if successor else [])
+    assert persisted_roles(history(runtime)) == (
+        ["user", "note", "assistant"] if successor else ["user", "error"]
+    )
 
 
 @pytest.mark.asyncio
@@ -747,7 +785,10 @@ async def test_fallback_prepares_multiple_retained_images_in_original_order() ->
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["answer", "provider-error", "context-preparation-failure"])
+@pytest.mark.parametrize(
+    "outcome",
+    ["answer", "provider-error", "context-preparation-failure", "cancel", "cancel-during-close"],
+)
 async def test_the_run_adapter_is_closed_whatever_the_outcome(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
@@ -757,23 +798,79 @@ async def test_the_run_adapter_is_closed_whatever_the_outcome(
         else {"content": "Hello", "tool_calls": None}
     )
     adapter = ClosingStubAdapter([response])
-    runtime = _fallback_runtime(tmp_path, adapter, fallback_models=[])
+    fallback = ClosingStubAdapter([])
+    fallback_closes = 0
+    started = asyncio.Event()
+    release_close = asyncio.Event()
+    acquired_connections: list[str] = []
+    runtime = _fallback_runtime(
+        tmp_path, adapter, fallback, fallback_models=[FALLBACK, "anthropic/never-needed::api-key"]
+    )
+    get_adapter = runtime.get_adapter
+
+    def acquire(connection: Any) -> Any:
+        acquired_connections.append(connection.connection_id)
+        return get_adapter(connection)
+
+    async def close_fallback() -> None:
+        nonlocal fallback_closes
+        fallback_closes += 1
+        if outcome == "cancel-during-close":
+            started.set()
+            await release_close.wait()
+        await ClosingStubAdapter.aclose(fallback)
+
+    monkeypatch.setattr(runtime, "get_adapter", acquire)
+    monkeypatch.setattr(fallback, "aclose", close_fallback)
     if outcome == "context-preparation-failure":
 
         def fail_catalog(*_args: Any, **_kwargs: Any) -> None:
             raise ConfigError("catalog preparation failed")
 
         monkeypatch.setattr("core.chat._run_state.pinned_skill_catalog", fail_catalog)
-    send = build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+    if outcome == "cancel":
+
+        async def block_request(*_args: Any, **_kwargs: Any) -> Any:
+            started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(adapter, "send", block_request)
+    send = asyncio.create_task(
+        build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+    )
 
     if outcome == "answer":
         await send
+    elif outcome in {"cancel", "cancel-during-close"}:
+        await started.wait()
+        active = runtime.chat_run_manager.active_run(
+            agent_id="coder", session_id="session-one", project_id=None
+        )
+        assert active is not None
+        if outcome == "cancel-during-close":
+            active.request_cancel(reason="user")
+            assert fallback.closed is False
+            release_close.set()
+        else:
+            await runtime.chat_run_manager.cancel(active.id, reason="user")
+        with pytest.raises(RunCancelledError):
+            await send
     else:
         with pytest.raises((ProviderError, ConfigError)):
             await send
 
     assert adapter.closed is True
-    assert len(adapter.requests) == (0 if outcome == "context-preparation-failure" else 1)
+    assert len(adapter.requests) == (
+        0 if outcome in {"context-preparation-failure", "cancel"} else 1
+    )
+    prefetched = outcome != "context-preparation-failure"
+    assert fallback.closed is prefetched
+    assert fallback_closes == int(prefetched)
+    assert acquired_connections == [
+        "openai:api-key",
+        *(["anthropic:api-key"] if prefetched else []),
+    ]
+    assert fallback.requests == []
 
 
 @pytest.mark.asyncio

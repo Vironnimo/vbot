@@ -186,7 +186,14 @@ describe('SettingsView Channels', () => {
 
   it('defers an external channel reload while a new channel form is open, not for an open row', async () => {
     const props = reactiveProps({ channelsRefreshToken: 0 });
-    await openChannels({ channels: [channelConfig('tg-assistant')] }, props);
+    await openChannels(
+      {
+        channels: [
+          channelConfig('tg-assistant', { allowed_chat_ids: ['12345'] }),
+        ],
+      },
+      props,
+    );
     const initialListCalls = callsTo('channel.list').length;
 
     buttonByText('Add channel').click();
@@ -210,12 +217,48 @@ describe('SettingsView Channels', () => {
     const disclosure = buttonByAriaLabel('Edit channel tg-assistant');
     disclosure.click();
     flushSync();
+    // Another accessor revoked this chat. The open, clean form follows it.
+    await rpcMock('channel.update', {
+      id: 'tg-assistant',
+      allowed_chat_ids: [],
+    });
     props.channelsRefreshToken += 1;
     flushSync();
     await waitForCondition(
       () => callsTo('channel.list').length === initialListCalls + 2,
     );
     expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+    await waitForCondition(
+      () =>
+        document.querySelector('#channel-allowed-chat-ids-input')?.value === '',
+    );
+
+    // An invalidation deferred by a dirty form must also survive its save:
+    // this editor owns only the token field, not the Agent or access rules.
+    setInputValue('#channel-token-env-input', 'TELEGRAM_BOT_TOKEN_UPDATED');
+    await rpcMock('channel.update', {
+      id: 'tg-assistant',
+      agent_id: 'assistant-work',
+      allowed_chat_ids: ['67890'],
+    });
+    props.channelsRefreshToken += 1;
+    flushSync();
+    buttonByText('Save').click();
+    await waitForCall('channel.update', {
+      token_env_var: 'TELEGRAM_BOT_TOKEN_UPDATED',
+    });
+    expect(callsTo('channel.update').at(-1)[1]).toEqual({
+      id: 'tg-assistant',
+      token_env_var: 'TELEGRAM_BOT_TOKEN_UPDATED',
+    });
+    await waitForCondition(
+      () =>
+        document.querySelector('#channel-allowed-chat-ids-input')?.value ===
+        '67890',
+    );
+    expect(
+      document.getElementById('channel-agent-select').textContent,
+    ).toContain('Assistant Work');
   });
 
   it('names the Agents anew after an Agent change and keeps a new channel form', async () => {
@@ -296,10 +339,12 @@ describe('SettingsView Channels', () => {
     await waitForCall('channel.update', {
       token_env_var: 'TELEGRAM_BOT_TOKEN_UPDATED',
     });
-    expect(callsTo('channel.update').at(-1)[1].allowed_chat_ids).toEqual([
-      '12345',
-      '99999',
-    ]);
+    expect(callsTo('channel.update').at(-1)[1]).not.toHaveProperty(
+      'allowed_chat_ids',
+    );
+    expect(
+      document.querySelector('#channel-allowed-chat-ids-input').value,
+    ).toBe('12345, 99999');
   });
 
   it('creates a channel from the inline form', async () => {

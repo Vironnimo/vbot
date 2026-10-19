@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import threading
 from collections.abc import Iterator
@@ -94,26 +95,91 @@ def blocked_trace_writes(monkeypatch: pytest.MonkeyPatch) -> Iterator[_BlockedTr
 
 
 class TestSaveTrace:
-    def test_failed_index_replace_preserves_previous_trace_and_removes_new_file(
-        self, tmp_path, monkeypatch
+    @pytest.mark.parametrize(
+        "index_problem",
+        [
+            "unreadable",
+            "invalid_json",
+            "invalid_root",
+            "invalid_entry",
+            "invalid_timestamp",
+            "invalid_utf8",
+        ],
+    )
+    def test_unusable_index_refuses_save_without_changing_captures(
+        self, tmp_path, monkeypatch, deny_access, index_problem
+    ):
+        store = DebugTraceStore(tmp_path, trace_limit=1)
+        previous = _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z")
+        store.save_trace(TRACE_ID_1, previous)
+        index = store.get_data_dir() / "index.json"
+        intact = index.read_bytes()
+        damaged = {
+            "invalid_json": b"[",
+            "invalid_root": b"{}",
+            "invalid_entry": json.dumps([{"trace_id": "invalid"}]).encode(),
+            "invalid_timestamp": json.dumps([{"trace_id": TRACE_ID_1, "timestamp": None}]).encode(),
+            "invalid_utf8": b"\xff",
+        }.get(index_problem, intact)
+        index.write_bytes(damaged)
+        if index_problem == "unreadable":
+            deny_access(index)
+
+        assert store.get_traces() == []
+        error_type = PermissionError if index_problem == "unreadable" else ValueError
+        with pytest.raises(error_type):
+            store.save_trace(TRACE_ID_2, _make_trace_data(TRACE_ID_2, "2025-01-02T00:00:00Z"))
+
+        monkeypatch.undo()
+        assert index.read_bytes() == damaged
+        assert store.get_trace(TRACE_ID_1) == previous
+        assert {path.name for path in (store.get_data_dir() / "traces").iterdir()} == {
+            f"{TRACE_ID_1}.json"
+        }
+        # A readable, repaired index resumes ordinary publication and retention.
+        index.write_bytes(intact)
+        store.save_trace(TRACE_ID_2, _make_trace_data(TRACE_ID_2, "2025-01-02T00:00:00Z"))
+        assert [entry["trace_id"] for entry in store.get_traces()] == [TRACE_ID_2]
+        assert not (store.get_data_dir() / "traces" / f"{TRACE_ID_1}.json").exists()
+
+    @pytest.mark.parametrize("cleanup_index", ["readable", "unreadable", "missing", "corrupt"])
+    def test_failed_index_replace_preserves_previous_trace_and_cleans_only_with_evidence(
+        self, tmp_path, monkeypatch, deny_access, cleanup_index
     ):
         store = DebugTraceStore(tmp_path, trace_limit=1)
         store.save_trace(TRACE_ID_1, _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z"))
+        index = store.get_data_dir() / "index.json"
+        original_index = index.read_bytes()
         replace = os.replace
+        failure = OSError("index write failed")
 
         def fail_index(source, target):
-            if Path(target).name == "index.json":
-                raise OSError("index write failed")
+            if Path(target) == index:
+                if cleanup_index == "unreadable":
+                    deny_access(index)
+                elif cleanup_index == "missing":
+                    index.unlink()
+                elif cleanup_index == "corrupt":
+                    index.write_text("[", encoding="utf-8")
+                raise failure
             replace(source, target)
 
         monkeypatch.setattr("core.utils.atomic.os.replace", fail_index)
-        for trace_id in [TRACE_ID_2, TRACE_ID_3]:
-            with pytest.raises(OSError, match="index write failed"):
-                store.save_trace(trace_id, _make_trace_data(trace_id, "2025-01-02T00:00:00Z"))
-        assert [entry["trace_id"] for entry in store.get_traces()] == [TRACE_ID_1]
+        with pytest.raises(OSError) as raised:
+            store.save_trace(TRACE_ID_2, _make_trace_data(TRACE_ID_2, "2025-01-02T00:00:00Z"))
+        assert raised.value is failure
+        monkeypatch.undo()
         assert store.get_trace(TRACE_ID_1)["trace_id"] == TRACE_ID_1
+        expected = {f"{TRACE_ID_1}.json"}
+        if cleanup_index != "readable":
+            expected.add(f"{TRACE_ID_2}.json")
+        assert {path.name for path in (store.get_data_dir() / "traces").iterdir()} == expected
+
+        index.write_bytes(original_index)
+        assert [entry["trace_id"] for entry in store.get_traces()] == [TRACE_ID_1]
+        store.save_trace(TRACE_ID_3, _make_trace_data(TRACE_ID_3, "2025-01-03T00:00:00Z"))
         assert {path.name for path in (store.get_data_dir() / "traces").iterdir()} == {
-            f"{TRACE_ID_1}.json"
+            f"{TRACE_ID_3}.json"
         }
 
     def test_next_save_removes_crash_orphans_and_partial_atomic_files(self, tmp_path):
@@ -125,23 +191,31 @@ class TestSaveTrace:
         store.save_trace(TRACE_ID_4, _make_trace_data(TRACE_ID_4, "2025-01-04T00:00:00Z"))
         assert [path.name for path in traces.iterdir()] == [f"{TRACE_ID_4}.json"]
 
+    @pytest.mark.parametrize("unreadable_after_publication", [False, True])
     def test_failure_after_index_publication_keeps_the_published_capture(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, deny_access, unreadable_after_publication
     ):
         store = DebugTraceStore(tmp_path, trace_limit=1)
         store.save_trace(TRACE_ID_1, _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z"))
         write_index = store._write_index
+        failure = OSError("directory sync failed")
 
         def fail_after_publication(entries):
             write_index(entries)
-            raise OSError("directory sync failed")
+            if unreadable_after_publication:
+                deny_access(store.get_data_dir() / "index.json")
+            raise failure
 
         monkeypatch.setattr(store, "_write_index", fail_after_publication)
-        with pytest.raises(OSError, match="directory sync failed"):
+        with pytest.raises(OSError) as raised:
             store.save_trace(TRACE_ID_2, _make_trace_data(TRACE_ID_2, "2025-01-02T00:00:00Z"))
+        assert raised.value is failure
+        monkeypatch.undo()
         assert [entry["trace_id"] for entry in store.get_traces()] == [TRACE_ID_2]
         assert store.get_trace(TRACE_ID_2)["trace_id"] == TRACE_ID_2
-        assert not (store.get_data_dir() / "traces" / f"{TRACE_ID_1}.json").exists()
+        assert (store.get_data_dir() / "traces" / f"{TRACE_ID_1}.json").exists() == (
+            unreadable_after_publication
+        )
 
     def test_concurrent_adapter_stores_retain_one_consistent_bounded_index(self, tmp_path):
         def save(_):

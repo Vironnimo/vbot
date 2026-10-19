@@ -31,9 +31,9 @@ from tests.core.database.database_test_support import (
 )
 
 
-def _created(data_dir: Path, *bodies: str) -> Path:
+def _created(data_dir: Path, *bodies: str, schema_sql: str = NOTES_SCHEMA_SQL) -> Path:
     """Create the notes database with ``bodies`` and close it."""
-    database = open_database(notes_spec(data_dir))
+    database = open_database(notes_spec(data_dir, schema_sql=schema_sql))
     try:
         for body in bodies:
             add_note(database, body)
@@ -65,11 +65,19 @@ _COMPACT_SCHEMA_SQL = NOTES_SCHEMA_SQL + (
 )
 
 
+@pytest.mark.parametrize("formatting", ["identical", "column", "comment"])
 def test_the_current_schema_reopens_without_a_change_while_another_writer_holds_admission(
     data_dir: Path,
+    formatting: str,
 ) -> None:
     spec = notes_spec(data_dir, schema_sql=_COMPACT_SCHEMA_SQL)
     open_database(spec).close()
+    if formatting == "column":
+        spec = replace(spec, schema_sql=spec.schema_sql.replace("TEXT NOT NULL", "text  not\nnull"))
+    elif formatting == "comment":
+        spec = replace(
+            spec, schema_sql=spec.schema_sql.replace("TEXT NOT NULL", "TEXT /* type */ NOT NULL")
+        )
 
     # A planned change would need the write lock the other writer holds.
     with closing(sqlite3.connect(spec.path)) as writer:
@@ -115,57 +123,144 @@ def _replace_table(schema_sql: str, old: str, new: str) -> str:
 _TAG = "  tag     TEXT CHECK (tag IS NULL OR length(tag) <= 40)\n"
 
 
+_LITERAL_SCHEMA_SQL = _replace_table(
+    NOTES_SCHEMA_SQL,
+    _TAG,
+    "  tag TEXT DEFAULT 'READY' CHECK (tag IS NULL OR tag IN ('READY', 'DONE'))\n",
+)
+
+
 @pytest.mark.parametrize(
-    ("changed_schema", "message"),
+    ("initial_schema", "changed_schema", "message"),
     [
-        (
+        pytest.param(
+            NOTES_SCHEMA_SQL,
             _replace_table(NOTES_SCHEMA_SQL, _TAG, _TAG[:-1] + ",\n  required TEXT NOT NULL\n"),
             "cannot be added",
+            id="required-column",
         ),
-        (
+        pytest.param(
+            NOTES_SCHEMA_SQL,
             _replace_table(
                 NOTES_SCHEMA_SQL,
                 _TAG,
                 _TAG[:-1] + ",\n  size    INTEGER GENERATED ALWAYS AS (length(body)) VIRTUAL\n",
             ),
             "cannot be added",
+            id="generated-column",
         ),
-        (
+        pytest.param(
+            NOTES_SCHEMA_SQL,
             _replace_table(
                 NOTES_SCHEMA_SQL, "note_id INTEGER PRIMARY KEY", "note_id INTEGER NOT NULL"
             ).replace("body    TEXT NOT NULL", "body    TEXT PRIMARY KEY NOT NULL"),
             "primary key",
+            id="primary-key",
         ),
-        (
+        pytest.param(
+            NOTES_SCHEMA_SQL,
             _replace_table(NOTES_SCHEMA_SQL, "length(tag) <= 40", "length(tag) <= 41"),
             "declared shape",
+            id="column-contract",
         ),
-        (_replace_table(NOTES_SCHEMA_SQL, ") STRICT;", ");"), "options"),
-        (
+        pytest.param(
+            NOTES_SCHEMA_SQL,
+            _replace_table(NOTES_SCHEMA_SQL, ") STRICT;", ");"),
+            "options",
+            id="table-options",
+        ),
+        pytest.param(
+            NOTES_SCHEMA_SQL,
             _replace_table(NOTES_SCHEMA_SQL, "ON notes (tag);", "ON notes (tag, note_id);"),
             "needs a new name",
+            id="index-definition",
         ),
-        (
+        pytest.param(
+            NOTES_SCHEMA_SQL
+            + "\nCREATE VIEW tagged AS SELECT note_id FROM notes WHERE tag IS NOT NULL;",
             NOTES_SCHEMA_SQL + "\nCREATE VIEW tagged AS SELECT note_id FROM notes WHERE tag;",
             "view tagged",
+            id="view-definition",
         ),
-    ],
-    ids=[
-        "required-column",
-        "generated-column",
-        "primary-key",
-        "column-contract",
-        "table-options",
-        "index-definition",
-        "view-definition",
+        pytest.param(
+            _LITERAL_SCHEMA_SQL,
+            _LITERAL_SCHEMA_SQL.replace("DEFAULT 'READY'", "DEFAULT 'ready'"),
+            "declared shape",
+            id="default-literal-case",
+        ),
+        pytest.param(
+            _LITERAL_SCHEMA_SQL,
+            _LITERAL_SCHEMA_SQL.replace("IN ('READY', 'DONE')", "IN ('ready', 'done')"),
+            "declared shape",
+            id="check-literal-case",
+        ),
+        pytest.param(
+            _LITERAL_SCHEMA_SQL.replace("DEFAULT 'READY'", "DEFAULT 'O''Brien  READY'"),
+            _LITERAL_SCHEMA_SQL.replace("DEFAULT 'READY'", "DEFAULT 'O''Brien READY'"),
+            "declared shape",
+            id="escaped-default-literal-whitespace",
+        ),
+        pytest.param(
+            _LITERAL_SCHEMA_SQL.replace(
+                "DEFAULT 'READY'", "DEFAULT '/* O''Brien -- two  spaces */'"
+            ),
+            _LITERAL_SCHEMA_SQL.replace(
+                "DEFAULT 'READY'", "DEFAULT '/* O''Brien -- two spaces */'"
+            ),
+            "declared shape",
+            id="comment-markers-inside-literal",
+        ),
+        pytest.param(
+            NOTES_SCHEMA_SQL.replace(
+                _TAG, "  tag TEXT /* ' */ CHECK (tag IS NULL OR tag = 'READY') /* ' */\n"
+            ),
+            NOTES_SCHEMA_SQL.replace(
+                _TAG, "  tag TEXT /* ' */ CHECK (tag IS NULL OR tag = 'ready') /* ' */\n"
+            ),
+            "declared shape",
+            id="comment-quotes-do-not-fold-check-literal",
+        ),
+        pytest.param(
+            NOTES_SCHEMA_SQL.replace(
+                _TAG,
+                "  tag TEXT CHECK (tag IS NULL OR tag = 'READY' -- allowed\n OR tag = 'DONE'\n)\n",
+            ),
+            NOTES_SCHEMA_SQL.replace(
+                _TAG,
+                "  tag TEXT CHECK (tag IS NULL OR tag = 'READY' -- allowed OR tag = 'DONE'\n)\n",
+            ),
+            "declared shape",
+            id="line-comment-boundary-changes-check",
+        ),
+        *[
+            pytest.param(
+                NOTES_SCHEMA_SQL + statement,
+                NOTES_SCHEMA_SQL + statement.replace("two  spaces", "two spaces"),
+                "needs a new name",
+                id=f"{kind}-literal-whitespace",
+            )
+            for kind, statement in (
+                ("index", "\nCREATE INDEX by_value ON notes (tag) WHERE tag = 'two  spaces';"),
+                ("view", "\nCREATE VIEW value AS SELECT 'two  spaces' AS content;"),
+                (
+                    "trigger",
+                    "\nCREATE TRIGGER on_note AFTER INSERT ON notes "
+                    "BEGIN SELECT 'two  spaces'; END;",
+                ),
+            )
+        ],
+        pytest.param(
+            NOTES_SCHEMA_SQL.replace(_TAG, _TAG[:-1] + ",\n  CHECK (tag != 'two  spaces')\n"),
+            NOTES_SCHEMA_SQL.replace(_TAG, _TAG[:-1] + ",\n  CHECK (tag != 'two spaces')\n"),
+            "constraints",
+            id="table-check-literal-whitespace",
+        ),
     ],
 )
 def test_reconcile_refuses_every_non_additive_change_untouched(
-    data_dir: Path, changed_schema: str, message: str
+    data_dir: Path, initial_schema: str, changed_schema: str, message: str
 ) -> None:
-    path = _created(data_dir, "kept")
-    if "CREATE VIEW" in changed_schema:
-        raw_execute(path, "CREATE VIEW tagged AS SELECT note_id FROM notes WHERE tag IS NOT NULL")
+    path = _created(data_dir, "kept", schema_sql=initial_schema)
     original = path.read_bytes()
 
     with pytest.raises(DatabaseSchemaMismatchError, match=message):

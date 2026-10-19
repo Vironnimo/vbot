@@ -77,10 +77,12 @@ class Desktop:
             # Without coordinates the image only tells which app was in front, or which
             # app lay under the pointer; without an image there is nothing to compare.
             images = self.state.images
-            found = images.get(action.screenshot_id or "") or images.get(
-                self.state.latest_image or ""
-            )
-            return found or Frame.of(self._chosen(self.target.displays()))
+            reference = action.screenshot_id or self.state.latest_image
+            found = images.get(reference or "")
+            if found is not None:
+                return found
+            if action.screenshot_id is None:
+                return Frame.of(self._chosen(self.target.displays()))
         if not needs_image:
             return Frame.of(self._chosen(self.target.displays()))
         reference = action.screenshot_id or self.state.latest_image

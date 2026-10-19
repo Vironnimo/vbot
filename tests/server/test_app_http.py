@@ -51,17 +51,26 @@ def test_browser_origin_guard_admits_only_the_served_origin(tmp_path: Path) -> N
                 ("192.168.10.25:8420", "http://192.168.10.25:8420", 200),
                 ("attacker.example:8420", "http://attacker.example:8420", 403),
                 ("192.168.10.25:8420", "http://192.168.10.99:8420", 403),
+                ("vbot.home.arpa:8420", "http://vbot.home.arpa:8420", 200),
+                ("localhost:8420", "http://localhost:8420", 200),
+                ("testserver:8420", "http://testserver:8420", 200),
+                ("VBOT.home.arpa.:8420", "http://vbot.home.arpa.:8420", 200),
+                ("vbot.home.arpa:8420", "http://testserver:8420", 403),
+                ("vbot.home.arpa:8420", "http://vbot.home.arpa:8421", 403),
+                ("vbot.home.arpa:8420", "https://vbot.home.arpa:8420", 403),
             ],
         ),
         ("::", [("[fd00::25]:8420", "http://[fd00::25]:8420", 200)]),
+        ("127.0.0.1", [("localhost:8420", "http://localhost:8420", 200)]),
     ],
 )
-def test_wildcard_bind_admits_same_origin_ip_requests_only(
+def test_bind_admits_same_origin_ip_and_known_host_requests_only(
     tmp_path: Path, listen_host: str, requests: list[tuple[str, str, int]]
 ) -> None:
     app = create_app(
         runtime=ServerStubRuntime(tmp_path),
         server_bind={"listen_host": listen_host, "listen_port": 8420, "port_source": "cli"},
+        access=access_config("lan", allow_hosts=["vbot.home.arpa"]),
     )
 
     with TestClient(app) as client:

@@ -20,7 +20,7 @@ from typing import Any, TextIO
 
 from cli._parser_agents import DEFAULT_CHAT_AGENT
 from cli._progress import Status, status_line
-from cli._recovery import format_command
+from cli._recovery import format_command, target_options
 from cli.formatting import output_mode
 from cli.rpc_client import RunEventStreamError, stream_run_events
 from cli.rpc_client import rpc_call as _rpc_call
@@ -276,7 +276,7 @@ def _command_handled(
     else:
         lines = [f"{command} handled in Session {report.session_id} (Agent {request.agent})"]
     if session_id is not None:
-        lines.append(_continue_line(agent, session_id))
+        lines.append(_continue_line(instance, agent, session_id))
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
@@ -311,7 +311,7 @@ def _run_outcome(
     model = timeline.model or "unknown"
     where = f"in Session {session_id} (Agent {request.agent}, Model {model})"
     if lost is not None:
-        status_command = _chat_command(request.agent, session_id, "/status")
+        status_command = _chat_command(instance, request.agent, session_id, "/status")
         return CommandResult(
             ok=False,
             message=(
@@ -325,7 +325,7 @@ def _run_outcome(
         if report.agent_overrides:
             saved = ", ".join(f"{key}={value}" for key, value in report.agent_overrides.items())
             lines.append(f"Session overrides: {saved} (kept for later messages in this Session)")
-        lines.append(_continue_line(request.agent, session_id))
+        lines.append(_continue_line(instance, request.agent, session_id))
         return CommandResult(ok=True, message="\n".join(lines), instance=instance)
     if status == "cancelled":
         detail = f"Run {run_id} was cancelled {where}"
@@ -351,13 +351,15 @@ def _duration_ms(terminal: JsonObject) -> int | None:
     return duration if isinstance(duration, int) and not isinstance(duration, bool) else None
 
 
-def _continue_line(agent: str, session_id: str) -> str:
-    return f"Continue: {_chat_command(agent, session_id)} <message>"
+def _continue_line(instance: ServerInstance, agent: str, session_id: str) -> str:
+    return f"Continue: {_chat_command(instance, agent, session_id)} <message>"
 
 
-def _chat_command(agent: str, session_id: str, *tail: str) -> str:
+def _chat_command(instance: ServerInstance, agent: str, session_id: str, *tail: str) -> str:
     agent_option = () if agent == DEFAULT_CHAT_AGENT else ("--agent", agent)
-    return format_command(("vbot", "chat", "--session", session_id, *agent_option, *tail))
+    return format_command(
+        ("vbot", "chat", "--session", session_id, *agent_option, *target_options(instance), *tail)
+    )
 
 
 def _cancel_after_interrupt(instance: ServerInstance, run_id: str, timeline: _RunTimeline) -> None:

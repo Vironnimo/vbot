@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
+from weakref import WeakValueDictionary
 
 from core.chat import ReplySurface, reply_surface_from_note
 from core.chat.commands import CommandExecutionContext, CommandFeedback, CommandOutcome, CommandRun
@@ -138,6 +139,9 @@ class GoalService:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._unobserve: Callable[[], None] | None = None
         self._closed = False
+        # State transitions and automatic admission share one Session boundary.
+        self._locks: WeakValueDictionary[SessionAddress, asyncio.Lock] = WeakValueDictionary()
+        self._automatic_runs: WeakValueDictionary[SessionAddress, Run] = WeakValueDictionary()
 
     # -- Wiring ------------------------------------------------------------------
 
@@ -226,7 +230,8 @@ class GoalService:
             metadata[SESSION_GOAL_META_KEY] = goal
             outcome["changed"] = True
 
-        await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
+        async with self._lock(address):
+            await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
         if outcome.get("missing"):
             raise NoGoalError(address.session_id)
         changed = outcome.get("changed", False)
@@ -236,7 +241,18 @@ class GoalService:
 
     async def pause_for_stop(self, address: SessionAddress) -> bool:
         """Pause an active or blocked goal because the user stopped work; True if it changed."""
-        return await self._pause(address, "stop")
+        async with self._lock(address):
+            previous = await self._sessions.run_async(self._pause_metadata, address, "stop")
+            # Stop's initial Run lookup can precede an automatic admission that
+            # already holds this lock. Include only that Goal Run, never queued input.
+            active = self._run_manager.active_run(
+                agent_id=address.agent_id,
+                session_id=address.session_id,
+                project_id=address.project_id,
+            )
+            if active is not None and active is self._automatic_runs.get(address):
+                active.request_cancel(reason="user", initiator="goal_stop")
+        return await self._record_pause(address, "stop", previous)
 
     async def pause_for_takeover(self, address: SessionAddress) -> bool:
         """Pause the goal of a Session that just moved to another Agent."""
@@ -244,7 +260,15 @@ class GoalService:
 
     async def _pause(self, address: SessionAddress, reason: PauseReason) -> bool:
         """Pause an open goal, write its note and announce the change."""
-        previous = await self._sessions.run_async(self._pause_metadata, address, reason)
+        async with self._lock(address):
+            previous = await self._sessions.run_async(self._pause_metadata, address, reason)
+        return await self._record_pause(address, reason, previous)
+
+    async def _record_pause(
+        self, address: SessionAddress, reason: PauseReason, previous: dict[str, Any] | None
+    ) -> bool:
+        # A Tool may hold the Session append lock while changing goal metadata.
+        # Never wait for that append lock while holding the goal admission lock.
         if previous is None:
             return False
         recorded = await self._record(
@@ -353,36 +377,39 @@ class GoalService:
             objective = text[: match.start()].strip()
         if not objective:
             return _notice(_USAGE)
-        if self._busy(address):
-            return _notice("Stop the current turn first, then set the goal.")
-        now = _now()
-        goal = {
-            "objective": objective,
-            "status": "active",
-            "turns": 0,
-            "max_turns": max_turns,
-            "created_at": now,
-            "updated_at": now,
-        }
+        async with self._lock(address):
+            if self._busy(address):
+                return _notice("Stop the current turn first, then set the goal.")
+            now = _now()
+            goal = {
+                "objective": objective,
+                "status": "active",
+                "turns": 0,
+                "max_turns": max_turns,
+                "created_at": now,
+                "updated_at": now,
+            }
 
-        def mutate(metadata: dict[str, Any]) -> None:
-            metadata[SESSION_GOAL_META_KEY] = goal
+            def mutate(metadata: dict[str, Any]) -> None:
+                metadata[SESSION_GOAL_META_KEY] = goal
 
-        await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
-        self._cancel_deferred(address)
-        _LOGGER.info(
-            "Goal set (agent=%s session=%s max_turns=%d)",
-            address.agent_id,
-            address.session_id,
-            max_turns,
-        )
-        note = GOAL_SET_TEXT.format(objective=quote_external_value(objective))
-        event = GoalEvent("set", objective=objective, max_turns=max_turns)
-        try:
-            run = await self._start_user_run(
-                address, context, ChatMessage.note(note, goal_event=event)
+            await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
+            self._cancel_deferred(address)
+            _LOGGER.info(
+                "Goal set (agent=%s session=%s max_turns=%d)",
+                address.agent_id,
+                address.session_id,
+                max_turns,
             )
-        except ActiveRunError:
+            note = GOAL_SET_TEXT.format(objective=quote_external_value(objective))
+            event = GoalEvent("set", objective=objective, max_turns=max_turns)
+            try:
+                run = await self._start_user_run(
+                    address, context, ChatMessage.note(note, goal_event=event)
+                )
+            except ActiveRunError:
+                run = None
+        if run is None:
             # The Run that won the Session continues the goal when it ends.
             recorded = await self._record(address, event, note)
             self._notify(address, history=recorded)
@@ -391,24 +418,25 @@ class GoalService:
         return CommandOutcome(command="goal", runs=(CommandRun(role="primary", run=run),))
 
     async def _command_pause(self, address: SessionAddress) -> CommandOutcome:
-        goal = await self.goal(address)
-        if goal is None:
-            return _notice(_status_text(None))
-        if goal["status"] not in ("active", "blocked"):
-            return _notice(f"The goal is already {goal['status']}.")
+        async with self._lock(address):
+            goal = await self.goal(address)
+            if goal is None:
+                return _notice(_status_text(None))
+            if goal["status"] not in ("active", "blocked"):
+                return _notice(f"The goal is already {goal['status']}.")
 
-        def mutate(metadata: dict[str, Any]) -> None:
-            current = _goal(metadata.get(SESSION_GOAL_META_KEY))
-            if current is None or current["status"] not in ("active", "blocked"):
-                return
-            metadata[SESSION_GOAL_META_KEY] = {
-                **current,
-                "status": "paused",
-                "pause_reason": "user",
-                "updated_at": _now(),
-            }
+            def mutate(metadata: dict[str, Any]) -> None:
+                current = _goal(metadata.get(SESSION_GOAL_META_KEY))
+                if current is None or current["status"] not in ("active", "blocked"):
+                    return
+                metadata[SESSION_GOAL_META_KEY] = {
+                    **current,
+                    "status": "paused",
+                    "pause_reason": "user",
+                    "updated_at": _now(),
+                }
 
-        await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
+            await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
         self._cancel_deferred(address)
         recorded = await self._record(address, GoalEvent("paused", reason="user"))
         self._notify(address, history=recorded)
@@ -417,29 +445,30 @@ class GoalService:
     async def _command_resume(
         self, address: SessionAddress, context: CommandExecutionContext
     ) -> CommandOutcome:
-        goal = await self.goal(address)
-        if goal is None:
-            return _notice(_status_text(None))
-        if goal["status"] == "active":
-            return _notice("The goal is already active.")
+        async with self._lock(address):
+            goal = await self.goal(address)
+            if goal is None:
+                return _notice(_status_text(None))
+            if goal["status"] == "active":
+                return _notice("The goal is already active.")
 
-        def mutate(metadata: dict[str, Any]) -> None:
-            current = _goal(metadata.get(SESSION_GOAL_META_KEY))
-            if current is None:
-                return
-            resumed = {**current, "status": "active", "turns": 0, "updated_at": _now()}
-            resumed.pop("pause_reason", None)
-            resumed.pop("status_run_id", None)
-            metadata[SESSION_GOAL_META_KEY] = resumed
+            def mutate(metadata: dict[str, Any]) -> None:
+                current = _goal(metadata.get(SESSION_GOAL_META_KEY))
+                if current is None:
+                    return
+                resumed = {**current, "status": "active", "turns": 0, "updated_at": _now()}
+                resumed.pop("pause_reason", None)
+                resumed.pop("status_run_id", None)
+                metadata[SESSION_GOAL_META_KEY] = resumed
 
-        await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
-        event = GoalEvent("resumed")
-        run = None
-        if not self._busy(address):
-            with contextlib.suppress(ActiveRunError):
-                run = await self._start_user_run(
-                    address, context, ChatMessage.note(GOAL_RESUMED_TEXT, goal_event=event)
-                )
+            await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
+            event = GoalEvent("resumed")
+            run = None
+            if not self._busy(address):
+                with contextlib.suppress(ActiveRunError):
+                    run = await self._start_user_run(
+                        address, context, ChatMessage.note(GOAL_RESUMED_TEXT, goal_event=event)
+                    )
         if run is None:
             # The current Run continues the goal when it ends.
             recorded = await self._record(address, event)
@@ -454,7 +483,8 @@ class GoalService:
         def mutate(metadata: dict[str, Any]) -> None:
             removed["goal"] = metadata.pop(SESSION_GOAL_META_KEY, None) is not None
 
-        await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
+        async with self._lock(address):
+            await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
         if not removed.get("goal"):
             return _notice(_status_text(None))
         self._cancel_deferred(address)
@@ -520,7 +550,8 @@ class GoalService:
             metadata[SESSION_GOAL_META_KEY] = active
             changed["goal"] = True
 
-        await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
+        async with self._lock(address):
+            await self._sessions.run_async(self._sessions.mutate_metadata, address, mutate)
         if changed:
             recorded = await self._record(address, GoalEvent("reactivated"))
             self._notify(address, history=recorded)
@@ -536,6 +567,31 @@ class GoalService:
         if wait_for_work and self._work_pending is not None and await self._work_pending(address):
             self._defer(address)
             return
+        reply_surface = await self._latest_reply_surface(address)
+        async with self._lock(address):
+            run, paused = await self._admit_continuation(address, ended, reply_surface)
+        if paused is not None:
+            await self._record_pause(address, "run_failed", paused)
+        if run is None:
+            return
+        self._notify(address)
+        if reply_surface is not None and reply_surface.kind == "channel" and self._run_relay:
+            try:
+                await self._run_relay(run, reply_surface)
+            except Exception:
+                _LOGGER.error(
+                    "Goal Run relay failed (agent=%s session=%s)",
+                    address.agent_id,
+                    address.session_id,
+                    exc_info=True,
+                )
+
+    async def _admit_continuation(
+        self, address: SessionAddress, ended: Run | None, reply_surface: ReplySurface | None
+    ) -> tuple[Run | None, dict[str, Any] | None]:
+        """Count and admit under the same lock as every live goal state transition."""
+        if self._closed or self._queued(address):
+            return None, None
         turn: dict[str, int] = {}
 
         def count(metadata: dict[str, Any]) -> None:
@@ -549,12 +605,11 @@ class GoalService:
 
         await self._sessions.run_async(self._sessions.mutate_metadata, address, count)
         if not turn:
-            return
+            return None, None
         message = GOAL_LAST_TURN_TEXT if turn["turns"] >= turn["max_turns"] else GOAL_CONTINUE_TEXT
         row = ChatMessage.note(
             "", goal_event=GoalEvent("turn", turn=turn["turns"], max_turns=turn["max_turns"])
         )
-        reply_surface = await self._latest_reply_surface(address)
         run = None
         while run is None:
             try:
@@ -578,7 +633,7 @@ class GoalService:
                     continue
                 # Another Run won the Session; its end decides again.
                 await self._uncount(address)
-                return
+                return None, None
             except Exception:
                 _LOGGER.warning(
                     "Goal Run start failed (agent=%s session=%s)",
@@ -587,19 +642,12 @@ class GoalService:
                     exc_info=True,
                 )
                 await self._uncount(address)
-                await self._pause(address, "run_failed")
-                return
-        self._notify(address)
-        if reply_surface is not None and reply_surface.kind == "channel" and self._run_relay:
-            try:
-                await self._run_relay(run, reply_surface)
-            except Exception:
-                _LOGGER.error(
-                    "Goal Run relay failed (agent=%s session=%s)",
-                    address.agent_id,
-                    address.session_id,
-                    exc_info=True,
+                previous = await self._sessions.run_async(
+                    self._pause_metadata, address, "run_failed"
                 )
+                return None, previous
+        self._automatic_runs[address] = run
+        return run, None
 
     async def _uncount(self, address: SessionAddress) -> None:
         def mutate(metadata: dict[str, Any]) -> None:
@@ -702,6 +750,13 @@ class GoalService:
         return None if message is None else reply_surface_from_note(message)
 
     # -- Helpers -------------------------------------------------------------------
+
+    def _lock(self, address: SessionAddress) -> asyncio.Lock:
+        lock = self._locks.get(address)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[address] = lock
+        return lock
 
     def _busy(self, address: SessionAddress) -> bool:
         return self._run_manager.has_activity_for_session(

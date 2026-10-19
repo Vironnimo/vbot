@@ -7,12 +7,16 @@ import json
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
 
+from cli import chat_management, main
+from cli._server_target import resolve_instance, selected_server_url
+from cli.parser import parse_args
 from tests.cli.cli_test_support import FakeRpc, RunCli
 
 RUN_ID = "run-1"
@@ -187,7 +191,8 @@ def test_chat_starts_a_session_and_prints_the_answer(
     # Events the chat.stream reply already carried are not requested again.
     assert run_stream.queries == [{"after_sequence": 2}]
     assert f"completed in Session s-new (Agent main, Model {MODEL})" in err
-    assert "Continue: vbot chat --session s-new <message>" in err
+    assert "Continue: vbot chat --session s-new " in err
+    assert err.rstrip().endswith("<message>")
     assert ("Session overrides:" in err) is bool(overrides)
 
 
@@ -519,7 +524,70 @@ def test_chat_reports_a_lost_run_stream_without_resending(
     assert run_stream.queries == [{"after_sequence": 2}] * connections
     assert rpc.methods == ["chat.stream"]
     assert f"lost the event stream of Run {RUN_ID}" in err
-    assert "check it with vbot chat --session s-new /status" in err
+    assert "check it with vbot chat --session s-new " in err
+    assert "/status" in err
+
+
+@pytest.mark.parametrize("outcome", ["completed", "handled", "lost"])
+@pytest.mark.parametrize("url", ["http://127.0.0.1:9123", "http://192.0.2.8:9123", "https://[::1]"])
+def test_chat_followup_preserves_the_resolved_target(
+    rpc: FakeRpc,
+    run_stream: FakeRunStream,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+    url: str,
+) -> None:
+    target = resolve_instance(url=url, data_dir=tmp_path / "data with spaces")
+    commands: list[tuple[str, ...]] = []
+    format_command = chat_management.format_command
+
+    def record_command(tokens: tuple[str, ...]) -> str:
+        commands.append(tokens)
+        return format_command(tokens)
+
+    monkeypatch.setattr(chat_management, "format_command", record_command)
+    if outcome == "handled":
+        rpc.reply(
+            "chat.stream",
+            {
+                "command_handled": True,
+                "session_id": "s-new",
+                "reply": "Moved",
+                "data": {"command": "switch", "agent_id": "other@project", "session_id": "s-other"},
+            },
+        )
+    else:
+        reply_run(rpc, "s-new")
+        if outcome == "lost":
+            run_stream.refuse(404)
+        else:
+            run_stream.connection(*TOOL_RUN)
+
+    code = main.run(
+        ["chat", "--agent", "builder@project", "Hello"], resolve=lambda **_options: target
+    )
+    _out, err = capsys.readouterr()
+
+    assert code == (1 if outcome == "lost" else 0)
+    assert len(commands) == 1
+    assert format_command(commands[0]) in err
+    followup = parse_args([*commands[0][1:], *([] if outcome == "lost" else ["Next message"])])
+    assert followup.agent == ("other@project" if outcome == "handled" else "builder@project")
+    assert followup.session == ("s-other" if outcome == "handled" else "s-new")
+    if outcome == "lost":
+        assert followup.prompt == "/status"
+    monkeypatch.setenv("VBOT_SERVER_URL", "https://another.example")
+    assert (
+        resolve_instance(
+            host=followup.host,
+            port=followup.port,
+            data_dir=followup.data_dir,
+            url=selected_server_url(followup),
+        )
+        == target
+    )
 
 
 def test_chat_ctrl_c_cancels_the_run_and_exits_130(

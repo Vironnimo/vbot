@@ -403,3 +403,166 @@ async def test_stop_takeover_and_restart_pause_an_open_goal(harness: _Harness, p
     assert harness.goal()["pause_reason"] == pause
     assert harness.notes()[-1].startswith("The goal was paused because ")
     assert await harness.goals.pause_for_stop(_ADDRESS) is False
+
+
+@pytest.mark.parametrize("has_goal", [False, True])
+async def test_stop_leaves_a_queued_user_run_to_finish(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, has_goal: bool
+) -> None:
+    started, successor_started, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def work(_run: Run) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    async def successor(_run: Run) -> str:
+        successor_started.set()
+        await release.wait()
+        return "queued answer"
+
+    if has_goal:
+        harness.loop.turns = [_works, work]
+        await harness.command("Finish the work")
+    else:
+        await harness.user_run(work)
+    await started.wait()
+    queued = await harness.runs.enqueue(_ADDRESS, successor)
+    run_async = harness.sessions.run_async
+
+    async def held_pause(operation: Any, *args: Any, **kwargs: Any) -> Any:
+        if operation == harness.goals._pause_metadata:  # noqa: SLF001
+            await successor_started.wait()
+        return await run_async(operation, *args, **kwargs)
+
+    monkeypatch.setattr(harness.sessions, "run_async", held_pause)
+    harness.runs.cancel_by_session("coder", "session-one", project_id=None, reason="user")
+    try:
+        async with asyncio.timeout(2):
+            await harness.goals.pause_for_stop(_ADDRESS)
+        user_run = await queued.future
+        assert user_run.run_kind == RunKind.USER
+        assert not user_run.cancel_requested
+        if has_goal:
+            assert harness.goal()["status"] == "paused"
+    finally:
+        release.set()
+    await harness.settle()
+
+
+@pytest.mark.parametrize("command", ["pause", "clear", "resume", "stop"])
+async def test_goal_commands_and_tool_updates_do_not_invert_the_history_lock(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    harness.loop.turns = [_marks(harness.goals, "blocked")]
+    await harness.command("Finish the work")
+    await harness.settle()
+    if command != "resume":
+        harness.sessions.mutate_metadata(
+            _ADDRESS, lambda metadata: metadata[SESSION_GOAL_META_KEY].update(status="active")
+        )
+    tool_entered, metadata_changed, release_run = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    run_async = harness.sessions.run_async
+
+    async def record_mutation(operation: Any, *args: Any, **kwargs: Any) -> Any:
+        result = await run_async(operation, *args, **kwargs)
+        if operation in (harness.sessions.mutate_metadata, harness.goals._pause_metadata):  # noqa: SLF001
+            metadata_changed.set()
+        return result
+
+    async def tool(run: Run) -> None:
+        # Chat holds this lock through the assistant Tool calls and their results.
+        async with harness.sessions.write_lock(_ADDRESS):
+            tool_entered.set()
+            await metadata_changed.wait()
+            if command == "clear":
+                from core.automation.goals import NoGoalError
+
+                with pytest.raises(NoGoalError):
+                    await harness.goals.update_from_agent(_ADDRESS, "complete", run_id=run.id)
+            else:
+                await harness.goals.update_from_agent(_ADDRESS, "complete", run_id=run.id)
+        await release_run.wait()
+
+    await harness.user_run(tool)
+    await tool_entered.wait()
+    monkeypatch.setattr(harness.sessions, "run_async", record_mutation)
+    try:
+        async with asyncio.timeout(2):
+            if command == "stop":
+                await harness.goals.pause_for_stop(_ADDRESS)
+            else:
+                await harness.command(command)
+    finally:
+        release_run.set()
+    await harness.settle()
+
+
+@pytest.mark.parametrize("transition", ["stop", "pause", "clear"])
+@pytest.mark.parametrize("stage", ["surface", "admission"])
+async def test_goal_transitions_serialize_with_automatic_admission(
+    harness: _Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    transition: str,
+    stage: str,
+) -> None:
+    entered, release, release_run = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    start_run = harness.loop.start_run
+    latest_surface = harness.goals._latest_reply_surface  # noqa: SLF001
+
+    async def held_surface(address: SessionAddress) -> ReplySurface | None:
+        if stage == "surface":
+            entered.set()
+            await release.wait()
+        return await latest_surface(address)
+
+    async def held_start(*args: Any, **kwargs: Any) -> Run:
+        if stage == "admission" and kwargs["run_kind"] == RunKind.SYSTEM:
+            entered.set()
+            await release.wait()
+        return await start_run(*args, **kwargs)
+
+    async def work(run: Run) -> None:
+        await release_run.wait()
+
+    monkeypatch.setattr(harness.goals, "_latest_reply_surface", held_surface)
+    monkeypatch.setattr(harness.loop, "start_run", held_start)
+    harness.loop.turns = [_works, work]
+    await harness.command("Finish the work")
+    await entered.wait()
+
+    async def change() -> None:
+        if transition == "stop":
+            assert await harness.goals.pause_for_stop(_ADDRESS)
+        else:
+            await harness.command(transition)
+
+    changing = asyncio.create_task(change())
+    try:
+        if stage == "surface":
+            await changing
+        else:
+            # The admitted start and the transition cannot both pass their boundary.
+            await asyncio.sleep(0)
+            assert not changing.done()
+        release.set()
+        await changing
+        if stage == "admission" and transition == "stop":
+            active = harness.runs.active_run(
+                agent_id=_ADDRESS.agent_id, session_id=_ADDRESS.session_id, project_id=None
+            )
+            assert active is None or active.cancel_requested
+        release_run.set()
+        await harness.settle()
+    finally:
+        release.set()
+        release_run.set()
+        await changing
+
+    automatic = [kind for _text, kind in harness.loop.started if kind == RunKind.SYSTEM]
+    assert len(automatic) <= (1 if stage == "admission" else 0)
+    goal = harness.sessions.metadata_value(_ADDRESS, SESSION_GOAL_META_KEY)
+    if transition == "clear":
+        assert goal is None
+    else:
+        assert goal["status"] == "paused"
+        assert goal["pause_reason"] == ("stop" if transition == "stop" else "user")
