@@ -796,6 +796,10 @@ class ChatLoop:
         """Return whether *agent*'s Runs get On-demand Tools on its Model's route."""
         return await self._requests.tool_catalog.serves_on_demand_tools(agent)
 
+    async def context_capacity(self, agent: Any) -> int | None:
+        """Return the Context capacity *agent*'s Runs budget against on its Model's route."""
+        return await self._requests.targets.agent_context_capacity(agent)
+
     async def start_external_run(
         self,
         agent_id: str,

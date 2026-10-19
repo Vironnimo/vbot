@@ -19,6 +19,7 @@ from core.chat.model_resolution import (
     _resolve_agent_connection,
     _split_agent_model,
     parse_model_with_connection,
+    resolve_agent_context_window,
     resolve_route_context_window,
 )
 from core.chat.streaming import stream_stall_timeout
@@ -167,6 +168,28 @@ class RequestTargets:
     async def resolve_context_capacity_async(self, agent: Any, target: _ModelTarget) -> int | None:
         """Read the live Settings-derived Context capacity on the Chat workers."""
         return await _CHAT_TRANSFORM_WORKERS.run(self.resolve_context_capacity, agent, target)
+
+    async def agent_context_capacity(self, agent: Any) -> int | None:
+        """The Context capacity a Run of ``agent`` budgets against, without starting one.
+
+        Acquires the route a Run resolves to and reads its capacity
+        (:meth:`resolve_context_capacity`). A Model without a usable route
+        keeps the window of its Model route (:func:`resolve_agent_context_window`).
+        """
+        try:
+            target = await self.for_agent(agent)
+        except VBotError:
+            return await _CHAT_TRANSFORM_WORKERS.run(
+                lambda: resolve_agent_context_window(
+                    self._dependencies,
+                    agent,
+                    local_context_windows=self._dependencies.get_local_context_windows(),
+                )
+            )
+        try:
+            return await self.resolve_context_capacity_async(agent, target)
+        finally:
+            await _close_adapter(target.adapter)
 
     def resolve_context_capacity(self, agent: Any, target: _ModelTarget) -> int | None:
         """The input tokens one request to the target may hold.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -13,9 +14,11 @@ from core.chat.errors import ChatSessionError
 from core.chat.status_report import (
     ContextWindowResolver,
     ReasoningRenderDescriber,
+    StatusActivity,
     build_status_reply,
     resolve_reported_thinking_effort,
     resolve_status_activity,
+    resolve_status_context_window,
     resolve_status_model_details,
     resolve_status_project_label,
     resolve_status_sampling,
@@ -28,11 +31,17 @@ from core.projects import (
     ProjectStore,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
+    RuntimeAgent,
     format_agent_address,
 )
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
-from core.sessions import SESSION_WORKING_PROJECT_META_KEY, ChatSessionManager, SessionAddress
+from core.sessions import (
+    SESSION_WORKING_PROJECT_META_KEY,
+    ChatSessionManager,
+    SessionAddress,
+    SessionStatusSnapshot,
+)
 from core.tools._background_tasks_arguments import (
     BACKGROUND_TASKS_TOOL_NAME,
     COMMAND_ID_PREFIX,
@@ -52,7 +61,7 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
-    offload_tool_handler,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -234,6 +243,18 @@ def _configured_zone(timezone_name_loader: Callable[[], str] | None) -> tzinfo |
         return UTC
 
 
+@dataclass(frozen=True)
+class _StatusTarget:
+    """The Session a status call reports on, with the facts read for it."""
+
+    agent: RuntimeAgent
+    agent_id: str
+    session_id: str
+    snapshot: SessionStatusSnapshot
+    working_project_id: str | None
+    activity: StatusActivity
+
+
 def make_status_handler(
     agent_resolver: AgentResolver,
     sessions: ChatSessionManager,
@@ -246,9 +267,14 @@ def make_status_handler(
     reasoning_render_describer: ReasoningRenderDescriber | None = None,
     timezone_name_loader: Callable[[], str] | None = None,
 ):
-    """Create a status tool handler bound to runtime services."""
+    """Create a status tool handler bound to runtime services.
 
-    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    The blocking lookups and the report run on the Tool workers; the Context
+    window is resolved between them, because the Context capacity of the
+    route the Agent's Model resolves to is resolved asynchronously.
+    """
+
+    def find_target(context: ToolContext, arguments: JsonObject) -> JsonObject | _StatusTarget:
         task_id = arguments.get(_TASK_ID_SENT)
         if isinstance(task_id, str):
             return tool_failure("invalid_arguments", _task_id_message(context, task_id))
@@ -312,26 +338,33 @@ def make_status_handler(
                     message += _SESSION_OWNER_HINT
             return tool_failure("session_not_found", message)
 
-        activity = resolve_status_activity(chat_runs, agent_id, session_id, context.project_id)
-        model_details = resolve_status_model_details(
-            agent, models, providers, context_window_resolver=context_window_resolver
+        return _StatusTarget(
+            agent=agent,
+            agent_id=agent_id,
+            session_id=session_id,
+            snapshot=snapshot,
+            working_project_id=working_project_id,
+            activity=resolve_status_activity(chat_runs, agent_id, session_id, context.project_id),
         )
 
+    def report(target: _StatusTarget, context_window: int | None) -> JsonObject:
+        agent = target.agent
+        model_details = resolve_status_model_details(agent, models, providers)
         try:
             text = build_status_reply(
                 agent,
-                status_session_facts_from_snapshot(snapshot),
-                model_details.context_window,
+                status_session_facts_from_snapshot(target.snapshot),
+                context_window,
                 started_at,
                 model_details.display_name,
-                activity,
+                target.activity,
                 actual_thinking_effort=resolve_reported_thinking_effort(
                     agent=agent,
                     models=models,
                     model_details=model_details,
                     describe_render=reasoning_render_describer,
                 ),
-                project_label=resolve_status_project_label(projects, working_project_id),
+                project_label=resolve_status_project_label(projects, target.working_project_id),
                 sampling_status=resolve_status_sampling(agent, model_details),
                 timezone=_configured_zone(timezone_name_loader),
             )
@@ -342,10 +375,17 @@ def make_status_handler(
         return tool_success(
             {
                 "text": text,
-                "agent_id": agent_id,
-                "session_id": session_id,
+                "agent_id": target.agent_id,
+                "session_id": target.session_id,
             }
         )
+
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        target = await run_tool_worker(find_target, context, arguments)
+        if not isinstance(target, _StatusTarget):
+            return target
+        context_window = await resolve_status_context_window(target.agent, context_window_resolver)
+        return await run_tool_worker(report, target, context_window)
 
     return handler
 
@@ -368,19 +408,17 @@ def register_status_tool(
         STATUS_TOOL_NAME,
         STATUS_TOOL_DESCRIPTION,
         STATUS_TOOL_PARAMETERS,
-        offload_tool_handler(
-            make_status_handler(
-                agent_resolver,
-                sessions,
-                models,
-                chat_runs,
-                started_at,
-                providers,
-                projects,
-                context_window_resolver,
-                reasoning_render_describer,
-                timezone_name_loader,
-            )
+        make_status_handler(
+            agent_resolver,
+            sessions,
+            models,
+            chat_runs,
+            started_at,
+            providers,
+            projects,
+            context_window_resolver,
+            reasoning_render_describer,
+            timezone_name_loader,
         ),
         summary="Check a Session's model, context and usage.",
         open_input_schema=True,

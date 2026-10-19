@@ -320,21 +320,38 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(
 ) -> None:
     # The resolver and the Session lookup receive the address and the Session (whose
     # Agent overrides the report must reflect), and the Model registry, the Project
-    # store and the reasoning describer each feed their report line. The Project
-    # reported is the one the Session works in, for an Identity Session too.
+    # store, the reasoning describer and the Context window resolver each feed their
+    # report line. The Project reported is the one the Session works in, for an
+    # Identity Session too.
     resolver = _StubResolver(_make_agent(thinking_effort="xhigh", temperature=None))
-    sessions = _StubSessions([], working_project_id="vbot")
+    # No step recorded the window its Context fills yet.
+    sessions = _StubSessions(
+        [
+            ChatMessage.assistant(
+                model="openai/gpt-5.2",
+                content="Done.",
+                usage={"input_tokens": 1234, "context_usage": {"tokens": 1276}},
+            )
+        ],
+        working_project_id="vbot",
+    )
     described: list[tuple[str, str | None]] = []
+    capacity_agents: list[str] = []
 
     def describe_render(agent: RuntimeAgent) -> ReasoningIntent:
         described.append((agent.model, agent.thinking_effort))
         return ReasoningIntent("effort", effort_level="max")
+
+    async def context_capacity(agent: RuntimeAgent) -> int:
+        capacity_agents.append(agent.model)
+        return 272_000
 
     registry = _registry(
         resolver=resolver,
         sessions=sessions,
         models=_StubModels(_make_model(name="GPT-5.2 Registry", recommended_temperature=1.0)),
         projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
+        context_window_resolver=context_capacity,
         reasoning_render_describer=describe_render,
     )
 
@@ -344,8 +361,10 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(
     assert resolver.calls == [(project_id, "coder", "session-one")]
     assert sessions.calls == [("coder", "session-one", project_id)]
     assert described == [("openai/gpt-5.2", "xhigh")]
+    assert capacity_agents == ["openai/gpt-5.2"]
     for line in (
         "Project: vBot (vbot)",
+        "Context usage: 1276 / 272000",
         "Model display name: GPT-5.2 Registry",
         "Selected thinking effort: xhigh",
         "Actual model thinking effort: max",

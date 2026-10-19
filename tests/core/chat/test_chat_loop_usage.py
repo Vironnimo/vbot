@@ -15,6 +15,7 @@ from core.providers.errors import NetworkError, ProviderError
 from core.runs import RunCancelledError
 from core.tools import ToolRegistry, tool_success
 from core.usage import UsageRecorder
+from core.utils.errors import ConfigError
 from core.utils.tokens import estimate_output_tokens, estimate_request_input_tokens
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -344,6 +345,43 @@ async def test_measured_context_decides_whether_the_next_request_fits_the_capaci
             await loop.send("coder", "Weather?", session_id="session-one")
         assert raised.value.retryable is False
         assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reported_window", "input_limit", "route_error", "capacity"),
+    [
+        pytest.param(None, None, None, 1_000, id="catalog-window"),
+        pytest.param(800, None, None, 800, id="reported-window"),
+        pytest.param(800, 600, None, 600, id="input-limit-caps-the-window"),
+        pytest.param(800, 600, ConfigError("bad credential"), 1_000, id="no-route"),
+    ],
+)
+async def test_context_capacity_is_the_one_a_run_of_the_agent_budgets_against(
+    tmp_path: Path,
+    reported_window: int | None,
+    input_limit: int | None,
+    route_error: Exception | None,
+    capacity: int,
+) -> None:
+    class ReportingAdapter(StubAdapter):
+        @override
+        def reported_context_window(self, model_id: str) -> int | None:
+            return reported_window
+
+        @override
+        def input_token_limit(self, model_id: str) -> int | None:
+            return input_limit
+
+    runtime = _runtime(
+        tmp_path,
+        ReportingAdapter([]),
+        models=StubModels({("openai", "gpt-4.1"): 1_000}),
+        raise_on_connection={"openai:api-key": route_error} if route_error else None,
+    )
+
+    # Without a usable route the Model route's catalog window remains.
+    assert await build_chat_loop(runtime).context_capacity(runtime.agents.get("coder")) == capacity
 
 
 @pytest.mark.asyncio
