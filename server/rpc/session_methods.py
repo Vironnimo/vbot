@@ -438,11 +438,6 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
             )
 
     def load_sessions() -> JsonObject:
-        resolver = state.runtime.agent_resolver
-        agent_policies: dict[tuple[str | None, str], Any] = {}
-        for _address, agent_id, project_id in parsed_addresses:
-            agent = resolver.resolve_agent(project_id, agent_id, require_model=False)
-            agent_policies[(project_id, agent_id)] = getattr(agent, "compaction_policy", None)
         page = state.runtime.chat_sessions.list_summaries_page(
             [(project_id, agent_id) for _address, agent_id, project_id in parsed_addresses],
             limit=limit,
@@ -450,9 +445,7 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
             filters=filters,
             required_address=required_address,
         )
-        return _session_list_page_payload(
-            state, page, lambda project_id, agent_id: agent_policies[(project_id, agent_id)]
-        )
+        return _session_list_page_payload(state, page, _listed_agent_policies(state))
 
     try:
         return cast(JsonObject, await state.runtime.chat_sessions.run_async(load_sessions))

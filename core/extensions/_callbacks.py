@@ -66,9 +66,28 @@ async def invoke_lifecycle_handler(
     Cancelling the caller cancels the callback and propagates. A detached
     callback's later failure is still logged.
     """
-    task = asyncio.ensure_future(invoke_extension_handler(handler))
+    return await invoke_isolated_handler(
+        handler,
+        extension_name=extension_name,
+        description=description,
+        timeout_seconds=_LIFECYCLE_HANDLER_TIMEOUT_SECONDS,
+        cancel_on_timeout=cancel_on_timeout,
+    )
+
+
+async def invoke_isolated_handler(
+    handler: Callable[..., Any],
+    *arguments: Any,
+    extension_name: str,
+    description: str,
+    timeout_seconds: float | None = None,
+    cancel_on_timeout: bool = True,
+    **keyword_arguments: Any,
+) -> Any:
+    """Keep callback self-cancellation separate from cancellation of its caller."""
+    task = asyncio.create_task(invoke_extension_handler(handler, *arguments, **keyword_arguments))
     try:
-        done, _ = await asyncio.wait({task}, timeout=_LIFECYCLE_HANDLER_TIMEOUT_SECONDS)
+        done, _ = await asyncio.wait({task}, timeout=timeout_seconds)
     except asyncio.CancelledError:
         task.cancel()
         detach_extension_task(task, extension_name=extension_name, description=description)
@@ -77,7 +96,8 @@ async def invoke_lifecycle_handler(
         if cancel_on_timeout:
             task.cancel()
         detach_extension_task(task, extension_name=extension_name, description=description)
-        raise ExtensionHandlerTimeoutError(_LIFECYCLE_HANDLER_TIMEOUT_SECONDS)
+        assert timeout_seconds is not None
+        raise ExtensionHandlerTimeoutError(timeout_seconds)
     if task.cancelled():
         # The wait above, not the child result, carries caller cancellation.
         raise RuntimeError("Extension callback cancelled itself")
@@ -175,7 +195,9 @@ async def invoke_hook_fail_open(
     """
     started_at = time.perf_counter()
     try:
-        return await invoke_extension_handler(handler, ctx, **payload)
+        return await invoke_isolated_handler(
+            handler, ctx, extension_name=extension_name, description=f"{event} handler", **payload
+        )
     except Exception as exc:
         _LOGGER.warning(
             "Extension %r %s handler raised: %s",

@@ -66,5 +66,5 @@ metadata:
 
 ## Diagnostics
 
-- Retain non-loadable directories as diagnostics (I/O failures, malformed requirements, duplicate names) so UI can explain them; plain YAML errors and missing ordinary metadata use loadable fallbacks instead. Unknown requirement keys, including YAML non-string keys, invalidate only their package rather than aborting the registry scan.
+- Retain non-loadable directories as diagnostics (I/O failures, malformed requirements, duplicate names) so UI can explain them; YAML errors (including nesting beyond the parser's recursion limit) and missing ordinary metadata use loadable fallbacks instead. Unknown requirement keys, including YAML non-string keys, invalidate only their package rather than aborting the registry scan.
 - Metadata diagnostics log at `DEBUG` (`vbot.skills`) **once per process**, keyed by (path, warning) in a bounded `LoggedConditions` memory (a pair it forgot logs again), because registries reload on every project run/reload - only the log deduplicates; caller-facing diagnostics always carry every warning. For the same reason an unreadable or invalid policy file warns once per file version (modification time and size) and logs INFO once it is usable again (`SkillPolicyService`), and a stale shared entry warns once per owner or owner/Skill until it resolves (`SkillRuntime`), not once per receiver build.

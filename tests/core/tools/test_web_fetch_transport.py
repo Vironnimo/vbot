@@ -73,6 +73,7 @@ async def test_addresses_that_are_not_web_urls_are_refused_without_fetching(
         ("http://100.127.255.254/internal", "private or local network address"),
         ("http://[::ffff:100.64.0.1]/internal", "private or local network address"),
         ("https://localhost/admin", "private or local network address"),
+        ("http://１２７.０.０.１/private", "private or local network address"),
         ("http://2130706433/private", "private or local network address"),
         ("http://0x7f000001/private", "private or local network address"),
         ("http://127.1/private", "private or local network address"),
@@ -486,16 +487,31 @@ async def test_transient_failures_recover_on_a_later_attempt(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("url", "pin"),
+    ("url", "request_url", "pins"),
     [
-        ("https://example.com/page", "example.com:443:93.184.216.34"),
-        ("http://93.184.216.34:8080/page", "93.184.216.34:8080:93.184.216.34"),
-        (f"https://{IPV6_HOST}/page", f"{IPV6_HOST}:443:[{IPV6_ADDRESS}]"),
+        ("https://example.com/page", "https://example.com/page", ["example.com:443:93.184.216.34"]),
+        (
+            "https://ExAmPle.com./page?q=1",
+            "https://example.com/page?q=1",
+            ["example.com:443:93.184.216.34"],
+        ),
+        (
+            "https://bücher.example:8443/page",
+            "https://xn--bcher-kva.example:8443/page",
+            ["xn--bcher-kva.example:8443:93.184.216.34"],
+        ),
+        ("http://93.184.216.34:8080/page", "http://93.184.216.34:8080/page", []),
+        (
+            f"https://{IPV6_HOST}/page",
+            f"https://{IPV6_HOST}/page",
+            [f"{IPV6_HOST}:443:[{IPV6_ADDRESS}]"],
+        ),
+        (f"https://[{IPV6_ADDRESS}]:8443/page", f"https://[{IPV6_ADDRESS}]:8443/page", []),
     ],
-    ids=["resolved-host", "literal-ip", "ipv6"],
+    ids=["resolved-host", "trailing-dot", "idn", "literal-ip", "ipv6-dns", "ipv6-literal"],
 )
 async def test_request_is_a_pinned_browser_like_get_with_a_streamed_body(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, pin: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, request_url: str, pins: list[str]
 ) -> None:
     session = StreamingSession(
         StreamingResponse(
@@ -512,9 +528,34 @@ async def test_request_is_a_pinned_browser_like_get_with_a_streamed_body(
     assert options["impersonate"] == "chrome"
     assert "text/markdown" in options["headers"]["Accept"]
     # The connection targets exactly the address that cleared validation.
-    assert session.curl_options[CurlOpt.RESOLVE] == [pin]
+    assert session.curl_options[CurlOpt.RESOLVE] == pins
     assert session.calls == [
-        ("GET", url, {"allow_redirects": False, "timeout": public_http._REQUEST_TIMEOUT})
+        ("GET", request_url, {"allow_redirects": False, "timeout": public_http._REQUEST_TIMEOUT})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_redirect_hosts_use_the_same_canonical_url_and_dns_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, list[str]]] = []
+    redirects = ["https://bücher.example.:8443/page", f"https://[{IPV6_ADDRESS}]/page"]
+
+    async def get(session: Any, url: str, max_bytes: int) -> PublicResponse:
+        calls.append((url, list(session.curl_options[CurlOpt.RESOLVE])))
+        if len(calls) <= len(redirects):
+            return make_result(status_code=302, headers={"Location": redirects[len(calls) - 1]})
+        return make_result(text="public content", headers={"Content-Type": "text/plain"}, url=url)
+
+    monkeypatch.setattr(public_http, "_http_get", get)
+    result = await fetch(tmp_path, {"url": "https://example.com./start"})
+    assert assert_success_envelope(result)["content"] == "public content"
+    first = "example.com:443:93.184.216.34"
+    second = "xn--bcher-kva.example:8443:93.184.216.34"
+    assert calls == [
+        ("https://example.com/start", [first]),
+        ("https://xn--bcher-kva.example:8443/page", [first, second]),
+        (f"https://[{IPV6_ADDRESS}]/page", [first, second]),
     ]
 
 

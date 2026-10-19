@@ -124,6 +124,27 @@ def test_read_missing_agent_prompt_fragment_returns_empty_string(storage: Storag
     assert storage.read_agent_prompt_fragment("coder", "skills.md") == ""
 
 
+@pytest.mark.parametrize("scope", ["default", "bundled", "agent"])
+def test_invalid_utf8_fragment_reports_storage_error(storage: StorageManager, scope: str) -> None:
+    storage.ensure_directories()
+    directory = {
+        "default": storage.prompts_dir,
+        "bundled": storage.resources_dir / "prompts",
+        "agent": storage.agent_prompts_dir("coder"),
+    }[scope]
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "runtime.md"
+    path.write_bytes(b"\xffinvalid utf-8")
+
+    with pytest.raises(StorageError, match=r"runtime\.md") as failure:
+        if scope == "agent":
+            storage.read_agent_prompt_fragment("coder", "runtime.md")
+        else:
+            storage.read_prompt_fragment("runtime.md")
+    assert isinstance(failure.value.__cause__, UnicodeDecodeError)
+    assert path.read_bytes() == b"\xffinvalid utf-8"
+
+
 @pytest.mark.parametrize(
     ("agent_id", "fragment_name"),
     [("../escape", "runtime.md"), ("coder", "../runtime.md"), ("coder", "compaction.md")],

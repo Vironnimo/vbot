@@ -511,6 +511,7 @@ class CronService:
                     if self._jobs.get(job_id) is candidate:
                         # A fire during the save records on the live job; keep that.
                         _take_back_edit(candidate, before=job, edited=edited)
+                        self._execution._restore_once_budget(candidate)
                         if self._started and restart_task:
                             self._scheduler._restart_job_task(candidate)
 
@@ -552,6 +553,7 @@ class CronService:
                 )
             if (
                 "schedule_type" in fields
+                and job.schedule_type != "once"
                 and "remaining_runs" not in fields
                 and job.remaining_runs != 1
             ):
@@ -599,6 +601,15 @@ class CronService:
             return job, job, [], False
 
         self._validate_job(candidate, validate_references=validate_references)
+        if (
+            candidate.schedule_type == "once"
+            and job.status not in TERMINAL_CRON_JOB_STATUSES
+            and candidate.run_at != job.run_at
+            and "remaining_runs" not in fields
+        ):
+            # A new once time arms a new fire even while the previous Run is
+            # still settling with its own fire already consumed.
+            candidate.remaining_runs = 1
         if set(_SCHEDULE_FIELDS) & set(changed_fields) or (
             candidate.status == "active" and job.status != "active"
         ):

@@ -127,12 +127,12 @@ def parse_skill_front_matter(front_matter: str) -> tuple[Any, list[str]]:
         return {}, []
     try:
         return yaml.safe_load(front_matter) or {}, []
-    except yaml.YAMLError:
+    except yaml.YAMLError, RecursionError:
         repaired = repair_colon_scalars(front_matter)
         if repaired != front_matter:
             try:
                 return yaml.safe_load(repaired) or {}, [MALFORMED_YAML_FALLBACK_WARNING]
-            except yaml.YAMLError:
+            except yaml.YAMLError, RecursionError:
                 pass
         return _parse_simple_key_values(front_matter), [SIMPLE_KEY_VALUE_FALLBACK_WARNING]
 

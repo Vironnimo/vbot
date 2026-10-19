@@ -10,6 +10,8 @@ Every `ExtensionAPI` registration method only appends to that Extension's `Exten
 
 ## Chat hooks
 
+Hook and Interaction callbacks run in isolated Tasks: a callback's own cancellation is a logged handler failure, while cancelling the dispatch caller still cancels its callback and propagates. The same isolation serves lifecycle callbacks with their deadline (`_callbacks.py`, `test_dispatch.py`).
+
 The hook set is closed: `run_start`, `context`, `tool_call`, `tool_result`, and `run_end`. Adding another name to `api.on()` is inert unless `ExtensionRegistry` exposes a dispatch path and Chat fires it at a defined boundary.
 
 - `run_start(ctx, *, session_id, agent_id)` fires once after the Run is admitted and before context assembly.
