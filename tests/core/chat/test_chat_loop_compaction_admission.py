@@ -11,7 +11,7 @@ import pytest
 from core.chat import ChatMessage, ToolCall
 from core.compaction import CompactionService
 from core.providers.errors import ProviderError
-from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
+from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, LOCAL_CONTEXT_DEFAULT_CAP
 from core.runs import COMPACTION_STARTED_EVENT
 from core.tools import tool_success
 from core.utils.tokens import estimate_request_input_tokens
@@ -154,29 +154,65 @@ async def test_trigger_counts_this_runs_measurement_or_the_selected_wire_estimat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "model_window", "expected_window"),
+    ("model", "model_window", "reported_window", "local", "expected_window"),
     [
-        ("openai/gpt-5.4", 400_000, 1_050_000),
-        ("openai/gpt-5.4::subscription", 400_000, 272_000),
-        ("openai/gpt-5.4::subscription", None, GLOBAL_CONTEXT_WINDOW_FLOOR),
+        pytest.param("openai/gpt-5.4", 400_000, None, False, 1_050_000, id="api-key-connection"),
+        pytest.param(
+            "openai/gpt-5.4::subscription",
+            400_000,
+            None,
+            False,
+            272_000,
+            id="subscription-connection",
+        ),
+        pytest.param(
+            "openai/gpt-5.4::subscription",
+            None,
+            None,
+            False,
+            GLOBAL_CONTEXT_WINDOW_FLOOR,
+            id="unknown-window-uses-floor",
+        ),
+        pytest.param(
+            "openai/gpt-5.4::subscription",
+            400_000,
+            64_000,
+            False,
+            64_000,
+            id="reported-window-wins",
+        ),
+        pytest.param(
+            "openai/gpt-5.4",
+            400_000,
+            None,
+            True,
+            LOCAL_CONTEXT_DEFAULT_CAP,
+            id="local-model-default-cap",
+        ),
     ],
-    ids=["api-key-connection", "subscription-connection", "unknown-window-uses-floor"],
 )
-async def test_trigger_uses_the_selected_connections_context_window(
-    tmp_path: Path, model: str, model_window: int | None, expected_window: int
+async def test_trigger_uses_the_window_of_the_selected_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    model_window: int | None,
+    reported_window: int | None,
+    local: bool,
+    expected_window: int,
 ) -> None:
     key = ("openai", "gpt-5.4")
     agent = StubAgent(id="coder", model=model, allowed_tools=["*"])
-    runtime = compaction_runtime(
-        tmp_path,
-        agent=agent,
-        models=StubModels(
-            {key: model_window},
-            connection_context_windows=(
-                {key: {"api-key": 1_050_000, "subscription": 272_000}} if model_window else None
-            ),
+    models = StubModels(
+        {key: model_window},
+        connection_context_windows=(
+            {key: {"api-key": 1_050_000, "subscription": 272_000}} if model_window else None
         ),
     )
+    if local:
+        models.get(*key).metadata["ollama"] = {"local": True}
+    runtime = compaction_runtime(tmp_path, agent=agent, models=models)
+    # A window the Provider reported for the route outranks every catalog window.
+    monkeypatch.setattr(runtime.adapter, "reported_context_window", lambda _model: reported_window)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
     service = StubCompactionService(should_auto=False)

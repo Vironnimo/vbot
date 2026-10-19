@@ -150,6 +150,7 @@ async def test_chat_runs_against_the_window_of_the_loaded_instance(
     )
 
     try:
+        assert adapter.reported_context_window(MODEL_ID) is None
         response = await adapter.send(
             [{"role": "user", "content": "Hello"}], model_id=MODEL_ID, max_tokens=60000
         )
@@ -157,6 +158,8 @@ async def test_chat_runs_against_the_window_of_the_loaded_instance(
         await adapter.aclose()
 
     assert response == CHAT_RESPONSE
+    # Chat budgets the Context against the window the Provider reports serving.
+    assert adapter.reported_context_window(MODEL_ID) == served_window
     requested = [call.request.url.path for call in respx.calls]
     if load_payload is None:
         assert requested == ["/api/v1/models", "/v1/chat/completions"]

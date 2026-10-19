@@ -31,6 +31,10 @@ class AdapterHookDefaults:
         del model_id
         return None
 
+    def reported_context_window(self, model_id: str) -> int | None:
+        del model_id
+        return None
+
     def image_size_limit(self, model_id: str) -> int | None:
         del model_id
         return None

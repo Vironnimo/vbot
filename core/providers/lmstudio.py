@@ -185,15 +185,23 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
                 yield event
 
     @override
-    def _request_context_window(self, model_id: str) -> int:
-        """The window of the loaded instance, else the one vBot loads the Model with."""
+    def reported_context_window(self, model_id: str) -> int | None:
+        """The window the Model's loaded instance serves, else one a rejection stated."""
 
-        bare_model_id = model_id.split("::", 1)[0]
-        loaded = self._loaded_context_windows.get(bare_model_id)
+        loaded = self._loaded_context_windows.get(model_id.split("::", 1)[0])
         if loaded is not None:
             return loaded
+        return super().reported_context_window(model_id)
+
+    @override
+    def _request_context_window(self, model_id: str) -> int:
+        """The reported window, else the one vBot loads the Model with."""
+
+        reported = self.reported_context_window(model_id)
+        if reported is not None:
+            return reported
         if self._local_context_resolver is not None:
-            configured = self._local_context_resolver(bare_model_id)
+            configured = self._local_context_resolver(model_id.split("::", 1)[0])
             if configured is not None:
                 return configured
         return super()._request_context_window(model_id)

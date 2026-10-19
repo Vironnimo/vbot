@@ -476,20 +476,29 @@ class ProviderAdapter(ABC):
             return context_window
         return None
 
+    def reported_context_window(self, model_id: str) -> int | None:
+        """The Context window the Provider reported for ``model_id`` on this Connection.
+
+        The window a Provider rejection stated (a learned wire fact); an
+        Adapter whose server reports the window it serves (a loaded local
+        instance) overrides this. ``None`` when nothing was reported. A
+        reported window wins over catalog values and estimates: the Adapter's
+        output clamp and Chat's Context capacity both budget against it.
+        """
+        return self.wire.learned_context_window(model_id)
+
     def _request_context_window(self, model_id: str) -> int:
         """The Context window a request for ``model_id`` must fit on this Adapter's wire.
 
         Output clamping and the local overflow check budget against it: the
-        window a Provider rejection stated for this Model on this Connection
-        (a learned wire fact), else the catalog window through the read-side
-        chain (``resolve_context_window``). An Adapter whose server reports the
-        window it actually serves (a loaded local instance) overrides this.
+        reported window (``reported_context_window``), else the catalog window
+        through the read-side chain (``resolve_context_window``).
         """
         from core.providers.providers import resolve_context_window
 
-        stated = self.wire.learned_context_window(model_id)
-        if stated is not None:
-            return stated
+        reported = self.reported_context_window(model_id)
+        if reported is not None:
+            return reported
         return resolve_context_window(
             self._model_context_window(model_id), getattr(self, "_config", None)
         )
