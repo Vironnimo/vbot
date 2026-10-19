@@ -33,9 +33,11 @@ import {
   selectSimpleOption,
   setInputValue,
   settingsPayload,
+  settleSettingsPanels,
   waitForCondition,
 } from './SettingsView.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
+import { settingsPanelLoaders } from '../../lib/settingsView/panelLoaders.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -43,16 +45,18 @@ vi.mock('svelte', async () => {
 
 const { default: SettingsView } = await import('../SettingsView.svelte');
 
-function clickButton(label) {
+async function clickButton(label) {
   getButton(label).click();
   flushSync();
+  await settleSettingsPanels();
 }
 
-function search(query) {
+async function search(query) {
   const input = document.querySelector('input[type="search"]');
   input.value = query;
   input.dispatchEvent(new Event('input', { bubbles: true }));
   flushSync();
+  await settleSettingsPanels();
   return input;
 }
 
@@ -92,41 +96,44 @@ describe('SettingsView', () => {
 
   afterEach(async () => {
     mountedComponent = await cleanupSettingsViewHarness(mountedComponent);
+    vi.restoreAllMocks();
   });
 
   async function mountSettings(options = {}, props = {}) {
     rpcMock.mockImplementation(createSettingsRpcMock(options));
     mountedComponent = mount(SettingsView, { target: document.body, props });
     flushSync();
-    await waitForCondition(() => buttonByText('Add provider'));
+    await settleSettingsPanels();
   }
 
   describe('layout and navigation', () => {
     it('retains editors but polls speech memory only on the visible Voice page', async () => {
       await mountSettings();
-      vi.useFakeTimers();
       const calls = () =>
         rpcMock.mock.calls.filter(
           ([method]) => method === 'speech.local_memory_status',
         ).length;
+      expect(
+        document.getElementById('settings-specialized-speech_to_text'),
+      ).toBeNull();
+      expect(calls()).toBe(0);
+
+      await clickButton('Voice');
       const editor = document.getElementById(
         'settings-specialized-speech_to_text',
       );
       expect(editor).toBeTruthy();
-      await vi.advanceTimersByTimeAsync(6000);
-      expect(calls()).toBe(0);
-
-      clickButton('Voice');
       await flushAsyncUpdates();
       expect(calls()).toBe(1);
-      search('speech');
+      await search('speech');
       await flushAsyncUpdates();
+      vi.useFakeTimers();
       await vi.advanceTimersByTimeAsync(6000);
       expect(calls()).toBe(1);
-      search('');
+      await search('');
       await flushAsyncUpdates();
       expect(calls()).toBe(2);
-      clickButton('General');
+      await clickButton('General');
       await flushAsyncUpdates();
       await vi.advanceTimersByTimeAsync(6000);
       expect(calls()).toBe(2);
@@ -154,16 +161,27 @@ describe('SettingsView', () => {
       );
       // The loading banner shows until settings.get answers.
       expect(document.querySelector('.s-doc > .banner--neutral')).toBeTruthy();
-      await waitForCondition(() => buttonByText('Add provider'));
+      await settleSettingsPanels();
       expect(document.querySelector('.s-doc > .banner--neutral')).toBeNull();
       expect(rpcMock).toHaveBeenCalledWith('settings.get');
-      // Editors stay mounted on other pages and load independently.
+      // Opening General does not mount the other pages or read their catalogs.
+      expect(document.querySelector('.s-provider-card')).toBeNull();
+      for (const method of [
+        'extensions.list',
+        'channel.list',
+        'speech.local_memory_status',
+      ]) {
+        expect(rpcMock.mock.calls.map(([called]) => called)).not.toContain(
+          method,
+        );
+      }
+      await clickButton('Providers');
       expect(document.body.textContent).toContain('OpenAI');
       expect(
         document.querySelector('.s-provider-card .chip.success'),
       ).toBeTruthy();
 
-      clickButton('System');
+      await clickButton('System');
       expect(document.body.textContent).toContain('127.0.0.1:8420');
       expect(document.body.textContent).toContain('C:/data');
       expect(document.body.textContent).not.toMatch(
@@ -183,10 +201,10 @@ describe('SettingsView', () => {
         'server offline',
       );
 
-      clickButton('Retry');
+      await clickButton('Retry');
       expect(rpcMock).toHaveBeenNthCalledWith(1, 'settings.get');
       expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.get');
-      await waitForCondition(() => buttonByText('Add provider'));
+      await settleSettingsPanels();
       expect(document.querySelector('.banner--error')).toBeNull();
     });
 
@@ -342,6 +360,16 @@ describe('SettingsView', () => {
           ),
         ).toEqual(sectionIds);
       }
+      for (const button of buttons) {
+        button.click();
+        await settleSettingsPanels();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        flushSync();
+        expect(visiblePages()).toHaveLength(1);
+        expect(navigation.place).toEqual(visiblePages());
+        expect(document.activeElement.textContent).toBe(button.textContent);
+        expect(button.getAttribute('aria-current')).toBe('page');
+      }
       // Task-specific Models sit beside their consumers, exactly once.
       for (const [task, pageId] of [
         ['speech_to_text', 'voice'],
@@ -359,16 +387,7 @@ describe('SettingsView', () => {
           inputs[0].closest('[data-settings-page]').dataset.settingsPage,
         ).toBe(pageId);
       }
-      for (const button of buttons) {
-        button.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        flushSync();
-        expect(visiblePages()).toHaveLength(1);
-        expect(navigation.place).toEqual(visiblePages());
-        expect(document.activeElement.textContent).toBe(button.textContent);
-        expect(button.getAttribute('aria-current')).toBe('page');
-      }
-      clickButton('Providers');
+      await clickButton('Providers');
       document.querySelector('.settings-defaults-link').click();
       expect(navigate).toHaveBeenCalledWith('defaults');
       expect(document.querySelector('#settings-defaults-model')).toBeNull();
@@ -404,7 +423,7 @@ describe('SettingsView', () => {
         'archive.list',
       );
 
-      search('archive');
+      await search('archive');
       expect(searchResultRows()).toEqual(
         expect.arrayContaining([
           {
@@ -420,7 +439,7 @@ describe('SettingsView', () => {
           },
         ]),
       );
-      search('days archive');
+      await search('days archive');
       await openFirstSearchResult();
       expect(navigation.place).toEqual(['archive', 'archive_retention']);
       expect(document.activeElement.id).toBe('settings-archive-retention-days');
@@ -490,7 +509,7 @@ describe('SettingsView', () => {
       expect(replace).toHaveBeenCalledWith(['tools', 'decision_model']);
       expect(navigate).not.toHaveBeenCalled();
 
-      search('timezone');
+      await search('timezone');
       document.querySelector('.settings-search-result').click();
       await new Promise((resolve) => setTimeout(resolve, 0));
       flushSync();
@@ -518,7 +537,7 @@ describe('SettingsView', () => {
         },
       });
       flushSync();
-      await waitForCondition(() => buttonByText('Add provider'));
+      await settleSettingsPanels();
       const scrollport = document.querySelector('.settings-content');
       await new Promise((resolve) => setTimeout(resolve, 40));
       expect(scrollport.scrollTop).toBe(expectedTop);
@@ -577,7 +596,7 @@ describe('SettingsView', () => {
   describe('search', () => {
     it('finds settings across hidden topics with spacing-insensitive search and preserves drafts', async () => {
       await mountSettings();
-      clickButton('Tools');
+      await clickButton('Tools');
       const input = document.querySelector(
         '#settings-web-search-default-count',
       );
@@ -587,7 +606,7 @@ describe('SettingsView', () => {
 
       // One word matches the two-word label; the result names the setting
       // and where it lives.
-      search('timezone');
+      await search('timezone');
       expect(searchResultRows()[0]).toEqual({
         title: t('settings.general.timezone'),
         location: searchLocation(
@@ -600,7 +619,38 @@ describe('SettingsView', () => {
       expect(isSectionHidden('server')).toBe(true);
       expect(document.activeElement.id).toBe('settings-general-timezone');
 
-      clickButton('Tools');
+      await clickButton('Tools');
+      expect(document.querySelector('#settings-web-search-default-count')).toBe(
+        input,
+      );
+      expect(input.value).toBe('9');
+    });
+
+    it('offers reload for a failed search import and preserves the mounted draft until then', async () => {
+      const loader = vi
+        .spyOn(settingsPanelLoaders, 'providers')
+        .mockRejectedValue(new Error('chunk unavailable'));
+      await mountSettings();
+      await clickButton('Tools');
+      const input = document.querySelector(
+        '#settings-web-search-default-count',
+      );
+      setInputValue('#settings-web-search-default-count', '9');
+
+      await search('openai example');
+      const error = document.querySelector('.s-doc > .banner--error');
+      expect(error?.getAttribute('role')).toBe('alert');
+      expect(error.hidden).toBe(false);
+      const reload = Array.from(error.querySelectorAll('button')).find(
+        (button) => button.textContent.trim() === t('common.reloadPage'),
+      );
+      expect(reload).toBeTruthy();
+      expect(reload.disabled).toBe(false);
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(
+        document.querySelector('.settings-search-results .empty-state'),
+      ).toBeNull();
+      await clickButton('Tools');
       expect(document.querySelector('#settings-web-search-default-count')).toBe(
         input,
       );
@@ -611,7 +661,7 @@ describe('SettingsView', () => {
       const navigation = createStandaloneNavigation();
       await mountSettings({}, { navigation });
 
-      search('sleep');
+      await search('sleep');
       expect(searchResultRows()).toEqual([
         {
           title: t('settings.general.keepAwake'),
@@ -624,7 +674,7 @@ describe('SettingsView', () => {
 
       // Debug is off, so its trace limit row is hidden. Enter opens the first
       // result at the switch that reveals it.
-      const input = search('trace limit');
+      const input = await search('trace limit');
       expect(searchResultRows()[0]).toEqual({
         title: t('debug.traceLimit'),
         location: searchLocation(
@@ -654,7 +704,7 @@ describe('SettingsView', () => {
 
     it('ranks label matches above help and content matches', async () => {
       await mountSettings();
-      search('trace');
+      await search('trace');
       const titles = searchResultRows().map((row) => row.title);
       // Document order puts the Debug switch, whose help mentions traces,
       // before the Trace limit.
@@ -665,7 +715,7 @@ describe('SettingsView', () => {
     it('opens an entity row when the match lies in its collapsed details', async () => {
       await mountSettings();
       // The endpoint is shown only in the Provider's details.
-      search('openai example');
+      await search('openai example');
       expect(searchResultRows()).toEqual([
         { title: 'OpenAI', location: t('settings.providers.title') },
       ]);
@@ -683,7 +733,6 @@ describe('SettingsView', () => {
     it('finds Channel settings that are rendered only while a Channel is edited', async () => {
       const navigation = createStandaloneNavigation();
       await mountSettings({ channels: [channelConfig('ops')] }, { navigation });
-      await waitForCondition(() => document.querySelector('.s-channel-list'));
       const dmScope = {
         title: t('settings.channels.dm_scope'),
         location: searchLocation(
@@ -692,7 +741,10 @@ describe('SettingsView', () => {
         ),
       };
 
-      search('DM scope');
+      await search('DM scope');
+      await waitForCondition(() =>
+        searchResultRows().some((row) => row.title === dmScope.title),
+      );
       expect(searchResultRows()).toEqual([dmScope]);
       await openFirstSearchResult();
       expect(navigation.place).toEqual(['integrations', 'channels']);
@@ -706,7 +758,7 @@ describe('SettingsView', () => {
       await waitForCondition(() =>
         document.querySelector('#channel-dm-scope-select'),
       );
-      search('DM scope');
+      await search('DM scope');
       expect(searchResultRows()).toEqual([dmScope]);
       await openFirstSearchResult();
       expect(document.activeElement.id).toBe('channel-dm-scope-select');
@@ -715,7 +767,7 @@ describe('SettingsView', () => {
     it('routes shared Agent defaults search to Agents without duplicating its editor', async () => {
       const navigate = vi.fn();
       await mountSettings({}, { onNavigateToAgentDefaults: navigate });
-      search('thinking');
+      await search('thinking');
       Array.from(document.querySelectorAll('.settings-search-result'))
         .find((item) => item.textContent.includes(t('agents.shared.title')))
         .click();
@@ -725,8 +777,8 @@ describe('SettingsView', () => {
 
     it('finds connected Providers while another topic is selected', async () => {
       await mountSettings();
-      clickButton('General');
-      search('OpenAI');
+      await clickButton('General');
+      await search('OpenAI');
       expect(
         Array.from(document.querySelectorAll('.settings-search-result')).map(
           (result) => result.textContent,
@@ -736,11 +788,11 @@ describe('SettingsView', () => {
 
     it('shows an empty search state and can navigate out of it', async () => {
       await mountSettings();
-      const input = search('no-such-setting-sentinel');
+      const input = await search('no-such-setting-sentinel');
       expect(
         document.querySelector('.settings-search-results .empty-state'),
       ).toBeTruthy();
-      clickButton('Providers');
+      await clickButton('Providers');
       expect(input.value).toBe('');
       expect(isSectionHidden('providers')).toBe(false);
     });
@@ -883,7 +935,7 @@ describe('SettingsView', () => {
             .length > 1,
       );
       selectSearchableOption('settings-session-title-model', 'openai/gpt-5.2');
-      clickButton('Save');
+      await clickButton('Save');
 
       expect(rpcMock).toHaveBeenCalledWith('settings.update', {
         session_titles: {
@@ -943,6 +995,7 @@ describe('SettingsView', () => {
   describe('Voice page', () => {
     it('shows server-wide Voice settings but hides Desktop-only connection settings', async () => {
       await mountSettings();
+      await clickButton('Voice');
 
       expect(
         document.querySelector('[data-settings-section="desktop_connection"]'),
@@ -1015,6 +1068,7 @@ describe('SettingsView', () => {
       });
       flushSync();
 
+      await clickButton('Voice');
       const combination = (section) =>
         document
           .querySelector(
@@ -1121,8 +1175,7 @@ describe('SettingsView', () => {
 
       // Navigating elsewhere moves the index highlight; the Voice section stays
       // in the document (sections are never unmounted).
-      buttonByText('System').click();
-      flushSync();
+      await clickButton('System');
       await waitForCondition(
         () => buttonByText('System')?.getAttribute('aria-current') === 'page',
       );

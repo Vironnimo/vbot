@@ -57,15 +57,29 @@ describe('build-extension-pages', () => {
     // opaque-origin CSP blocks, and every bundled font must actually ship.
     const swarmBuild = resolve(projectRoot, 'resources/extensions/swarm/web');
     const swarmHtml = readFileSync(resolve(swarmBuild, 'page.html'), 'utf8');
-    const stylesheet = swarmHtml.match(/href="(\.\/assets\/[^"]+\.css)"/)[1];
-    const css = readFileSync(resolve(swarmBuild, stylesheet), 'utf8');
+    // Shared chunks can add stylesheets before the page stylesheet. Check the
+    // complete initial CSS, including the fonts needed before any lazy view.
+    const stylesheets = Array.from(
+      swarmHtml.matchAll(/href="(\.\/assets\/[^"]+\.css)"/g),
+      (match) => match[1],
+    );
+    const css = stylesheets
+      .map((stylesheet) =>
+        readFileSync(resolve(swarmBuild, stylesheet), 'utf8'),
+      )
+      .join('\n');
     expect(css).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
     expect(
       readFileSync(resolve(swarmBuild, 'fonts/OFL.txt'), 'utf8'),
     ).toContain('SIL OPEN FONT LICENSE');
     const fonts = [
-      ...css.matchAll(/url\((?:["']?)([^)"']+\.woff2)(?:["']?)\)/g),
-    ].map((match) => match[1]);
+      ...new Set(
+        Array.from(
+          css.matchAll(/url\((?:["']?)([^)"']+\.woff2)(?:["']?)\)/g),
+          (match) => match[1],
+        ),
+      ),
+    ];
     expect(fonts).toHaveLength(3);
     for (const font of fonts)
       expect(existsSync(resolve(swarmBuild, 'assets', font))).toBe(true);

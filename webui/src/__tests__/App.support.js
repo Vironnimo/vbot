@@ -56,6 +56,18 @@ vi.mock('$lib/api.js', () =>
     listSessionActivity: (...args) => listSessionActivityMock(...args),
     listLogs: (...args) => listLogsMock(...args),
     readLogFile: (...args) => readLogFileMock(...args),
+    listTerminals: () => rpcMock('terminal.list'),
+    createTerminalGroup: vi.fn(),
+    deleteTerminalGroup: vi.fn(),
+    forgetTerminal: vi.fn(),
+    killTerminal: vi.fn(),
+    moveTerminal: vi.fn(),
+    renameTerminalGroup: vi.fn(),
+    setTerminalGroupOrder: vi.fn(),
+    startTerminal: vi.fn(),
+    subscribeTerminalEvents: vi.fn(),
+    transcribeSpeech: vi.fn(),
+    prepareSpeechTranscription: vi.fn(),
     subscribeLogEvents: (...args) => subscribeLogEventsMock(...args),
     subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
     subscribeServerEvents: (...args) => subscribeServerEventsMock(...args),
@@ -63,6 +75,14 @@ vi.mock('$lib/api.js', () =>
 );
 
 export const { default: App, NAVIGATION_ITEMS } = await import('../App.svelte');
+
+// Compile the large editors outside individual test budgets. App still owns
+// when their loaders run and when they mount; controlled pending imports in
+// the navigation suite cover the loading boundary itself.
+await Promise.all([
+  import('../components/SettingsView.svelte'),
+  import('../components/AgentsView.svelte'),
+]);
 
 export function resetAppHarness() {
   vi.stubGlobal(
@@ -136,9 +156,12 @@ const QUICK_POLLS = 10;
 const SLOW_POLLS = 60;
 const SLOW_POLL_MS = 50;
 
-// Retries an assertion until it passes: first after every pending task, then
-// every 50 ms for about three seconds.
+// Settle view imports explicitly: compiling a view is unrelated to the
+// bounded wait for its server-backed state. Then retry after pending tasks,
+// followed by every 50 ms for about three seconds.
 export async function waitForCondition(assertion) {
+  await vi.dynamicImportSettled();
+  flushSync();
   for (let attempt = 0; ; attempt += 1) {
     try {
       assertion();

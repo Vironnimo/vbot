@@ -1,6 +1,10 @@
 # WebUI shared controls
 
-Read when using or changing the behavior of the shared `SortableList`, `PathField`, `DataTable`, `Modal` or `Dropdown` controls. The rule to use them is in `webui.md` -> Ownership; their appearance is in `webui/design.md` -> Shared controls and feedback, their files in `webui/source-map.md` -> UI primitives.
+Read when using or changing the behavior of the shared `LazyContent`, `SortableList`, `PathField`, `DataTable`, `Modal` or `Dropdown` controls. The rule to use them is in `webui.md` -> Ownership; their appearance is in `webui/design.md` -> Shared controls and feedback, their files in `webui/source-map.md` -> UI primitives.
+
+## LazyContent
+
+`components/ui/LazyContent.svelte` renders a dynamically imported component through its `children(Component)` snippet, preserving the caller's props, bindings and context. Pass a stable module-scope `load` function returning `import(...)`; `lib/lazyContent.js::loadComponent` shares pending imports and returns a cached component synchronously on revisits. The same helper lets an owner await its component before calling a bound instance. Loading and failure feedback stays in the shared primitive; navigation never waits for an abandoned import and late results cannot display a previous view. A failed import offers an explicit Reload page action: browsers can cache a failed module fetch for the document, so simply calling the same import again is not reliable recovery. `showFeedback` hides pending/error feedback for a retained but hidden child. The caller owns whether the loaded child stays mounted (Chat and visited Settings editors retain their existing continuity contracts). Tests: `ui/__tests__/LazyContent.test.js`.
 
 ## SortableList
 

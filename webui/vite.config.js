@@ -35,19 +35,23 @@ export default defineConfig({
         // gets a dedicated chunk because it is the largest library and only
         // grows with markdown features, never with app code. The @xterm and
         // tldts packages match no group on purpose: they are loaded through
-        // dynamic import() and must remain separate on-demand chunks.
+        // dynamic import() and must remain separate on-demand chunks. Other
+        // libraries are grouped by their actual consumers so a lazy view's
+        // dependency (such as Cron's cronstrue) stays out of startup imports.
         codeSplitting: {
           groups: [
             {
               name: 'markdown',
               test: /[\\/]node_modules[\\/](markdown-it|linkify-it|mdurl|uc\.micro|entities)[\\/]/,
               minSize: 0,
+              entriesAware: true,
               priority: 20,
             },
             {
               name: 'vendor',
               test: /[\\/]node_modules[\\/](?!@xterm[\\/]|tldts(-core)?[\\/])/,
               minSize: 0,
+              entriesAware: true,
               priority: 10,
             },
           ],

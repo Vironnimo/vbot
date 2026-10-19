@@ -121,6 +121,7 @@ describe('SwarmPage overview', () => {
     await tick();
     expect(callsTo(operation, 'profiles.list')).toHaveLength(1);
     button(NEW_SWARM).click();
+    await vi.dynamicImportSettled();
     await tick();
     flushSync();
     expect(callsTo(operation, 'catalog')).toHaveLength(1);

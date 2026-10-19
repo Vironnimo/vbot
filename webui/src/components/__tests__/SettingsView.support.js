@@ -67,6 +67,7 @@ export async function openSettingsSection(navLabel, sectionId) {
   } else {
     await waitForCondition(() => buttonByText(navLabel));
     buttonByText(navLabel).click();
+    await settleSettingsPanels();
     await waitForCondition(
       () =>
         document.querySelector('[data-settings-section="' + sectionId + '"]')
@@ -319,6 +320,13 @@ export function submitChannelForm() {
   expect(form).toBeTruthy();
   form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
   flushSync();
+}
+
+// Wait for the explicitly requested lazy panels, not an arbitrary render delay.
+export async function settleSettingsPanels() {
+  await flushAsyncUpdates();
+  await vi.dynamicImportSettled();
+  await flushAsyncUpdates();
 }
 
 export async function flushAsyncUpdates(iterations = 4) {
@@ -743,8 +751,8 @@ export function createSettingsRpcMock(options = {}) {
       return { model_tasks: deepClone(nextModelTasks) };
     }
 
-    // The Extensions section is always mounted in the settings document and
-    // self-loads on mount; give it an empty-but-valid payload.
+    // The Extensions section self-loads when first opened or searched.
+    // Give it an empty-but-valid payload.
     if (method === 'extensions.list') {
       return { extensions: options.extensions ?? [] };
     }

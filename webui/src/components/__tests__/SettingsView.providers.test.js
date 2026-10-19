@@ -196,7 +196,7 @@ describe('SettingsView Providers', () => {
       );
       mountView({ onToast: toastMock });
       await openProvidersPanel();
-      // Other always-mounted sections load the model catalog on mount; only
+      // Other visited sections load the model catalog on mount; only
       // the refresh-triggered reload must be absent.
       const modelListBefore = modelListCalls();
 
@@ -328,6 +328,7 @@ describe('SettingsView Providers', () => {
       const onToast = vi.fn();
       const props = reactiveProps({ modelsRefreshToken: 0, onToast });
       mountView(props);
+      await openProvidersPanel();
       await openSubAgentsPanel();
       vi.useFakeTimers();
       const input = document.querySelector(DEPTH);
@@ -397,6 +398,7 @@ describe('SettingsView Providers', () => {
       await flushAsyncUpdates();
       props.modelsRefreshToken += 1;
       await flushAsyncUpdates();
+      await openProvidersPanel();
       expect(document.body.textContent).toContain('Newest Provider');
 
       oldRefresh.resolve(initial);
@@ -444,6 +446,9 @@ describe('SettingsView Providers', () => {
           await flushAsyncUpdates();
         }
         expect(reads.count).toBe(2);
+        // Before Providers first opens the shell still reconciles invalidations.
+        expect(document.querySelector('.s-provider-card')).toBeNull();
+        await openProvidersPanel();
         expect(document.body.textContent).toContain('Changed during save');
         expect(onSettingsCommit).toHaveBeenLastCalledWith(
           expect.objectContaining({ providers: refreshed.providers }),

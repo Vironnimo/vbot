@@ -30,14 +30,18 @@ const DELETE_SWARM = t('swarm.profile.deleteAction');
 async function openEditor(bridge) {
   await render(bridge);
   button(EDIT).click();
-  await tick();
-  flushSync();
+  await vi.dynamicImportSettled();
+  await vi.waitFor(() =>
+    expect(document.querySelector('.swarm-profile-editor')).not.toBeNull(),
+  );
 }
 async function openNewProfile(bridge) {
   await render(bridge);
   button(NEW_SWARM).click();
-  await tick();
-  flushSync();
+  await vi.dynamicImportSettled();
+  await vi.waitFor(() =>
+    expect(document.querySelector('.swarm-profile-editor')).not.toBeNull(),
+  );
 }
 async function reopenEditor(bridge) {
   await unmount(fixtureState.mounted);

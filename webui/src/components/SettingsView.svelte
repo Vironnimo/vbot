@@ -5,35 +5,12 @@
     modelTasksBySection,
   } from '$lib/settingsView/catalog.js';
   import { createSettingsPageNavigation } from '$lib/settingsView/pageNavigation.svelte.js';
-  import { onMount } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
 
-  import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
-  import TranscriptionAudioSettings from './voice/TranscriptionAudioSettings.svelte';
-  import ArchiveEntriesPanel from './archive/ArchiveEntriesPanel.svelte';
-  import DesktopConnectionSettings from './settings/DesktopConnectionSettings.svelte';
-  import DesktopLiveVoiceShortcut from './settings/DesktopLiveVoiceShortcut.svelte';
-  import DesktopMicrophoneSettings from './settings/DesktopMicrophoneSettings.svelte';
-  import DesktopDictationSettings from './settings/DesktopDictationSettings.svelte';
   import SettingsActivityPanel from './settings/SettingsActivityPanel.svelte';
-  import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
-  import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
-  import SettingsCredentialsPanel from './settings/SettingsCredentialsPanel.svelte';
-  import SettingsDebugPanel from './settings/SettingsDebugPanel.svelte';
-  import SettingsArchivePanel from './settings/SettingsArchivePanel.svelte';
-  import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
-  import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
-  import SettingsAccessPanel from './settings/SettingsAccessPanel.svelte';
-  import SettingsLibrarianPanel from './settings/SettingsLibrarianPanel.svelte';
-  import SettingsLiveVoicePanel from './settings/SettingsLiveVoicePanel.svelte';
-  import SettingsNotificationsPanel from './settings/SettingsNotificationsPanel.svelte';
-  import SettingsProvidersPanel from './settings/SettingsProvidersPanel.svelte';
-  import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
-  import SettingsReflectionPanel from './settings/SettingsReflectionPanel.svelte';
-  import SettingsSessionTitlesPanel from './settings/SettingsSessionTitlesPanel.svelte';
-  import SettingsSpecializedModelsPanel from './settings/SettingsSpecializedModelsPanel.svelte';
-  import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
-  import SettingsWebFetchPanel from './settings/SettingsWebFetchPanel.svelte';
-  import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
+  import LazyContent from './ui/LazyContent.svelte';
+  import { loadComponent } from '$lib/lazyContent.js';
+  import { settingsPanelLoaders } from '$lib/settingsView/panelLoaders.js';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import Dropdown from './Dropdown.svelte';
@@ -129,6 +106,10 @@
   let providerRefreshGeneration = 0;
   let providerRefreshPending = false;
   let providersPanel = $state(null);
+  let lastModelsRefreshToken = null;
+  let visitedPages = $state({});
+  let searchLoading = $state(false);
+  let searchLoadError = $state(false);
   const pageNavigation = createSettingsPageNavigation({
     get navigation() {
       return navigation;
@@ -148,6 +129,59 @@
     get onNavigateToAgentDefaults() {
       return onNavigateToAgentDefaults;
     },
+  });
+
+  // Opening a page admits its editors once; hiding it never discards drafts,
+  // authentication state, or a save already in flight. Search explicitly needs
+  // every page's rendered labels and help, so it admits the remaining pages.
+  $effect(() => {
+    const wanted = pageNavigation.searchActive
+      ? pages.map((page) => page.id)
+      : [pageNavigation.activePageId];
+    untrack(() => {
+      for (const pageId of wanted) visitedPages[pageId] = true;
+    });
+  });
+
+  $effect(() => {
+    if (!pageNavigation.searchActive || loading) return;
+    const loaders = new Set(
+      pages.flatMap((page) =>
+        page.sections.map((id) => settingsPanelLoaders[id]),
+      ),
+    );
+    let current = true;
+    searchLoading = true;
+    searchLoadError = false;
+    void Promise.all([...loaders].map(loadComponent))
+      .then(async () => {
+        // Imports and their mounted labels must settle before reporting the
+        // complete search result count. Later server data re-indexes as usual.
+        await tick();
+        if (current) pageNavigation.refreshSearchResults();
+      })
+      .catch(() => {
+        if (current) searchLoadError = true;
+      })
+      .finally(() => {
+        if (current) searchLoading = false;
+      });
+    return () => {
+      current = false;
+    };
+  });
+
+  // Before Providers has ever opened there is no panel to handle catalog
+  // invalidations. Refresh its projection here; after mounting, the panel
+  // retains its existing modal-aware refresh gate.
+  $effect(() => {
+    const token = modelsRefreshToken;
+    if (loading) return;
+    if (lastModelsRefreshToken !== null && token !== lastModelsRefreshToken) {
+      if (!providersPanel)
+        void refreshProviderSettings().catch(reportProviderRefreshError);
+    }
+    lastModelsRefreshToken = token;
   });
 
   onMount(() => {
@@ -268,9 +302,9 @@
   }
 </script>
 
-{#snippet panelContent(panelId, active)}
+{#snippet panelContent(panelId, active, Panel)}
   {#if panelId === 'preferences'}
-    <SettingsGeneralPanel
+    <Panel
       page="preferences"
       {settings}
       {onOpenSetupGuide}
@@ -278,7 +312,7 @@
       onError={reportSettingsError}
     />
   {:else if panelId === 'providers'}
-    <SettingsProvidersPanel
+    <Panel
       bind:this={providersPanel}
       {settings}
       visible={true}
@@ -292,7 +326,7 @@
       {modelsRefreshToken}
     />
   {:else if panelId === 'channels'}
-    <SettingsChannelsPanel
+    <Panel
       {active}
       {onToast}
       {channelsRefreshToken}
@@ -300,16 +334,16 @@
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'extensions'}
-    <SettingsExtensionsPanel
+    <Panel
       {onToast}
       {subscribeExtensionInvalidations}
       {agentsRefreshToken}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'credentials'}
-    <SettingsCredentialsPanel {credentialsRefreshToken} {onToast} />
+    <Panel {credentialsRefreshToken} {onToast} />
   {:else if panelId === 'live_voice_model'}
-    <SettingsLiveVoicePanel
+    <Panel
       {settings}
       onCommit={(next) => commitSettings(next, ['model_tasks.live_voice'])}
       onError={(message) => reportSettingsError(message)}
@@ -319,7 +353,7 @@
       {sessionsRefreshToken}
     />
   {:else if modelTasksBySection[panelId]}
-    <SettingsSpecializedModelsPanel
+    <Panel
       {active}
       taskTypes={modelTasksBySection[panelId]}
       {settings}
@@ -332,14 +366,14 @@
       {modelsRefreshToken}
     />
   {:else if panelId === 'session_titles'}
-    <SettingsSessionTitlesPanel
+    <Panel
       {settings}
       onCommit={(next) => commitSettings(next, ['session_titles'])}
       onError={(message) => reportSettingsError(message)}
       {modelsRefreshToken}
     />
   {:else if panelId === 'recall'}
-    <SettingsRecallPanel
+    <Panel
       {settings}
       onCommit={(next) =>
         commitSettings(next, ['recall', 'model_tasks.text_embedding'])}
@@ -348,20 +382,20 @@
       {recallIndexStatus}
     />
   {:else if panelId === 'voice_controls'}
-    <WakewordVoiceSettings
+    <Panel
       {agents}
       wakewordAvailable={desktopCapabilities?.wakeword === true}
       {desktopVoice}
       {onToast}
     />
   {:else if panelId === 'transcription_audio'}
-    <TranscriptionAudioSettings
+    <Panel
       {settings}
       onCommit={(next) => commitSettings(next, ['speech'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'web_fetch'}
-    <SettingsWebFetchPanel
+    <Panel
       {settings}
       onCommit={(next) =>
         commitSettings(next, ['web_fetch', 'web_search.services'])}
@@ -369,7 +403,7 @@
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'web_search'}
-    <SettingsWebSearchPanel
+    <Panel
       {settings}
       onCommit={(next) =>
         commitSettings(next, ['web_search', 'web_fetch.services'])}
@@ -377,19 +411,19 @@
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'subagents'}
-    <SettingsSubAgentsPanel
+    <Panel
       {settings}
       onCommit={(next) => commitSettings(next, ['subagents'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'reflection'}
-    <SettingsReflectionPanel
+    <Panel
       {settings}
       onCommit={(next) => commitSettings(next, ['reflection'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'librarian'}
-    <SettingsLibrarianPanel
+    <Panel
       {settings}
       {agents}
       onCommit={(next) => commitSettings(next, ['librarian'])}
@@ -400,26 +434,26 @@
       {skillsRefreshToken}
     />
   {:else if panelId === 'notifications'}
-    <SettingsNotificationsPanel
+    <Panel
       {settings}
       onCommit={(next) => commitSettings(next, ['notifications'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'appearance'}
-    <SettingsAppearancePanel
+    <Panel
       {settings}
       {desktopZoom}
       onCommit={(next) => commitSettings(next, ['appearance'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'archive_retention'}
-    <SettingsArchivePanel
+    <Panel
       {settings}
       onCommit={(next) => commitSettings(next, ['archive'])}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'archive_entries'}
-    <ArchiveEntriesPanel
+    <Panel
       navigation={pageNavigation.archiveNavigation}
       active={pageNavigation.activePageId === 'archive'}
       {agents}
@@ -431,14 +465,14 @@
       {onToast}
     />
   {:else if panelId === 'debug'}
-    <SettingsDebugPanel
+    <Panel
       {settings}
       onCommit={(next) => commitSettings(next, ['debug'])}
       onError={(message) => reportSettingsError(message)}
       {onDebugEnabledChange}
     />
   {:else if panelId === 'server'}
-    <SettingsGeneralPanel
+    <Panel
       {settings}
       {clientsRefreshToken}
       {onOpenSetupGuide}
@@ -446,15 +480,15 @@
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'access'}
-    <SettingsAccessPanel {devicesRefreshToken} {onToast} />
+    <Panel {devicesRefreshToken} {onToast} />
   {:else if panelId === 'desktop_connection'}
-    <DesktopConnectionSettings {onToast} />
+    <Panel {onToast} />
   {:else if panelId === 'live_voice_shortcut'}
-    <DesktopLiveVoiceShortcut {onToast} />
+    <Panel {onToast} />
   {:else if panelId === 'microphone'}
-    <DesktopMicrophoneSettings {desktopVoice} {onToast} />
+    <Panel {desktopVoice} {onToast} />
   {:else if panelId === 'desktop_dictation'}
-    <DesktopDictationSettings {onToast} />
+    <Panel {onToast} />
   {/if}
 {/snippet}
 
@@ -543,12 +577,27 @@
           <header class="settings-page-heading">
             <h2 class="view-header__title">{t('settings.search.results')}</h2>
             <p class="view-header__subtitle" role="status">
-              {t('settings.search.resultCount', {
-                count: pageNavigation.searchResults.length,
-              })}
+              {#if searchLoading}
+                {t('settings.loading')}
+              {:else}
+                {t('settings.search.resultCount', {
+                  count: pageNavigation.searchResults.length,
+                })}
+              {/if}
             </p>
           </header>
-          <div class="settings-search-results">
+          {#if searchLoadError}
+            <Banner variant="error" role="alert">
+              <span>{t('common.viewLoadError')}</span>
+              <Button
+                variant="secondary"
+                onClick={() => window.location.reload()}
+              >
+                {t('common.reloadPage')}
+              </Button>
+            </Banner>
+          {/if}
+          <div class="settings-search-results" aria-busy={searchLoading}>
             {#each pageNavigation.searchResults as result (result.key)}
               <Button
                 class="settings-search-result"
@@ -562,10 +611,12 @@
                 >
               </Button>
             {:else}
-              <EmptyState
-                density="compact"
-                description={t('settings.search.noMatches')}
-              />
+              {#if !searchLoading && !searchLoadError}
+                <EmptyState
+                  density="compact"
+                  description={t('settings.search.noMatches')}
+                />
+              {/if}
             {/each}
           </div>
         {/if}
@@ -646,12 +697,19 @@
                     </header>
                   {/if}
                   <div class="settings-editor-body s-section__body">
-                    {@render panelContent(
-                      panelId,
-                      !pageNavigation.searchActive &&
-                        pageNavigation.activePageId === page.id &&
-                        (!subPage || panelId === page.subPages),
-                    )}
+                    {#if visitedPages[page.id]}
+                      <LazyContent load={settingsPanelLoaders[panelId]}>
+                        {#snippet children(Panel)}
+                          {@render panelContent(
+                            panelId,
+                            !pageNavigation.searchActive &&
+                              pageNavigation.activePageId === page.id &&
+                              (!subPage || panelId === page.subPages),
+                            Panel,
+                          )}
+                        {/snippet}
+                      </LazyContent>
+                    {/if}
                   </div>
                 </section>
               {/each}

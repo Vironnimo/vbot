@@ -557,6 +557,10 @@ export function createSettingsPageNavigation(context) {
     resultTitle,
     resultLocation,
     navigateToDefaults,
+    refreshSearchResults() {
+      searchIndex = null;
+      updateSearchResults();
+    },
     handleSearchInput,
     handleSearchKeydown,
     handleContentScroll,
