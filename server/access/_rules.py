@@ -230,7 +230,7 @@ def _inspect_peer(
             refusal = "peer_not_admitted"
         return RequestFacts(peer, peer, proxy_headers, False, secure, refusal)
     if proxy_headers and address_in(peer, proxies):
-        client = _forwarded_client(_header_values(headers, b"x-forwarded-for"), proxies, peer)
+        client = _forwarded_client(_header_values(headers, b"x-forwarded-for"), proxies)
         if client is None:
             return RequestFacts(peer, None, True, True, False, "invalid_forwarded_for")
         protocols = _list_values(_header_values(headers, b"x-forwarded-proto"))
@@ -278,17 +278,16 @@ def _list_values(values: list[str]) -> list[str]:
     return [item.strip() for value in values for item in value.split(",") if item.strip()]
 
 
-def _forwarded_client(
-    values: list[str], proxies: tuple[IpNetwork, ...], peer: IpAddress
-) -> IpAddress | None:
+def _forwarded_client(values: list[str], proxies: tuple[IpNetwork, ...]) -> IpAddress | None:
     """The rightmost forwarded address that is not a trusted proxy.
 
     Addresses left of it were written by the client itself and prove nothing.
-    ``None`` refuses a chain with an entry that is not an address.
+    A missing client, or any non-address entry, refuses the chain. A list of
+    trusted proxies alone never establishes which client sent the request.
     """
     chain = _list_values(values)
     if not chain:
-        return peer
+        return None
     parsed: list[IpAddress] = []
     for entry in chain:
         address = _forwarded_address(entry)
@@ -298,7 +297,7 @@ def _forwarded_client(
     for address in reversed(parsed):
         if not address_in(address, proxies):
             return address
-    return parsed[0]
+    return None
 
 
 def _forwarded_address(entry: str) -> IpAddress | None:

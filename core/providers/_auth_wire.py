@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -106,6 +107,25 @@ class DeviceFlowSession:
     verification_uri: str
     expires_in: int
     interval: int
+
+    def __post_init__(self) -> None:
+        # Every accessor may open this Provider-supplied value in a browser.
+        # Validate after flow-specific relative paths have been resolved.
+        if not isinstance(self.verification_uri, str):
+            raise DeviceFlowTerminalError("invalid_authorization_response")
+        try:
+            uri = urlsplit(self.verification_uri)
+            valid = (
+                uri.scheme in {"http", "https"}
+                and bool(uri.hostname)
+                and not any(ord(char) < 33 for char in self.verification_uri)
+            )
+            # Access validates a supplied port, even when it is not needed here.
+            _ = uri.port
+        except ValueError:
+            valid = False
+        if not valid:
+            raise DeviceFlowTerminalError("invalid_authorization_response")
 
 
 class DeviceFlowTerminalError(ProviderError):
@@ -228,7 +248,11 @@ def _device_session_from_response(
         or data.get("verification_uri")
         or data["verification_url"]
     )
-    if _is_opencode_flow(oauth_config) and verification_uri.startswith("/"):
+    if (
+        _is_opencode_flow(oauth_config)
+        and isinstance(verification_uri, str)
+        and verification_uri.startswith("/")
+    ):
         verification_uri = _opencode_server_url(oauth_config) + verification_uri
     return DeviceFlowSession(
         device_code=data["device_code"],

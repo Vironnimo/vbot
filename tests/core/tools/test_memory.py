@@ -1,6 +1,7 @@
 """The built-in memory Tool, dispatched through the production executor."""
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,10 @@ def content(result: JsonObject) -> str:
     return str(result["data"]["content"])
 
 
+def listed_entries(text: str) -> list[str]:
+    return [json.loads(line[2:]) for line in text.splitlines() if line.startswith("- ")]
+
+
 def failure(result: JsonObject, code: str) -> str:
     assert result["ok"] is False, result
     assert result["error"]["code"] == code, result
@@ -123,12 +128,11 @@ def test_list_renders_scopes_like_the_memory_block(workspace: Path) -> None:
     both = one(workspace, {"action": "list"})
     agent = one(workspace, {"action": "list", "scope": "agent"})
 
-    assert content(both) == (
-        "# Agent Memory (121/4000 chars used)\n" + AGENT + "\n# User Profile (48/3000 chars used)\n"
-        "- User prefers concise answers.\n- User's name is Sam."
-    )
+    assert "# Agent Memory (121/4000 chars used)" in content(both)
+    assert "# User Profile (48/3000 chars used)" in content(both)
+    assert listed_entries(content(both)) == [line[2:] for line in (AGENT + USER).splitlines()]
     assert both["data"]["count"] == 5
-    assert content(agent) == "# Agent Memory (121/4000 chars used)\n" + AGENT.rstrip("\n")
+    assert listed_entries(content(agent)) == [line[2:] for line in AGENT.splitlines()]
     assert agent["data"]["count"] == 3
 
 
@@ -314,10 +318,9 @@ def test_ambiguous_and_unmatched_text_show_what_can_be_addressed(workspace: Path
         "appears in only one of them:\n- The staging host is reachable only over the VPN.\n"
         "- Deploys run from the release branch."
     )
-    assert failure(unmatched, "memory_no_match") == (
-        'No agent Memory entry contains old_text "Postgres"; nothing changed. Copy old_text '
-        "from a current entry:\n\n# Agent Memory (121/4000 chars used)\n" + AGENT.rstrip("\n")
-    )
+    assert listed_entries(failure(unmatched, "memory_no_match")) == [
+        line[2:] for line in AGENT.splitlines()
+    ]
     assert files(workspace) == (AGENT, USER)
 
 
@@ -441,7 +444,7 @@ def test_full_scope_names_the_excess_and_shows_entries(workspace: Path) -> None:
         "Nothing changed."
     )
     assert "calls in one message run in order" in message
-    assert "- User prefers concise answers." in message
+    assert "User prefers concise answers." in listed_entries(message)
     assert files(workspace)[1] == USER + f"- {big}\n"
 
 

@@ -102,7 +102,15 @@ def register_access_routes(app: FastAPIType, service: AccessService) -> None:
             redemption = None
         if redemption is None:
             service.refused("invalid_ticket", facts, request.url.path)
-            service.failed_authentication(facts)
+            wait = service.failed_authentication(facts)
+            if wait is not None:
+                response = _ticket_page(
+                    "Too many sign-in attempts",
+                    "Wait before trying another sign-in link.",
+                    status_code=429,
+                )
+                response.headers["Retry-After"] = str(max(1, round(wait)))
+                return response
             return _ticket_page(
                 "Sign-in link not valid",
                 "This sign-in link is invalid, expired or already used. "

@@ -671,13 +671,18 @@ class ToolRegistry:
             )
         return contracts
 
-    async def dispatch(
+    def authorize(
         self,
         context: ToolContext,
         arguments: JsonObject,
         allowed_tools: Sequence[str] | None = None,
-    ) -> JsonObject:
-        """Execute a registered allowed tool through an async interface."""
+    ) -> Tool:
+        """Resolve a call's Tool and enforce its existing dispatch authority.
+
+        Chat checks this before Extension hooks, which can replace a call without
+        running its handler. Dispatch checks again after those asynchronous hooks
+        so a changed registration cannot inherit the earlier Tool's authority.
+        """
         try:
             tool = self.get(context.tool_name)
         except ToolNotFoundError:
@@ -692,6 +697,16 @@ class ToolRegistry:
             tool.requires_opt_in and context.tool_name not in (allowed_tools or ())
         ) or not self._is_allowed(context.tool_name, allowed_tools, internal=tool.internal):
             raise ToolNotAllowedError(f"Tool not allowed: {model_tool_name(context.tool_name)}.")
+        return tool
+
+    async def dispatch(
+        self,
+        context: ToolContext,
+        arguments: JsonObject,
+        allowed_tools: Sequence[str] | None = None,
+    ) -> JsonObject:
+        """Execute a registered allowed tool through an async interface."""
+        tool = self.authorize(context, arguments, allowed_tools)
         # Readiness safety net: dispatch is not list-filtered, so a prompt built
         # moments before the credential vanished could still request a now
         # not-ready tool. Re-evaluate live and return a clean failure envelope

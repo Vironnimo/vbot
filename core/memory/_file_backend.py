@@ -754,10 +754,13 @@ def _format_scope(
 
     With no entries, *placeholder* adds the empty-scope text below the label.
     """
+    # Chat's quoting imports prompt state, which itself imports Memory.
+    from core.chat.wire_shaping import quote_external_value
+
     label = f"{MEMORY_SCOPE_LABELS[scope]} ({used}/{_MAX_SCOPE_BUDGET[scope]} chars used)"
     if not entries:
         return f"{label}\n{_EMPTY_SCOPE_TEXT}" if placeholder else label
-    body = "\n".join(f"{_BULLET_PREFIX}{entry}" for entry in entries)
+    body = "\n".join(f"{_BULLET_PREFIX}{quote_external_value(entry)}" for entry in entries)
     return f"{label}\n{body}"
 
 
@@ -816,7 +819,14 @@ def match_memory_entries(entries: Sequence[str], old_text: str) -> list[int]:
         partial = [index for index, entry in enumerate(entries) if needle in key(entry)]
         if partial:
             return partial
-    return []
+    # A copied complete bullet uses the same lossless encoding as prompt/list
+    # rendering. Prefer the existing literal matches above when both could apply.
+    from core.chat.wire_shaping import quote_external_value
+
+    quoted_matches = [
+        index for index, entry in enumerate(entries) if quote_external_value(entry) == locator
+    ]
+    return quoted_matches[:1]
 
 
 def _exact_entry_key(text: str) -> str:

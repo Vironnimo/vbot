@@ -6,6 +6,8 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 
 | Text | Reason |
 |---|---|
+| Online update: `Release identity does not match the selected update channel '...'.` | The selected channel is part of the update request; reject a mismatched or missing channel before downloading or reporting already up to date, without suggesting the Agent switch channels. |
+| Online update: `Release package does not match the selected update channel '...'.` | A valid signature alone does not identify the requested channel; reject a mismatched or missing channel before staging publishes the version, while explicit local packages remain supported. |
 | Package admission: `This package does not declare compatible server authentication support.` | Missing or unsupported package metadata cannot prove that a downgrade will enforce login; explains why otherwise valid packages are refused. |
 | Package admission: `It cannot replace a server in authenticated access mode.` | States the affected security boundary rather than suggesting a retry or implying the server was replaced. |
 | Package admission: `Choose a package that supports authenticated access.` | Gives the safe recovery without steering an Agent to disable authentication to make an update succeed. |

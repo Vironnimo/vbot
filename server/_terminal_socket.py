@@ -32,6 +32,8 @@ from server._streams import _stream_websocket_events
 
 JsonObject = dict[str, Any]
 
+TERMINAL_SOCKET_QUEUE_LIMIT = 32
+
 
 async def serve_terminal_socket(
     websocket: WebSocket, manager: TerminalManager, terminal_id: str
@@ -41,8 +43,8 @@ async def serve_terminal_socket(
     Raises ``TerminalNotFoundError`` before anything is streamed for an
     unknown Terminal.
     """
-    requests: asyncio.Queue[JsonObject] = asyncio.Queue()
-    replies: asyncio.Queue[JsonObject] = asyncio.Queue()
+    requests: asyncio.Queue[JsonObject] = asyncio.Queue(maxsize=TERMINAL_SOCKET_QUEUE_LIMIT)
+    replies: asyncio.Queue[JsonObject] = asyncio.Queue(maxsize=TERMINAL_SOCKET_QUEUE_LIMIT)
     worker = asyncio.create_task(
         _apply_requests(manager, terminal_id, requests, replies),
         name=f"terminal:{terminal_id}:socket-requests",
@@ -62,6 +64,11 @@ async def serve_terminal_socket(
         events = manager.watch_for_operator(terminal_id)
         async with aclosing(_merge(events, replies)) as stream:
             await _stream_websocket_events(websocket, stream, on_text=receive)
+    except asyncio.QueueFull:
+        # Keep receiving independent of PTY writes and socket sends, so overload
+        # can close this connection instead of retaining unlimited operator input.
+        worker.cancel()
+        await websocket.close(code=1013, reason="Terminal socket backlog exceeded")
     finally:
         worker.cancel()
         with suppress(asyncio.CancelledError):
@@ -78,7 +85,7 @@ async def _apply_requests(
         message = await requests.get()
         reply = await _apply(manager, terminal_id, message)
         if reply is not None:
-            replies.put_nowait(reply)
+            await replies.put(reply)
 
 
 async def _apply(
