@@ -143,6 +143,9 @@ export default Object.freeze({
   'common.delete': 'Delete',
   'common.edit': 'Edit',
   'common.loading': 'Loading…',
+  'common.viewLoadError':
+    'This view could not be loaded. Reload the page to try again.',
+  'common.reloadPage': 'Reload page',
   'common.moreInfo': 'More information',
   'common.refresh': 'Refresh',
   'common.remove': 'Remove',

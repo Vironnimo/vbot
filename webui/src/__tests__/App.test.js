@@ -442,6 +442,7 @@ describe('App', () => {
       t('status.switchServer'),
     ).click();
     flushSync();
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(0);
     flushSync();
 
@@ -497,6 +498,8 @@ describe('App', () => {
       expect(sidebarNavButton('Fixture page')).toBeTruthy();
     });
     sidebarNavButton('Fixture page').click();
+    flushSync();
+    await vi.dynamicImportSettled();
     flushSync();
 
     const frame = document.querySelector('iframe');

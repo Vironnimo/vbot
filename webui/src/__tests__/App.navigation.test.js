@@ -9,6 +9,8 @@ import {
 } from '../components/__tests__/AgentsView.support.js';
 import { AUTOSAVE_STILL_SAVING_MS } from '../lib/autosave.js';
 import { t } from '../lib/i18n.js';
+import * as lazyContent from '../lib/lazyContent.js';
+import * as liveUiActions from '../app/liveUiActions.js';
 import {
   App,
   assistantHistory,
@@ -101,6 +103,7 @@ describe('App navigation', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     mountedComponent = await cleanupAppHarness(mountedComponent);
   });
@@ -117,6 +120,8 @@ describe('App navigation', () => {
     );
     settingsPanelButton('tools').click();
     flushSync();
+    await vi.dynamicImportSettled();
+    await waitForCondition(() => expect(depthInput()).toBeTruthy());
   }
 
   async function openSubAgentSession() {
@@ -709,6 +714,18 @@ describe('App navigation', () => {
   });
 
   it('keeps Chat initialized while another main view is active', async () => {
+    const loadComponent = lazyContent.loadComponent;
+    let requestedView;
+    let finishImport;
+    const loading = new Promise((resolve) => {
+      finishImport = resolve;
+    });
+    const load = vi
+      .spyOn(lazyContent, 'loadComponent')
+      .mockImplementationOnce((loader) => {
+        requestedView = loader;
+        return loading;
+      });
     rpcMock.mockImplementation(
       createAppRpcMock({
         agents: [
@@ -735,8 +752,30 @@ describe('App navigation', () => {
 
     const readsBeforeSwitch = rpcMock.mock.calls.length;
     const activityReadsBeforeSwitch = listSessionActivityMock.mock.calls.length;
+    expect(load).not.toHaveBeenCalled();
+
+    // The first requested view is still loading when Chat becomes active
+    // again. Finishing that request must not replace or remount Chat.
+    sidebarNavButton('logs').click();
+    flushSync();
+    expect(
+      document.querySelector('.lazy-content-feedback[aria-busy]'),
+    ).toBeTruthy();
+    expect(chatView.hidden).toBe(true);
+    sidebarNavButton('chat').click();
+    flushSync();
+    finishImport(await loadComponent(requestedView));
+    await tick();
+    expect(logsShown()).toBe(false);
+    expect(chatView.hidden).toBe(false);
+    expect(document.querySelector('.msg-input')).toBe(composer);
+    load.mockRestore();
 
     sidebarNavButton('logs').click();
+    flushSync();
+    // A loaded view is available immediately when requested again.
+    expect(logsShown()).toBe(true);
+    expect(document.querySelector('.lazy-content-feedback')).toBeNull();
     await waitForCondition(() => {
       expect(logsShown()).toBe(true);
       expect(document.querySelector('.chat-view')).toBe(chatView);
@@ -762,6 +801,25 @@ describe('App navigation', () => {
       activityReadsBeforeSwitch,
     );
     expect(document.querySelector('.chat-view__state-banner')).toBeNull();
+  });
+
+  it('waits for the Terminals view before applying its first Live layout request', async () => {
+    const createActions = vi.spyOn(liveUiActions, 'createLiveUiActions');
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        methods: {
+          'terminal.list': () => ({ groups: [], terminals: [] }),
+        },
+      }),
+    );
+    mountApp();
+    const actions = createActions.mock.results[0].value;
+
+    await expect(
+      actions.terminalView({ op: 'context' }, { isCurrent: () => true }),
+    ).resolves.toMatchObject({ visible_order: [] });
+    expect(isCurrent('terminals')).toBe(true);
+    expect(document.querySelector('.terminals-view')).toBeTruthy();
   });
 
   it('names the shown Session when Chat is first opened after loading in the background', async () => {

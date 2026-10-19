@@ -45,6 +45,7 @@ describe('Swarm participant Activity', () => {
     );
     await openSwarm(bridge);
     button('Alpha').click();
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(document.querySelector('.history')).not.toBeNull(),
     );

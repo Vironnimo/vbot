@@ -1,3 +1,9 @@
+<script module>
+  const loadActivity = () => import('./RunActivity.svelte');
+  const loadUsage = () => import('./RunUsage.svelte');
+  const loadWiki = () => import('./WikiPanel.svelte');
+</script>
+
 <script>
   import { t } from '../../../../webui/src/lib/i18n.js';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
@@ -6,6 +12,7 @@
   import { contextMenuAnchor } from '../../../../webui/src/components/ui/contextMenu.js';
   import StatusChip from '../../../../webui/src/components/ui/StatusChip.svelte';
   import TabList from '../../../../webui/src/components/ui/TabList.svelte';
+  import LazyContent from '../../../../webui/src/components/ui/LazyContent.svelte';
   import { tooltip } from '../../../../webui/src/lib/tooltip.js';
   import { failureText } from './failureText.js';
   import {
@@ -19,18 +26,22 @@
   } from './runPresentation.js';
   import SwarmIcon from './SwarmIcon.svelte';
   import RunBoard from './RunBoard.svelte';
-  import RunActivity from './RunActivity.svelte';
-  import RunUsage from './RunUsage.svelte';
-  import WikiPanel from './WikiPanel.svelte';
   import './runView.css';
 
   // The selected Run: its header (title, summary, state, the one lifecycle
   // action and the Run's menu), the participants that need attention, the
   // tabs and the shown tab's panel. The view is the page's scroller; the
   // tabs stick to its top edge, and `--swarm-run-sticky-top` tells the
-  // panels how much of the scroller they cover. The Wiki stays mounted
-  // across tab changes.
+  // panels how much of the scroller they cover. After its first visit, the
+  // Wiki stays mounted across tab changes to retain its pages and drafts.
   let { model } = $props();
+
+  let wikiVisitedSwarm = $state(null);
+  $effect(() => {
+    if (model.activeTab === 'wiki') wikiVisitedSwarm = model.selectedSwarm.id;
+    else if (wikiVisitedSwarm !== model.selectedSwarm.id)
+      wikiVisitedSwarm = null;
+  });
 
   const run = $derived(model.selectedRun);
   const title = $derived(runTitle(run));
@@ -166,23 +177,37 @@
       onChange={(next) => model.navigate(() => model.openTab(next))}
     />
   </div>
-  {#key model.selectedSwarm.id}<WikiPanel
-      bind:this={model.wikiPanel}
-      swarmId={model.selectedSwarm.id}
-      client={model.client}
-      contentLinks={model.board.contentLinks}
-      active={model.activeTab === 'wiki'}
-    />{/key}
+  {#key model.selectedSwarm.id}
+    {#if model.activeTab === 'wiki' || wikiVisitedSwarm === model.selectedSwarm.id}
+      <LazyContent load={loadWiki} showFeedback={model.activeTab === 'wiki'}>
+        {#snippet children(Component)}
+          <Component
+            bind:this={model.wikiPanel}
+            swarmId={model.selectedSwarm.id}
+            client={model.client}
+            contentLinks={model.board.contentLinks}
+            active={model.activeTab === 'wiki'}
+          />
+        {/snippet}
+      </LazyContent>
+    {/if}
+  {/key}
   {#if model.activeTab === 'board'}<RunBoard
       board={model.board}
       {model}
-    />{:else if model.activeTab === 'participants'}<RunActivity
-      activity={model.activity}
-      {model}
-    />{:else if model.activeTab === 'usage'}<RunUsage
-      usage={model.usage}
-      {model}
-    />{/if}
+    />{:else if model.activeTab === 'participants'}
+    <LazyContent load={loadActivity}>
+      {#snippet children(Component)}
+        <Component activity={model.activity} {model} />
+      {/snippet}
+    </LazyContent>
+  {:else if model.activeTab === 'usage'}
+    <LazyContent load={loadUsage}>
+      {#snippet children(Component)}
+        <Component usage={model.usage} {model} />
+      {/snippet}
+    </LazyContent>
+  {/if}
 </div>
 
 <ContextMenu {menu} onClose={() => (menu = null)} />

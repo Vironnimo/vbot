@@ -169,28 +169,6 @@ function holdWiki(fixture, action, finish) {
 }
 
 describe('Swarm Wiki pages', () => {
-  it('replaces the initial loading state with a list failure it can retry', async () => {
-    const fixture = wikiBridge();
-    let unavailable = true;
-    overrideOperations(fixture.operation, {
-      wiki: (args, fallback) =>
-        args.action === 'list' && unavailable
-          ? Promise.reject(new Error('Wiki unavailable'))
-          : fallback(),
-    });
-    await openWikiTab(fixture);
-    const panel = () => document.querySelector('.wiki-panel');
-    await vi.waitFor(() =>
-      expect(panel().textContent).toContain('Wiki unavailable'),
-    );
-    expect(panel().querySelector('[role="status"]')).toBeNull();
-    expect(panel().textContent).not.toContain(t('swarm.wiki.empty'));
-    unavailable = false;
-    button(t('common.retry')).click();
-    await vi.waitFor(() => expect(button('Shared research')).toBeDefined());
-    expect(panel().textContent).not.toContain('Wiki unavailable');
-  });
-
   it('opens internal Board links, displays the pinned request and restores a deleted page', async () => {
     const fixture = wikiBridge();
     await openSwarm(fixture.bridge);
@@ -200,7 +178,11 @@ describe('Swarm Wiki pages', () => {
     expect(document.querySelector('.swarm-goal-post').textContent).toContain(
       swarm.prompt,
     );
+    // This is the first Wiki visit: its module has not mounted on the Board.
+    expect(wikiCalls(fixture, 'list')).toHaveLength(0);
+    expect(wikiCalls(fixture, 'read')).toHaveLength(0);
     document.querySelector('a[href="#wiki/w1"]').click();
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(wikiContent()).toContain('Original evidence'),
     );
@@ -270,6 +252,28 @@ describe('Swarm Wiki pages', () => {
       expect(document.activeElement.dataset.postNumber).toBe('1'),
     );
     expect(fixture.bridge.openLink).not.toHaveBeenCalled();
+  });
+
+  it('replaces the initial loading state with a list failure it can retry', async () => {
+    const fixture = wikiBridge();
+    let unavailable = true;
+    overrideOperations(fixture.operation, {
+      wiki: (args, fallback) =>
+        args.action === 'list' && unavailable
+          ? Promise.reject(new Error('Wiki unavailable'))
+          : fallback(),
+    });
+    await openWikiTab(fixture);
+    const panel = () => document.querySelector('.wiki-panel');
+    await vi.waitFor(() =>
+      expect(panel().textContent).toContain('Wiki unavailable'),
+    );
+    expect(panel().querySelector('[role="status"]')).toBeNull();
+    expect(panel().textContent).not.toContain(t('swarm.wiki.empty'));
+    unavailable = false;
+    button(t('common.retry')).click();
+    await vi.waitFor(() => expect(button('Shared research')).toBeDefined());
+    expect(panel().textContent).not.toContain('Wiki unavailable');
   });
 
   it('creates free Markdown pages and searches without exposing content as HTML', async () => {

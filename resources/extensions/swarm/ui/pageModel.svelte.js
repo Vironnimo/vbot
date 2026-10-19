@@ -9,7 +9,7 @@ import {
   canResume as projectCanResume,
 } from './runPresentation.js';
 import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
-import { onMount, tick } from 'svelte';
+import { onMount } from 'svelte';
 import { createExtensionPageClient } from '$lib/extensionPageClient.js';
 import { sameServerPath } from '$lib/pathPicker.js';
 import {
@@ -98,6 +98,10 @@ export function createSwarmPageModel(host) {
   let newProfileDraft = $state.raw(null);
 
   let wikiPanel = $state(null);
+
+  // A Board citation can arrive before the Wiki's code finishes loading.
+  // Keep the requested page until its panel mounts, only for this Swarm/tab.
+  let wikiRequest = $state.raw(null);
 
   let editorKey = $state(0);
 
@@ -255,9 +259,9 @@ export function createSwarmPageModel(host) {
     // A Wiki link from the Board; a page that cannot open shows why.
     async openWikiPage(id) {
       try {
-        if (!(await openTab('wiki'))) return;
-        await tick();
-        await wikiPanel?.openPage(id);
+        const swarmId = selectedSwarm?.id;
+        if (!(await openTab('wiki')) || selectedSwarm?.id !== swarmId) return;
+        wikiRequest = { swarmId, id };
       } catch (cause) {
         if (!disposed) error = failureText(cause);
       }
@@ -267,6 +271,20 @@ export function createSwarmPageModel(host) {
       activity.inspectParticipant(participant),
     refresh,
     showResumeFailures,
+  });
+
+  $effect(() => {
+    const request = wikiRequest;
+    if (!request) return;
+    if (activeTab !== 'wiki' || selectedSwarm?.id !== request.swarmId) {
+      wikiRequest = null;
+      return;
+    }
+    if (!wikiPanel) return;
+    wikiRequest = null;
+    void wikiPanel.openPage(request.id).catch((cause) => {
+      if (!disposed) error = failureText(cause);
+    });
   });
 
   const usage = createSwarmPageUsage({

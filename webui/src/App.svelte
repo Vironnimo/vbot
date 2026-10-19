@@ -1,6 +1,23 @@
 <script module>
   import { t } from '$lib/i18n.js';
 
+  const loadOnboardingView = () => import('./components/OnboardingView.svelte');
+  const loadExtensionPage = () => import('./components/ExtensionPage.svelte');
+  const loadAgentsView = () => import('./components/AgentsView.svelte');
+  const loadTerminalsView = () => import('./components/TerminalsView.svelte');
+  const loadProjectsView = () => import('./components/ProjectsView.svelte');
+  const loadCalendarView = () => import('./components/CalendarView.svelte');
+  const loadCronView = () => import('./components/CronView.svelte');
+  const loadSkillsView = () => import('./components/skills/SkillsView.svelte');
+  const loadSystemPromptView = () =>
+    import('./components/SystemPromptView.svelte');
+  const loadSettingsView = () => import('./components/SettingsView.svelte');
+  const loadLogsView = () => import('./components/LogsView.svelte');
+  const loadStatisticsView = () => import('./components/StatisticsView.svelte');
+  const loadDebugView = () => import('./components/DebugView.svelte');
+  const loadDesktopConnectionSettings = () =>
+    import('./components/settings/DesktopConnectionSettings.svelte');
+
   export const NAVIGATION_ITEMS = Object.freeze([
     {
       id: 'chat',
@@ -69,28 +86,15 @@
   import AppShell from './components/AppShell.svelte';
   import Banner from './components/ui/Banner.svelte';
   import Button from './components/ui/Button.svelte';
+  import LazyContent from './components/ui/LazyContent.svelte';
   import ExtensionRequests from './components/ExtensionRequests.svelte';
   import LiveVoice from './components/LiveVoice.svelte';
-  import OnboardingView from './components/OnboardingView.svelte';
   import ChatWorkspace from './components/ChatWorkspace.svelte';
   import { appearancePrefs } from '$lib/appearancePrefs.svelte.js';
-  import ExtensionPage from './components/ExtensionPage.svelte';
   import { dateTimePrefs } from '$lib/dateTimePrefs.svelte.js';
-  import AgentsView from './components/AgentsView.svelte';
-  import TerminalsView from './components/TerminalsView.svelte';
-  import ProjectsView from './components/ProjectsView.svelte';
-  import CalendarView from './components/CalendarView.svelte';
-  import CronView from './components/CronView.svelte';
-  import SkillsView from './components/skills/SkillsView.svelte';
-  import SystemPromptView from './components/SystemPromptView.svelte';
-  import SettingsView from './components/SettingsView.svelte';
-  import LogsView from './components/LogsView.svelte';
-  import StatisticsView from './components/StatisticsView.svelte';
-  import DebugView from './components/DebugView.svelte';
   import ToastStack from './components/ToastStack.svelte';
   import Modal from './components/ui/Modal.svelte';
   import ConfirmDialog from './components/ui/ConfirmDialog.svelte';
-  import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
   import { onMount, tick } from 'svelte';
   import {
     CONNECTION_STATUS_DISCONNECTED,
@@ -109,6 +113,7 @@
     reportClientMetrics,
   } from '$lib/api.js';
   import { startClientMetrics } from '$lib/clientMetrics.js';
+  import { loadComponent } from '$lib/lazyContent.js';
   import { isWebuiOutdated } from '$lib/webuiBuild.js';
   import { provideAutosaveContext } from '$lib/autosave.js';
   import {
@@ -349,7 +354,12 @@
     requestTransition: autosave.requestTransition,
     chatSelection: () => chatNavigation.shownSession,
     terminalsView: () => terminalsView,
-    afterRender: tick,
+    afterRender: async () => {
+      // A voice layout request can be the first opening of Terminals.
+      // Wait for its code as well as the render that binds its controller.
+      await loadComponent(loadTerminalsView);
+      await tick();
+    },
   });
 
   const loadDataStoreStatus = async () => {
@@ -665,14 +675,18 @@
   {/if}
   {#key serverRecoveryGeneration}
     {#if setup.onboardingActive}
-      <OnboardingView
-        {providerAuthEvent}
-        {modelsRefreshToken}
-        targetAgentId={selection.selectedAgentId || 'main'}
-        onComplete={setup.completeOnboarding}
-        onDismiss={setup.dismissOnboarding}
-        onToast={desktop.showToast}
-      />
+      <LazyContent load={loadOnboardingView}>
+        {#snippet children(Component)}
+          <Component
+            {providerAuthEvent}
+            {modelsRefreshToken}
+            targetAgentId={selection.selectedAgentId || 'main'}
+            onComplete={setup.completeOnboarding}
+            onDismiss={setup.dismissOnboarding}
+            onToast={desktop.showToast}
+          />
+        {/snippet}
+      </LazyContent>
     {:else}
       <ChatWorkspace
         onToast={desktop.showToast}
@@ -718,137 +732,187 @@
         {@const page = extensions.extensionPages.find(
           (item) => item.route === activeViewId,
         )}
-        <ExtensionPage
-          descriptor={page}
-          navigation={navigator.view(activeViewId)}
-          theme={{ ...extensions.extensionPageTheme }}
-          locale={setup.settings?.appearance?.language ?? 'en'}
-          timezone={dateTimePrefs.timeZone}
-          subscribeInvalidations={extensions.subscribeInvalidations}
-          onToast={(message, variant) =>
-            desktop.showToast({ title: message, variant })}
-        />
+        <LazyContent load={loadExtensionPage}>
+          {#snippet children(Component)}
+            <Component
+              descriptor={page}
+              navigation={navigator.view(activeViewId)}
+              theme={{ ...extensions.extensionPageTheme }}
+              locale={setup.settings?.appearance?.language ?? 'en'}
+              timezone={dateTimePrefs.timeZone}
+              subscribeInvalidations={extensions.subscribeInvalidations}
+              onToast={(message, variant) =>
+                desktop.showToast({ title: message, variant })}
+            />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'agents'}
-        <AgentsView
-          navigation={navigator.view('agents')}
-          sharedSelectedAgentId={selection.selectedAgentId}
-          onAgentsChanged={selection.refreshAgents}
-          onAgentSelected={selectAgentFromView}
-          onOpenChat={openAgentChat}
-          onOpenInSplit={chatNavigation.openAgentInSplit}
-          onToast={desktop.showToast}
-          onNavigateToSettingsPanel={navigateToSettingsPanel}
-          onNavigateToAgentPrompt={navigateToAgentPromptScope}
-          onOpenSkill={navigateToAgentSkill}
-          subscribeAgentRenames={selection.subscribeAgentRenames}
-          agentsRefreshToken={selection.agentsRefreshToken}
-          {memoriesRefreshToken}
-          {modelsRefreshToken}
-          {projectsRefreshToken}
-          {skillsRefreshToken}
-        />
+        <LazyContent load={loadAgentsView}>
+          {#snippet children(Component)}
+            <Component
+              navigation={navigator.view('agents')}
+              sharedSelectedAgentId={selection.selectedAgentId}
+              onAgentsChanged={selection.refreshAgents}
+              onAgentSelected={selectAgentFromView}
+              onOpenChat={openAgentChat}
+              onOpenInSplit={chatNavigation.openAgentInSplit}
+              onToast={desktop.showToast}
+              onNavigateToSettingsPanel={navigateToSettingsPanel}
+              onNavigateToAgentPrompt={navigateToAgentPromptScope}
+              onOpenSkill={navigateToAgentSkill}
+              subscribeAgentRenames={selection.subscribeAgentRenames}
+              agentsRefreshToken={selection.agentsRefreshToken}
+              {memoriesRefreshToken}
+              {modelsRefreshToken}
+              {projectsRefreshToken}
+              {skillsRefreshToken}
+            />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'terminals'}
-        <TerminalsView
-          bind:this={terminalsView}
-          navigation={navigator.view('terminals')}
-          {terminalsRefreshToken}
-          {serverUnavailable}
-          onToast={desktop.showToast}
-          onOpenSession={chatNavigation.navigateToSession}
-        />
+        <LazyContent load={loadTerminalsView}>
+          {#snippet children(Component)}
+            <Component
+              bind:this={terminalsView}
+              navigation={navigator.view('terminals')}
+              {terminalsRefreshToken}
+              {serverUnavailable}
+              onToast={desktop.showToast}
+              onOpenSession={chatNavigation.navigateToSession}
+            />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'projects'}
-        <ProjectsView
-          navigation={navigator.view('projects')}
-          selectedProjectId={selection.managedProjectId}
-          onProjectSelected={selection.selectManagedProject}
-          onToast={desktop.showToast}
-          onNavigateToSettingsPanel={navigateToSettingsPanel}
-          onOpenSkill={navigateToProjectSkill}
-          agentsRefreshToken={selection.agentsRefreshToken}
-          {modelsRefreshToken}
-          {projectsRefreshToken}
-          {skillsRefreshToken}
-        />
+        <LazyContent load={loadProjectsView}>
+          {#snippet children(Component)}
+            <Component
+              navigation={navigator.view('projects')}
+              selectedProjectId={selection.managedProjectId}
+              onProjectSelected={selection.selectManagedProject}
+              onToast={desktop.showToast}
+              onNavigateToSettingsPanel={navigateToSettingsPanel}
+              onOpenSkill={navigateToProjectSkill}
+              agentsRefreshToken={selection.agentsRefreshToken}
+              {modelsRefreshToken}
+              {projectsRefreshToken}
+              {skillsRefreshToken}
+            />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'calendar'}
-        <CalendarView
-          navigation={navigator.view('calendar')}
-          onToast={desktop.showToast}
-          {serverUnavailable}
-          {calendarRefreshToken}
-          {cronRefreshToken}
-          agentsRefreshToken={selection.agentsRefreshToken}
-          onOpenCronJob={openCronJobFromCalendar}
-          onOpenSession={chatNavigation.navigateToSession}
-        />
+        <LazyContent load={loadCalendarView}>
+          {#snippet children(Component)}
+            <Component
+              navigation={navigator.view('calendar')}
+              onToast={desktop.showToast}
+              {serverUnavailable}
+              {calendarRefreshToken}
+              {cronRefreshToken}
+              agentsRefreshToken={selection.agentsRefreshToken}
+              onOpenCronJob={openCronJobFromCalendar}
+              onOpenSession={chatNavigation.navigateToSession}
+            />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'cron'}
-        <CronView
-          navigation={navigator.view('cron')}
-          bind:newJobDraft={cronNewJobDraft}
-          onToast={desktop.showToast}
-          {serverUnavailable}
-          {cronRefreshToken}
-          agentsRefreshToken={selection.agentsRefreshToken}
-          {projectsRefreshToken}
-        />
+        <LazyContent load={loadCronView}>
+          {#snippet children(Component)}
+            <Component
+              navigation={navigator.view('cron')}
+              bind:newJobDraft={cronNewJobDraft}
+              onToast={desktop.showToast}
+              {serverUnavailable}
+              {cronRefreshToken}
+              agentsRefreshToken={selection.agentsRefreshToken}
+              {projectsRefreshToken}
+            />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'skills'}
-        <SkillsView
-          navigation={navigator.view('skills')}
-          onToast={desktop.showToast}
-          settings={setup.settings}
-          onSettingsCommit={(nextSettings) => (setup.settings = nextSettings)}
-          onOpenSession={chatNavigation.navigateToSession}
-          {skillsRefreshToken}
-          agentsRefreshToken={selection.agentsRefreshToken}
-          {projectsRefreshToken}
-        />
+        <LazyContent load={loadSkillsView}>
+          {#snippet children(Component)}
+            <Component
+              navigation={navigator.view('skills')}
+              onToast={desktop.showToast}
+              settings={setup.settings}
+              onSettingsCommit={(nextSettings) =>
+                (setup.settings = nextSettings)}
+              onOpenSession={chatNavigation.navigateToSession}
+              {skillsRefreshToken}
+              agentsRefreshToken={selection.agentsRefreshToken}
+              {projectsRefreshToken}
+            />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'system-prompt'}
-        <SystemPromptView
-          navigation={navigator.view('system-prompt')}
-          onToast={desktop.showToast}
-          agentsRefreshToken={selection.agentsRefreshToken}
-        />
+        <LazyContent load={loadSystemPromptView}>
+          {#snippet children(Component)}
+            <Component
+              navigation={navigator.view('system-prompt')}
+              onToast={desktop.showToast}
+              agentsRefreshToken={selection.agentsRefreshToken}
+            />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'settings'}
-        <SettingsView
-          bind:this={settingsView}
-          navigation={navigator.view('settings')}
-          onSettingsCommit={(nextSettings) => (setup.settings = nextSettings)}
-          onNavigateToAgentDefaults={navigateToAgentDefaults}
-          {providerAuthEvent}
-          onToast={desktop.showToast}
-          agents={selection.agents}
-          projects={selection.projects}
-          desktopCapabilities={desktop.desktopCapabilities}
-          desktopVoice={desktop.desktopVoice}
-          desktopZoom={desktop.desktopZoom}
-          onDebugEnabledChange={handleDebugEnabledChange}
-          onOpenSetupGuide={setup.reopenOnboarding}
-          {modelsRefreshToken}
-          {recallIndexStatus}
-          {backgroundActivity}
-          {secretStore}
-          {clientsRefreshToken}
-          {devicesRefreshToken}
-          {credentialsRefreshToken}
-          {channelsRefreshToken}
-          {archiveRefreshToken}
-          agentsRefreshToken={selection.agentsRefreshToken}
-          {projectsRefreshToken}
-          {sessionsRefreshToken}
-          {skillsRefreshToken}
-          onOpenSession={chatNavigation.navigateToSession}
-          initialScrollPosition={settingsScrollPosition}
-          onScrollPositionChange={rememberSettingsScrollPosition}
-          subscribeExtensionInvalidations={extensions.subscribeInvalidations}
-        />
+        <LazyContent load={loadSettingsView}>
+          {#snippet children(Component)}
+            <Component
+              bind:this={settingsView}
+              navigation={navigator.view('settings')}
+              onSettingsCommit={(nextSettings) =>
+                (setup.settings = nextSettings)}
+              onNavigateToAgentDefaults={navigateToAgentDefaults}
+              {providerAuthEvent}
+              onToast={desktop.showToast}
+              agents={selection.agents}
+              projects={selection.projects}
+              desktopCapabilities={desktop.desktopCapabilities}
+              desktopVoice={desktop.desktopVoice}
+              desktopZoom={desktop.desktopZoom}
+              onDebugEnabledChange={handleDebugEnabledChange}
+              onOpenSetupGuide={setup.reopenOnboarding}
+              {modelsRefreshToken}
+              {recallIndexStatus}
+              {backgroundActivity}
+              {secretStore}
+              {clientsRefreshToken}
+              {devicesRefreshToken}
+              {credentialsRefreshToken}
+              {channelsRefreshToken}
+              {archiveRefreshToken}
+              agentsRefreshToken={selection.agentsRefreshToken}
+              {projectsRefreshToken}
+              {sessionsRefreshToken}
+              {skillsRefreshToken}
+              onOpenSession={chatNavigation.navigateToSession}
+              initialScrollPosition={settingsScrollPosition}
+              onScrollPositionChange={rememberSettingsScrollPosition}
+              subscribeExtensionInvalidations={extensions.subscribeInvalidations}
+            />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'logs'}
-        <LogsView navigation={navigator.view('logs')} />
+        <LazyContent load={loadLogsView}>
+          {#snippet children(Component)}
+            <Component navigation={navigator.view('logs')} />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'statistics'}
-        <StatisticsView navigation={navigator.view('statistics')} />
+        <LazyContent load={loadStatisticsView}>
+          {#snippet children(Component)}
+            <Component navigation={navigator.view('statistics')} />
+          {/snippet}
+        </LazyContent>
       {:else if activeViewId === 'debug'}
-        <DebugView
-          navigation={navigator.view('debug')}
-          {debugTracesRefreshToken}
-        />
+        <LazyContent load={loadDebugView}>
+          {#snippet children(Component)}
+            <Component
+              navigation={navigator.view('debug')}
+              {debugTracesRefreshToken}
+            />
+          {/snippet}
+        </LazyContent>
       {/if}
     {/if}
   {/key}
@@ -879,10 +943,14 @@
   >
     {#snippet body()}
       <div class="modal-body desktop-server-switch-modal__body">
-        <DesktopConnectionSettings
-          idPrefix="desktop-outage-server"
-          onToast={desktop.showToast}
-        />
+        <LazyContent load={loadDesktopConnectionSettings}>
+          {#snippet children(Component)}
+            <Component
+              idPrefix="desktop-outage-server"
+              onToast={desktop.showToast}
+            />
+          {/snippet}
+        </LazyContent>
       </div>
     {/snippet}
   </Modal>

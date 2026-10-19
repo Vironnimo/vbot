@@ -1,8 +1,12 @@
+<script module>
+  const loadProfileEditor = () => import('./ProfileEditor.svelte');
+</script>
+
 <script>
   import { t } from '../../../../webui/src/lib/i18n.js';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
-  import ProfileEditor from './ProfileEditor.svelte';
+  import LazyContent from '../../../../webui/src/components/ui/LazyContent.svelte';
   import { provideNavigation } from '../../../../webui/src/lib/navigation.svelte.js';
   import { createSwarmPageModel } from './pageModel.svelte.js';
   // The shared rules load before the areas' own stylesheets.
@@ -53,17 +57,21 @@
       </div>{/if}
     {#if model.editor}
       {#key model.editorKey}
-        <ProfileEditor
-          bind:this={model.profileEditor}
-          profile={model.editor === 'new' ? null : model.editor}
-          newDraft={model.newProfileDraft}
-          catalog={model.catalog}
-          bridgeClient={model.client}
-          onSave={model.saveProfile}
-          onCancel={model.openStart}
-          onDelete={model.runActions.confirmProfileDelete}
-          onDraftChange={(next) => (model.newProfileDraft = next)}
-        />
+        <LazyContent load={loadProfileEditor}>
+          {#snippet children(Component)}
+            <Component
+              bind:this={model.profileEditor}
+              profile={model.editor === 'new' ? null : model.editor}
+              newDraft={model.newProfileDraft}
+              catalog={model.catalog}
+              bridgeClient={model.client}
+              onSave={model.saveProfile}
+              onCancel={model.openStart}
+              onDelete={model.runActions.confirmProfileDelete}
+              onDraftChange={(next) => (model.newProfileDraft = next)}
+            />
+          {/snippet}
+        </LazyContent>
       {/key}
     {:else if model.selectedSwarm}<RunView {model} />{:else}<RunStartForm
         {model}

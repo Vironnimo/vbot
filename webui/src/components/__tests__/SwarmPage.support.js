@@ -448,6 +448,8 @@ async function openParticipant(bridge, name = 'Alpha') {
   button('Investigate').click();
   await vi.waitFor(() => expect(button(name)).toBeDefined());
   button(name).click();
+  await vi.dynamicImportSettled();
+  await tick();
 }
 
 function historyText() {
