@@ -11,7 +11,12 @@ import respx
 from core.models.models import REASONING_CONTROL_ON_OFF
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.lmstudio import LMStudioAdapter
-from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.providers import (
+    REQUEST_MIN_RESERVE_TOKENS,
+    AuthConfig,
+    ConnectionConfig,
+    ProviderConfig,
+)
 
 LMSTUDIO_CONFIG = ProviderConfig(
     id="lmstudio",
@@ -96,22 +101,46 @@ def test_entry_of_another_type_is_skipped() -> None:
 
 
 @pytest.mark.parametrize(
-    ("loaded_instances", "load_payload"),
+    ("listings", "load_payload", "served_window"),
     [
-        pytest.param([], {"model": MODEL_ID, "context_length": 32768}, id="unloaded-is-loaded"),
-        pytest.param([{"id": "existing-instance"}], None, id="loaded-is-reused"),
+        pytest.param(
+            [[], [{"id": "loaded-instance", "config": {"context_length": 16384}}]],
+            {"model": MODEL_ID, "context_length": 32768},
+            16384,
+            id="unloaded-is-loaded-and-read-back",
+        ),
+        pytest.param(
+            [
+                [
+                    {"id": "small-instance", "config": {"context_length": 8192}},
+                    {"id": "large-instance", "config": {"context_length": 65536}},
+                ]
+            ],
+            None,
+            8192,
+            id="loaded-is-reused-at-its-smallest-window",
+        ),
     ],
 )
 @respx.mock
 @pytest.mark.asyncio
-async def test_chat_loads_an_unloaded_model_with_the_resolved_context_first(
-    loaded_instances: list[dict[str, str]], load_payload: dict[str, object] | None
+async def test_chat_runs_against_the_window_of_the_loaded_instance(
+    listings: list[list[dict[str, object]]],
+    load_payload: dict[str, object] | None,
+    served_window: int,
 ) -> None:
-    adapter = LMStudioAdapter(LMSTUDIO_CONFIG, "", local_context_resolver=lambda model_id: 32768)
+    reported: list[tuple[str, int | None]] = []
+    adapter = LMStudioAdapter(
+        LMSTUDIO_CONFIG,
+        "",
+        local_context_resolver=lambda model_id: 32768,
+        loaded_context_reporter=lambda model_id, window: reported.append((model_id, window)),
+    )
     respx.get("http://localhost:1234/api/v1/models").mock(
-        return_value=httpx.Response(
-            200, json={"models": [{**NATIVE_MODEL, "loaded_instances": loaded_instances}]}
-        )
+        side_effect=[
+            httpx.Response(200, json={"models": [{**NATIVE_MODEL, "loaded_instances": instances}]})
+            for instances in listings
+        ]
     )
     load_route = respx.post("http://localhost:1234/api/v1/models/load").mock(
         return_value=httpx.Response(200, json={"instance_id": "loaded-instance"})
@@ -121,7 +150,9 @@ async def test_chat_loads_an_unloaded_model_with_the_resolved_context_first(
     )
 
     try:
-        response = await adapter.send([{"role": "user", "content": "Hello"}], model_id=MODEL_ID)
+        response = await adapter.send(
+            [{"role": "user", "content": "Hello"}], model_id=MODEL_ID, max_tokens=60000
+        )
     finally:
         await adapter.aclose()
 
@@ -129,7 +160,19 @@ async def test_chat_loads_an_unloaded_model_with_the_resolved_context_first(
     requested = [call.request.url.path for call in respx.calls]
     if load_payload is None:
         assert requested == ["/api/v1/models", "/v1/chat/completions"]
+        assert reported == [(MODEL_ID, served_window)]
     else:
-        assert requested == ["/api/v1/models", "/api/v1/models/load", "/v1/chat/completions"]
+        assert requested == [
+            "/api/v1/models",
+            "/api/v1/models/load",
+            "/api/v1/models",
+            "/v1/chat/completions",
+        ]
         assert json.loads(load_route.calls.last.request.content) == load_payload
-    assert "authorization" not in chat_route.calls.last.request.headers
+        assert reported == [(MODEL_ID, None), (MODEL_ID, served_window)]
+    chat_request = chat_route.calls.last.request
+    assert "authorization" not in chat_request.headers
+    # The output allowance is clamped to the window the instance serves, not
+    # to the catalog maximum or the window vBot would load the Model with.
+    max_tokens = json.loads(chat_request.content)["max_tokens"]
+    assert served_window // 2 < max_tokens < served_window - REQUEST_MIN_RESERVE_TOKENS

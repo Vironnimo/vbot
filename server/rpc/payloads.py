@@ -172,10 +172,10 @@ def _resolve_context_window(state: Any, model: str) -> int | None:
 
 
 def _local_context_windows(state: Any) -> Any:
-    """Return the live local-model window map from settings, or empty."""
+    """Return the Runtime's live local-model window map, or empty."""
     try:
-        return state.runtime.storage.load_local_models_settings()["context_windows"]
-    except AttributeError, KeyError:
+        return state.runtime.local_context_windows()
+    except AttributeError:
         return {}
 
 

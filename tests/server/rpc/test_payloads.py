@@ -113,16 +113,16 @@ def _agent_window_state(model: Model, local_windows: dict[str, int]) -> SimpleNa
                 raise KeyError((provider_id, model_id))
             return model
 
-    class _Storage:
-        def load_local_models_settings(self) -> dict[str, Any]:
-            return {"context_windows": dict(local_windows)}
-
     class _Providers:
         def get(self, provider_id: str) -> Any:
             raise KeyError(provider_id)
 
     return SimpleNamespace(
-        runtime=SimpleNamespace(models=_Models(), storage=_Storage(), providers=_Providers())
+        runtime=SimpleNamespace(
+            models=_Models(),
+            providers=_Providers(),
+            local_context_windows=lambda: dict(local_windows),
+        )
     )
 
 

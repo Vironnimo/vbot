@@ -966,7 +966,10 @@ class Runtime(RuntimeServiceGraph):
         return self._provider_operations().connection_reachability(connection_id)
 
     def local_context_windows(self) -> Mapping[str, Any]:
-        """Return live user-configured context windows for local Models."""
+        """Return live context windows for local Models.
+
+        The user's Settings, overridden by the window LM Studio reports for a loaded instance.
+        """
         return self._provider_operations().local_context_windows()
 
     def has_provider_credentials(self, provider_id: str) -> bool:

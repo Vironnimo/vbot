@@ -90,7 +90,6 @@ from core.providers.http import (
 from core.providers.providers import (
     AuthConfig,
     ProviderConfig,
-    resolve_context_window,
     resolve_request_output_limit,
 )
 from core.providers.reasoning import (
@@ -547,9 +546,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             explicit_limit=explicit,
             model_output_limit=self._model_max_output_tokens(model_id),
             provider_default=default,
-            effective_context_window=resolve_context_window(
-                self._model_context_window(model_id), self._config
-            ),
+            effective_context_window=self._request_context_window(model_id),
             estimated_input_tokens=estimated_input,
             minimum_output_tokens=self.minimum_output_tokens(
                 model_id, request_kwargs.get("thinking_effort"), explicit_limit=explicit

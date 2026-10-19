@@ -54,10 +54,21 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         *,
         connection_mode: str | None = None,
         local_context_resolver: Callable[[str], int | None] | None = None,
+        loaded_context_reporter: Callable[[str, int | None], None] | None = None,
     ) -> None:
+        """Bind the Connection; ``local_context_resolver`` and ``loaded_context_reporter`` are DI.
+
+        ``local_context_resolver`` maps a Model id to the window vBot loads an
+        unloaded Model with (the user's local setting or the local cap).
+        ``loaded_context_reporter`` receives the window LM Studio reports for a
+        Model's loaded instance, or ``None`` when no loaded instance reports
+        one, each time the Adapter reads it before a request.
+        """
         resolved_base_url = base_url or config.base_url
         self._native_base_url = _native_base_url(resolved_base_url)
         self._local_context_resolver = local_context_resolver
+        self._loaded_context_reporter = loaded_context_reporter
+        self._loaded_context_windows: dict[str, int] = {}
         self._model_load_lock = asyncio.Lock()
         super().__init__(
             config,
@@ -173,20 +184,52 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
             async for event in events:
                 yield event
 
+    @override
+    def _request_context_window(self, model_id: str) -> int:
+        """The window of the loaded instance, else the one vBot loads the Model with."""
+
+        bare_model_id = model_id.split("::", 1)[0]
+        loaded = self._loaded_context_windows.get(bare_model_id)
+        if loaded is not None:
+            return loaded
+        if self._local_context_resolver is not None:
+            configured = self._local_context_resolver(bare_model_id)
+            if configured is not None:
+                return configured
+        return super()._request_context_window(model_id)
+
     async def _ensure_model_loaded(self, model_id: str) -> None:
+        """Reuse a loaded instance, or load one; then record the window it reports.
+
+        A loaded instance is used as it is, whatever the local setting says:
+        its reported ``context_length`` is the window LM Studio serves. Only a
+        Model that is not loaded is loaded with the resolved local window, and
+        the new instance is read back for the window LM Studio applied.
+        """
         bare_model_id = model_id.split("::", 1)[0]
         async with self._model_load_lock:
             model = await self._native_model(bare_model_id)
             loaded_instances = model.get("loaded_instances")
-            if isinstance(loaded_instances, list) and loaded_instances:
-                return
+            if not (isinstance(loaded_instances, list) and loaded_instances):
+                # Forget the window of an instance that is gone before resolving
+                # the one to load with, so the local setting decides again.
+                self._record_loaded_context_window(bare_model_id, None)
+                payload: dict[str, Any] = {"model": bare_model_id}
+                if self._local_context_resolver is not None:
+                    context_length = self._local_context_resolver(bare_model_id)
+                    if context_length is not None:
+                        payload["context_length"] = context_length
+                await self._load_native_model(payload)
+                model = await self._native_model(bare_model_id)
+            self._record_loaded_context_window(bare_model_id, _loaded_context_length(model))
 
-            payload: dict[str, Any] = {"model": bare_model_id}
-            if self._local_context_resolver is not None:
-                context_length = self._local_context_resolver(bare_model_id)
-                if context_length is not None:
-                    payload["context_length"] = context_length
-            await self._load_native_model(payload)
+    def _record_loaded_context_window(self, model_id: str, window: int | None) -> None:
+        if window is None:
+            self._loaded_context_windows.pop(model_id, None)
+        else:
+            self._loaded_context_windows[model_id] = window
+        if self._loaded_context_reporter is not None:
+            self._loaded_context_reporter(model_id, window)
 
     async def _native_model(self, model_id: str) -> Mapping[str, Any]:
         async def _request() -> Mapping[str, Any]:
@@ -237,6 +280,26 @@ def _positive_int(value: Any) -> int | None:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         return None
     return value
+
+
+def _loaded_context_length(model: Mapping[str, Any]) -> int | None:
+    """The ``context_length`` LM Studio reports for the Model's loaded instances.
+
+    Each entry of ``loaded_instances`` carries the window it was loaded with in
+    ``config.context_length``. With several instances any of them may serve a
+    request, so the smallest reported window holds; ``None`` when none reports one.
+    """
+    instances = model.get("loaded_instances")
+    if not isinstance(instances, list):
+        return None
+    windows = [
+        window
+        for instance in instances
+        if isinstance(instance, Mapping)
+        and isinstance(config := instance.get("config"), Mapping)
+        and (window := _positive_int(config.get("context_length"))) is not None
+    ]
+    return min(windows) if windows else None
 
 
 def _chat_base_url(base_url: str) -> str:

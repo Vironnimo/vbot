@@ -9,7 +9,9 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
+import httpx
 import pytest
+import respx
 
 import core.models.discovery as discovery_module
 import core.providers.runtime as provider_runtime_module
@@ -104,6 +106,53 @@ def test_local_context_resolver_enforces_the_effective_window(
     assert resolver("big-local") == 32768
     assert resolver("kimi-k2.6:cloud") is None
     assert resolver("missing") is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_lm_studio_served_window_replaces_the_local_setting_while_loaded(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _local_model("gemma", {"lmstudio": {"local": True}})
+    monkeypatch.setattr(runtime.models, "get", lambda provider_id, model_id: model)
+    runtime.storage.update_settings_sections(
+        {"local_models": {"context_windows": {"lmstudio/gemma": 16384}}}
+    )
+    runtime.storage.set_provider_connection_enabled("lmstudio:local", True)
+
+    def listing(*windows: int) -> httpx.Response:
+        instances = [
+            {"id": f"gemma:{n}", "config": {"context_length": w}} for n, w in enumerate(windows)
+        ]
+        entry = {"type": "llm", "key": "gemma", "max_context_length": 262144}
+        return httpx.Response(200, json={"models": [{**entry, "loaded_instances": instances}]})
+
+    # Loaded by someone else at 8192; then unloaded and loaded again by vBot.
+    respx.get("http://localhost:1234/api/v1/models").mock(
+        side_effect=[listing(8192), listing(), listing(12288)]
+    )
+    load_route = respx.post("http://localhost:1234/api/v1/models/load").mock(
+        return_value=httpx.Response(200, json={"instance_id": "gemma"})
+    )
+    respx.post("http://localhost:1234/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi."}}]},
+        )
+    )
+    adapter = runtime.get_adapter(ConnectionRef("lmstudio", "lmstudio:local"))
+    try:
+        # The served window is the live window for Chat, Compaction and /status.
+        await adapter.send([{"role": "user", "content": "Hello"}], model_id="gemma")
+        assert runtime.local_context_windows()["lmstudio/gemma"] == 8192
+
+        # Once the instance is gone, the setting decides the window vBot loads with.
+        await adapter.send([{"role": "user", "content": "Hello"}], model_id="gemma")
+    finally:
+        await adapter.aclose()
+    assert json.loads(load_route.calls.last.request.content)["context_length"] == 16384
+    # What the new instance reports wins over what vBot asked for.
+    assert runtime.local_context_windows()["lmstudio/gemma"] == 12288
 
 
 @pytest.mark.asyncio
