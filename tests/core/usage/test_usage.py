@@ -298,6 +298,16 @@ async def test_usage_restore_recovers_existing_call_from_newer_session(
         sessions.close()
 
 
+SPEED = {
+    "first_token_ms": 900,
+    "duration_ms": 4100,
+    "output_tokens_per_second": 62.5,
+    "tokens": 200,
+    "window_ms": 3200,
+    "basis": "output",
+}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "provider_field"),
@@ -341,6 +351,7 @@ async def test_history_import_retains_stronger_measurements_cost_and_outcome(
                         "output_tokens_estimated": True,
                         "cache_read_tokens": 1,
                         "reported_cost_usd": 0.1,
+                        "speed": SPEED,
                     },
                 )
             ],
@@ -353,6 +364,7 @@ async def test_history_import_retains_stronger_measurements_cost_and_outcome(
         assert record.usage["output_tokens"] == 4
         assert record.usage["output_tokens_estimated"] is True
         assert record.usage["cache_read_tokens"] == 1
+        assert record.usage["speed"] == SPEED
         assert record.usage["cost"] == provider_cost
         if provider_field == "reported_cost_usd":
             assert record.usage["reported_cost_usd"] == 0.7

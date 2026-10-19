@@ -186,6 +186,8 @@ def _import_usage(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[st
         merged["estimated"] = True
     else:
         merged.pop("estimated", None)
+    if "speed" not in merged and "speed" in incoming:
+        merged["speed"] = incoming["speed"]
 
     old_cost = project_cost(previous.get("cost"))
     new_cost = project_cost(incoming.get("cost"))
