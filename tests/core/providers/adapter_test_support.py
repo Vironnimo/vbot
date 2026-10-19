@@ -46,6 +46,10 @@ class AdapterHookDefaults:
         del model_id
         return False
 
+    def on_demand_tools(self, model_id: str) -> bool:
+        del model_id
+        return True
+
     async def stream(
         self, messages: list[Any], *, model_id: str, **kwargs: Any
     ) -> AsyncIterator[dict[str, Any]]:

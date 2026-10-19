@@ -12,7 +12,7 @@
 
 ## On-demand Tools
 
-`core/tools/on_demand.py::on_demand_tools` is the one classification Chat, `prompt.preview` and `scripts/tool_lab` share: every Tool except `load_tools`, the Session's granted Tools and the always-loaded Tools (the default set, or `always_loaded`; the file edit Tools count as one). Built-in Agents, fixed Tool sets, Tool access `none` and temporary Agents have none.
+`core/tools/on_demand.py::on_demand_tools` is the one classification Chat, `prompt.preview` and `scripts/tool_lab` share: every Tool except `load_tools`, the Session's granted Tools and the always-loaded Tools (the default set, or `always_loaded`; the file edit Tools count as one). Built-in Agents, fixed Tool sets, Tool access `none` and temporary Agents have none. Neither does a Run whose primary route does not serve them (wire `request.on_demand_tools: false`, the Adapter's `on_demand_tools(model_id)`): its Model calls only Tools the request's `tools[]` lists, so Chat lists every Tool whatever `tool_loading` says instead of breaking the prompt cache with each load (`chat/request-building.md` -> Tool catalog per prompt epoch). `prompt.preview` follows the Agent's Model route the same way (`ChatLoop.serves_on_demand_tools`); `scripts/tool_lab` shows the Agent-level classification.
 
 ## Tool summaries
 

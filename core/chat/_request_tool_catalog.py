@@ -45,6 +45,7 @@ from core.tools import (
 )
 from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tool_entries, on_demand_tools
 from core.tools.terminal import project_terminal_tool_definitions
+from core.utils.errors import VBotError
 
 if TYPE_CHECKING:
     from core.chat._run_state import ChatLoopDependencies, _RunExecutionContext
@@ -90,6 +91,7 @@ class RequestToolCatalog:
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
             model_family=target.model_family,
+            route_on_demand=target.on_demand_tools,
             known=known,
             told=told,
         )
@@ -208,9 +210,16 @@ class RequestToolCatalog:
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         model_family: str,
+        route_on_demand: bool,
         known: Collection[str] = (),
         told: Collection[str] = (),
     ) -> LiveToolCatalog:
+        """Measure the Tools *agent* may use now on one route.
+
+        A route without On-demand Tools (*route_on_demand* false) lists every
+        Tool, whatever the Agent's ``tool_loading`` says: its Model calls only
+        listed Tools, and listing a loaded one would cost the prompt cache.
+        """
         definitions = await self._dependencies.get_system_prompts().provider_tool_definitions_async(
             agent,
             session_tool_grants=session_tool_grants,
@@ -235,14 +244,18 @@ class RequestToolCatalog:
             and not await self._dependencies.image_understanding_available()
         ):
             usable.discard(ANALYZE_IMAGE_TOOL_NAME)
-        on_demand = await _CHAT_TRANSFORM_WORKERS.run(
-            partial(
-                on_demand_tool_entries,
-                self._dependencies.tools,
-                agent,
-                offered,
-                session_tool_grants=session_tool_grants,
+        on_demand = (
+            await _CHAT_TRANSFORM_WORKERS.run(
+                partial(
+                    on_demand_tool_entries,
+                    self._dependencies.tools,
+                    agent,
+                    offered,
+                    session_tool_grants=session_tool_grants,
+                )
             )
+            if route_on_demand
+            else ()
         )
         # load_tools is offered while a Tool is there to load, and usable while
         # any usable Tool is on demand: readiness and route gates alone never
@@ -253,7 +266,9 @@ class RequestToolCatalog:
                 for definition in offered
                 if definition.get("name") != LOAD_TOOLS_TOOL_NAME
             ]
-        if not on_demand_tools(agent, usable, session_tool_grants=session_tool_grants):
+        if not route_on_demand or not on_demand_tools(
+            agent, usable, session_tool_grants=session_tool_grants
+        ):
             usable.discard(LOAD_TOOLS_TOOL_NAME)
         return LiveToolCatalog(
             usable=frozenset(usable),
@@ -344,6 +359,22 @@ class RequestToolCatalog:
         return [
             definition for definition in tools if definition.get("name") != ANALYZE_IMAGE_TOOL_NAME
         ]
+
+    async def serves_on_demand_tools(self, agent: Any) -> bool:
+        """Return whether a Run of *agent* on its Model's route gets On-demand Tools.
+
+        False when the route lists every Tool whatever the Agent's
+        ``tool_loading`` says (the Adapter's ``on_demand_tools``). An Agent whose
+        Model resolves to no route keeps its own setting.
+        """
+        try:
+            target = await self.targets.for_agent(agent)
+        except VBotError:
+            return True
+        try:
+            return target.on_demand_tools
+        finally:
+            await _close_adapter(target.adapter)
 
     async def preview_tool_definitions(
         self, agent: Any, *, session_tool_grants: Sequence[str] = ()

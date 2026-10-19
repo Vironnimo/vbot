@@ -297,6 +297,9 @@ class _ModelTarget:
     # Whether the route returns calls to Tools outside the request's Tool list
     # (the Adapter's ``list_announced_tools`` is false).
     unlisted_tool_calls: bool = True
+    # Whether the route serves On-demand Tools (the Adapter's ``on_demand_tools``);
+    # on the primary route false lists every Tool a new Tool pin offers.
+    on_demand_tools: bool = True
     # The Model's family from the Model catalog ("" when unknown); on the primary
     # route it decides the file edit Tools a new Tool pin offers.
     model_family: str = ""
@@ -542,6 +545,7 @@ class RequestBuildInputs:
     tool_route_input_modalities: frozenset[str] | None = None
     tool_route_wire_media_types: frozenset[str] | None = None
     tool_route_model_family: str | None = None
+    tool_route_on_demand_tools: bool = True
     # Pinned prompt-epoch state; replaced wholesale by a Compaction refresh.
     agent_body: str = ""
     project_context: ProjectPromptContext | None = None
@@ -595,6 +599,7 @@ class RequestBuildInputs:
             tool_route_input_modalities=context.primary_target.input_modalities,
             tool_route_wire_media_types=context.primary_target.wire_media_types,
             tool_route_model_family=context.primary_target.model_family,
+            tool_route_on_demand_tools=context.primary_target.on_demand_tools,
             agent_body=context.agent_body,
             project_context=context.project_prompt_context,
             working_project_context=context.working_project_context,

@@ -288,6 +288,7 @@ class ChatCompactionHost:
                     has_open_goal, self._dependencies.sessions, session.address
                 ),
                 list_announced_tools=adapter.list_announced_tools(model_id),
+                tool_route_on_demand_tools=adapter.on_demand_tools(model_id),
             )
             state = await self._requests.build_request_state(agent, session, inputs=inputs)
             return ManualCompactionRequest(

@@ -557,7 +557,7 @@ export default Object.freeze({
   'toolAccess.onDemand.description':
     'Only Tools marked Always loaded are sent with every request. The Agent loads the others when it needs them, which saves context.',
   'toolAccess.onDemand.help':
-    'The Agent sees the other allowed Tools by name with a one-line summary and loads their full definitions with the load_tools Tool before it first calls one. Requests stay smaller, so more context is left for the conversation. What the Agent may use does not change.\n\nSome Models handle this less reliably. If the Agent misses Tools it should use, mark them Always loaded or turn this off.',
+    'The Agent sees the other allowed Tools by name with a one-line summary and loads their full definitions with the load_tools Tool before it first calls one. Requests stay smaller, so more context is left for the conversation. What the Agent may use does not change.\n\nOpenAI Models can only call Tools sent with the request, so with them every Tool is sent and this setting has no effect. Some other Models handle loading less reliably. If the Agent misses Tools it should use, mark them Always loaded or turn this off.',
   'toolAccess.alwaysLoaded.title': 'Always loaded',
   'toolAccess.alwaysLoaded.summary':
     '{alwaysLoaded} always loaded, {onDemand} on demand. Use the pin on a Tool to change it.',

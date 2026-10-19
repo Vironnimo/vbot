@@ -23,7 +23,7 @@ Domain vocabulary. The core Tool term lives in `.vorch/GLOSSARY.md`.
 **Not:** The canonical contract, a per-Run schema, readiness, or an execution-time fallback.
 
 ### On-demand Tool
-**Definition:** A Tool an Agent may use whose definition its Tool list leaves out while the Agent's `tool_loading` switch is on (`agent/configuration.md` -> Fields): the System Prompt lists it by name and summary, and the Agent loads its definition with `load_tools` before the first call. `core/tools/on_demand.py::on_demand_tools` is the one classification Chat, `prompt.preview` and `scripts/tool_lab` share (`tools/load_tools.md`).
+**Definition:** A Tool an Agent may use whose definition its Tool list leaves out while the Agent's `tool_loading` switch is on and its route serves them (`agent/configuration.md` -> Fields): the System Prompt lists it by name and summary, and the Agent loads its definition with `load_tools` before the first call. `core/tools/on_demand.py::on_demand_tools` is the one classification Chat, `prompt.preview` and `scripts/tool_lab` share (`tools/load_tools.md`).
 **Not:** A permission or a deferred Tool (`deferred=True`): an On-demand Tool is allowed and callable, only its definition is not shown until loaded.
 
 ### Failure modes F1-F6
