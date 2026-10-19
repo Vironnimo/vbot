@@ -15,7 +15,11 @@ from core.providers.github_copilot_responses import (
     build_responses_payload,
     estimate_responses_input_tokens,
 )
-from tests.core.providers.responses_test_support import responses_policy, responses_reasoning
+from tests.core.providers.responses_test_support import (
+    keep_output_limit,
+    responses_policy,
+    responses_reasoning,
+)
 
 _ENCRYPTED_INCLUDE = [REASONING_ENCRYPTED_CONTENT_INCLUDE]
 _HELLO = [{"role": "user", "content": "Hello"}]
@@ -29,6 +33,7 @@ def test_payload_carries_system_instructions_and_always_requests_encrypted_reaso
         model_id="gpt-5.4",
         policy=responses_policy(),
         reasoning_renderer=responses_reasoning(),
+        output_limit=keep_output_limit,
     )
 
     # Reasoning-capable Models need the continuity bytes even without an effort.
@@ -46,6 +51,7 @@ def test_payload_maps_effort_and_tool_definitions_and_gates_structured_output() 
         model_id="gpt-5.4",
         policy=responses_policy(structured_outputs=False),
         reasoning_renderer=responses_reasoning("xhigh", levels=("low",)),
+        output_limit=keep_output_limit,
         tools=[
             {"name": "search", "description": "Search", "parameters": {"type": "object"}},
             # A blank top-level name defers to the nested function definition.
@@ -149,6 +155,7 @@ def test_payload_forwards_only_fields_the_policy_allows(
         model_id="gpt-5.4",
         policy=responses_policy(**overrides),
         reasoning_renderer=reasoning,
+        output_limit=keep_output_limit,
         **request_kwargs,
     )
 
@@ -474,6 +481,7 @@ def test_payload_replays_conversation_as_responses_items(
         model_id="gpt-5.4",
         policy=responses_policy(),
         reasoning_renderer=responses_reasoning(),
+        output_limit=keep_output_limit,
     )
 
     assert payload["input"] == expected_input
@@ -498,6 +506,7 @@ def test_payload_maps_an_allowed_document_to_input_file() -> None:
         model_id="gpt-5.4",
         policy=responses_policy(),
         reasoning_renderer=responses_reasoning(),
+        output_limit=keep_output_limit,
         document_media_types=frozenset({"application/pdf"}),
     )
 
@@ -531,6 +540,7 @@ def test_payload_rejects_media_the_endpoint_cannot_carry(media_block: dict[str, 
             model_id="gpt-5.4",
             policy=responses_policy(),
             reasoning_renderer=responses_reasoning(),
+            output_limit=keep_output_limit,
         )
 
     assert caught.value.retryable is False
@@ -606,6 +616,7 @@ def test_estimate_budgets_everything_that_rides_on_the_wire(
         model_id="gpt-5.4",
         policy=responses_policy(),
         reasoning_renderer=responses_reasoning(),
+        output_limit=keep_output_limit,
     )
 
     assert estimated > estimate_responses_input_tokens(messages)

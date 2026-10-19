@@ -522,24 +522,6 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return normalize_responses_response(response)
         return super().normalize_response(response, model_id=model_id)
 
-    def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        # ``None``-valued caller kwargs mean unspecified — drop them before
-        # Provider defaults, matching ``OpenAICompatibleAdapter._build_payload``.
-        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
-        if self._config.defaults:
-            for key, value in self._config.defaults.items():
-                request_kwargs.setdefault(key, value)
-        # Output-limit defaults are resolved by _apply_model_output_limit in
-        # _build_responses_payload, which honors the full precedence chain:
-        # explicit caller limit → model ceiling → provider default. Leaving the
-        # flat provider default here would make it look like an explicit caller
-        # value and skip the model ceiling — the bug that capped Grok-4.5 at
-        # 8192 instead of its 500000-token ceiling.
-        for key in ("max_tokens", "max_output_tokens"):
-            if kwargs.get(key) is None:
-                request_kwargs.pop(key, None)
-        return request_kwargs
-
     def _build_responses_payload(
         self,
         messages: list[dict[str, Any]],
@@ -560,22 +542,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             effort_levels(profile.reasoning) if self.effort_updates(model_id) else None,
         )
         reasoning_renderer = take_reasoning_renderer(profile, request_kwargs)
-        # A wire that takes no output-token field (Codex) is never budgeted
-        # locally: the reserve would abort a still-valid request (it sits at the
-        # same 80% line as Compaction, which never sees this pre-send path).
-        if policy.supports_request_parameter("max_tokens") or policy.supports_request_parameter(
-            "max_output_tokens"
-        ):
-            self._apply_model_output_limit(
-                request_kwargs,
-                model_id,
-                messages,
-                estimated_input_tokens=lambda: self.estimate_request_input_tokens(
-                    messages,
-                    model_id=model_id,
-                    tools=request_kwargs.get("tools"),
-                ),
-            )
+        # A wire that takes no output-token field (Codex) is budgeted all the
+        # same, so input that cannot fit fails before I/O; its policy drops the field.
         payload = build_responses_payload(
             messages,
             model_id=model_id,
@@ -583,6 +551,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             stream=stream,
             document_media_types=self._responses_document_types(model_id),
             reasoning_renderer=reasoning_renderer,
+            output_limit=lambda kwargs: self._apply_model_output_limit(kwargs, model_id, messages),
             **request_kwargs,
         )
         if self._connection_mode == CODEX_RESPONSES_MODE:

@@ -62,6 +62,12 @@ def responses_reasoning(
     return lambda payload: render_reasoning(wire, intent, payload)
 
 
+def keep_output_limit(request_kwargs: dict[str, Any]) -> None:
+    """The codec's output-limit step without an Adapter: the caller's limit stands as given."""
+
+    del request_kwargs
+
+
 def sse_event(event: str, data: Mapping[str, Any]) -> str:
     """One named SSE event; ``data`` may omit ``type`` to rely on the event name."""
 

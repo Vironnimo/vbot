@@ -204,7 +204,16 @@ async def test_request_carries_cache_affinity_tier_and_model_output_limit(
             "grok-4.20-multi-agent-0309",
             {
                 "thinking_effort": "xhigh",
-                "tools": [{"type": "function", "function": {"name": "lookup"}}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "description": "Look up.",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
             },
             {
                 "reasoning": {"effort": "xhigh", "summary": "auto"},

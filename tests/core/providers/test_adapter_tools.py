@@ -42,7 +42,7 @@ from core.providers.wire_profiles import standalone_wire_binding
 from core.tools import tool_failure, tool_success
 
 from .adapter_test_support import TOKEN, bearer_config
-from .responses_test_support import responses_policy, responses_reasoning
+from .responses_test_support import keep_output_limit, responses_policy, responses_reasoning
 
 _DASH_UNDERSCORE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 _ALPHANUMERIC_ID = re.compile(r"^[A-Za-z0-9]+$")
@@ -529,7 +529,11 @@ def test_responses_replay_rewrites_foreign_call_ids_without_forging_item_ids(
     original = copy.deepcopy(messages)
 
     payload = build_responses_payload(
-        messages, model_id="test-model", policy=_RESPONSES_POLICY, reasoning_renderer=_NO_REASONING
+        messages,
+        model_id="test-model",
+        policy=_RESPONSES_POLICY,
+        reasoning_renderer=_NO_REASONING,
+        output_limit=keep_output_limit,
     )
 
     replayed_reasoning, function_call, function_output = payload["input"]
@@ -582,7 +586,11 @@ def test_responses_replay_neutralizes_readable_item_text_and_keeps_opaque_state(
     original = copy.deepcopy(messages)
 
     payload = build_responses_payload(
-        messages, model_id="test-model", policy=_RESPONSES_POLICY, reasoning_renderer=_NO_REASONING
+        messages,
+        model_id="test-model",
+        policy=_RESPONSES_POLICY,
+        reasoning_renderer=_NO_REASONING,
+        output_limit=keep_output_limit,
     )
 
     # Readable text cannot forge a reminder; encrypted content and ids replay verbatim.
@@ -829,6 +837,7 @@ def test_responses_wire_sends_the_rendered_result_text() -> None:
         model_id="test-model",
         policy=_RESPONSES_POLICY,
         reasoning_renderer=_NO_REASONING,
+        output_limit=keep_output_limit,
     )
 
     outputs = [

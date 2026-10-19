@@ -370,11 +370,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
 
             def build() -> dict[str, Any]:
                 return self._build_responses_payload(
-                    messages,
-                    model_id=model_id,
-                    **self._request_kwargs_with_defaults(
-                        self._kwargs_with_model_output_limit(model_id, messages, kwargs)
-                    ),
+                    messages, model_id=model_id, **self._request_kwargs_with_defaults(kwargs)
                 )
 
             response = await execute_learning_from_rejections(
@@ -410,9 +406,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                     messages,
                     model_id=model_id,
                     stream=True,
-                    **self._request_kwargs_with_defaults(
-                        self._kwargs_with_model_output_limit(model_id, messages, kwargs)
-                    ),
+                    **self._request_kwargs_with_defaults(kwargs),
                 )
 
             return stream_learning_from_rejections(
@@ -461,20 +455,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             response_headers=response_headers,
         )
 
-    def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        """Merge provider ``defaults`` under caller kwargs for the Responses route.
-
-        The Chat Completions path applies defaults inside the shared
-        ``_build_payload``; this custom route bypasses it, so it mirrors the
-        OpenRouter adapter's explicit merge (caller kwargs win).
-        """
-
-        request_kwargs: dict[str, Any] = {}
-        if self._config.defaults:
-            request_kwargs.update(self._config.defaults)
-        request_kwargs.update(kwargs)
-        return request_kwargs
-
     def _build_responses_payload(
         self,
         messages: list[dict[str, Any]],
@@ -507,6 +487,9 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             policy=profile_responses_policy(profile, self._catalog_model(model_id)),
             stream=stream,
             reasoning_renderer=reasoning_renderer,
+            output_limit=lambda request_kwargs: self._apply_model_output_limit(
+                request_kwargs, model_id, messages
+            ),
             **kwargs,
         )
         payload["store"] = False
@@ -641,27 +624,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             build_headers=_build_headers,
             handle_error_status=_handle_error_status,
         )
-
-    def _kwargs_with_model_output_limit(
-        self,
-        model_id: str,
-        messages: list[dict[str, Any]],
-        kwargs: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Copy the caller kwargs with the model output ceiling defaulted in.
-
-        The Responses build stamps it here because it bypasses the shared
-        ``_build_payload``, which applies it on the Chat path; the inner
-        Messages adapter applies it before each of its builds. Each runs in the
-        build, off the Event Loop. The explicit-vs-ceiling logic lives in the
-        base ``_apply_model_output_limit``; this adapter only contributes
-        flat-namespace candidate resolution via its ``_model_max_output_tokens``
-        override.
-        """
-
-        request_kwargs = dict(kwargs)
-        self._apply_model_output_limit(request_kwargs, model_id, messages)
-        return request_kwargs
 
     @override
     def _model_max_output_tokens(self, model_id: str) -> int | None:
