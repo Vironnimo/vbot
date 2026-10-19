@@ -43,10 +43,17 @@ Results are compact text: `count` or `service`/`changed` fields plus a `content`
 
 - `POST /api/services/{domain}/{service}`. Required `domain`, `service`; optional `entity_id` (one id, a list, or comma-separated ids; the body sends a list for several) and `data` object. Display summary fields: `domain`, `service`, `entity_id`.
 - Dialects: `action` -> `service`, `service_data` -> `data`; `target` lifts `entity_id` to the field and `area_id`/`device_id`/`floor_id`/`label_id` into `data`; `data.entity_id` lifts to `entity_id` (matching duplicates accepted, different entities refuse); `light.turn_on` in either field supplies both unless the other field disagrees. A service without domain takes its entities' single domain; entities of several domains refuse, pointing at `homeassistant`.
-- Returns `{service, changed, note?, response?, content?}`: the last reported state of each changed entity, with attributes named by `data` keys. Requested entities that did not change are read back (at most 10) and listed with `[unchanged]`; when every requested entity is missing the result is `entity_not_found` with candidates, otherwise a note names the missing ids.
+- Returns `{service, changed, note?, response?, content?}`: the last reported state of each changed entity, with attributes named by `data` keys. For a light's `brightness_pct`, it reports the returned `brightness` and its approximate percentage (0-255 maps to 0-100%), never the requested value; missing/null brightness reads `brightness not reported`, and unusual values remain raw without a percentage. Requested entities that did not change are read back (at most 10) and listed with `[unchanged]`, with the same brightness rendering; when every requested entity is missing the result is `entity_not_found` with candidates, otherwise a note names the missing ids.
 - A 400/404 answer is diagnosed through `GET /api/services`: unknown domain/service -> `service_not_found` with close names and the corrected call; otherwise the message names `ha_list_services {"domain","service"}` for the fields.
 - Service responses: a 400 whose message mentions `return_response` (Home Assistant's pre-run refusal of a data-only service) is re-sent once with `?return_response`, and the result carries `response` (cut at 16000 characters). The unadvertised `return_response: true` requests optional responses; a service without responses refuses it with `invalid_arguments`. This REST behavior follows Home Assistant's API source and is covered by respx tests, not verified against a live instance.
 - Blocked domains: `shell_command`, `command_line`, `python_script`, `pyscript`, `hassio`, `rest_command`; refused before any request with `blocked_domain`.
+
+## Agent-facing text
+
+| Text | Reason |
+| --- | --- |
+| `brightness=<returned value> (~<percentage>%)` for a `brightness_pct` request | F4: service inputs and state attributes use different names. Three successful brightness calls on 2026-10-18/19 returned only `on`, after which Agents confirmed the requested percentage without returned brightness evidence. |
+| `brightness not reported` | F4: a missing or null state attribute cannot confirm the requested brightness; name the missing evidence instead of silently omitting it. |
 
 ## Settings Schema & live reads
 
