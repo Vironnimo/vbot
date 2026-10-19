@@ -39,7 +39,11 @@ from core.providers.adapter import (
     estimate_wire_request_input_tokens,
     request_input_budget,
 )
-from core.providers.providers import ConnectionConfig, resolve_effective_context_window
+from core.providers.providers import (
+    ConnectionConfig,
+    RequestInput,
+    resolve_effective_context_window,
+)
 from core.providers.reasoning import ReasoningReplayPolicy
 from core.utils.retry import caller_owns_retries
 from scripts._wire_snapshot.environment import SnapshotEnvironment, build_environment
@@ -464,7 +468,10 @@ class _ModelCapture:
             budget = estimate_wire_request_input_tokens(
                 adapter, messages, model_id=self._model_id, tools=tools
             )
-        with caller_owns_retries(), request_input_budget(self._model_id, budget):
+        with (
+            caller_owns_retries(),
+            request_input_budget(self._model_id, RequestInput.estimate(budget)),
+        ):
             if mode == "send":
                 return await adapter.send(messages, **kwargs)
             return [delta async for delta in adapter.stream(messages, **kwargs)]

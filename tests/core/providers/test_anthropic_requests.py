@@ -20,7 +20,7 @@ from core.providers.adapter import (
 )
 from core.providers.errors import ProviderError, ProviderRequestTooLargeError
 from core.providers.http import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
-from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
+from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, RequestInput
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 
 from .anthropic_test_support import (
@@ -725,14 +725,14 @@ async def test_context_clamping_preserves_thinking_until_capacity_is_exhausted()
     assert reservation == 32_769
     budgets = []
     for tokens in (100_000, 140_000, 150_000, 165_000):
-        with request_input_budget(MODEL_ID, tokens):
+        with request_input_budget(MODEL_ID, RequestInput.estimate(tokens)):
             payload = await sent_payload(adapter, thinking_effort="max")
         budgets.append(payload["thinking"])
         assert reservation <= payload["max_tokens"] <= 200_000 - tokens
     assert budgets == [{"type": "enabled", "budget_tokens": 32_768}] * 4
     # An oversized request fails before I/O instead of silently changing the
     # Model's thinking, including when Compaction is disabled or failed.
-    with request_input_budget(MODEL_ID, 170_000), respx.mock:
+    with request_input_budget(MODEL_ID, RequestInput.estimate(170_000)), respx.mock:
         route = respx.post(ANTHROPIC_URL).mock(return_value=httpx.Response(200))
         with pytest.raises(ProviderError):
             await adapter.send(SAMPLE_MESSAGES, model_id=MODEL_ID, thinking_effort="max")

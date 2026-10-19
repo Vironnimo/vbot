@@ -24,6 +24,7 @@ from core.chat.messages import (
 )
 from core.chat.wire_shaping import _embed_notes_into_request
 from core.providers.adapter import estimate_wire_request_input_tokens
+from core.providers.providers import RequestInput
 from core.utils.tokens import estimate_request_input_tokens
 
 JsonObject = dict[str, Any]
@@ -632,6 +633,24 @@ def with_context_window(usage: JsonObject, context_window: int | None) -> JsonOb
     if context_window is None or context_window <= 0:
         return usage
     return {**usage, "context_window": context_window}
+
+
+def projected_request_input(context_usage: Mapping[str, Any]) -> RequestInput:
+    """The request input a Context projection describes, measured and estimated parts apart.
+
+    Against a Provider measurement only the estimated change since it is an
+    estimate; without one the whole projection is. Only estimated parts carry
+    the estimation margin when the request's output is sized.
+    """
+    tokens = _non_negative_int(context_usage.get("tokens"))
+    if _optional_non_negative_int(context_usage.get("provider_input_tokens")) is None:
+        return RequestInput.estimate(tokens)
+    if not context_usage.get("estimated"):
+        return RequestInput.measured(tokens)
+    change = context_usage.get("estimated_delta_tokens")
+    if not isinstance(change, int) or isinstance(change, bool):
+        return RequestInput.estimate(tokens)
+    return RequestInput.measured(tokens, estimated_change=change)
 
 
 def latest_context_window(messages: Sequence[ChatMessage]) -> int | None:

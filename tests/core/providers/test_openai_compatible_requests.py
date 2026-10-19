@@ -18,7 +18,12 @@ from core.providers.adapter import (
 from core.providers.errors import ProviderError
 from core.providers.http import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
 from core.providers.openai_compatible import REASONING_PARAMETER_NAMES
-from core.providers.providers import AuthConfig, ConnectionConfig, resolve_request_output_limit
+from core.providers.providers import (
+    AuthConfig,
+    ConnectionConfig,
+    RequestInput,
+    resolve_request_output_limit,
+)
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.tools import tool_failure, tool_success
 from core.utils.tokens import estimate_structured_tokens
@@ -226,26 +231,27 @@ async def test_output_allowance_leaves_room_for_the_tool_inclusive_request() -> 
         model_output_limit=256_000,
         provider_default=None,
         effective_context_window=256_000,
-        estimated_input_tokens=estimated_input,
+        request_input=RequestInput.estimate(estimated_input),
     )
     assert 0 < payload["max_tokens"] < 256_000
 
 
 @pytest.mark.asyncio
-async def test_output_allowance_uses_the_scoped_input_projection_and_separate_reserve() -> None:
+async def test_output_allowance_uses_the_scoped_input_projection_with_its_measured_part() -> None:
     model_id = "nvidia/nemotron-nano-9b-v2:free"
     adapter = make_adapter(
         NO_DEFAULTS_CONFIG,
         model=catalog_model(model_id, max_output_tokens=256_000, context_window=256_000),
     )
 
-    with request_input_budget(model_id, 150_000):
+    with request_input_budget(model_id, RequestInput.measured(150_000, estimated_change=2_000)):
         payload = await sent_payload(
             adapter, [{"role": "user", "content": "x" * 8_000}], url=MINIMAL_URL, model_id=model_id
         )
 
-    # 256k window minus measured input minus the existing 25% output reserve.
-    assert payload["max_tokens"] == 68_500
+    # 256k window minus the projected input minus the margin of its estimated
+    # 2k change only; the measured part carries none.
+    assert payload["max_tokens"] == 256_000 - 150_000 - 500
     assert set(payload) == {"model", "messages", "max_tokens"}
 
 

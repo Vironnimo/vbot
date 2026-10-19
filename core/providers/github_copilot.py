@@ -365,7 +365,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                     model_id=model_id,
                     tools=tool_definitions,
                 ),
-            )
+            ).tokens
             if estimated_input > max_prompt_tokens:
                 raise ProviderError(
                     "Request input exceeds the GitHub Copilot Model prompt limit "

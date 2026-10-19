@@ -17,6 +17,7 @@ from core.chat.usage import (
     checkpoint_context_usage,
     latest_context_window,
     latest_session_context_usage,
+    projected_request_input,
 )
 from core.compaction.compaction import (
     COMPACTION_POLICY_META_KEY,
@@ -29,7 +30,6 @@ from core.compaction.compaction import (
     effective_compaction_policy,
 )
 from core.performance import record_span, session_track
-from core.providers.providers import request_input_limit_for_output
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -480,12 +480,14 @@ class CompactionRunCoordinator:
             settings.threshold,
             settings=settings,
         )
+        # Compact before the request, plus the estimation margin of its
+        # estimated part, could leave less than a stable thinking budget's room.
+        request_input = projected_request_input(effective_context_usage)
         effort = current_state.effort
         reservation = target.adapter.minimum_output_tokens(
             target.model_id, effort.current if effort is not None else agent.thinking_effort
         )
-        input_limit = request_input_limit_for_output(context_window, reservation)
-        if input_limit is not None and input_tokens > input_limit:
+        if reservation > 0 and request_input.upper_bound > context_window - reservation:
             should_compact = True
             if not forced:
                 reason = "output_reservation"

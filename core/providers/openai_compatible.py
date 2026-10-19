@@ -571,7 +571,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             return max(0, int(value))
 
         rules = self.wire_profile(model_id).request
-        estimated_input = resolve_request_input_budget(model_id, estimate_input)
         resolved = resolve_request_output_limit(
             explicit_limit=explicit_limit,
             model_output_limit=self._model_max_output_tokens(model_id),
@@ -580,7 +579,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             effective_context_window=resolve_context_window(
                 self._model_context_window(model_id), self._config
             ),
-            estimated_input_tokens=estimated_input,
+            request_input=resolve_request_input_budget(model_id, estimate_input),
             minimum_output_tokens=self.minimum_output_tokens(
                 model_id, request_kwargs.get("thinking_effort"), explicit_limit=explicit_limit
             ),

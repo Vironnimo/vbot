@@ -22,6 +22,7 @@ from core.providers.adapter import request_input_budget, resolve_request_input_b
 from core.providers.errors import ProviderRequestTooLargeError
 from core.providers.http import PreparedRequest
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.providers import RequestInput
 from core.providers.wire_profile import RequestRules
 
 from . import anthropic_test_support as anthropic
@@ -42,7 +43,7 @@ from .openai_compatible_test_support import (
 
 _MESSAGES = [{"role": "user", "content": 'Grüße 😀 "quoted" \\ slash\n\tline end'}]
 _MODES = pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
-_BUDGET = 4321
+_BUDGET = RequestInput.measured(4321, estimated_change=21)
 
 
 def _messages_sse() -> httpx.Response:
@@ -130,7 +131,7 @@ class _Preparation:
 
     def __init__(self, model_id: str = MODEL_ID) -> None:
         self.model_id = model_id
-        self.builds: list[tuple[int, int]] = []
+        self.builds: list[tuple[int, RequestInput]] = []
         self.encodings: list[int] = []
         self.hops = 0
 

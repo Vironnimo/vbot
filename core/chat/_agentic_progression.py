@@ -52,6 +52,7 @@ from core.chat.tool_dispatch import (
 from core.chat.usage import (
     add_session_turn_usage,
     aggregate_session_usage,
+    projected_request_input,
 )
 from core.chat.wire_shaping import (
     _message_to_request_dict,
@@ -466,7 +467,9 @@ class AgenticProgression:
                 )
                 try:
                     with (
-                        request_input_budget(target.model_id, int(request_context_usage["tokens"])),
+                        request_input_budget(
+                            target.model_id, projected_request_input(request_context_usage)
+                        ),
                         measure(
                             "provider.response",
                             track=track,

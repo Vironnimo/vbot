@@ -26,6 +26,7 @@ from core.providers.lmstudio import LMStudioAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openrouter import OpenRouterAdapter
+from core.providers.providers import RequestInput
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.providers.xai import XAIAdapter
 
@@ -107,15 +108,18 @@ def test_optional_capabilities_degrade_safely_by_default() -> None:
 
 @pytest.mark.asyncio
 async def test_request_input_budget_is_task_local_nested_and_model_specific() -> None:
+    local = RequestInput.estimate(280_000)
+
     async def one_budget(tokens: int) -> None:
-        with request_input_budget("model", tokens):
+        budget = RequestInput.measured(tokens, estimated_change=1_000)
+        with request_input_budget("model", budget):
             await asyncio.sleep(0)
-            assert resolve_request_input_budget("model", 280_000) == tokens
-            assert resolve_request_input_budget("other-model", 280_000) == 280_000
-            with request_input_budget("model", 123):
-                assert resolve_request_input_budget("model", 280_000) == 123
-            assert resolve_request_input_budget("model", 280_000) == tokens
-        assert resolve_request_input_budget("model", 280_000) == 280_000
+            assert resolve_request_input_budget("model", 280_000) == budget
+            assert resolve_request_input_budget("other-model", 280_000) == local
+            with request_input_budget("model", RequestInput.measured(123)):
+                assert resolve_request_input_budget("model", 280_000) == RequestInput.measured(123)
+            assert resolve_request_input_budget("model", 280_000) == budget
+        assert resolve_request_input_budget("model", 280_000) == local
 
     await asyncio.gather(one_budget(150_000), one_budget(20_000))
 
@@ -127,11 +131,13 @@ def test_request_input_budget_evaluates_a_fallback_only_without_a_matching_scope
         calls.append(True)
         return 280_000
 
-    with request_input_budget("model", 0):
-        assert resolve_request_input_budget("model", estimate) == 0
+    with request_input_budget("model", RequestInput.measured(0)):
+        assert resolve_request_input_budget("model", estimate) == RequestInput.measured(0)
         assert calls == []
-        assert resolve_request_input_budget("other-model", estimate) == 280_000
-    assert resolve_request_input_budget("model", estimate) == 280_000
+        assert resolve_request_input_budget("other-model", estimate) == RequestInput.estimate(
+            280_000
+        )
+    assert resolve_request_input_budget("model", estimate) == RequestInput.estimate(280_000)
     assert len(calls) == 2
 
 
@@ -208,12 +214,12 @@ async def test_matching_budget_replaces_wire_estimation_without_changing_the_req
             assert standalone[limit] == 68_500
 
             calls.clear()
-            with request_input_budget("another-model", 250_000):
+            with request_input_budget("another-model", RequestInput.estimate(250_000)):
                 assert await sent_body() == standalone
             assert calls
 
             monkeypatch.setattr(adapter, "estimate_request_input_tokens", unexpected_estimate)
-            with request_input_budget(_BUDGET_MODEL_ID, 150_000):
+            with request_input_budget(_BUDGET_MODEL_ID, RequestInput.estimate(150_000)):
                 assert await sent_body() == standalone
     finally:
         await adapter.aclose()
@@ -233,7 +239,7 @@ async def test_matching_budget_still_enforces_the_copilot_prompt_limit_before_io
         with respx.mock:
             route = respx.post(url).mock(return_value=httpx.Response(200, json={"id": "reply"}))
             with (
-                request_input_budget(_BUDGET_MODEL_ID, 200_001),
+                request_input_budget(_BUDGET_MODEL_ID, RequestInput.measured(200_001)),
                 pytest.raises(ProviderError) as error,
             ):
                 await adapter.send(_BUDGET_MESSAGES, model_id=_BUDGET_MODEL_ID)

@@ -39,6 +39,7 @@ from core.providers._tool_result_text import (
     tool_result_function_response,
     tool_result_text,
 )
+from core.providers.providers import RequestInput
 from core.providers.reasoning import (
     ReasoningIntent,
     ReasoningReplayFidelity,
@@ -127,28 +128,31 @@ TERMINAL_OUTCOMES: Final[frozenset[TerminalOutcome]] = frozenset(
 
 IMAGE_WIRE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 
-_REQUEST_INPUT_BUDGET: ContextVar[tuple[str, int] | None] = ContextVar(
+_REQUEST_INPUT_BUDGET: ContextVar[tuple[str, RequestInput] | None] = ContextVar(
     "provider_request_input_budget", default=None
 )
 
 
 @contextmanager
-def request_input_budget(model_id: str, tokens: int) -> Iterator[None]:
+def request_input_budget(model_id: str, request_input: RequestInput) -> Iterator[None]:
     """Scope Chat's complete Context projection to one send, including inner wire routing.
 
-    This local budget never enters request kwargs or a Provider payload. The
-    Adapter still adds its independent output-capacity uncertainty reserve.
+    The projection keeps its measured and estimated parts apart, so the
+    Adapter's output clamp applies the estimation margin to the estimated part
+    only. This local budget never enters request kwargs or a Provider payload.
     """
-    with _REQUEST_INPUT_BUDGET.set((model_id, max(0, tokens))):
+    with _REQUEST_INPUT_BUDGET.set((model_id, request_input)):
         yield
 
 
-def resolve_request_input_budget(model_id: str, local_estimate: int | Callable[[], int]) -> int:
-    """Use the scoped projection, evaluating a local fallback only when needed."""
+def resolve_request_input_budget(
+    model_id: str, local_estimate: int | Callable[[], int]
+) -> RequestInput:
+    """Use the scoped projection, else a local estimate evaluated only when needed."""
     budget = _REQUEST_INPUT_BUDGET.get()
     if budget is not None and budget[0] == model_id:
         return budget[1]
-    return local_estimate() if callable(local_estimate) else local_estimate
+    return RequestInput.estimate(local_estimate() if callable(local_estimate) else local_estimate)
 
 
 def estimate_wire_request_input_tokens(
