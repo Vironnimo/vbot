@@ -57,6 +57,7 @@ from core.providers._openrouter_policy import (
     _openrouter_provider_preferences,
     _openrouter_routing_options,
     _openrouter_status_error_payload,
+    openrouter_in_flight_budget_exhausted,
 )
 from core.providers._responses_profile import (
     RESPONSES_DOCUMENT_TYPES,
@@ -70,6 +71,7 @@ from core.providers._wire_learning import (
 )
 from core.providers.errors import (
     NetworkError,
+    ProviderRateLimitError,
     classify_in_band_provider_error,
 )
 from core.providers.github_copilot_responses import (
@@ -95,6 +97,7 @@ from core.providers.openai_compatible import (
 )
 from core.providers.wire_profile import Protocol
 from core.settings.settings import parse_openrouter_routing
+from core.utils.http_status import parse_retry_after
 from core.utils.retry import retry_async
 
 __all__ = [
@@ -306,10 +309,20 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 response_headers=response_headers,
             )
             return
+        if status_code == 402 and openrouter_in_flight_budget_exhausted(error):
+            throttled = ProviderRateLimitError(
+                f"Rate limited by the in-flight spending budget: {detail}"
+            )
+            throttled.status_code = status_code
+            throttled.retry_after = parse_retry_after(response_headers)
+            raise throttled
         # Same router leniency as the streaming path: a structured OpenRouter
         # error body on an otherwise fatal status may still name a transient or
         # endpoint-specific condition, so classify from its structured fields.
-        raise classify_in_band_provider_error(error, lenient_unknown=True)
+        # Any other 402 (credits, key limit) needs the user and stays fatal.
+        classified = classify_in_band_provider_error(error, lenient_unknown=status_code != 402)
+        classified.status_code = status_code
+        raise classified
 
     @override
     def estimate_request_input_tokens(

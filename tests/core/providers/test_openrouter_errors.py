@@ -105,6 +105,42 @@ async def test_chat_stream_in_band_error_uses_router_leniency(
             7,
             id="429-keeps-shared-policy-and-retry-after",
         ),
+        pytest.param(
+            httpx.Response(
+                402,
+                json={
+                    "error": {
+                        "code": 402,
+                        "message": "Insufficient credits.",
+                        "metadata": {"limit_source": "openrouter_credits"},
+                    }
+                },
+            ),
+            ProviderError,
+            False,
+            None,
+            id="402-credits-need-the-user",
+        ),
+        pytest.param(
+            httpx.Response(
+                402,
+                headers={"Retry-After": "3"},
+                json={
+                    "error": {
+                        "code": 402,
+                        "message": "In-flight budget exhausted.",
+                        "metadata": {
+                            "limit_source": "openrouter_in_flight_budget",
+                            "reason": "in_flight_budget_exhausted",
+                        },
+                    }
+                },
+            ),
+            ProviderRateLimitError,
+            True,
+            3,
+            id="402-in-flight-budget-waits",
+        ),
     ],
 )
 @respx.mock

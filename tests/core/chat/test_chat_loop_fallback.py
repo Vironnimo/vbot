@@ -23,6 +23,7 @@ from core.providers.errors import (
     ProviderAuthError,
     ProviderRateLimitError,
     ProviderTimeoutError,
+    ProviderUsageLimitError,
 )
 from core.runs import (
     ERROR_MESSAGE_PERSISTED_EVENT,
@@ -197,8 +198,9 @@ async def test_rate_limit_without_a_fallback_fails_the_run_after_same_model_reco
     [
         ProviderAuthError("invalid credential"),
         ProviderError("Provider error: insufficient_quota", retryable=False),
+        ProviderUsageLimitError("Subscription usage limit reached; it resets at 18:00 UTC"),
     ],
-    ids=["auth", "billing"],
+    ids=["auth", "billing", "usage-limit"],
 )
 async def test_account_scoped_failure_advances_only_to_another_connection(
     tmp_path: Path, failure: ProviderError

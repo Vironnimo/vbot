@@ -360,6 +360,11 @@ def classify_in_band_error_type(
         return _build(True)
     if classifier in IN_BAND_FATAL_ERROR_CODES:
         return _build(False)
+    # Payment required: missing credits or a spending limit need the user, so
+    # no retry or router leniency helps (OpenRouter's in-flight budget, which a
+    # later attempt can pass, is classified before this).
+    if numeric_code == 402:
+        return _build(False)
     if hints.get("retryable") is True:
         return _build(True)
     return _build(lenient_unknown)

@@ -22,6 +22,7 @@ from core.providers.errors import (
     ProviderAuthError,
     ProviderRateLimitError,
     ProviderStreamingUnsupportedError,
+    ProviderUsageLimitError,
 )
 from core.providers.reasoning import merge_reasoning_meta, split_inline_reasoning
 from core.runs import (
@@ -244,8 +245,8 @@ def model_fallback_scope(
     may use a different host, so its normalized interruption can advance.
 
     ``"connection"``: only routes on another Connection or account. That holds
-    for auth failures and billing, quota and permission refusals, which belong
-    to the account behind the failed route's Connection.
+    for auth failures, a reached usage limit, and billing, quota and permission
+    refusals, which belong to the account behind the failed route's Connection.
 
     ``None``: no route. Streaming-unsupported and every other fatal class
     (context/token limits, content policy) would either fail again or silently
@@ -255,7 +256,7 @@ def model_fallback_scope(
         return "route" if error.cause in {"provider", "network", "timeout"} else None
     if isinstance(error, ProviderStreamingUnsupportedError):
         return None
-    if isinstance(error, ProviderAuthError):
+    if isinstance(error, ProviderAuthError | ProviderUsageLimitError):
         return "connection"
     if error.retryable or getattr(error, "status_code", None) == 404:
         return "route"

@@ -50,6 +50,24 @@ def _openrouter_http_error_detail(response: httpx.Response) -> str:
     return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
 
 
+def openrouter_in_flight_budget_exhausted(error: Mapping[str, Any]) -> bool:
+    """Whether a 402 error object is OpenRouter's in-flight budget, which a later attempt can pass.
+
+    OpenRouter holds each paid request's estimated cost against the balance and
+    rejects one that does not fit with 402 "before it reaches a provider", with
+    ``Retry-After``; ``weight_exceeds_budget`` never fits, and other
+    ``limit_source`` values (credits, key limit) need the user
+    (https://openrouter.ai/docs/api_reference/limits, read 2026-10-19).
+    """
+
+    metadata = error.get("metadata")
+    return (
+        isinstance(metadata, Mapping)
+        and metadata.get("limit_source") == "openrouter_in_flight_budget"
+        and metadata.get("reason") != "weight_exceeds_budget"
+    )
+
+
 def _openrouter_status_error_payload(detail: str) -> dict[str, Any] | None:
     """Extract the structured ``error`` object from an HTTP error detail.
 

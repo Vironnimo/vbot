@@ -23,6 +23,7 @@ from uuid import uuid4
 import httpx
 
 from core.debug import DebugContext, ProviderDebugRecorder
+from core.providers._openrouter_policy import openrouter_in_flight_budget_exhausted
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter_types import openai_compatible_base_url
 from core.providers.errors import (
@@ -633,14 +634,7 @@ def classify_task_response(
 
 
 def _in_flight_budget_exhausted(response: httpx.Response) -> bool:
-    """Whether a 402 is OpenRouter's in-flight budget, which a later attempt can pass.
-
-    OpenRouter holds each paid request's estimated cost against the balance and
-    rejects one that does not fit with 402 "before it reaches a provider", with
-    ``Retry-After``; ``weight_exceeds_budget`` never fits, and other
-    ``limit_source`` values (credits, key limit) need the user
-    (https://openrouter.ai/docs/api_reference/limits, read 2026-10-19).
-    """
+    """Whether a 402 is OpenRouter's in-flight budget, which a later attempt can pass."""
 
     if response.status_code != 402:
         return False
@@ -649,12 +643,7 @@ def _in_flight_budget_exhausted(response: httpx.Response) -> bool:
     except ValueError, UnicodeError:
         return False
     error = payload.get("error") if isinstance(payload, Mapping) else None
-    metadata = error.get("metadata") if isinstance(error, Mapping) else None
-    return (
-        isinstance(metadata, Mapping)
-        and metadata.get("limit_source") == "openrouter_in_flight_budget"
-        and metadata.get("reason") != "weight_exceeds_budget"
-    )
+    return isinstance(error, Mapping) and openrouter_in_flight_budget_exhausted(error)
 
 
 def _task_debug_recorder(
