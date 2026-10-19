@@ -126,8 +126,10 @@ async def test_provider_connect_completion_publishes_the_auth_outcome(
             "success": success,
         }
     ]
-    # Only a successful login changes which Models are selectable.
+    # Only a successful login changes which Models are selectable, and ends the
+    # transports opened with the previous token.
     assert resource_changes(state) == ([{"kind": "providers"}] if success else [])
+    assert state.runtime.closed_transports == ([("github-copilot", "oauth")] if success else [])
 
 
 @pytest.mark.asyncio
@@ -156,6 +158,7 @@ async def test_provider_disconnect_deletes_only_the_account_token_and_cancels_it
     assert token_store.load(Account("github-copilot", "oauth", kept)) is not None
     assert state.device_flow_engine.cancelled == [("github-copilot", "oauth", account_id)]
     assert resource_changes(state) == [{"kind": "providers"}]
+    assert state.runtime.closed_transports == [("github-copilot", "oauth")]
 
 
 @pytest.mark.asyncio

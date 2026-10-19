@@ -13,6 +13,7 @@ import asyncio
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx
@@ -22,8 +23,11 @@ from core.models.models import (
     Model,
 )
 from core.providers._codex_websocket import (
+    CodexConnectionKey,
+    CodexTransports,
     CodexWebSocket,
     _CodexWebSocketTransportError,
+    codex_conversation_id,
 )
 from core.providers._openai_constants import (
     _CODEX_CACHE_SCOPE_MAX_LENGTH,
@@ -119,6 +123,7 @@ __all__ = [
     "CODEX_WEBSOCKET_BETA",
     "CONVERSATION_ID_KWARG",
     "CodexTransport",
+    "CodexTransports",
     "CodexWebSocketConnector",
     "CodexWebSocketRoute",
     "DISCOVERY_JSON_PARAMETER_NAMES",
@@ -163,7 +168,13 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         connection_mode: str | None = None,
         codex_transport: CodexTransport = _CODEX_TRANSPORT_AUTO,
         codex_websocket_connect: CodexWebSocketConnector | None = None,
+        codex_transports: CodexTransports | None = None,
+        codex_connection: CodexConnectionKey | None = None,
     ) -> None:
+        """``codex_transports`` keeps Codex sockets and Connection facts beyond this
+        Adapter (the Runtime passes its own, keyed by ``codex_connection``); without
+        it the Adapter owns a private one and closes it with :meth:`aclose`.
+        """
         if codex_transport not in {_CODEX_TRANSPORT_AUTO, _CODEX_TRANSPORT_SSE}:
             raise ValueError(f"unsupported Codex transport: {codex_transport}")
         super().__init__(
@@ -176,17 +187,28 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             connection_mode=connection_mode,
         )
         self._codex_transport = codex_transport
-        self._codex_websocket_disabled_routes: set[CodexWebSocketRoute] = set()
+        self._owns_codex_transports = codex_transports is None
+        self._codex_transports = codex_transports or CodexTransports()
+        self._codex_connection: CodexConnectionKey = codex_connection or (
+            config.id,
+            connection_mode or "",
+        )
         self._codex_socket = CodexWebSocket(
             base_url=str(self._client.base_url),
             connect=codex_websocket_connect or cast(CodexWebSocketConnector, websocket_connect),
             debug_recorder=self._debug_recorder,
+            transports=self._codex_transports,
+            connection=self._codex_connection,
         )
 
     @override
     async def aclose(self) -> None:
-        """Close the cached Codex WebSocket and inherited HTTP client."""
-        await self._codex_socket.aclose()
+        """Close the inherited HTTP client, and the Codex sockets this Adapter owns.
+
+        Shared Codex transports keep the Session's socket for its next Run.
+        """
+        if self._owns_codex_transports:
+            await self._codex_transports.aclose()
         await super().aclose()
 
     @classmethod
@@ -293,7 +315,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         ``previous_response_id`` continuation. The API-key paths ignore both.
         """
         del project_id
-        conversation_id = f"{agent_id}:{session_id}"
+        conversation_id = codex_conversation_id(agent_id, session_id)
         return {
             CONVERSATION_ID_KWARG: conversation_id,
             PROMPT_CACHE_AFFINITY_ID_KWARG: (prompt_cache_affinity_id or conversation_id),
@@ -622,6 +644,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         A failed WebSocket exchange drops its continuation and socket, so the
         rebuilt request opens a fresh exchange with full context. ``states``
         collects the stream state of every attempt (the last one completed).
+        When the request will try the WebSocket, its JSON body is encoded only
+        if it falls back to HTTP: a WebSocket request encodes just the
+        ``response.create`` it sends.
         """
 
         request_kwargs = dict(kwargs)
@@ -650,7 +675,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
         return stream_learning_from_rejections(
             open_stream,
-            self._request_plan(messages, model_id, build),
+            replace(
+                self._request_plan(messages, model_id, build),
+                lazy_body=self._tries_codex_websocket(cache_scope_id, conversation_id),
+            ),
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -742,7 +770,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         return await post_json_with_retry(
             self._client,
             endpoint_path,
-            request.body,
+            await request.encode_body(),
             build_headers=lambda: self._attempt_headers(cache_scope_id, headers),
             handle_error_status=self._handle_error_status,
             provider_context="OpenAI provider",
@@ -761,7 +789,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         return await connect_streaming_with_retry(
             self._client,
             endpoint_path,
-            request.body,
+            await request.encode_body(),
             build_headers=lambda: self._attempt_headers(cache_scope_id, headers),
             handle_error_status=self._handle_error_status,
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
@@ -860,6 +888,17 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         finally:
             await response.aclose()
 
+    def _tries_codex_websocket(
+        self, cache_scope_id: str | None, conversation_id: str | None
+    ) -> bool:
+        """Whether a Codex request with these ids starts on the WebSocket."""
+        return bool(
+            cache_scope_id
+            and conversation_id
+            and self._codex_transport == _CODEX_TRANSPORT_AUTO
+            and self._codex_transports.websocket_available(self._codex_connection)
+        )
+
     async def _stream_codex_auto(
         self,
         request: PreparedRequest,
@@ -882,48 +921,35 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         # forks; the local route must remain Session-unique so one branch can
         # never consume another branch's ``previous_response_id`` state.
         route = (conversation_id, model_id, account_id)
-        if route in self._codex_websocket_disabled_routes:
-            async with aclosing(
-                self._stream_responses_sse(
-                    request,
-                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                    request_headers=request_headers,
-                    cache_scope_id=cache_scope_id,
-                    state=state,
-                )
-            ) as deltas:
-                async for delta in deltas:
-                    yield delta
-            return
-
-        try:
-            async with aclosing(
-                self._codex_socket.stream(
-                    request.payload,
-                    headers=websocket_headers,
-                    route=route,
-                    state=state,
-                )
-            ) as deltas:
-                async for delta in deltas:
-                    yield delta
-        except _CodexWebSocketTransportError as exc:
-            self._codex_websocket_disabled_routes.add(route)
-            if exc.events_received:
-                raise
-            # No event arrived, so no delta was yielded and the prepared body
-            # is still held for this fallback.
-            async with aclosing(
-                self._stream_responses_sse(
-                    request,
-                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                    request_headers=request_headers,
-                    cache_scope_id=cache_scope_id,
-                    state=state,
-                )
-            ) as deltas:
-                async for delta in deltas:
-                    yield delta
+        if self._codex_transports.websocket_available(self._codex_connection):
+            try:
+                async with aclosing(
+                    self._codex_socket.stream(
+                        request.payload,
+                        headers=websocket_headers,
+                        route=route,
+                        state=state,
+                    )
+                ) as deltas:
+                    async for delta in deltas:
+                        yield delta
+                return
+            except _CodexWebSocketTransportError as exc:
+                if exc.events_received:
+                    raise
+                # No event arrived, so no delta was yielded and the prepared
+                # request is still held for SSE.
+        async with aclosing(
+            self._stream_responses_sse(
+                request,
+                endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                request_headers=request_headers,
+                cache_scope_id=cache_scope_id,
+                state=state,
+            )
+        ) as deltas:
+            async for delta in deltas:
+                yield delta
 
     async def _build_codex_websocket_headers(self, cache_scope_id: str) -> dict[str, str]:
         wire_cache_scope = _clamp_codex_cache_scope(cache_scope_id)

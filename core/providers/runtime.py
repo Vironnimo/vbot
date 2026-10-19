@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, tzinfo
 from pathlib import Path
@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.models.database import ModelDatabaseRefresh, begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
+from core.providers._codex_websocket import CodexTransports, codex_conversation_id
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, Account, ConnectionRef, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter, is_local_provider_base_url
@@ -23,6 +24,7 @@ from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.ollama import OllamaAdapter
+from core.providers.openai import OpenAIAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import (
     ConnectionConfig,
@@ -100,6 +102,7 @@ class ProviderRuntime:
         # on the loop while worker threads read them.
         self._loaded_context_windows: dict[str, int] = {}
         self._loaded_context_lock = threading.Lock()
+        self._codex_transports = CodexTransports()
         self._wire_observations = self._load_wire_observations(storage)
         self._wire_profiles = WireProfiles(
             files=wire_profile_files(custom_providers, resources_path),
@@ -186,6 +189,30 @@ class ProviderRuntime:
         """Write pending learned wire facts (called on Runtime shutdown)."""
         self._wire_observations.close()
 
+    async def close_session_transports(self, sessions: Iterable[tuple[str, str]]) -> None:
+        """Close the Provider connections kept open for these ``(agent_id, session_id)``."""
+        await self._codex_transports.close_conversations(
+            {codex_conversation_id(agent_id, session_id) for agent_id, session_id in sessions}
+        )
+
+    async def close_connection_transports(
+        self, provider_id: str, connection_id: str | None = None
+    ) -> None:
+        """Close a Connection's kept-open Provider connections after its credentials changed.
+
+        ``connection_id`` is local (``subscription``); without it, every
+        Connection of the Provider closes.
+        """
+        await self._codex_transports.close_connection(provider_id, connection_id)
+
+    async def aclose_transports(self) -> None:
+        """Close every kept-open Provider connection (Runtime shutdown)."""
+        await self._codex_transports.aclose()
+
+    def abort_transports(self) -> None:
+        """Drop every kept-open Provider connection without waiting (synchronous shutdown)."""
+        self._codex_transports.abort()
+
     def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
         provider_id = connection.provider_id
         connection_id = connection.connection_id
@@ -213,6 +240,10 @@ class ProviderRuntime:
             extra_kwargs["loaded_context_reporter"] = self._loaded_context_reporter(provider_id)
         if adapter_class is OpenRouterAdapter:
             extra_kwargs["routing"] = self._storage.load_openrouter_routing_settings()
+        if adapter_class is OpenAIAdapter:
+            # A Session's Codex socket and continuation outlive the Run's Adapter.
+            extra_kwargs["codex_transports"] = self._codex_transports
+            extra_kwargs["codex_connection"] = (provider_id, connection_config.id)
 
         base_url = connection_config.base_url
         if adapter_class is GitHubCopilotAdapter:

@@ -825,7 +825,9 @@ _ASYNC_SHUTDOWN = (
     "video.aclose",
     "speech.aclose",
     "provider_usage.aclose",
+    "provider_runtime.aclose_transports",
     "debug_traces.aclose",
+    "provider_runtime.close_wire_observations",
     "performance.aclose",
     "commands.aclose",
     "terminals.aclose",
@@ -851,6 +853,8 @@ _SYNC_SHUTDOWN = (
     "librarian.stop",
     "speech.close",
     "provider_usage.close",
+    "provider_runtime.abort_transports",
+    "provider_runtime.close_wire_observations",
     "performance.stop",
     "commands.close",
     "terminals.stop",
@@ -888,6 +892,9 @@ def _recording_service(
         fire_shutdown=partial(acall, "fire_shutdown"),
         drain_activity=partial(acall, "drain_activity"),
         shutdown=partial(acall, "shutdown"),
+        abort_transports=partial(call, "abort_transports"),
+        aclose_transports=partial(acall, "aclose_transports"),
+        close_wire_observations=partial(call, "close_wire_observations"),
     )
 
 
@@ -946,6 +953,7 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
         ("_video", "video"),
         ("_speech", "speech"),
         ("_provider_usage", "provider_usage"),
+        ("_provider_runtime", "provider_runtime"),
         ("_performance", "performance"),
         ("_command_manager", "commands"),
         ("_terminal_manager", "terminals"),

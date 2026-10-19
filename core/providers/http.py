@@ -350,28 +350,37 @@ class RequestPlan:
     ``body_limit`` is the wire's verified request byte limit, when known.
     ``payload_headers`` returns the headers that depend on the finished payload
     and may refuse it with a ``ProviderError``; it runs once per payload, not
-    once per attempt.
+    once per attempt. ``lazy_body`` defers the JSON body to its first use
+    (:meth:`PreparedRequest.encode_body`) for a wire that may send something
+    else, such as a WebSocket continuation; a ``body_limit`` needs the body to
+    check it, so it keeps the encoding in the preparation hop.
     """
 
     build: Callable[[], dict[str, Any]]
     body_limit: int | None = None
     payload_headers: Callable[[Mapping[str, Any]], dict[str, str]] | None = None
+    lazy_body: bool = False
 
 
 class PreparedRequest:
     """One rendered request: its payload, exact JSON body and payload headers.
 
-    Every attempt of the request sends the same body bytes. An established
-    stream never sends its request again, so the stream owner calls
-    :meth:`release` and the payload and body need not live as long as the
-    stream; reading either afterwards is a programming error.
+    Every attempt of the request sends the same body bytes. A lazily planned
+    request encodes its body on first use, off the Event Loop, and keeps it
+    for every later attempt. An established stream never sends its request
+    again, so the stream owner calls :meth:`release` and the payload and body
+    need not live as long as the stream; reading either afterwards is a
+    programming error.
     """
 
-    __slots__ = ("_body", "_payload", "headers")
+    __slots__ = ("_body", "_payload", "_released", "headers")
 
-    def __init__(self, payload: dict[str, Any], body: bytes, headers: dict[str, str]) -> None:
+    def __init__(
+        self, payload: dict[str, Any], body: bytes | None, headers: dict[str, str]
+    ) -> None:
         self._payload: dict[str, Any] | None = payload
         self._body: bytes | None = body
+        self._released = False
         self.headers = headers
 
     @property
@@ -382,12 +391,22 @@ class PreparedRequest:
 
     @property
     def body(self) -> bytes:
-        if self._body is None:
+        """The exact JSON body; a lazily planned request needs :meth:`encode_body` first."""
+        if self._released:
             raise RuntimeError("The Provider request was released after it was established")
+        if self._body is None:
+            raise RuntimeError("The lazily planned Provider request body was not encoded yet")
+        return self._body
+
+    async def encode_body(self) -> bytes:
+        """Return the exact JSON body, encoding it on the request-body worker on first use."""
+        if self._body is None:
+            self._body = await _REQUEST_BODY_WORKERS.run(_encode_json_body, self.payload)
         return self._body
 
     def release(self) -> None:
         """Drop the payload and body; the headers stay for diagnostics."""
+        self._released = True
         self._payload = None
         self._body = None
 
@@ -399,9 +418,11 @@ type PayloadRevision = Callable[[dict[str, Any]], bool]
 async def prepare_request(plan: RequestPlan) -> PreparedRequest:
     """Build, encode and check one request in a single request-body worker hop.
 
-    The build runs in a copy of the caller's context, so a scoped Chat input
-    budget decides the same output limit it would on the Event Loop. A
-    cancelled caller waits until a started hop settles and sends nothing.
+    A ``plan.lazy_body`` request without a ``body_limit`` is built and checked
+    but not encoded. The build runs in a copy of the caller's context, so a
+    scoped Chat input budget decides the same output limit it would on the
+    Event Loop. A cancelled caller waits until a started hop settles and sends
+    nothing.
 
     Raises:
         ProviderRequestTooLargeError: the body exceeds ``plan.body_limit``.
@@ -430,8 +451,8 @@ def _render_request(
     payload = context.run(plan.build)
     if revise is not None and not revise(payload):
         return None
-    body = _encode_json_body(payload)
-    if plan.body_limit is not None and len(body) > plan.body_limit:
+    body = None if plan.lazy_body and plan.body_limit is None else _encode_json_body(payload)
+    if body is not None and plan.body_limit is not None and len(body) > plan.body_limit:
         raise ProviderRequestTooLargeError(len(body), plan.body_limit)
     headers = context.run(plan.payload_headers, payload) if plan.payload_headers is not None else {}
     return PreparedRequest(payload, body, headers)

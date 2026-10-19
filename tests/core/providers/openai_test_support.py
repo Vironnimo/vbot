@@ -16,7 +16,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import pytest
 import respx
+from websockets.extensions.permessage_deflate import PerMessageDeflate
+from websockets.frames import Frame, Opcode
+from websockets.protocol import State
 
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers.openai import (
@@ -292,24 +296,66 @@ async def platform_payload(
 
 
 class FakeCodexWebSocket:
-    """An in-memory Codex socket replaying one scripted event batch per ``response.create``."""
+    """An in-memory Codex socket replaying one scripted event batch per ``response.create``.
 
-    def __init__(self, event_batches: Sequence[Sequence[dict[str, Any] | BaseException]]) -> None:
+    With ``deflate_params`` the connector negotiates permessage-deflate with
+    the offered extension, answering with those response parameters; every
+    message then goes through the negotiated extension's ``encode`` as
+    websockets frames it, and a server-side decoder reads it back.
+    ``sent_data`` keeps what each ``send`` call got and ``sent_frames`` each
+    message's frame as it went out. Unexpected traffic fails the test outright
+    instead of looking like a transport failure.
+    """
+
+    def __init__(
+        self,
+        event_batches: Sequence[Sequence[dict[str, Any] | BaseException]],
+        *,
+        deflate_params: Sequence[tuple[str, str | None]] | None = None,
+    ) -> None:
         self._event_batches = deque(deque(batch) for batch in event_batches)
         self._active_events: deque[dict[str, Any] | BaseException] = deque()
+        self.deflate_params = deflate_params
         self.sent_payloads: list[dict[str, Any]] = []
+        self.sent_data: list[str | bytes] = []
+        self.sent_frames: list[Frame] = []
         self.closed = False
+        self.state = State.OPEN
         self.response = SimpleNamespace(status_code=101, headers={"x-test-transport": "ws"})
+        self.protocol = SimpleNamespace(extensions=[])
 
-    async def send(self, data: str) -> None:
-        self.sent_payloads.append(json.loads(data))
+    def negotiate(self, offered: Sequence[Any]) -> None:
+        if self.deflate_params is None:
+            return
+        [factory] = offered
+        client = factory.process_response_params(self.deflate_params, [])
+        self.protocol.extensions = [client]
+        # The server's side of the same negotiation; it keeps its decoder
+        # across messages unless the client may not take over context.
+        self._server = PerMessageDeflate(
+            client.local_no_context_takeover,
+            client.remote_no_context_takeover,
+            client.local_max_window_bits,
+            client.remote_max_window_bits,
+        )
+
+    async def send(self, data: str | bytes, text: bool | None = None) -> None:
+        assert text is not False
+        self.sent_data.append(data)
+        message = data.encode("utf-8") if isinstance(data, str) else data
+        if self.protocol.extensions:
+            [extension] = self.protocol.extensions
+            frame = extension.encode(Frame(Opcode.TEXT, message))
+            self.sent_frames.append(frame)
+            message = bytes(self._server.decode(frame).data)
+        self.sent_payloads.append(json.loads(message))
         if not self._event_batches:
-            raise AssertionError("unexpected WebSocket request")
+            pytest.fail("unexpected WebSocket request")
         self._active_events = self._event_batches.popleft()
 
     async def recv(self) -> str:
         if not self._active_events:
-            raise AssertionError("WebSocket response ended without a terminal event")
+            pytest.fail("WebSocket response ended without a terminal event")
         event = self._active_events.popleft()
         if isinstance(event, BaseException):
             raise event
@@ -317,6 +363,7 @@ class FakeCodexWebSocket:
 
     async def close(self) -> None:
         self.closed = True
+        self.state = State.CLOSED
 
 
 class FakeCodexWebSocketConnector:
@@ -329,10 +376,11 @@ class FakeCodexWebSocketConnector:
     async def __call__(self, url: str, **kwargs: Any) -> FakeCodexWebSocket:
         self.calls.append((url, kwargs))
         if not self._connections:
-            raise AssertionError("unexpected WebSocket connection")
+            pytest.fail("unexpected WebSocket connection")
         connection = self._connections.popleft()
         if isinstance(connection, BaseException):
             raise connection
+        connection.negotiate(kwargs.get("extensions") or ())
         return connection
 
     def headers(self, name: str) -> list[str]:

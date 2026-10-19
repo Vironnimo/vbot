@@ -80,6 +80,10 @@ async def test_an_archived_agent_returns_with_its_sessions_grants_and_roster_pos
     assert agents.get("manager").tools["subagent"]["allowed_agents"] == ["x"]
     assert [agent.id for agent in agents.list_with_order().agents] == ["manager", "beta"]
     assert world.recall_removals == [(None, "coder", None)]
+    assert set(world.closed_transports) == {
+        SessionAddress(None, "coder", coder.current_session_id),
+        second,
+    }
     assert world.changes
     # The commands of its Sessions were stopped without delivery first.
     assert world.commands.closed == [("agent", "coder", None)]
@@ -334,6 +338,7 @@ async def test_an_archived_project_returns_and_roots_its_agents_again(
     # An Identity Session stays where it works; it cannot run until the Project returns.
     assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == "vbot"
     assert not build_scratch.area.exists() and notes_scratch.area.exists()
+    assert world.closed_transports == [build]
 
     if replace_agent:
         await world.service.archive_agent("coder")
@@ -473,6 +478,7 @@ async def test_a_session_archive_takes_its_review_forks_and_moves_the_current_po
     assert not world.sessions.exists(session) and not world.sessions.exists(review)
     assert world.commands.closed == [("session", session), ("session", review)]
     assert world.recall_removals == [(None, session.agent_id, session.session_id)]
+    assert world.closed_transports == [session, review]
     assert not scratch.area.exists() and not review_scratch.area.exists()
     assert (await world.service.show(archived.entry_id)).listing.accepts_target_id
     # Channel routing started a new Session at the archived address meanwhile.

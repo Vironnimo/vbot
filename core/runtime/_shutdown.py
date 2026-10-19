@@ -163,9 +163,16 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("speech", speech.close, speech.aclose)
     if provider_usage is not None:
         yield _Step("provider_usage", provider_usage.close, provider_usage.aclose)
+    if (provider_runtime := runtime._provider_runtime) is not None:
+        # Every Provider call has ended; close the connections kept for the next Run.
+        yield _Step(
+            "provider_transports",
+            provider_runtime.abort_transports,
+            provider_runtime.aclose_transports,
+        )
     # Every Provider call has ended; persist the Debug traces they handed off.
     yield _Step("debug_traces", None, drain_debug_traces)
-    if (provider_runtime := runtime._provider_runtime) is not None:
+    if provider_runtime is not None:
         # Every Provider call has ended; write the wire facts they taught.
         close_observations = provider_runtime.close_wire_observations
         yield _Step(

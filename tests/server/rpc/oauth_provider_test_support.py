@@ -122,12 +122,25 @@ class _ModelRegistry:
 
 
 def oauth_provider_state(tmp_path: Path, provider: ProviderConfig) -> SimpleNamespace:
-    """Return an RPC state serving only *provider*, with a real Token Store."""
+    """Return an RPC state serving only *provider*, with a real Token Store.
+
+    ``runtime.closed_transports`` records each ``(provider_id, connection_id)``
+    whose kept-open Provider transports the RPCs closed.
+    """
 
     refresh_lock = asyncio.Lock()
     secrets = SecretStore(tmp_path)
+    closed_transports: list[tuple[str, str | None]] = []
+
+    async def close_connection_transports(
+        provider_id: str, connection_id: str | None = None
+    ) -> None:
+        closed_transports.append((provider_id, connection_id))
+
     return SimpleNamespace(
         runtime=SimpleNamespace(
+            closed_transports=closed_transports,
+            close_connection_transports=close_connection_transports,
             model_database_refresh=lambda: refresh_lock,
             providers=_ProviderRegistry(provider),
             token_store=TokenStore(secrets),
