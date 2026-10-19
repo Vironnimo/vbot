@@ -292,16 +292,25 @@ live-Model Eval, external MCP service, installed-instance migration or published
 CI release was run. Findings describing hypothetical Model obedience were not
 reported as reproduced exploits.
 
+After merging with the concurrent output-speed work, 101 focused Chat, streaming,
+Usage and Tool-dispatch tests passed. That check exposed an existing test race:
+the stored Context estimate could use the cold tokenizer fallback while a later
+assertion used the loaded tokenizer. The Usage test module now fixes its estimator
+to the fallback with a fresh private count cache, without network loading or any
+production behavior change (`407775268`).
+
 The review also corrects misleading documentation in Automation, Discord and the
 sender metadata comment. Domain ownership remains unchanged and the Domain Maps
 index needs no new entries. The original report was left intact for comparison.
 
 ## Landing status
 
-All changes are committed together on the `security-findings` integration branch.
-The user explicitly reserved the merge to `main` until giving a separate signal,
-because another chat is working in the primary checkout. Main and its local
-`FLAGGED.md` are therefore not changed by this task yet. At the approved merge,
-reconcile that ledger with the verdicts above: remove fixed and disproved entries,
-retain the unresolved first-install authenticity concern, and keep
-unrelated entries intact.
+The user authorized the merge on 2026-10-19. Commit `53d0f99b2` merged the reviewed
+changes into `main`, preserving the concurrent output-speed work. The merge
+passed the repository's static checks, and the managed integration worktree was
+removed. No push, deployment or release was performed.
+
+The local, ignored `FLAGGED.md` was reconciled with these verdicts: resolved,
+disproved and intentional-behavior entries were removed, the first-install
+authenticity concern remains open, and unrelated concerns were preserved. The
+decisions above remain unimplemented.
