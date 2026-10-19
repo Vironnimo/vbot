@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from core.model_tasks.decision_types import DecisionError, validate_answers
+from core.model_tasks.decision_types import DecisionError, validate_answers, wire_questions
 from core.providers.task_client import NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY, ProviderTaskClient
 
 
@@ -35,9 +35,7 @@ class ProviderDecisionClient(ProviderTaskClient):
             json={
                 "model": self._model_id,
                 "state": state,
-                "questions": {
-                    q["id"]: {k: v for k, v in q.items() if k != "id"} for q in questions
-                },
+                "questions": wire_questions(questions),
             },
             parse=lambda response: validate_answers(response.json(), questions),
         )

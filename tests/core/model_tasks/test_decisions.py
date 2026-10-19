@@ -5,7 +5,12 @@ from typing import Any, cast
 import pytest
 
 from core.model_tasks.decision_types import DecisionError
-from core.model_tasks.decisions import INPUT_TOKEN_LIMIT, ITEM_LIMIT, DecisionService
+from core.model_tasks.decisions import (
+    ITEM_LIMIT,
+    QUESTION_TOKEN_LIMIT,
+    REQUEST_TOKEN_LIMIT,
+    DecisionService,
+)
 from core.model_tasks.model_tasks import TaskModelService
 
 QUESTIONS = [{"id": "q", "type": "noul", "instructions": "Relevant?"}]
@@ -50,6 +55,18 @@ async def test_each_item_is_one_bounded_request_answered_in_item_order(monkeypat
     assert 1 < peak <= 8
 
 
+class _Calibration:
+    def __init__(self, factor: float) -> None:
+        self.factor = factor
+        self.samples: list[tuple[str, int, int]] = []
+
+    def input_estimate_factor(self, model: str) -> float:
+        return self.factor
+
+    def record_input_estimate(self, model: str, *, measured: int, estimated: int) -> None:
+        self.samples.append((model, measured, estimated))
+
+
 @pytest.mark.asyncio
 async def test_an_oversized_item_fails_alone_without_a_request(monkeypatch):
     owner = service()
@@ -60,11 +77,39 @@ async def test_an_oversized_item_fails_alone_without_a_request(monkeypatch):
         return {"answers": {"q": {"type": "noul", "noul": 0.5}}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
+    # Each question fits alone with the item, together they exceed the request limit.
+    question_sized = "word " * (QUESTION_TOKEN_LIMIT // 2)
+    many = [{**QUESTIONS[0], "id": f"q{n}", "instructions": question_sized} for n in range(5)]
 
-    small, large = await owner.classify(["small", "word " * INPUT_TOKEN_LIMIT], QUESTIONS)
+    small, alone = await owner.classify(["small", "word " * QUESTION_TOKEN_LIMIT], QUESTIONS)
+    [together] = await owner.classify(["x"], many)
 
     assert sent == ["small"] and small["answers"]["q"]["noul"] == 0.5
-    assert isinstance(large, DecisionError) and large.code == "too_large"
+    assert isinstance(alone, DecisionError) and alone.code == "too_large"
+    assert isinstance(together, DecisionError) and "all questions" in str(together)
+    assert 5 * QUESTION_TOKEN_LIMIT // 2 > REQUEST_TOKEN_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_reported_input_tokens_correct_the_size_check(monkeypatch):
+    calibration = _Calibration(factor=2.0)
+    owner = service()
+    owner._usage_recorder = cast(Any, calibration)
+
+    async def evaluate(target, state, questions, *, http_client=None, usage_context=None):
+        return {"answers": {}, "usage": {"input_tokens": 1234}}
+
+    monkeypatch.setattr(owner, "_evaluate", evaluate)
+    # About 0.6 of the per-question limit: fits as estimated, not as corrected.
+    halfway = "word " * (QUESTION_TOKEN_LIMIT * 6 // 10)
+
+    rejected, answered = await owner.classify([halfway, "small"], QUESTIONS)
+
+    assert isinstance(rejected, DecisionError) and rejected.code == "too_large"
+    assert answered["usage"]["input_tokens"] == 1234
+    [(model, measured, estimated)] = calibration.samples
+    assert model == "openrouter/typesafe/jev-1.13::api_key" and measured == 1234
+    assert 0 < estimated < 100
 
 
 @pytest.mark.asyncio

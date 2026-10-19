@@ -99,6 +99,11 @@ def validate_questions(questions: Any) -> list[dict[str, Any]]:
     return cast(list[dict[str, Any]], questions)
 
 
+def wire_questions(questions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Validated questions as the Decisions wire keys them: by id."""
+    return {q["id"]: {k: v for k, v in q.items() if k != "id"} for q in questions}
+
+
 def finite_number(value: Any, *, minimum: float = 0, maximum: float = math.inf) -> bool:
     return (
         isinstance(value, int | float)

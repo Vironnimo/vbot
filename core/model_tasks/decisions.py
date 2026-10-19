@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import math
+from typing import Any, NamedTuple
 
 import httpx
 
@@ -12,6 +13,7 @@ from core.model_tasks.decision_types import (
     DecisionError,
     json_copy,
     validate_questions,
+    wire_questions,
 )
 from core.model_tasks.model_tasks import TaskModelService, parse_task_model_target_id
 from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
@@ -24,8 +26,10 @@ from core.utils.workers import BoundedWorkerPool
 
 # The most items one classify call judges.
 ITEM_LIMIT = 100
-# The most tokens the Decision Model reads per request: state plus questions.
-INPUT_TOKEN_LIMIT = 32_000
+# TypeSafe's context limits (docs.typesafe.ai/models, without the opt-in long
+# context): the state plus all questions, and the state plus any one question.
+REQUEST_TOKEN_LIMIT = 64_000
+QUESTION_TOKEN_LIMIT = 32_000
 # Items judged at the same time; each is one Provider request.
 _ITEM_CONCURRENCY = 8
 _DECISION_SETUP_WORKERS = BoundedWorkerPool(name="decision-setup", max_workers=2)
@@ -102,21 +106,23 @@ class DecisionService:
         ) -> dict[str, Any] | DecisionError:
             try:
                 state = json_copy(state)
-                tokens, _ = estimate_json_tokens({"state": state, "questions": questions})
-                if tokens > INPUT_TOKEN_LIMIT:
-                    raise DecisionError(
-                        f"This item has about {tokens} tokens together with context and "
-                        f"questions; the Decision Model reads at most {INPUT_TOKEN_LIMIT}.",
-                        code="too_large",
-                    )
+                estimate = _input_estimate(state, questions)
+                factor = (
+                    self._usage_recorder.input_estimate_factor(target)
+                    if self._usage_recorder is not None
+                    else 1.0
+                )
+                _check_input_size(estimate, factor)
                 async with slots:
-                    return await self._evaluate(
+                    result = await self._evaluate(
                         target,
                         state,
                         questions,
                         http_client=http_client,
                         usage_context=usage_context,
                     )
+                await self._learn_input_estimate(target, result, estimate.request)
+                return result
             except DecisionError as exc:
                 return exc
 
@@ -126,6 +132,19 @@ class DecisionService:
         ):
             tasks = [group.create_task(judge(state, http_client)) for state in states]
         return [task.result() for task in tasks]
+
+    async def _learn_input_estimate(
+        self, target: str, result: dict[str, Any], estimated: int
+    ) -> None:
+        """Correct later size checks by the input the Provider reported."""
+        recorder = self._usage_recorder
+        usage = result.get("usage")
+        measured = usage.get("input_tokens") if isinstance(usage, dict) else None
+        if recorder is None or not isinstance(measured, int) or isinstance(measured, bool):
+            return
+        await _DECISION_SETUP_WORKERS.run(
+            recorder.record_input_estimate, target, measured=measured, estimated=estimated
+        )
 
     async def _evaluate(
         self,
@@ -156,3 +175,34 @@ class DecisionService:
             ) from exc
         except (ProviderError, NetworkError) as exc:
             raise DecisionError(str(exc), code="provider_error") from exc
+
+
+class _InputEstimate(NamedTuple):
+    """Uncorrected estimates of one request: the whole of it and its largest question."""
+
+    request: int
+    question: int
+
+
+def _input_estimate(state: Any, questions: list[dict[str, Any]]) -> _InputEstimate:
+    request, _ = estimate_json_tokens({"state": state, "questions": wire_questions(questions)})
+    state_tokens, _ = estimate_json_tokens({"state": state})
+    largest = max(estimate_json_tokens(wire_questions([q]))[0] for q in questions)
+    return _InputEstimate(request, state_tokens + largest)
+
+
+def _check_input_size(estimate: _InputEstimate, factor: float) -> None:
+    request = math.ceil(estimate.request * factor)
+    question = math.ceil(estimate.question * factor)
+    if request > REQUEST_TOKEN_LIMIT:
+        raise DecisionError(
+            f"This item has about {request} tokens together with context and all "
+            f"questions; the Decision Model reads at most {REQUEST_TOKEN_LIMIT}.",
+            code="too_large",
+        )
+    if question > QUESTION_TOKEN_LIMIT:
+        raise DecisionError(
+            f"This item has about {question} tokens together with context and its largest "
+            f"question; the Decision Model reads at most {QUESTION_TOKEN_LIMIT} per question.",
+            code="too_large",
+        )
