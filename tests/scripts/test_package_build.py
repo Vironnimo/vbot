@@ -70,7 +70,12 @@ def test_every_pin_names_the_one_python_version_the_packages_bundle() -> None:
     archive = f"cpython-{runtime_lock['python']}%2B{runtime_lock['release']}-"
     assert all(archive in spec["url"] for spec in runtime_lock["runtimes"].values())
 
-    locks = sorted((ROOT / "scripts").glob("*/requirements-*.lock"))
+    # The build backend lock is not a packaged runtime and has no Python/CLI extras.
+    locks = sorted(
+        path
+        for path in (ROOT / "scripts").glob("*/requirements-*.lock")
+        if path.name != "requirements-build.lock"
+    )
     assert len(locks) == 5
     for lock in locks:
         locked = lock.read_text(encoding="utf-8")
