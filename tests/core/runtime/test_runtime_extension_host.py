@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -20,6 +21,7 @@ from core.tools import ToolContext
 from core.tools.availability import ToolAccess
 from core.tools.terminal_manager import TerminalOwner
 from core.utils.config import Config
+from tests.core.extensions.extension_test_support import tool_context
 from tests.core.runtime.runtime_test_support import write_project_skill, write_skill
 from tests.core.sessions.history_fixtures import complete_run
 
@@ -244,6 +246,63 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
     monkeypatch.setattr(runtime.projects, "list", retire_while_listing)
     with pytest.raises(ValueError, match="no longer current"):
         await host.catalog()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retirement", ["disable", "reload", "shutdown"])
+async def test_cached_owner_host_stops_admitting_service_calls(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retirement: str
+) -> None:
+    # Inject spies at the Runtime service boundary: refused calls must not reach it.
+    factory = runtime._host_operations()  # noqa: SLF001
+    context = tool_context("extension_tool", tmp_path)
+    sync_calls = {
+        "resolve_agent": (None, "a"),
+        "resolve_tool_agent": (context,),
+        "resolve_cwd": (None, "a"),
+        "store_attachment": ("text/plain", b"test-owned-attachment"),
+        "resolve_credential": ("TEST_CREDENTIAL",),
+        "set_credential": ("TEST_CREDENTIAL", "test-owned-value"),
+    }
+    services = {name: Mock() for name in sync_calls}
+    services["sample"] = AsyncMock(return_value={})
+    services["resolve_tool_agent_async"] = AsyncMock()
+    monkeypatch.setattr(factory, "_host", replace(factory._host, **services))  # noqa: SLF001
+    host = _owner_host(runtime, "mcp")
+    extensions = runtime.extensions
+    assert extensions is not None
+
+    for name, args in sync_calls.items():
+        getattr(host, name)(*args)
+        services[name].assert_called_once_with(*args)
+        services[name].reset_mock()
+    assert await host.sample(context, {}) == {}
+    services["sample"].reset_mock()
+    # Constructing a coroutine while active cannot reserve permission after retirement.
+    pending_sample = host.sample(context, {})
+
+    if retirement == "disable":
+        assert await extensions.deactivate("mcp", runtime.tools)
+    elif retirement == "reload":
+        extensions.retire_registration()
+    else:
+        await runtime.aclose()
+
+    with pytest.raises(ValueError):
+        await pending_sample
+    with pytest.raises(ValueError):
+        await host.sample(context, {})
+    assert host.resolve_tool_agent_async is not None
+    with pytest.raises(ValueError):
+        await host.resolve_tool_agent_async(context)
+    for name, args in sync_calls.items():
+        with pytest.raises(ValueError):
+            getattr(host, name)(*args)
+    assert host.for_owner is not None
+    with pytest.raises(ValueError):
+        host.for_owner(ExtensionRegistrationIdentity("mcp", "replacement"))
+    for service in services.values():
+        service.assert_not_called()
 
 
 @pytest.mark.asyncio
