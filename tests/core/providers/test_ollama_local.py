@@ -296,13 +296,18 @@ def test_malformed_tool_arguments_become_a_rejected_call() -> None:
             id="both-counters",
         ),
         pytest.param({"eval_count": 2572}, {"output_tokens": 2572}, id="cloud-omits-prompt-count"),
+        pytest.param(
+            {"eval_count": 50, "eval_duration": 1_250_000_000},
+            {"output_tokens": 50, "reported_output_tokens_per_second": 40.0},
+            id="measured-decode-speed",
+        ),
         pytest.param({}, None, id="no-counters-no-usage"),
     ],
 )
 @respx.mock
 @pytest.mark.asyncio
 async def test_usage_counters_map_on_completed_responses_and_streams(
-    counters: dict[str, int], expected_usage: dict[str, int] | None
+    counters: dict[str, int], expected_usage: dict[str, float] | None
 ) -> None:
     final = {"message": {"content": "x"}, "done": True, "done_reason": "stop", **counters}
     adapter = local_adapter()

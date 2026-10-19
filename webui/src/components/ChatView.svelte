@@ -946,6 +946,7 @@
                   {#if sessionSettings.view}
                     <ComposerSessionSettings
                       view={sessionSettings.view}
+                      outputSpeed={target.activeSessionState?.outputSpeed}
                       {projects}
                       {projectsLoaded}
                       onSelectProject={sessionSettings.selectProject}

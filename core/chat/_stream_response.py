@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.chat._output_speed import STREAM_TIMING_FIELD
 from core.chat._run_state import (
     _AssistantStep,
 )
@@ -147,6 +148,7 @@ async def consume_stream_response(
     delta_emitter = _StreamingRunDeltaEmitter(run)
     attempt_started = time.perf_counter()
     awaiting_first_delta = True
+    accumulator.request_sent()
     stream = adapter.stream(
         messages,
         model_id=model_id,
@@ -433,6 +435,14 @@ async def consume_stream_response(
             message_id=message_id,
         )
     assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
+    output_timing = accumulator.output_timing
+    if output_timing is not None:
+        # Only a complete response has a speed; the step's preparation turns
+        # these marks into ``usage.speed`` once its output tokens are known.
+        assistant_message = replace(
+            assistant_message,
+            usage={**(assistant_message.usage or {}), STREAM_TIMING_FIELD: output_timing},
+        )
     _emit_streaming_assistant_events(
         run, assistant_message, allow_after_cancel=preserve_complete_after_cancel
     )

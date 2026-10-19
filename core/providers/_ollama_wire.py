@@ -224,6 +224,15 @@ def _extract_ollama_usage(response: Mapping[str, Any]) -> dict[str, Any] | None:
         and output_tokens >= 0
     ):
         usage["output_tokens"] = output_tokens
+        # Ollama measures generation itself: eval_duration in nanoseconds.
+        eval_duration = response.get("eval_duration")
+        if (
+            output_tokens > 0
+            and isinstance(eval_duration, int)
+            and not isinstance(eval_duration, bool)
+            and eval_duration > 0
+        ):
+            usage["reported_output_tokens_per_second"] = output_tokens * 1e9 / eval_duration
     return usage or None
 
 

@@ -69,5 +69,5 @@ Read these only when your task matches - not by default.
 - Changing canonical message fields, request history, notes, Skill activation/catalog stability, the prompt-epoch Tool list or Tool-change announcements, reasoning replay, Assistant output-file references, Content Blocks, file mentions, attachment routing, or Tool-cycle repair -> `chat/request-building.md`
 - Changing Run admission/execution, `ChatLoop` entry points, Queue steering, streaming recovery, cancellation, interruption notices, Stream drafts, Tool progression, Run event payloads, Reasoning/content normalization, temporary or owned Runs, Model/Connection resolution, sampling, fallback, or Compaction boundaries -> `chat/run-execution.md`
 - Changing `start_external_run` or `ExternalRun` (recording a Live call's conversation) -> `chat/external-run.md`
-- Changing token normalization, estimation, persistence, whole-Session aggregation, Usage events, or the server-owned token projection -> `chat/usage.md`
+- Changing token normalization, estimation, persistence, whole-Session aggregation, Usage events, output speed, or the server-owned token projection -> `chat/usage.md`
 - Changing Built-in or Extension Command recognition, scheduling, effects, neutral outcomes, surface availability, or projection -> `chat/commands.md`

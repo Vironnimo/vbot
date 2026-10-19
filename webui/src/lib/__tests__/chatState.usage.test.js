@@ -138,6 +138,67 @@ describe('turn usage from Run events', () => {
   });
 });
 
+describe('output speed', () => {
+  const measured = {
+    first_token_ms: 900,
+    duration_ms: 4100,
+    output_tokens_per_second: 62.5,
+    tokens: 200,
+    window_ms: 3200,
+    basis: 'output',
+  };
+  const latencyOnly = { first_token_ms: 400, duration_ms: 450 };
+
+  it('keeps the newest measured speed when a later step is too short to measure', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: 'running',
+    });
+    const step = (sequence, speed) =>
+      appendRunEvent(sessionState, {
+        type: 'model_step_usage',
+        run_id: 'run-one',
+        sequence,
+        payload: { usage: { input_tokens: 10, output_tokens: 5, speed } },
+      });
+
+    step(2, measured);
+    step(3, latencyOnly);
+
+    expect(sessionState.usage.speed).toEqual(latencyOnly);
+    expect(sessionState.outputSpeed).toEqual(measured);
+  });
+
+  it('takes the newest measured step from History', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const assistant = (id, speed) => ({
+      id,
+      role: 'assistant',
+      content: 'Answer',
+      timestamp: '2026-10-19T10:00:00.000000Z',
+      usage: { input_tokens: 10, output_tokens: 5, speed },
+    });
+
+    loadHistory(
+      sessionState,
+      [assistant('m1', measured), assistant('m2', latencyOnly)],
+      { lastUsage: { input_tokens: 10, output_tokens: 5, speed: latencyOnly } },
+    );
+
+    expect(sessionState.outputSpeed).toEqual(measured);
+  });
+});
+
 describe('usage from History', () => {
   it('fills Session Usage from History and keeps it when a later load has none', () => {
     const sessionState = ensureSessionState(

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator, Mapping
@@ -129,7 +130,40 @@ def _usage_fields(value: Mapping[str, Any] | None) -> dict[str, Any]:
     cost = project_cost(source.get("cost"))
     if cost is not None:
         result["cost"] = cost
+    speed = _speed_fields(source.get("speed"))
+    if speed:
+        result["speed"] = speed
     return result
+
+
+_SPEED_COUNTS = ("first_token_ms", "first_answer_ms", "duration_ms", "tokens", "window_ms")
+_SPEED_BASES = ("output", "answer", "provider")
+
+
+def _speed_fields(value: Any) -> dict[str, Any]:
+    """Chat's measured output speed (``chat/usage.md`` -> Output speed), validated."""
+    if not isinstance(value, Mapping):
+        return {}
+    speed: dict[str, Any] = {
+        key: value[key]
+        for key in _SPEED_COUNTS
+        if isinstance(value.get(key), int)
+        and not isinstance(value.get(key), bool)
+        and value[key] >= 0
+    }
+    rate = value.get("output_tokens_per_second")
+    if (
+        isinstance(rate, int | float)
+        and not isinstance(rate, bool)
+        and math.isfinite(rate)
+        and rate > 0
+    ):
+        speed["output_tokens_per_second"] = float(rate)
+    if value.get("basis") in _SPEED_BASES:
+        speed["basis"] = value["basis"]
+    if value.get("estimated") is True:
+        speed["estimated"] = True
+    return speed
 
 
 def _import_usage(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
@@ -367,7 +401,8 @@ class UsageRecorder:
             result = {
                 key: value
                 for key, value in (usage or {}).items()
-                if key not in (*_COUNTERS, *_FLAGS, "cost", "reported_cost_usd", "usage_call_id")
+                if key
+                not in (*_COUNTERS, *_FLAGS, "cost", "reported_cost_usd", "speed", "usage_call_id")
             }
             return {**result, **merged}
 

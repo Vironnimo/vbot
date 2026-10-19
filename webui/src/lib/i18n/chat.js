@@ -513,6 +513,19 @@ export default Object.freeze({
   'chat.sessionSettings.effortHint':
     'The thinking effort for this Session. Changes also become the start value for new Sessions of this Agent; other Sessions keep their choices.',
   'chat.sessionSettings.saveError': 'The Session setting could not be saved.',
+  'chat.sessionSettings.speed': 'Output speed',
+  'chat.sessionSettings.speedValue': '{rate} tok/s',
+  'chat.sessionSettings.speedHint':
+    'How fast the latest measured Model response was written. Waiting for the Model counts toward the time to first token, not toward the speed.',
+  'chat.sessionSettings.speedRate': 'Tokens per second',
+  'chat.sessionSettings.firstToken': 'Time to first token',
+  'chat.sessionSettings.firstAnswer': 'Time to first answer',
+  'chat.sessionSettings.speedMeasured': 'Measured over',
+  'chat.sessionSettings.speedMeasuredValue': '{tokens} tokens in {duration}',
+  'chat.sessionSettings.speedEstimatedValue': '~{tokens} tokens in {duration}',
+  'chat.sessionSettings.speedAnswerOnly':
+    'The answer only: the Provider did not stream its Reasoning.',
+  'chat.sessionSettings.speedReported': 'Measured by the Provider.',
   'chat.activity.parentSession': 'Parent Session',
   'chat.activity.openParentSession': 'Open parent Session · {session}',
   'sessions.title': 'Sessions',

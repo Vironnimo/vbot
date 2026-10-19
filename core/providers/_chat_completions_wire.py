@@ -436,7 +436,7 @@ def _apply_openai_reasoning_meta(
             message[key] = reasoning_meta[key]
 
 
-def _extract_openai_usage(response: dict[str, Any]) -> dict[str, int] | None:
+def _extract_openai_usage(response: dict[str, Any]) -> dict[str, Any] | None:
     """Extract token usage from an OpenAI-compatible response.
 
     Maps ``prompt_tokens`` → ``input_tokens`` and
@@ -450,7 +450,7 @@ def _extract_openai_usage(response: dict[str, Any]) -> dict[str, int] | None:
     completion_tokens = _optional_non_negative_usage_int(usage.get("completion_tokens"))
     if prompt_tokens is None and completion_tokens is None:
         return None
-    normalized: dict[str, int] = {}
+    normalized: dict[str, Any] = {}
     if prompt_tokens is not None:
         normalized["input_tokens"] = prompt_tokens
     if completion_tokens is not None:
@@ -464,6 +464,12 @@ def _extract_openai_usage(response: dict[str, Any]) -> dict[str, int] | None:
     reasoning_tokens = reasoning_token_count(usage)
     if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0:
         normalized["reasoning_tokens"] = reasoning_tokens
+    # llama.cpp's server measures its decode speed beside the Usage.
+    timings = response.get("timings")
+    if isinstance(timings, dict):
+        speed = timings.get("predicted_per_second")
+        if isinstance(speed, int | float) and not isinstance(speed, bool):
+            normalized["reported_output_tokens_per_second"] = speed
     return normalized
 
 

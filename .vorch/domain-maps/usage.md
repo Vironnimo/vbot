@@ -34,6 +34,9 @@ it absent; public address or Run-id reuse never proves historical ownership.
   estimate provenance and a cost snapshot, returning Usage with `usage_call_id`.
   Missing counters remain absent. Provider-reported cost takes precedence over
   catalog valuation. Recording does not infer token quantities for media.
+  Besides counters, flags and cost it keeps only Chat's validated output
+  `speed` (`chat/usage.md` -> Output speed); other producer metadata such as
+  `context_usage` returns to the caller unpersisted.
 - `update(id, usage)` enriches the same call without changing its outcome.
   Cumulative Live Voice reports replace counters instead of adding repeated
   snapshots. Chat enriches its record with final estimates before appending the

@@ -12,6 +12,8 @@
   //   the row names the Model by its catalog name, the tooltip by its id.
   // - Thinking effort: Provider default or a level the effective Model
   //   offers; hidden for a Model without reasoning.
+  // - Output speed: tokens per second of the Session's newest measured
+  //   Model step (`usage.speed`), with its latency in the tooltip.
   import {
     THINKING_EFFORT_OPTIONS,
     effortOptionsForReasoning,
@@ -27,6 +29,7 @@
     parseModelSelectionValue,
     selectModelValue,
   } from '$lib/modelSelection.js';
+  import { formatDurationMs } from '$lib/chatTimelinePresentation/time.js';
   import { tooltip } from '$lib/tooltip.js';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
@@ -36,6 +39,8 @@
 
   let {
     view,
+    // The Session's newest measured `usage.speed`; null hides it.
+    outputSpeed = null,
     projects = [],
     // Until the Project list is read, a Project missing from it is unknown.
     projectsLoaded = false,
@@ -233,6 +238,64 @@
     };
   });
 
+  // --- Output speed ----------------------------------------------------
+
+  let speedLabel = $derived.by(() => {
+    const rate = outputSpeed?.output_tokens_per_second;
+    if (!Number.isFinite(rate) || rate <= 0) return '';
+    return t('chat.sessionSettings.speedValue', {
+      rate: rate < 10 ? rate.toFixed(1) : String(Math.round(rate)),
+    });
+  });
+  let speedTooltip = $derived.by(() => {
+    if (!speedLabel) return null;
+    const speed = outputSpeed;
+    const rows = [
+      {
+        label: t('chat.sessionSettings.speedRate'),
+        value: speed.output_tokens_per_second.toFixed(1),
+      },
+    ];
+    if (Number.isFinite(speed.first_token_ms)) {
+      rows.push({
+        label: t('chat.sessionSettings.firstToken'),
+        value: formatDurationMs(speed.first_token_ms),
+      });
+    }
+    // Reasoning streamed before the answer: when the answer began.
+    if (
+      Number.isFinite(speed.first_answer_ms) &&
+      speed.first_answer_ms > speed.first_token_ms
+    ) {
+      rows.push({
+        label: t('chat.sessionSettings.firstAnswer'),
+        value: formatDurationMs(speed.first_answer_ms),
+      });
+    }
+    if (Number.isFinite(speed.tokens) && Number.isFinite(speed.window_ms)) {
+      const tokens = speed.tokens;
+      const duration = formatDurationMs(speed.window_ms);
+      rows.push({
+        label: t('chat.sessionSettings.speedMeasured'),
+        value: speed.estimated
+          ? t('chat.sessionSettings.speedEstimatedValue', { tokens, duration })
+          : t('chat.sessionSettings.speedMeasuredValue', { tokens, duration }),
+      });
+    }
+    const notes = [t('chat.sessionSettings.speedHint')];
+    if (speed.basis === 'answer') {
+      notes.push(t('chat.sessionSettings.speedAnswerOnly'));
+    } else if (speed.basis === 'provider') {
+      notes.push(t('chat.sessionSettings.speedReported'));
+    }
+    return {
+      title: t('chat.sessionSettings.speed'),
+      text: notes.join(' '),
+      rows,
+      placement: 'top',
+    };
+  });
+
   // --- Thinking effort -------------------------------------------------
 
   let effectiveModel = $derived(view.model || view.defaultModel);
@@ -341,6 +404,28 @@
           panelMinWidth={200}
           onValueChange={(next) => onSelectAgent(next)}
         />
+      </span>
+    {/if}
+    {#if speedLabel}
+      <span class="session-settings__field session-settings__field--icon">
+        <svg
+          class="session-settings__icon"
+          viewBox="0 0 16 16"
+          width="13"
+          height="13"
+          aria-hidden="true"
+        >
+          <path d="M2.5 11.5a5.5 5.5 0 1 1 11 0" />
+          <path d="M8 11.5l2.5-3.5" />
+        </svg>
+        <span
+          class="session-settings__value session-settings__value--speed"
+          role="group"
+          aria-label={t('chat.sessionSettings.speed')}
+          use:tooltip={speedTooltip}
+        >
+          <span class="session-settings__value-label">{speedLabel}</span>
+        </span>
       </span>
     {/if}
   </div>
@@ -543,6 +628,10 @@
     max-width: 240px;
     align-items: center;
     cursor: default;
+  }
+
+  .session-settings__value--speed {
+    font-variant-numeric: tabular-nums;
   }
 
   .session-settings__value-label {

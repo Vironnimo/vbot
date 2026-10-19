@@ -457,6 +457,29 @@ describe('ChatView Session settings', () => {
       expect(rpcCalls('chat.timeline')).toHaveLength(historyReads);
     });
 
+    it('shows the newest measured output speed beside the Project', async () => {
+      rpcMock.mockImplementation(settingsRpcMock());
+      await chat.mountChat(reactiveProps({ projects: PROJECTS }));
+      const session = () => testChatStateRefs[0].sessions['alpha::session-1'];
+      await waitForCondition(() => session()?.historyLoaded === true);
+      const speedValue = () =>
+        footer()?.querySelector('[role="group"][aria-label="Output speed"]');
+      expect(speedValue()).toBeNull();
+
+      session().outputSpeed = {
+        first_token_ms: 900,
+        duration_ms: 4100,
+        output_tokens_per_second: 62.46,
+        tokens: 200,
+        window_ms: 3200,
+        basis: 'output',
+      };
+      flushSync();
+
+      await waitForCondition(() => speedValue() !== null);
+      expect(speedValue().textContent.trim()).toBe('62 tok/s');
+    });
+
     it('shows the Session goal and sends its buttons as /goal commands', async () => {
       rpcMock.mockImplementation(
         settingsRpcMock({

@@ -15,7 +15,10 @@ import {
   resetStaleRun,
   startRun,
 } from './chatState.js';
-import { nextContextUsage } from './chatState/sessionState.js';
+import {
+  nextContextUsage,
+  updateSessionUsage,
+} from './chatState/sessionState.js';
 
 const HEARTBEAT_TIMEOUT_MS = 25_000;
 
@@ -180,7 +183,7 @@ export function createChatRunStream({
         state.context_usage,
       );
     if (state.session_usage) session.sessionUsage = state.session_usage;
-    if (state.usage) session.usage = state.usage;
+    if (state.usage) updateSessionUsage(session, state.usage);
     if (data.terminal)
       appendRunEvent(session, {
         type: `run_${state.status ?? current.status}`,

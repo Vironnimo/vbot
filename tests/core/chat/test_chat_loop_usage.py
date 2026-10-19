@@ -116,6 +116,9 @@ async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_recor
         # Measured counters are kept as reported, without an estimated flag.
         for usage in (answer.usage, saved.usage, completed["usage"]):
             assert _counters(usage) == MEASURED
+            # A streamed step records its latency; "Hello" is too short for a speed.
+            assert set(usage["speed"]) == {"first_token_ms", "first_answer_ms", "duration_ms"}
+            assert "stream_timing" not in usage
         assert saved.usage["context_usage"] == answer.usage["context_usage"]
         assert completed["status"] == "completed"
         assert completed["timing"]["duration_ms"] >= 0
@@ -134,11 +137,12 @@ async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_recor
             "provider_output_tokens": 40,
         }
 
-        # The usage record keeps only the canonical counters and outlives the Session.
+        # The usage record keeps only the canonical counters and speed, and outlives the Session.
         runtime.chat_sessions.delete(SESSION)
         _, records = read_ledger(recorder)
         assert [record.id for record in records] == [answer.usage["usage_call_id"]]
         assert _counters(records[0].usage) == MEASURED
+        assert records[0].usage["speed"] == saved.usage["speed"]
         assert not {"estimated", "context_usage"} & set(records[0].usage)
     finally:
         recorder.close()

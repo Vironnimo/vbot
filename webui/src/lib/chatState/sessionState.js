@@ -210,6 +210,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       streamError: '',
       streamStatus: CHAT_STATUS_IDLE,
       usage: null,
+      // The newest Model step with a measured output speed (`usage.speed`).
+      outputSpeed: null,
       sessionUsage: null,
       contextUsage: null,
       // The Session's effective Compaction Policy from `chat.history`; null
@@ -455,7 +457,18 @@ export function currentSessionState(state) {
 
 export function updateSessionUsage(sessionState, usage) {
   sessionState.usage = usage;
+  // A step too short to measure keeps the speed shown before it.
+  sessionState.outputSpeed =
+    measuredOutputSpeed(usage) ?? sessionState.outputSpeed ?? null;
   return sessionState;
+}
+
+// A step's `usage.speed` when the server measured its tokens per second;
+// otherwise null (the step was too short or arrived in one burst).
+export function measuredOutputSpeed(usage) {
+  const speed = usage?.speed;
+  const rate = speed?.output_tokens_per_second;
+  return Number.isFinite(rate) && rate > 0 ? speed : null;
 }
 
 function normalizeServerQueuedItem(item) {

@@ -603,6 +603,22 @@ async def test_repeated_name_is_deduplicated_but_argument_bytes_are_kept() -> No
             id="usable-counter-only",
         ),
         pytest.param(
+            {
+                "choices": [],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 5},
+                "timings": {"predicted_n": 5, "predicted_per_second": 61.5},
+            },
+            [
+                {
+                    "type": "usage",
+                    "input_tokens": 9,
+                    "output_tokens": 5,
+                    "reported_output_tokens_per_second": 61.5,
+                }
+            ],
+            id="llama-cpp-decode-speed",
+        ),
+        pytest.param(
             {**_finish_chunk("stop"), "usage": "not-a-dict"},
             [{"type": "finish", "reason": "stop"}],
             id="unusable-usage-omitted",

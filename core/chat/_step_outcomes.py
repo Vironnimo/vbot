@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from core.chat._output_speed import complete_output_speed
 from core.chat.messages import (
     CONTEXT_ESTIMATION_FIELD,
     ChatMessage,
@@ -95,6 +96,7 @@ def _prepare_completed_assistant(
     completed = replace(
         completed, usage={**(completed.usage or {}), "cost": price_usage(completed.usage, pricing)}
     )
+    completed = complete_output_speed(completed)
     return _with_assistant_output_files(completed, cwd=output_cwd)
 
 

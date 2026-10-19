@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal
 
+from core.chat._output_speed import REPORTED_SPEED_FIELD, OutputTimer, reported_speed
 from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
@@ -513,6 +514,7 @@ class StreamingAccumulator:
         self._taken_tool_calls: OrderedDict[str, list[JsonObject]] = OrderedDict()
         self._finish_reason: TerminalOutcome | None = None
         self._usage: JsonObject | None = None
+        self._output_timer = OutputTimer()
 
     @property
     def finish_reason(self) -> TerminalOutcome | None:
@@ -557,6 +559,15 @@ class StreamingAccumulator:
                 round((self._reasoning_ended_perf - self._reasoning_started_perf) * 1000),
             ),
         }
+
+    def request_sent(self) -> None:
+        """Start timing this attempt's output (``output_timing``)."""
+        self._output_timer.request_sent()
+
+    @property
+    def output_timing(self) -> JsonObject | None:
+        """Return when output arrived, in ms since ``request_sent``, or None."""
+        return self._output_timer.marks()
 
     @property
     def has_partial_tool_call(self) -> bool:
@@ -663,6 +674,7 @@ class StreamingAccumulator:
             return None
         self._open_tool_slot = None
         self._last_text_delta_type = "content_delta"
+        self._output_timer.output(answer=True)
         self._content_parts.append(text)
         return StreamingVisibleDelta(
             event_type=ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -676,6 +688,7 @@ class StreamingAccumulator:
         self._open_tool_slot = None
         self._last_text_delta_type = "reasoning_delta"
         self._record_reasoning_activity()
+        self._output_timer.output(answer=False)
         self._reasoning_parts.append(text)
         payload: JsonObject = {"reasoning_delta": text}
         index = delta.get("summary_index")
@@ -727,6 +740,8 @@ class StreamingAccumulator:
         if not name_delta and not arguments_delta and not id_changed:
             return None
         fragments.append(name_delta=name_delta, arguments_delta=arguments_delta)
+        if name_delta or arguments_delta:
+            self._output_timer.output(answer=True)
 
         # Tool-call deltas are transient. Before an index-based wire supplies its
         # real id, this field is only a stable display correlation handle; the
@@ -776,6 +791,9 @@ class StreamingAccumulator:
         reported_cost = nonnegative_amount(delta.get("reported_cost_usd"))
         if reported_cost is not None:
             usage["reported_cost_usd"] = reported_cost
+        speed = reported_speed(delta.get(REPORTED_SPEED_FIELD))
+        if speed is not None:
+            usage[REPORTED_SPEED_FIELD] = speed
         self._usage = usage
 
     def _add_finish(self, delta: JsonObject) -> None:
