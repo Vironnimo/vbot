@@ -15,7 +15,6 @@ from core.providers.github_copilot_responses import (
     build_responses_payload,
     estimate_responses_input_tokens,
 )
-from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE
 from tests.core.providers.responses_test_support import responses_policy, responses_reasoning
 
 _ENCRYPTED_INCLUDE = [REASONING_ENCRYPTED_CONTENT_INCLUDE]
@@ -631,5 +630,6 @@ def test_estimate_prices_native_media_as_an_image_for_the_active_model() -> None
     assert estimate_responses_input_tokens(image_message("a" * 10_000)) < 10_000
     known = estimate_responses_input_tokens(one_pixel_png, model_id="gpt-4o")
     fallback = estimate_responses_input_tokens(one_pixel_png, model_id="unknown")
-    # gpt-4o prices a one-tile image at 85 base plus 170 tile tokens.
-    assert fallback - known == NATIVE_MEDIA_TOKEN_RESERVE - 255
+    # gpt-4o prices a one-tile image at 85 base plus 170 tile tokens; a Model
+    # without a documented rule counts the image's single 28px patch.
+    assert fallback - known == 1 - 255

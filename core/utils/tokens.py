@@ -43,8 +43,9 @@ MESSAGE_TOKEN_ESTIMATE_FIELDS = (
     "tool_result_content",
 )
 
-# Fallback for unknown image inputs and audio/documents. Known images use their
-# Model profile and header dimensions instead of counting base64 as text.
+# Fallback for images of unreadable size and audio/documents. Readable images use
+# their Model profile, or a size-based estimate capped at this reserve, instead
+# of counting base64 as text.
 # One payload must still leave usable output capacity under the conservative
 # 8192-token unknown-Model context floor; the separate 25% request reserve then
 # absorbs Provider-specific media accounting variance.
@@ -420,7 +421,11 @@ def _image_dimensions(payload: str) -> tuple[int, int] | None:
 
 
 def _image_tokens(payload: str, *, model_id: str | None, detail: str) -> int:
-    """Apply documented image rules, with a fixed reserve for unknown inputs.
+    """Apply documented image rules; other Models estimate from the image size.
+
+    A Model without a documented rule counts one token per 28px patch, the
+    common grid of current vision encoders, capped at the fixed reserve; only
+    images whose size cannot be read keep the reserve.
 
     Sources (2026-09-11): developers.openai.com/api/docs/guides/images-vision,
     platform.claude.com/docs/en/build-with-claude/{vision,vision-coordinates},
@@ -457,12 +462,12 @@ def _image_tokens(payload: str, *, model_id: str | None, detail: str) -> int:
             return base
         if detail == "original":
             return NATIVE_MEDIA_TOKEN_RESERVE
-    if not (tile or patch or claude or deepseek):
-        return NATIVE_MEDIA_TOKEN_RESERVE
     dimensions = _image_dimensions(payload)
     if dimensions is None:
         return NATIVE_MEDIA_TOKEN_RESERVE
     width, height = dimensions
+    if not (tile or patch or claude or deepseek):
+        return min(NATIVE_MEDIA_TOKEN_RESERVE, math.ceil(width / 28) * math.ceil(height / 28))
     if tile:
         scale = min(1, 2048 / max(width, height), 768 / min(width, height))
         width, height = max(1, math.floor(width * scale)), max(1, math.floor(height * scale))

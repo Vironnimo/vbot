@@ -270,7 +270,7 @@ def test_request_image_estimate_receives_active_model() -> None:
     known = adapter.estimate_request_input_tokens(messages, model_id="gpt-4o")
     fallback = adapter.estimate_request_input_tokens(messages, model_id="unknown")
 
-    assert fallback - known == 4096 - 255
+    assert fallback - known == 1 - 255
 
 
 # ---------------------------------------------------------------------------

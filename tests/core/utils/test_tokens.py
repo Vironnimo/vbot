@@ -593,6 +593,9 @@ def _image_payload(width=1024, height=1024, image_format="PNG"):
         ("deepseek-v4.1-flash", 100, 5000, "auto", 482),
         ("deepseek-v4.1-flash", 5000, 100, "auto", 365),
         ("deepseek-v4.1-flash", 1024, 1024, "low", 184),
+        # Models without a documented rule: 28px patches, capped at the reserve.
+        ("openai/gpt-6.1-sol", 1460, 787, "auto", 1537),
+        ("unknown", 4096, 4096, "auto", NATIVE_MEDIA_TOKEN_RESERVE),
     ],
 )
 def test_documented_image_token_examples(model, width, height, detail, expected):
@@ -643,15 +646,11 @@ def test_unknown_dimensions_use_reserve(payload):
     )
 
 
-def test_unknown_model_and_low_detail_do_not_open_images(monkeypatch):
+def test_fixed_low_detail_does_not_open_images(monkeypatch):
     def unexpected(*args, **kwargs):
         raise AssertionError("Image inspection is unnecessary")
 
     monkeypatch.setattr(token_utils.Image, "open", unexpected)
-    assert (
-        token_utils._image_tokens("unused", model_id="unknown", detail="auto")
-        == NATIVE_MEDIA_TOKEN_RESERVE
-    )
     assert token_utils._image_tokens("unused", model_id="gpt-4o", detail="low") == 85
 
 
@@ -698,7 +697,7 @@ def test_generic_request_estimate_uses_model_for_image_and_tools():
     tools = [{"name": "inspect", "parameters": {"type": ["object", "null"]}}]
     known = estimate_request_input_tokens(messages, tools, model_id="gpt-4o")[0]
     unknown = estimate_request_input_tokens(messages, tools)[0]
-    assert unknown - known == NATIVE_MEDIA_TOKEN_RESERVE - 255
+    assert unknown - known == 19 * 19 - 255
 
 
 def test_image_header_inspection_has_a_hard_byte_limit(monkeypatch):
