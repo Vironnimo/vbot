@@ -19,11 +19,13 @@ from core.chat.model_resolution import (
     _resolve_agent_connection,
     _split_agent_model,
     parse_model_with_connection,
+    resolve_agent_context_window,
+    resolve_route_context_window,
 )
 from core.chat.streaming import stream_stall_timeout
 from core.chat.usage import latest_session_context_usage
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
-from core.providers.providers import context_capacity, resolve_effective_context_window
+from core.providers.providers import context_capacity
 from core.runs import Run
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -167,6 +169,28 @@ class RequestTargets:
         """Read the live Settings-derived Context capacity on the Chat workers."""
         return await _CHAT_TRANSFORM_WORKERS.run(self.resolve_context_capacity, agent, target)
 
+    async def agent_context_capacity(self, agent: Any) -> int | None:
+        """The Context capacity a Run of ``agent`` budgets against, without starting one.
+
+        Acquires the route a Run resolves to and reads its capacity
+        (:meth:`resolve_context_capacity`). A Model without a usable route
+        keeps the window of its Model route (:func:`resolve_agent_context_window`).
+        """
+        try:
+            target = await self.for_agent(agent)
+        except VBotError:
+            return await _CHAT_TRANSFORM_WORKERS.run(
+                lambda: resolve_agent_context_window(
+                    self._dependencies,
+                    agent,
+                    local_context_windows=self._dependencies.get_local_context_windows(),
+                )
+            )
+        try:
+            return await self.resolve_context_capacity_async(agent, target)
+        finally:
+            await _close_adapter(target.adapter)
+
     def resolve_context_capacity(self, agent: Any, target: _ModelTarget) -> int | None:
         """The input tokens one request to the target may hold.
 
@@ -180,63 +204,31 @@ class RequestTargets:
         return context_capacity(context_window, target.adapter.input_token_limit(target.model_id))
 
     def resolve_context_window(self, agent: Any, target: _ModelTarget) -> int | None:
-        """Resolve the usable context window for the current Model target.
+        """The Context window a request to the target fills.
 
-        Returns ``None`` only when the Model catalog has no entry for the target.
-        Otherwise the value always resolves through the shared effective chain
-        (user-set/capped window for flagged-local models, else model window →
-        provider-config default → global floor, see
-        :func:`resolve_effective_context_window`), so a model whose window is
-        ``None`` still gets a usable budget and auto-compaction keeps working
-        instead of silently disabling itself.
+        A window the Provider reported for the route wins
+        (``ProviderAdapter.reported_context_window``: one a rejection stated, or
+        the one a loaded local instance serves). Otherwise the route's effective
+        window (:func:`resolve_route_context_window`): the Connection's catalog
+        window through the read-side chain, with local-Model policy (the user's
+        setting, else the local cap) for a flagged-local Model. ``None`` only
+        when nothing is reported and the catalog has no entry for the Model.
+        Reads Settings, so callers run it off the Event Loop.
         """
         del agent  # The target carries the resolved Model and Connection.
-        provider_id = target.provider_id
-        resolved_model_id = target.model_id
-        connection_id = target.connection_id
-
-        try:
-            model_entry = self._dependencies.models.get(provider_id, resolved_model_id)
-        except KeyError, AttributeError:
-            return None
-
-        model_context_window = model_entry.context_window
-        try:
-            if connection_id is None:
-                raise ConfigError("Model target has no resolved Provider Connection")
-            local_connection_id, _account_id = split_connection_id(provider_id, connection_id)
-            context_window_for = getattr(model_entry, "context_window_for", None)
-            if callable(context_window_for):
-                model_context_window = context_window_for(local_connection_id)
-        except AttributeError, ChatError, ConfigError, KeyError:
-            # Status/build callers can be partially wired. Preserve the existing
-            # Model-wide fallback when the active Connection cannot be resolved.
-            pass
-
-        local_context_windows = self._dependencies.get_local_context_windows()
-
-        return resolve_effective_context_window(
-            model_context_window,
-            self._lookup_provider_config(provider_id),
-            model_metadata=model_entry.metadata,
-            model_key=f"{provider_id}/{resolved_model_id}",
+        reported = target.adapter.reported_context_window(target.model_id)
+        if reported is not None:
+            return reported
+        return resolve_route_context_window(
+            self._dependencies,
+            target.provider_id,
+            target.connection_id,
+            target.model_id,
             # Live read through the runtime's single source of truth (no reload
             # hook, StorageError-tolerant), so a settings change applies to the
             # next request without re-implementing the storage read here.
-            local_context_windows=local_context_windows,
+            local_context_windows=self._dependencies.get_local_context_windows(),
         )
-
-    def _lookup_provider_config(self, provider_id: str) -> Any:
-        """Return the ProviderConfig for the read-side window default, or None.
-
-        Tolerant of a missing/partial runtime (the registry may be absent for a
-        custom provider): the resolver treats ``None`` as "no provider default"
-        and falls back to the global floor.
-        """
-        try:
-            return self._dependencies.providers.get(provider_id)
-        except KeyError, AttributeError:
-            return None
 
     @staticmethod
     def raise_if_measured_context_exhausted(

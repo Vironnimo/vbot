@@ -30,6 +30,7 @@ from core.chat.status_report import (
     build_status_reply,
     resolve_reported_thinking_effort,
     resolve_status_activity,
+    resolve_status_context_window,
     resolve_status_model_details,
     resolve_status_project_label,
     resolve_status_sampling,
@@ -418,10 +419,11 @@ async def _status_outcome(
     storage: Any | None,
     wire_profile_describer: WireProfileDescriber | None,
 ) -> CommandOutcome:
-    # Resolving the Connection reads credential state, so it runs off the loop.
     model_details = await _COMMAND_WORKERS.run(
-        resolve_status_model_details, agent, models, providers, context_window_resolver
+        resolve_status_model_details, agent, models, providers
     )
+    context_window = await resolve_status_context_window(agent, context_window_resolver)
+    # Resolving the Connection reads credential state, so it runs off the loop.
     wire_profile = await _COMMAND_WORKERS.run(
         resolve_status_wire_profile, agent, wire_profile_describer
     )
@@ -435,7 +437,7 @@ async def _status_outcome(
     text = build_status_reply(
         agent,
         status_session,
-        model_details.context_window,
+        context_window,
         started_at,
         model_details.display_name,
         activity,

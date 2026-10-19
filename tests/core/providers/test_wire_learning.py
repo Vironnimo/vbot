@@ -59,18 +59,18 @@ class _Within:
     """Equals an output allowance clamped into a ``window``, its reserve included."""
 
     def __init__(self, window: int) -> None:
-        self._window = window
+        self.window = window
 
     @override
     def __eq__(self, value: object) -> bool:
         return (
             isinstance(value, int)
-            and self._window // 2 < value <= self._window - REQUEST_ESTIMATE_MIN_MARGIN_TOKENS
+            and self.window // 2 < value <= self.window - REQUEST_ESTIMATE_MIN_MARGIN_TOKENS
         )
 
     @override
     def __repr__(self) -> str:
-        return f"<output within {self._window}>"
+        return f"<output within {self.window}>"
 
 
 _WITHIN_4096 = _Within(4096)
@@ -380,6 +380,10 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
             await paths.request(adapter, path, kwargs)
 
     assert [_sent(call.request, field) for call in route.calls] == expected
+    # A window a rejection stated is the one the Provider reports; Chat's Context
+    # capacity budgets against it too.
+    stated_window = next((value.window for value in expected if isinstance(value, _Within)), None)
+    assert adapter.reported_context_window(path.model_id) == stated_window
 
 
 @pytest.mark.parametrize(

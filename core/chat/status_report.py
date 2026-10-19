@@ -11,7 +11,7 @@ The dispatcher workflow that gathers inputs lives in
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
@@ -103,7 +103,6 @@ class StatusModelDetails:
     resolved value with its source rather than only the configured agent field.
     """
 
-    context_window: int | None
     display_name: str | None
     reasoning_levels: tuple[str, ...] = ()
     reasoning_control: str | None = None
@@ -142,9 +141,10 @@ class StatusWireProfile:
 # resolves to as chat resolves it, or ``None`` when it resolves to none.
 WireProfileDescriber = Callable[[RuntimeAgent], StatusWireProfile | None]
 
-# Runtime-wired seam: Agent -> the effective Context window of the route its
-# Model resolves to as chat resolves it, or ``None`` for an unknown Model.
-ContextWindowResolver = Callable[[RuntimeAgent], int | None]
+# Runtime-wired seam: Agent -> the Context capacity a Run of the Agent budgets
+# against on the route its Model resolves to (``ChatLoop.context_capacity``), or
+# ``None`` for an unknown Model.
+ContextWindowResolver = Callable[[RuntimeAgent], Awaitable[int | None]]
 
 
 class _WireProfileOmitted(Enum):
@@ -172,26 +172,19 @@ def resolve_status_model_details(
     agent: RuntimeAgent | None,
     models: ModelRegistry | None,
     providers: ProviderRegistry | None = None,
-    context_window_resolver: ContextWindowResolver | None = None,
 ) -> StatusModelDetails:
     """Resolve model facts for status output from the model registry.
 
-    Returns context window, display name, and the effective reasoning-effort
-    ladder. A missing agent/registry/model yields empty details so status
+    Returns display name, the effective reasoning-effort ladder and sampling
+    defaults. A missing agent/registry/model yields empty details so status
     rendering degrades to placeholders instead of failing.
-
-    ``context_window`` is the effective window of the route the Agent's Model
-    resolves to (``context_window_resolver``): the Connection's own window
-    where the Model records one, the budget a Run on that route uses. It is
-    ``None`` when no model resolves or no resolver is wired. Reads credential
-    state, so callers run this off the Event Loop.
     """
     if agent is None or models is None:
-        return StatusModelDetails(context_window=None, display_name=None)
+        return StatusModelDetails(display_name=None)
 
     provider_id, model_id = _parse_registry_model_key(agent.model)
     if provider_id is None or model_id is None:
-        return StatusModelDetails(context_window=None, display_name=None)
+        return StatusModelDetails(display_name=None)
 
     try:
         model = models.get(provider_id, model_id)
@@ -201,7 +194,7 @@ def resolve_status_model_details(
             provider_id,
             model_id,
         )
-        return StatusModelDetails(context_window=None, display_name=None)
+        return StatusModelDetails(display_name=None)
     except Exception:
         _LOGGER.error(
             "Failed model registry lookup for %r/%r while building status",
@@ -209,11 +202,10 @@ def resolve_status_model_details(
             model_id,
             exc_info=True,
         )
-        return StatusModelDetails(context_window=None, display_name=None)
+        return StatusModelDetails(display_name=None)
 
     provider_config = _status_provider_config(providers, provider_id)
     return StatusModelDetails(
-        context_window=_status_context_window(agent, context_window_resolver),
         display_name=model.name,
         reasoning_levels=tuple(model.capabilities.reasoning.levels),
         reasoning_control=model.capabilities.reasoning.control,
@@ -225,13 +217,19 @@ def resolve_status_model_details(
     )
 
 
-def _status_context_window(
-    agent: RuntimeAgent, context_window_resolver: ContextWindowResolver | None
+async def resolve_status_context_window(
+    agent: RuntimeAgent | None, context_window_resolver: ContextWindowResolver | None
 ) -> int | None:
-    if context_window_resolver is None:
+    """The window the ``Context usage`` line shows when the projection records none.
+
+    The Context capacity a Run of the Agent budgets against on the route its
+    Model resolves to (``context_window_resolver``), so the line matches the
+    indicator. ``None`` without an Agent or resolver, or when resolving fails.
+    """
+    if agent is None or context_window_resolver is None:
         return None
     try:
-        return context_window_resolver(agent)
+        return await context_window_resolver(agent)
     except Exception:
         _LOGGER.warning("Failed to resolve the Context window for %s", agent.model, exc_info=True)
         return None
@@ -617,6 +615,10 @@ def _learned_wire_facts_text(facts: ObservedFacts) -> str:
         parts.append("reasoning off is ignored, so effort none sends the lowest level")
     if facts.effort_updates_rejected:
         parts.append("effort updates are rejected, so an effort change costs the prompt cache")
+    if facts.max_output_tokens is not None:
+        parts.append(f"output limit: {facts.max_output_tokens} tokens")
+    if facts.context_window is not None:
+        parts.append(f"context window: {facts.context_window} tokens")
     return "; ".join(parts)
 
 

@@ -8,7 +8,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 from uuid import uuid4
 
 from core.agents import LIVE_BACKEND_BUILTIN
@@ -29,7 +29,6 @@ from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, ChatMessage, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
-from core.chat.model_resolution import resolve_agent_context_window
 from core.compaction import CompactionService
 from core.database import (
     DatabaseError,
@@ -738,7 +737,7 @@ def bootstrap(runtime: Runtime) -> None:
             providers=runtime._providers,
             projects=runtime._projects,
             agents=runtime._agents,
-            context_window_resolver=partial(_agent_context_window, runtime),
+            context_window_resolver=runtime._chat_loop.context_capacity,
             trigger_service=runtime._trigger_service,
             reflection_service=runtime._reflection_service,
             storage=runtime._storage,
@@ -829,7 +828,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._started_at,
             runtime._providers,
             runtime._projects,
-            partial(_agent_context_window, runtime),
+            runtime._chat_loop.context_capacity,
             runtime.describe_agent_reasoning_render,
             runtime.timezone_name,
         )
@@ -881,13 +880,6 @@ def bootstrap(runtime: Runtime) -> None:
     # startup traceback as its context.
     clean_up_failed_startup(runtime)
     raise startup_error
-
-
-def _agent_context_window(runtime: Runtime, agent: Any) -> int | None:
-    """Return the effective Context window of the route the Agent's Model resolves to."""
-    return resolve_agent_context_window(
-        runtime, agent, local_context_windows=runtime.local_context_windows()
-    )
 
 
 def _log_startup_failure(runtime: Runtime) -> None:

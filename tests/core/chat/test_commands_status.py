@@ -204,12 +204,16 @@ def test_status_reports_the_identity_sessions_agent_model_and_cache() -> None:
         ),
     ]
     # A pinned connection suffix is stripped before the Model registry lookup.
-    windows = {"openai/gpt-5.2::primary": 272_000}
+    capacities = {"openai/gpt-5.2::primary": 272_000}
+
+    async def context_capacity(agent: Any) -> int | None:
+        return capacities[agent.model]
+
     dispatcher, resolver, models = _status_dispatcher(
         resolver=_StubResolver(_make_agent(model="openai/gpt-5.2::primary")),
         messages=messages,
         model=_make_model(name="GPT-5.2 Registry"),
-        context_window_resolver=lambda agent: windows[agent.model],
+        context_window_resolver=context_capacity,
     )
 
     result = _execute_sync(dispatcher, "/status")
@@ -225,7 +229,7 @@ def test_status_reports_the_identity_sessions_agent_model_and_cache() -> None:
     assert "Activity: idle" in reply
     assert f"Run created at: {STATUS_PLACEHOLDER}" in reply
     # Context usage is the Session's Context projection, not the raw input, in the
-    # window of the route the Agent's Model resolves to.
+    # Context capacity a Run of the Agent budgets against on its Model's route.
     assert "Context usage: 1276 / 272000" in reply
     assert "Last request cache: read 800 / 1234 (64.8% hit), write 100" in reply
     assert "Session cache: read 800 / 1234 (64.8% hit), write 100" in reply
@@ -281,6 +285,8 @@ def _wire_profile_fails(_agent: Any) -> StatusWireProfile | None:
                     rejected_efforts=("xhigh",),
                     reasoning_returned=True,
                     off_ignored=True,
+                    max_output_tokens=32_000,
+                    context_window=131_072,
                 ),
             ),
             [
@@ -288,7 +294,8 @@ def _wire_profile_fails(_agent: Any) -> StatusWireProfile | None:
                 "Learned wire facts: reasoning arrives in reasoning_content; "
                 "rejected parameters: temperature, top_p; only one of: temperature or top_k; "
                 "rejected reasoning efforts: xhigh; "
-                "reasoning off is ignored, so effort none sends the lowest level",
+                "reasoning off is ignored, so effort none sends the lowest level; "
+                "output limit: 32000 tokens; context window: 131072 tokens",
             ],
             id="configured-with-learned-facts",
         ),
@@ -657,7 +664,6 @@ def test_reported_thinking_effort_prefers_the_adapter_description(
         agent=agent,
         models=cast(ModelRegistry, object()),
         model_details=StatusModelDetails(
-            context_window=1_048_576,
             display_name="glm-5.3-flash",
             reasoning_levels=(),
             reasoning_control="on_off",
@@ -671,7 +677,7 @@ def test_reported_thinking_effort_prefers_the_adapter_description(
 
 
 def test_reported_thinking_effort_without_an_agent_is_unknown() -> None:
-    details = StatusModelDetails(context_window=None, display_name=None)
+    details = StatusModelDetails(display_name=None)
 
     assert resolve_reported_thinking_effort(agent=None, models=None, model_details=details) is None
 
@@ -685,7 +691,6 @@ def test_reported_thinking_effort_without_an_agent_is_unknown() -> None:
             ),
             None,
             {
-                "context_window": 272_000,
                 "display_name": "GPT-5.2",
                 "reasoning_levels": _LADDER,
                 "reasoning_control": "levels",
@@ -707,12 +712,10 @@ def test_reported_thinking_effort_without_an_agent_is_unknown() -> None:
 def test_status_model_details_resolve_through_the_model_and_provider(
     model: Model, provider: ProviderConfig | None, expected: dict[str, Any]
 ) -> None:
-    # The window is the one of the route the Agent's Model resolves to.
     details = resolve_status_model_details(
         _make_agent(model="provider/gpt-5.2"),
         cast(ModelRegistry, _AnyModels(model)),
         cast(Any, _Providers(provider)) if provider is not None else None,
-        context_window_resolver=lambda agent: {"provider/gpt-5.2": 272_000}[agent.model],
     )
 
     assert {name: getattr(details, name) for name in expected} == expected
@@ -734,7 +737,6 @@ def test_status_sampling_names_what_the_request_sends(
     expected: str,
 ) -> None:
     details = StatusModelDetails(
-        context_window=None,
         display_name=None,
         recommended_temperature=recommended,
         provider_default_temperature=provider_default,
