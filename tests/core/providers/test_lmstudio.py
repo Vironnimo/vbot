@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 
 import httpx
 import pytest
 import respx
+from PIL import Image
 
+from core.attachments.images import ImageConverter
+from core.chat.block_resolver import ContentBlockResolver
 from core.models.models import REASONING_CONTROL_ON_OFF
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.lmstudio import LMStudioAdapter
@@ -179,3 +184,33 @@ async def test_chat_runs_against_the_window_of_the_loaded_instance(
     # to the catalog maximum or the window vBot would load the Model with.
     max_tokens = json.loads(chat_request.content)["max_tokens"]
     assert served_window // 2 < max_tokens < served_window - REQUEST_ESTIMATE_MIN_MARGIN_TOKENS
+
+
+@pytest.mark.parametrize("source_format", ["WEBP", "GIF"])
+@pytest.mark.asyncio
+async def test_images_the_endpoint_rejects_are_converted_before_the_request(
+    source_format: str,
+) -> None:
+    adapter = LMStudioAdapter(LMSTUDIO_CONFIG, "")
+    source = io.BytesIO()
+    Image.new("RGB", (12, 8), "red").save(source, format=source_format)
+    media_type = f"image/{source_format.lower()}"
+    original = {
+        "path": f"fixture.{source_format.lower()}",
+        "filename": f"fixture.{source_format.lower()}",
+        "media_type": media_type,
+        "base64": base64.b64encode(source.getvalue()).decode("ascii"),
+    }
+    try:
+        # LM Studio's endpoint rejects WebP although its docs list it.
+        supported = adapter.wire_media_support(MODEL_ID)
+        assert supported == frozenset({"image/jpeg", "image/png"})
+        parts = await ContentBlockResolver.resolve_tool_image(
+            original, frozenset({"text", "image"}), supported, ImageConverter()
+        )
+    finally:
+        await adapter.aclose()
+
+    assert parts[0]["media_type"] == "image/png"
+    with Image.open(io.BytesIO(base64.b64decode(parts[0]["base64"]))) as converted:
+        assert converted.size == (12, 8)

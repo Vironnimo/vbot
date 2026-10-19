@@ -1,0 +1,7 @@
+{
+  "format_version": 1,
+  "_comment": "LM Studio's OpenAI-compatible /v1/chat/completions. Its docs list WebP, but its endpoint rejects data:image/webp on current builds (lmstudio-bug-tracker #1752 on 0.4.9, #1839 on 0.4.12, read 2026-10-19), so vBot converts WebP and GIF to a declared type instead of sending a failing request.",
+  "defaults": {
+    "media": {"types": ["image/jpeg", "image/png"]}
+  }
+}

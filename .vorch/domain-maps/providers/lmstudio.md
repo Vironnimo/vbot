@@ -21,6 +21,7 @@ Model loading is transport behavior only. It emits no Provider-specific Chat mes
 ## Constraints and verification
 
 - LM Studio's native `/api/v1/chat` is not used because vBot needs the complete existing Chat Completions message and Tool contract.
+- Images go out as JPEG or PNG only (`resources/wire/lmstudio.json`). LM Studio's docs list WebP, but its `/v1/chat/completions` rejects `data:image/webp` on current builds (lmstudio-bug-tracker #1752 on 0.4.9, #1839 on 0.4.12, read 2026-10-19), so Chat converts WebP and GIF before the request instead of sending one that fails.
 - Embedding requests go to the OpenAI-compatible `POST /v1/embeddings` through the shared task client (`model_tasks/embeddings.md`), which does not call the native load endpoint. Whether LM Studio loads an unloaded embedding Model on demand for that endpoint (its just-in-time loading setting) has not been verified live.
 - Real-hardware verification must avoid loading LM Studio and Ollama Models simultaneously on constrained hosts. That is a test-execution constraint, not runtime coordination policy.
 - Focused coverage lives in `tests/core/providers/test_lmstudio.py`, Provider discovery/runtime tests, and Settings Provider tests.
