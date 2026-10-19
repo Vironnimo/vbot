@@ -377,6 +377,8 @@ async def paint_on_the_wide_display(computer: Harness) -> None:
         ),
         ({"action": "key", "text": "Page_Down", "repeat": 3}, [("keys", ["pagedown"], 3)]),
         ({"action": "hold_key", "text": "shift", "duration": 2}, [("hold", ["shift"], 2.0)]),
+        # Above 100, a hold or drag duration can only mean milliseconds.
+        ({"action": "hold_key", "text": "shift", "duration": 500}, [("hold", ["shift"], 0.5)]),
     ],
 )
 async def test_input_actions_map_frame_coordinates_and_return_a_screenshot(
@@ -412,11 +414,11 @@ async def test_wait_pauses_then_shows_the_screen(computer: Harness) -> None:
     result = await computer.call("computer", {"action": "wait", "duration": 2}, context)
     assert computer.sleeps == [2] and len(images(context)) == 1
     assert model_text(result).startswith("Waited 2 s.\nScreenshot")
-    result = await computer.computer(action="wait", duration=1500)
-    assert computer.sleeps[-1] == 1.5
-    assert model_text(result).endswith(
-        "duration 1500 was read as milliseconds (1.5 s); duration is in seconds."
-    )
+    # A wait is always in seconds: 120 waits the longest wait, 100 s, and says so.
+    result = await computer.computer(action="wait", duration=120)
+    assert computer.sleeps[-1] == 100
+    assert model_text(result).startswith("Waited 100 s.")
+    assert "capped at 100 s" in model_text(result)
     result = await computer.computer(action="wait", duration=1, screenshot_id="shot_unknown")
     assert result["ok"]
     assert model_text(result).endswith("Ignored screenshot_id: wait does not use it.")

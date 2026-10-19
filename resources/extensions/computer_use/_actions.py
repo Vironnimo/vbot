@@ -319,7 +319,7 @@ def _region(value: Any) -> tuple[int, int, int, int]:
 
 
 def _seconds(value: Any, name: str, default: float | None) -> tuple[float, str | None]:
-    """Return seconds and a note when a large number was read as milliseconds."""
+    """Return seconds and a note when a large number was capped or read as milliseconds."""
     if value is None:
         if default is None:
             raise ActionError(
@@ -332,6 +332,12 @@ def _seconds(value: Any, name: str, default: float | None) -> tuple[float, str |
     seconds = float(value)
     if 0 <= seconds <= MAX_SECONDS:
         return seconds, None
+    if name == "wait" and seconds > MAX_SECONDS:
+        # A long wait means seconds: Agents send 120 to wait for a slow program, not 0.12 s.
+        return MAX_SECONDS, (
+            f"duration {value:g} was capped at {MAX_SECONDS:g} s, the longest wait; wait again "
+            "for the rest."
+        )
     if MAX_SECONDS < seconds <= MAX_SECONDS * 1000:
         # Above the limit only milliseconds make sense: 500 means half a second.
         seconds /= 1000
