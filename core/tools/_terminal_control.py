@@ -387,6 +387,7 @@ class _EmulatorStream(pyte.Stream):
                 groups: list[list[int]] = []
                 values: list[int] = []
                 value = -1
+                parameter_count = 0
                 valid = True
                 while True:
                     char = yield None
@@ -395,12 +396,16 @@ class _EmulatorStream(pyte.Stream):
                             valid = False
                         value = min(max(value, 0) * 10 + ord(char) - 48, 99999)
                     elif char == ";" or char == ":":
-                        if intermediates:
+                        # Count sub-parameters too: a single unfinished group can
+                        # otherwise retain unbounded values across output chunks.
+                        parameter_count = min(parameter_count + 1, _MAX_CSI_PARAMETERS)
+                        if intermediates or parameter_count >= _MAX_CSI_PARAMETERS:
                             valid = False
-                        values.append(max(value, 0))
+                        if valid:
+                            values.append(max(value, 0))
                         value = -1
                         if char == ";":
-                            if len(groups) < _MAX_CSI_PARAMETERS:
+                            if valid:
                                 groups.append(values)
                             values = []
                     elif "<" <= char <= "?":
@@ -413,8 +418,7 @@ class _EmulatorStream(pyte.Stream):
                     elif "@" <= char <= "~":
                         if valid:
                             values.append(max(value, 0))
-                            if len(groups) < _MAX_CSI_PARAMETERS:
-                                groups.append(values)
+                            groups.append(values)
                             self._dispatch_csi(
                                 (prefix, intermediates, char),
                                 groups,

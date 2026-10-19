@@ -642,6 +642,14 @@ def test_dim_and_conceal_follow_their_sgr_codes_but_not_color_operands() -> None
         ("\x1b[4m\x1b[4:0m", ""),
         ("\x1b[58:2::9:9:9m", ""),
         ("\x1b[1:2u", "\x1b[u"),
+        # At most 32 parameters including sub-parameters; an overlong CSI is
+        # ignored whole, even when its unfinished prefix spans output chunks.
+        ("\x1b[" + ";".join(["1"] * 32) + "m", "\x1b[1m"),
+        ("\x1b[" + ";".join(["1"] * 33) + "m", ""),
+        ("\x1b[" + ":".join(["1"] * 32) + "m", "\x1b[1m"),
+        ("\x1b[" + ":".join(["1"] * 33) + "m", ""),
+        ("\x1b[" + ";".join(["1:1"] * 16) + "m", "\x1b[1m"),
+        ("\x1b[" + ";".join(["1:1"] * 17) + "m", ""),
         # Control strings, shell marks and a soft reset show nothing.
         ("\x1bP+q544e\x1b\\", ""),
         ("\x9fGa=q\x9c", ""),
