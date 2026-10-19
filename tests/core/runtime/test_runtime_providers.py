@@ -59,10 +59,10 @@ def test_bundled_provider_configs_expose_their_connections(shared_runtime: Runti
         "subscription",
     ]
     assert openai_config.get_connection("api-key").auth.credential_key == "OPENAI_API_KEY"
-    codex_connection = openai_config.get_connection("subscription")
-    assert codex_connection.mode == "codex_responses"
-    assert codex_connection.oauth is not None
-    assert codex_connection.oauth.device_flow == "openai_codex"
+    responses_connection = openai_config.get_connection("subscription")
+    assert responses_connection.mode == "codex_responses"
+    assert responses_connection.oauth is not None
+    assert responses_connection.oauth.device_flow == "openai_codex"
     assert providers.get("openrouter").adapter == "openrouter"
     assert providers.get("github-copilot").adapter == "github_copilot"
 
@@ -353,8 +353,8 @@ _ADAPTER_WIRING: list[tuple[str, type, Callable[[Any], bool]]] = [
             adapter._connection_mode is None
             and adapter._config.base_url == "https://api.openai.com/v1"
             # Codex sockets outlive the Adapter in the Runtime's transports.
-            and not adapter._owns_codex_transports
-            and adapter._codex_connection == ("openai", "api-key")
+            and not adapter._owns_responses_transports
+            and adapter._responses_connection == ("openai", "api-key")
         ),
     ),
     (

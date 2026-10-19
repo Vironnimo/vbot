@@ -367,7 +367,7 @@ class FakeCodexWebSocket:
 
 
 class FakeCodexWebSocketConnector:
-    """A ``codex_websocket_connect`` double handing out scripted sockets in order."""
+    """A ``responses_websocket_connect`` double handing out scripted sockets in order."""
 
     def __init__(self, connections: list[FakeCodexWebSocket | BaseException]) -> None:
         self._connections = deque(connections)

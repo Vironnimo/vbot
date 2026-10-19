@@ -1,15 +1,18 @@
-"""Codex Responses over WebSocket: one request's exchange and the sockets that outlive it.
+"""Responses over WebSocket: one request's exchange and the sockets that outlive it.
+
+The ChatGPT Codex backend (``/codex/responses``) and the OpenAI Platform
+(``/v1/responses``, its documented WebSocket mode) speak the same protocol.
 
 A request that extends the previous request and its response unchanged
 continues it on the same socket with ``previous_response_id`` and only the new
 input items. ``store`` is false, so that continuation lives on the connection,
 not on the server. A socket remembers the request it continues by its
-:class:`CodexRequestDigest`, never the request itself, so an idle socket does
-not hold a Session's screenshots. :class:`CodexTransports` is the Runtime-wide owner that keeps
+:class:`ResponsesRequestDigest`, never the request itself, so an idle socket does
+not hold a Session's screenshots. :class:`ResponsesTransports` is the Runtime-wide owner that keeps
 a Session's socket and its continuation open between Runs (each Run has its own
 Adapter), bounds how many stay open and for how long, and remembers per
 Connection whether the WebSocket or request compression currently works.
-:class:`CodexWebSocket` streams one Adapter's requests over those sockets.
+:class:`ResponsesWebSocket` streams one Adapter's requests over those sockets.
 """
 
 from __future__ import annotations
@@ -37,11 +40,10 @@ from websockets.protocol import State
 from websockets.typing import ExtensionParameter
 
 from core.providers._openai_constants import (
-    _CODEX_WEBSOCKET_CONNECT_TIMEOUT_SECONDS,
-    _CODEX_WEBSOCKET_STATUS_CODE,
-    CODEX_RESPONSES_ENDPOINT,
-    CodexWebSocketConnector,
-    CodexWebSocketRoute,
+    _RESPONSES_WEBSOCKET_CONNECT_TIMEOUT_SECONDS,
+    _RESPONSES_WEBSOCKET_STATUS_CODE,
+    ResponsesWebSocketConnector,
+    ResponsesWebSocketRoute,
 )
 from core.providers.errors import (
     NetworkError,
@@ -58,32 +60,32 @@ from core.utils.tls import shared_ssl_context
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
-_LOGGER = get_logger("providers.codex_websocket")
+_LOGGER = get_logger("providers.responses_websocket")
 
-CODEX_SOCKET_IDLE_SECONDS = 15 * 60
+RESPONSES_SOCKET_IDLE_SECONDS = 15 * 60
 """An idle socket closes after this long. A Run's next step follows its Tool
 calls within seconds to minutes and a user's next turn usually within minutes;
-an hour-old continuation would expire anyway (``CODEX_SOCKET_MAX_AGE_SECONDS``)."""
+an hour-old continuation would expire anyway (``RESPONSES_SOCKET_MAX_AGE_SECONDS``)."""
 
-CODEX_MAX_OPEN_SOCKETS = 16
+RESPONSES_MAX_OPEN_SOCKETS = 16
 """Sockets kept open across all Connections. Idle sockets beyond it close, least
 recently used first; a request is never refused, so in-use sockets of
 concurrent Runs may briefly exceed it."""
 
-CODEX_MAX_IDLE_SOCKETS_PER_CONVERSATION = 2
+RESPONSES_MAX_IDLE_SOCKETS_PER_CONVERSATION = 2
 """Idle sockets kept per Session: its Run's and one for a side request (Session
 title, Extension sampling) with other instructions or Tools. The one whose
 continuation saves the fewest input items closes first."""
 
-CODEX_SOCKET_MAX_AGE_SECONDS = 55 * 60
+RESPONSES_SOCKET_MAX_AGE_SECONDS = 55 * 60
 """The backend ends a connection after 60 minutes
 (``websocket_connection_limit_reached``); an older socket is never reused."""
 
-CODEX_WEBSOCKET_FAILURE_LIMIT = 2
+RESPONSES_WEBSOCKET_FAILURE_LIMIT = 2
 """Consecutive WebSocket transport failures on one Connection before its
-requests use SSE for ``CODEX_WEBSOCKET_RETRY_AFTER_SECONDS``."""
+requests use SSE for ``RESPONSES_WEBSOCKET_RETRY_AFTER_SECONDS``."""
 
-CODEX_WEBSOCKET_RETRY_AFTER_SECONDS = 10 * 60
+RESPONSES_WEBSOCKET_RETRY_AFTER_SECONDS = 10 * 60
 """How long a Connection whose WebSocket failed (or answered HTTP 426) uses SSE."""
 
 DEFLATE_LEVEL = 2
@@ -100,22 +102,22 @@ _AUTH_HANDSHAKE_STATUSES = frozenset({401, 403})
 _UPGRADE_REQUIRED_STATUS = 426
 _EMPTY_UNCOMPRESSED_BLOCK = b"\x00\x00\xff\xff"
 
-type CodexConnectionKey = tuple[str, str]
+type ResponsesConnectionKey = tuple[str, str]
 """``(provider id, local Connection id)``: the unit of WebSocket availability,
 request compression and credential-change closing."""
 
-type _SocketKey = tuple[CodexConnectionKey, str]
+type _SocketKey = tuple[ResponsesConnectionKey, str]
 """A Connection and a Session's conversation id."""
 
 
-def codex_conversation_id(agent_id: str, session_id: str) -> str:
-    """The id that scopes a Session's Codex sockets and continuations."""
+def responses_conversation_id(agent_id: str, session_id: str) -> str:
+    """The id that scopes a Session's Responses sockets and continuations."""
     return f"{agent_id}:{session_id}"
 
 
 @dataclass(frozen=True, slots=True)
-class CodexRequestDigest:
-    """What a continuation compares of one Codex request.
+class ResponsesRequestDigest:
+    """What a continuation compares of one Responses request.
 
     ``fields`` digests every request field but ``input`` and
     ``previous_response_id``; ``items`` holds one digest per input item, or is
@@ -129,14 +131,14 @@ class CodexRequestDigest:
     items: tuple[bytes, ...] | None
 
 
-def codex_request_digest(payload: Mapping[str, Any]) -> CodexRequestDigest:
+def responses_request_digest(payload: Mapping[str, Any]) -> ResponsesRequestDigest:
     """Digest one request in its preparation hop, off the Event Loop.
 
     Every item is hashed once per request, however often the request is sent;
     a 55 MB request with 100 screenshots takes about 27 ms.
     """
     items = payload.get("input")
-    return CodexRequestDigest(
+    return ResponsesRequestDigest(
         fields=_json_digest(
             {key: value for key, value in payload.items() if key not in _NOT_CONTINUED_FIELDS}
         ),
@@ -180,15 +182,15 @@ def _feed_json(feed: Callable[[bytes], object], value: Any) -> None:
         for element in value:
             _feed_json(feed, element)
     else:
-        raise TypeError(f"Codex request value of type {type(value).__name__} is not JSON")
+        raise TypeError(f"Responses request value of type {type(value).__name__} is not JSON")
 
 
 @dataclass(frozen=True)
-class _CodexWebSocketContinuation:
+class _ResponsesContinuation:
     """What the next request on a socket may chain to with ``previous_response_id``.
 
     It keeps the previous request's digests, never its items: ``fields`` and
-    ``input_items`` come from that request's :class:`CodexRequestDigest`.
+    ``input_items`` come from that request's :class:`ResponsesRequestDigest`.
     ``response_items`` are the Provider's own final output items, few and
     small, which the next request must replay unchanged.
     """
@@ -209,13 +211,13 @@ class _PooledSocket:
     """One open socket of one Session on one route, with its continuation."""
 
     key: _SocketKey
-    route: CodexWebSocketRoute
+    route: ResponsesWebSocketRoute
     handshake: str
     websocket: Any
     deflate_window_bits: int | None
     opened_at: float
     idle_since: float = 0.0
-    continuation: _CodexWebSocketContinuation | None = None
+    continuation: _ResponsesContinuation | None = None
     retired: bool = False
     idle_timer: asyncio.TimerHandle | None = None
 
@@ -226,16 +228,16 @@ class _PooledSocket:
         return self.continuation.saved_items() if self.continuation is not None else 0
 
 
-class CodexTransports:
-    """Runtime-wide Codex transport state that outlives one Run's Adapter.
+class ResponsesTransports:
+    """Runtime-wide Responses transport state that outlives one Run's Adapter.
 
     Sockets are checked out per request, so two concurrent requests never
     share one; a completed exchange returns its socket with the continuation
     it established. An idle socket closes after ``idle_seconds``; at most
-    ``max_sockets`` stay open (``CODEX_MAX_OPEN_SOCKETS``). Per Connection it
+    ``max_sockets`` stay open (``RESPONSES_MAX_OPEN_SOCKETS``). Per Connection it
     remembers consecutive WebSocket failures (after
-    ``CODEX_WEBSOCKET_FAILURE_LIMIT`` the Connection uses SSE for
-    ``CODEX_WEBSOCKET_RETRY_AFTER_SECONDS``) and whether the backend rejected
+    ``RESPONSES_WEBSOCKET_FAILURE_LIMIT`` the Connection uses SSE for
+    ``RESPONSES_WEBSOCKET_RETRY_AFTER_SECONDS``) and whether the backend rejected
     a compressed request body. Correctness never depends on the explicit
     closing calls: a socket is reused only on its route and handshake.
     """
@@ -243,8 +245,8 @@ class CodexTransports:
     def __init__(
         self,
         *,
-        idle_seconds: float = CODEX_SOCKET_IDLE_SECONDS,
-        max_sockets: int = CODEX_MAX_OPEN_SOCKETS,
+        idle_seconds: float = RESPONSES_SOCKET_IDLE_SECONDS,
+        max_sockets: int = RESPONSES_MAX_OPEN_SOCKETS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._idle_seconds = idle_seconds
@@ -253,13 +255,13 @@ class CodexTransports:
         self._idle: dict[_SocketKey, list[_PooledSocket]] = {}
         self._in_use: set[_PooledSocket] = set()
         self._closing: set[asyncio.Task[None]] = set()
-        self._failures: dict[CodexConnectionKey, int] = {}
-        self._websocket_retry_at: dict[CodexConnectionKey, float] = {}
-        self._uncompressed: set[CodexConnectionKey] = set()
+        self._failures: dict[ResponsesConnectionKey, int] = {}
+        self._websocket_retry_at: dict[ResponsesConnectionKey, float] = {}
+        self._uncompressed: set[ResponsesConnectionKey] = set()
 
     # -- WebSocket availability and request compression ------------------------
 
-    def websocket_available(self, connection: CodexConnectionKey) -> bool:
+    def websocket_available(self, connection: ResponsesConnectionKey) -> bool:
         """Whether ``connection``'s requests try the WebSocket (not SSE) now."""
         retry_at = self._websocket_retry_at.get(connection)
         if retry_at is None:
@@ -269,34 +271,36 @@ class CodexTransports:
         del self._websocket_retry_at[connection]
         return True
 
-    def record_websocket_failure(self, connection: CodexConnectionKey) -> bool:
+    def record_websocket_failure(self, connection: ResponsesConnectionKey) -> bool:
         """Count one transport failure; return whether the Connection now uses SSE."""
         failures = self._failures.get(connection, 0) + 1
-        if failures < CODEX_WEBSOCKET_FAILURE_LIMIT:
+        if failures < RESPONSES_WEBSOCKET_FAILURE_LIMIT:
             self._failures[connection] = failures
             return False
         self.mark_websocket_unavailable(connection)
         return True
 
-    def mark_websocket_unavailable(self, connection: CodexConnectionKey) -> None:
+    def mark_websocket_unavailable(self, connection: ResponsesConnectionKey) -> None:
         """Send ``connection``'s requests over SSE for the retry window."""
         self._failures.pop(connection, None)
-        self._websocket_retry_at[connection] = self._clock() + CODEX_WEBSOCKET_RETRY_AFTER_SECONDS
+        self._websocket_retry_at[connection] = (
+            self._clock() + RESPONSES_WEBSOCKET_RETRY_AFTER_SECONDS
+        )
         _LOGGER.warning(
-            "Codex WebSocket unavailable on %s:%s; using SSE for %d minutes",
+            "Responses WebSocket unavailable on %s:%s; using SSE for %d minutes",
             *connection,
-            CODEX_WEBSOCKET_RETRY_AFTER_SECONDS // 60,
+            RESPONSES_WEBSOCKET_RETRY_AFTER_SECONDS // 60,
         )
 
-    def record_websocket_success(self, connection: CodexConnectionKey) -> None:
+    def record_websocket_success(self, connection: ResponsesConnectionKey) -> None:
         """A completed exchange ends a run of consecutive failures."""
         self._failures.pop(connection, None)
 
-    def compresses_requests(self, connection: CodexConnectionKey) -> bool:
+    def compresses_requests(self, connection: ResponsesConnectionKey) -> bool:
         """Whether ``connection``'s HTTP request bodies are sent zstd-compressed."""
         return connection not in self._uncompressed
 
-    def stop_compressing_requests(self, connection: CodexConnectionKey) -> None:
+    def stop_compressing_requests(self, connection: ResponsesConnectionKey) -> None:
         """Send ``connection``'s request bodies uncompressed from now on."""
         self._uncompressed.add(connection)
 
@@ -306,9 +310,9 @@ class CodexTransports:
         self,
         key: _SocketKey,
         *,
-        route: CodexWebSocketRoute,
+        route: ResponsesWebSocketRoute,
         handshake: str,
-        digest: CodexRequestDigest,
+        digest: ResponsesRequestDigest,
     ) -> _PooledSocket | None:
         """Check out an idle socket for the request ``digest`` describes, or ``None``.
 
@@ -329,7 +333,7 @@ class CodexTransports:
             same_route = pooled.route == route
             if (
                 not pooled.is_open()
-                or now - pooled.opened_at >= CODEX_SOCKET_MAX_AGE_SECONDS
+                or now - pooled.opened_at >= RESPONSES_SOCKET_MAX_AGE_SECONDS
                 or now - pooled.idle_since >= self._idle_seconds
                 or (same_route and pooled.handshake != handshake)
             ):
@@ -354,7 +358,7 @@ class CodexTransports:
         self,
         key: _SocketKey,
         *,
-        route: CodexWebSocketRoute,
+        route: ResponsesWebSocketRoute,
         handshake: str,
         connect: Callable[[], Awaitable[Any]],
     ) -> _PooledSocket:
@@ -385,7 +389,7 @@ class CodexTransports:
         pooled.idle_timer = asyncio.get_running_loop().call_later(
             self._idle_seconds, self._expire, pooled
         )
-        if len(sockets) > CODEX_MAX_IDLE_SOCKETS_PER_CONVERSATION:
+        if len(sockets) > RESPONSES_MAX_IDLE_SOCKETS_PER_CONVERSATION:
             self._retire(min(sockets, key=lambda idle: (idle.saved_items(), idle.idle_since)))
         self._evict_idle(self._max_sockets)
 
@@ -402,7 +406,7 @@ class CodexTransports:
         attempt.
         """
 
-        def matches(connection: CodexConnectionKey) -> bool:
+        def matches(connection: ResponsesConnectionKey) -> bool:
             return connection[0] == provider_id and connection_id in {None, connection[1]}
 
         for connection in [*self._failures, *self._websocket_retry_at]:
@@ -519,7 +523,7 @@ class _PrecompressedDeflate(PerMessageDeflate):
         if frame.opcode in CTRL_OPCODES:
             return frame
         if frame.opcode is CONT or not frame.fin:
-            raise ProtocolError("Codex WebSocket messages are never fragmented")
+            raise ProtocolError("Responses WebSocket messages are never fragmented")
         data = (
             frame.data
             if isinstance(frame.data, _DeflatedText)
@@ -569,7 +573,7 @@ def _negotiated_deflate_window_bits(websocket: Any) -> int | None:
 # ---------------------------------------------------------------------------
 
 
-class _CodexFreshSocketRequiredError(Exception):
+class _FreshSocketRequiredError(Exception):
     """The socket's continuation or connection ended before any model output."""
 
     def __init__(self, code: str) -> None:
@@ -577,8 +581,8 @@ class _CodexFreshSocketRequiredError(Exception):
         self.code = code
 
 
-class _CodexWebSocketTransportError(NetworkError):
-    """Codex WebSocket failed before or after receiving a provider event.
+class _ResponsesWebSocketTransportError(NetworkError):
+    """Responses WebSocket failed before or after receiving a provider event.
 
     ``handshake_status`` is the HTTP status that refused the upgrade, if any.
     """
@@ -592,7 +596,7 @@ class _CodexWebSocketTransportError(NetworkError):
 
 
 @dataclass(frozen=True, slots=True)
-class _CodexMessage:
+class _ResponsesMessage:
     """One rendered ``response.create``: the request, its UTF-8 text and the bytes sent."""
 
     request: dict[str, Any]
@@ -600,13 +604,13 @@ class _CodexMessage:
     data: bytes
 
 
-def _codex_websocket_response_head(websocket: Any) -> tuple[int, dict[str, str]]:
+def _websocket_response_head(websocket: Any) -> tuple[int, dict[str, str]]:
     response = getattr(websocket, "response", None)
-    raw_status = getattr(response, "status_code", _CODEX_WEBSOCKET_STATUS_CODE)
+    raw_status = getattr(response, "status_code", _RESPONSES_WEBSOCKET_STATUS_CODE)
     status_code = (
         raw_status
         if isinstance(raw_status, int) and not isinstance(raw_status, bool)
-        else _CODEX_WEBSOCKET_STATUS_CODE
+        else _RESPONSES_WEBSOCKET_STATUS_CODE
     )
     raw_headers = getattr(response, "headers", None)
     # websockets' Headers refuses dict() for a repeated name (chatgpt.com sends
@@ -628,7 +632,7 @@ def _handshake_status(error: BaseException) -> int | None:
     return status if isinstance(status, int) and not isinstance(status, bool) else None
 
 
-def _codex_responses_error_code(event: Mapping[str, Any]) -> str | None:
+def _responses_error_code(event: Mapping[str, Any]) -> str | None:
     response = event.get("response")
     payload = response if isinstance(response, Mapping) else event
     error = payload.get("error")
@@ -640,12 +644,12 @@ def _codex_responses_error_code(event: Mapping[str, Any]) -> str | None:
     return code if isinstance(code, str) and code else None
 
 
-def _render_codex_message(
+def _render_websocket_message(
     payload: dict[str, Any],
-    digest: CodexRequestDigest,
-    continuation: _CodexWebSocketContinuation | None,
+    digest: ResponsesRequestDigest,
+    continuation: _ResponsesContinuation | None,
     deflate_window_bits: int | None,
-) -> _CodexMessage:
+) -> _ResponsesMessage:
     """Chain ``payload`` to ``continuation``, encode it and deflate it if negotiated.
 
     The request is ``payload`` itself unless it extends ``continuation``'s
@@ -659,13 +663,13 @@ def _render_codex_message(
         {"type": "response.create", **request}, ensure_ascii=False, separators=(",", ":")
     ).encode("utf-8")
     data = text if deflate_window_bits is None else _deflate_message(text, deflate_window_bits)
-    return _CodexMessage(request, text, data)
+    return _ResponsesMessage(request, text, data)
 
 
 def _continued_request(
     payload: dict[str, Any],
-    digest: CodexRequestDigest,
-    continuation: _CodexWebSocketContinuation | None,
+    digest: ResponsesRequestDigest,
+    continuation: _ResponsesContinuation | None,
 ) -> dict[str, Any]:
     """``payload`` after ``previous_response_id``, if it extends ``continuation`` unchanged.
 
@@ -691,10 +695,10 @@ def _continued_request(
 
 
 def _completed_continuation(
-    digest: CodexRequestDigest,
+    digest: ResponsesRequestDigest,
     state: ResponsesStreamState,
     output_items: dict[int | None, dict[str, Any] | None],
-) -> _CodexWebSocketContinuation | None:
+) -> _ResponsesContinuation | None:
     """The continuation a completed exchange establishes, if its output is proven."""
 
     completed_response = state.completed_response
@@ -718,7 +722,7 @@ def _completed_continuation(
         or not all(isinstance(item, dict) for item in response_items)
     ):
         return None
-    return _CodexWebSocketContinuation(
+    return _ResponsesContinuation(
         fields=digest.fields,
         input_items=digest.items,
         response_id=response_id,
@@ -734,20 +738,22 @@ def _handshake_fingerprint(url: str, headers: Mapping[str, str]) -> str:
     return digest.hexdigest()
 
 
-class CodexWebSocket:
-    """Stream one Adapter's Codex requests over its Connection's pooled sockets."""
+class ResponsesWebSocket:
+    """Stream one Adapter's Responses requests over its Connection's pooled sockets."""
 
     def __init__(
         self,
         *,
         base_url: str,
-        connect: CodexWebSocketConnector,
+        endpoint_path: str,
+        connect: ResponsesWebSocketConnector,
         debug_recorder: ProviderDebugRecorder | None,
-        transports: CodexTransports,
-        connection: CodexConnectionKey,
+        transports: ResponsesTransports,
+        connection: ResponsesConnectionKey,
     ) -> None:
         self._base_url = base_url
-        self._codex_websocket_connect = connect
+        self._endpoint_path = endpoint_path
+        self._websocket_connect = connect
         self._debug_recorder = debug_recorder
         self._transports = transports
         self._connection = connection
@@ -756,22 +762,22 @@ class CodexWebSocket:
         self,
         payload: dict[str, Any],
         *,
-        digest: CodexRequestDigest,
+        digest: ResponsesRequestDigest,
         headers: dict[str, str],
-        route: CodexWebSocketRoute,
+        route: ResponsesWebSocketRoute,
         state: ResponsesStreamState,
     ) -> AsyncGenerator[dict[str, Any]]:
         """Stream ``payload``'s response, continuing the Session's socket where it can.
 
-        ``digest`` is ``payload``'s :func:`codex_request_digest`. Before any
+        ``digest`` is ``payload``'s :func:`responses_request_digest`. Before any
         Provider event, a lost continuation, an ended connection or
         a transport failure retries once in full on a fresh socket. A
-        :class:`_CodexWebSocketTransportError` without events means the caller
+        :class:`_ResponsesWebSocketTransportError` without events means the caller
         may send the same request another way (SSE): the Connection failed
         repeatedly, answered HTTP 426, or refused the credentials.
         """
 
-        url = self._codex_websocket_url()
+        url = self._websocket_url()
         key = (self._connection, route[0])
         handshake = _handshake_fingerprint(url, headers)
         fresh = False
@@ -796,13 +802,13 @@ class CodexWebSocket:
                 ) as deltas:
                     async for delta in deltas:
                         yield delta
-            except _CodexFreshSocketRequiredError as missing:
+            except _FreshSocketRequiredError as missing:
                 if fresh:
                     raise ProviderError(
-                        f"Codex WebSocket failed on a fresh connection: {missing.code}",
+                        f"Responses WebSocket failed on a fresh connection: {missing.code}",
                         retryable=True,
                     ) from None
-            except _CodexWebSocketTransportError as error:
+            except _ResponsesWebSocketTransportError as error:
                 if error.handshake_status == _UPGRADE_REQUIRED_STATUS:
                     self._transports.mark_websocket_unavailable(self._connection)
                     raise
@@ -822,11 +828,11 @@ class CodexWebSocket:
         self,
         payload: dict[str, Any],
         *,
-        digest: CodexRequestDigest,
+        digest: ResponsesRequestDigest,
         url: str,
         key: _SocketKey,
         headers: dict[str, str],
-        route: CodexWebSocketRoute,
+        route: ResponsesWebSocketRoute,
         handshake: str,
         fresh: bool,
         state: ResponsesStreamState,
@@ -845,7 +851,7 @@ class CodexWebSocket:
         completed = False
         try:
             message = await _REQUEST_BODY_WORKERS.run(
-                _render_codex_message,
+                _render_websocket_message,
                 payload,
                 digest,
                 pooled.continuation,
@@ -856,7 +862,7 @@ class CodexWebSocket:
                 capture = self._debug_recorder.begin_capture(
                     method="WEBSOCKET", url=url, headers=headers, body=message.text
                 )
-                capture.record_response_head(*_codex_websocket_response_head(pooled.websocket))
+                capture.record_response_head(*_websocket_response_head(pooled.websocket))
             # Bytes go out as one text frame: no UTF-8 encoding on the Event Loop.
             send_result = pooled.websocket.send(message.data, text=True)
             if inspect.isawaitable(send_result):
@@ -870,21 +876,21 @@ class CodexWebSocket:
                     frame_text = raw_frame
                     frame_bytes = raw_frame.encode("utf-8")
                 else:
-                    raise TypeError("Codex WebSocket returned a non-text frame")
+                    raise TypeError("Responses WebSocket returned a non-text frame")
                 events_received = True
                 if capture is not None:
                     capture.feed_body(frame_bytes + b"\n")
                 event = json.loads(frame_text)
                 if not isinstance(event, Mapping):
-                    raise ValueError("Codex WebSocket event must be an object")
+                    raise ValueError("Responses WebSocket event must be an object")
                 event_data = dict(event)
-                code = _codex_responses_error_code(event_data)
+                code = _responses_error_code(event_data)
                 if (
                     code in _FRESH_SOCKET_CODES
                     and not model_delta_received
                     and (continued or code != "previous_response_not_found")
                 ):
-                    raise _CodexFreshSocketRequiredError(code)
+                    raise _FreshSocketRequiredError(code)
                 event_type = event_data.get("type")
                 event_name = event_type if isinstance(event_type, str) else ""
                 raw_item = event_data.get("item")
@@ -926,15 +932,15 @@ class CodexWebSocket:
                     yield delta
                 if completed:
                     return
-        except _CodexFreshSocketRequiredError:
+        except _FreshSocketRequiredError:
             raise
         except ProviderError:
             raise
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            transport_error = _CodexWebSocketTransportError(
-                f"Codex WebSocket failed: {exc}", events_received=events_received
+            transport_error = _ResponsesWebSocketTransportError(
+                f"Responses WebSocket failed: {exc}", events_received=events_received
             )
             if capture is not None:
                 capture.record_error(transport_error)
@@ -950,14 +956,14 @@ class CodexWebSocket:
         key: _SocketKey,
         *,
         headers: dict[str, str],
-        route: CodexWebSocketRoute,
+        route: ResponsesWebSocketRoute,
         handshake: str,
     ) -> _PooledSocket:
         async def connect() -> Any:
-            connection = self._codex_websocket_connect(
+            connection = self._websocket_connect(
                 url,
                 additional_headers=headers,
-                open_timeout=_CODEX_WEBSOCKET_CONNECT_TIMEOUT_SECONDS,
+                open_timeout=_RESPONSES_WEBSOCKET_CONNECT_TIMEOUT_SECONDS,
                 max_size=None,
                 # Without a context, websockets parses the CA bundle per connection.
                 ssl=shared_ssl_context() if url.startswith("wss://") else None,
@@ -974,8 +980,8 @@ class CodexWebSocket:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            transport_error = _CodexWebSocketTransportError(
-                f"Codex WebSocket failed: {exc}",
+            transport_error = _ResponsesWebSocketTransportError(
+                f"Responses WebSocket failed: {exc}",
                 events_received=False,
                 handshake_status=_handshake_status(exc),
             )
@@ -987,7 +993,7 @@ class CodexWebSocket:
                 capture.finalize()
             raise transport_error from exc
 
-    def _codex_websocket_url(self) -> str:
+    def _websocket_url(self) -> str:
         base_url = self._base_url.rstrip("/")
         if base_url.startswith("https://"):
             websocket_base = f"wss://{base_url.removeprefix('https://')}"
@@ -995,7 +1001,7 @@ class CodexWebSocket:
             websocket_base = f"ws://{base_url.removeprefix('http://')}"
         else:
             raise ProviderError(
-                f"Codex WebSocket requires an HTTP(S) base URL, got {base_url!r}",
+                f"Responses WebSocket requires an HTTP(S) base URL, got {base_url!r}",
                 retryable=False,
             )
-        return f"{websocket_base}{CODEX_RESPONSES_ENDPOINT}"
+        return f"{websocket_base}{self._endpoint_path}"

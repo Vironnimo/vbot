@@ -22,7 +22,7 @@ from core.providers.errors import (
     ProviderTimeoutError,
     ProviderUsageLimitError,
 )
-from core.providers.openai import CODEX_ZSTD_MIN_BYTES, CodexTransports, OpenAIAdapter
+from core.providers.openai import RESPONSES_ZSTD_MIN_BYTES, OpenAIAdapter, ResponsesTransports
 from core.utils.retry import caller_owns_retries
 from tests.core.chat.assistant_turn_test_support import (
     assistant_turn_from_response,
@@ -31,12 +31,15 @@ from tests.core.chat.assistant_turn_test_support import (
 )
 
 from .openai_test_support import (
+    COMPLETED_RESPONSE,
     OPENAI_SUBSCRIPTION_URL,
+    PLATFORM_RESPONSES_URL,
     SAMPLE_MESSAGES,
     RotatingTokenGetter,
     codex_adapter,
     codex_sse,
     jwt_with_account,
+    platform_adapter,
     sse_response,
 )
 
@@ -248,7 +251,7 @@ async def test_closing_a_partial_codex_sse_stream_closes_the_response(
 ) -> None:
     body = _TrackedStream(b'data: {"type":"response.output_text.delta","delta":"partial"}\n\n')
     adapter = codex_adapter(
-        codex_websocket_connect=AsyncMock(side_effect=OSError("connection unavailable"))
+        responses_websocket_connect=AsyncMock(side_effect=OSError("connection unavailable"))
     )
     stream = cast(
         AsyncGenerator[dict[str, Any]],
@@ -282,11 +285,15 @@ async def _stream_text(adapter: OpenAIAdapter, text: str) -> None:
         pass
 
 
+@pytest.mark.parametrize("wire", ["codex-stream", "platform-stream", "platform-send"])
 @pytest.mark.parametrize("large", [True, False], ids=["large-zstd", "small-plain"])
 @pytest.mark.asyncio
-async def test_large_codex_http_bodies_are_zstd_compressed_once_for_every_attempt(
-    large: bool, monkeypatch: pytest.MonkeyPatch
+async def test_large_responses_http_bodies_are_zstd_compressed_once_for_every_attempt(
+    wire: str, large: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Codex and the Platform (which documents zstd for ``POST /v1/responses``) both
+    get a large body compressed, streaming or not."""
+
     compressions: list[None] = []
     compress = http_module._zstd_compress
 
@@ -295,17 +302,23 @@ async def test_large_codex_http_bodies_are_zstd_compressed_once_for_every_attemp
         return compress(body)
 
     monkeypatch.setattr(http_module, "_zstd_compress", counting_compress)
-    text = "x" * (CODEX_ZSTD_MIN_BYTES if large else 100)
-    adapter = codex_adapter()
+    text = "x" * (RESPONSES_ZSTD_MIN_BYTES if large else 100)
+    adapter = codex_adapter() if wire == "codex-stream" else platform_adapter()
+    url = OPENAI_SUBSCRIPTION_URL if wire == "codex-stream" else PLATFORM_RESPONSES_URL
+    completed = (
+        httpx.Response(200, json=COMPLETED_RESPONSE)
+        if wire == "platform-send"
+        else sse_response(_COMPLETED_SSE)
+    )
 
     with respx.mock:
-        route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-            side_effect=[
-                httpx.Response(503, text="Service Unavailable"),
-                sse_response(_COMPLETED_SSE),
-            ]
+        route = respx.post(url).mock(
+            side_effect=[httpx.Response(503, text="Service Unavailable"), completed]
         )
-        await _stream_text(adapter, text)
+        if wire == "platform-send":
+            await adapter.send(_user_messages(text), model_id=MODEL_ID)
+        else:
+            await _stream_text(adapter, text)
 
     first, retried = (call.request for call in route.calls)
     assert retried.content == first.content
@@ -342,15 +355,15 @@ async def test_a_rejected_zstd_body_is_resent_uncompressed_and_the_connection_st
 ) -> None:
     """The rejection is remembered for the Connection, so a later Run sends plain JSON."""
 
-    transports = CodexTransports()
-    text = "x" * CODEX_ZSTD_MIN_BYTES
+    transports = ResponsesTransports()
+    text = "x" * RESPONSES_ZSTD_MIN_BYTES
 
     with respx.mock:
         route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
             side_effect=[rejection, sse_response(_COMPLETED_SSE), sse_response(_COMPLETED_SSE)]
         )
         for _run in range(2):
-            adapter = codex_adapter(codex_transports=transports)
+            adapter = codex_adapter(responses_transports=transports)
             await _stream_text(adapter, text)
             await adapter.aclose()
 
@@ -363,15 +376,15 @@ async def test_a_rejected_zstd_body_is_resent_uncompressed_and_the_connection_st
 
 @pytest.mark.asyncio
 async def test_another_error_of_a_zstd_request_stays_that_error() -> None:
-    transports = CodexTransports()
-    adapter = codex_adapter(codex_transports=transports)
+    transports = ResponsesTransports()
+    adapter = codex_adapter(responses_transports=transports)
 
     with respx.mock:
         route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
             return_value=httpx.Response(400, json={"error": {"message": "Invalid input."}})
         )
         with pytest.raises(ProviderError, match="Invalid input"):
-            await _stream_text(adapter, "x" * CODEX_ZSTD_MIN_BYTES)
+            await _stream_text(adapter, "x" * RESPONSES_ZSTD_MIN_BYTES)
 
     assert route.call_count == 1
     assert transports.compresses_requests(("openai", "subscription"))

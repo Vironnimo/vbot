@@ -198,7 +198,7 @@ async def test_codex_websocket_request_is_built_continued_and_encoded_off_the_ev
         [[{"type": "response.completed", "response": openai.COMPLETED_RESPONSE}]]
     )
     adapter = openai.codex_adapter(
-        codex_websocket_connect=openai.FakeCodexWebSocketConnector([socket]),
+        responses_websocket_connect=openai.FakeCodexWebSocketConnector([socket]),
         model_lookup=openai.bundled_model_lookup(),
     )
     preparation = _Preparation(paths.CODEX.model_id)
