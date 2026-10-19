@@ -12,22 +12,46 @@ from core.chat.messages import ChatMessage
 JsonObject = dict[str, Any]
 
 ANSWER = "word " * 100
-# 2.0 s from the request to the first output; Reasoning streams first when
-# there is some, the answer from 4.0 s, the last output at 6.0 s.
+
+
+def _arrivals(
+    first_ms: int,
+    last_ms: int,
+    *,
+    chars: int,
+    first_chars: int,
+    arrivals: int = 40,
+    max_arrival_chars: int = 30,
+) -> JsonObject:
+    return {
+        "first_ms": first_ms,
+        "last_ms": last_ms,
+        "chars": chars,
+        "first_chars": first_chars,
+        "arrivals": arrivals,
+        "max_arrival_chars": max_arrival_chars,
+    }
+
+
+# Output from 2.0 s (Reasoning first, when there is some), the answer from
+# 4.0 s, the last output at 6.0 s; the first read carries a fifth of each.
 MARKS = {
-    "first_token_ms": 2000,
-    "first_answer_ms": 4000,
-    "last_token_ms": 6000,
-    "deltas": 80,
-    "answer_deltas": 40,
+    "output": _arrivals(2000, 6000, chars=1000, first_chars=200),
+    "answer": _arrivals(4000, 6000, chars=500, first_chars=100),
 }
 
 
-def _speed(usage: JsonObject, *, reasoning: str | None = None) -> JsonObject | None:
-    message = ChatMessage.assistant(
-        content=ANSWER, reasoning=reasoning, model="openai/gpt-5", usage=usage
+def _speed(
+    usage: JsonObject, *, marks: JsonObject = MARKS, reasoning: str | None = None
+) -> JsonObject | None:
+    completed = complete_output_speed(
+        ChatMessage.assistant(
+            content=ANSWER,
+            reasoning=reasoning,
+            model="openai/gpt-5",
+            usage={"input_tokens": 10, **usage, "stream_timing": marks},
+        )
     )
-    completed = complete_output_speed(message)
     assert completed.usage is not None
     assert "stream_timing" not in completed.usage
     assert "reported_output_tokens_per_second" not in completed.usage
@@ -35,62 +59,88 @@ def _speed(usage: JsonObject, *, reasoning: str | None = None) -> JsonObject | N
 
 
 @pytest.mark.parametrize(
-    ("usage", "reasoning", "rate"),
+    ("usage", "reasoning", "marks", "rate"),
     [
         pytest.param(
             {"output_tokens": 300},
             "thought " * 200,
-            {"output_tokens_per_second": 75.0, "tokens": 300, "window_ms": 4000, "basis": "output"},
-            id="streamed-reasoning-counts-from-the-first-token",
+            MARKS,
+            {"output_tokens_per_second": 60.0, "tokens": 240, "window_ms": 4000, "basis": "output"},
+            id="streamed-reasoning-counts-after-the-first-read",
         ),
         pytest.param(
             {"output_tokens": 2100, "reasoning_tokens": 2000},
             None,
-            {"output_tokens_per_second": 50.0, "tokens": 100, "window_ms": 2000, "basis": "answer"},
+            MARKS,
+            {"output_tokens_per_second": 40.0, "tokens": 80, "window_ms": 2000, "basis": "answer"},
             id="hidden-reasoning-leaves-the-answer-over-its-window",
+        ),
+        pytest.param(
+            {"output_tokens": 120},
+            None,
+            {
+                "output": _arrivals(400, 550, chars=1000, first_chars=200),
+                "answer": _arrivals(400, 550, chars=1000, first_chars=200),
+            },
+            {"output_tokens_per_second": 640.0, "tokens": 96, "window_ms": 150, "basis": "output"},
+            id="a-fast-model-within-a-short-window",
         ),
         pytest.param(
             {"output_tokens": 100, "reported_output_tokens_per_second": 61.47},
             None,
-            {"output_tokens_per_second": 61.5, "basis": "provider"},
+            MARKS,
+            {
+                "output_tokens_per_second": 61.5,
+                "tokens": 100,
+                "window_ms": 1627,
+                "basis": "provider",
+            },
             id="provider-measured-speed-wins",
         ),
     ],
 )
-def test_speed_divides_the_streamed_tokens_by_their_generation_window(
-    usage: JsonObject, reasoning: str | None, rate: JsonObject
+def test_speed_divides_the_window_tokens_by_their_generation_window(
+    usage: JsonObject, reasoning: str | None, marks: JsonObject, rate: JsonObject
 ) -> None:
-    speed = _speed({"input_tokens": 10, **usage, "stream_timing": MARKS}, reasoning=reasoning)
+    speed = _speed(usage, marks=marks, reasoning=reasoning)
 
-    assert speed == {"first_token_ms": 2000, "first_answer_ms": 4000, "duration_ms": 6000, **rate}
+    assert speed == {
+        "first_token_ms": marks["output"]["first_ms"],
+        "first_answer_ms": marks["answer"]["first_ms"],
+        "duration_ms": marks["output"]["last_ms"],
+        **rate,
+    }
+
+
+def _output_only(**changes: Any) -> JsonObject:
+    output = {**MARKS["output"], **changes}
+    return {"output": output, "answer": {**output}}
 
 
 @pytest.mark.parametrize(
     ("output_tokens", "marks"),
     [
-        pytest.param(15, MARKS, id="too-few-tokens"),
-        pytest.param(100, {**MARKS, "first_token_ms": 5800, "first_answer_ms": 5800}, id="burst"),
-        pytest.param(100, {**MARKS, "deltas": 2, "answer_deltas": 2}, id="too-few-deltas"),
+        pytest.param(12, MARKS, id="too-few-tokens"),
+        pytest.param(100, _output_only(arrivals=1, max_arrival_chars=0), id="one-burst"),
+        pytest.param(100, _output_only(arrivals=3), id="too-few-arrivals"),
+        pytest.param(100, _output_only(max_arrival_chars=500), id="most-output-in-one-read"),
+        pytest.param(100, _output_only(first_ms=5950), id="window-too-short"),
     ],
 )
 def test_an_unreliable_window_keeps_only_the_latency(output_tokens: int, marks: JsonObject) -> None:
-    speed = _speed({"input_tokens": 10, "output_tokens": output_tokens, "stream_timing": marks})
+    speed = _speed({"output_tokens": output_tokens}, marks=marks)
 
     assert speed is not None
     assert "output_tokens_per_second" not in speed
-    assert speed["first_token_ms"] == marks["first_token_ms"]
+    assert speed["first_token_ms"] == marks["output"]["first_ms"]
 
 
 def test_reasoning_counted_without_a_split_leaves_the_estimated_answer() -> None:
-    speed = _speed(
-        {"input_tokens": 10, "output_tokens": 2100, "stream_timing": MARKS},
-        reasoning="A short summary.",
-    )
+    speed = _speed({"output_tokens": 2100}, reasoning="A short summary.")
 
     # Only a summary streamed: the answer's local estimate over its own window.
     assert speed is not None
     assert speed["basis"] == "answer"
     assert speed["estimated"] is True
     assert speed["window_ms"] == 2000
-    assert 80 <= speed["tokens"] <= 130
-    assert speed["output_tokens_per_second"] == round(speed["tokens"] / 2, 1)
+    assert 60 <= speed["tokens"] <= 110

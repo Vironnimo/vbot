@@ -256,6 +256,14 @@
         value: speed.output_tokens_per_second.toFixed(1),
       },
     ];
+    // The Model that answered; the footer may already name another one.
+    if (speed.model) {
+      const { model } = parseModelSelectionValue(speed.model);
+      rows.push({
+        label: t('chat.sessionSettings.model'),
+        value: modelNames.get(model) || model,
+      });
+    }
     if (Number.isFinite(speed.first_token_ms)) {
       rows.push({
         label: t('chat.sessionSettings.firstToken'),

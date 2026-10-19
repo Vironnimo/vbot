@@ -626,6 +626,7 @@ class AgenticProgression:
                     MODEL_STEP_USAGE_EVENT,
                     {
                         "usage": dict(assistant_message.usage),
+                        "model": assistant_message.model,
                         "session_usage": dict(session_usage),
                         "context_usage": dict(assistant_context_usage),
                         "iteration_count": run.iteration_count,

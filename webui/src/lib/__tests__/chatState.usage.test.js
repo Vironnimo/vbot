@@ -165,14 +165,49 @@ describe('output speed', () => {
         type: 'model_step_usage',
         run_id: 'run-one',
         sequence,
-        payload: { usage: { input_tokens: 10, output_tokens: 5, speed } },
+        payload: {
+          usage: { input_tokens: 10, output_tokens: 5, speed },
+          model: 'openai/gpt-5',
+        },
       });
 
     step(2, measured);
     step(3, latencyOnly);
 
     expect(sessionState.usage.speed).toEqual(latencyOnly);
-    expect(sessionState.outputSpeed).toEqual(measured);
+    expect(sessionState.outputSpeed).toEqual({
+      ...measured,
+      model: 'openai/gpt-5',
+    });
+  });
+
+  it('keeps the answering Model when the Run repeats its last measurement', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: 'running',
+    });
+    const usage = { input_tokens: 10, output_tokens: 5, speed: measured };
+
+    appendRunEvent(sessionState, {
+      type: 'model_step_usage',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { usage, model: 'openai/gpt-5' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: { status: 'completed', usage },
+    });
+
+    expect(sessionState.outputSpeed.model).toBe('openai/gpt-5');
   });
 
   it('takes the newest measured step from History', () => {
@@ -185,6 +220,7 @@ describe('output speed', () => {
       id,
       role: 'assistant',
       content: 'Answer',
+      model: `openai/${id}`,
       timestamp: '2026-10-19T10:00:00.000000Z',
       usage: { input_tokens: 10, output_tokens: 5, speed },
     });
@@ -195,7 +231,10 @@ describe('output speed', () => {
       { lastUsage: { input_tokens: 10, output_tokens: 5, speed: latencyOnly } },
     );
 
-    expect(sessionState.outputSpeed).toEqual(measured);
+    expect(sessionState.outputSpeed).toEqual({
+      ...measured,
+      model: 'openai/m1',
+    });
   });
 });
 

@@ -210,7 +210,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       streamError: '',
       streamStatus: CHAT_STATUS_IDLE,
       usage: null,
-      // The newest Model step with a measured output speed (`usage.speed`).
+      // The newest Model step with a measured output speed: its
+      // `usage.speed` plus the `model` that answered, when known.
       outputSpeed: null,
       sessionUsage: null,
       contextUsage: null,
@@ -455,20 +456,39 @@ export function currentSessionState(state) {
   return state.sessions[sessionKey(agent.id, agent.current_session_id)] ?? null;
 }
 
-export function updateSessionUsage(sessionState, usage) {
+export function updateSessionUsage(sessionState, usage, { model } = {}) {
   sessionState.usage = usage;
-  // A step too short to measure keeps the speed shown before it.
-  sessionState.outputSpeed =
-    measuredOutputSpeed(usage) ?? sessionState.outputSpeed ?? null;
+  const measured = measuredOutputSpeed(usage, model);
+  // A step too short to measure keeps the speed shown before it; a repeat of
+  // the same measurement without its Model (the Run's terminal Usage) keeps
+  // the Model already known.
+  if (
+    measured &&
+    !(
+      measured.model === null &&
+      sameMeasurement(measured, sessionState.outputSpeed)
+    )
+  ) {
+    sessionState.outputSpeed = measured;
+  }
   return sessionState;
 }
 
-// A step's `usage.speed` when the server measured its tokens per second;
-// otherwise null (the step was too short or arrived in one burst).
-export function measuredOutputSpeed(usage) {
+function sameMeasurement(left, right) {
+  if (!left || !right) return false;
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  keys.delete('model');
+  return [...keys].every((key) => left[key] === right[key]);
+}
+
+// A step's `usage.speed` with the Model that answered, when the server
+// measured its tokens per second; otherwise null (the step was too short or
+// arrived in bursts).
+export function measuredOutputSpeed(usage, model = null) {
   const speed = usage?.speed;
   const rate = speed?.output_tokens_per_second;
-  return Number.isFinite(rate) && rate > 0 ? speed : null;
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  return { ...speed, model: typeof model === 'string' && model ? model : null };
 }
 
 function normalizeServerQueuedItem(item) {

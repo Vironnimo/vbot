@@ -473,6 +473,7 @@ describe('ChatView Session settings', () => {
         tokens: 200,
         window_ms: 3200,
         basis: 'output',
+        model: 'openai/gpt-5',
       };
       flushSync();
 

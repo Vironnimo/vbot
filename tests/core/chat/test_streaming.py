@@ -377,7 +377,7 @@ def test_reasoning_timing_spans_first_to_last_non_empty_reasoning_delta(
     assert accumulator.finalize_assistant_fields().reasoning_timing == timing
 
 
-def test_output_timing_marks_first_answer_and_last_output_since_the_request(
+def test_output_timing_groups_output_deltas_into_arrivals_since_the_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = [100.0]
@@ -392,6 +392,9 @@ def test_output_timing_marks_first_answer_and_last_output_since_the_request(
     accumulator.add_delta({"type": "reasoning_delta", "text": "Think"})
     clock[0] += 2
     accumulator.add_delta({"type": "content_delta", "text": "Answer"})
+    # Within the arrival gap: the same network read.
+    clock[0] += 0.001
+    accumulator.add_delta({"type": "content_delta", "text": " more"})
     clock[0] += 0.5
     accumulator.add_delta({"type": "tool_call_delta", "id": "call_1", "name_delta": "read"})
     clock[0] += 3
@@ -399,11 +402,22 @@ def test_output_timing_marks_first_answer_and_last_output_since_the_request(
 
     # Only non-empty Reasoning, answer text and Tool Call fragments are output.
     assert accumulator.output_timing == {
-        "first_token_ms": 1500,
-        "first_answer_ms": 3500,
-        "last_token_ms": 4000,
-        "deltas": 3,
-        "answer_deltas": 2,
+        "output": {
+            "first_ms": 1500,
+            "last_ms": 4001,
+            "chars": 20,
+            "first_chars": 5,
+            "arrivals": 3,
+            "max_arrival_chars": 11,
+        },
+        "answer": {
+            "first_ms": 3500,
+            "last_ms": 4001,
+            "chars": 15,
+            "first_chars": 11,
+            "arrivals": 2,
+            "max_arrival_chars": 4,
+        },
     }
 
 

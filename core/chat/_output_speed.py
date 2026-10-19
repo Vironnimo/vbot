@@ -6,17 +6,20 @@ tokens are known, ``complete_output_speed`` turns those marks into the
 step's public ``usage.speed`` (``chat/usage.md`` -> Output speed).
 
 Tokens per second is the Model's generation speed while it was writing, not
-request throughput: the window starts at the first output token, so queueing
-and prompt processing count toward the time to first token instead. Two
-Provider behaviors would otherwise make the figure absurd:
+request throughput: the window starts at the first output, so queueing and
+prompt processing count toward the time to first token instead, and only
+output that arrived after the first network read counts, since the first
+read's tokens were generated before the window began. Provider behaviors
+that would otherwise make the figure absurd:
 
 - Reasoning a Provider counts but never streams (hidden, or only summarized)
   was generated before or between the visible deltas, outside any window
   vBot can see. When the counted output clearly exceeds what was streamed,
   only the answer counts, over the answer's own window.
-- Deltas that arrive in one burst (a buffering proxy, a cached response)
-  span no real generation time. A window shorter than half a second, with
-  fewer than three deltas or under twenty tokens yields no speed at all.
+- Output that arrives in bursts (a buffering proxy, a cached response, a busy
+  Event Loop) spans no real generation time. Deltas that follow each other
+  within two milliseconds came from one read; a window needs four such
+  arrivals, and none after the first may carry half of its output.
 
 A speed the Provider measured itself (local servers report their decode
 speed) takes precedence over the stream measurement.
@@ -42,9 +45,14 @@ STREAM_TIMING_FIELD = "stream_timing"
 REPORTED_SPEED_FIELD = "reported_output_tokens_per_second"
 """Normalized Usage field for a decode speed the Provider measured itself."""
 
-MIN_SPEED_TOKENS = 20
-MIN_SPEED_WINDOW_MS = 500
-MIN_SPEED_DELTAS = 3
+ARRIVAL_GAP_SECONDS = 0.002
+"""Deltas closer together than this arrived with one network read."""
+
+MIN_SPEED_ARRIVALS = 4
+MIN_SPEED_WINDOW_MS = 100
+MIN_SPEED_TOKENS = 10
+MAX_ARRIVAL_SHARE = 0.5
+"""No single arrival after the first may carry more of the window's output."""
 
 # Counted output within this ratio of the locally estimated streamed text
 # (plus a small allowance for framing) was streamed as it was generated;
@@ -53,56 +61,82 @@ _STREAMED_COVERAGE_RATIO = 1.5
 _STREAMED_COVERAGE_SLACK_TOKENS = 16
 
 
+class _Arrivals:
+    """When one kind of output (all of it, or the answer) arrived, and how much."""
+
+    def __init__(self) -> None:
+        self.first: float | None = None
+        self.last: float | None = None
+        self.chars = 0
+        self.first_chars = 0
+        self.arrivals = 0
+        self.max_arrival_chars = 0
+        self._arrival_chars = 0
+
+    def add(self, now: float, chars: int) -> None:
+        if self.last is None or now - self.last > ARRIVAL_GAP_SECONDS:
+            self.arrivals += 1
+            self._arrival_chars = 0
+        if self.first is None:
+            self.first = now
+        self.last = now
+        self.chars += chars
+        self._arrival_chars += chars
+        if self.arrivals == 1:
+            self.first_chars += chars
+        else:
+            self.max_arrival_chars = max(self.max_arrival_chars, self._arrival_chars)
+
+    def marks(self, sent: float) -> JsonObject | None:
+        if self.first is None or self.last is None:
+            return None
+        return {
+            "first_ms": _elapsed_ms(sent, self.first),
+            "last_ms": _elapsed_ms(sent, self.last),
+            "chars": self.chars,
+            "first_chars": self.first_chars,
+            "arrivals": self.arrivals,
+            "max_arrival_chars": self.max_arrival_chars,
+        }
+
+
 class OutputTimer:
     """Monotonic marks of one stream attempt's output deltas.
 
     ``request_sent`` starts the attempt; every non-empty Reasoning, answer or
     Tool Call delta afterwards is output, answer text and Tool Calls are also
-    answer output.
+    answer output. ``chars`` is the delta's text length, which apportions the
+    counted tokens between the first read and the rest of the window.
     """
 
     def __init__(self, clock: Callable[[], float] | None = None) -> None:
         self._clock = clock if clock is not None else time.monotonic
         self._sent: float | None = None
-        self._first: float | None = None
-        self._first_answer: float | None = None
-        self._last: float | None = None
-        self._deltas = 0
-        self._answer_deltas = 0
+        self._output = _Arrivals()
+        self._answer = _Arrivals()
 
     def request_sent(self) -> None:
         self._sent = self._clock()
 
-    def output(self, *, answer: bool) -> None:
+    def output(self, chars: int, *, answer: bool) -> None:
         if self._sent is None:
             return
         now = self._clock()
-        if self._first is None:
-            self._first = now
-        self._last = now
-        self._deltas += 1
+        self._output.add(now, chars)
         if answer:
-            if self._first_answer is None:
-                self._first_answer = now
-            self._answer_deltas += 1
+            self._answer.add(now, chars)
 
     def marks(self) -> JsonObject | None:
-        """Milliseconds since the request was sent, or None without output."""
-        sent, first, last = self._sent, self._first, self._last
-        if sent is None or first is None or last is None:
+        """Arrival marks in ms since the request was sent, or None without output."""
+        if self._sent is None:
             return None
-
-        def elapsed_ms(moment: float) -> int:
-            return max(0, round((moment - sent) * 1000))
-
-        marks: JsonObject = {
-            "first_token_ms": elapsed_ms(first),
-            "last_token_ms": elapsed_ms(last),
-            "deltas": self._deltas,
-        }
-        if self._first_answer is not None:
-            marks["first_answer_ms"] = elapsed_ms(self._first_answer)
-            marks["answer_deltas"] = self._answer_deltas
+        output = self._output.marks(self._sent)
+        if output is None:
+            return None
+        marks: JsonObject = {"output": output}
+        answer = self._answer.marks(self._sent)
+        if answer is not None:
+            marks["answer"] = answer
         return marks
 
 
@@ -120,18 +154,37 @@ def complete_output_speed(message: ChatMessage) -> ChatMessage:
     reported = reported_speed(usage.pop(REPORTED_SPEED_FIELD, None))
     speed: JsonObject = {}
     if isinstance(marks, dict):
-        speed["first_token_ms"] = marks["first_token_ms"]
-        if "first_answer_ms" in marks:
-            speed["first_answer_ms"] = marks["first_answer_ms"]
-        speed["duration_ms"] = marks["last_token_ms"]
+        speed["first_token_ms"] = marks["output"]["first_ms"]
+        if "answer" in marks:
+            speed["first_answer_ms"] = marks["answer"]["first_ms"]
+        speed["duration_ms"] = marks["output"]["last_ms"]
     if reported is not None:
-        speed["output_tokens_per_second"] = round(reported, 1)
-        speed["basis"] = "provider"
+        speed.update(_reported_speed(reported, usage))
     elif isinstance(marks, dict):
         speed.update(_measured_speed(marks, usage, message))
     if speed:
         usage[SPEED_FIELD] = speed
     return replace(message, usage=usage)
+
+
+def reported_speed(value: Any) -> float | None:
+    """Return a valid Provider-reported speed (finite, positive), else None."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return float(value)
+
+
+def _reported_speed(rate: float, usage: JsonObject) -> JsonObject:
+    speed: JsonObject = {"output_tokens_per_second": round(rate, 1)}
+    tokens = _count(usage.get("output_tokens"))
+    if tokens and usage.get("output_tokens_estimated") is not True:
+        # The window the Provider's own measurement implies, so every speed
+        # can be weighted by its tokens alike.
+        speed.update(tokens=tokens, window_ms=max(1, round(tokens * 1000 / rate)))
+    speed["basis"] = "provider"
+    return speed
 
 
 def _measured_speed(marks: JsonObject, usage: JsonObject, message: ChatMessage) -> JsonObject:
@@ -151,10 +204,10 @@ def _measured_speed(marks: JsonObject, usage: JsonObject, message: ChatMessage) 
     ):
         basis = "output"
         tokens = output_tokens
-        window_ms = marks["last_token_ms"] - marks["first_token_ms"]
-        deltas = marks["deltas"]
+        arrivals = marks["output"]
     else:
-        if "first_answer_ms" not in marks:
+        arrivals = marks.get("answer")
+        if arrivals is None:
             return {}
         basis = "answer"
         reasoning_tokens = _count(usage.get("reasoning_tokens"))
@@ -163,13 +216,22 @@ def _measured_speed(marks: JsonObject, usage: JsonObject, message: ChatMessage) 
         else:
             tokens = answer_tokens
             estimated = True
-        window_ms = marks["last_token_ms"] - marks["first_answer_ms"]
-        deltas = marks["answer_deltas"]
-    if tokens < MIN_SPEED_TOKENS or window_ms < MIN_SPEED_WINDOW_MS or deltas < MIN_SPEED_DELTAS:
+    window_ms = arrivals["last_ms"] - arrivals["first_ms"]
+    window_chars = arrivals["chars"] - arrivals["first_chars"]
+    if (
+        arrivals["arrivals"] < MIN_SPEED_ARRIVALS
+        or window_ms < MIN_SPEED_WINDOW_MS
+        or window_chars <= 0
+        or arrivals["max_arrival_chars"] > window_chars * MAX_ARRIVAL_SHARE
+    ):
+        return {}
+    # The first read's share of the output was generated before the window.
+    window_tokens = tokens * window_chars / arrivals["chars"]
+    if window_tokens < MIN_SPEED_TOKENS:
         return {}
     speed: JsonObject = {
-        "output_tokens_per_second": round(tokens * 1000 / window_ms, 1),
-        "tokens": tokens,
+        "output_tokens_per_second": round(window_tokens * 1000 / window_ms, 1),
+        "tokens": round(window_tokens),
         "window_ms": window_ms,
         "basis": basis,
     }
@@ -178,16 +240,11 @@ def _measured_speed(marks: JsonObject, usage: JsonObject, message: ChatMessage) 
     return speed
 
 
+def _elapsed_ms(start: float, moment: float) -> int:
+    return max(0, round((moment - start) * 1000))
+
+
 def _count(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
     return value
-
-
-def reported_speed(value: Any) -> float | None:
-    """Return a valid Provider-reported speed (finite, positive), else None."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    if not math.isfinite(value) or value <= 0:
-        return None
-    return float(value)

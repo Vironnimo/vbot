@@ -81,8 +81,8 @@ export function loadHistory(sessionState, messages, options = {}) {
       if (lastUsage) sessionState.usage = lastUsage;
     }
     sessionState.outputSpeed =
-      measuredOutputSpeed(sessionState.usage) ??
-      findLastOutputSpeed(sessionState.messages);
+      findLastOutputSpeed(sessionState.messages) ??
+      measuredOutputSpeed(sessionState.usage);
   }
   // Whole-session totals come from the server (the loaded page may be a
   // slice); terminal run events refresh them between history loads.
@@ -221,7 +221,7 @@ function findLastOutputSpeed(messages) {
   for (let i = (messages ?? []).length - 1; i >= 0; i--) {
     const speed =
       messages[i]?.role === 'assistant'
-        ? measuredOutputSpeed(messages[i].usage)
+        ? measuredOutputSpeed(messages[i].usage, messages[i].model)
         : null;
     if (speed) return speed;
   }

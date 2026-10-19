@@ -566,7 +566,7 @@ class StreamingAccumulator:
 
     @property
     def output_timing(self) -> JsonObject | None:
-        """Return when output arrived, in ms since ``request_sent``, or None."""
+        """Return when and how much output arrived since ``request_sent``, or None."""
         return self._output_timer.marks()
 
     @property
@@ -674,7 +674,7 @@ class StreamingAccumulator:
             return None
         self._open_tool_slot = None
         self._last_text_delta_type = "content_delta"
-        self._output_timer.output(answer=True)
+        self._output_timer.output(len(text), answer=True)
         self._content_parts.append(text)
         return StreamingVisibleDelta(
             event_type=ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -688,7 +688,7 @@ class StreamingAccumulator:
         self._open_tool_slot = None
         self._last_text_delta_type = "reasoning_delta"
         self._record_reasoning_activity()
-        self._output_timer.output(answer=False)
+        self._output_timer.output(len(text), answer=False)
         self._reasoning_parts.append(text)
         payload: JsonObject = {"reasoning_delta": text}
         index = delta.get("summary_index")
@@ -741,7 +741,7 @@ class StreamingAccumulator:
             return None
         fragments.append(name_delta=name_delta, arguments_delta=arguments_delta)
         if name_delta or arguments_delta:
-            self._output_timer.output(answer=True)
+            self._output_timer.output(len(name_delta) + len(arguments_delta), answer=True)
 
         # Tool-call deltas are transient. Before an index-based wire supplies its
         # real id, this field is only a stable display correlation handle; the
