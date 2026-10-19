@@ -206,9 +206,9 @@
   display: none;
 }
 
-/* A Working line reads like the Tool rows it folds: dot, names, facts and
-   time. Finished, it lists the Tools used, their count and any failure;
-   while it holds a running Run's latest activity, it names that step. */
+/* A Working line is a heading over the rows it folds: "Working…" while it
+   holds a running Run's latest activity (else "Worked"), the call count, the
+   Tools used and the time. It carries no status dot; each row keeps its own. */
 .working-block__summary {
   min-width: 0;
   max-width: 100%;
@@ -220,32 +220,90 @@
   box-shadow: var(--focus-ring);
 }
 
-.working-block__names {
+.working-block__label {
+  flex-shrink: 0;
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
+}
+
+.working-block__summary:hover .working-block__label {
+  color: var(--text-hi);
+}
+
+/* A light sweep across the text says the Agent is still at it. */
+.working-block__label--active,
+.working-block__summary:hover .working-block__label--active {
+  background: linear-gradient(
+      90deg,
+      var(--text-med) 0%,
+      var(--text-med) 35%,
+      var(--text-hi) 50%,
+      var(--text-med) 65%,
+      var(--text-med) 100%
+    )
+    0 0 / 250% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: working-sweep 2s linear infinite;
+}
+
+@keyframes working-sweep {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: -150% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .working-block__label--active,
+  .working-block__summary:hover .working-block__label--active {
+    background: none;
+    color: var(--text-hi);
+    animation: none;
+  }
+}
+
+.working-block__kinds {
+  display: flex;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
   white-space: nowrap;
 }
 
-.working-block__more {
-  margin-left: 5px;
-  color: var(--text-lo);
+.working-block__kinds::before {
+  margin-right: 8px;
+  content: '·';
 }
 
-.working-block__failed {
-  color: var(--red);
-}
-
-.working-block__running {
-  color: var(--amber);
-}
-
-.working-block__activity {
-  display: inline-flex;
+.working-block__kind {
   min-width: 0;
-  align-items: center;
-  gap: 8px;
   overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.working-block__kind + .working-block__kind::before {
+  margin-right: 5px;
+  content: ',';
+}
+
+.working-block__kind-count {
+  margin-left: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.working-block__more {
+  flex-shrink: 0;
+  margin-left: 5px;
+}
+
+.working-block__note {
+  color: var(--text-lo);
 }
 
 .working-block__chevron {

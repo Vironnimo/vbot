@@ -128,6 +128,33 @@ describe('server Timeline projection', () => {
       first.slice(0, -1).map((part) => part.id),
     );
   });
+  it('keeps a compact Working span in the viewport part of its first row', () => {
+    // Output rows 0-24, then a Working span of 50 Tool calls and Thinking
+    // blocks across the 30-row buckets, then output again.
+    const children = Array.from({ length: 100 }, (_, position) => {
+      const id = `step-${position}`;
+      if (position < 25 || position >= 75)
+        return outputItem(`step ${position}`, { id, position });
+      return position % 2
+        ? reasoningItem('Think.', { id, position })
+        : toolItem({ id, position, result: { ok: true } });
+    });
+    const run = assistantRun('one', children);
+    const partOf = (rows, id) =>
+      rows.find((part) => part.items.some((child) => child.id === id)).id;
+
+    const compact = timelineRowsForViewport([run], 'compact');
+    expect(
+      new Set(children.slice(25, 75).map((c) => partOf(compact, c.id))),
+    ).toEqual(new Set([partOf(compact, 'step-25')]));
+    expect(partOf(compact, 'step-75')).not.toBe(partOf(compact, 'step-74'));
+    expect(compact.flatMap((part) => part.items)).toEqual(children);
+    expect(compact.every((part) => part.runItems === children)).toBe(true);
+    // Normal Work details show every row, so plain position buckets suffice.
+    const normal = timelineRowsForViewport([run]);
+    expect(partOf(normal, 'step-30')).not.toBe(partOf(normal, 'step-29'));
+  });
+
   it('replaces only the selected Run in place and keeps unrelated rows unchanged', () => {
     const before = messageItem({
       id: 'old-user',

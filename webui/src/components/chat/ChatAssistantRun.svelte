@@ -21,6 +21,7 @@
     groupRunChildren,
     isRowCancellable,
     isRunChildWorking,
+    latestRunActivity,
     isSubAgentSendTool,
     isSubAgentSpawnTool,
     isTextToSpeechTool,
@@ -98,8 +99,12 @@
     groupRunChildren(visibleRunChildren(item), chatWorkingMode),
   );
 
+  // The running Run's latest activity, also when this item is one viewport
+  // part of a long Run.
+  let latestActivityId = $derived(latestRunActivity(item)?.id ?? null);
+
   let answerCopyText = $derived(
-    (item.answerItems ?? visibleRunChildren(item))
+    (item.runItems ?? visibleRunChildren(item))
       .filter((child) => child.type === 'assistant_output')
       .map((child) =>
         typeof child.content === 'string' ? child.content.trim() : '',
@@ -173,11 +178,9 @@
   }
 
   function workingGroupIsActive(group) {
-    const visibleChildren = visibleRunChildren(item);
-    const latestVisibleChild = visibleChildren.at(-1);
     return (
-      item?.status === 'running' &&
-      latestVisibleChild?.id === group.children.at(-1)?.id
+      latestActivityId !== null &&
+      latestActivityId === group.children.at(-1)?.id
     );
   }
 
@@ -713,76 +716,66 @@
             class="working-block__summary tool-event-line"
             use:tooltip={() => workingGroupDetails(summary)}
           >
-            {#if summary.status}
-              <span
-                class="te-dot"
-                class:running={summary.status === 'running'}
-                class:done={summary.status === 'success'}
-                class:error={summary.status === 'failed'}
-                class:partial={summary.status === 'partial'}
-                class:interrupted={summary.status === 'interrupted'}
-                class:cancelled={summary.status === 'cancelled'}
-                class:ended={summary.status === 'ended'}
-                aria-hidden="true">●</span
-              >
-            {/if}
-            {#if summary.active || summary.toolCount === 1}
-              {#if summary.active}
-                <span class="te-fn working-block__label">
-                  {t('chat.working.active')}
-                </span>
-              {/if}
-              {#if summary.latestTool}
-                {@const presentation = toolRowPresentation(summary.latestTool)}
-                <span class="working-block__activity">
-                  <span class="te-fn">{runToolName(summary.latestTool)}</span>
-                  {#if presentation.primary.length > 0}
-                    <ToolPrimaryLine primary={presentation.primary} />
-                  {/if}
-                </span>
+            <!-- A heading over the rows it folds: whether the Agent is still
+                 working here, how many calls, and which Tools. Row states
+                 stay on the rows themselves. -->
+            <span
+              class="working-block__label"
+              class:working-block__label--active={summary.active}
+            >
+              {summary.active
+                ? t('chat.working.active')
+                : t('chat.working.done')}
+            </span>
+            <span class="te-fact working-block__count">
+              {#if summary.toolCount > 0}
+                {summary.toolCount === 1
+                  ? t('chat.working.toolCallOne')
+                  : t('chat.working.toolCallCount', {
+                      count: summary.toolCount,
+                    })}
               {:else}
-                <span class="te-fact">{t('chat.working.thinking')}</span>
+                {summary.thoughtCount === 1
+                  ? t('chat.working.thoughtOne')
+                  : t('chat.working.thoughtCount', {
+                      count: summary.thoughtCount,
+                    })}
               {/if}
-            {:else}
-              {#if summary.toolNames.length > 0}
-                <span class="te-fn working-block__names">
-                  {summary.toolNames.join(', ')}{#if summary.moreToolNames}
-                    <span class="working-block__more"
-                      >{t('chat.working.moreTools', {
-                        count: summary.moreToolNames,
-                      })}</span
-                    >{/if}
-                </span>
-              {/if}
-              <span class="te-fact working-block__count">
-                {#if summary.toolCount > 0}
-                  {summary.toolCount === 1
-                    ? t('chat.working.toolCallOne')
-                    : t('chat.working.toolCallCount', {
-                        count: summary.toolCount,
-                      })}
-                {:else}
-                  {summary.thoughtCount === 1
-                    ? t('chat.working.thoughtOne')
-                    : t('chat.working.thoughtCount', {
-                        count: summary.thoughtCount,
-                      })}
+            </span>
+            {#if summary.toolKinds.length > 0}
+              <span class="working-block__kinds">
+                {#each summary.toolKinds as kind (kind.name)}
+                  <span class="working-block__kind"
+                    >{kind.name}{#if kind.count > 1}<span
+                        class="working-block__kind-count"
+                        >{t('chat.working.kindCount', {
+                          count: kind.count,
+                        })}</span
+                      >{/if}</span
+                  >
+                {/each}
+                {#if summary.moreToolKinds}
+                  <span class="working-block__more"
+                    >{t('chat.working.moreTools', {
+                      count: summary.moreToolKinds,
+                    })}</span
+                  >
                 {/if}
               </span>
-              {#if summary.failedCount > 0}
-                <span class="te-fact working-block__failed">
-                  {t('chat.working.failedCount', {
-                    count: summary.failedCount,
-                  })}
-                </span>
-              {/if}
-              {#if summary.runningCount > 0}
-                <span class="te-fact working-block__running">
-                  {t('chat.working.runningCount', {
-                    count: summary.runningCount,
-                  })}
-                </span>
-              {/if}
+            {/if}
+            {#if summary.failedCount > 0}
+              <span class="te-fact working-block__note">
+                {t('chat.working.failedCount', {
+                  count: summary.failedCount,
+                })}
+              </span>
+            {/if}
+            {#if summary.runningCount > 0}
+              <span class="te-fact working-block__note">
+                {t('chat.working.runningCount', {
+                  count: summary.runningCount,
+                })}
+              </span>
             {/if}
             {#if summary.durationLabel}
               <span class="te-time">{summary.durationLabel}</span>

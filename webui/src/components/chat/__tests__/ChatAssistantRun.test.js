@@ -387,6 +387,15 @@ describe('ChatAssistantRun', () => {
       return document.querySelector('.working-block');
     }
 
+    function summaryText(selector) {
+      return (
+        workingBlock()
+          .querySelector(`summary ${selector}`)
+          ?.textContent.replace(/\s+/g, ' ')
+          .trim() ?? null
+      );
+    }
+
     it('groups contiguous Thinking and Tool rows behind a completed disclosure', () => {
       run.mount({
         item: assistantRun({
@@ -400,14 +409,12 @@ describe('ChatAssistantRun', () => {
 
       const block = workingBlock();
       expect(block.open).toBe(false);
-      // A finished group with one Tool reads like that Tool's own row.
-      const summary = block.querySelector('summary');
-      const step = summary.querySelector('.working-block__activity');
-      expect(step.querySelector('.te-fn').textContent).toBe('read');
-      expect(step.textContent).toContain('README.md');
-      expect(summary.querySelector('.te-dot').classList).toContain('done');
-      expect(summary.querySelector('.working-block__label')).toBeNull();
-      expect(summary.querySelector('.working-block__count')).toBeNull();
+      // A heading over the rows, without a status dot of its own.
+      expect(summaryText('.working-block__label')).toBe(t('chat.working.done'));
+      expect(summaryText('.working-block__count')).toBe('1 Tool call');
+      expect(summaryText('.working-block__kinds')).toBe('read');
+      expect(summaryText('.working-block__more')).toBeNull();
+      expect(block.querySelector('summary .te-dot')).toBeNull();
       expect(
         block.querySelectorAll('.reasoning-block, .tool-event'),
       ).toHaveLength(0);
@@ -424,72 +431,106 @@ describe('ChatAssistantRun', () => {
       expect(child.querySelector('.tool-event-body')).toBe(body);
     });
 
+    const laterOutput = outputItem('Done.', { id: 'later-output' });
     it.each([
       [
-        'the latest Tool',
-        [reasoningItem('Inspect the repository.'), bashChild()],
-        'bash',
+        'its latest Tool running',
+        { items: [reasoningItem('Inspect the repository.'), bashChild()] },
+        true,
       ],
       [
-        'the latest Tool while later Thinking is active',
-        [
-          bashChild({ status: 'success' }),
-          reasoningItem('Interpret the result.', { streaming: true }),
-        ],
-        'bash',
+        'later Thinking active',
+        {
+          items: [
+            bashChild({ status: 'success' }),
+            reasoningItem('Interpret the result.', { streaming: true }),
+          ],
+        },
+        true,
       ],
       [
-        'no activity for Thinking only',
-        [
-          reasoningItem('First thought.', { id: 'first' }),
-          reasoningItem('Second thought.', { id: 'second', streaming: true }),
-        ],
-        null,
+        'only Thinking',
+        {
+          items: [
+            reasoningItem('First thought.', { id: 'first' }),
+            reasoningItem('Second thought.', { id: 'second', streaming: true }),
+          ],
+        },
+        true,
+      ],
+      [
+        'later output',
+        {
+          items: [
+            reasoningItem('Inspect the repository.'),
+            readChild({ status: 'success' }),
+            laterOutput,
+          ],
+        },
+        false,
+      ],
+      // One viewport part of a long Run: its last group is not the Run's
+      // latest activity when a later part holds newer children.
+      [
+        'later children in another viewport part',
+        {
+          items: [
+            reasoningItem('Inspect the repository.', { id: 'part-thought' }),
+            readChild({ status: 'success' }),
+          ],
+          runItems: [
+            reasoningItem('Inspect the repository.', { id: 'part-thought' }),
+            readChild({ status: 'success' }),
+            laterOutput,
+          ],
+        },
+        false,
       ],
     ])(
-      'labels an active group as working with %s',
-      (_case, items, activity) => {
+      'labels a running Run’s group with %s as working only while it holds the latest activity',
+      (_case, fields, active) => {
         run.mount({
-          item: assistantRun({ status: 'running', items }),
+          item: assistantRun({ status: 'running', ...fields }),
           chatWorkingMode: 'compact',
         });
 
-        const block = workingBlock();
-        expect(
-          block.querySelector('.working-block__label').textContent.trim(),
-        ).toBe(t('chat.working.active'));
-        expect(block.querySelector('.te-dot').classList).toContain('running');
-        expect(
-          block
-            .querySelector('.working-block__activity .te-fn')
-            ?.textContent.trim() ?? null,
-        ).toBe(activity);
-        if (activity === 'bash') {
-          expect(
-            block.querySelector('.working-block__activity').textContent,
-          ).toContain('ls -la');
-        }
-        expect(block.querySelector('summary').textContent).not.toContain(
-          t('chat.event.thinking'),
+        const label = workingBlock().querySelector('.working-block__label');
+        expect(label.textContent.trim()).toBe(
+          active ? t('chat.working.active') : t('chat.working.done'),
         );
+        expect(label.classList.contains('working-block__label--active')).toBe(
+          active,
+        );
+        expect(workingBlock().querySelector('summary .te-dot')).toBeNull();
       },
     );
 
     it.each([
       [
-        'a failure in red beside the count',
+        'a failure as a quiet note beside the count',
         [
           readChild({ id: 'read-ok', status: 'success' }),
           bashChild({ status: 'failed' }),
         ],
-        { names: 'read, bash', dot: 'error', failed: '1 failed' },
+        { kinds: ['read', 'bash'], count: '2 Tool calls', note: '1 failed' },
       ],
       [
-        'at most three Tool names and how many more',
-        ['read', 'grep', 'glob', 'bash', 'write'].map((name) =>
-          toolChild(name, {}, { status: 'success' }),
-        ),
-        { names: 'read, grep, glob+2', dot: 'done', count: '5 Tool calls' },
+        'the most used Tools first, with their counts, and how many more',
+        [
+          toolChild('grep', {}, { id: 'grep', status: 'success' }),
+          ...['read-1', 'read-2', 'read-3'].map((id) =>
+            readChild({ id, status: 'success' }),
+          ),
+          ...['glob', 'bash', 'write'].map((name) =>
+            toolChild(name, {}, { status: 'success' }),
+          ),
+          toolChild('glob', {}, { id: 'glob-2', status: 'success' }),
+        ],
+        {
+          kinds: ['read×3', 'glob×2', 'grep'],
+          more: '+2',
+          count: '8 Tool calls',
+        },
       ],
       [
         'the span from the first start to the last end',
@@ -509,36 +550,23 @@ describe('ChatAssistantRun', () => {
             },
           }),
         ],
-        { names: 'read, bash', dot: 'done', time: '5.0s' },
+        { kinds: ['read', 'bash'], count: '2 Tool calls', time: '5.0s' },
       ],
     ])('summarizes a finished group with %s', (_case, items, expected) => {
       run.mount({ item: assistantRun({ items }), chatWorkingMode: 'compact' });
 
-      const summary = workingBlock().querySelector('summary');
       expect(
-        summary
-          .querySelector('.working-block__names')
-          .textContent.replace(/\s+/g, ''),
-      ).toBe(expected.names.replace(/\s+/g, ''));
-      expect(summary.querySelector('.te-dot').classList).toContain(
-        expected.dot,
-      );
-      if (expected.failed) {
-        expect(
-          summary.querySelector('.working-block__failed').textContent.trim(),
-        ).toBe(expected.failed);
-      } else {
-        expect(summary.querySelector('.working-block__failed')).toBeNull();
-      }
-      if (expected.count) {
-        expect(
-          summary.querySelector('.working-block__count').textContent.trim(),
-        ).toBe(expected.count);
-      }
+        Array.from(
+          workingBlock().querySelectorAll('.working-block__kind'),
+          (kind) => kind.textContent.trim(),
+        ),
+      ).toEqual(expected.kinds);
+      expect(summaryText('.working-block__more')).toBe(expected.more ?? null);
+      expect(summaryText('.working-block__count')).toBe(expected.count);
+      expect(summaryText('.working-block__note')).toBe(expected.note ?? null);
+      expect(workingBlock().querySelector('summary .te-dot')).toBeNull();
       if (expected.time) {
-        expect(summary.querySelector('.te-time').textContent.trim()).toBe(
-          expected.time,
-        );
+        expect(summaryText('.te-time')).toBe(expected.time);
       }
     });
 

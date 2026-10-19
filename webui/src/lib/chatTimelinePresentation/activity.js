@@ -47,6 +47,19 @@ export const visibleRunChildren = (assistantRun) =>
     return Boolean(child.content);
   });
 
+// The running Run's latest visible child, or null once the Run ended. A
+// viewport part of a long Run (`chatTimeline.js` `timelineRowsForViewport`)
+// holds only some children and carries the whole Run's as `runItems`, so a
+// part never mistakes its own last child for the Run's current activity.
+export function latestRunActivity(assistantRun) {
+  if (assistantRun?.status !== 'running') return null;
+  return (
+    visibleRunChildren({
+      items: assistantRun.runItems ?? assistantRun.items,
+    }).at(-1) ?? null
+  );
+}
+
 // `streaming` means a text section still comes from transient deltas and may
 // later be replaced by its stable message. It does not mean that section is
 // still the Run's current activity: once a later visible child exists, the
@@ -55,12 +68,7 @@ export function isRunChildWorking(assistantRun, child) {
   if (assistantRun?.status !== 'running' || !child?.streaming || !child?.id) {
     return false;
   }
-
-  const children = visibleRunChildren(assistantRun);
-  const childIndex = children.findIndex(
-    (candidate) => candidate.id === child.id,
-  );
-  return childIndex >= 0 && childIndex === children.length - 1;
+  return latestRunActivity(assistantRun)?.id === child.id;
 }
 
 // Duration label for one reasoning block header: the persisted first-to-last

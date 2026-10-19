@@ -1,3 +1,5 @@
+import { workingSpanStarts } from './chatTimelinePresentation.js';
+
 // The server owns conversation semantics. This module applies its keyed
 // projections, preserving unchanged objects so streaming touches only its tail.
 export function visibleTimelineItemsForRender(sessionState) {
@@ -12,22 +14,30 @@ export function visibleTimelineItemsForRender(sessionState) {
 }
 
 // Run is a semantic unit, not an indivisible DOM row. Stable position buckets
-// let the existing viewport unmount old parts of one unusually long Run.
-export function timelineRowsForViewport(items) {
+// let the existing viewport unmount old parts of one unusually long Run. In
+// compact Work details a Working span stays in its first row's part, so its
+// group is never cut apart. Every part carries the whole Run as `runItems`.
+export function timelineRowsForViewport(items, workingMode = 'normal') {
   return items.flatMap((item) => {
     if (item.type !== 'assistant_run' || item.items.length <= 60) return [item];
+    const spanStarts =
+      workingMode === 'compact' ? workingSpanStarts(item) : new Map();
+    const positions = new Map(
+      item.items.map((child, index) => [child.id, child.position ?? index]),
+    );
     const groups = new Map();
-    item.items.forEach((child, index) => {
-      const part = Math.floor((child.position ?? index) / 30);
+    for (const child of item.items) {
+      const anchor = spanStarts.get(child.id) ?? child;
+      const part = Math.floor(positions.get(anchor.id) / 30);
       if (!groups.has(part)) groups.set(part, []);
       groups.get(part).push(child);
-    });
+    }
     const parts = [...groups];
     return parts.map(([part, children], index) => ({
       ...item,
       id: `${item.id}:part:${part}`,
       sourceItemId: item.id,
-      answerItems: item.items,
+      runItems: item.items,
       items: children,
       segment_first: index === 0,
       segment_tail: index === parts.length - 1,

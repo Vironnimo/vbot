@@ -1,6 +1,10 @@
 import { formatDurationMs, timestampToMs } from './time.js';
 import { t } from '$lib/i18n.js';
 import { toolDurationMs, toolStartedTimestamp } from './toolFacts.js';
+import { visibleRunChildren } from './activity.js';
+
+const isWorkingChild = (child) =>
+  child.type === 'reasoning' || child.type === 'tool_call';
 
 // Compact Work details fold each contiguous span of at least two Thinking or
 // Tool rows into one Working line; Assistant output, user messages and every
@@ -29,7 +33,7 @@ export function groupRunChildren(children, workingMode) {
     span = [];
   };
   for (const child of children) {
-    if (child.type === 'reasoning' || child.type === 'tool_call') {
+    if (isWorkingChild(child)) {
       span.push(child);
       continue;
     }
@@ -40,59 +44,59 @@ export function groupRunChildren(children, workingMode) {
   return groups;
 }
 
+// The first row of the Working span each later child of a Run continues, by
+// child id; hidden children inside a span continue it too. The viewport keeps
+// a span with its first row, so a long Run is never cut inside a Working group.
+export function workingSpanStarts(run) {
+  const visible = new Set(visibleRunChildren(run));
+  const starts = new Map();
+  let start = null;
+  for (const child of run.items ?? []) {
+    if (visible.has(child) && !isWorkingChild(child)) {
+      start = null;
+    } else if (start) {
+      starts.set(child.id, start);
+    } else if (visible.has(child)) {
+      start = child;
+    }
+  }
+  return starts;
+}
+
 const MAX_NAMED_TOOLS = 3;
 
-// The worst state among the group's rows decides its dot, in the order a
-// reader must notice it: still running, failed, cut short, then done.
-const STATUS_PRIORITY = [
-  'running',
-  'failed',
-  'partial',
-  'interrupted',
-  'cancelled',
-  'ended',
-  'success',
-];
-
-// What one Working line says about its rows. `rowStatus(child)` is the dot
-// state the Tool row itself shows and `toolName(child)` its displayed name;
-// `active` marks the group holding a running Run's latest activity, whose
-// duration keeps ticking with `nowMs`.
+// What one Working line says about its rows. `rowStatus(child)` is the state
+// the Tool row itself shows and `toolName(child)` its displayed name; `active`
+// marks the group holding a running Run's latest activity, whose duration
+// keeps ticking with `nowMs`. The line names the Tools used, most used first.
 export function workingGroupSummary(
   group,
   { active = false, nowMs = Date.now(), rowStatus, toolName },
 ) {
   const tools = group.children.filter((child) => child.type === 'tool_call');
   const statuses = tools.map((tool) => rowStatus(tool));
-  const names = [...new Set(tools.map((tool) => toolName(tool)))];
-  const runningCount = statuses.filter((status) => status === 'running').length;
-  const failedCount = statuses.filter((status) => status === 'failed').length;
-  const status = active
-    ? 'running'
-    : tools.length === 0
-      ? ''
-      : (STATUS_PRIORITY.find((candidate) => statuses.includes(candidate)) ??
-        'success');
-  // The line names the step it stands for: the running Run's latest Tool, or
-  // a finished group's only Tool, shown with its arguments like its own row.
-  const latestTool = active
-    ? tools.at(-1)
-    : tools.length === 1
-      ? tools[0]
-      : null;
+  const callsByName = new Map();
+  for (const tool of tools) {
+    const name = toolName(tool);
+    callsByName.set(name, (callsByName.get(name) ?? 0) + 1);
+  }
+  // A stable sort keeps equally used Tools in the order they were first used.
+  const kinds = [...callsByName]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
   const durationMs = workingGroupDurationMs(group.children, active, nowMs);
   return {
-    status,
     active,
-    latestTool: latestTool ?? null,
-    toolNames: names.slice(0, MAX_NAMED_TOOLS),
-    moreToolNames: Math.max(0, names.length - MAX_NAMED_TOOLS),
+    toolKinds: kinds.slice(0, MAX_NAMED_TOOLS),
+    moreToolKinds: Math.max(0, kinds.length - MAX_NAMED_TOOLS),
     toolCount: tools.length,
     thoughtCount: group.children.length - tools.length,
-    failedCount,
+    failedCount: statuses.filter((status) => status === 'failed').length,
     // Work still running in a finished group: Sub-Agents and background
     // commands that outlive the step that started them.
-    runningCount: active ? 0 : runningCount,
+    runningCount: active
+      ? 0
+      : statuses.filter((status) => status === 'running').length,
     durationLabel: durationMs === null ? '' : formatDurationMs(durationMs),
   };
 }
@@ -112,6 +116,10 @@ export function workingGroupDetails(summary) {
       {
         label: t('chat.working.failed'),
         value: String(summary.failedCount),
+      },
+      {
+        label: t('chat.working.stillRunning'),
+        value: String(summary.runningCount),
       },
       { label: t('chat.working.duration'), value: summary.durationLabel },
     ].filter((row) => row.value && row.value !== '0'),

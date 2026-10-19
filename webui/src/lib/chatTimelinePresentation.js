@@ -28,6 +28,7 @@ export {
 export {
   visibleRunChildren,
   isRunChildWorking,
+  latestRunActivity,
   reasoningDurationLabel,
   runFooterParts,
   runFooterDetails,
@@ -46,6 +47,7 @@ export {
   groupRunChildren,
   workingGroupDetails,
   workingGroupSummary,
+  workingSpanStarts,
 } from './chatTimelinePresentation/working.js';
 export {
   isReflectionRunKind,

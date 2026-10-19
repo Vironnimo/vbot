@@ -79,7 +79,9 @@
     onScrollbarWidthChange = () => {},
   } = $props();
 
-  const timelineItems = $derived(timelineRowsForViewport(sourceTimelineItems));
+  const timelineItems = $derived(
+    timelineRowsForViewport(sourceTimelineItems, chatWorkingMode),
+  );
 
   let nowMs = $state(Date.now());
 
