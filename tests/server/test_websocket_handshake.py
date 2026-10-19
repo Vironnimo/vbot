@@ -326,7 +326,13 @@ async def test_shared_socket_closes_subscription_immediately(
         raise WebSocketDisconnect()
 
     socket = SimpleNamespace(
-        app=app, query_params={}, headers={}, accept=accept, receive=receive, send_json=send_json
+        app=app,
+        query_params={},
+        headers={},
+        scope={},
+        accept=accept,
+        receive=receive,
+        send_json=send_json,
     )
     endpoint = next(
         cast(Any, route).endpoint for route in app.routes if getattr(route, "path", None) == "/ws"

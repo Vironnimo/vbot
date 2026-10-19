@@ -72,6 +72,8 @@ async def _stream_websocket_events(
     *,
     on_binary: Callable[[bytes], None] | None = None,
     on_text: Callable[[str], None] | None = None,
+    file_delivery: FileDelivery | None = None,
+    file_actor: str | None = None,
 ) -> bool:
     """Push *stream* items to the socket: ``bytes`` as binary frames, others as JSON.
 
@@ -121,6 +123,8 @@ async def _stream_websocket_events(
                 if isinstance(event, bytes):
                     await websocket.send_bytes(event)
                 else:
+                    if file_delivery is not None:
+                        event = file_delivery.bind_payload(event, file_actor)
                     await websocket.send_json(event)
         finally:
             if event_task is not None:
@@ -318,6 +322,8 @@ async def _sse_run_events(
     heartbeat_interval_seconds: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
     file_delivery: FileDelivery | None = None,
     include_file_urls: bool = False,
+    file_actor: str | None = None,
+    file_expires_at: int | None = None,
 ) -> AsyncGenerator[str]:
     async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
         event_iterator = events.__aiter__()
@@ -374,6 +380,8 @@ async def _sse_run_events(
                     if shutdown_event is not None and shutdown_event.is_set():
                         break
                 count(SSE_EVENTS_METRIC)
+                if file_delivery is not None:
+                    data = file_delivery.bind_payload(data, file_actor, expires_at=file_expires_at)
                 yield (
                     f"id: {event.sequence}\n"
                     f"event: {event.type}\n"

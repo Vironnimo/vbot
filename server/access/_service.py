@@ -189,15 +189,15 @@ class AccessService:
         await self._expire(store.expired_devices(now=self._utc_now()))
 
     async def close(self) -> None:
-        """Write remembered device uses; called once at shutdown."""
+        """Persist pending removals and remembered uses at shutdown."""
         for task in list(self._background):
             await asyncio.gather(task, return_exceptions=True)
         store = self._store
         if store is not None and store.available:
             try:
                 await _DEVICE_WRITES.call_async(store.flush_usage)
-            except OSError as exc:
-                _LOGGER.warning("Writing device last use failed (error=%s)", exc)
+            except (DeviceStoreUnavailableError, OSError) as exc:
+                _LOGGER.warning("Writing pending device state failed (error=%s)", exc)
 
     # Request path ------------------------------------------------------------
 
@@ -242,6 +242,26 @@ class AccessService:
         if cookies:
             return self._device(cookies[0], facts, enforcing, from_cookie=True)
         return Authentication(None if enforcing else OPEN)
+
+    def principal_for_capability(self, actor: str) -> Principal | None:
+        """Resolve a capability's issuer without renewing its activity.
+
+        This is an Event Loop lookup. A missing or expired Device cannot
+        delegate access; expiry also closes its existing connections. An
+        unavailable store raises ``devices_unavailable``.
+        """
+        if actor == HOST.actor:
+            return HOST
+        if actor == OPEN.actor:
+            return OPEN if self.config.mode != "authenticated" else None
+        store = self._require_store()
+        device = store.get(actor)
+        if device is None:
+            return None
+        if self._utc_now() - device.last_used_at > DEVICE_IDLE_EXPIRY:
+            self._spawn(self._expire([device]))
+            return None
+        return Principal("device", device)
 
     def refused(
         self, reason: str, facts: RequestFacts, path: str, *, detail: str | None = None
@@ -329,6 +349,7 @@ class AccessService:
         if request.state == "pending":
             return {"status": "pending", "expires_in": self.pairings.expires_in(request)}, None
         if request.state == "denied":
+            self.pairings.handed_out(request)
             return {"status": "denied"}, None
         return await self._claim(request, facts)
 
@@ -356,8 +377,6 @@ class AccessService:
                     request.claim = None
 
             claim.add_done_callback(settled)
-            # The answer holds the token; it goes with the request after the grace period.
-            asyncio.get_running_loop().call_later(CLAIM_GRACE_SECONDS, self.pairings.sweep)
         # A poll that is cancelled (its client went away) leaves the claim running.
         payload, cookie_token = await asyncio.shield(claim)
         return dict(payload), cookie_token
@@ -374,13 +393,20 @@ class AccessService:
             via="pairing",
         )
         if created is None:
+            self._claim_handed_out(request)
             return {"status": "denied"}, None
         device, token = created
         payload: dict[str, Any] = {"status": "approved", "device": _device_summary(device)}
+        self._claim_handed_out(request)
         if device.kind == "browser":
             return payload, token
         payload["token"] = token
         return payload, None
+
+    def _claim_handed_out(self, request: PairingRequest) -> None:
+        """Keep a settled claim recoverable after a lost or cancelled response."""
+        self.pairings.handed_out(request)
+        asyncio.get_running_loop().call_later(CLAIM_GRACE_SECONDS, self.pairings.sweep)
 
     def pending_pairing(self, code: Any, principal: Principal) -> dict[str, Any]:
         """What the approver sees before confirming a code."""
@@ -461,12 +487,27 @@ class AccessService:
         """
         if self.config.mode != "authenticated":
             return None
-        self._require_store()
+        store = self._require_store()
         redeemed = self.tickets.redeem(ticket)
         if redeemed is None:
             return None
         current = None if principal is None else principal.device
         if current is not None and current.kind == "browser":
+            try:
+                rebound = await _DEVICE_WRITES.call_async(
+                    lambda: store.rebind_ticket_browser(current.id, redeemed.issued_by)
+                )
+            except DeviceNotFoundError, ValueError:
+                return None
+            except (DeviceStoreUnavailableError, OSError) as exc:
+                raise _store_failure(exc) from None
+            if rebound.approved_by != current.approved_by:
+                _LOGGER.info(
+                    "Browser sign-in renewed (device=%s approved_by=%s)",
+                    rebound.id,
+                    rebound.approved_by,
+                )
+                self._changed()
             _LOGGER.debug(
                 "Login ticket redeemed by a signed-in browser; it keeps its device (device=%s)",
                 current.id,
@@ -527,7 +568,10 @@ class AccessService:
         cascade (``devices.revoke_others`` keeps the calling device).
         """
         store = self._require_store()
-        if not missing_ok and any(store.get(device_id) is None for device_id in device_ids):
+        if not missing_ok and any(
+            store.get(device_id) is None and not store.removal_pending(device_id)
+            for device_id in device_ids
+        ):
             raise AccessError(DEVICE_NOT_FOUND, "No device has this id", status=404)
         targets = _with_ticket_browsers(store.devices(), device_ids, spare=spare)
         # What these devices approved but nobody claimed yet goes with them, before
@@ -636,19 +680,34 @@ class AccessService:
         if not devices or store is None:
             return
         ids = [device.id for device in devices]
-        self._withdraw_approvals(set(ids))
+        targets: list[str] = []
+
+        def remove() -> list[Device]:
+            # A ticket browser may have renewed its issuer while this write
+            # waited. Re-check before expanding and removing the delegation.
+            expired = [
+                device_id
+                for device_id in ids
+                if (device := store.get(device_id)) is not None
+                and self._utc_now() - device.last_used_at > DEVICE_IDLE_EXPIRY
+            ]
+            targets[:] = _with_ticket_browsers(store.devices(), expired, spare=frozenset())
+            return store.remove(targets)
+
         try:
-            removed = await _DEVICE_WRITES.call_async(lambda: store.remove(ids))
+            removed = await _DEVICE_WRITES.call_async(remove)
         except (DeviceStoreUnavailableError, OSError) as exc:
             _LOGGER.warning("Removing expired devices failed (count=%d error=%s)", len(ids), exc)
             return
-        self.connections.revoke({device.id for device in removed})
+        finally:
+            self._withdraw_approvals(set(targets))
+            self.connections.revoke(set(targets))
+            if targets:
+                self._changed()
         for device in removed:
             _LOGGER.info(
                 "Device expired (device=%s idle_days=%d)", device.id, DEVICE_IDLE_EXPIRY.days
             )
-        if removed:
-            self._changed()
 
     def _changed(self) -> None:
         """Tell the listener that devices or pairing decisions changed."""
@@ -682,7 +741,7 @@ class AccessService:
             try:
                 store.flush_usage()
             except (DeviceStoreUnavailableError, OSError) as exc:
-                _LOGGER.warning("Writing device last use failed (error=%s)", exc)
+                _LOGGER.warning("Writing pending device state failed (error=%s)", exc)
             finally:
                 self._flush_pending = False
 
@@ -701,6 +760,7 @@ class AccessService:
                 DEVICES_UNAVAILABLE,
                 "The device store is unavailable; see the server log",
                 status=503,
+                retry_after=30,
             )
         return store
 
@@ -761,7 +821,10 @@ def _require_signed_in(principal: Principal) -> None:
 def _store_failure(exc: BaseException) -> AccessError:
     _LOGGER.warning("Device store change failed (error=%s)", exc)
     return AccessError(
-        DEVICES_UNAVAILABLE, "The device store could not be changed; see the server log", status=503
+        DEVICES_UNAVAILABLE,
+        "The device store could not be changed; see the server log",
+        status=503,
+        retry_after=30,
     )
 
 
@@ -779,6 +842,8 @@ def _client_key(facts: RequestFacts) -> str:
     One IPv6 host commonly holds a whole /64; counting its addresses apart would
     multiply its budget.
     """
+    if facts.direct_loopback:
+        return "loopback"
     client = facts.client or facts.peer
     if client is None:
         return "unknown"
@@ -788,7 +853,12 @@ def _client_key(facts: RequestFacts) -> str:
 
 
 def _is_secret(value: Any) -> TypeIs[str]:
-    return isinstance(value, str) and 0 < len(value) <= _MAX_SECRET_CHARS
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= _MAX_SECRET_CHARS
+        and value.isascii()
+        and all(character.isalnum() or character in "_-" for character in value)
+    )
 
 
 def _cookie_values(headers: list[tuple[bytes, bytes]], name: str) -> list[str]:

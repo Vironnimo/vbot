@@ -408,6 +408,15 @@ async def test_sse_projects_assistant_file_references_to_signed_urls(
         },
     )
     delivery = FileDelivery(secret=b"sse-secret")
+    monkeypatch.setattr("server.file_delivery.time.time", lambda: 1000)
+    run_grant = delivery.bind_payload(
+        delivery.open_extension_run(
+            extension="fixture", page="page", epoch="epoch", group_id="group", run_id=run.id
+        ),
+        "device-one",
+    )
+    admitted = delivery.access_claims(run_grant["url"])
+    assert admitted is not None
     event_loop_thread = get_ident()
     project_message = delivery.project_message
     projection_threads: list[int] = []
@@ -418,9 +427,19 @@ async def test_sse_projects_assistant_file_references_to_signed_urls(
         return project_message(value)
 
     monkeypatch.setattr(delivery, "project_message", checked_projection)
-    stream = _sse_run_events(run, file_delivery=delivery, include_file_urls=include_file_urls)
+    stream = _sse_run_events(
+        run,
+        file_delivery=delivery,
+        include_file_urls=include_file_urls,
+        file_actor=admitted["actor"],
+        file_expires_at=admitted["expires_at"],
+    )
 
     delta = await anext(stream)
+    # The Run URL's 120 seconds limit admission, not an already-open stream:
+    # a long Run must still produce usable media for its live Device.
+    monkeypatch.setattr("server.file_delivery.time.time", lambda: 1121)
+    assert delivery.access_claims(run_grant["url"]) is None
     event = await anext(stream)
     await stream.aclose()
 
@@ -433,11 +452,16 @@ async def test_sse_projects_assistant_file_references_to_signed_urls(
     assert str(image) not in event
     assert "![sse.png](/api/files/" in event
     data = _parse_sse(event)[0]["data"]
+    media_url = data["payload"]["display"]["media"][0]["url"]
+    media_claims = delivery.access_claims(media_url)
+    assert media_claims is not None and media_claims["actor"] == "device-one"
     if include_file_urls:
         assert len(data["file_urls"]) == 1
         url = data["file_urls"][0]
         assert url in data["payload"]["message"]["content"]
         assert delivery.resolve_token(url.removeprefix("/api/files/")) is not None
+        claims = delivery.access_claims(url)
+        assert claims is not None and claims["actor"] == "device-one"
     else:
         assert "file_urls" not in data
 

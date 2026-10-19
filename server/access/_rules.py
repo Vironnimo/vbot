@@ -116,7 +116,9 @@ def host_policy(config: AccessConfig, *, bind_host: str | None) -> HostPolicy:
     names = {"localhost", *machine_host_names(), *config.allow_hosts}
     origin = config.public_origin()
     if origin is not None:
-        names.add(origin[1])
+        name = normalize_host_name(origin[1])
+        if name is not None:
+            names.add(name)
     bind = normalize_host_name(bind_host) if bind_host else None
     if bind is not None:
         names.add(bind)
@@ -243,6 +245,11 @@ def _inspect_peer(
     return RequestFacts(peer, peer, proxy_headers, False, secure, refusal)
 
 
+def is_capability_route(method: str, path: str) -> bool:
+    """Whether this request shape belongs to a capability-verifying route."""
+    return method in {"GET", "HEAD"} and _CAPABILITY_ROUTES.fullmatch(path) is not None
+
+
 def classify_route(scope_type: str, method: str, path: str) -> RouteClass:
     """Whether a route needs a principal in ``authenticated`` mode. Fails closed."""
     if scope_type != "http":
@@ -253,7 +260,7 @@ def classify_route(scope_type: str, method: str, path: str) -> RouteClass:
         ticket = path.removeprefix(TICKET_PATH_PREFIX)
         if path.startswith(TICKET_PATH_PREFIX) and ticket and "/" not in ticket:
             return "exempt"
-        if _CAPABILITY_ROUTES.fullmatch(path):
+        if is_capability_route(method, path):
             return "exempt"
     if method in {"GET", "HEAD"} and not any(
         path == namespace or path.startswith(f"{namespace}/") for namespace in _SERVER_NAMESPACES

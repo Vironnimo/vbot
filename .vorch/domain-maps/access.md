@@ -1,16 +1,16 @@
 # Access
 
-Who may reach a vBot server and how they prove it: access modes, the access guard at the server edge, paired Devices, pairing, login tickets, the local access token and direct TLS.
+Who may reach vBot: access modes, the server-edge guard, paired Devices, pairing, login tickets, the local access token and TLS.
 
 ## Overview
 
-The server runs in exactly one Access Mode (GLOSSARY -> Access Mode), chosen by the host when the server starts and never changeable through RPC:
+The host chooses one Access Mode at startup, never through RPC:
 
 - `local` ("This computer only"): loopback peers only; the server must bind a loopback address (default `127.0.0.1`).
 - `lan` ("Home network without login"): loopback, RFC 1918, link-local and IPv6 ULA peers plus each `--allow-network` CIDR; no login (default bind `0.0.0.0`).
 - `authenticated` ("With login (internet)"): any peer, but every protected request needs a credential. It requires `--public-url https://<origin>` and HTTPS through either direct TLS (`--tls-cert` + `--tls-key`, default bind `0.0.0.0`) or at least one `--trusted-proxy` that terminates HTTPS (default bind `127.0.0.1`).
 
-The labels are `core.access.config.ACCESS_MODE_LABELS`; user-facing text uses them, flags and records use the mode names.
+Labels: `core.access.config.ACCESS_MODE_LABELS`; flags and records use mode names.
 
 Owners:
 
@@ -32,7 +32,7 @@ How each accessor signs in: `access/accessor-contracts.md` -> Accessor notes.
 Core terms (Access Mode, Device, Accessor) live in `.vorch/GLOSSARY.md`.
 
 ### Principal
-Who a request acts for, attached by the guard: `host` (the local access token), `device` (a paired Device's token or cookie) or `open` (a `local`/`lan` request without a valid credential). An exempt route in `authenticated` mode without a credential has no principal (`None`). Logs and the device store name it as its `actor`: the device id, `host` or `open`.
+Who a request acts for: `host` (local access token), `device` (paired Device) or `open` (credential-free `local`/`lan`). Capabilities resolve their signed issuer; other credential-free exempt requests have no principal (`None`). Its `actor` in logs and the device store is the device id, `host` or `open`.
 
 ### Effective client
 The address a request counts as coming from: the direct peer, or in `authenticated` mode the address a trusted proxy forwarded. Rate limits, refusal logs and a Device's `last_client` use it.
@@ -41,16 +41,16 @@ The address a request counts as coming from: the direct peer, or in `authenticat
 A `vbl_` bearer token created fresh at every server start and written, once the server listens, to the owner-only `<data-dir>/runtime/local-access-<port>.token`; removed at stop unless a newer server replaced it. The server accepts it only from a direct loopback peer without any forwarding header; where clients may send it: Invariants (file format: `access/accessor-contracts.md` -> Credentials).
 
 ### Pairing
-How a new Device gets a token: it requests pairing and shows an 8-character code; someone already signed in (host or Device) approves the code; the new Device claims its token by polling. Requests live in memory for 10 minutes; a decided one answers repeated polls for a 60-second claim grace.
+How a new Device gets a token: it requests pairing and shows an 8-character code; someone already signed in (host or Device) approves the code; the new Device claims its token by polling. Requests live in memory for 10 minutes; a settled outcome answers repeated polls for a 60-second claim grace.
 
 ### Login ticket
 A single-use, 60-second secret a signed-in principal creates (`auth.login_ticket`) so that a top-level browser navigation to `/auth/ticket/<ticket>` signs the browser in and lands it on the ticket's `next` page: a new browser Device with its cookie, or the browser's existing browser Device when it is signed in already. Accessors holding a credential (Desktop, CLI tray) use it to open the WebUI in a browser or the Desktop window.
 
 ### Ticket browser
-A browser Device created by redeeming a login ticket (`via: "ticket"`, `approved_by` the issuer). It is revoked together with the Device that issued its ticket, transitively; a Device that claimed an approved pairing (`via: "pairing"`) never is.
+A browser Device created by redeeming a login ticket (`via: "ticket"`, `approved_by` the issuer). Revocation and expiry follow its current issuer transitively; another issuer's ticket can renew the delegation. Independently paired Devices (`via: "pairing"`) never join that cascade.
 
 ### Route class
-`classify_route` sorts every request into `exempt` (no principal needed), `shell` (the public WebUI shell: any GET/HEAD outside the server namespaces `/api`, `/ws`, `/_vbot`, `/auth`, `/health`) or `protected` (everything else, every WebSocket). It fails closed.
+`classify_route` sorts every request into `exempt` (no Bearer/cookie required), `shell` (the public WebUI shell: any GET/HEAD outside the server namespaces `/api`, `/ws`, `/_vbot`, `/auth`, `/health`) or `protected` (everything else, every WebSocket). It fails closed.
 
 ## Request pipeline
 
@@ -61,7 +61,7 @@ A browser Device created by redeeming a login ticket (`via: "ticket"`, `approved
 3. Credential (`AccessService.authenticate`): `Authorization: Bearer` wins over the `__Host-vbot_device` cookie. A `vbl_` token counts only from a direct loopback peer, a `vbt_` token through the device store. In `local`/`lan` a refused credential still yields `open`; in `authenticated` it is logged, counted per effective client, and a dead cookie is cleared.
 4. A `protected` route, or `GET /api/auth/status`, whose device token the unavailable device store could not check answers 503 `devices_unavailable` (Invariants). Otherwise a `protected` route without a principal answers 401 `auth_required` with `WWW-Authenticate: Bearer` (WebSocket 4401), or 429 `rate_limited` with `Retry-After` once the client is over its failed-credential limit.
 5. The principal goes into `scope["vbot.principal"]`; `/api/rpc` binds it for its own task (`bound_principal`), where RPC handlers read it with `current_principal()` (Interfaces).
-6. Every request of a Device registers in `LiveConnections`, so revoking or expiring the Device ends its open connections and turns its pending responses into 401.
+6. Every Device request, including its capability requests, registers in `LiveConnections`; revocation or expiry cancels body/admission waits and open connections. Owners settle admitted mutations; pending answers become 401.
 7. Every HTTP response gets security headers (`nosniff`, HSTS over HTTPS, the WebUI CSP on `shell` routes); a header the route set itself wins.
 
 ## Interfaces
@@ -89,14 +89,14 @@ A browser Device created by redeeming a login ticket (`via: "ticket"`, `approved
 ## Constraints & Gotchas
 
 - New server routes go under an existing namespace (`/api`, `/ws`, `/_vbot`, `/auth`, `/health`). A GET/HEAD route anywhere else is classified `shell` and served without a credential in `authenticated` mode. A new namespace must be added to both `_SERVER_NAMESPACES` (`_rules.py`) and `_is_reserved_server_path` (`app.py`). For the same reason FastAPI's `/docs`, `/redoc` and `/openapi.json` are disabled.
-- An exempt route is added only as an exact `(method, path)` in `_EXEMPT_ROUTES` or as a GET/HEAD capability route shape in `_CAPABILITY_ROUTES` whose handler verifies its own HMAC; any other method or shape under these prefixes is `protected`. The exempt set: `access/request-pipeline.md` -> Exempt routes.
+- An exempt route is added only as an exact `(method, path)` in `_EXEMPT_ROUTES` or as a GET/HEAD capability route shape in `_CAPABILITY_ROUTES` whose handler verifies its own HMAC; in `authenticated` mode the guard also verifies its recipient grant (`server/browser-capabilities.md`). Other methods or shapes under these prefixes are `protected`. The exempt set: `access/request-pipeline.md` -> Exempt routes.
 - Direct TLS serves HTTPS and plain HTTP on one listener (`tls.py`); the guard admits plain HTTP only from loopback in `authenticated` mode, so local tools keep `http://127.0.0.1:<port>`.
 - A reverse proxy on the same computer that adds no forwarding header is indistinguishable from a local client. In `local`/`lan` such a setup publishes the server without login; only `authenticated` mode is safe behind any proxy (proxy setup: `access/server-setup.md`).
 - `lan` trusts the source address. Anything that forwards outside traffic with a private or loopback source address (router port forwarding with source NAT, Windows `netsh interface portproxy`, Docker's userland proxy, SSH or VPN tunnels ending on the host) admits those clients without login. Reach vBot from outside the home network only in `authenticated` mode.
 - Anyone with a shell on the host as the same user can read the local access token, which includes Agents' shell Tools. The token is equivalent to host access; the CLI's Agent Run guard (Invariants) stops only accidental approvals, sign-in links and access mode changes.
 - Refusals log the first of each reason at WARN, then one summary line per minute while they continue (`_limits.py`; lines and reasons: `access/request-pipeline.md` -> Refusal reasons).
 
-Tests: `tests/server/test_access.py`, `test_tls.py`, `test_main.py`, `tests/core/access/`, `tests/core/utils/test_atomic.py` (owner-only files), `tests/cli/test_cli_devices.py`, `test_server_management.py`, `tests/cli/application/test_command.py`, `test_install.py`, `test_state.py`.
+Tests: `tests/server/test_access.py`, `test_access_lifecycle.py`, `test_tls.py`, `test_main.py`, `tests/core/access/`, `tests/core/utils/test_atomic.py`, `tests/cli/test_cli_devices.py`, `test_server_management.py`, `tests/cli/application/`.
 
 ## References
 

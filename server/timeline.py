@@ -354,7 +354,14 @@ def timeline_update(previous: JsonObject, current: JsonObject) -> JsonObject:
     return patch
 
 
-async def _public_frame(state: Any, data: JsonObject, *, include_file_urls: bool) -> JsonObject:
+async def _public_frame(
+    state: Any,
+    data: JsonObject,
+    *,
+    include_file_urls: bool,
+    file_actor: str | None = None,
+    file_expires_at: int | None = None,
+) -> JsonObject:
     result = cast(
         JsonObject,
         await remove_opaque_provider_metadata_async(data, file_delivery=state.file_delivery),
@@ -367,7 +374,14 @@ async def _public_frame(state: Any, data: JsonObject, *, include_file_urls: bool
             if candidates
             else []
         )
-    return result
+    return (
+        cast(
+            JsonObject,
+            state.file_delivery.bind_payload(result, file_actor, expires_at=file_expires_at),
+        )
+        if state.file_delivery is not None
+        else result
+    )
 
 
 def _synchronize_public_text(value: Any) -> None:
@@ -402,6 +416,8 @@ async def sse_timeline(
     include_file_urls: bool = False,
     batch_interval_seconds: float = TIMELINE_BATCH_INTERVAL_SECONDS,
     child_limit: int = 0,
+    file_actor: str | None = None,
+    file_expires_at: int | None = None,
 ) -> AsyncGenerator[str]:
     """Stream one authoritative snapshot, then bounded-rate semantic patches.
 
@@ -424,7 +440,13 @@ async def sse_timeline(
                 "items": window_timeline_items(previous["items"], child_limit),
                 "windowed": True,
             }
-    initial = await _public_frame(state, initial, include_file_urls=include_file_urls)
+    initial = await _public_frame(
+        state,
+        initial,
+        include_file_urls=include_file_urls,
+        file_actor=file_actor,
+        file_expires_at=file_expires_at,
+    )
     if shutdown_event is not None and shutdown_event.is_set():
         return
     yield _frame("timeline_snapshot", initial)
@@ -472,7 +494,13 @@ async def sse_timeline(
                 else timeline_update(previous, current)
             )
             previous = current
-            public = await _public_frame(state, patch, include_file_urls=include_file_urls)
+            public = await _public_frame(
+                state,
+                patch,
+                include_file_urls=include_file_urls,
+                file_actor=file_actor,
+                file_expires_at=file_expires_at,
+            )
             if shutdown_event is not None and shutdown_event.is_set():
                 return
             yield _frame("timeline_update", public)

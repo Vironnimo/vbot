@@ -73,18 +73,45 @@ def test_access_config_refuses_combinations_the_mode_does_not_allow(
         access_config(mode, **options)
 
 
-def test_access_config_normalizes_and_round_trips_through_the_record(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("public_url", "normalized_url", "origin"),
+    [
+        (
+            "HTTPS://VBot.Example.org:443/",
+            "https://vbot.example.org",
+            ("https", "vbot.example.org", 443),
+        ),
+        (
+            "HTTPS://VBot.Example.org.:443/",
+            "https://vbot.example.org.",
+            ("https", "vbot.example.org.", 443),
+        ),
+        (
+            "https://[2001:0db8:0:0:0:0:0:1]:8443/",
+            "https://[2001:db8::1]:8443",
+            ("https", "2001:db8::1", 8443),
+        ),
+        (
+            "https://[::ffff:192.0.2.1]/",
+            "https://[::ffff:c000:201]",
+            ("https", "::ffff:c000:201", 443),
+        ),
+    ],
+)
+def test_access_config_normalizes_and_round_trips_through_the_record(
+    tmp_path: Path, public_url: str, normalized_url: str, origin: tuple[str, str, int]
+) -> None:
     config = access_config(
         "authenticated",
-        public_url="HTTPS://VBot.Example.org:443/",
+        public_url=public_url,
         trusted_proxies=["127.0.0.1", "10.1.0.0/16", "127.0.0.1"],
         tls_cert=tmp_path / "cert.pem",
         tls_key=tmp_path / "key.pem",
         allow_hosts=["VBot.Home.Arpa.", "[::ffff:192.168.1.5]", "vbot.home.arpa"],
     )
 
-    assert config.public_url == "https://vbot.example.org"
-    assert config.public_origin() == ("https", "vbot.example.org", 443)
+    assert config.public_url == normalized_url
+    assert config.public_origin() == origin
     assert config.trusted_proxies == ("127.0.0.1/32", "10.1.0.0/16")
     assert config.tls_cert == str((tmp_path / "cert.pem").resolve())
     assert config.allow_hosts == ("vbot.home.arpa", "192.168.1.5")
@@ -93,9 +120,6 @@ def test_access_config_normalizes_and_round_trips_through_the_record(tmp_path: P
     record = access_config("local").to_record()
     del record["allow_hosts"]
     assert access_config_from_record(record) == access_config("local")
-    assert access_config(
-        "authenticated", public_url="https://[::1]:8443", trusted_proxies=["::1"]
-    ).public_origin() == ("https", "::1", 8443)
 
 
 @pytest.mark.parametrize(

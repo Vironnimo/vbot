@@ -5,18 +5,28 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, MutableMapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from server.access._principal import PRINCIPAL_SCOPE_KEY, Principal
-from server.access._rules import AUTH_STATUS_PATH, RouteClass, classify_route, request_host
+from server.access._rules import (
+    AUTH_STATUS_PATH,
+    RouteClass,
+    classify_route,
+    is_capability_route,
+    request_host,
+)
 from server.access._service import (
     ACCESS_DENIED,
     AUTH_REQUIRED,
     DEVICE_COOKIE,
     DEVICES_UNAVAILABLE,
     RATE_LIMITED,
+    AccessError,
     AccessService,
 )
+
+if TYPE_CHECKING:
+    from server.file_delivery import FileDelivery
 
 Scope = MutableMapping[str, Any]
 Message = MutableMapping[str, Any]
@@ -65,9 +75,12 @@ class AccessGuard:
     response gets the security headers.
     """
 
-    def __init__(self, app: Any, *, service: AccessService) -> None:
+    def __init__(
+        self, app: Any, *, service: AccessService, file_delivery: FileDelivery | None = None
+    ) -> None:
         self._app = app
         self._service = service
+        self._file_delivery = file_delivery
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         scope_type = scope.get("type")
@@ -117,6 +130,36 @@ class AccessGuard:
         if authentication.clear_cookie:
             send = _with_cleared_cookie(send)
         principal = authentication.principal
+        if (
+            service.config.mode == "authenticated"
+            and scope_type == "http"
+            and is_capability_route(str(scope.get("method") or ""), path)
+        ):
+            # Opaque-origin documents cannot send a Device cookie. Their signed
+            # capability carries its own issuer; a different request credential
+            # must neither replace that issuer nor revive a dead capability.
+            claims = (
+                self._file_delivery.access_claims(path) if self._file_delivery is not None else None
+            )
+            try:
+                principal = (
+                    None if claims is None else service.principal_for_capability(claims["actor"])
+                )
+            except AccessError as exc:
+                await _refuse(
+                    scope,
+                    receive,
+                    send,
+                    exc.status,
+                    exc.code,
+                    exc.message,
+                    retry_after=exc.retry_after,
+                )
+                return
+            if principal is None or claims is None:
+                await _refuse(scope, receive, send, 404, "not_found", "Resource is not available")
+                return
+            scope["vbot.capability_expires_at"] = claims["expires_at"]
         if route == "protected" and principal is None:
             if wait is not None:
                 await _refuse(
@@ -142,15 +185,15 @@ class AccessGuard:
     ) -> None:
         """Run a device's request so that revoking the device ends or refuses it.
 
-        The request is registered from its first moment: revocation cancels a
-        WebSocket or a started response, and a response that starts after the
-        revocation becomes a 401 ``auth_required`` instead.
+        The request is registered from its first moment: revocation cancels
+        body reads, mutation-admission waits and started responses alike. Owners
+        settle admitted durable work; an answer not yet started becomes 401.
         """
         assert principal.device is not None
         connections = self._service.connections
         websocket = scope.get("type") == "websocket"
         state = {"accepted": False, "closed": False, "started": False, "finished": False}
-        connection = connections.register(principal.device.id, streaming=websocket)
+        connection = connections.register(principal.device.id)
 
         async def tracked_send(message: Message) -> None:
             kind = message.get("type")
@@ -165,20 +208,19 @@ class AccessGuard:
                 state["closed"] = True
             elif kind == "http.response.start":
                 state["started"] = True
-                connection.streaming = True
             elif kind == "http.response.body" and not message.get("more_body", False):
                 state["finished"] = True
-                connection.streaming = False
             await send(message)
 
         async def tracked_receive() -> Message:
             if connection.revoked:
-                return (
-                    {"type": "websocket.disconnect", "code": WEBSOCKET_AUTH_REQUIRED}
-                    if websocket
-                    else {"type": "http.disconnect"}
-                )
-            return await receive()
+                raise asyncio.CancelledError
+            message = await receive()
+            # A body reader may complete concurrently with revocation, or may
+            # settle its read despite cancellation. Never deliver that command.
+            if connection.revoked:
+                raise asyncio.CancelledError
+            return message
 
         try:
             try:
@@ -203,7 +245,9 @@ class AccessGuard:
                             "reason": "Device signed out",
                         }
                     )
-            elif state["started"] and not state["finished"]:
+            elif not state["started"]:
+                await _refuse(scope, receive, send, 401, AUTH_REQUIRED, "Device signed out")
+            elif not state["finished"]:
                 await send({"type": "http.response.body", "body": b"", "more_body": False})
         except OSError, RuntimeError:
             # The client is already gone.

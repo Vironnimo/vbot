@@ -21,9 +21,10 @@ LOGIN_TICKET_TTL_SECONDS = 60.0
 #: Unambiguous characters: no 0/O, 1/I/L or U/V look-alikes. 30^8 codes.
 PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"
 PAIRING_CODE_LENGTH = 8
-#: Bounds memory under a flood that the rate limits let through. Requests of this
-#: computer's own clients are not counted; they are bounded by their rate limit.
+#: Bound remote and local tables separately so a remote flood cannot fill the
+#: host's reserved space. All direct-loopback addresses share one rate budget.
 MAX_PENDING_PAIRINGS = 256
+MAX_LOCAL_PENDING_PAIRINGS = 32
 MAX_LOGIN_TICKETS = 256
 
 PairingState = Literal["pending", "approved", "denied"]
@@ -63,7 +64,7 @@ class PairingRequest:
     #: The rate limit key of the client that asked, and whether it is this computer.
     client_key: str = ""
     local: bool = False
-    #: Whether a poll has learned the decision; the grace period runs from then.
+    #: Whether the outcome is ready to return; the grace period runs from then.
     handed_out: bool = False
     #: The device's claim of the approval once started: opaque to the registry,
     #: owned by the access service. A claimed approval is never withdrawn here.
@@ -98,8 +99,7 @@ class PairingRegistry:
         ``OverflowError`` only when every counted request is already approved.
         """
         self.sweep()
-        if not local:
-            self._make_room()
+        self._make_room(local=local)
         codes = {request.code for request in self._requests.values()}
         code = ""
         while not code or code in codes:
@@ -122,9 +122,10 @@ class PairingRegistry:
         self._requests[request.id] = request
         return request, poll_secret
 
-    def _make_room(self) -> None:
-        counted = [request for request in self._requests.values() if not request.local]
-        if len(counted) < MAX_PENDING_PAIRINGS:
+    def _make_room(self, *, local: bool) -> None:
+        counted = [request for request in self._requests.values() if request.local == local]
+        limit = MAX_LOCAL_PENDING_PAIRINGS if local else MAX_PENDING_PAIRINGS
+        if len(counted) < limit:
             return
         held: dict[str, list[PairingRequest]] = {}
         for request in counted:
@@ -180,17 +181,24 @@ class PairingRegistry:
             request.poll_secret_hash, _digest(poll_secret)
         ):
             return None
-        if request.state != "pending" and not request.handed_out:
+        return request
+
+    def handed_out(self, request: PairingRequest) -> None:
+        """Begin the retry grace once an outcome can actually be returned."""
+        if not request.handed_out:
             request.handed_out = True
             request.expires_at = self._clock() + CLAIM_GRACE_SECONDS
-        return request
 
     def expires_in(self, request: PairingRequest) -> int:
         return max(0, round(request.expires_at - self._clock()))
 
     def sweep(self) -> None:
         now = self._clock()
-        for request_id in [key for key, item in self._requests.items() if item.expires_at <= now]:
+        for request_id in [
+            key
+            for key, item in self._requests.items()
+            if item.expires_at <= now and not (item.claim is not None and not item.handed_out)
+        ]:
             del self._requests[request_id]
 
 

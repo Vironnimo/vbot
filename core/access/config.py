@@ -378,6 +378,16 @@ def _normalize_public_url(value: str | None) -> str:
         _HOST_LABEL.fullmatch(label) for label in host.removesuffix(".").split(".")
     ):
         raise AccessConfigError(f"--public-url names an invalid host: {host}")
+    if ":" in host:
+        # Browsers serialize IPv6 URL hosts in compressed form. Keep IPv4-mapped
+        # IPv6 as IPv6: URL origins, unlike peer addresses, distinguish them.
+        address = ipaddress.IPv6Address(host)
+        host = str(address)
+        if address.ipv4_mapped is not None:
+            # Python renders the suffix in dotted decimal; URL serialization
+            # uses two hexadecimal pieces like every other IPv6 address.
+            mapped = int(address.ipv4_mapped)
+            host = f"::ffff:{mapped >> 16:x}:{mapped & 0xFFFF:x}"
     netloc = f"[{host}]" if ":" in host else host
     if port is not None and port != 443:
         netloc = f"{netloc}:{port}"
