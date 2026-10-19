@@ -4,6 +4,13 @@ from __future__ import annotations
 
 ANTHROPIC_OVERLOADED_STATUS = 529
 
+# Anthropic's monthly spend cap: HTTP 429 typed ``rate_limit_error`` without
+# ``retry-after``, told apart from a rate limit only by this
+# ``error.details.error_code``. Access resumes at 00:00 UTC on the first day of
+# the next month, which the message states
+# (https://platform.claude.com/docs/en/api/rate-limits, read 2026-10-19).
+ANTHROPIC_SPEND_CAP_ERROR_CODE = "enforced_spend_limit_reached"
+
 MESSAGES_ENDPOINT = "/messages"
 
 ANTHROPIC_VERSION = "2023-06-01"

@@ -7,10 +7,13 @@ utility can decide whether to re-attempt the call.
 """
 
 import json
+import math
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 
 from core.utils.errors import ProviderError, VBotError
+from core.utils.retry import MAX_RETRY_AFTER_SECONDS
 
 
 class NetworkError(VBotError):
@@ -84,6 +87,20 @@ class ProviderRateLimitError(ProviderError):
 
     def __init__(self, message: str = "") -> None:
         super().__init__(message, retryable=True)
+
+
+class ProviderUsageLimitError(ProviderError):
+    """The account's usage limit is reached until the reset the Provider reported.
+
+    Not retryable: the reset is usually hours away, far beyond any retry wait.
+    A reset that falls within the retry cap is a ``ProviderRateLimitError``
+    waiting exactly until then instead (:func:`usage_limit_error`).
+    ``resets_at`` is the reported reset in UTC, ``None`` when none was reported.
+    """
+
+    def __init__(self, message: str, *, resets_at: datetime | None = None) -> None:
+        super().__init__(message, retryable=False)
+        self.resets_at = resets_at
 
 
 class ProviderTimeoutError(ProviderError):
@@ -176,6 +193,25 @@ IN_BAND_TRANSIENT_ERROR_CODES = frozenset(
 )
 IN_BAND_RETRYABLE_NUMERIC_CODES = frozenset({429, 502, 503, 504})
 
+# An exhausted quota, spend cap or plan entitlement, whatever status carries it
+# (also HTTP 429): waiting does not help. These are the codes and types OpenAI's
+# Codex client stops on (``openai/codex`` ``codex-api/src/api_bridge.rs`` and
+# ``codex-api/src/sse/responses_error.rs``, read 2026-10-19).
+QUOTA_EXHAUSTED_ERROR_CODES = frozenset(
+    {
+        "insufficient_quota",
+        "credit_balance_exhausted",
+        "organization_spend_limit_exceeded",
+        "organization_usage_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "usage_not_included",
+    }
+)
+
+# The ChatGPT subscription's usage limit (Codex backend), with the reset in
+# ``resets_at`` (epoch seconds) or, from older backends, ``resets_in_seconds``.
+USAGE_LIMIT_ERROR_TYPE = "usage_limit_reached"
+
 # Deterministic failures where an identical retry can never help, even on a
 # multi-upstream router: token/context limits, billing, permissions, and
 # content policy. Everything else unclassified may become retryable when the
@@ -198,11 +234,7 @@ IN_BAND_FATAL_ERROR_CODES = frozenset(
         "not_found_error",
         "permission_error",
         "request_too_large",
-        "insufficient_quota",
-        "credit_balance_exhausted",
-        "organization_spend_limit_exceeded",
-        "project_spend_limit_exceeded",
-        "usage_not_included",
+        *QUOTA_EXHAUSTED_ERROR_CODES,
         "invalid_prompt",
         "cyber_policy",
         "bio_policy",
@@ -317,6 +349,9 @@ def classify_in_band_error_type(
 
     if classifier in IN_BAND_AUTH_ERROR_CODES or numeric_code in (401, 403):
         return ProviderAuthError(message)
+    # An exhausted quota arrives with status 429, yet waiting does not help.
+    if classifier in QUOTA_EXHAUSTED_ERROR_CODES:
+        return _build(False)
     if classifier in IN_BAND_RATE_LIMIT_ERROR_CODES or numeric_code == 429:
         return _rate_limit_error(message, hints)
     if classifier in IN_BAND_TIMEOUT_ERROR_CODES or numeric_code == 504:
@@ -336,3 +371,88 @@ def _rate_limit_error(message: str, availability: Mapping[str, Any]) -> Provider
     if isinstance(retry_after, int) and not isinstance(retry_after, bool) and retry_after > 0:
         rate_limit_error.retry_after = retry_after
     return rate_limit_error
+
+
+# ---------------------------------------------------------------------------
+# Exhausted allowances
+# ---------------------------------------------------------------------------
+
+
+def exhausted_quota_code(error: Mapping[str, Any]) -> str | None:
+    """The code or type by which an error object reports an exhausted quota, if any."""
+
+    for value in (error.get("code"), error.get("type"), error.get("error_type")):
+        if isinstance(value, str) and value in QUOTA_EXHAUSTED_ERROR_CODES:
+            return value
+    return None
+
+
+def usage_limit_error(
+    error: Mapping[str, Any],
+    detail: str,
+    *,
+    reported_wait: float | None = None,
+    display_timezone: tzinfo = UTC,
+    now: datetime | None = None,
+) -> ProviderError | None:
+    """Classify a reached subscription usage limit by its reset; ``None`` for any other error.
+
+    The reset is the error's ``resets_at`` (epoch seconds), else its
+    ``resets_in_seconds``, else ``reported_wait`` (the ``Retry-After`` its
+    response carried). A reset within the retry cap (``MAX_RETRY_AFTER_SECONDS``)
+    becomes a ``ProviderRateLimitError`` whose ``retry_after`` waits exactly
+    until then; a later or unreported reset becomes a non-retryable
+    ``ProviderUsageLimitError``. The message names the reset as wall-clock time
+    in ``display_timezone`` and ends with ``detail``, the Provider's evidence.
+    """
+
+    if USAGE_LIMIT_ERROR_TYPE not in (
+        error.get("type"),
+        error.get("code"),
+        error.get("error_type"),
+    ):
+        return None
+    current = now or datetime.now(UTC)
+    resets_at = _reported_reset(error, reported_wait, current)
+    if resets_at is None:
+        return ProviderUsageLimitError(
+            f"Subscription usage limit reached; no reset time was reported: {detail}"
+        )
+    wait = max(0.0, (resets_at - current).total_seconds())
+    reset_text = resets_at.astimezone(display_timezone).strftime("%Y-%m-%d %H:%M %Z")
+    if wait <= MAX_RETRY_AFTER_SECONDS:
+        rate_limit_error = ProviderRateLimitError(
+            f"Subscription usage limit reached; it resets at {reset_text}, "
+            f"in {math.ceil(wait)} seconds: {detail}"
+        )
+        rate_limit_error.retry_after = wait
+        return rate_limit_error
+    return ProviderUsageLimitError(
+        f"Subscription usage limit reached; it resets at {reset_text}: {detail}",
+        resets_at=resets_at,
+    )
+
+
+def _reported_reset(
+    error: Mapping[str, Any], reported_wait: float | None, now: datetime
+) -> datetime | None:
+    resets_at = _finite_number(error.get("resets_at"))
+    if resets_at is not None:
+        try:
+            return datetime.fromtimestamp(resets_at, UTC)
+        except OverflowError, OSError, ValueError:
+            pass
+    for seconds in (_finite_number(error.get("resets_in_seconds")), reported_wait):
+        if seconds is not None and seconds >= 0:
+            try:
+                return now + timedelta(seconds=seconds)
+            except OverflowError:
+                return None
+    return None
+
+
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None

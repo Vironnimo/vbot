@@ -85,7 +85,7 @@ Image preparation runs against the complete rendered Messages payload, including
 ## Error Classification
 
 - 401/403 -> `ProviderAuthError`
-- 429 -> `ProviderRateLimitError`
+- 429 -> `ProviderRateLimitError`, except the monthly spend cap: a 429 typed `rate_limit_error` without `retry-after` whose `error.details.error_code` is `enforced_spend_limit_reached`, documented to hold until 00:00 UTC on the first day of the next month (https://platform.claude.com/docs/en/api/rate-limits, read 2026-10-19). It is a non-retryable `ProviderUsageLimitError` `Monthly spend cap reached: <detail>`; the detail keeps the error code and Anthropic's message, which states when access resumes (`ANTHROPIC_SPEND_CAP_ERROR_CODE`, `AnthropicCompatibleAdapter._classify_http_status`; `test_anthropic_responses.py`). Not live-verified.
 - 529, 502, 503 -> retryable provider overload errors
 - Other errors -> non-retryable `ProviderError`
 

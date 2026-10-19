@@ -6,14 +6,21 @@ import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any, cast, override
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 import respx
 
 from core.chat.streaming import StreamingAccumulator, StreamingDeltaBatcher
-from core.providers.errors import ProviderTimeoutError
+from core.providers.errors import (
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+    ProviderUsageLimitError,
+)
 from core.providers.openai import OpenAIAdapter
+from core.utils.retry import caller_owns_retries
 from tests.core.chat.assistant_turn_test_support import (
     assistant_turn_from_response,
     event_payload,
@@ -159,6 +166,71 @@ async def test_codex_stream_connect_retry_rebuilds_account_headers() -> None:
         "acct-stale",
         "acct-fresh",
     ]
+
+
+@pytest.mark.parametrize(
+    ("error", "headers", "expected_type", "retry_after", "wording"),
+    [
+        pytest.param(
+            # Reset 2100-01-01T00:00:00Z: far beyond any retry wait.
+            {"type": "usage_limit_reached", "plan_type": "plus", "resets_at": 4_102_444_800},
+            {"retry-after": "20"},
+            ProviderUsageLimitError,
+            None,
+            "Subscription usage limit reached; it resets at 2100-01-01 01:00 CET: 429 {",
+            id="distant-usage-limit-reset-stops",
+        ),
+        pytest.param(
+            {"type": "usage_limit_reached", "plan_type": "plus"},
+            {"retry-after": "20"},
+            ProviderRateLimitError,
+            20.0,
+            ", in 20 seconds: 429 {",
+            id="usage-limit-reset-from-retry-after-waits-exactly",
+        ),
+        pytest.param(
+            {"type": "usage_not_included"},
+            {},
+            ProviderError,
+            None,
+            "Quota exhausted: 429 {",
+            id="exhausted-entitlement-stops",
+        ),
+        pytest.param(
+            {"type": "test_rate_limit_type"},
+            {"retry-after": "7"},
+            ProviderRateLimitError,
+            7.0,
+            "Rate limited: 429 {",
+            id="other-429-stays-a-rate-limit",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_codex_http_429_tells_an_exhausted_allowance_from_a_rate_limit(
+    error: dict[str, Any],
+    headers: dict[str, str],
+    expected_type: type[ProviderError],
+    retry_after: float | None,
+    wording: str,
+) -> None:
+    """The body's ``error`` decides; a usage limit's reset is named in the display timezone."""
+
+    adapter = codex_adapter()
+    adapter.display_timezone = ZoneInfo("Europe/Berlin")
+
+    with respx.mock, caller_owns_retries():
+        respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+            return_value=httpx.Response(429, json={"error": error}, headers=headers)
+        )
+        with pytest.raises(ProviderError) as caught:
+            await _collect(adapter)
+
+    assert type(caught.value) is expected_type
+    assert caught.value.retryable is (expected_type is ProviderRateLimitError)
+    assert caught.value.retry_after == retry_after
+    assert caught.value.status_code == 429
+    assert wording in str(caught.value)
 
 
 @pytest.mark.parametrize(

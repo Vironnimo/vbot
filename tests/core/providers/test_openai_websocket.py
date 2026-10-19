@@ -10,6 +10,7 @@ import json
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pytest
 import respx
@@ -17,7 +18,13 @@ from websockets.datastructures import Headers
 
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
-from core.providers.errors import NetworkError, ProviderAuthError, ProviderError
+from core.providers.errors import (
+    NetworkError,
+    ProviderAuthError,
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderUsageLimitError,
+)
 from core.providers.openai import CODEX_WEBSOCKET_BETA, OpenAIAdapter
 from core.utils.tls import shared_ssl_context
 
@@ -444,7 +451,7 @@ def _failed(code: str) -> dict[str, Any]:
     }
 
 
-def _error_frame(status: int, **error: str) -> dict[str, Any]:
+def _error_frame(status: int, **error: Any) -> dict[str, Any]:
     return {
         "type": "error",
         "status": status,
@@ -498,6 +505,13 @@ def _error_frame(status: int, **error: str) -> dict[str, Any]:
             False,
             id="auth-status",
         ),
+        pytest.param(
+            _error_frame(429, type="insufficient_quota"),
+            "insufficient_quota",
+            ProviderError,
+            False,
+            id="exhausted-quota-at-a-wait-status-stops",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -521,6 +535,74 @@ async def test_codex_error_events_follow_codex_retry_classification(
     assert sentinel in message
     assert "test-instructions-sentinel" not in message
     assert "test-header-sentinel" not in message
+    await adapter.aclose()
+
+
+# 2100-01-01T00:00:00Z: far beyond any retry wait.
+_DISTANT_RESET = 4_102_444_800
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_type", "retry_after", "wording"),
+    [
+        pytest.param(
+            _error_frame(
+                429, type="usage_limit_reached", plan_type="pro", resets_at=_DISTANT_RESET
+            ),
+            ProviderUsageLimitError,
+            None,
+            "Subscription usage limit reached; it resets at 2100-01-01 01:00 CET: {",
+            id="distant-usage-limit-reset-stops",
+        ),
+        pytest.param(
+            _error_frame(429, type="usage_limit_reached", resets_in_seconds=30),
+            ProviderRateLimitError,
+            30.0,
+            ", in 30 seconds: {",
+            id="usage-limit-reset-within-the-retry-cap-waits-exactly",
+        ),
+        pytest.param(
+            {**_error_frame(429, type="test_rate_limit_type"), "headers": {"Retry-After": 7}},
+            ProviderRateLimitError,
+            7.0,
+            "Test failure.: {",
+            id="frame-headers-report-the-wait",
+        ),
+        pytest.param(
+            _error_frame(503, type="test_unknown_type", headers={"retry-after-ms": "1500"}),
+            ProviderError,
+            1.5,
+            "Test failure.: {",
+            id="error-headers-report-the-wait",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_codex_error_frames_wait_as_long_as_the_provider_reports(
+    event: dict[str, Any],
+    expected_type: type[ProviderError],
+    retry_after: float | None,
+    wording: str,
+) -> None:
+    """A usage limit stops unless its reset fits the retry cap; headers report waits like HTTP.
+
+    The reset is named in the Adapter's display timezone; headers stay out of
+    the message.
+    """
+
+    connector = FakeCodexWebSocketConnector([FakeCodexWebSocket([[event]])])
+    adapter = codex_adapter(codex_websocket_connect=connector)
+    adapter.display_timezone = ZoneInfo("Europe/Berlin")
+
+    with pytest.raises(ProviderError) as caught:
+        await _send(adapter)
+
+    assert type(caught.value) is expected_type
+    assert caught.value.retryable is (expected_type is not ProviderUsageLimitError)
+    assert caught.value.retry_after == retry_after
+    message = str(caught.value)
+    assert wording in message
+    assert '"headers"' not in message
     await adapter.aclose()
 
 

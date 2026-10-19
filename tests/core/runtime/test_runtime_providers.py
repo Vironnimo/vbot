@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -429,6 +430,7 @@ def test_get_adapter_scopes_model_lookup_wire_profiles_and_replay_to_its_connect
 
     anthropic = shared_runtime.get_adapter(ConnectionRef("anthropic", "anthropic:api-key"))
     assert anthropic.local_endpoint is False
+    assert anthropic.display_timezone == ZoneInfo(shared_runtime.timezone_name())
     lookup = anthropic._model_lookup
     assert lookup is not None
     assert lookup("claude-sonnet-4-6") == shared_runtime.models.get(

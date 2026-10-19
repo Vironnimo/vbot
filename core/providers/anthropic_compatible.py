@@ -29,6 +29,7 @@ from core.providers._messages_constants import (
     ANTHROPIC_ERROR_STOP_REASONS,
     ANTHROPIC_OVERLOADED_STATUS,
     ANTHROPIC_REASONING_PARAMETER_NAMES,
+    ANTHROPIC_SPEND_CAP_ERROR_CODE,
     ANTHROPIC_STOP_REASONS,
     ANTHROPIC_TOOL_STOP_REASONS,
     ANTHROPIC_VERSION,
@@ -74,7 +75,7 @@ from core.providers.adapter import (
     resolve_request_input_budget,
 )
 from core.providers.effort_updates import apply_effort_updates, effort_levels, is_effort_update
-from core.providers.errors import NetworkError
+from core.providers.errors import NetworkError, ProviderUsageLimitError
 from core.providers.http import (
     PreparedRequest,
     RequestPlan,
@@ -456,8 +457,15 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         detail: str,
         response_headers: httpx.Headers,
     ) -> None:
-        """Classify one response status, allowing concrete gateways to refine it."""
+        """Classify one response status, allowing concrete gateways to refine it.
 
+        A spend-cap 429 fails without retry: the cap holds until next month.
+        """
+
+        if status_code == 429 and ANTHROPIC_SPEND_CAP_ERROR_CODE in detail:
+            spend_cap = ProviderUsageLimitError(f"Monthly spend cap reached: {detail}")
+            spend_cap.status_code = status_code
+            raise spend_cap
         classify_http_status(
             status_code,
             idempotent=False,
@@ -564,7 +572,11 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         Parses the Anthropic error response format for richer error messages.
         The Anthropic API returns errors as::
 
-            {"type": "error", "error": {"type": "...", "message": "..."}}
+            {"type": "error", "error": {"type": "...", "message": "...",
+                                        "details": {"error_code": "..."}}}
+
+        ``details`` is optional; its ``error_code`` tells cases of one type
+        apart (the spend cap from a rate limit).
 
         Args:
             status_code: HTTP response status code.
@@ -578,10 +590,18 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         try:
             error_data = json.loads(response_body) if response_body else {}
             error_info = error_data.get("error", {})
-            error_type = error_info.get("type", "")
+            error_details = error_info.get("details")
+            error_code = (
+                error_details.get("error_code") if isinstance(error_details, dict) else None
+            )
+            labels = ", ".join(
+                label
+                for label in (error_info.get("type"), error_code)
+                if isinstance(label, str) and label
+            )
             error_message = error_info.get("message", "")
-            if error_type and error_message:
-                detail = f"{status_code} ({error_type}): {error_message}"
+            if labels and error_message:
+                detail = f"{status_code} ({labels}): {error_message}"
             elif error_message:
                 detail = f"{status_code}: {error_message}"
         except json.JSONDecodeError, AttributeError:
