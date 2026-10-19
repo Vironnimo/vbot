@@ -667,8 +667,10 @@ _TOOL_USE_START = {
                         ]
                     },
                 },
-                # No ``message_start`` input count: no usage is invented.
                 {"type": "finish", "reason": TERMINAL_OUTCOME_STOP},
+                # No ``message_start`` input count: none is invented, but the
+                # reported output count is kept on its own.
+                {"type": "usage", "output_tokens": 2},
             ],
             id="visible-thinking-text-delta-without-input-usage",
         ),

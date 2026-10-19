@@ -59,7 +59,6 @@ class CopilotMessagesStreamState(AnthropicMessagesStreamDecoder):
             error_detail=_messages_error_detail,
             reasoning_block_normalizer=_safe_reasoning_block,
             text_delta_in_thinking=True,
-            emit_usage_without_start=False,
             drop_stopped_reasoning_block=True,
         )
 
