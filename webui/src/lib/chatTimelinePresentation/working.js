@@ -88,7 +88,7 @@ export function workingGroupSummary(
   return {
     active,
     toolKinds: kinds.slice(0, MAX_NAMED_TOOLS),
-    moreToolKinds: Math.max(0, kinds.length - MAX_NAMED_TOOLS),
+    otherToolKinds: kinds.slice(MAX_NAMED_TOOLS),
     toolCount: tools.length,
     thoughtCount: group.children.length - tools.length,
     failedCount: statuses.filter((status) => status === 'failed').length,
@@ -108,6 +108,12 @@ export function workingGroupDetails(summary) {
       {
         label: t('chat.working.toolCalls'),
         value: String(summary.toolCount),
+      },
+      {
+        label: t('chat.working.otherTools'),
+        value: summary.otherToolKinds
+          .map(({ name, count }) => (count > 1 ? `${name} ${count}` : name))
+          .join(', '),
       },
       {
         label: t('chat.working.reasoning'),

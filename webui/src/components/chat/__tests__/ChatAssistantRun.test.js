@@ -410,10 +410,11 @@ describe('ChatAssistantRun', () => {
       const block = workingBlock();
       expect(block.open).toBe(false);
       // A heading over the rows, without a status dot of its own.
-      expect(summaryText('.working-block__label')).toBe(t('chat.working.done'));
+      expect(summaryText('.working-block__label')).toBeNull();
+      expect(block.querySelector('.working-block__icon--active')).toBeNull();
       expect(summaryText('.working-block__count')).toBe('1 Tool call');
       expect(summaryText('.working-block__kinds')).toBe('read');
-      expect(summaryText('.working-block__more')).toBeNull();
+      expect(summaryText('.working-block__chip--more')).toBeNull();
       expect(block.querySelector('summary .te-dot')).toBeNull();
       expect(
         block.querySelectorAll('.reasoning-block, .tool-event'),
@@ -494,13 +495,12 @@ describe('ChatAssistantRun', () => {
           chatWorkingMode: 'compact',
         });
 
-        const label = workingBlock().querySelector('.working-block__label');
-        expect(label.textContent.trim()).toBe(
-          active ? t('chat.working.active') : t('chat.working.done'),
+        expect(summaryText('.working-block__label')).toBe(
+          active ? t('chat.working.active') : null,
         );
-        expect(label.classList.contains('working-block__label--active')).toBe(
-          active,
-        );
+        expect(
+          Boolean(workingBlock().querySelector('.working-block__icon--active')),
+        ).toBe(active);
         expect(workingBlock().querySelector('summary .te-dot')).toBeNull();
       },
     );
@@ -527,7 +527,7 @@ describe('ChatAssistantRun', () => {
           toolChild('glob', {}, { id: 'glob-2', status: 'success' }),
         ],
         {
-          kinds: ['read×3', 'glob×2', 'grep'],
+          kinds: ['read3', 'glob2', 'grep'],
           more: '+2',
           count: '8 Tool calls',
         },
@@ -550,23 +550,27 @@ describe('ChatAssistantRun', () => {
             },
           }),
         ],
-        { kinds: ['read', 'bash'], count: '2 Tool calls', time: '5.0s' },
+        { kinds: ['read', 'bash'], count: '2 Tool calls', time: 'took 5.0s' },
       ],
     ])('summarizes a finished group with %s', (_case, items, expected) => {
       run.mount({ item: assistantRun({ items }), chatWorkingMode: 'compact' });
 
       expect(
         Array.from(
-          workingBlock().querySelectorAll('.working-block__kind'),
+          workingBlock().querySelectorAll(
+            '.working-block__chip:not(.working-block__chip--more)',
+          ),
           (kind) => kind.textContent.trim(),
         ),
       ).toEqual(expected.kinds);
-      expect(summaryText('.working-block__more')).toBe(expected.more ?? null);
+      expect(summaryText('.working-block__chip--more')).toBe(
+        expected.more ?? null,
+      );
       expect(summaryText('.working-block__count')).toBe(expected.count);
       expect(summaryText('.working-block__note')).toBe(expected.note ?? null);
       expect(workingBlock().querySelector('summary .te-dot')).toBeNull();
       if (expected.time) {
-        expect(summaryText('.te-time')).toBe(expected.time);
+        expect(summaryText('.working-block__time')).toBe(expected.time);
       }
     });
 
