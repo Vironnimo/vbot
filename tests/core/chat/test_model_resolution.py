@@ -231,8 +231,8 @@ def test_fallback_chain_keeps_only_resolvable_distinct_candidates_in_order() -> 
         models={**CONNECTION_BOUND, ("openai", "enterprise-only"): ("enterprise",)},
     )
 
-    def is_usable(_provider_id: str, connection_id: str) -> bool:
-        if connection_id == "openai:missing":
+    def is_usable(provider_id: str, connection_id: str) -> bool:
+        if provider_id == "broken" or connection_id == "openai:missing":
             raise ConfigError("Unknown connection: openai:missing")
         return connection_id in BOTH_USABLE
 
@@ -241,6 +241,7 @@ def test_fallback_chain_keeps_only_resolvable_distinct_candidates_in_order() -> 
         "openai/gpt-5.2::api-key",
         fallback_models=[
             "ghost/ghost-model::api-key",
+            "broken/unpinned-model",
             "openai/codex-auto-review",
             "openai/gpt-5.2::api-key",
             "openai/dead::missing",
