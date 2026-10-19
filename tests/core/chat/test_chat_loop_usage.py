@@ -4,6 +4,7 @@ end, the Context guard, price snapshots and the usage record of every Model atte
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, override
 
@@ -15,6 +16,7 @@ from core.providers.errors import NetworkError, ProviderError
 from core.runs import RunCancelledError
 from core.tools import ToolRegistry, tool_success
 from core.usage import UsageRecorder
+from core.utils import tokens as token_utils
 from core.utils.errors import ConfigError
 from core.utils.tokens import estimate_output_tokens, estimate_request_input_tokens
 from tests.core.chat.chat_loop_support import (
@@ -40,6 +42,13 @@ MEASURED = {
     "reasoning_tokens": 25,
 }
 SESSION = session_address("coder", "session-one")
+
+
+@pytest.fixture(autouse=True)
+def _stable_token_estimates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep Run and assertion estimates independent of background tokenizer loading."""
+    monkeypatch.setattr(token_utils, "_load_estimation_encoding", lambda: None)
+    monkeypatch.setattr(token_utils, "_COUNT_CACHE", OrderedDict())
 
 
 def _runtime(tmp_path: Path, adapter: StubAdapter, **runtime_options: Any) -> Any:
