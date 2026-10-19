@@ -20,6 +20,11 @@ failures can arrive after the provider has started the operation.
 Callers pass ``idempotent`` to declare whether their request is safe to repeat,
 plus any provider-specific ``extra`` codes (e.g. Anthropic's 529 "overloaded").
 
+A retryable response may also report how long to wait: ``parse_retry_after``
+reads ``Retry-After``, and ``parse_rate_limit_retry_after`` additionally reads
+the reported reset of a 429's exhausted rate limits when ``Retry-After`` is
+absent.
+
 The desktop wakeword worker keeps its own copy of the always-retryable set: it
 runs across the desktop/server boundary and must not import from ``core`` (see
 ``.vorch/PROJECT.md`` → architecture).
@@ -27,6 +32,8 @@ runs across the desktop/server boundary and must not import from ``core`` (see
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -121,6 +128,124 @@ def parse_retry_after(headers: Mapping[str, str]) -> float | None:
         retry_at = retry_at.replace(tzinfo=UTC)
     delta = (retry_at - datetime.now(UTC)).total_seconds()
     return delta if delta > 0 else 0.0
+
+
+# Documented per-limit rate-limit state, as (remaining header, reset header)
+# pairs. OpenAI reports the time until a limit "resets to its initial state" as
+# a Go duration such as ``6m0s`` or ``20ms``
+# (https://developers.openai.com/api/docs/guides/rate-limits, read 2026-10-19);
+# OpenAI-compatible APIs reuse these names. Anthropic reports when a limit "will
+# be fully replenished" as an RFC 3339 timestamp
+# (https://platform.claude.com/docs/en/api/rate-limits, read 2026-10-19).
+_DURATION_RATE_LIMITS: tuple[tuple[str, str], ...] = tuple(
+    (f"x-ratelimit-remaining-{limit}", f"x-ratelimit-reset-{limit}")
+    for limit in ("requests", "tokens", "project-tokens")
+)
+_TIMESTAMP_RATE_LIMITS: tuple[tuple[str, str], ...] = tuple(
+    (f"anthropic-{limit}-remaining", f"anthropic-{limit}-reset")
+    for limit in (
+        "ratelimit-requests",
+        "ratelimit-tokens",
+        "ratelimit-input-tokens",
+        "ratelimit-output-tokens",
+        "priority-input-tokens",
+        "priority-output-tokens",
+    )
+)
+_DURATION_UNIT_SECONDS = {
+    "h": 3600.0,
+    "m": 60.0,
+    "s": 1.0,
+    "ms": 1e-3,
+    "us": 1e-6,
+    "µs": 1e-6,
+    "μs": 1e-6,
+    "ns": 1e-9,
+}
+_DURATION_PART = r"(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)"
+_DURATION = re.compile(f"(?:{_DURATION_PART})+")
+_DURATION_PARTS = re.compile(_DURATION_PART)
+
+
+def parse_rate_limit_retry_after(
+    headers: Mapping[str, str], *, now: datetime | None = None
+) -> float | None:
+    """Return the wait an HTTP 429 response reports, in seconds.
+
+    ``Retry-After`` (see :func:`parse_retry_after`) wins. Without it, the wait
+    is the latest reported reset among the limits the response reports as
+    exhausted (remaining count zero): the request passes again only once each
+    of them has room. A reset of a limit with room left, or without a reported
+    remaining count, says nothing about this rejection and is ignored, as are
+    unparseable values. Only a 429 reports exhausted limits; other statuses use
+    :func:`parse_retry_after` alone.
+
+    Args:
+        headers: Case-insensitive (``httpx.Headers``) or lowercase-keyed
+            response headers.
+        now: The current time for timestamp resets; defaults to the clock.
+
+    Returns:
+        The delay in seconds, clamped to ``>= 0``, or ``None`` when the
+        response reports no usable wait.
+    """
+    retry_after = parse_retry_after(headers)
+    if retry_after is not None:
+        return retry_after
+    current = now or datetime.now(UTC)
+    resets = [
+        *map(_duration_seconds, _exhausted_limit_resets(headers, _DURATION_RATE_LIMITS)),
+        *(
+            _seconds_until(reset, current)
+            for reset in _exhausted_limit_resets(headers, _TIMESTAMP_RATE_LIMITS)
+        ),
+    ]
+    return max((reset for reset in resets if reset is not None), default=None)
+
+
+def _exhausted_limit_resets(
+    headers: Mapping[str, str], limits: tuple[tuple[str, str], ...]
+) -> list[str]:
+    """Raw reset values of the limits whose remaining count is reported as zero."""
+    resets: list[str] = []
+    for remaining_header, reset_header in limits:
+        remaining = _number(headers.get(remaining_header))
+        reset = headers.get(reset_header)
+        if remaining is not None and remaining <= 0 and reset is not None:
+            resets.append(reset)
+    return resets
+
+
+def _number(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value.strip())
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _duration_seconds(value: str) -> float | None:
+    """Parse a non-negative Go duration such as ``1h2m3.5s`` or ``20ms``."""
+    text = value.strip()
+    if not _DURATION.fullmatch(text):
+        return None
+    return sum(
+        float(amount) * _DURATION_UNIT_SECONDS[unit]
+        for amount, unit in _DURATION_PARTS.findall(text)
+    )
+
+
+def _seconds_until(value: str, now: datetime) -> float | None:
+    """Seconds from ``now`` until an RFC 3339 timestamp; a past one means now."""
+    try:
+        reset_at = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if reset_at.tzinfo is None:
+        return None
+    return max(0.0, (reset_at - now).total_seconds())
 
 
 @dataclass(frozen=True)

@@ -81,6 +81,13 @@ async def test_non_streaming_reads_are_bounded_and_stream_reads_are_left_to_chat
 # Error classification
 # ---------------------------------------------------------------------------
 
+EXHAUSTED_REQUESTS = {
+    "x-ratelimit-remaining-requests": "0",
+    "x-ratelimit-reset-requests": "2s",
+    "x-ratelimit-remaining-tokens": "149000",
+    "x-ratelimit-reset-tokens": "6m0s",
+}
+
 
 @pytest.mark.parametrize(
     ("error", "expected_type", "detail"),
@@ -144,6 +151,10 @@ def test_unusable_provider_json_is_a_fatal_error_naming_the_provider(
     [
         (429, False, {"Retry-After": "7"}, "429 slow down", ProviderRateLimitError, True, 7.0),
         (429, False, None, "", ProviderRateLimitError, True, None),
+        # Without Retry-After a 429 waits for its exhausted limit's reported reset ...
+        (429, False, EXHAUSTED_REQUESTS, "", ProviderRateLimitError, True, 2.0),
+        # ... which no other status reports.
+        (503, False, EXHAUSTED_REQUESTS, "", ProviderError, True, None),
         (503, False, {"retry-after-ms": "2000"}, "", ProviderError, True, 2.0),
         (500, False, None, "500 boom", ProviderError, False, None),
         (500, True, None, "", ProviderError, True, None),
@@ -155,6 +166,8 @@ def test_unusable_provider_json_is_a_fatal_error_naming_the_provider(
     ids=[
         "rate-limit-retry-after",
         "rate-limit-without-headers",
+        "rate-limit-reported-reset",
+        "server-error-ignores-reset",
         "retryable-retry-after-ms",
         "server-error-not-replay-safe",
         "server-error-replay-safe",

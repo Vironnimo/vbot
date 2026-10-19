@@ -2,7 +2,8 @@
 
 Verifies the single source of truth in :mod:`core.utils.http_status`: the
 method-agnostic retryable set (429/502/503/504), the idempotent-only code
-(500), provider-specific ``extra`` codes, and ``Retry-After`` header parsing.
+(500), provider-specific ``extra`` codes, ``Retry-After`` header parsing, and a
+429's reported rate-limit reset.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from core.utils.http_status import (
     IDEMPOTENT_RETRYABLE_STATUS_CODES,
     RETRYABLE_STATUS_CODES,
     is_retryable_status,
+    parse_rate_limit_retry_after,
     parse_retry_after,
 )
 
@@ -86,3 +88,67 @@ def test_parse_retry_after_reads_an_http_date_as_the_time_until_then() -> None:
     assert seconds is not None and 110 <= seconds <= 121
     # A date already in the past means "retry now".
     assert parse_retry_after(at(timedelta(seconds=-120))) == 0.0
+
+
+NOW = datetime(2026, 10, 19, 12, 0, tzinfo=UTC)
+
+
+def _openai_limit(limit: str, remaining: str, reset: str) -> dict[str, str]:
+    return {f"X-RateLimit-Remaining-{limit}": remaining, f"X-RateLimit-Reset-{limit}": reset}
+
+
+def _anthropic_limit(limit: str, remaining: str, reset: str) -> dict[str, str]:
+    return {f"anthropic-{limit}-remaining": remaining, f"anthropic-{limit}-reset": reset}
+
+
+@pytest.mark.parametrize(
+    ("headers", "seconds"),
+    [
+        pytest.param(
+            {"Retry-After": "5", **_openai_limit("Requests", "0", "30s")},
+            5.0,
+            id="retry-after-wins",
+        ),
+        pytest.param(
+            {
+                **_openai_limit("Requests", "0", "1s"),
+                **_openai_limit("Tokens", "149984", "6m0s"),
+            },
+            1.0,
+            id="limit-with-room-left-is-ignored",
+        ),
+        pytest.param(
+            {**_openai_limit("Requests", "0", "20ms"), **_openai_limit("Tokens", "0", "1h2m3.5s")},
+            3723.5,
+            id="latest-exhausted-go-duration",
+        ),
+        pytest.param(_openai_limit("Project-Tokens", "0", "3s"), 3.0, id="project-tokens"),
+        pytest.param(
+            {
+                **_anthropic_limit("ratelimit-input-tokens", "0", "2026-10-19T14:00:42+02:00"),
+                **_anthropic_limit("ratelimit-requests", "0", "2026-10-19T11:59:00Z"),
+            },
+            42.0,
+            id="rfc3339-reset-past-means-now",
+        ),
+        pytest.param(
+            _anthropic_limit("priority-output-tokens", "0", "2026-10-19T12:00:07.5Z"),
+            7.5,
+            id="priority-tier",
+        ),
+        pytest.param(_openai_limit("Requests", "5", "1s"), None, id="nothing-exhausted"),
+        pytest.param({"x-ratelimit-reset-requests": "1s"}, None, id="remaining-unreported"),
+        pytest.param(_openai_limit("Requests", "0", "30"), None, id="bare-number-is-no-duration"),
+        pytest.param(_openai_limit("Requests", "0", "-1s"), None, id="negative-duration"),
+        pytest.param(
+            _anthropic_limit("ratelimit-tokens", "0", "2026-10-19T12:00:42"),
+            None,
+            id="timestamp-without-offset",
+        ),
+        pytest.param({}, None, id="no-headers"),
+    ],
+)
+def test_rate_limit_wait_falls_back_to_the_reset_of_exhausted_limits(
+    headers: dict[str, str], seconds: float | None
+) -> None:
+    assert parse_rate_limit_retry_after(httpx.Headers(headers), now=NOW) == seconds

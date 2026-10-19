@@ -26,7 +26,11 @@ from core.providers.errors import (
     ProviderRequestTooLargeError,
     ProviderTimeoutError,
 )
-from core.utils.http_status import is_retryable_status, parse_retry_after
+from core.utils.http_status import (
+    is_retryable_status,
+    parse_rate_limit_retry_after,
+    parse_retry_after,
+)
 from core.utils.retry import retry_async
 from core.utils.tls import shared_ssl_context
 from core.utils.workers import BoundedWorkerPool
@@ -239,7 +243,9 @@ def classify_http_status(
             ``str(status_code)`` is used.
         response_headers: The response headers, when available. Used to parse a
             ``Retry-After`` hint that is attached to retryable errors so
-            ``retry_async`` can honor the provider's requested wait.
+            ``retry_async`` can honor the provider's requested wait. Without
+            it, a 429 takes the reported reset of its exhausted rate limits
+            (``parse_rate_limit_retry_after``).
 
     Raises:
         ProviderAuthError: 401 / 403 (not retryable).
@@ -261,7 +267,13 @@ def classify_http_status(
         too_large.status_code = status_code
         raise too_large
 
-    retry_after = parse_retry_after(response_headers) if response_headers is not None else None
+    retry_after: float | None = None
+    if response_headers is not None:
+        retry_after = (
+            parse_rate_limit_retry_after(response_headers)
+            if status_code == 429
+            else parse_retry_after(response_headers)
+        )
 
     if status_code == 429:
         rate_limit_error = ProviderRateLimitError(f"Rate limited: {detail}")

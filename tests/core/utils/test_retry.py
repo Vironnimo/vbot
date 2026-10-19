@@ -201,7 +201,7 @@ async def test_retry_honors_a_server_retry_after_hint_and_logs_it(
     assert sleeps == [10.0, 10.0, 10.0]
     messages = _retry_log(caplog, "Retryable error")
     assert len(messages) == MAX_RETRIES
-    assert all("honoring server Retry-After" in message for message in messages)
+    assert all("honoring the server's requested wait" in message for message in messages)
 
 
 @pytest.mark.asyncio
