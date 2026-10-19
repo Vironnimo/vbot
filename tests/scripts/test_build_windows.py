@@ -68,6 +68,9 @@ def _source(tmp_path: Path) -> Path:
         (source / "scripts" / "windows" / f"requirements-{shape}.lock").write_text(
             "example==1.0 --hash=sha256:abc\n", encoding="utf-8"
         )
+    (source / "scripts/windows/requirements-build.lock").write_text(
+        "setuptools==82.0.1 --hash=sha256:abc\n", encoding="utf-8"
+    )
     # The runtime fixture already carries the pinned library, so nothing downloads.
     (source / "scripts/windows/sqlite.lock.json").write_text(
         json.dumps(
@@ -286,28 +289,37 @@ def test_runtime_rejects_unexcluded_links(tmp_path: Path, relative: str) -> None
         )
 
 
+@pytest.mark.parametrize("shape", SHAPES)
 def test_runtime_provisioning_uses_shape_lock_with_hashes(
-    tmp_path: Path, pip_commands: list[list[str]]
+    tmp_path: Path, pip_commands: list[list[str]], shape: str
 ) -> None:
     source = _source(tmp_path)
-    lock = source / "scripts" / "windows" / "requirements-server.lock"
+    lock = source / "scripts" / "windows" / f"requirements-{shape}.lock"
     runtime = _runtime(tmp_path)
 
-    build_windows.copy_runtime(runtime, tmp_path / "copy", app_source=source, shape="server")
+    build_windows.copy_runtime(runtime, tmp_path / "copy", app_source=source, shape=shape)
 
-    (command,) = pip_commands
-    assert command[:6] == [
-        sys.executable,
-        "-B",
-        "-m",
-        "pip",
-        "--python",
-        str(runtime / "python.exe"),
-    ]
+    command = pip_commands[-1]
+    assert command[:5] == [sys.executable, "-B", "-m", "pip", "--python"]
     assert "--require-hashes" in command
     assert "--only-binary=:all:" in command
-    assert "--no-binary=proxy-tools" in command
+    assert "--no-build-isolation" in command
     assert command[-2:] == ["-r", str(lock)]
+    if shape == "server":
+        assert len(pip_commands) == 1
+        assert command[5] == str(runtime / "python.exe")
+        assert not any(argument.startswith("--no-binary") for argument in command)
+    else:
+        creation, backend, _ = pip_commands
+        assert creation[:5] == [str(runtime / "python.exe"), "-B", "-m", "venv", "--without-pip"]
+        assert not Path(creation[-1]).exists()
+        assert Path(command[5]).is_relative_to(Path(creation[-1]))
+        assert backend[:6] == command[:6]
+        assert "--require-hashes" in backend
+        assert "--only-binary=:all:" in backend
+        assert backend[-2:] == ["-r", str(source / "scripts/windows/requirements-build.lock")]
+        assert "--no-binary=proxy-tools" in command
+        assert "--no-cache-dir" in command
 
 
 def test_runtime_cache_reuses_a_runtime_only_for_the_same_inputs(
@@ -336,6 +348,10 @@ def test_runtime_cache_reuses_a_runtime_only_for_the_same_inputs(
     upgraded = prepare("fourth")
     assert len(pip_commands) == 3
     assert (upgraded / "python.exe").read_bytes() == b"python, upgraded"
+    build_lock = source / "scripts/windows/requirements-build.lock"
+    build_lock.write_text(build_lock.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
+    prepare("fifth")
+    assert len(pip_commands) == 4
 
 
 def test_build_writes_complete_hashed_manifest_and_rooted_archive(

@@ -9,7 +9,9 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+import tempfile
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 if __package__ in {None, ""}:
@@ -44,6 +46,7 @@ CODE_ROOT = Path(__file__).resolve().parent.parent
 #: Everything besides the input runtime that decides a prepared runtime's content.
 RUNTIME_KEY_FILES = (
     "scripts/windows/requirements-{shape}.lock",
+    "scripts/windows/requirements-build.lock",
     "scripts/windows/sqlite.lock.json",
     "scripts/build_windows.py",
     "scripts/package_build.py",
@@ -73,6 +76,42 @@ def _copy_tree(
 
 def _site_packages(runtime: Path) -> Path:
     return runtime / "Lib" / "site-packages"
+
+
+@contextmanager
+def _dependency_interpreter(source: Path, app_source: Path, shape: str) -> Iterator[Path]:
+    """Keep the Desktop-only source build's backend pinned and outside the payload."""
+    interpreter = _runtime_python(source)
+    if shape == "server":
+        yield interpreter
+        return
+    lock = app_source / "scripts/windows/requirements-build.lock"
+    if not lock.is_file():
+        raise BuildError(f"missing locked Windows build requirements: {lock}")
+    with tempfile.TemporaryDirectory(prefix="vbot-build-dependencies-") as temporary:
+        environment = Path(temporary)
+        run_tool([str(interpreter), "-B", "-m", "venv", "--without-pip", str(environment)])
+        build_python = environment / (
+            "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+        )
+        run_tool(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "pip",
+                "--python",
+                str(build_python),
+                "install",
+                "--disable-pip-version-check",
+                "--no-input",
+                "--require-hashes",
+                "--only-binary=:all:",
+                "-r",
+                str(lock),
+            ]
+        )
+        yield build_python
 
 
 def copy_runtime(source: Path, destination: Path, *, app_source: Path, shape: str) -> None:
@@ -108,26 +147,28 @@ def copy_runtime(source: Path, destination: Path, *, app_source: Path, shape: st
         # Only the shape's lock provisions packages; the input runtime's never ship.
         shutil.rmtree(site, ignore_errors=True)
     site.mkdir(parents=True, exist_ok=True)
-    run_tool(
-        [
-            sys.executable,
-            "-B",
-            "-m",
-            "pip",
-            "--python",
-            str(_runtime_python(source)),
-            "install",
-            "--disable-pip-version-check",
-            "--no-input",
-            "--target",
-            str(site),
-            "--require-hashes",
-            "--only-binary=:all:",
-            "--no-binary=proxy-tools",
-            "-r",
-            str(lock),
-        ]
-    )
+    with _dependency_interpreter(source, app_source, shape) as interpreter:
+        run_tool(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "pip",
+                "--python",
+                str(interpreter),
+                "install",
+                "--disable-pip-version-check",
+                "--no-input",
+                "--target",
+                str(site),
+                "--require-hashes",
+                "--only-binary=:all:",
+                "--no-build-isolation",
+                *(["--no-binary=proxy-tools", "--no-cache-dir"] if shape != "server" else []),
+                "-r",
+                str(lock),
+            ]
+        )
     write_inventory(destination, site)
 
 

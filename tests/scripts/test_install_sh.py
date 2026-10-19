@@ -141,15 +141,14 @@ def _calls(environment: dict[str, str]) -> list[str]:
             None,
             id="main",
         ),
-        # A release whose identity records no digest installs over HTTPS only.
         pytest.param(
             ("--version", "v1.2.3", "--no-autostart"),
             "download/v1.2.3",
             "download/v1.2.3",
             "release",
             False,
-            "",
-            id="version-without-digest",
+            None,
+            id="version",
         ),
     ],
 )
@@ -168,7 +167,7 @@ def test_installer_installs_the_verified_package_links_the_command_and_starts_th
     result = _install(environment, "--port", "8500", *arguments)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert ("WARN" in result.stdout) == (digest == "")
+    assert "WARN" not in result.stdout
     root = Path(environment["HOME"]) / ".local" / "share" / "vbot"
     link = Path(environment["HOME"]) / ".local" / "bin" / "vbot"
     assert link.is_symlink() and link.resolve() == root / "vbot"
@@ -207,6 +206,17 @@ def test_installer_installs_the_verified_package_links_the_command_and_starts_th
             (), "0" * 64, True, "1.2.3", "does not match the SHA256 digest", id="digest-mismatch"
         ),
         pytest.param((), None, False, "1.2.3", f"Could not read {IDENTITY}", id="no-identity"),
+        pytest.param(
+            ("--version", "v1.2.3"),
+            "",
+            True,
+            "1.2.3",
+            "not a valid vBot release identity",
+            id="no-digest",
+        ),
+        pytest.param(
+            (), "0" * 63, True, "1.2.3", "not a valid vBot release identity", id="invalid-digest"
+        ),
         # The tag, given or named by the latest identity, becomes part of the download URL.
         pytest.param(
             ("--version", "v1/../../x"), None, True, "1.2.3", "--version needs", id="unsafe-tag"
@@ -226,15 +236,16 @@ def test_installer_refuses_a_package_it_cannot_verify_against_the_release_identi
 ) -> None:
     environment = _environment(tmp_path)
     package = _package(tmp_path / "package.zip")
-    _publish(
-        tmp_path / "web", "latest/download", package, digest, identity=identity, version=version
-    )
+    base = "download/v1.2.3" if arguments == ("--version", "v1.2.3") else "latest/download"
+    _publish(tmp_path / "web", base, package, digest, identity=identity, version=version)
 
     result = _install(environment, *arguments)
 
     assert result.returncode == 1
     assert message in result.stderr
     assert not [call for call in _calls(environment) if not call.startswith("curl")]
+    if digest in {"", "0" * 63}:
+        assert _calls(environment) == [f"curl {DOWNLOADS}/{base}/{IDENTITY}"]
     assert not (Path(environment["HOME"]) / ".local" / "share" / "vbot").exists()
 
 

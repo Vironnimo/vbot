@@ -11,8 +11,14 @@ python -m uv pip compile pyproject.toml --extra cli --extra application --extra 
 
 Review and commit all lock changes with the corresponding `pyproject.toml` dependency change.
 The vBot source is copied separately by the package builder and is deliberately omitted here.
-The builder requires wheels for every locked dependency except `proxy-tools==0.1.0`, which is
-published only as a pure-Python source distribution. Pip builds that one package in its default
-isolated build environment while retaining the lock's hash verification.
+The builder requires wheels for every locked dependency except the Desktop dependency
+`proxy-tools==0.1.0`, which is published only as a pure-Python source distribution. Its build
+uses a temporary environment provisioned from the wheel-only, hash-checked
+`requirements-build.lock`, with pip's automatic build isolation disabled so no unpinned build
+dependencies can be fetched. The backend stays outside the packaged runtime. To update it,
+choose a setuptools version, verify its wheel digest against its PyPI release metadata and
+update `requirements-build.lock`; the prepared runtime cache includes this lock in its key.
+Desktop dependency installs disable pip's wheel cache so a wheel built previously with a
+different backend cannot bypass this preparation.
 Optional local speech dependencies belong to their managed user-data environments, not these
 runtime locks.
