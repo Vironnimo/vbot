@@ -180,6 +180,30 @@ class Totals:
             "unpriced_calls": self["unpriced_calls"],
             "retrospective_calls": self["retrospective_calls"],
             "uncached_cost_usd": usd(self["uncached_nusd"]) if estimated_calls else None,
+            **self._speed_json(),
+        }
+
+    def _speed_json(self) -> JsonObject:
+        """Output speed: token-weighted over measured windows, first token on average.
+
+        The speed divides all measured tokens by all window time, so a long
+        answer weighs more than a short one and a call without a measured
+        window does not count; ``None`` without any measured call.
+        """
+        window_ms = self["speed_window_ms"]
+        first_token_calls = self["first_token_calls"]
+        return {
+            "speed_calls": self["speed_calls"],
+            "estimated_speed_calls": self["estimated_speed_calls"],
+            "speed_tokens": self["speed_tokens"],
+            "speed_window_ms": window_ms,
+            "output_tokens_per_second": (
+                round(self["speed_tokens"] * 1000 / window_ms, 1) if window_ms else None
+            ),
+            "first_token_calls": first_token_calls,
+            "avg_first_token_ms": (
+                round(self["first_token_ms"] / first_token_calls) if first_token_calls else None
+            ),
         }
 
 

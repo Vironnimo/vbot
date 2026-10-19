@@ -25,8 +25,20 @@ _TOTAL_COUNTS = [
     "estimated_calls",
     "unpriced_calls",
     "retrospective_calls",
+    "speed_calls",
+    "estimated_speed_calls",
+    "speed_tokens",
+    "speed_window_ms",
+    "first_token_calls",
 ]
-_TOTAL_AMOUNTS = ("cost_usd", "reported_cost_usd", "estimated_cost_usd", "uncached_cost_usd")
+_TOTAL_AMOUNTS = (
+    "cost_usd",
+    "reported_cost_usd",
+    "estimated_cost_usd",
+    "uncached_cost_usd",
+    "output_tokens_per_second",
+    "avg_first_token_ms",
+)
 
 
 def _totals(**values: Any) -> dict[str, Any]:
@@ -286,7 +298,20 @@ def test_statistics_usage_prints_totals_breakdowns_and_costliest_work(
         "totals": _totals(calls=2, cost_usd=0.5, reported_cost_usd=0.5, reported_calls=2),
         "breakdowns": {
             "model": [
-                {"key": "openai/gpt-5", "runs": 1, "sessions": 1, **_totals(calls=2, cost_usd=0.5)}
+                {
+                    "key": "openai/gpt-5",
+                    "runs": 1,
+                    "sessions": 1,
+                    **_totals(
+                        calls=2,
+                        cost_usd=0.5,
+                        output_tokens_per_second=48.25,
+                        speed_calls=1,
+                        avg_first_token_ms=850,
+                        first_token_calls=2,
+                    ),
+                },
+                {"key": "local/slow", "runs": 0, "sessions": 0, **_totals(calls=1)},
             ],
             "project": [{"key": "", "runs": 1, "sessions": 1, **_totals(calls=2)}],
         },
@@ -305,8 +330,12 @@ def test_statistics_usage_prints_totals_breakdowns_and_costliest_work(
         "model calls: 2 (failed=0, without usage=0)",
         "tokens: input=0 output=0 reasoning=0 (of which estimated: input=0 output=0)",
         "  openai/gpt-5: calls=2 failed=0 runs=1 sessions=1 input=0 output=0 cache_hit=- "
-        "cost=$0.5000",
-        "by project:\n  (no project): calls=2",
+        "cost=$0.5000 speed=48tok/s speed_calls=1 avg_first_token=850ms first_token_calls=2",
+        # A Model without a measured call shows none; other dimensions show no speed at all.
+        "  local/slow: calls=1 failed=0 runs=0 sessions=0 input=0 output=0 cache_hit=- "
+        "cost=unknown speed=- speed_calls=0 avg_first_token=- first_token_calls=0",
+        "by project:\n  (no project): calls=2 failed=0 runs=1 sessions=1 input=0 output=0 "
+        "cache_hit=- cost=unknown\n",
         "by provider:\n  no model calls recorded",
         "costliest runs:\n  main ses_a run_1: origin=user status=completed",
         "costliest sessions:\n  no sessions recorded",

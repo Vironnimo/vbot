@@ -66,6 +66,12 @@ CREATE TABLE agg_run_models (
     uncached_nusd INTEGER NOT NULL,
     uncached_calls INTEGER NOT NULL,
     estimated_token_calls INTEGER NOT NULL,
+    speed_calls INTEGER NOT NULL,
+    estimated_speed_calls INTEGER NOT NULL,
+    speed_tokens INTEGER NOT NULL,
+    speed_window_ms INTEGER NOT NULL,
+    first_token_calls INTEGER NOT NULL,
+    first_token_ms INTEGER NOT NULL,
     PRIMARY KEY (session_key, run_id, model_key)
 ) WITHOUT ROWID;
 CREATE TABLE agg_usage (
@@ -93,6 +99,12 @@ CREATE TABLE agg_usage (
     uncached_nusd INTEGER NOT NULL,
     uncached_calls INTEGER NOT NULL,
     estimated_token_calls INTEGER NOT NULL,
+    speed_calls INTEGER NOT NULL,
+    estimated_speed_calls INTEGER NOT NULL,
+    speed_tokens INTEGER NOT NULL,
+    speed_window_ms INTEGER NOT NULL,
+    first_token_calls INTEGER NOT NULL,
+    first_token_ms INTEGER NOT NULL,
     PRIMARY KEY (hour, unit_key, origin, model_key, kind, status)
 ) WITHOUT ROWID;
 CREATE INDEX agg_usage_unit ON agg_usage(unit_key);

@@ -361,13 +361,21 @@ describe('StatisticsView', () => {
         .getAttribute('aria-selected'),
     ).toBe('true');
     expect(breakdown().textContent).toContain('model-breakdown-sentinel');
+    // Model rows add their output speed and average time to first token.
+    const header = () => breakdown().querySelector('thead').textContent;
+    expect(header()).toContain(t('statistics.col.speed'));
+    expect(header()).toContain(t('statistics.col.firstToken'));
+    expect(breakdown().textContent).toContain('48 tok/s');
+    expect(breakdown().textContent).toContain('850 ms');
 
-    // Calls made outside any Session are their own Agent row.
+    // Calls made outside any Session are their own Agent row; an Agent mixes
+    // Models, so it has no speed.
     document.querySelector('#statistics-usage-dimension-tab-agent').click();
     flushSync();
     expect(breakdown().textContent).toContain(
       t('statistics.cost.withoutSession'),
     );
+    expect(header()).not.toContain(t('statistics.col.speed'));
 
     document.querySelector('#statistics-usage-dimension-tab-project').click();
     flushSync();

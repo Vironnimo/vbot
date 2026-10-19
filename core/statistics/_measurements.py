@@ -71,6 +71,26 @@ def _usage_nonnegative_int(usage: JsonObject | None, field_name: str) -> int | N
     return value
 
 
+def _speed_facts(usage: JsonObject) -> tuple[int | None, int | None, bool, int | None]:
+    """A call's measured output-speed window and its time to first token.
+
+    Returns ``(tokens, window_ms, estimated, first_token_ms)`` from Chat's
+    ``usage.speed`` (``chat/usage.md`` -> Output speed). A window counts only
+    with positive whole tokens and duration, so every measured call weighs its
+    tokens alike in a token-weighted speed; ``estimated`` marks a counted
+    window whose tokens are a local estimate.
+    """
+    speed = usage.get("speed")
+    if not isinstance(speed, dict):
+        return None, None, False, None
+    tokens = _usage_nonnegative_int(speed, "tokens")
+    window_ms = _usage_nonnegative_int(speed, "window_ms")
+    if not tokens or not window_ms:
+        tokens = window_ms = None
+    estimated = tokens is not None and speed.get("estimated") is True
+    return tokens, window_ms, estimated, _usage_nonnegative_int(speed, "first_token_ms")
+
+
 def _nearest_rank_percentile(sorted_values: list[int], percentile: float) -> float | None:
     """Nearest-rank percentile of an ascending list (``None`` when empty).
 

@@ -42,6 +42,13 @@ function makeTotals(overrides = {}) {
     unpriced_calls: 2,
     retrospective_calls: 3,
     uncached_cost_usd: 2,
+    speed_calls: 0,
+    estimated_speed_calls: 0,
+    speed_tokens: 0,
+    speed_window_ms: 0,
+    output_tokens_per_second: null,
+    first_token_calls: 0,
+    avg_first_token_ms: null,
     ...overrides,
   };
 }
@@ -255,7 +262,15 @@ function makeUsageSection(overrides = {}) {
         breakdownRow('', { cost_usd: 0.01, runs: 0, sessions: 0 }),
       ],
       model: [
-        breakdownRow('openrouter/anthropic/claude-sonnet-4', { cost_usd: 10 }),
+        breakdownRow('openrouter/anthropic/claude-sonnet-4', {
+          cost_usd: 10,
+          speed_calls: 12,
+          speed_tokens: 24_000,
+          speed_window_ms: 500_000,
+          output_tokens_per_second: 48,
+          first_token_calls: 14,
+          avg_first_token_ms: 850,
+        }),
         breakdownRow('model-breakdown-sentinel', { cost_usd: 2.5 }),
       ],
       provider: [breakdownRow('openrouter', { cost_usd: 12.5 })],
