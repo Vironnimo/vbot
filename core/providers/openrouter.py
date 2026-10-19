@@ -112,7 +112,15 @@ __all__ = [
 
 
 def _openrouter_usage_extras(raw: Any) -> dict[str, Any]:
-    """OpenRouter credits are USD; never substitute upstream/BYOK costs."""
+    """Report what the user pays for one request, in USD (OpenRouter credits).
+
+    ``cost`` is OpenRouter's charge. For a BYOK request (``is_byok: true``) that
+    is only OpenRouter's fee, while the upstream Provider bills
+    ``cost_details.upstream_inference_cost`` to the user's own key, so the two
+    are added. Otherwise ``cost`` already includes upstream inference and the
+    upstream amount is never added. A missing or invalid upstream amount leaves
+    ``cost`` alone.
+    """
     from core.models.pricing import nonnegative_amount
 
     if not isinstance(raw, Mapping):
@@ -120,6 +128,11 @@ def _openrouter_usage_extras(raw: Any) -> dict[str, Any]:
     extras: dict[str, Any] = {}
     cost = nonnegative_amount(raw.get("cost"))
     if cost is not None:
+        details = raw.get("cost_details")
+        if raw.get("is_byok") is True and isinstance(details, Mapping):
+            upstream = nonnegative_amount(details.get("upstream_inference_cost"))
+            if upstream is not None:
+                cost += upstream
         extras["reported_cost_usd"] = cost
     details = raw.get("prompt_tokens_details") or raw.get("input_tokens_details")
     if isinstance(details, Mapping):
