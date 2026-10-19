@@ -228,6 +228,11 @@ class _EmittingToolRegistry(ToolRegistry):
                     started_at=started_at,
                     started_perf=started_perf,
                 )
+            # A replacement skips canonical dispatch entirely. Check the same
+            # authority first so neither hook can act on a forbidden call or
+            # replace its authorization failure with a successful result.
+            if self._extension_registry is not None:
+                self._registry.authorize(context, arguments, allowed_tools)
             # Decision pipeline runs before the started event so the timeline
             # shows the effective (possibly modified) arguments. A deny or
             # replace short-circuits execution; a modify rewrites the input the

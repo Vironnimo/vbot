@@ -20,13 +20,26 @@ pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 _WAIT_SECONDS = 10.0
 
 
-def _recording_tool(executed: list[str], *, parameters: JsonObject | None = None) -> ToolRegistry:
+def _recording_tool(
+    executed: list[str],
+    *,
+    parameters: JsonObject | None = None,
+    session_scoped: bool = False,
+    requires_opt_in: bool = False,
+) -> ToolRegistry:
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         executed.append(context.tool_call_id)
         return tool_success({"ran": context.tool_call_id, "arguments": arguments})
 
     tools = ToolRegistry()
-    tools.register("echo", "Echo input.", parameters or {"type": "object"}, handler)
+    tools.register(
+        "echo",
+        "Echo input.",
+        parameters or {"type": "object"},
+        handler,
+        session_scoped=session_scoped,
+        requires_opt_in=requires_opt_in,
+    )
     return tools
 
 
@@ -169,30 +182,54 @@ async def test_sibling_handlers_run_in_parallel_while_hooks_serialize(
 
 
 @pytest.mark.asyncio
-async def test_runtime_denial_precedes_handlers_and_extension_hooks(tmp_path: Path) -> None:
+@pytest.mark.parametrize("gate", ["live", "policy", "restriction", "session", "opt_in"])
+async def test_runtime_denial_precedes_handlers_and_extension_hooks(
+    tmp_path: Path, gate: str
+) -> None:
     executed: list[str] = []
     hook_calls: list[str] = []
     denial = (
         "Tool access denied: the current sender is a group member. "
         "Group members may use only web_search and web_fetch."
     )
-    registry = _extensions("tool_call", lambda _c, **_p: hook_calls.append("called"))
-    registry.install_handler("observer", "tool_result", lambda _c, **_p: hook_calls.append("x"))
-    harness = ToolDispatchHarness(tmp_path, _recording_tool(executed), extensions=registry)
+    replacement = tool_success({"replaced": True})
+
+    def replace_call(_context: HookContext, **_payload: Any) -> Replace:
+        hook_calls.append("tool_call")
+        return Replace(replacement)
+
+    def replace_result(_context: HookContext, **_payload: Any) -> JsonObject:
+        hook_calls.append("tool_result")
+        return replacement
+
+    registry = _extensions("tool_call", replace_call)
+    registry.install_handler("observer", "tool_result", replace_result)
+    harness = ToolDispatchHarness(
+        tmp_path,
+        _recording_tool(
+            executed, session_scoped=gate == "session", requires_opt_in=gate == "opt_in"
+        ),
+        extensions=registry,
+        allowed_tools=[] if gate == "policy" else None,
+    )
 
     dispatched = await harness.dispatch(
         [call("echo", "call-1"), call("echo", "call-2")],
-        tool_denial_resolver=lambda _tool_name: denial,
+        tool_denial_resolver=(lambda _tool_name: denial) if gate == "live" else None,
+        tool_restriction=[] if gate == "restriction" else None,
     )
 
     assert (executed, hook_calls) == ([], [])
-    denied = {
-        "ok": False,
-        "error": {"code": "tool_not_allowed", "message": denial},
-        "data": None,
-        "artifacts": [],
-    }
-    assert dispatched.results == [denied, denied]
+    assert len(dispatched.results) == 2
+    for result in dispatched.results:
+        assert result["ok"] is False
+        assert result["error"]["code"] == (
+            "echo_unavailable" if gate == "session" else "tool_not_allowed"
+        )
+        if gate == "live":
+            assert result["error"]["message"] == denial
+    assert len(dispatched.events(TOOL_CALL_STARTED_EVENT)) == 2
+    assert len(dispatched.events(TOOL_CALL_RESULT_EVENT)) == 2
 
 
 @pytest.mark.asyncio
