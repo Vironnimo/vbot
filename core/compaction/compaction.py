@@ -28,13 +28,13 @@ from core.chat.wire_shaping import (
     notes_missing_from_request,
     route_effort,
 )
+from core.compaction._estimates import _history_tokens, _request_estimator
 from core.compaction._model_request import _send_streaming_model_request
 from core.compaction._tail import (
     _is_compaction_checkpoint_note,
     _is_compaction_summary_note,
     _is_compaction_user_quote,
     _plan_working_tail,
-    _tail_estimator,
 )
 from core.compaction._tail_types import COMPACTION_USER_QUOTE_PREFIX as COMPACTION_USER_QUOTE_PREFIX
 from core.compaction._tail_types import TAIL_FLOOR_PERCENT as TAIL_FLOOR_PERCENT
@@ -57,7 +57,6 @@ from core.sessions import (
     skill_tool_activation,
 )
 from core.settings.normalizers import normalize_compaction_policy
-from core.utils.tokens import estimate_message_tokens
 from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
@@ -202,21 +201,30 @@ class CompactionContext:
     previous_compacted_token_count: int
     instruction: str | None
     storage: Any
-    estimate_tail_tokens: RequestTokenEstimator | None = None
+    # Counts request messages for the active Model, corrected like Chat's
+    # Context accounting, so every count here is in the Session's Context unit.
+    estimate_request_tokens: RequestTokenEstimator
     trigger: str = COMPACTION_TRIGGER_AUTO
-    # Corrects local estimates for the active Model (Chat's Context accounting),
-    # so every count here is in the same unit as the Session's Context.
-    estimate_factor: float = 1.0
+
+    def history_tokens(self, messages: Sequence[ChatMessage]) -> int:
+        """Count *messages* as the active request sends them, in the Context unit.
+
+        A message the Projection rewrites, such as a digested Skill Result, is
+        not what the request sends under its id, so it counts as rendered.
+        """
+        sent = {message.id: message for message in self.messages}
+        rewritten = {message.id for message in messages if sent.get(message.id, message) != message}
+        request = tuple(item for item in self.request_messages if item.get("id") not in rewritten)
+        return _history_tokens(messages, request, self.estimate_request_tokens)
 
 
 @dataclass(frozen=True)
 class _PreparedCompaction:
     plan: CompactionPlan
-    effective_messages: list[ChatMessage]
+    context: CompactionContext
     strategy_id: str
     active_skill_names: tuple[str, ...]
     activation_result_names: tuple[tuple[str, str], ...]
-    estimate_factor: float = 1.0
 
 
 class CompactionStrategy(Protocol):
@@ -252,7 +260,7 @@ class SummarizationStrategy:
             messages,
             settings.tail_tokens,
             request_messages=context.request_messages,
-            estimate_tail_tokens=context.estimate_tail_tokens,
+            estimate_tail_tokens=context.estimate_request_tokens,
         )
         head = messages[: tail_plan.boundary_index]
         request_prefix = _request_prefix_before_tail(
@@ -276,9 +284,7 @@ class SummarizationStrategy:
             user_quote=_summary_user_quote(head, tail_plan.retained_messages),
             compacted_token_count=(
                 context.previous_compacted_token_count
-                + _estimate_token_span(
-                    _summarized_messages(head, uncovered), context.estimate_factor
-                )
+                + context.history_tokens(_summarized_messages(head, uncovered))
             ),
         )
 
@@ -320,9 +326,7 @@ class ContinuationStrategy:
             # checkpoint notes are already included in the cumulative count.
             compacted_token_count=(
                 context.previous_compacted_token_count
-                + _estimate_token_span(
-                    _summarized_messages(messages, uncovered), context.estimate_factor
-                )
+                + context.history_tokens(_summarized_messages(messages, uncovered))
             ),
         )
 
@@ -401,21 +405,21 @@ class CompactionService:
         effective = effective_compaction_messages(messages)
         if not effective:
             return False
+        estimate = _request_estimator(active_adapter, active_model_id, estimate_factor)
+        request = tuple(request_messages) if request_messages is not None else None
         if strategy.id != STRATEGY_SUMMARY_TAIL:
             new_context = [
                 message for message in effective if not _is_compaction_checkpoint_note(message)
             ]
-            return bool(new_context) and _estimate_token_span(new_context, estimate_factor) >= max(
-                minimum_reclaim_tokens, 1
-            )
+            return bool(new_context) and _history_tokens(
+                new_context, request or (), estimate
+            ) >= max(minimum_reclaim_tokens, 1)
         try:
             tail_plan = _plan_working_tail(
                 effective,
                 settings.tail_tokens,
-                request_messages=tuple(request_messages) if request_messages is not None else None,
-                estimate_tail_tokens=_tail_estimator(
-                    active_adapter, active_model_id, estimate_factor
-                ),
+                request_messages=request,
+                estimate_tail_tokens=estimate,
             )
         except CompactionError:
             return False
@@ -462,10 +466,9 @@ class CompactionService:
                 instruction=instruction,
                 trigger=trigger,
                 request_messages=request_messages,
-                estimate_tail_tokens=_tail_estimator(
+                estimate_request_tokens=_request_estimator(
                     active_adapter, active_model_id, estimate_factor
                 ),
-                estimate_factor=estimate_factor,
             )
             plan = prepared.plan
             response: JsonObject | None = None
@@ -564,9 +567,8 @@ class CompactionService:
         settings: CompactionSettings,
         instruction: str | None,
         request_messages: list[JsonObject] | None,
+        estimate_request_tokens: RequestTokenEstimator,
         trigger: str = COMPACTION_TRIGGER_AUTO,
-        estimate_tail_tokens: RequestTokenEstimator | None = None,
-        estimate_factor: float = 1.0,
     ) -> _PreparedCompaction:
         """Build and validate the sync Strategy plan inside the Compaction pool."""
         strategy = self._strategies.get(settings.strategy)
@@ -580,9 +582,8 @@ class CompactionService:
             previous_compacted_token_count=_previous_compacted_token_count(checkpoint),
             instruction=instruction,
             storage=storage,
-            estimate_tail_tokens=estimate_tail_tokens,
+            estimate_request_tokens=estimate_request_tokens,
             trigger=trigger,
-            estimate_factor=estimate_factor,
         )
         plan = strategy.plan(context, settings)
         _validate_plan(plan)
@@ -594,11 +595,10 @@ class CompactionService:
         )
         return _PreparedCompaction(
             plan=plan,
-            effective_messages=effective,
+            context=context,
             strategy_id=strategy.id,
             active_skill_names=active_skill_names,
             activation_result_names=activation_result_names,
-            estimate_factor=estimate_factor,
         )
 
 
@@ -654,9 +654,8 @@ def _finalize_compaction(
         )
         projection = _append_compaction_skill_guidance(projection, guidance)
     _validate_projection(projection)
-    reclaimed_tokens = _estimate_token_span(
-        prepared.effective_messages, prepared.estimate_factor
-    ) - _estimate_token_span(projection, prepared.estimate_factor)
+    context = prepared.context
+    reclaimed_tokens = context.history_tokens(context.messages) - context.history_tokens(projection)
     if minimum_reclaim_tokens > 0 and reclaimed_tokens < minimum_reclaim_tokens:
         raise CompactionInsufficientReclaimError(
             "Compaction projection reclaimed "
@@ -827,15 +826,6 @@ def _validate_projection(messages: list[ChatMessage]) -> None:
             raise CompactionError("Compaction projection splits an unresolved Tool cycle")
     if pending:
         raise CompactionError("Compaction projection ends inside a Tool cycle")
-
-
-def _estimate_token_span(messages: list[ChatMessage], factor: float = 1.0) -> int:
-    return round(sum(_estimate_message_tokens(message) for message in messages) * factor)
-
-
-def _estimate_message_tokens(message: ChatMessage) -> int:
-    estimated_tokens, _ = estimate_message_tokens(message.to_dict())
-    return estimated_tokens
 
 
 def _request_prefix_before_tail(
