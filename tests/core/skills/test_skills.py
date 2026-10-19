@@ -238,6 +238,24 @@ def oversized_instructions(kilobytes: int, lines: int) -> str:
             ["YAML front matter was read with the simple key: value fallback."],
             id="unrepairable-yaml",
         ),
+        *[
+            pytest.param(
+                "deep-yaml",
+                f"---\nname: deep-yaml\ndescription: {description}\nnested: "
+                + "[" * 800
+                + "0"
+                + "]" * 800
+                + "\n---\n",
+                "deep-yaml",
+                description,
+                ["YAML front matter was read with the simple key: value fallback."],
+                id=case,
+            )
+            for description, case in [
+                ("Use it.", "deep-yaml"),
+                ("Use mode: careful", "deep-yaml-after-repair"),
+            ]
+        ],
     ],
 )
 def test_imperfect_metadata_loads_with_fallbacks_and_warnings(
@@ -249,6 +267,7 @@ def test_imperfect_metadata_loads_with_fallbacks_and_warnings(
     warnings: list[str],
 ) -> None:
     write_skill(tmp_path, directory, document)
+    write_skill(tmp_path, "healthy-sibling")
 
     registry = SkillRegistry.load(tmp_path)
     skill = registry.get(name)
@@ -256,6 +275,7 @@ def test_imperfect_metadata_loads_with_fallbacks_and_warnings(
     assert skill.description == description
     assert registry.warnings_for(name) == [warning.format(path=skill.path) for warning in warnings]
     assert registry.invalid_diagnostics() == []
+    assert registry.get("healthy-sibling").description == "Use it."
 
 
 @pytest.mark.parametrize(
