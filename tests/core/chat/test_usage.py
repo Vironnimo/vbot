@@ -274,7 +274,7 @@ def test_estimate_factor_scales_only_the_estimated_part_of_a_projection():
 def test_measurement_continues_across_runs_until_compaction():
     """A new Run resumes the Session's anchor; history corrects with its factor."""
     first = RequestContextUsage(_Calibration(1.5))
-    base = [{"role": "system", "content": "rules"}, {"role": "user", "content": "task"}]
+    base = [ChatMessage.system("rules", "m").to_dict(), {"role": "user", "content": "task"}]
     args = {"target": _route(), "tools": [], "scope": "epoch"}
     first.observe({"input_tokens": 150_000, "output_tokens": 50}, base, **args)
     answer = {"role": "assistant", "content": "done"}
@@ -287,10 +287,18 @@ def test_measurement_continues_across_runs_until_compaction():
         }
     )
     newer = ChatMessage.user("next task " * 100)
-    # A later Run has a new Adapter instance for the same route.
+    # A later Run has a new Adapter instance for the same route and builds its
+    # system message anew, with its own id and timestamp.
     resumed = RequestContextUsage.resume([assistant, newer], _Calibration(1.5))
     next_args = {**args, "target": _route()}
-    next_request = [*base, answer, {"role": "user", "content": "next task " * 100}]
+    rebuilt_system = ChatMessage.system("rules", "m").to_dict()
+    assert rebuilt_system["id"] != base[0]["id"]
+    next_request = [
+        rebuilt_system,
+        *base[1:],
+        answer,
+        {"role": "user", "content": "next task " * 100},
+    ]
     projection = resumed.project(next_request, **next_args)
     assert projection["provider_input_tokens"] == 150_000
     delta = estimate_request_input_tokens(next_request[2:])[0]

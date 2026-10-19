@@ -541,12 +541,14 @@ def _context_key(
     messages: Sequence[Mapping[str, Any]], target: ContextTarget, tools: Any, scope: str
 ) -> str:
     # Stable across Runs and processes: an anchor outlives the Run's Adapter.
+    # Only the System Prompt text reaches the wire; every request build makes a
+    # system message with a new id and timestamp, which must not end the anchor.
     return _context_digest(
         [
             target.model_reference,
             scope,
             tools,
-            [message for message in messages if message.get("role") == "system"],
+            [message.get("content") for message in messages if message.get("role") == "system"],
         ]
     )
 
