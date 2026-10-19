@@ -332,9 +332,9 @@ async def test_edits_that_fail_are_skipped_and_the_others_written_once(
     writes: list[int] = []
     commit = file_changes_module._commit
 
-    def counted_commit(*args: Any) -> Any:
+    def counted_commit(*args: Any, **kwargs: Any) -> Any:
         writes.append(1)
-        return commit(*args)
+        return commit(*args, **kwargs)
 
     monkeypatch.setattr(file_changes_module, "_commit", counted_commit)
     tools = registry()
