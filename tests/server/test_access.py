@@ -707,27 +707,39 @@ def test_an_unavailable_device_store_answers_503_and_keeps_credentials(
     assert host.status_code == 404
 
 
-def test_dead_device_cookies_are_cleared_and_repeated_failures_are_throttled(
-    served: Any, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("credential", ["cookie", "ticket"])
+def test_invalid_credentials_are_throttled_without_blocking_valid_sign_ins(
+    served: Any, caplog: pytest.LogCaptureFixture, credential: str
 ) -> None:
     _app, client = served(_authenticated())
-    dead = {**_INTERNET, "Cookie": "__Host-vbot_device=vbt_dev_AAAAAAAAAAAAAAAA_" + "x" * 43}
+    ticket = credential == "ticket"
+    path = "/auth/ticket/" + "t" * 43 if ticket else _PROTECTED
+    dead = (
+        _INTERNET
+        if ticket
+        else {**_INTERNET, "Cookie": "__Host-vbot_device=vbt_dev_AAAAAAAAAAAAAAAA_" + "x" * 43}
+    )
 
-    first = client.get(_PROTECTED, headers=dead)
+    first = client.get(path, headers=dead)
     for _attempt in range(19):
-        client.get(_PROTECTED, headers=dead)
-    throttled = client.get(_PROTECTED, headers=dead)
+        client.get(path, headers=dead)
+    throttled = client.get(path, headers=dead)
     host = client.get(_PROTECTED, headers=_HOST)
+    issued = _rpc(client, "auth.login_ticket")["result"]
+    valid = client.get(issued["path"], headers=_INTERNET, follow_redirects=False)
 
-    assert first.status_code == 401
-    assert first.headers["set-cookie"].startswith("__Host-vbot_device=;")
+    assert first.status_code == (400 if ticket else 401)
+    if not ticket:
+        assert first.headers["set-cookie"].startswith("__Host-vbot_device=;")
     assert throttled.status_code == 429 and int(throttled.headers["retry-after"]) > 0
     assert host.status_code == 404
+    assert valid.status_code == 303
     refusals = [r.getMessage() for r in caplog.records if "Access refused" in r.getMessage()]
-    assert refusals == [
-        "Access refused (reason=invalid_token client=203.0.113.7 path=/api/runs/...)"
-    ]
+    reason = "invalid_ticket" if ticket else "invalid_token"
+    redacted_path = "/auth/ticket/..." if ticket else "/api/runs/..."
+    assert refusals == [f"Access refused (reason={reason} client=203.0.113.7 path={redacted_path})"]
     assert "x" * 43 not in caplog.text
+    assert "t" * 43 not in caplog.text
 
 
 def test_pairing_requests_are_rate_limited_per_client(tmp_path: Path) -> None:
