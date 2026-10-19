@@ -4,9 +4,17 @@ from typing import Any, cast
 
 import pytest
 
+from core.model_tasks.constants import TASK_DECISION
 from core.model_tasks.decision_types import DecisionError
-from core.model_tasks.decisions import ITEM_LIMIT, DecisionService
+from core.model_tasks.decisions import ITEM_LIMIT, NOT_CONFIGURED_MESSAGE, DecisionService
 from core.model_tasks.model_tasks import TaskModelService
+from tests.core.model_tasks.model_tasks_test_support import (
+    _Credentials,
+    _model,
+    _Models,
+    _Providers,
+    _Storage,
+)
 
 QUESTIONS = [{"id": "q", "type": "noul", "instructions": "Relevant?"}]
 
@@ -151,3 +159,28 @@ async def test_invalid_calls_and_missing_bindings_send_nothing(
         await owner.classify(items, questions)
 
     assert error.value.code == code
+
+
+@pytest.mark.asyncio
+async def test_a_stored_binding_to_another_decision_model_reads_as_not_configured(monkeypatch):
+    stored = {TASK_DECISION: {"target": "openrouter/cloudflare/clef::api-key", "options": {}}}
+    storage = _Storage(stored)
+    model_tasks = TaskModelService(
+        _Providers(),
+        _Models([_model("cloudflare/clef", (TASK_DECISION,), name="Cloudflare: Clef")]),
+        _Credentials(),
+        storage,
+    )
+    owner = DecisionService(model_tasks, cast(Any, None))
+
+    async def evaluate(*args, **kwargs):
+        raise AssertionError("no request may be sent")
+
+    monkeypatch.setattr(owner, "_evaluate", evaluate)
+
+    with pytest.raises(DecisionError) as error:
+        await owner.classify(["x"], QUESTIONS)
+
+    assert not owner.available()
+    assert (error.value.code, str(error.value)) == ("not_configured", NOT_CONFIGURED_MESSAGE)
+    assert storage.load_model_task_settings() == stored

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from core.model_tasks.constants import (
     SUPPORTED_TASK_TYPES,
+    TASK_DECISION,
     TASK_IMAGE_GENERATION,
     TASK_IMAGE_UNDERSTANDING,
     TASK_MUSIC_GENERATION,
@@ -211,6 +213,11 @@ def task_model_targets_equal(left: str | None, right: str | None) -> bool:
 #: have no fixed media settings or per-call choices to offer.
 _ROUTER_MODEL_PREFIX = "openrouter/"
 _GENERATION_TASKS = frozenset({TASK_IMAGE_GENERATION, TASK_VIDEO_GENERATION, TASK_MUSIC_GENERATION})
+#: TypeSafe Jev releases and the alias of the newest one. vBot's Decisions wire,
+#: answer validation and the classify Tool are verified only for Jev: other
+#: decision Models read only part of the state without an error or expect
+#: their own state shapes. ``typesafe/jev-router`` is a Chat router, not Jev.
+_JEV_DECISION_MODEL = re.compile(r"~?typesafe/jev-(?:latest|\d[^/]*)")
 
 
 def model_supports_task(model: Any, task_type: str) -> bool:
@@ -224,7 +231,8 @@ def model_supports_task(model: Any, task_type: str) -> bool:
 
     Media generation excludes router Models. Video generation also needs a
     published duration choice: Models without one edit or upscale a video,
-    or animate an avatar, and cannot run from a prompt alone.
+    or animate an avatar, and cannot run from a prompt alone. Decisions run
+    only on TypeSafe Jev, the one decision Model family vBot's wire supports.
     """
 
     capabilities = getattr(model, "capabilities", None)
@@ -239,6 +247,8 @@ def model_supports_task(model: Any, task_type: str) -> bool:
         )
     if task_type not in task_types:
         return False
+    if task_type == TASK_DECISION:
+        return _JEV_DECISION_MODEL.fullmatch(str(getattr(model, "model_id", ""))) is not None
     if task_type in _GENERATION_TASKS and str(getattr(model, "model_id", "")).startswith(
         _ROUTER_MODEL_PREFIX
     ):

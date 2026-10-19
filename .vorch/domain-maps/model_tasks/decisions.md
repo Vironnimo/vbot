@@ -4,7 +4,7 @@
 
 ## Interfaces
 
-- Task binding: `decision`, currently OpenRouter API-key targets with `decisions` output (`typesafe/jev-1.13`, `~typesafe/jev-latest`). Discovery includes `GET /api/v1/models?output_modalities=decisions`; a Decision Model is not a Chat Model. Settings shows it under Tools -> Decision Model.
+- Task binding: `decision`, OpenRouter API-key targets with `decisions` output, limited to TypeSafe Jev: the releases `typesafe/jev-<version>` (1.13 and 1.14 on 2026-10-19) and `~typesafe/jev-latest`, which tracks the newest release; never `typesafe/jev-router`, a Chat router. `model_supports_task` applies this to listing and validation because vBot's wire, answer validation and the `classify` Tool are verified only for Jev. OpenRouter lists 27 decision Models from 13 makers (2026-10-19), and others differ: Cloudflare Clef reads only about the first 2,000 tokens and drops the rest without an error; ScaleDown and Respan take their own `state` shapes. A stored binding to another Model stays as stored and reads as not configured (`available()` false, code `not_configured`); Settings shows it as a custom target. No target is marked recommended: decision targets carry no `facts`, and the generic task picker has no recommendation. Discovery includes `GET /api/v1/models?output_modalities=decisions`; a Decision Model is not a Chat Model. Settings shows it under Tools -> Decision Model.
 - `available()`: the binding is usable and its target is an OpenRouter target, the only implemented wire. Tools use it as readiness.
 - `classify(items, questions, *, context=None, usage_context=None) -> list[dict | DecisionError]`: answers every question about each item separately, in item order. Each item is one request whose state is the item itself, or `{"context": context, "item": item}` when `context` is given. Consumers: the `classify` Tool (`../tools/classify.md`); future specialized Tools (for example one that picks the relevant files for a task) build their items and questions and call the same method instead of a second executor.
 - Provider wire: `POST /api/alpha/decisions` at the configured OpenRouter origin, using the existing Connection credential and shared `ProviderTaskClient` retry/auth classification. Ambiguous outcomes are never automatically replayed.
@@ -30,7 +30,8 @@ The former `decisions` database (`<data-dir>/decisions.db`) is listed in `core/r
 
 ## Verification owners
 
-- `tests/core/model_tasks/test_decisions.py`: one bounded request per item in item order, partial failure, oversized items, nothing sent for invalid calls or a missing binding.
+- `tests/core/model_tasks/test_decisions.py`: one bounded request per item in item order, partial failure, items beyond the reported window, nothing sent for invalid calls, a missing binding or one to another decision Model.
+- `tests/core/model_tasks/test_model_task_targets.py::test_list_targets_offers_only_models_tagged_for_the_task`: only Jev targets are offered.
 - `tests/core/model_tasks/test_decision_{types,providers}.py`: validation and the wire (exact request, auth, no ambiguous replay, shared connection).
 - `tests/core/model_tasks/test_task_usage.py`: `decision` Usage per request.
 - `tests/core/runtime/test_runtime_lifecycle.py::test_a_start_removes_killed_staging_and_only_a_normal_one_releases_retired_databases`.
