@@ -118,7 +118,9 @@ async def test_an_item_beyond_the_reported_context_window_fails_alone_unsent(mon
     assert small["answers"]["q"]["noul"] == 0.5
     if window is None:
         # Without a reported window the Provider decides what is too large.
-        assert sent == ["small", long]
+        # Worker preparation may complete in either order; both requests must be sent.
+        assert sorted(sent) == sorted(["small", long])
+        assert beyond["answers"]["q"]["noul"] == 0.5
     else:
         assert sent == ["small"]
         assert isinstance(beyond, DecisionError) and beyond.code == "too_large"
