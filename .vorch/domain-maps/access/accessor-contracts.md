@@ -61,4 +61,4 @@ Via `POST /api/rpc`; each needs a principal, so in-process dispatch is refused w
 - `devices.pending {code}` -> `{code, name, kind, client, requested_at, expires_in}`: what the approver confirms before approving (`client` is the requester's effective address).
 - `devices.approve {code}` / `devices.deny {code}` -> `{status: "approved"|"denied", name}`.
   Pending, approve and deny need a signed-in principal in `authenticated` mode; codes are accepted in any case, with or without the dash or spaces. An unknown code is `pairing_not_found`; 10 wrong codes per principal (50 overall) per 10 minutes block further attempts (`rate_limited`).
-- Failed credentials: 20 per client and 200 overall per 10 minutes, then 429 until the window frees up.
+- Failed credentials and invalid login tickets: 20 per client and 200 overall per 10 minutes, then 429 with `Retry-After` until the window frees up (an invalid ticket returns an HTML page). Valid credentials and valid tickets still succeed; pairing has its own budgets above.

@@ -19,7 +19,7 @@ How a server resolves and records its Access Mode at start, the access records, 
 
 Each authenticated server needs a dedicated hostname, with no unrelated services on other ports: browser cookies are host-scoped, not port-scoped; separate server instances use separate hostnames.
 
-Behind a trusted proxy the proxy must append the client to `X-Forwarded-For`, set `X-Forwarded-Proto` and pass `Host` through; `USAGE.md` -> Server access has an nginx example.
+Behind a trusted proxy every proxy must append its connecting peer to `X-Forwarded-For`, set `X-Forwarded-Proto` and pass `Host` through; `USAGE.md` -> Server access has an nginx example. Trust only proxy addresses, not client networks: a forwarded request must identify a client outside the trusted proxies. Missing chains and chains containing only trusted proxies are refused instead of assigning an unproven client address.
 
 ## Direct TLS
 
