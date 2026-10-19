@@ -415,6 +415,7 @@ describe('ChatAssistantRun', () => {
       expect(summaryText('.working-block__count')).toBe('1 Tool call');
       expect(summaryText('.working-block__kinds')).toBe('read');
       expect(summaryText('.working-block__chip--more')).toBeNull();
+      expect(summaryText('.working-block__note')).toBe('1 thought');
       expect(block.querySelector('summary .te-dot')).toBeNull();
       expect(
         block.querySelectorAll('.reasoning-block, .tool-event'),
@@ -437,7 +438,7 @@ describe('ChatAssistantRun', () => {
       [
         'its latest Tool running',
         { items: [reasoningItem('Inspect the repository.'), bashChild()] },
-        true,
+        'chat.working.active',
       ],
       [
         'later Thinking active',
@@ -447,7 +448,7 @@ describe('ChatAssistantRun', () => {
             reasoningItem('Interpret the result.', { streaming: true }),
           ],
         },
-        true,
+        'chat.working.thinking',
       ],
       [
         'only Thinking',
@@ -457,7 +458,7 @@ describe('ChatAssistantRun', () => {
             reasoningItem('Second thought.', { id: 'second', streaming: true }),
           ],
         },
-        true,
+        'chat.working.thinking',
       ],
       [
         'later output',
@@ -468,7 +469,7 @@ describe('ChatAssistantRun', () => {
             laterOutput,
           ],
         },
-        false,
+        null,
       ],
       // One viewport part of a long Run: its last group is not the Run's
       // latest activity when a later part holds newer children.
@@ -485,22 +486,22 @@ describe('ChatAssistantRun', () => {
             laterOutput,
           ],
         },
-        false,
+        null,
       ],
     ])(
-      'labels a running Run’s group with %s as working only while it holds the latest activity',
-      (_case, fields, active) => {
+      'labels a running Run’s group with %s as working or thinking only while it holds the latest activity',
+      (_case, fields, label) => {
         run.mount({
           item: assistantRun({ status: 'running', ...fields }),
           chatWorkingMode: 'compact',
         });
 
         expect(summaryText('.working-block__label')).toBe(
-          active ? t('chat.working.active') : null,
+          label ? t(label) : null,
         );
         expect(
           Boolean(workingBlock().querySelector('.working-block__icon--active')),
-        ).toBe(active);
+        ).toBe(label !== null);
         expect(workingBlock().querySelector('summary .te-dot')).toBeNull();
       },
     );

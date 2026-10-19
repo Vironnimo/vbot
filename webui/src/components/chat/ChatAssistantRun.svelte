@@ -207,6 +207,12 @@
     );
   }
 
+  function thoughtsLabel(count) {
+    return count === 1
+      ? t('chat.working.thoughtOne')
+      : t('chat.working.thoughtCount', { count });
+  }
+
   function summarizeWorkingGroup(group) {
     return workingGroupSummary(group, {
       active: workingGroupIsActive(group),
@@ -717,10 +723,11 @@
             class="working-block__summary tool-event-line"
             use:tooltip={() => workingGroupDetails(summary)}
           >
-            <!-- A heading over the rows it folds: a spinner and "Working…"
-                 while the Agent is still at it here, else a Tool icon; then
-                 how many calls, a chip per Tool used and how long it took.
-                 Row states stay on the rows themselves. -->
+            <!-- A heading over the rows it folds: a spinner and "Working…",
+                 or "Thinking…" while the Agent thinks, while it is still at it
+                 here, else a Tool icon; then how many calls, a chip per Tool
+                 used, how many thoughts and how long it took. Row states stay
+                 on the rows themselves. -->
             {#if summary.active}
               <svg
                 class="working-block__icon working-block__icon--active"
@@ -730,7 +737,9 @@
                 <path d="M8 2.5a5.5 5.5 0 1 0 5.5 5.5" />
               </svg>
               <span class="working-block__label">
-                {t('chat.working.active')}
+                {summary.thinking
+                  ? t('chat.working.thinking')
+                  : t('chat.working.active')}
               </span>
             {:else}
               <svg
@@ -751,11 +760,7 @@
                       count: summary.toolCount,
                     })}
               {:else}
-                {summary.thoughtCount === 1
-                  ? t('chat.working.thoughtOne')
-                  : t('chat.working.thoughtCount', {
-                      count: summary.thoughtCount,
-                    })}
+                {thoughtsLabel(summary.thoughtCount)}
               {/if}
             </span>
             {#if summary.toolKinds.length > 0}
@@ -774,6 +779,11 @@
                     })}</span
                   >
                 {/if}
+              </span>
+            {/if}
+            {#if summary.toolCount > 0 && summary.thoughtCount > 0}
+              <span class="working-block__note">
+                {thoughtsLabel(summary.thoughtCount)}
               </span>
             {/if}
             {#if summary.failedCount > 0}

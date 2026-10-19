@@ -68,7 +68,8 @@ const MAX_NAMED_TOOLS = 3;
 // What one Working line says about its rows. `rowStatus(child)` is the state
 // the Tool row itself shows and `toolName(child)` its displayed name; `active`
 // marks the group holding a running Run's latest activity, whose duration
-// keeps ticking with `nowMs`. The line names the Tools used, most used first.
+// keeps ticking with `nowMs`, and `thinking` that this activity is Thinking.
+// The line names the Tools used, most used first.
 export function workingGroupSummary(
   group,
   { active = false, nowMs = Date.now(), rowStatus, toolName },
@@ -87,6 +88,7 @@ export function workingGroupSummary(
   const durationMs = workingGroupDurationMs(group.children, active, nowMs);
   return {
     active,
+    thinking: active && group.children.at(-1)?.type === 'reasoning',
     toolKinds: kinds.slice(0, MAX_NAMED_TOOLS),
     otherToolKinds: kinds.slice(MAX_NAMED_TOOLS),
     toolCount: tools.length,
@@ -114,10 +116,6 @@ export function workingGroupDetails(summary) {
         value: summary.otherToolKinds
           .map(({ name, count }) => (count > 1 ? `${name} ${count}` : name))
           .join(', '),
-      },
-      {
-        label: t('chat.working.reasoning'),
-        value: String(summary.thoughtCount),
       },
       {
         label: t('chat.working.failed'),
