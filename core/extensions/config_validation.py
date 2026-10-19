@@ -116,7 +116,7 @@ def _declarations(value: Any) -> dict[str, str]:
             or not function.isidentifier()
         ):
             raise ValueError("config_documents validators use module:function")
-        if module.split(".")[0] == "__init__":
+        if module.split(".")[0].casefold() == "__init__":
             raise ValueError("config_documents validators cannot load the Extension's __init__")
     return value
 

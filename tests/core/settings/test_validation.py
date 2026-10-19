@@ -805,7 +805,7 @@ def test_runtime_settings_leave_out_unknown_fields_and_the_version(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
-    "validator", ["validate:check", "__init__:check", "__init__.validate:check"]
+    "validator", ["validate:check", "__init__:check", "__INIT__:check", "__init__.validate:check"]
 )
 def test_extension_documents_validate_without_running_the_extension(
     tmp_path: Path, validator: str
