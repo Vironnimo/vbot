@@ -88,10 +88,11 @@ def test_a_failed_credential_write_leaves_the_stored_credentials_unchanged(
             raise OSError("replace failed")
         return original_replace(source, target)
 
-    monkeypatch.setattr("core.utils.atomic.os.replace", fail_replace)
-    with pytest.raises(StorageError):
-        storage.set_data_dir_credential("OPENROUTER_API_KEY", "new")
-    monkeypatch.undo()
+    # Restore only the injected write failure, preserving the fixture's isolated home.
+    with monkeypatch.context() as patch:
+        patch.setattr("core.utils.atomic.os.replace", fail_replace)
+        with pytest.raises(StorageError):
+            storage.set_data_dir_credential("OPENROUTER_API_KEY", "new")
 
     assert store_path.read_bytes() == before
     assert storage.load_data_dir_credentials() == {"OPENROUTER_API_KEY": "old"}
