@@ -3,7 +3,9 @@
 A request that extends the previous request and its response unchanged
 continues it on the same socket with ``previous_response_id`` and only the new
 input items. ``store`` is false, so that continuation lives on the connection,
-not on the server. :class:`CodexTransports` is the Runtime-wide owner that keeps
+not on the server. A socket remembers the request it continues by its
+:class:`CodexRequestDigest`, never the request itself, so an idle socket does
+not hold a Session's screenshots. :class:`CodexTransports` is the Runtime-wide owner that keeps
 a Session's socket and its continuation open between Runs (each Run has its own
 Adapter), bounds how many stay open and for how long, and remembers per
 Connection whether the WebSocket or request compression currently works.
@@ -93,6 +95,7 @@ of 16 %."""
 _FRESH_SOCKET_CODES = frozenset(
     {"previous_response_not_found", "websocket_connection_limit_reached"}
 )
+_NOT_CONTINUED_FIELDS = frozenset({"input", "previous_response_id"})
 _AUTH_HANDSHAKE_STATUSES = frozenset({401, 403})
 _UPGRADE_REQUIRED_STATUS = 426
 _EMPTY_UNCOMPRESSED_BLOCK = b"\x00\x00\xff\xff"
@@ -110,27 +113,95 @@ def codex_conversation_id(agent_id: str, session_id: str) -> str:
     return f"{agent_id}:{session_id}"
 
 
+@dataclass(frozen=True, slots=True)
+class CodexRequestDigest:
+    """What a continuation compares of one Codex request.
+
+    ``fields`` digests every request field but ``input`` and
+    ``previous_response_id``; ``items`` holds one digest per input item, or is
+    ``None`` when the input is not a list. Two values share a digest only when
+    they are the same JSON value: any change at any depth changes it, strings,
+    numbers, booleans and ``null`` keep their type, and only an object's key
+    order does not count, as in a dict comparison.
+    """
+
+    fields: bytes
+    items: tuple[bytes, ...] | None
+
+
+def codex_request_digest(payload: Mapping[str, Any]) -> CodexRequestDigest:
+    """Digest one request in its preparation hop, off the Event Loop.
+
+    Every item is hashed once per request, however often the request is sent;
+    a 55 MB request with 100 screenshots takes about 27 ms.
+    """
+    items = payload.get("input")
+    return CodexRequestDigest(
+        fields=_json_digest(
+            {key: value for key, value in payload.items() if key not in _NOT_CONTINUED_FIELDS}
+        ),
+        items=tuple(_json_digest(item) for item in items) if isinstance(items, list) else None,
+    )
+
+
+def _json_digest(value: Any) -> bytes:
+    digest = hashlib.sha256()
+    _feed_json(digest.update, value)
+    return digest.digest()
+
+
+def _feed_json(feed: Callable[[bytes], object], value: Any) -> None:
+    """Feed one JSON value, every part tagged and strings length-prefixed.
+
+    No two JSON values produce the same stream. Strings go in as their UTF-8
+    bytes without escaping, the bulk of which SHA-256 hashes outside the GIL.
+    """
+    if isinstance(value, str):
+        data = value.encode("utf-8", "surrogatepass")
+        feed(b"s%d:" % len(data))
+        feed(data)
+    elif value is None:
+        feed(b"n")
+    elif value is True:
+        feed(b"t")
+    elif value is False:
+        feed(b"f")
+    elif isinstance(value, int):
+        feed(b"i%d;" % value)
+    elif isinstance(value, float):
+        feed(b"d%s;" % float.__repr__(value).encode("ascii"))
+    elif isinstance(value, dict):
+        feed(b"{%d:" % len(value))
+        for key in sorted(value, key=str):
+            _feed_json(feed, key)
+            _feed_json(feed, value[key])
+    elif isinstance(value, list | tuple):
+        feed(b"[%d:" % len(value))
+        for element in value:
+            _feed_json(feed, element)
+    else:
+        raise TypeError(f"Codex request value of type {type(value).__name__} is not JSON")
+
+
 @dataclass(frozen=True)
 class _CodexWebSocketContinuation:
     """What the next request on a socket may chain to with ``previous_response_id``.
 
-    ``last_request_payload`` is the caller's payload itself, not a copy: the
-    adapter builds a fresh payload for every request, and neither it nor this
-    socket writes to one after it is sent. Continuation requests are built as
-    new dicts that share the retained input items.
+    It keeps the previous request's digests, never its items: ``fields`` and
+    ``input_items`` come from that request's :class:`CodexRequestDigest`.
+    ``response_items`` are the Provider's own final output items, few and
+    small, which the next request must replay unchanged.
     """
 
-    last_request_payload: dict[str, Any]
-    last_response_id: str
+    fields: bytes
+    input_items: tuple[bytes, ...]
+    response_id: str
     # Original final Provider output, never normalized or rendered for replay.
-    last_response_items: list[dict[str, Any]]
+    response_items: list[dict[str, Any]]
 
     def saved_items(self) -> int:
         """How many input items a continuation of this one need not resend."""
-        previous_input = self.last_request_payload.get("input")
-        return (len(previous_input) if isinstance(previous_input, list) else 0) + len(
-            self.last_response_items
-        )
+        return len(self.input_items) + len(self.response_items)
 
 
 @dataclass(eq=False)
@@ -237,12 +308,12 @@ class CodexTransports:
         *,
         route: CodexWebSocketRoute,
         handshake: str,
-        payload: Mapping[str, Any],
+        digest: CodexRequestDigest,
     ) -> _PooledSocket | None:
-        """Check out an idle socket for ``payload``, or ``None`` to open one.
+        """Check out an idle socket for the request ``digest`` describes, or ``None``.
 
         Only a socket on the same route and handshake qualifies: preferably one
-        whose continuation has ``payload``'s instructions, Tools and other
+        whose continuation has the request's instructions, Tools and other
         request fields, otherwise one without a continuation. A socket with
         another request kind's continuation stays for that kind. A closed,
         idle-expired or too old socket, or one on this route whose handshake
@@ -269,10 +340,7 @@ class CodexTransports:
             (
                 pooled
                 for pooled in reversed(usable)
-                if pooled.continuation is not None
-                and _codex_payloads_match_except_input(
-                    payload, pooled.continuation.last_request_payload
-                )
+                if pooled.continuation is not None and pooled.continuation.fields == digest.fields
             ),
             None,
         ) or next((pooled for pooled in reversed(usable) if pooled.continuation is None), None)
@@ -572,18 +640,9 @@ def _codex_responses_error_code(event: Mapping[str, Any]) -> str | None:
     return code if isinstance(code, str) and code else None
 
 
-def _codex_payloads_match_except_input(
-    current: Mapping[str, Any],
-    previous: Mapping[str, Any],
-) -> bool:
-    ignored = {"input", "previous_response_id"}
-    current_rest = {key: value for key, value in current.items() if key not in ignored}
-    previous_rest = {key: value for key, value in previous.items() if key not in ignored}
-    return current_rest == previous_rest
-
-
 def _render_codex_message(
     payload: dict[str, Any],
+    digest: CodexRequestDigest,
     continuation: _CodexWebSocketContinuation | None,
     deflate_window_bits: int | None,
 ) -> _CodexMessage:
@@ -591,11 +650,11 @@ def _render_codex_message(
 
     The request is ``payload`` itself unless it extends ``continuation``'s
     request and output unchanged; then it carries only the new input items
-    after ``previous_response_id``. The comparison, the encoding and the
-    compression grow with the Session, so this runs on the request-body worker.
+    after ``previous_response_id``. The encoding and the compression grow with
+    the Session, so this runs on the request-body worker.
     """
 
-    request = _continued_request(payload, continuation)
+    request = _continued_request(payload, digest, continuation)
     text = json.dumps(
         {"type": "response.create", **request}, ensure_ascii=False, separators=(",", ":")
     ).encode("utf-8")
@@ -605,35 +664,41 @@ def _render_codex_message(
 
 def _continued_request(
     payload: dict[str, Any],
+    digest: CodexRequestDigest,
     continuation: _CodexWebSocketContinuation | None,
 ) -> dict[str, Any]:
-    if continuation is None or not _codex_payloads_match_except_input(
-        payload, continuation.last_request_payload
+    """``payload`` after ``previous_response_id``, if it extends ``continuation`` unchanged.
+
+    Its fields and leading input items must match the previous request's
+    digests, and the items after them the previous response's output.
+    """
+    if continuation is None or digest.items is None or digest.fields != continuation.fields:
+        return payload
+    previous = len(continuation.input_items)
+    baseline = previous + len(continuation.response_items)
+    current_input = payload["input"]
+    if (
+        len(digest.items) < baseline
+        or digest.items[:previous] != continuation.input_items
+        or current_input[previous:baseline] != continuation.response_items
     ):
-        return payload
-    current_input = payload.get("input")
-    previous_input = continuation.last_request_payload.get("input")
-    if not isinstance(current_input, list) or not isinstance(previous_input, list):
-        return payload
-    baseline = [*previous_input, *continuation.last_response_items]
-    if len(current_input) < len(baseline) or current_input[: len(baseline)] != baseline:
         return payload
     return {
         **payload,
-        "previous_response_id": continuation.last_response_id,
-        "input": current_input[len(baseline) :],
+        "previous_response_id": continuation.response_id,
+        "input": current_input[baseline:],
     }
 
 
 def _completed_continuation(
-    payload: dict[str, Any],
+    digest: CodexRequestDigest,
     state: ResponsesStreamState,
     output_items: dict[int | None, dict[str, Any] | None],
 ) -> _CodexWebSocketContinuation | None:
     """The continuation a completed exchange establishes, if its output is proven."""
 
     completed_response = state.completed_response
-    if not isinstance(completed_response, Mapping):
+    if digest.items is None or not isinstance(completed_response, Mapping):
         return None
     response_id = completed_response.get("id")
     response_items = completed_response.get("output")
@@ -654,9 +719,10 @@ def _completed_continuation(
     ):
         return None
     return _CodexWebSocketContinuation(
-        last_request_payload=payload,
-        last_response_id=response_id,
-        last_response_items=copy.deepcopy(response_items),
+        fields=digest.fields,
+        input_items=digest.items,
+        response_id=response_id,
+        response_items=copy.deepcopy(response_items),
     )
 
 
@@ -690,13 +756,15 @@ class CodexWebSocket:
         self,
         payload: dict[str, Any],
         *,
+        digest: CodexRequestDigest,
         headers: dict[str, str],
         route: CodexWebSocketRoute,
         state: ResponsesStreamState,
     ) -> AsyncGenerator[dict[str, Any]]:
         """Stream ``payload``'s response, continuing the Session's socket where it can.
 
-        Before any Provider event, a lost continuation, an ended connection or
+        ``digest`` is ``payload``'s :func:`codex_request_digest`. Before any
+        Provider event, a lost continuation, an ended connection or
         a transport failure retries once in full on a fresh socket. A
         :class:`_CodexWebSocketTransportError` without events means the caller
         may send the same request another way (SSE): the Connection failed
@@ -715,6 +783,7 @@ class CodexWebSocket:
                 async with aclosing(
                     self._exchange(
                         payload,
+                        digest=digest,
                         url=url,
                         key=key,
                         headers=headers,
@@ -753,6 +822,7 @@ class CodexWebSocket:
         self,
         payload: dict[str, Any],
         *,
+        digest: CodexRequestDigest,
         url: str,
         key: _SocketKey,
         headers: dict[str, str],
@@ -765,7 +835,7 @@ class CodexWebSocket:
         pooled = (
             None
             if fresh
-            else self._transports.take(key, route=route, handshake=handshake, payload=payload)
+            else self._transports.take(key, route=route, handshake=handshake, digest=digest)
         )
         if pooled is None:
             pooled = await self._open(url, key, headers=headers, route=route, handshake=handshake)
@@ -775,7 +845,11 @@ class CodexWebSocket:
         completed = False
         try:
             message = await _REQUEST_BODY_WORKERS.run(
-                _render_codex_message, payload, pooled.continuation, pooled.deflate_window_bits
+                _render_codex_message,
+                payload,
+                digest,
+                pooled.continuation,
+                pooled.deflate_window_bits,
             )
             continued = "previous_response_id" in message.request
             if self._debug_recorder is not None:
@@ -840,7 +914,7 @@ class CodexWebSocket:
                     if index is not None and final_item is not None:
                         output_items[index] = final_item
                 if any(delta.get("type") == "finish" for delta in deltas):
-                    pooled.continuation = _completed_continuation(payload, state, output_items)
+                    pooled.continuation = _completed_continuation(digest, state, output_items)
                     completed = True
                 for delta in deltas:
                     if delta.get("type") in {

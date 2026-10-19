@@ -25,10 +25,12 @@ from core.models.models import (
 )
 from core.providers._codex_websocket import (
     CodexConnectionKey,
+    CodexRequestDigest,
     CodexTransports,
     CodexWebSocket,
     _CodexWebSocketTransportError,
     codex_conversation_id,
+    codex_request_digest,
 )
 from core.providers._openai_constants import (
     _CODEX_CACHE_SCOPE_MAX_LENGTH,
@@ -659,8 +661,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         A failed WebSocket exchange drops its continuation and socket, so the
         rebuilt request opens a fresh exchange with full context. ``states``
         collects the stream state of every attempt (the last one completed).
-        When the request will try the WebSocket, its JSON body is encoded only
-        if it falls back to HTTP: a WebSocket request encodes just the
+        When the request will try the WebSocket, its preparation hop digests it
+        for the socket's continuation, and its JSON body is encoded only if it
+        falls back to HTTP: a WebSocket request encodes just the
         ``response.create`` it sends.
         """
 
@@ -688,12 +691,12 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 state=state,
             )
 
+        plan = self._request_plan(messages, model_id, build)
+        if self._tries_codex_websocket(cache_scope_id, conversation_id):
+            plan = replace(plan, lazy_body=True, digest=codex_request_digest)
         return stream_learning_from_rejections(
             open_stream,
-            replace(
-                self._request_plan(messages, model_id, build),
-                lazy_body=self._tries_codex_websocket(cache_scope_id, conversation_id),
-            ),
+            plan,
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -981,11 +984,16 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         # forks; the local route must remain Session-unique so one branch can
         # never consume another branch's ``previous_response_id`` state.
         route = (conversation_id, model_id, account_id)
-        if self._codex_transports.websocket_available(self._codex_connection):
+        # A request planned while the WebSocket was unavailable has no digest.
+        digest = request.digest
+        if isinstance(digest, CodexRequestDigest) and self._codex_transports.websocket_available(
+            self._codex_connection
+        ):
             try:
                 async with aclosing(
                     self._codex_socket.stream(
                         request.payload,
+                        digest=digest,
                         headers=websocket_headers,
                         route=route,
                         state=state,

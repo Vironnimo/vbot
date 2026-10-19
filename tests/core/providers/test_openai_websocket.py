@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any, cast
@@ -20,12 +21,14 @@ from websockets.http11 import Response
 from websockets.protocol import State
 
 import core.providers.http as http_module
+import core.providers.openai as openai_module
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
 from core.providers._codex_websocket import (
     CODEX_SOCKET_IDLE_SECONDS,
     CODEX_SOCKET_MAX_AGE_SECONDS,
     CODEX_WEBSOCKET_RETRY_AFTER_SECONDS,
+    CodexRequestDigest,
     codex_conversation_id,
 )
 from core.providers.errors import (
@@ -117,9 +120,11 @@ def _input_kinds(payload: dict[str, Any]) -> list[str]:
     return [item.get("type", item.get("role")) for item in payload["input"]]
 
 
-def _messages_with_tool_result(normalized: dict[str, Any]) -> list[dict[str, Any]]:
+def _messages_with_tool_result(
+    normalized: dict[str, Any], history: list[dict[str, Any]] = SAMPLE_MESSAGES
+) -> list[dict[str, Any]]:
     return [
-        *SAMPLE_MESSAGES,
+        *history,
         {
             "role": "assistant",
             "content": normalized["content"],
@@ -791,20 +796,36 @@ async def _settle(websocket: FakeCodexWebSocket) -> None:
         await asyncio.sleep(0)
 
 
+def _screenshot_history(text: str = "Hello", screenshot: str = "aW1hZ2U=") -> list[dict[str, Any]]:
+    return [
+        SAMPLE_MESSAGES[0],
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text},
+                {"type": "media", "media_type": "image/png", "base64": screenshot},
+            ],
+        },
+    ]
+
+
 @pytest.mark.asyncio
 async def test_a_later_run_continues_the_session_socket_with_only_new_input() -> None:
-    """The Runtime's transports keep a Session's socket and continuation across Runs."""
+    """The Runtime's transports keep a Session's socket and continuation across Runs;
+    the next Run's own rendering of the same history, screenshots included, matches."""
 
     transports = CodexTransports()
     websocket = FakeCodexWebSocket([_tool_call_turn("resp_1"), _final_turn("resp_2")])
     connector = FakeCodexWebSocketConnector([websocket])
     first_run = codex_adapter(codex_websocket_connect=connector, codex_transports=transports)
-    turn = await _send(first_run, tools=CODEX_TOOLS)
+    turn = await _send(first_run, _screenshot_history(), tools=CODEX_TOOLS)
     await first_run.aclose()
     assert websocket.closed is False
 
     next_run = codex_adapter(codex_websocket_connect=connector, codex_transports=transports)
-    await _send(next_run, _messages_with_tool_result(turn), tools=CODEX_TOOLS)
+    await _send(
+        next_run, _messages_with_tool_result(turn, _screenshot_history()), tools=CODEX_TOOLS
+    )
     await next_run.aclose()
 
     assert len(connector.calls) == 1
@@ -818,42 +839,53 @@ _CHANGED_TOOLS = [{**CODEX_TOOLS[0], "description": "Look up other data"}]
 
 
 @pytest.mark.parametrize(
-    ("next_run", "request_change", "old_socket_closes"),
+    ("next_run", "request_change", "history", "old_socket_closes"),
     [
-        pytest.param({}, {"tools": _CHANGED_TOOLS}, False, id="tools-changed"),
-        pytest.param({}, {"model_id": "gpt-5.6-sol"}, False, id="model-changed"),
+        pytest.param({}, {"tools": _CHANGED_TOOLS}, {}, False, id="tools-changed"),
+        pytest.param({}, {"model_id": "gpt-5.6-sol"}, {}, False, id="model-changed"),
         pytest.param(
-            {"token_getter": jwt_with_account() + "x"}, {}, True, id="credentials-changed"
+            {"token_getter": jwt_with_account() + "x"}, {}, {}, True, id="credentials-changed"
         ),
-        pytest.param({"codex_connection": ("openai", "other")}, {}, False, id="connection-changed"),
+        pytest.param(
+            {"codex_connection": ("openai", "other")}, {}, {}, False, id="connection-changed"
+        ),
+        pytest.param({}, {}, {"text": "Hello there"}, False, id="earlier-item-changed"),
+        pytest.param({}, {}, {"screenshot": "b3RoZXI="}, False, id="nested-part-changed"),
     ],
 )
 @pytest.mark.asyncio
 async def test_a_changed_request_never_continues_an_earlier_runs_response(
-    next_run: dict[str, Any], request_change: dict[str, Any], old_socket_closes: bool
+    next_run: dict[str, Any],
+    request_change: dict[str, Any],
+    history: dict[str, str],
+    old_socket_closes: bool,
 ) -> None:
     """Another Model, Connection, credential or request field starts on a new socket
-    with the full context. A socket opened with replaced credentials closes; others
-    stay for the requests they still match."""
+    with the full context, and so does a changed earlier item, down to a part inside
+    it, on the Session's socket. A socket opened with replaced credentials closes;
+    others stay for the requests they still match."""
 
     transports = CodexTransports()
-    first = FakeCodexWebSocket([_tool_call_turn("resp_1")])
+    first = FakeCodexWebSocket([_tool_call_turn("resp_1"), _final_turn("resp_2")])
     second = FakeCodexWebSocket([_final_turn("resp_2")])
     connector = FakeCodexWebSocketConnector([first, second])
     adapter = codex_adapter(codex_websocket_connect=connector, codex_transports=transports)
-    turn = await _send(adapter, tools=CODEX_TOOLS)
+    turn = await _send(adapter, _screenshot_history(), tools=CODEX_TOOLS)
     await adapter.aclose()
 
     adapter = codex_adapter(
         codex_websocket_connect=connector, codex_transports=transports, **next_run
     )
     await _send(
-        adapter, _messages_with_tool_result(turn), **{"tools": CODEX_TOOLS, **request_change}
+        adapter,
+        _messages_with_tool_result(turn, _screenshot_history(**history)),
+        **{"tools": CODEX_TOOLS, **request_change},
     )
     await adapter.aclose()
     await _settle(first)
 
-    [payload] = second.sent_payloads
+    [payload] = [*first.sent_payloads[1:], *second.sent_payloads]
+    assert len(connector.calls) == (1 if history else 2)
     assert "previous_response_id" not in payload
     assert _input_kinds(payload) == _FULL_CONTEXT_INPUT_KINDS
     assert first.closed is old_socket_closes
@@ -1005,24 +1037,39 @@ async def test_codex_websocket_messages_arrive_deflated_from_the_request_worker(
 async def test_codex_websocket_requests_never_build_the_http_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A WebSocket request is rendered once as its message; neither a full request
-    nor a continuation also serializes the HTTP body."""
+    """A WebSocket request is digested once in its preparation hop, off the Event
+    Loop, however often it is sent, and rendered as its message; neither a full
+    request nor a continuation also serializes the HTTP body."""
 
     encoded: list[None] = []
+    digest_threads: list[str] = []
     encode = http_module._encode_json_body
+    digest = openai_module.codex_request_digest
 
     def counting_encode(payload: dict[str, Any]) -> bytes:
         encoded.append(None)
         return encode(payload)
 
+    def recording_digest(payload: dict[str, Any]) -> CodexRequestDigest:
+        digest_threads.append(threading.current_thread().name)
+        return digest(payload)
+
     monkeypatch.setattr(http_module, "_encode_json_body", counting_encode)
-    websocket = FakeCodexWebSocket([_tool_call_turn("resp_1"), _final_turn("resp_2")])
-    adapter = codex_adapter(codex_websocket_connect=FakeCodexWebSocketConnector([websocket]))
+    monkeypatch.setattr(openai_module, "codex_request_digest", recording_digest)
+    lost = {"type": "error", "error": {"code": "previous_response_not_found", "message": "Gone."}}
+    websocket = FakeCodexWebSocket([_tool_call_turn("resp_1"), [lost]])
+    replacement = FakeCodexWebSocket([_final_turn("resp_2")])
+    adapter = codex_adapter(
+        codex_websocket_connect=FakeCodexWebSocketConnector([websocket, replacement])
+    )
 
     turn = await _send(adapter, tools=CODEX_TOOLS)
     await _send(adapter, _messages_with_tool_result(turn), tools=CODEX_TOOLS)
 
     assert websocket.sent_payloads[1]["previous_response_id"] == "resp_1"
+    assert _input_kinds(replacement.sent_payloads[0]) == _FULL_CONTEXT_INPUT_KINDS
+    assert len(digest_threads) == 2
+    assert all(name.startswith("vbot-provider-request-body") for name in digest_threads)
     assert encoded == []
     await adapter.aclose()
 
