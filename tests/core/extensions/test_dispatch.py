@@ -10,9 +10,11 @@ and async callables, raising handlers and load order.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 import threading
+from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,17 @@ def _make_validator() -> tuple[Any, list[tuple[str, dict[str, Any]]]]:
 
 def _boom(*_args: Any, **_payload: Any) -> Any:
     raise RuntimeError("boom")
+
+
+async def _cancel_self(*_args: Any, **_payload: Any) -> None:
+    task = asyncio.current_task()
+    assert task is not None
+    task.cancel()
+    await asyncio.sleep(0)
+
+
+def _raise_cancelled(*_args: Any, **_payload: Any) -> None:
+    raise asyncio.CancelledError
 
 
 @pytest.mark.asyncio
@@ -105,7 +118,10 @@ async def test_observer_events_run_every_handler_in_load_order_and_isolate_failu
 
 
 @pytest.mark.asyncio
-async def test_context_handlers_chain_the_message_list_and_skip_failures() -> None:
+@pytest.mark.parametrize("failing_handler", [_boom, _raise_cancelled, _cancel_self])
+async def test_context_handlers_chain_the_message_list_and_skip_failures(
+    failing_handler: Any,
+) -> None:
     seen: list[list] = []
 
     def first(ctx: HookContext, *, messages: list) -> list:
@@ -122,7 +138,7 @@ async def test_context_handlers_chain_the_message_list_and_skip_failures() -> No
     def returns_dict(ctx: HookContext, *, messages: list) -> dict[str, Any]:
         return {"not": "a list"}
 
-    registry = _registry("context", first, _boom, returns_none, returns_dict, second)
+    registry = _registry("context", first, failing_handler, returns_none, returns_dict, second)
 
     result = await registry.dispatch_context(_ctx(), messages=[{"role": "user"}])
 
@@ -285,19 +301,28 @@ async def test_tool_result_handlers_replace_the_whole_envelope_in_turn() -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "raise RuntimeError('boom')",
+        "raise asyncio.CancelledError",
+        "asyncio.current_task().cancel(); await asyncio.sleep(0)",
+    ],
+)
 async def test_channel_interactions_route_by_prefix_and_isolate_raising_handlers(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, failure: str
 ) -> None:
     write_extension(
         tmp_path / "extensions",
         "taps",
+        "import asyncio\n"
         "seen = []\n"
         "async def _check(event, responder):\n"
         "    seen.append((event.data, responder))\n"
         "def _ping(event, responder):\n"
         "    seen.append((event.data, responder))\n"
         "async def _boom(event, responder):\n"
-        "    raise RuntimeError('boom')\n"
+        f"    {failure}\n"
         "def register(api):\n"
         "    api.register_interaction_handler('poll', _check)\n"
         "    api.register_interaction_handler('ping', _ping)\n"
@@ -317,3 +342,44 @@ async def test_channel_interactions_route_by_prefix_and_isolate_raising_handlers
 
     assert seen == [("poll:yes", responder), ("ping", responder)]
     assert any("interaction handler" in entry.getMessage() for entry in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["context", "interaction"])
+async def test_cancelling_dispatch_cancels_its_callback_and_propagates(
+    kind: str, tmp_path: Path
+) -> None:
+    entered = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def handler(*args: Any, **kwargs: Any) -> None:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    call: Coroutine[Any, Any, Any]
+    if kind == "context":
+        registry = _registry("context", handler)
+        call = registry.dispatch_context(_ctx(), messages=[])
+    else:
+        write_extension(
+            tmp_path,
+            "taps",
+            "async def handler(event, responder):\n    await callback(event, responder)\n"
+            "def register(api):\n    api.register_interaction_handler('poll', handler)\n",
+        )
+        registry = ExtensionRegistry.load(tmp_path)
+        vars(sys.modules["vbot_ext.taps"])["callback"] = handler
+        call = registry.dispatch_channel_interaction(tap("poll:yes"), RecordingResponder())
+    caller = asyncio.create_task(call)
+    try:
+        await entered.wait()
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        await stopped.wait()
+    finally:
+        caller.cancel()
+        await asyncio.gather(caller, return_exceptions=True)

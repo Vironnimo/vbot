@@ -28,6 +28,7 @@ from core.extensions._callbacks import (
     _log_slow_extension_handler,
     invoke_extension_handler,
     invoke_hook_fail_open,
+    invoke_isolated_handler,
     invoke_lifecycle_fail_open,
     invoke_lifecycle_handler,
 )
@@ -916,7 +917,13 @@ class ExtensionRegistry:
         extension_name, handler = entry
         started_at = time.perf_counter()
         try:
-            await invoke_extension_handler(handler, event, responder)
+            await invoke_isolated_handler(
+                handler,
+                event,
+                responder,
+                extension_name=extension_name,
+                description=f"interaction:{prefix} handler",
+            )
         except Exception as exc:
             _LOGGER.warning(
                 "Extension %r interaction handler %r raised: %s",
