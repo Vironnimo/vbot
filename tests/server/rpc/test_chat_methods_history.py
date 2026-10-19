@@ -327,6 +327,22 @@ async def test_history_reports_usage_per_message_and_for_the_whole_session(
         "context_window": 128_000,
     }
 
+    # A newer Compaction anchors the Context, which still fills that window.
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="summary",
+            projection=[ChatMessage.user("tail")],
+            compacted_token_count=1_000,
+            context_tokens_before=2_210,
+            context_tokens_after=400,
+        )
+    )
+    assert (await history.read())["context_usage"] == {
+        "tokens": 400,
+        "estimated": True,
+        "context_window": 128_000,
+    }
+
 
 @pytest.mark.asyncio
 async def test_history_includes_compaction_checkpoints_tool_timing_and_run_summaries(

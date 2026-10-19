@@ -150,10 +150,51 @@ def session_usage(connection: sqlite3.Connection, state: sqlite3.Row) -> JsonObj
     return {key: int(row[key]) for key in _SESSION_USAGE_KEYS}
 
 
+_USAGE_ASSISTANT = (
+    "e.role = 'assistant' AND EXISTS (SELECT 1 FROM assistant_entries AS a "
+    "WHERE a.entry_key = e.entry_key AND a.usage_present = 1)"
+)
+_CONTEXT_CHECKPOINT = (
+    "e.role = 'compaction_checkpoint' AND EXISTS (SELECT 1 FROM checkpoint_entries AS k "
+    "WHERE k.entry_key = e.entry_key AND k.context_tokens_after IS NOT NULL)"
+)
+
+
+def context_batch(
+    connection: sqlite3.Connection, ranges: Sequence[ViewRange]
+) -> _store_codec.EntryBatch:
+    """The entries the Context projection reads: the newest anchor and what follows it.
+
+    The anchor is the newest Assistant step with Usage or Compaction checkpoint
+    with a post-Compaction size. A checkpoint anchor keeps the newest Assistant
+    step with Usage before it, which records the window its Context fills.
+    """
+    anchor = view_seq(connection, ranges, where=f"({_USAGE_ASSISTANT}) OR ({_CONTEXT_CHECKPOINT})")
+    if anchor is None:
+        return _store_codec.EntryBatch([])
+    rows = _store_lineage.ordered_rows(
+        connection, ranges, columns=_store_codec.ENTRY_COLUMNS, lower=anchor
+    )
+    if rows and str(rows[0]["role"]) == "compaction_checkpoint":
+        rows = [
+            *_store_lineage.ordered_rows(
+                connection,
+                ranges,
+                columns=_store_codec.ENTRY_COLUMNS,
+                where=_USAGE_ASSISTANT,
+                upper=anchor,
+                descending=True,
+                limit=1,
+            ),
+            *rows,
+        ]
+    return _store_codec.select_batch(connection, rows)
+
+
 def status_snapshot(
     connection: sqlite3.Connection, address: SessionAddress
-) -> Callable[[], tuple[str | None, int, JsonObject | None, JsonObject]]:
-    """Read the status facts: first entry time, User count, latest usage and spend."""
+) -> Callable[[], tuple[str | None, int, JsonObject | None, JsonObject, list[ChatMessage]]]:
+    """Read the status facts: first entry time, User count, latest usage, spend and Context."""
     state, ranges = current_view(connection, address)
     first = _store_lineage.ordered_rows(connection, ranges, columns="e.created_at", limit=1)
     user_count = sum(
@@ -166,22 +207,15 @@ def status_snapshot(
         )
         for view_range in ranges
     )
-    latest = view_batch(
-        connection,
-        ranges,
-        where=(
-            "e.role = 'assistant' AND EXISTS (SELECT 1 FROM assistant_entries AS a "
-            "WHERE a.entry_key = e.entry_key AND a.usage_present = 1)"
-        ),
-        descending=True,
-        limit=1,
-    )
+    latest = view_batch(connection, ranges, where=_USAGE_ASSISTANT, descending=True, limit=1)
     usage = session_usage(connection, state)
+    context = context_batch(connection, ranges)
     return lambda: (
         None if not first else str(first[0][0]),
         user_count,
         None if not latest.rows else latest.message(latest.rows[0]).usage,
         usage,
+        context.messages(),
     )
 
 

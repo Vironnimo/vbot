@@ -34,7 +34,12 @@ from core.projects import (
     RuntimeAgent,
 )
 from core.runs import ChatRunManager, Run
-from core.sessions import SESSION_WORKING_PROJECT_META_KEY, ChatSessionManager, SessionAddress
+from core.sessions import (
+    SESSION_WORKING_PROJECT_META_KEY,
+    ChatSessionManager,
+    SessionAddress,
+    SessionStatusSnapshot,
+)
 from core.settings.settings import SettingsValidationError
 from core.tools import ToolAccess, ToolContext, ToolRegistry
 from core.tools.status import STATUS_TOOL_NAME, register_status_tool
@@ -126,8 +131,15 @@ class _StubSession:
     def load(self) -> list[ChatMessage]:
         return list(self._messages)
 
-    def status_snapshot(self) -> Any:
-        return status_session_facts(self._messages)
+    def status_snapshot(self) -> SessionStatusSnapshot:
+        facts = status_session_facts(self._messages)
+        return SessionStatusSnapshot(
+            first_message_at=facts.first_message_at,
+            user_message_count=facts.user_message_count,
+            latest_assistant_usage=facts.latest_assistant_usage,
+            session_usage=facts.session_usage,
+            context_messages=tuple(self._messages),
+        )
 
 
 class _StubSessions:
@@ -229,6 +241,11 @@ def test_status_tool_reports_the_current_session_like_the_status_command(tmp_pat
                 "output_tokens": 42,
                 "cache_read_tokens": 800,
                 "cache_write_tokens": 100,
+                "context_usage": {
+                    "tokens": 1276,
+                    "estimated": False,
+                    "context_window": 128_000,
+                },
             },
             timestamp=session_started,
         ),
@@ -288,6 +305,7 @@ def test_status_tool_reports_the_current_session_like_the_status_command(tmp_pat
     assert "Agent: Coder (openai/gpt-5.2)" in data["text"]
     assert "Activity: idle" in data["text"]
     assert "Session cache: read 800 / 1234 (64.8% hit), write 100" in data["text"]
+    assert "Context usage: 1276 / 128000" in data["text"]
 
 
 @pytest.mark.parametrize(

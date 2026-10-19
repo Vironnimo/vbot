@@ -17,7 +17,8 @@ Reports current or targeted agent/session/runtime status through the same status
 - The status text carries `Last request cache:` and `Session cache:` lines. They render provider-reported cache read/write tokens and hit rate only when cache fields are present on assistant usage whose input was measured (an estimated output alone does not exclude a turn); otherwise they render the placeholder, so providers without cache reporting do not look like a 0% hit.
 - The status text renders activity as `running` or `idle`; unknown/missing Agent or Session targets return failure envelopes.
 - Display: no summary. A status call must render as `status`, not `status ({})`.
-- Both surfaces consume the Sessions-owned `status_snapshot`: SQL supplies Session start, User-turn count, latest Assistant Usage, whole-Session Usage/cache aggregates, and no complete transcript. The Agent-callable Tool wraps its synchronous dependency gathering in the cancellation-safe Tool worker; `/status` uses the command worker path.
+- The `Context usage:` line is the Session's Context projection, the value `chat.history` returns (`status_session_facts_from_snapshot` -> `latest_session_context_usage`), as `<tokens> / <window>`: the window the projection records, else the Agent's resolved window. A Session without a projection renders the placeholder; token counters alone are never shown as Context.
+- Both surfaces consume the Sessions-owned `status_snapshot`: SQL supplies Session start, User-turn count, latest Assistant Usage, whole-Session Usage/cache aggregates, the Context projection inputs, and no complete transcript. The Agent-callable Tool wraps its synchronous dependency gathering in the cancellation-safe Tool worker; `/status` uses the command worker path.
 
 ## Constraints & Gotchas
 

@@ -467,7 +467,7 @@ class ChatSession:
         )
 
     def status_snapshot(self) -> SessionStatusSnapshot:
-        first_message_at, user_count, latest_usage, usage = self._store.status_snapshot(
+        first_message_at, user_count, latest_usage, usage, context = self._store.status_snapshot(
             self.address
         )
         return SessionStatusSnapshot(
@@ -475,6 +475,7 @@ class ChatSession:
             user_message_count=user_count,
             latest_assistant_usage=latest_usage,
             session_usage=usage,
+            context_messages=tuple(context),
         )
 
     async def status_snapshot_async(self) -> SessionStatusSnapshot:

@@ -19,7 +19,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.messages import ChatMessage
-from core.chat.usage import aggregate_session_usage
+from core.chat.usage import aggregate_session_usage, latest_session_context_usage
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from core.projects import ProjectStore, RuntimeAgent
     from core.providers.providers import ProviderRegistry
     from core.runs import ChatRunManager
+    from core.sessions import SessionStatusSnapshot
 else:
     ModelRegistry = Any
     ProjectStore = Any
@@ -151,12 +152,17 @@ class _WireProfileOmitted(Enum):
 
 @dataclass(frozen=True)
 class StatusSessionFacts:
-    """Small persisted Session projection needed by the status renderer."""
+    """Small persisted Session projection needed by the status renderer.
+
+    ``context_usage`` is the Session's Context projection, the same value
+    ``chat.history`` and the Run events carry.
+    """
 
     first_message_at: str | None
     user_message_count: int
     latest_assistant_usage: dict[str, Any] | None
     session_usage: dict[str, Any]
+    context_usage: dict[str, Any] | None
 
 
 def resolve_status_model_details(
@@ -627,23 +633,19 @@ def _strip_pinned_connection_suffix(model_string: str) -> str:
 
 
 def _context_usage_text_from_facts(facts: StatusSessionFacts, context_window: int | None) -> str:
-    latest_usage = facts.latest_assistant_usage
-    if latest_usage is None:
+    projection = facts.context_usage
+    if projection is None:
         return STATUS_PLACEHOLDER
-    # Prefer the window of the Model that answered, recorded with its Context.
-    projection = latest_usage.get("context_usage")
-    recorded = (
-        _coerce_int(projection.get("context_window")) if isinstance(projection, dict) else None
-    )
+    tokens = _coerce_non_negative_int(projection.get("tokens"))
+    if tokens is None:
+        return STATUS_PLACEHOLDER
+    # Prefer the window the projection names: the one its Context fills.
+    recorded = _coerce_int(projection.get("context_window"))
     if recorded is not None and recorded > 0:
         context_window = recorded
     if context_window is None or context_window <= 0:
         return STATUS_PLACEHOLDER
-
-    input_tokens = _coerce_int(latest_usage.get("input_tokens"))
-    if input_tokens is None:
-        return STATUS_PLACEHOLDER
-    return f"{input_tokens} / {context_window}"
+    return f"{tokens} / {context_window}"
 
 
 def _turn_count_text_from_facts(facts: StatusSessionFacts) -> str:
@@ -660,6 +662,22 @@ def status_session_facts(messages: list[ChatMessage]) -> StatusSessionFacts:
         user_message_count=sum(1 for message in messages if message.role == "user"),
         latest_assistant_usage=None if latest_usage is None else dict(latest_usage),
         session_usage=aggregate_session_usage(messages),
+        context_usage=latest_session_context_usage(messages),
+    )
+
+
+def status_session_facts_from_snapshot(snapshot: SessionStatusSnapshot) -> StatusSessionFacts:
+    """Build the status read model from a persisted Session status snapshot.
+
+    Projecting the Context estimates the messages after its anchor, so callers
+    run this off the Event Loop.
+    """
+    return StatusSessionFacts(
+        first_message_at=snapshot.first_message_at,
+        user_message_count=snapshot.user_message_count,
+        latest_assistant_usage=snapshot.latest_assistant_usage,
+        session_usage=snapshot.session_usage,
+        context_usage=latest_session_context_usage(list(snapshot.context_messages)),
     )
 
 

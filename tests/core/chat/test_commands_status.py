@@ -25,13 +25,14 @@ from core.chat.status_report import (
     resolve_status_project_label,
     resolve_status_sampling,
     status_session_facts,
+    status_session_facts_from_snapshot,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolver, ProjectStore
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, ProviderConfig
 from core.providers.wire_observations import ObservedFacts
 from core.runs import ChatRunManager, Run
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress, SessionStatusSnapshot
 from tests.core.chat.commands_test_support import (
     _execute,
     _execute_sync,
@@ -87,8 +88,15 @@ class _StubSession:
     def load(self) -> list[ChatMessage]:
         return list(self._messages)
 
-    def status_snapshot(self) -> Any:
-        return status_session_facts(self._messages)
+    def status_snapshot(self) -> SessionStatusSnapshot:
+        facts = status_session_facts(self._messages)
+        return SessionStatusSnapshot(
+            first_message_at=facts.first_message_at,
+            user_message_count=facts.user_message_count,
+            latest_assistant_usage=facts.latest_assistant_usage,
+            session_usage=facts.session_usage,
+            context_messages=tuple(self._messages),
+        )
 
 
 class _StubSessions:
@@ -183,6 +191,12 @@ def test_status_reports_the_identity_sessions_agent_model_and_cache() -> None:
                 "output_tokens": 42,
                 "cache_read_tokens": 800,
                 "cache_write_tokens": 100,
+                "context_usage": {
+                    "tokens": 1276,
+                    "estimated": False,
+                    "provider_input_tokens": 1234,
+                    "provider_output_tokens": 42,
+                },
             }
         ),
     ]
@@ -205,7 +219,8 @@ def test_status_reports_the_identity_sessions_agent_model_and_cache() -> None:
     assert f"Project: {STATUS_PLACEHOLDER}" in reply
     assert "Activity: idle" in reply
     assert f"Run created at: {STATUS_PLACEHOLDER}" in reply
-    assert "Context usage: 1234 / 200000" in reply
+    # Context usage is the Session's Context projection, not the raw input.
+    assert "Context usage: 1276 / 200000" in reply
     assert "Last request cache: read 800 / 1234 (64.8% hit), write 100" in reply
     assert "Session cache: read 800 / 1234 (64.8% hit), write 100" in reply
     assert "Current time:" in reply
@@ -396,6 +411,7 @@ def test_status_text_reports_an_estimated_turn_like_a_measured_one() -> None:
                 "input_tokens_estimated": True,
                 "output_tokens_estimated": True,
                 "estimated": True,
+                "context_usage": {"tokens": 999, "estimated": True},
             }
         ),
     ]
@@ -411,7 +427,7 @@ def test_status_text_reports_an_estimated_turn_like_a_measured_one() -> None:
     assert f"Actual model thinking effort: {STATUS_PLACEHOLDER}" in text
     assert "Temperature: 0.3" in text
     assert f"Activity: {STATUS_PLACEHOLDER}" in text
-    assert "Context usage: 987 / 200000" in text
+    assert "Context usage: 999 / 200000" in text
     assert "Last request cache: read 0 / 987 (0.0% hit), write 0" in text
     assert "Session cache: read 0 / 987 (0.0% hit), write 0" in text
     assert "Session started:" in text
@@ -431,6 +447,13 @@ def test_status_text_reports_an_estimated_turn_like_a_measured_one() -> None:
         _make_agent(), [messages[0], answered], context_window=200_000, started_at=_APP_STARTED
     )
     assert "Context usage: 987 / 128000" in text
+
+    # Counters without a Context snapshot are not reinterpreted as a Context size.
+    unprojected = _cached_turn({"input_tokens": 987, "output_tokens": 12})
+    text = build_status_text(
+        _make_agent(), [messages[0], unprojected], context_window=200_000, started_at=_APP_STARTED
+    )
+    assert f"Context usage: {STATUS_PLACEHOLDER}" in text
 
 
 def _two_cached_turns() -> list[ChatMessage]:
@@ -460,18 +483,16 @@ def _two_cached_turns() -> list[ChatMessage]:
 
 
 @pytest.mark.parametrize(
-    ("latest_usage", "context", "latest_cache", "session_cache"),
+    ("latest_usage", "latest_cache", "session_cache"),
     [
         (
             None,
-            "500 / 200000",
             "read 200 / 500 (40.0% hit), write 0",
             "read 1000 / 1500 (66.7% hit), write 100",
         ),
         (
             # Estimated input counts like any other; absent cache counters are zero.
             {"input_tokens": 500, "input_tokens_estimated": True, "estimated": True},
-            "500 / 200000",
             "read 0 / 500 (0.0% hit), write 0",
             "read 800 / 1500 (53.3% hit), write 100",
         ),
@@ -479,7 +500,7 @@ def _two_cached_turns() -> list[ChatMessage]:
     ids=["cache-reported", "cache-absent"],
 )
 def test_status_text_cache_figures_count_every_turn(
-    latest_usage: dict[str, Any] | None, context: str, latest_cache: str, session_cache: str
+    latest_usage: dict[str, Any] | None, latest_cache: str, session_cache: str
 ) -> None:
     messages = _two_cached_turns()
     if latest_usage is not None:
@@ -489,25 +510,44 @@ def test_status_text_cache_figures_count_every_turn(
         _make_agent(), messages, context_window=200_000, started_at=_APP_STARTED
     )
 
-    assert f"Context usage: {context}" in text
     assert f"Last request cache: {latest_cache}" in text
     assert f"Session cache: {session_cache}" in text
 
 
 @pytest.mark.usefixtures("current_format_data_directory")
 def test_status_session_facts_match_the_persisted_status_snapshot(tmp_path: Path) -> None:
-    messages = _two_cached_turns()
+    measured = _cached_turn(
+        {
+            "input_tokens": 2000,
+            "output_tokens": 100,
+            "context_usage": {"tokens": 2100, "estimated": False, "context_window": 128_000},
+        }
+    )
+    compaction = ChatMessage.compaction_checkpoint(
+        summary="summary",
+        projection=[ChatMessage.user("tail")],
+        compacted_token_count=1_000,
+        context_tokens_before=2_100,
+        context_tokens_after=400,
+    )
+    messages = [*_two_cached_turns(), measured, compaction, ChatMessage.user("Next question")]
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("agent", session_id="session-one")
     session.append_many(messages)
 
-    persisted = session.status_snapshot()
+    persisted = status_session_facts_from_snapshot(session.status_snapshot())
     in_memory = status_session_facts(messages)
     sessions.close()
 
     assert persisted.session_usage == in_memory.session_usage
-    assert persisted.session_usage["input_tokens"] == 1500
+    assert persisted.session_usage["input_tokens"] == 3500
     assert persisted.latest_assistant_usage == in_memory.latest_assistant_usage
+    # The Compaction anchors the Context, which still fills the window of the
+    # Model that last answered; the newer User message is estimated on top.
+    assert persisted.context_usage == in_memory.context_usage
+    assert in_memory.context_usage is not None
+    assert in_memory.context_usage["context_window"] == 128_000
+    assert in_memory.context_usage["tokens"] > 400
 
 
 def test_status_text_renders_unset_defaults_and_the_effort_split() -> None:

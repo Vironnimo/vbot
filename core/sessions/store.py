@@ -678,7 +678,7 @@ class SessionStore:
     def status_snapshot(
         self,
         address: SessionAddress,
-    ) -> tuple[str | None, int, JsonObject | None, JsonObject]:
+    ) -> tuple[str | None, int, JsonObject | None, JsonObject, list[ChatMessage]]:
         return self._read_decoded(
             lambda connection: _store_history.status_snapshot(connection, address)
         )

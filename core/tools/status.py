@@ -12,13 +12,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from core.chat.errors import ChatSessionError
 from core.chat.status_report import (
     ReasoningRenderDescriber,
-    StatusSessionFacts,
     build_status_reply,
     resolve_reported_thinking_effort,
     resolve_status_activity,
     resolve_status_model_details,
     resolve_status_project_label,
     resolve_status_sampling,
+    status_session_facts_from_snapshot,
 )
 from core.models.models import ModelRegistry
 from core.projects import (
@@ -328,12 +328,7 @@ def make_status_handler(
         try:
             text = build_status_reply(
                 agent,
-                StatusSessionFacts(
-                    first_message_at=snapshot.first_message_at,
-                    user_message_count=snapshot.user_message_count,
-                    latest_assistant_usage=snapshot.latest_assistant_usage,
-                    session_usage=snapshot.session_usage,
-                ),
+                status_session_facts_from_snapshot(snapshot),
                 model_details.context_window,
                 started_at,
                 model_details.display_name,

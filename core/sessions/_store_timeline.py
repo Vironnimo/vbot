@@ -199,25 +199,6 @@ def _background_records(
     ]
 
 
-def _context_batch(
-    connection: sqlite3.Connection, ranges: Sequence[ViewRange]
-) -> _store_codec.EntryBatch:
-    """The current entries from the newest usage anchor on: context-usage inputs."""
-    anchor = _store_history.view_seq(
-        connection,
-        ranges,
-        where=(
-            "(e.role = 'assistant' AND EXISTS (SELECT 1 FROM assistant_entries AS a "
-            "WHERE a.entry_key = e.entry_key AND a.usage_present = 1)) "
-            "OR (e.role = 'compaction_checkpoint' AND EXISTS (SELECT 1 FROM checkpoint_entries AS k "
-            "WHERE k.entry_key = e.entry_key AND k.context_tokens_after IS NOT NULL))"
-        ),
-    )
-    if anchor is None:
-        return _store_codec.EntryBatch([])
-    return _store_history.view_batch(connection, ranges, lower=anchor)
-
-
 def _page_runs(
     connection: sqlite3.Connection,
     ranges: Sequence[ViewRange],
@@ -371,7 +352,7 @@ def chat_history_snapshot(
                 is not None
             )
     usage = _store_history.session_usage(connection, state)
-    context = _context_batch(connection, ranges)
+    context = _store_history.context_batch(connection, ranges)
     background = _background_records(
         connection,
         ranges,

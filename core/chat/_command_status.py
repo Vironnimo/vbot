@@ -33,6 +33,7 @@ from core.chat.status_report import (
     resolve_status_project_label,
     resolve_status_sampling,
     resolve_status_wire_profile,
+    status_session_facts_from_snapshot,
 )
 from core.projects import AgentOverrides, format_agent_address
 from core.runs import ChatRunManager
@@ -284,11 +285,8 @@ async def _execute_status(
                 "status_snapshot_async",
                 "status_snapshot",
             )
-            status_session = StatusSessionFacts(
-                first_message_at=snapshot.first_message_at,
-                user_message_count=snapshot.user_message_count,
-                latest_assistant_usage=snapshot.latest_assistant_usage,
-                session_usage=snapshot.session_usage,
+            status_session = await _COMMAND_WORKERS.run(
+                status_session_facts_from_snapshot, snapshot
             )
             working_project_id = await _command_session_io(
                 sessions,
