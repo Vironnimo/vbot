@@ -206,37 +206,27 @@
   display: none;
 }
 
-/* A Working line is a small bar of its own, so it never reads as part of the
-   Agent's text: an icon, the call count, a chip per Tool used and the time.
+/* A Working line sits flush with the Agent's text but reads as a control,
+   not prose: an icon, the call count, a chip per Tool used and the time.
    It carries no status dot; each row keeps its own. The child selector
    outweighs the shared `.tool-event-line`, which loads later. */
 .working-block > .working-block__summary {
   min-width: 0;
   max-width: 100%;
   gap: 10px;
-  padding: 3px 10px 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  padding: 2px 0;
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
-  transition:
-    background-color 0.15s,
-    border-color 0.15s;
 }
 
-.working-block__summary:hover {
-  border-color: var(--border-2);
-  background: var(--surface-2);
+.working-block__summary:hover .working-block__count {
+  color: var(--text-hi);
 }
 
 .working-block__summary:focus-visible {
+  border-radius: var(--r-sm);
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-.working-block[open] > .working-block__summary {
-  border-color: var(--border-2);
 }
 
 .working-block__icon {
