@@ -6,7 +6,7 @@ input items. ``store`` is false, so that continuation lives on the connection,
 not on the server. :class:`CodexTransports` is the Runtime-wide owner that keeps
 a Session's socket and its continuation open between Runs (each Run has its own
 Adapter), bounds how many stay open and for how long, and remembers per
-Connection whether the WebSocket currently works.
+Connection whether the WebSocket or request compression currently works.
 :class:`CodexWebSocket` streams one Adapter's requests over those sockets.
 """
 
@@ -98,8 +98,8 @@ _UPGRADE_REQUIRED_STATUS = 426
 _EMPTY_UNCOMPRESSED_BLOCK = b"\x00\x00\xff\xff"
 
 type CodexConnectionKey = tuple[str, str]
-"""``(provider id, local Connection id)``: the unit of WebSocket availability
-and credential-change closing."""
+"""``(provider id, local Connection id)``: the unit of WebSocket availability,
+request compression and credential-change closing."""
 
 type _SocketKey = tuple[CodexConnectionKey, str]
 """A Connection and a Session's conversation id."""
@@ -164,9 +164,9 @@ class CodexTransports:
     ``max_sockets`` stay open (``CODEX_MAX_OPEN_SOCKETS``). Per Connection it
     remembers consecutive WebSocket failures (after
     ``CODEX_WEBSOCKET_FAILURE_LIMIT`` the Connection uses SSE for
-    ``CODEX_WEBSOCKET_RETRY_AFTER_SECONDS``). Correctness never depends on
-    the explicit closing calls: a socket is reused only on its route and
-    handshake.
+    ``CODEX_WEBSOCKET_RETRY_AFTER_SECONDS``) and whether the backend rejected
+    a compressed request body. Correctness never depends on the explicit
+    closing calls: a socket is reused only on its route and handshake.
     """
 
     def __init__(
@@ -184,8 +184,9 @@ class CodexTransports:
         self._closing: set[asyncio.Task[None]] = set()
         self._failures: dict[CodexConnectionKey, int] = {}
         self._websocket_retry_at: dict[CodexConnectionKey, float] = {}
+        self._uncompressed: set[CodexConnectionKey] = set()
 
-    # -- WebSocket availability -------------------------------------------------
+    # -- WebSocket availability and request compression ------------------------
 
     def websocket_available(self, connection: CodexConnectionKey) -> bool:
         """Whether ``connection``'s requests try the WebSocket (not SSE) now."""
@@ -219,6 +220,14 @@ class CodexTransports:
     def record_websocket_success(self, connection: CodexConnectionKey) -> None:
         """A completed exchange ends a run of consecutive failures."""
         self._failures.pop(connection, None)
+
+    def compresses_requests(self, connection: CodexConnectionKey) -> bool:
+        """Whether ``connection``'s HTTP request bodies are sent zstd-compressed."""
+        return connection not in self._uncompressed
+
+    def stop_compressing_requests(self, connection: CodexConnectionKey) -> None:
+        """Send ``connection``'s request bodies uncompressed from now on."""
+        self._uncompressed.add(connection)
 
     # -- Sockets ----------------------------------------------------------------
 

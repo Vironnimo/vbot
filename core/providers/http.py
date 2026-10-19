@@ -13,6 +13,7 @@ import contextvars
 import json
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from compression import zstd
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, override
 
@@ -362,24 +363,29 @@ class RequestPlan:
     lazy_body: bool = False
 
 
+ZSTD_BODY_LEVEL = 3
+"""The zstd level of a compressed request body; OpenAI's Codex client uses it too."""
+
+
 class PreparedRequest:
     """One rendered request: its payload, exact JSON body and payload headers.
 
     Every attempt of the request sends the same body bytes. A lazily planned
     request encodes its body on first use, off the Event Loop, and keeps it
-    for every later attempt. An established stream never sends its request
-    again, so the stream owner calls :meth:`release` and the payload and body
-    need not live as long as the stream; reading either afterwards is a
-    programming error.
+    for every later attempt; so does its zstd-compressed variant. An
+    established stream never sends its request again, so the stream owner
+    calls :meth:`release` and the payload and bodies need not live as long as
+    the stream; reading any of them afterwards is a programming error.
     """
 
-    __slots__ = ("_body", "_payload", "_released", "headers")
+    __slots__ = ("_body", "_payload", "_released", "_zstd_body", "headers")
 
     def __init__(
         self, payload: dict[str, Any], body: bytes | None, headers: dict[str, str]
     ) -> None:
         self._payload: dict[str, Any] | None = payload
         self._body: bytes | None = body
+        self._zstd_body: bytes | None = None
         self._released = False
         self.headers = headers
 
@@ -404,11 +410,26 @@ class PreparedRequest:
             self._body = await _REQUEST_BODY_WORKERS.run(_encode_json_body, self.payload)
         return self._body
 
+    async def zstd_body(self) -> bytes:
+        """Return the JSON body compressed with zstd, compressed once off the Event Loop.
+
+        It is sent with ``Content-Encoding: zstd``; every attempt reuses it.
+        """
+        if self._zstd_body is None:
+            body = await self.encode_body()
+            self._zstd_body = await _REQUEST_BODY_WORKERS.run(_zstd_compress, body)
+        return self._zstd_body
+
     def release(self) -> None:
-        """Drop the payload and body; the headers stay for diagnostics."""
+        """Drop the payload and bodies; the headers stay for diagnostics."""
         self._released = True
         self._payload = None
         self._body = None
+        self._zstd_body = None
+
+
+def _zstd_compress(body: bytes) -> bytes:
+    return zstd.compress(body, level=ZSTD_BODY_LEVEL)
 
 
 type PayloadRevision = Callable[[dict[str, Any]], bool]

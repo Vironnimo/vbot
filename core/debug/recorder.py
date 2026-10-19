@@ -16,6 +16,7 @@ not pass through httpx.
 from __future__ import annotations
 
 import time
+from compression import zstd
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
@@ -134,6 +135,7 @@ class _TraceCapture:
             "headers": headers,
         }
         self._request_body = request_body
+        self._request_encoding = httpx.Headers(headers).get("content-encoding")
         self._response: dict[str, Any] | None = None
         self._error: dict[str, str] | None = None
         self._body_chunks: list[bytes] = []
@@ -245,6 +247,9 @@ class _TraceCapture:
 
     def _request_body_text(self) -> str | None:
         body = self._request_body
+        if body:
+            # A compressed request body reads as the payload the Adapter built.
+            body = _decode_request_content(body, self._request_encoding)
         if not body or self._body_limit is None or len(body) <= self._body_limit:
             return _decode_body(body)
         text = _decode_body(body[: self._body_limit]) or ""
@@ -277,6 +282,19 @@ def _decode_content(body: bytes, content_encoding: str | None) -> bytes:
             200, headers={"content-encoding": content_encoding}, content=body
         ).content
     except httpx.DecodingError:
+        return body
+
+
+def _decode_request_content(body: bytes, content_encoding: str | None) -> bytes:
+    """Undo a request ``Content-Encoding`` vBot sends (zstd); other bodies stay as sent.
+
+    Bytes that fail to decode are kept raw, so the trace shows what was sent.
+    """
+    if (content_encoding or "").strip().lower() != "zstd":
+        return body
+    try:
+        return zstd.decompress(body)
+    except zstd.ZstdError:
         return body
 
 

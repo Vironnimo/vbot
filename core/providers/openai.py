@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import replace
@@ -107,6 +108,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
 from core.providers.wire_profile import Protocol
 from core.utils.http_status import parse_rate_limit_retry_after
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from datetime import tzinfo
@@ -140,6 +142,19 @@ __all__ = [
     "STRUCTURED_OUTPUT_PARAMETER_NAMES",
     "TOOL_PARAMETER_NAMES",
 ]
+
+_LOGGER = get_logger("providers.openai")
+
+CODEX_ZSTD_MIN_BYTES = 32 * 1024
+"""A Codex HTTP request body at least this large is sent zstd-compressed, like
+OpenAI's Codex client sends its bodies; a smaller one uploads in milliseconds."""
+
+_COMPRESSION_REJECTION = re.compile(r"content[- ]encoding|zstd|compress|unsupported encoding")
+"""How a 400 names the request encoding it rejects (lowercased)."""
+
+
+class _CompressedBodyRejectedError(Exception):
+    """The Codex backend refused a zstd request body; resend it uncompressed."""
 
 
 class OpenAIAdapter(OpenAICompatibleAdapter):
@@ -785,15 +800,60 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
     ) -> httpx.Response:
+        """Establish one streaming POST; a large Codex body goes zstd-compressed.
+
+        A Codex body of at least ``CODEX_ZSTD_MIN_BYTES`` is compressed once,
+        off the Event Loop, and every attempt resends those bytes. When the
+        backend rejects the encoding (HTTP 415, a 400 naming it, or
+        ``x-openai-retry-uncompressed: true``), the request is sent once more
+        uncompressed and the Connection's later bodies stay uncompressed.
+        """
         headers = {**request.headers, **request_headers}
+        body = await request.encode_body()
+        if (
+            endpoint_path == CODEX_RESPONSES_ENDPOINT
+            and len(body) >= CODEX_ZSTD_MIN_BYTES
+            and self._codex_transports.compresses_requests(self._codex_connection)
+        ):
+            compressed_headers = {**headers, "Content-Encoding": "zstd"}
+            try:
+                return await connect_streaming_with_retry(
+                    self._client,
+                    endpoint_path,
+                    await request.zstd_body(),
+                    build_headers=lambda: self._attempt_headers(cache_scope_id, compressed_headers),
+                    handle_error_status=self._handle_compressed_error_status,
+                    auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
+                )
+            except _CompressedBodyRejectedError as rejected:
+                self._codex_transports.stop_compressing_requests(self._codex_connection)
+                _LOGGER.warning(
+                    "Codex backend rejected a zstd request body (%s); sending uncompressed",
+                    rejected,
+                )
         return await connect_streaming_with_retry(
             self._client,
             endpoint_path,
-            await request.encode_body(),
+            body,
             build_headers=lambda: self._attempt_headers(cache_scope_id, headers),
             handle_error_status=self._handle_error_status,
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
         )
+
+    def _handle_compressed_error_status(
+        self,
+        status_code: int,
+        error_body: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        """Tell a rejected request encoding from any other error of a compressed request."""
+        if (
+            status_code == 415
+            or response_headers.get("x-openai-retry-uncompressed", "").strip().lower() == "true"
+            or (status_code == 400 and _COMPRESSION_REJECTION.search(error_body.lower()))
+        ):
+            raise _CompressedBodyRejectedError(f"HTTP {status_code}")
+        self._handle_error_status(status_code, error_body, response_headers)
 
     async def _stream_responses(
         self,
