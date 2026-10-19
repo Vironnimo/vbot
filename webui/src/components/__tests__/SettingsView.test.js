@@ -44,6 +44,9 @@ vi.mock('svelte', async () => {
 });
 
 const { default: SettingsView } = await import('../SettingsView.svelte');
+// Compile panel fixtures before the test clock starts. The view still decides
+// when to request and mount them; first-use compilation is not polling behavior.
+await Promise.all(Object.values(settingsPanelLoaders).map((load) => load()));
 
 async function clickButton(label) {
   getButton(label).click();
