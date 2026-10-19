@@ -66,11 +66,17 @@ Used on the `api-key` Connection when the resolved wire profile's `protocol` is 
 
 ### Stream Error Classification
 
-- Both Responses paths - subscription Codex Responses over WebSocket or SSE, and Platform `/responses` - create lenient stream states (`openai.py::_responses_stream_state`): an in-band error whose code vBot does not know is retryable and enters Chat's bounded recovery (nine attempts per route, thirty minutes). Known deterministic codes stay fatal, including OpenAI's quota and spend codes (`insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded`), `usage_not_included`, `invalid_prompt`, and the policy codes `cyber_policy`, `bio_policy` and `misalignment_policy_violation` (`errors.py`).
-- A wrapped WebSocket error frame `{"type": "error", "status": <HTTP status>, "error": {...}}` is classified by its status like an HTTP failure: 401/403 auth, 429 rate limit, 502/503/504 transient, any other 5xx retryable through leniency. Any other 4xx rejects the request and stays fatal unless its code is known retryable (`websocket_connection_limit_reached`). Persisted failures carry the error object, code and status as trailing JSON (`providers/request-policy.md`).
+- Both Responses paths - subscription Codex Responses over WebSocket or SSE, and Platform `/responses` - create lenient stream states (`openai.py::_responses_stream_state`): an in-band error whose code vBot does not know is retryable and enters Chat's bounded recovery (nine attempts per route, thirty minutes). Known deterministic codes stay fatal, including OpenAI's quota, spend and entitlement codes (`QUOTA_EXHAUSTED_ERROR_CODES`: `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `organization_usage_limit_exceeded`, `project_spend_limit_exceeded`, `usage_not_included`), `invalid_prompt`, and the policy codes `cyber_policy`, `bio_policy` and `misalignment_policy_violation` (`errors.py`).
+- A wrapped WebSocket error frame `{"type": "error", "status": <HTTP status>, "error": {...}, "headers": {...}}` is classified by its status like an HTTP failure: 401/403 auth, 429 rate limit, 502/503/504 transient, any other 5xx retryable through leniency. Any other 4xx rejects the request and stays fatal unless its code is known retryable (`websocket_connection_limit_reached`). A quota code or type (`QUOTA_EXHAUSTED_ERROR_CODES`) stays fatal even at status 429, and a reached usage limit follows Usage Limit below. The frame's `headers` (under `error` first, then top-level) report the wait like HTTP response headers. Persisted failures carry the error object, code and status as trailing JSON, never the headers (`providers/request-policy.md`).
 - Evidence: on 2026-09-29 a Swarm Run on `openai/gpt-6-luna::subscription` failed at once with the in-band message "Unable to verify model access right now. Please retry." because its unknown code was fatal, while the official Codex CLI retried the same outage ("Reconnecting... n/5"). The policy mirrors `openai/codex` at commit `26dd19ef478c` (read 2026-09-29): `codex-api/src/sse/responses_error.rs::parse_failed_response` retries every unlisted `response.failed` code, `codex-api/src/endpoint/responses_websocket.rs::map_wrapped_websocket_error_event` treats a frame's status as an HTTP error, and `protocol/src/error.rs::CodexErr::retry_delay` defines which errors stop. Codex is OpenAI's own client for the private subscription wire, but its source is no official contract. The exact code and status of the 2026-09-29 error were not captured and remain unknown.
 - Deliberate difference: Codex also retries HTTP 500 at stream establishment; vBot's shared policy still treats a Provider POST 500 as fatal.
 - Regression anchor: `test_openai_websocket.py::test_codex_error_events_follow_codex_retry_classification`.
+
+### Usage Limit
+
+- The subscription answers an exhausted ChatGPT plan allowance with HTTP 429 (SSE) or a status-429 WebSocket error frame whose error has `type: "usage_limit_reached"`, the `plan_type`, and the reset as `resets_at` (epoch seconds; older backends sent `resets_in_seconds`). Source: `openai/codex` at commit `e4568a3538c9` (read 2026-10-19): `codex-api/src/api_bridge.rs` maps it to `UsageLimitReached`, which `protocol/src/error.rs::retry_delay` never retries, and `codex-api/src/endpoint/responses_websocket.rs` maps the frame like the HTTP error. Not live-verified in vBot.
+- vBot uses the reported reset (user requirement 2026-10-19: wherever a Provider reports a number, vBot uses it, including reset times): `resets_at`, else `resets_in_seconds`, else the response's or frame's reported wait (`Retry-After`, rate-limit reset headers). A reset within the retry cap (`MAX_RETRY_AFTER_SECONDS`, 60 s) is a `ProviderRateLimitError` whose `retry_after` is exactly the time until the reset; the shared bounded jitter is still added. A later or unreported reset is a non-retryable `ProviderUsageLimitError` (`resets_at` in UTC). The message reads `Subscription usage limit reached; it resets at <YYYY-MM-DD HH:MM zone>: <detail>`, in the Settings timezone (`ProviderRuntime.get_adapter` sets `ProviderAdapter.display_timezone`), followed by the HTTP detail or the frame's JSON facts (`errors.py::usage_limit_error`).
+- Tests: `test_errors.py::test_usage_limit_classifies_by_its_reported_reset`, `test_openai_streaming.py::test_codex_http_429_tells_an_exhausted_allowance_from_a_rate_limit`, `test_openai_websocket.py::test_codex_error_frames_wait_as_long_as_the_provider_reports`.
 
 ## OAuth (subscription connection)
 
@@ -212,12 +218,12 @@ The subscription usage fetcher in `core/providers/usage.py` (see `providers/usag
 
 - 401/403 -> `ProviderAuthError`
 - Shared OAuth request recovery may handle one initial HTTP 401 after classification; API-key wires have no refresh capability.
-- 429 -> `ProviderRateLimitError`
+- 429 -> `ProviderRateLimitError`, unless the body's `error` reports a reached usage limit (Usage Limit above) or a quota code or type (`QUOTA_EXHAUSTED_ERROR_CODES`, non-retryable `Quota exhausted: <detail>`), as in Codex `api_bridge.rs`. `OpenAIAdapter._classify_http_status` decides, for Responses and Chat Completions requests alike.
 - 502/503 -> retryable `ProviderError`
 - Other 4xx/5xx -> non-retryable `ProviderError`
 - Timeout -> `ProviderTimeoutError`
 - Connect errors -> `NetworkError`
-- Responses in-band errors are classified by exact structured code rather than message text; auth, rate-limit, timeout, transient service, and fatal codes enter the same exception taxonomy. Unknown codes fail closed as non-retryable.
+- Responses in-band errors are classified by exact structured code rather than message text; auth, rate-limit, timeout, transient service, and fatal codes enter the same exception taxonomy. Unknown codes retry through leniency (Stream Error Classification above).
 
 ## Constraints & Gotchas
 

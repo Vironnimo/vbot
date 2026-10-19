@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -12,7 +14,9 @@ from core.providers.errors import (
     ProviderAuthError,
     ProviderRateLimitError,
     ProviderTimeoutError,
+    ProviderUsageLimitError,
     classify_in_band_provider_error,
+    usage_limit_error,
 )
 from core.utils.errors import ProviderError, VBotError
 
@@ -109,6 +113,14 @@ def test_network_error_is_retryable_without_becoming_a_provider_error() -> None:
             id="specific-code-beats-fallback-type",
         ),
         pytest.param(
+            {"message": "no quota", "code": 429, "error_type": "insufficient_quota"},
+            True,
+            ProviderError,
+            False,
+            None,
+            id="exhausted-quota-beats-a-wait-status",
+        ),
+        pytest.param(
             {
                 "message": "no access",
                 "metadata": {"error_type": "authentication"},
@@ -202,3 +214,101 @@ def test_non_mapping_in_band_error_stays_fatal_plain_text() -> None:
     assert type(classified) is ProviderError
     assert classified.retryable is False
     assert str(classified) == "quota exceeded"
+
+
+_NOW = datetime(2026, 10, 19, 12, 0, tzinfo=UTC)
+
+
+def _epoch(delta: timedelta) -> int:
+    return int((_NOW + delta).timestamp())
+
+
+@pytest.mark.parametrize(
+    ("error", "reported_wait", "expected_type", "retry_after", "wording"),
+    [
+        pytest.param(
+            {"type": "usage_limit_reached", "resets_at": _epoch(timedelta(hours=3))},
+            None,
+            ProviderUsageLimitError,
+            None,
+            "Subscription usage limit reached; it resets at 2026-10-19 17:00 CEST: detail",
+            id="distant-reset-stops",
+        ),
+        pytest.param(
+            {"type": "usage_limit_reached", "resets_at": _epoch(timedelta(seconds=45))},
+            None,
+            ProviderRateLimitError,
+            45.0,
+            "Subscription usage limit reached; it resets at 2026-10-19 14:00 CEST, "
+            "in 45 seconds: detail",
+            id="reset-within-the-retry-cap-waits-exactly",
+        ),
+        pytest.param(
+            {
+                "code": "usage_limit_reached",
+                "resets_at": _epoch(timedelta(hours=3)),
+                "resets_in_seconds": 30,
+            },
+            10.0,
+            ProviderUsageLimitError,
+            None,
+            "it resets at 2026-10-19 17:00 CEST: detail",
+            id="reset-time-beats-reset-duration-and-reported-wait",
+        ),
+        pytest.param(
+            {"type": "usage_limit_reached", "resets_in_seconds": 7200},
+            10.0,
+            ProviderUsageLimitError,
+            None,
+            "it resets at 2026-10-19 16:00 CEST: detail",
+            id="reset-duration-beats-reported-wait",
+        ),
+        pytest.param(
+            {"type": "usage_limit_reached"},
+            20.0,
+            ProviderRateLimitError,
+            20.0,
+            "in 20 seconds: detail",
+            id="reported-wait-names-the-reset",
+        ),
+        pytest.param(
+            {"type": "usage_limit_reached", "resets_at": "soon"},
+            None,
+            ProviderUsageLimitError,
+            None,
+            "Subscription usage limit reached; no reset time was reported: detail",
+            id="no-usable-reset-stops",
+        ),
+    ],
+)
+def test_usage_limit_classifies_by_its_reported_reset(
+    error: dict[str, Any],
+    reported_wait: float | None,
+    expected_type: type[ProviderError],
+    retry_after: float | None,
+    wording: str,
+) -> None:
+    classified = usage_limit_error(
+        error,
+        "detail",
+        reported_wait=reported_wait,
+        display_timezone=ZoneInfo("Europe/Berlin"),
+        now=_NOW,
+    )
+
+    assert type(classified) is expected_type
+    assert classified.retryable is (expected_type is ProviderRateLimitError)
+    assert classified.retry_after == retry_after
+    assert wording in str(classified)
+
+
+def test_usage_limit_error_keeps_the_reported_reset_and_ignores_other_errors() -> None:
+    resets_at = _NOW + timedelta(hours=3)
+    classified = usage_limit_error(
+        {"type": "usage_limit_reached", "resets_at": resets_at.timestamp()}, "detail", now=_NOW
+    )
+
+    assert isinstance(classified, ProviderUsageLimitError)
+    assert classified.resets_at == resets_at
+    assert "it resets at 2026-10-19 15:00 UTC" in str(classified)
+    assert usage_limit_error({"type": "rate_limit_exceeded"}, "detail", now=_NOW) is None

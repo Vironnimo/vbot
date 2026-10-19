@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import UTC, tzinfo
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 from urllib.parse import urlparse
 
@@ -267,6 +268,13 @@ class ProviderAdapter(ABC):
     Set by the Provider runtime from the Connection's effective base URL
     (:func:`is_local_provider_base_url`); streaming callers turn their stall
     guards off for such endpoints, whose prefill can be silent for minutes.
+    """
+
+    display_timezone: tzinfo = UTC
+    """The zone in which this Adapter's errors name wall-clock times.
+
+    Set by the Provider runtime from the Settings timezone; an error naming a
+    Provider-reported reset (such as a reached usage limit) states it there.
     """
 
     def __init__(

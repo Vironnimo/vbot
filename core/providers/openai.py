@@ -10,6 +10,7 @@ continuation and SSE transport live here."""
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, ClassVar, cast, override
@@ -76,6 +77,8 @@ from core.providers.errors import (
     ProviderAuthError,
     ProviderError,
     ProviderTimeoutError,
+    exhausted_quota_code,
+    usage_limit_error,
 )
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
@@ -99,8 +102,11 @@ from core.providers.openai_subscription_auth import extract_chatgpt_account_id
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
 from core.providers.wire_profile import Protocol
+from core.utils.http_status import parse_rate_limit_retry_after
 
 if TYPE_CHECKING:
+    from datetime import tzinfo
+
     from core.debug import ProviderDebugRecorder
 
 __all__ = [
@@ -492,7 +498,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 RESPONSES_POLICY_ENDPOINT, request, request_headers=request_headers
             )
             async with aclosing(
-                self._responses_sse_deltas(response, _responses_stream_state())
+                self._responses_sse_deltas(response, _responses_stream_state(self.display_timezone))
             ) as deltas:
                 async for delta in deltas:
                     yield delta
@@ -661,7 +667,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             )
 
         def open_stream(request: PreparedRequest) -> AsyncGenerator[dict[str, Any]]:
-            state = _responses_stream_state()
+            state = _responses_stream_state(self.display_timezone)
             if states is not None:
                 states.append(state)
             return self._stream_responses(
@@ -696,6 +702,42 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             else OPENAI_API_KEY_WIRE_KEY
         )
         return model.context_window_for(connection_id)
+
+    @override
+    def _classify_http_status(
+        self,
+        status_code: int,
+        *,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        """Tell an exhausted allowance from a rate limit; both arrive as HTTP 429.
+
+        The body's ``error`` decides, as in OpenAI's Codex client
+        (``codex-api/src/api_bridge.rs``, read 2026-10-19): a reached
+        subscription usage limit classifies by its reported reset
+        (``usage_limit_error``), an exhausted quota fails without retry, and any
+        other 429 stays a rate limit.
+        """
+
+        if status_code == 429:
+            error = _http_error_object(status_code, detail)
+            exhausted = usage_limit_error(
+                error,
+                detail,
+                reported_wait=parse_rate_limit_retry_after(response_headers),
+                display_timezone=self.display_timezone,
+            )
+            if exhausted is None and exhausted_quota_code(error) is not None:
+                exhausted = ProviderError(f"Quota exhausted: {detail}", retryable=False)
+            if exhausted is not None:
+                exhausted.status_code = status_code
+                raise exhausted
+        super()._classify_http_status(
+            status_code,
+            detail=detail,
+            response_headers=response_headers,
+        )
 
     def _handle_error_status(
         self,
@@ -766,7 +808,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         conversation_id: str | None = None,
         state: ResponsesStreamState | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
-        stream_state = state or _responses_stream_state()
+        stream_state = state or _responses_stream_state(self.display_timezone)
         if (
             endpoint_path == CODEX_RESPONSES_ENDPOINT
             and cache_scope_id
@@ -932,13 +974,29 @@ def _clamp_codex_cache_scope(cache_scope_id: str) -> str:
     return cache_scope_id[:_CODEX_CACHE_SCOPE_MAX_LENGTH]
 
 
-def _responses_stream_state() -> ResponsesStreamState:
+def _responses_stream_state(display_timezone: tzinfo) -> ResponsesStreamState:
     """Retry in-band errors whose code is unknown, as OpenAI's Codex client does.
 
     Known deterministic codes and requests rejected with a client-error status
-    stay fatal; Chat's recovery budget bounds the retries.
+    stay fatal; Chat's recovery budget bounds the retries. A reported
+    usage-limit reset is named in ``display_timezone``.
     """
-    return ResponsesStreamState(lenient_unknown_errors=True, rejected_requests_fatal=True)
+    return ResponsesStreamState(
+        lenient_unknown_errors=True,
+        rejected_requests_fatal=True,
+        display_timezone=display_timezone,
+    )
+
+
+def _http_error_object(status_code: int, detail: str) -> Mapping[str, Any]:
+    """The ``error`` object of an HTTP error body; ``detail`` is ``"<status> <body>"``."""
+
+    try:
+        body = json.loads(detail.removeprefix(f"{status_code} "))
+    except ValueError, RecursionError:
+        return {}
+    error = body.get("error") if isinstance(body, Mapping) else None
+    return error if isinstance(error, Mapping) else {}
 
 
 # Platform embedding Model ids; the ``/models`` listing has no other fact.

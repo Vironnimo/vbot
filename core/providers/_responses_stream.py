@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, tzinfo
 from typing import Any
 
 from core.providers._responses_output import (
@@ -35,10 +36,13 @@ from core.providers.adapter import (
 from core.providers.errors import (
     ProviderError,
     classify_in_band_error_type,
+    exhausted_quota_code,
     in_band_error_text,
+    usage_limit_error,
 )
 from core.providers.http import split_stream_lines
 from core.providers.reasoning import merge_reasoning_meta
+from core.utils.http_status import parse_rate_limit_retry_after, parse_retry_after
 
 
 @dataclass
@@ -51,6 +55,8 @@ class ResponsesStreamState:
     # rejected. Routers that can serve the identical request through another
     # upstream leave this off.
     rejected_requests_fatal: bool = False
+    # The zone in which an error names a reported usage-limit reset.
+    display_timezone: tzinfo = UTC
     tool_call_ids_by_output_index: dict[int, str] = field(default_factory=dict)
     item_id_to_call_id: dict[str, str] = field(default_factory=dict)
     tool_call_order: list[str] = field(default_factory=list)
@@ -133,6 +139,7 @@ def normalize_responses_stream_event(
             event_data,
             lenient_unknown=state.lenient_unknown_errors,
             rejected_requests_fatal=state.rejected_requests_fatal,
+            display_timezone=state.display_timezone,
         )
     if event_type in RESPONSES_INCOMPLETE_EVENTS:
         return _completed_event_deltas(event_data, state, implied_status="incomplete")
@@ -603,18 +610,33 @@ def _classify_responses_stream_error(
     *,
     lenient_unknown: bool = False,
     rejected_requests_fatal: bool = False,
+    display_timezone: tzinfo = UTC,
 ) -> ProviderError:
     """Map exact Responses error facts into vBot's shared recovery taxonomy.
 
-    A WebSocket error frame carries the HTTP ``status`` its request would have
-    received; it classifies like a numeric code. The raised message embeds the
-    error facts as trailing JSON, so code and status survive into persisted Run
-    failures.
+    A WebSocket error frame carries the HTTP ``status`` and ``headers`` its
+    request would have received; the status classifies like a numeric code and
+    the headers report the wait like HTTP response headers. A reached usage
+    limit classifies by its reported reset (:func:`usage_limit_error`); an
+    exhausted quota stays fatal whatever its status. The raised message embeds
+    the error facts as trailing JSON, so code and status survive into persisted
+    Run failures.
     """
 
     payload = _responses_error_payload(event_data)
     error = payload.get("error")
     error_mapping = error if isinstance(error, Mapping) else {}
+    facts = _responses_error_facts(payload, error_mapping)
+    status = _error_status(payload)
+    reported_wait = _reported_wait(event_data, error_mapping, status)
+    usage_limit = usage_limit_error(
+        error_mapping,
+        in_band_error_text(None, facts),
+        reported_wait=reported_wait,
+        display_timezone=display_timezone,
+    )
+    if usage_limit is not None:
+        return usage_limit
     error_type = _first_non_empty_string(
         payload.get("error_type"),
         error_mapping.get("error_type"),
@@ -624,8 +646,11 @@ def _classify_responses_stream_error(
     code: Any = error_mapping.get("code")
     if code is None:
         code = payload.get("code")
-    classifier = error_type or (_non_empty_string_or_none(code) if isinstance(code, str) else None)
-    status = _error_status(payload)
+    classifier = (
+        exhausted_quota_code(error_mapping)
+        or error_type
+        or (_non_empty_string_or_none(code) if isinstance(code, str) else None)
+    )
     numeric_code = code if _is_integer(code) else status
     availability = error_mapping.get("availability", payload.get("availability"))
     rejected_request = (
@@ -634,24 +659,62 @@ def _classify_responses_stream_error(
         and 400 <= status < 500
         and status not in _WAIT_CLIENT_STATUSES
     )
-    return classify_in_band_error_type(
-        in_band_error_text(
-            _responses_error_message(event_data),
-            _responses_error_facts(payload, error_mapping),
-        ),
+    classified = classify_in_band_error_type(
+        in_band_error_text(_responses_error_message(event_data), facts),
         classifier=classifier,
         numeric_code=numeric_code,
         availability=availability if isinstance(availability, Mapping) else None,
         lenient_unknown=lenient_unknown and not rejected_request,
     )
+    if classified.retryable and classified.retry_after is None:
+        classified.retry_after = reported_wait
+    return classified
+
+
+def _reported_wait(
+    event_data: Mapping[str, Any], error_mapping: Mapping[str, Any], status: int | None
+) -> float | None:
+    """The wait an error frame's headers report, read like HTTP response headers.
+
+    OpenAI's Codex client reads ``error.headers`` before the frame's top-level
+    ``headers`` (``codex-api/src/endpoint/responses_websocket.rs``, read
+    2026-10-19).
+    """
+
+    for container in (error_mapping, event_data):
+        headers = _frame_headers(container.get("headers"))
+        if not headers:
+            continue
+        wait = (
+            parse_rate_limit_retry_after(headers) if status == 429 else parse_retry_after(headers)
+        )
+        if wait is not None:
+            return wait
+    return None
+
+
+def _frame_headers(raw: Any) -> dict[str, str]:
+    """Lowercase-keyed header strings from a frame's JSON ``headers`` object."""
+
+    if not isinstance(raw, Mapping):
+        return {}
+    headers: dict[str, str] = {}
+    for name, value in raw.items():
+        if not isinstance(name, str):
+            continue
+        if isinstance(value, bool):
+            headers[name.lower()] = "true" if value else "false"
+        elif isinstance(value, (str, int, float)):
+            headers[name.lower()] = str(value)
+    return headers
 
 
 # Client-error statuses that ask the caller to wait rather than reject the request.
 _WAIT_CLIENT_STATUSES = frozenset({408, 429})
 
 # Envelope fields that describe the error itself. A failed response's
-# instructions, output and Usage, or a WebSocket frame's headers, stay out of
-# the persisted error text.
+# instructions, output and Usage, or a WebSocket frame's headers (top-level or
+# under ``error``), stay out of the persisted error text.
 _ERROR_FACT_FIELDS = (
     "type",
     "status",
@@ -670,7 +733,7 @@ def _responses_error_facts(
 ) -> dict[str, Any]:
     facts = {name: payload[name] for name in _ERROR_FACT_FIELDS if name in payload}
     if error_mapping:
-        facts["error"] = dict(error_mapping)
+        facts["error"] = {name: value for name, value in error_mapping.items() if name != "headers"}
     return facts
 
 

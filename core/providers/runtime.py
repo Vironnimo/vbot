@@ -7,8 +7,10 @@ import threading
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
+from datetime import UTC, tzinfo
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.models.database import ModelDatabaseRefresh, begin_runtime_model_database_refresh
@@ -49,10 +51,14 @@ from core.providers.wire_profiles import (
     log_wire_profile_issue,
     wire_profile_files,
 )
+from core.settings.settings import effective_timezone_name
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
+from core.utils.logging import get_logger
 from core.utils.retry import caller_owns_retries
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
+
+_LOGGER = get_logger("providers.runtime")
 
 # Minimum pause between automatic local sweeps, measured from the end of the
 # previous sweep. It is also the probes' retry policy: each sweep makes one
@@ -228,7 +234,17 @@ class ProviderRuntime:
         )
         adapter.bind_wire_profiles(self._wire_profiles.bind(provider_id, connection_config.id))
         adapter.local_endpoint = is_local_provider_base_url(base_url or provider_config.base_url)
+        adapter.display_timezone = self._display_timezone()
         return cast(ProviderAdapter, adapter)
+
+    def _display_timezone(self) -> tzinfo:
+        """The Settings timezone, in which Adapters name Provider-reported times."""
+
+        try:
+            return ZoneInfo(effective_timezone_name(self._storage.load_settings()))
+        except OSError, ValueError:
+            _LOGGER.warning("Failed to load application timezone", exc_info=True)
+            return UTC
 
     def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
         provider_config = self._providers.get(connection.provider_id)
