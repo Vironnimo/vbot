@@ -44,6 +44,7 @@ Some directories are created only when their owning feature first writes data.
 | `artifacts/models/` | Complete runtime Model DB published by Model refresh | `vbot model list/refresh`; do not hand-edit generated catalogs |
 | `recall/` | Derived lexical/vector Session recall indexes | Use recall behavior and rebuild mechanisms; canonical history remains in Sessions |
 | `logs/` | Daily server/kernel application logs | `vbot log list/read` |
+| `bin/` | Only for a server started from a source checkout: the `vbot` command its shells use to reach it, rewritten at every start | Leave it to the server |
 | `artifacts/debug/` | Debug trace index and redacted raw Provider traffic under `traces/` | `vbot debug status/traces/trace/clear` |
 | `artifacts/performance/` | Performance recordings: a timeline trace plus a summary per recording; the newest 20 are kept | `vbot performance recordings/record`; do not hand-edit |
 | `.env`, `oauth/` | Plaintext credential files, which vBot ignores until `vbot data-store secrets convert --yes` imports them into the Secret Store | `vbot data-store secrets status` names them and what to do; never print them or copy their values |

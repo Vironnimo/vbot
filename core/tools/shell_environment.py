@@ -10,7 +10,10 @@ One owner builds it from explicit layers, each applied over the previous one:
 2. **This vBot instance.** ``VBOT_DATA_DIR``, ``VBOT_SERVER_PORT`` and
    ``VBOT_INSTALL_ROOT`` exactly when the server itself has them, so a ``vbot``
    command reaches the instance it runs under, and a worktree's own marker still
-   decides otherwise.
+   decides otherwise. A server that runs from a source checkout also leads
+   ``PATH`` with its own ``vbot`` command (``provide_instance_command``): the
+   ``vbot`` an installation put on ``PATH`` always reaches the installed
+   instance.
 3. **Output.** ``TERM``: a Terminal Session runs in a real terminal
    (``xterm-256color``); a command writes to a pipe that no one answers or
    renders (``dumb``).
@@ -58,6 +61,10 @@ SCRATCH_DIR_ENV = "VBOT_SCRATCH_DIR"
 
 # Variables that identify this vBot instance; passed on when the server has them.
 _INSTANCE_VARIABLES = ("VBOT_DATA_DIR", "VBOT_SERVER_PORT", "VBOT_INSTALL_ROOT")
+# The checkout this code runs from; an installed payload has no ``.git``.
+_CHECKOUT = Path(__file__).resolve().parents[2]
+# The directory of this server's own ``vbot`` command, set once at server start.
+_instance_command_directory: Path | None = None
 # Variables vBot's own Python process carries and a user's shell must not.
 _PROCESS_VARIABLES = frozenset({"PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV", "__PYVENV_LAUNCHER__"})
 
@@ -202,7 +209,93 @@ def _instance_environment() -> dict[str, str]:
     """The login base with this vBot instance's variables (layers 1 and 2)."""
     environment = _login_environment()
     _apply(environment, _instance_variables())
+    if _instance_command_directory is not None:
+        path = _get(environment, "PATH")
+        leading = str(_instance_command_directory)
+        _apply(environment, {"PATH": f"{leading}{os.pathsep}{path}" if path else leading})
     return environment
+
+
+def provide_instance_command(
+    directory: Path,
+    data_dir: Path,
+    port: int,
+    *,
+    checkout: Path = _CHECKOUT,
+    interpreter: str = sys.executable,
+) -> Path | None:
+    """Write a ``vbot`` command for this server and lead every shell's PATH with it.
+
+    Only for a server that runs from a source checkout: an installed server's shells
+    keep the installation's own ``vbot``. The command runs the checkout's CLI with
+    this server's data directory and port, so a ``vbot`` call in a Run reaches the
+    server that runs it. Returns the directory, or None for an installed server.
+    """
+    global _instance_command_directory
+    cli = checkout / "cli" / "main.py"
+    installed = os.environ.get("VBOT_INSTALL_ROOT") or not (checkout / ".git").exists()
+    if installed or not cli.is_file():
+        return None
+    directory.mkdir(parents=True, exist_ok=True)
+    data, python, script = str(data_dir), str(interpreter), str(cli)
+    if os.name == "nt":
+        # PowerShell runs vbot.ps1 in preference to vbot.cmd and passes each argument
+        # unchanged; cmd.exe and programs that start vbot through cmd use the .cmd.
+        (directory / "vbot.ps1").write_text(
+            _powershell_command(data, port, python, script), encoding="utf-8"
+        )
+        (directory / "vbot.cmd").write_text(
+            _cmd_command(data, port, python, script), encoding="utf-8", newline="\r\n"
+        )
+        # Git Bash finds a file without extension before an installation's vbot.exe.
+        python, script = Path(python).as_posix(), Path(script).as_posix()
+    sh = directory / "vbot"
+    sh.write_text(
+        "#!/bin/sh\n"
+        f"VBOT_DATA_DIR={_sh_quote(data)} VBOT_SERVER_PORT={port} "
+        f'exec {_sh_quote(python)} {_sh_quote(script)} "$@"\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    sh.chmod(0o755)
+    _instance_command_directory = directory
+    return directory
+
+
+def _powershell_command(data: str, port: int, python: str, script: str) -> str:
+    def quote(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    call = f"& {quote(python)} {quote(script)} @args"
+    # $env: belongs to the whole shell: the previous values come back after the call.
+    return (
+        "$saved = $env:VBOT_DATA_DIR, $env:VBOT_SERVER_PORT\n"
+        f"$env:VBOT_DATA_DIR = {quote(data)}\n"
+        f"$env:VBOT_SERVER_PORT = '{port}'\n"
+        "try {\n"
+        f"    if ($MyInvocation.ExpectingInput) {{ $input | {call} }} else {{ {call} }}\n"
+        "} finally {\n"
+        "    $env:VBOT_DATA_DIR, $env:VBOT_SERVER_PORT = $saved\n"
+        "}\n"
+        "exit $LASTEXITCODE\n"
+    )
+
+
+def _cmd_command(data: str, port: int, python: str, script: str) -> str:
+    def quote(value: str) -> str:
+        return value.replace("%", "%%")
+
+    return (
+        "@echo off\n"
+        "setlocal\n"
+        f'set "VBOT_DATA_DIR={quote(data)}"\n'
+        f'set "VBOT_SERVER_PORT={port}"\n'
+        f'"{quote(python)}" "{quote(script)}" %*\n'
+    )
+
+
+def _sh_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
 
 
 def inherited_value(name: str) -> str | None:
@@ -350,6 +443,7 @@ __all__ = [
     "RunIdentity",
     "command_environment",
     "inherited_value",
+    "provide_instance_command",
     "scratch_environment",
     "terminal_environment",
 ]

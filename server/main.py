@@ -42,6 +42,7 @@ from core.access.server_record import (
     write_server_access,
 )
 from core.storage.layout import DataDirectoryLayout, initialize_data_directory
+from core.tools.shell_environment import provide_instance_command
 from core.utils.config import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -191,6 +192,17 @@ def main(argv: list[str] | None = None) -> None:
         except BaseException:
             remove_server_control(control)
             raise
+        try:
+            provide_instance_command(
+                DataDirectoryLayout(config.data_dir).instance_command,
+                config.data_dir,
+                server_bind["listen_port"],
+            )
+        except OSError:
+            # Shells then find the vbot on PATH, as without a checkout.
+            get_logger("server.main").warning(
+                "Could not write the instance's vbot command", exc_info=True
+            )
         lifecycle = _ServerLifecycle(
             config=config,
             server_bind=server_bind,

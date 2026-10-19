@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -29,6 +30,7 @@ def login_base(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         "VBOT_UPDATE_HANDOFF": "stale-token",
     }
     monkeypatch.setattr(shell_environment, "_login_environment", lambda: dict(base))
+    monkeypatch.setattr(shell_environment, "_instance_command_directory", None)
     for name in ("VBOT_DATA_DIR", "VBOT_SERVER_PORT", "VBOT_INSTALL_ROOT"):
         monkeypatch.delenv(name, raising=False)
     return base
@@ -121,6 +123,66 @@ def test_server_environment_base_drops_what_vbot_added(monkeypatch: pytest.Monke
     assert environment["PATH"] == "/usr/bin"
     assert environment["LANG"] == "C.UTF-8"
     assert not {"VIRTUAL_ENV", "PYTHONPATH", "VBOT_RUN_AGENT_ID"} & environment.keys()
+
+
+def test_checkout_server_leads_shell_path_with_a_vbot_for_itself(
+    login_base: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkout = tmp_path / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    (checkout / "cli").mkdir()
+    # The fake CLI reports what the real one would act on: its arguments and target.
+    (checkout / "cli" / "main.py").write_text(
+        "import json, os, sys\n"
+        "print(json.dumps([sys.argv[1:], os.environ['VBOT_DATA_DIR'], "
+        "os.environ['VBOT_SERVER_PORT']]))\n",
+        encoding="utf-8",
+    )
+    data_dir = tmp_path / "data dir's"
+    monkeypatch.setenv("VBOT_INSTALL_ROOT", str(tmp_path / "installed"))
+    assert (
+        shell_environment.provide_instance_command(
+            tmp_path / "unused", data_dir, 22333, checkout=checkout
+        )
+        is None
+    )
+    monkeypatch.delenv("VBOT_INSTALL_ROOT")
+
+    directory = shell_environment.provide_instance_command(
+        data_dir / "bin", data_dir, 22333, checkout=checkout
+    )
+
+    assert directory == data_dir / "bin"
+    environment = terminal_environment()
+    assert environment["PATH"] == os.pathsep.join([str(directory), "/usr/bin"])
+    arguments = ["agent", "update", "a", "--name", "Mi ra", '{"mode":"selected"}']
+    shell_path = os.pathsep.join([str(directory), os.environ.get("PATH", "")])
+    if sys.platform == "win32":
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            pytest.skip("PowerShell 7 is not installed")
+        quoted = " ".join("'" + argument.replace("'", "''") + "'" for argument in arguments)
+        # The previous values come back in the calling shell after the command.
+        argv = [
+            pwsh,
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            f"vbot {quoted}; $env:VBOT_DATA_DIR",
+        ]
+    else:
+        argv = ["sh", "-c", 'vbot "$@"', "sh", *arguments]
+    output = subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+        env={**os.environ, "PATH": shell_path},
+    ).stdout.splitlines()
+
+    assert json.loads(output[0]) == [arguments, str(data_dir), "22333"]
+    assert output[1:] in ([], [""])
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows login environment")

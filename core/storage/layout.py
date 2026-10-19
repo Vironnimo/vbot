@@ -155,6 +155,11 @@ class DataDirectoryLayout:
         return self.root / "logs"
 
     @property
+    def instance_command(self) -> Path:
+        """The ``vbot`` command a server from a source checkout gives its shells."""
+        return self.root / "bin"
+
+    @property
     def processes(self) -> Path:
         return self.root / "processes"
 
