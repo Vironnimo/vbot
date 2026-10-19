@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
+from core.access.config import access_config
 from core.tools.terminal_manager import TerminalClosedError, TerminalNotFoundError
 from server._streams import _stream_websocket_events
 from server.app import create_app
@@ -20,12 +21,15 @@ from server.events import APP_ERROR_EVENT, RUN_STARTED_SERVER_EVENT
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 
+@pytest.mark.parametrize("host", ["192.168.10.25", "vbot.home.arpa", "localhost", "testserver"])
 def test_websocket_transports_reject_cross_origin_browsers_and_allow_the_server_origin(
     tmp_path: Path,
+    host: str,
 ) -> None:
     app = create_app(
         runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())),
         server_bind={"listen_host": "0.0.0.0", "listen_port": 8420, "port_source": "cli"},
+        access=access_config("lan", allow_hosts=["vbot.home.arpa"]),
     )
     rejected_codes: dict[str, int] = {}
 
@@ -39,7 +43,7 @@ def test_websocket_transports_reject_cross_origin_browsers_and_allow_the_server_
             rejected_codes[path] = exc_info.value.code
         with client.websocket_connect(
             "/ws",
-            headers={"host": "192.168.10.25:8420", "origin": "http://192.168.10.25:8420"},
+            headers={"host": f"{host}:8420", "origin": f"http://{host}:8420"},
         ) as websocket:
             hello = websocket.receive_json()
 

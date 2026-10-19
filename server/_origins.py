@@ -7,6 +7,7 @@ from collections.abc import MutableMapping
 from typing import Any, cast
 from urllib.parse import SplitResult, urlsplit
 
+from core.access.config import normalize_host_name
 from server._bind import ServerBindState
 from server._http_dependencies import Response
 from server.file_delivery import EXTENSION_ASSET_URL_PREFIX, PREVIEW_URL_PREFIX
@@ -32,11 +33,15 @@ class _BrowserOriginGuardMiddleware:
         app: Any,
         *,
         allowed_origins: frozenset[tuple[str, str, int]],
-        same_origin_ip_port: int | None,
+        same_origin_port: int,
+        same_origin_hosts: frozenset[str],
+        allow_same_origin_ip: bool,
     ) -> None:
         self._app = app
         self._allowed_origins = allowed_origins
-        self._same_origin_ip_port = same_origin_ip_port
+        self._same_origin_port = same_origin_port
+        self._same_origin_hosts = same_origin_hosts
+        self._allow_same_origin_ip = allow_same_origin_ip
 
     async def __call__(self, scope: MutableMapping[str, Any], receive: Any, send: Any) -> None:
         scope_type = scope.get("type")
@@ -55,7 +60,9 @@ class _BrowserOriginGuardMiddleware:
         if scope_type not in {"http", "websocket"} or _scope_has_allowed_origin(
             scope,
             self._allowed_origins,
-            same_origin_ip_port=self._same_origin_ip_port,
+            same_origin_port=self._same_origin_port,
+            same_origin_hosts=self._same_origin_hosts,
+            allow_same_origin_ip=self._allow_same_origin_ip,
         ):
             await self._app(scope, receive, send)
             return
@@ -76,7 +83,9 @@ def _scope_has_allowed_origin(
     scope: MutableMapping[str, Any],
     allowed_origins: frozenset[tuple[str, str, int]],
     *,
-    same_origin_ip_port: int | None,
+    same_origin_port: int,
+    same_origin_hosts: frozenset[str],
+    allow_same_origin_ip: bool,
 ) -> bool:
     origin_values = _scope_header_values(scope, ORIGIN_HEADER_NAME)
     if not origin_values:
@@ -88,10 +97,9 @@ def _scope_has_allowed_origin(
         return False
     if origin in allowed_origins:
         return True
-    if (
-        same_origin_ip_port is None
-        or origin[2] != same_origin_ip_port
-        or not _is_ip_literal(origin[1])
+    if origin[2] != same_origin_port or not (
+        normalize_host_name(origin[1]) in same_origin_hosts
+        or (allow_same_origin_ip and _is_ip_literal(origin[1]))
     ):
         return False
     target_scheme = _http_scheme(scope.get("scheme"))

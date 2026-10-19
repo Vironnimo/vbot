@@ -95,6 +95,7 @@ from server.access import (
     register_access_routes,
     scope_principal,
 )
+from server.access._rules import host_policy
 from server.events import RESOURCE_KIND_DEVICES, SERVER_STOPPING_EVENT
 from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
@@ -303,11 +304,11 @@ def create_app(
         _BrowserOriginGuardMiddleware,
         allowed_origins=_configured_browser_origins(resolved_server_bind)
         | _public_browser_origins(access_settings),
-        same_origin_ip_port=(
-            resolved_server_bind["listen_port"]
-            if resolved_server_bind["listen_host"] in {"0.0.0.0", "::"}
-            else None
-        ),
+        same_origin_port=resolved_server_bind["listen_port"],
+        same_origin_hosts=host_policy(
+            access_settings, bind_host=resolved_server_bind["listen_host"]
+        ).names,
+        allow_same_origin_ip=resolved_server_bind["listen_host"] in {"0.0.0.0", "::"},
     )
     # Added last, so it runs first: before the Origin guard and routing.
     app.add_middleware(AccessGuard, service=access_service)
