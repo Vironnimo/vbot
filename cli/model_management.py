@@ -25,7 +25,9 @@ def model_list(
     models = payload.data.get("models")
     if not isinstance(models, list):
         return CommandResult(ok=False, message="RPC result missing models list", instance=instance)
-    return CommandResult(ok=True, message=_format_model_rows(models), instance=instance)
+    return CommandResult(
+        ok=True, message=_format_model_rows(models, filtered=bool(filters)), instance=instance
+    )
 
 
 def model_show(instance: ServerInstance, model: str) -> CommandResult:
@@ -96,9 +98,9 @@ def model_refresh(
     )
 
 
-def _format_model_rows(models: Sequence[object]) -> str:
+def _format_model_rows(models: Sequence[object], *, filtered: bool) -> str:
     if not models:
-        return "no models available"
+        return "no usable models match these filters" if filtered else "no models available"
 
     lines = ["models:"]
     for model in models:

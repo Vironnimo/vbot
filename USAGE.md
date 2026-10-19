@@ -827,6 +827,7 @@ For an Agent's primary chat Model, list the currently selectable catalog through
 ```bash
 vbot model list --task chat
 vbot model list --provider openai --task chat --capability tools
+vbot model list --task chat --query claude --query opus   # every word in id, name or family
 ```
 
 The result contains only Models with at least one usable Connection (including enabled keyless Connections) and prints the exact id accepted by `agent create --model` or `agent update --model`. It also includes the effective context window, capabilities/task types, and `reachable: no` for a local Model whose service is currently down. Additional repeatable filters are `--capability`, `--task`, `--input-modality`, and `--output-modality`; `--min-context-window` applies a token floor.

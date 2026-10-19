@@ -1,7 +1,7 @@
 """Reusable, pure query over the model registry.
 
 This module centralizes capability / task / modality / context-window
-filtering for :class:`core.models.models.Model` data. The same matcher is
+and text-search filtering for :class:`core.models.models.Model` data. The same matcher is
 used by both the chat-model RPC (``model.list``) and the specialized
 target discovery (``task_model.list_targets``) so the two share a single
 vocabulary and a single source of truth for matching rules.
@@ -42,6 +42,9 @@ class ModelQuery:
       must be in the corresponding ``Capabilities`` modality tuple.
     * ``min_context_window`` — ``model.context_window`` must be at least
       this large. ``None`` means no minimum.
+    * ``search_terms`` — every term must occur, case-insensitively, in the
+      model id, name or family. ``from_filters`` splits each ``query`` value
+      at whitespace, so ``"claude opus"`` requires both words.
 
     The match is a logical AND across all non-empty fields.
     """
@@ -52,6 +55,7 @@ class ModelQuery:
     input_modalities: tuple[str, ...] = ()
     output_modalities: tuple[str, ...] = ()
     min_context_window: int | None = None
+    search_terms: tuple[str, ...] = ()
 
     @classmethod
     def from_filters(cls, params: Mapping[str, Any]) -> ModelQuery:
@@ -70,6 +74,9 @@ class ModelQuery:
         * ``"input_modality"`` / ``"input_modalities"``
         * ``"output_modality"`` / ``"output_modalities"``
 
+        ``"query"`` takes one or more search texts; each is split at
+        whitespace into ``search_terms``.
+
         Raises:
             ValueError: When a value is of an unexpected type for its
                 field (for example a list of non-strings, a non-string
@@ -83,6 +90,9 @@ class ModelQuery:
         input_modalities = _extract_string_values(params, ("input_modality", "input_modalities"))
         output_modalities = _extract_string_values(params, ("output_modality", "output_modalities"))
         min_context_window = _extract_optional_non_negative_int(params, "min_context_window")
+        search_terms = _normalize_string_values(
+            term for text in _extract_string_values(params, ("query",)) for term in text.split()
+        )
         return cls(
             provider_id=provider_id,
             capabilities=capabilities,
@@ -90,6 +100,7 @@ class ModelQuery:
             input_modalities=input_modalities,
             output_modalities=output_modalities,
             min_context_window=min_context_window,
+            search_terms=search_terms,
         )
 
     def matches(self, model: Model) -> bool:
@@ -115,6 +126,11 @@ class ModelQuery:
 
         if any(modality not in output_modalities for modality in self.output_modalities):
             return False
+
+        if self.search_terms:
+            searched = f"{model.model_id}\n{model.name}\n{model.family}".lower()
+            if any(term not in searched for term in self.search_terms):
+                return False
 
         # A model whose context window is unknown (``None``) cannot be proven to
         # meet a minimum, so it is excluded when a ``min_context_window`` filter is

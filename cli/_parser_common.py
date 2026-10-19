@@ -298,7 +298,7 @@ PROVIDER_HELP = {
 
 
 MODEL_HELP = {
-    "list": "List available models",
+    "list": "List usable Models, filtered by name, Provider, task or capability",
     "show": "Show complete data for one Model",
     "refresh": "Refresh model catalogs",
     "forget-wire-facts": "Forget what live traffic taught about a Provider's or Model's wire",

@@ -69,6 +69,8 @@ def test_model_list_sends_the_filters_and_prints_effective_window_and_capabiliti
         "--input-modality", "text",
         "--output-modality", "text",
         "--min-context-window", "128000",
+        "--query", "Claude",
+        "--search", "opus",
     )  # fmt: skip
 
     assert code == 0
@@ -82,6 +84,7 @@ def test_model_list_sends_the_filters_and_prints_effective_window_and_capabiliti
                 "input_modalities": ["text"],
                 "output_modalities": ["text"],
                 "min_context_window": 128000,
+                "query": ["Claude", "opus"],
             },
         )
     ]

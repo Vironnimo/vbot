@@ -291,6 +291,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
             id="provider-case-insensitive",
         ),
         pytest.param({"provider_id": "nonexistent"}, [], id="unknown-provider"),
+        pytest.param({"query": "GPT 5"}, ["openai/gpt-5.2"], id="query"),
     ],
 )
 async def test_model_list_filters(

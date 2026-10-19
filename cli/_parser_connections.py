@@ -483,8 +483,19 @@ def _add_model_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         model_subparsers,
         "list",
         MODEL_HELP["list"],
-        example="model list --task chat",
+        example="model list --task chat --query claude",
     )
+    list_parser.add_argument(
+        "--query",
+        action="append",
+        metavar="<text>",
+        help=(
+            "Text to find in the Model id, name or family, ignoring case; every word must "
+            "occur, and a repeated --query adds words. Omit to list Models of any name."
+        ),
+    )
+    # Other CLIs name the same filter --search.
+    list_parser.add_argument("--search", dest="query", action="append", help=argparse.SUPPRESS)
     list_parser.add_argument("--provider", dest="provider_id", help="Filter by Provider id")
     list_parser.add_argument(
         "--capability",

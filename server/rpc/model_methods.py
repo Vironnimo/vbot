@@ -70,6 +70,7 @@ MODEL_LIST_FILTER_FIELDS = frozenset(
         "output_modality",
         "output_modalities",
         "min_context_window",
+        "query",
     )
 )
 

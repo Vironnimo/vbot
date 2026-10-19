@@ -22,11 +22,13 @@ def _make_model(
     *,
     context_window: int | None = 32000,
     reasoning: bool = False,
+    family: str = "",
     **capabilities: Any,
 ) -> Model:
     return Model(
         model_id=model_id,
         name=model_id,
+        family=family,
         capabilities=Capabilities(
             **{"vision": False, "tools": False, "json_mode": False} | capabilities,
             reasoning=ReasoningCapabilities(supported=reasoning),
@@ -47,7 +49,9 @@ _MODELS = [
     ),
     _make_model("json-reasoning", json_mode=True, reasoning=True, context_window=1000),
     _make_model("image-gen", task_types=("chat", "text_output", "image_generation")),
-    _make_model("tts", output_modalities=("text", "speech"), context_window=128000),
+    _make_model(
+        "tts", family="voice-line", output_modalities=("text", "speech"), context_window=128000
+    ),
     _make_model("window-less", context_window=None),
 ]
 
@@ -92,6 +96,11 @@ _MODELS = [
             {"provider_id": "   ", "min_context_window": 0, "tasks": "chat"},
             ModelQuery(tasks=("chat",)),
             id="blank-provider-and-zero-window-mean-no-filter",
+        ),
+        pytest.param(
+            {"query": ["  Claude Opus ", "opus"]},
+            ModelQuery(search_terms=("claude", "opus")),
+            id="query-splits-into-lowercased-words",
         ),
     ],
 )
@@ -151,6 +160,12 @@ def test_query_is_frozen() -> None:
             id="every-input-modality-required",
         ),
         pytest.param(ModelQuery(output_modalities=("speech",)), ["tts"], id="output-modality"),
+        pytest.param(
+            ModelQuery(search_terms=("image", "gen")),
+            ["image-gen"],
+            id="every-search-term-required",
+        ),
+        pytest.param(ModelQuery(search_terms=("voice",)), ["tts"], id="search-reads-family"),
         # The minimum is inclusive; an unknown window cannot prove it and is excluded.
         pytest.param(
             ModelQuery(min_context_window=64000), ["vision-tools", "tts"], id="min-context-window"
