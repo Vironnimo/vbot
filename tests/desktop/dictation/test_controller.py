@@ -19,7 +19,12 @@ from desktop import hotkey
 from desktop.dictation.controller import (
     DictationController,
 )
-from desktop.dictation.insertion import INSERT_CLIPBOARD, INSERT_FAILED, INSERT_PASTED
+from desktop.dictation.insertion import (
+    INSERT_CANCELLED,
+    INSERT_CLIPBOARD,
+    INSERT_FAILED,
+    INSERT_PASTED,
+)
 from desktop.speech.microphone import MicrophoneService
 from desktop.speech.server_client import SpeechServerRejected
 from tests.desktop.hotkey_test_support import FakeHotkeyApi
@@ -142,11 +147,17 @@ class _FakeClient:
 class FakeInserter:
     outcome: str = INSERT_PASTED
     inserted: list[tuple[str, int]] = field(default_factory=list)
+    wait_for_cancel: bool = False
+    inserting: threading.Event = field(default_factory=threading.Event)
 
     def foreground_window(self) -> int:
         return TARGET_WINDOW
 
-    def insert(self, text: str, target_window: int) -> str:
+    def insert(self, text: str, target_window: int, *, cancel: threading.Event) -> str:
+        if self.wait_for_cancel:
+            self.inserting.set()
+            assert cancel.wait(1)
+            return INSERT_CANCELLED
         self.inserted.append((text, target_window))
         return self.outcome
 
@@ -330,15 +341,19 @@ def test_a_hold_take_ends_when_the_combination_is_let_go_and_a_tap_is_dropped(
     assert rig.controller.status()["last_failure"] is None
 
 
-@pytest.mark.parametrize("during", ["recording", "transcribing"])
+@pytest.mark.parametrize("during", ["recording", "transcribing", "inserting"])
 def test_escape_cancels_the_take_without_inserting(make_rig: Any, during: str) -> None:
     rig = make_rig()
-    rig.server.release_transcription.clear()
+    rig.inserter.wait_for_cancel = during == "inserting"
+    if during != "inserting":
+        rig.server.release_transcription.clear()
     rig.start_take()
-    if during == "transcribing":
+    if during in {"transcribing", "inserting"}:
         rig.press()
         wait_until(lambda: rig.controller.status()["state"] == "transcribing")
         assert rig.server.transcribing.wait(5)
+        if during == "inserting":
+            assert rig.inserter.inserting.wait(1)
 
     rig.escape()
     wait_until(lambda: "cancel" in rig.cues.played)

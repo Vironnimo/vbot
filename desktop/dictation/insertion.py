@@ -33,6 +33,7 @@ logger = logging.getLogger("vbot.desktop.dictation.insertion")
 INSERT_PASTED = "pasted"
 INSERT_CLIPBOARD = "clipboard"
 INSERT_FAILED = "failed"
+INSERT_CANCELLED = "cancelled"
 
 # How long a modifier may still be held (the shortcut that ended the
 # recording) before the paste gives up and leaves the text in the clipboard.
@@ -57,7 +58,7 @@ class TextInserter(Protocol):
     def foreground_window(self) -> int:
         """Return the window that has the focus now (0 when none)."""
 
-    def insert(self, text: str, target_window: int) -> str:
+    def insert(self, text: str, target_window: int, *, cancel: threading.Event) -> str:
         """Place ``text`` in ``target_window``; returns an ``INSERT_*`` outcome."""
 
 
@@ -102,22 +103,32 @@ class ClipboardTextInserter:
             logger.warning("The focused window could not be read", exc_info=True)
             return 0
 
-    def insert(self, text: str, target_window: int) -> str:
+    def insert(self, text: str, target_window: int, *, cancel: threading.Event) -> str:
+        if cancel.is_set():
+            return INSERT_CANCELLED
         # Wait before publishing the transcript: another app may change the
         # clipboard while a modifier is held, and Ctrl+V must paste this text.
-        may_paste = self._may_paste(target_window)
+        may_paste = self._may_paste(target_window, cancel)
+        if cancel.is_set():
+            return INSERT_CANCELLED
         try:
             previous = self._host.read_clipboard_text()
         except Exception:
             logger.info("The clipboard text could not be read; it will not be restored")
             previous = ""
+        if cancel.is_set():
+            return INSERT_CANCELLED
         try:
             self._host.write_clipboard_text(text)
             written = self._host.clipboard_sequence()
         except Exception:
             logger.warning("Dictation could not write the clipboard", exc_info=True)
             return INSERT_FAILED
-        if not may_paste or not self._target_focused(target_window):
+        may_paste = may_paste and self._target_focused(target_window)
+        if cancel.is_set():
+            self._restore(previous, written)
+            return INSERT_CANCELLED
+        if not may_paste:
             return INSERT_CLIPBOARD
         try:
             pasted = self._host.send_paste()
@@ -132,7 +143,7 @@ class ClipboardTextInserter:
             )
         return INSERT_PASTED
 
-    def _may_paste(self, target_window: int) -> bool:
+    def _may_paste(self, target_window: int, cancel: threading.Event) -> bool:
         if not self._target_focused(target_window):
             return False
         try:
@@ -145,6 +156,8 @@ class ClipboardTextInserter:
             return False
         deadline = self._clock() + MODIFIER_RELEASE_TIMEOUT_SECONDS
         while self._host.modifier_held():
+            if cancel.is_set():
+                return False
             if self._clock() >= deadline:
                 logger.info("A modifier is still held; the text stays in the clipboard")
                 return False

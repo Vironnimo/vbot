@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import pytest
 
 from desktop.dictation.insertion import (
+    INSERT_CANCELLED,
     INSERT_CLIPBOARD,
     INSERT_FAILED,
     INSERT_PASTED,
@@ -107,7 +109,9 @@ def test_a_paste_restores_the_previous_text_unless_something_new_was_copied(
             host.write_clipboard_text("copied by the user")
 
     assert (
-        _inserter(host, scheduler, on_wait=copy_during_wait).insert("Hallo Welt", TARGET)
+        _inserter(host, scheduler, on_wait=copy_during_wait).insert(
+            "Hallo Welt", TARGET, cancel=threading.Event()
+        )
         == INSERT_PASTED
     )
     assert host.events == ["paste:Hallo Welt"]
@@ -156,7 +160,7 @@ def test_without_a_safe_paste_the_text_stays_in_the_clipboard(
 
     outcome = _inserter(
         host, scheduler, on_wait=(lambda: setup(host)) if during_wait else None
-    ).insert("Hallo Welt", TARGET)
+    ).insert("Hallo Welt", TARGET, cancel=threading.Event())
 
     assert outcome == INSERT_CLIPBOARD
     assert host.clipboard == "Hallo Welt"
@@ -169,5 +173,61 @@ def test_without_a_safe_paste_the_text_stays_in_the_clipboard(
 def test_a_clipboard_that_cannot_be_written_fails_the_insert() -> None:
     host = FakeHost(clipboard_busy=True)
 
-    assert _inserter(host, Scheduler()).insert("Hallo", TARGET) == INSERT_FAILED
+    assert (
+        _inserter(host, Scheduler()).insert("Hallo", TARGET, cancel=threading.Event())
+        == INSERT_FAILED
+    )
     assert host.pastes == 0
+
+
+@pytest.mark.parametrize(
+    ("during", "previous"),
+    [
+        ("before-insert", "previous"),
+        ("modifier-wait", "previous"),
+        ("clipboard-read", "previous"),
+        ("before-paste", "previous"),
+        ("before-paste", ""),
+        ("new-copy-before-paste", "previous"),
+    ],
+)
+def test_cancellation_preserves_the_clipboard_and_never_pastes(
+    during: str, previous: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host, scheduler, cancel = FakeHost(clipboard=previous), Scheduler(), threading.Event()
+    clock = Clock(cancel.set if during == "modifier-wait" else None)
+    if during == "before-insert":
+        cancel.set()
+    elif during == "modifier-wait":
+        host.modifier_polls = 200
+    elif during == "clipboard-read":
+
+        def read() -> str:
+            cancel.set()
+            return host.clipboard
+
+        monkeypatch.setattr(host, "read_clipboard_text", read)
+    else:
+
+        def focused() -> int:
+            if host.sequence > 1:
+                cancel.set()
+                if during == "new-copy-before-paste":
+                    host.write_clipboard_text("copied by the user")
+            return host.foreground
+
+        monkeypatch.setattr(host, "foreground_window", focused)
+
+    outcome = ClipboardTextInserter(
+        host, clock=clock, sleep=clock.sleep, schedule=scheduler
+    ).insert("cancelled transcript", TARGET, cancel=cancel)
+
+    assert outcome == INSERT_CANCELLED
+    assert host.pastes == 0
+    assert host.clipboard == (
+        "copied by the user" if during == "new-copy-before-paste" else previous
+    )
+    assert scheduler.pending == []
+    if during in {"before-insert", "modifier-wait", "clipboard-read"}:
+        assert host.sequence == 1
+    assert clock.now < MODIFIER_RELEASE_TIMEOUT_SECONDS
