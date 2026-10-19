@@ -96,8 +96,45 @@ def quote_identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _normalized_ddl(sql: str) -> str:
-    return " ".join(sql.split())
+def _normalized_ddl(sql: str, *, fold_case: bool = False) -> str:
+    """Normalize formatting and comments outside quoted SQL tokens, never their values."""
+    result: list[str] = []
+    quote: str | None = None
+    pending_space = False
+    index = 0
+    while index < len(sql):
+        character = sql[index]
+        if quote is not None:
+            result.append(character)
+            if character == quote:
+                if quote != "]" and index + 1 < len(sql) and sql[index + 1] == quote:
+                    result.append(sql[index + 1])
+                    index += 1
+                else:
+                    quote = None
+        elif sql.startswith("--", index):
+            # A newline ends a line comment; collapsing it first would turn
+            # SQL on the next line into comment text and hide shape changes.
+            end = sql.find("\n", index + 2)
+            index = len(sql) if end < 0 else end + 1
+            pending_space = bool(result)
+            continue
+        elif sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            index = len(sql) if end < 0 else end + 2
+            pending_space = bool(result)
+            continue
+        elif character.isspace():
+            pending_space = bool(result)
+        else:
+            if pending_space:
+                result.append(" ")
+                pending_space = False
+            if character in {"'", '"', "`", "["}:
+                quote = "]" if character == "[" else character
+            result.append(character.lower() if fold_case else character)
+        index += 1
+    return "".join(result)
 
 
 @cache
@@ -410,11 +447,9 @@ def _verify_declared_shape(
     live_generated: bool,
     live_expression: str | None,
 ) -> None:
-    expression_matches = (
-        live_expression is not None
-        and _normalized_ddl(live_expression).lower()
-        == _normalized_ddl(column.type_expression).lower()
-    )
+    expression_matches = live_expression is not None and _normalized_ddl(
+        live_expression, fold_case=True
+    ) == _normalized_ddl(column.type_expression, fold_case=True)
     if (
         column.type_name.lower() != live_type.lower()
         or column.generated != live_generated
