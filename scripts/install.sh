@@ -132,7 +132,7 @@ status_line WORK "Looking up $RELEASE"
 curl -fsSL "$BASE/$IDENTITY" -o "$WORK/$IDENTITY" \
     || fail "Could not read $IDENTITY of $RELEASE from $BASE: the release does not exist, publishes no $IDENTITY, or GitHub cannot be reached"
 # The release identity names the version and records the SHA256 digest of each
-# asset; this prints the version and the package's digest, or - for none.
+# asset; both the version and the package's digest are required.
 FACTS="$(python3 - "$WORK/$IDENTITY" "$ASSET" <<'PY'
 import json, re, sys
 try:
@@ -147,9 +147,9 @@ assets = identity.get("assets")
 digest = assets.get(sys.argv[2]) if isinstance(assets, dict) else None
 if not isinstance(version, str) or not re.fullmatch(r"[0-9A-Za-z.+-]{1,64}", version):
     raise SystemExit(1)
-if digest is not None and not (isinstance(digest, str) and re.fullmatch(r"[0-9a-fA-F]{64}", digest)):
+if not (isinstance(digest, str) and re.fullmatch(r"[0-9a-fA-F]{64}", digest)):
     raise SystemExit(1)
-print(version, digest.lower() if digest else "-")
+print(version, digest.lower())
 PY
 )" || fail "$BASE/$IDENTITY is not a valid vBot release identity"
 read -r RELEASE_VERSION ASSET_SHA256 <<<"$FACTS"
@@ -165,14 +165,10 @@ fi
 status_line WORK "Downloading $ASSET of vBot $RELEASE_VERSION"
 curl -fL --progress-bar "$ASSET_BASE/$ASSET" -o "$WORK/$ASSET" \
     || fail "Could not download $ASSET_BASE/$ASSET: the release publishes no package for $PLATFORM, or GitHub cannot be reached"
-if [ "$ASSET_SHA256" != "-" ]; then
-    ACTUAL="$(python3 -c 'import hashlib, sys; print(hashlib.file_digest(open(sys.argv[1], "rb"), "sha256").hexdigest())' "$WORK/$ASSET" 2>/dev/null \
-        || sha256sum "$WORK/$ASSET" | cut -d " " -f 1)"
-    [ "$ACTUAL" = "$ASSET_SHA256" ] \
-        || fail "The downloaded package does not match the SHA256 digest in $IDENTITY. A newer build may have replaced the release files meanwhile (main builds are replaced in place); run the installer again"
-else
-    status_line WARN "$IDENTITY records no digest for $ASSET; it was downloaded over HTTPS only"
-fi
+ACTUAL="$(python3 -c 'import hashlib, sys; print(hashlib.file_digest(open(sys.argv[1], "rb"), "sha256").hexdigest())' "$WORK/$ASSET" 2>/dev/null \
+    || sha256sum "$WORK/$ASSET" | cut -d " " -f 1)"
+[ "$ACTUAL" = "$ASSET_SHA256" ] \
+    || fail "The downloaded package does not match the SHA256 digest in $IDENTITY. A newer build may have replaced the release files meanwhile (main builds are replaced in place); run the installer again"
 
 status_line WORK "Unpacking the package"
 python3 - "$WORK/$ASSET" "$WORK/payload" <<'PY'
