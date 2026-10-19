@@ -13,7 +13,7 @@ import pytest
 from core.chat import ChatMessage
 from core.chat.content_blocks import MediaBlock
 from core.chat.messages import ToolCall
-from core.database import data_store_status
+from core.database import DatabaseFormatError, data_store_status
 from core.runs import RunKind
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.schema import (
@@ -687,8 +687,9 @@ def test_fts_rebuild_resumes_after_an_interruption_from_its_last_whole_step(
 
     monkeypatch.setattr(store_module, "_FTS_BATCH_WINDOW", 50)
     monkeypatch.setattr(store_module, "_FTS_REBUILD_HOOK", interrupt)
-    with pytest.raises(RuntimeError, match="simulated FTS interruption"):
+    with pytest.raises(DatabaseFormatError, match="simulated FTS interruption") as failure:
         ChatSessionManager(tmp_path)
+    assert isinstance(failure.value.__cause__, RuntimeError)
 
     # Every rebuild step is one transaction, so the markers stay exactly as the
     # last backfill window committed them, also when the interruption strikes
