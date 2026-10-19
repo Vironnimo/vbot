@@ -491,6 +491,19 @@ def test_a_package_turned_off_leaves_every_scope_but_spares_same_named_packages(
     owner_skills = runtime.skills_for(None, "main")
     assert "deploy" not in {skill.name for skill in owner_skills.filter_allowed([])}
 
+    # Re-enable only the global replacement: the disabled private name must not
+    # grant it the owner's automatic private access.
+    global_deploy = _package_id(runtime, "deploy", "The global playbook.")
+    runtime.set_skill_package_disabled(global_deploy, disabled=False)
+    runtime.reload_skills()
+    owner_skills = runtime.skills_for(None, "main")
+    assert owner_skills.get("deploy").description == "The global playbook."
+    assert not owner_skills.is_allowed("deploy", [])
+    assert "deploy" not in {skill.name for skill in owner_skills.filter_allowed([])}
+    assert owner_skills.is_allowed("deploy", ["deploy"])
+    runtime.set_skill_package_disabled(global_deploy, disabled=True)
+    runtime.reload_skills()
+
     # A Project's own Skill is turned off in its Project.
     project_deploy = _package_id(runtime, "deploy", "A project playbook.")
     result = runtime.set_skill_package_disabled(project_deploy, disabled=True)

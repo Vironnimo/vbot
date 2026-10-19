@@ -48,7 +48,6 @@ from core.skills.skills import (
     load_project_skill_registry,
     project_skill_origin,
     scan_project_skill_names,
-    scan_skill_names,
 )
 from core.storage import StorageManager
 from core.utils.log_conditions import LoggedConditions
@@ -711,7 +710,22 @@ class SkillRuntime:
         # that Project's effective Skill set: those exact Project-granted names also
         # bypass the Identity Agent's unrelated personal allowlist and its exclusions
         # while this project-scoped registry is active.
-        agent_own_names = scan_skill_names(agent_root, environment, scan=scan) - removed_own_names
+        excluded_packages = _package_exclusions(
+            global_roots, self.agent_skills_dir, policy.disabled_packages
+        )
+        # A disabled private package grants nothing to a same-named replacement.
+        agent_own_names = (
+            frozenset(
+                skill.name
+                for skill in SkillRegistry.load(
+                    agent_root,
+                    environment=environment,
+                    excluded_packages=excluded_packages,
+                    scan=scan,
+                ).list_all()
+            )
+            - removed_own_names
+        )
         return SkillRegistry.load(
             roots[0],
             extra_dirs=roots[1:],
@@ -719,9 +733,7 @@ class SkillRuntime:
             always_allowed=(agent_own_names - exclusions) | project_allowed_names,
             origins=origins,
             package_sources=package_sources,
-            excluded_packages=_package_exclusions(
-                global_roots, self.agent_skills_dir, policy.disabled_packages
-            ),
+            excluded_packages=excluded_packages,
             allowlist_exclusions=exclusions,
             scan=scan,
         )
