@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from core.chat.messages import usage_token_is_estimated
 from core.chat.streaming import StreamingAccumulator, iter_with_chunk_timeout
+from core.compaction._workers import COMPACTION_WORKERS
 from core.compaction.errors import CompactionError
 from core.providers.adapter import TERMINAL_OUTCOME_STOP
 from core.utils.logging import get_logger
@@ -35,6 +38,7 @@ async def _send_streaming_model_request(
     *,
     usage_recorder: UsageRecorder | None = None,
     model_reference: str | None = None,
+    input_estimate: int | None = None,
     session_address: SessionAddress | None = None,
     run_id: str | None = None,
     owner_name: str | None = None,
@@ -54,6 +58,11 @@ async def _send_streaming_model_request(
     backoff. Acceptance failures and cancellation are never retried. Every
     attempt records its own Usage. One absolute deadline covers all attempts
     and their backoff, even while the Model keeps producing deltas.
+
+    ``input_estimate`` is the uncorrected selected-wire estimate of exactly
+    ``messages`` and their Tools. Every attempt whose Provider measures its
+    input, whatever its outcome, teaches it with that measurement to the input
+    estimate calibration of ``model_reference``.
     """
     model = model_reference or str(request_options.get("model_id") or "unknown")
     budget = asyncio.timeout(MODEL_REQUEST_TIMEOUT_SECONDS)
@@ -72,6 +81,11 @@ async def _send_streaming_model_request(
                         budget=budget,
                         model=model,
                         usage_recorder=usage_recorder,
+                        calibration=(
+                            (model_reference, input_estimate)
+                            if model_reference is not None and input_estimate is not None
+                            else None
+                        ),
                         session_address=session_address,
                         run_id=run_id,
                         owner_name=owner_name,
@@ -112,12 +126,17 @@ async def _stream_attempt(
     budget: asyncio.Timeout,
     model: str,
     usage_recorder: UsageRecorder | None,
+    calibration: tuple[str, int] | None,
     session_address: SessionAddress | None,
     run_id: str | None,
     owner_name: str | None,
     group_id: str | None,
 ) -> dict[str, Any]:
-    """Run one stream attempt and record its Usage, whatever its outcome."""
+    """Run one stream attempt and record its Usage, whatever its outcome.
+
+    *calibration* is the request's Model reference and uncorrected input
+    estimate; a measured input teaches it to the input estimate calibration.
+    """
     accumulator = StreamingAccumulator()
     call_id = (
         await usage_recorder.start(
@@ -196,10 +215,35 @@ async def _stream_attempt(
                     else "failed"
                 ),
             )
+            await _learn_input_estimate(usage_recorder, calibration, accumulator.usage)
         raise
     if usage_recorder is not None and call_id is not None:
         response["usage"] = await usage_recorder.finish(call_id, accumulator.usage)
+        await _learn_input_estimate(usage_recorder, calibration, accumulator.usage)
     return response
+
+
+async def _learn_input_estimate(
+    usage_recorder: UsageRecorder,
+    calibration: tuple[str, int] | None,
+    usage: Mapping[str, Any] | None,
+) -> None:
+    """Teach the calibration one attempt's measured input; estimated input never teaches.
+
+    The recorder ignores unusable samples (``is_usable_sample``).
+    """
+    if calibration is None or usage is None or usage_token_is_estimated(usage, "input_tokens"):
+        return
+    measured = usage.get("input_tokens")
+    if not isinstance(measured, int) or isinstance(measured, bool):
+        return
+    model_reference, estimated = calibration
+    await COMPACTION_WORKERS.run(
+        usage_recorder.record_input_estimate,
+        model_reference,
+        measured=measured,
+        estimated=estimated,
+    )
 
 
 def _budget_exhausted(budget: asyncio.Timeout) -> bool:

@@ -217,11 +217,15 @@ async def test_compaction_attempt_records_usage_before_checkpoint_acceptance(rej
 
 
 class _BudgetAdapter(StubAdapter):
-    """Counts 10 tokens per request message and 5 per Tool on its wire."""
+    """Counts 10 tokens per request message and 5 per Tool on its wire.
 
-    def __init__(self) -> None:
+    Its response reports the measured input *input_tokens*, or only output.
+    """
+
+    def __init__(self, input_tokens: int | None) -> None:
         super().__init__("Summary")
         self.budgets: list[RequestInput] = []
+        self.input_tokens = input_tokens
 
     def estimate_request_input_tokens(
         self, messages: list[dict[str, Any]], *, model_id: str, tools: Any = None
@@ -233,6 +237,10 @@ class _BudgetAdapter(StubAdapter):
         self.budgets.append(resolve_request_input_budget(kwargs["model_id"], -1))
         async for delta in super().stream(messages, **kwargs):
             yield delta
+        if self.input_tokens is None:
+            yield {"type": "usage", "output_tokens": 3}
+        else:
+            yield {"type": "usage", "input_tokens": self.input_tokens}
 
 
 class _SummaryCalibration(RecordingUsageRecorder):
@@ -243,19 +251,25 @@ class _SummaryCalibration(RecordingUsageRecorder):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("strategy", "context_tokens"),
-    [("summary_tail", None), ("continuation", None), ("continuation", 50_000)],
-    ids=["summary-model", "continuation-estimated", "continuation-measured"],
+    ("strategy", "context_tokens", "measured"),
+    [
+        ("summary_tail", None, 4_321),
+        ("continuation", None, 4_321),
+        ("continuation", 50_000, 4_321),
+        ("summary_tail", None, None),
+    ],
+    ids=["summary-model", "continuation-estimated", "continuation-measured", "unmeasured"],
 )
-async def test_compaction_request_carries_its_corrected_input_budget(
-    strategy: str, context_tokens: int | None
+async def test_compaction_request_reads_and_teaches_its_input_estimate_calibration(
+    strategy: str, context_tokens: int | None, measured: int | None
 ) -> None:
-    summary, active = _BudgetAdapter(), _BudgetAdapter()
+    summary, active = _BudgetAdapter(measured), _BudgetAdapter(measured)
     messages = [user("u1", "old"), assistant("a1", "old answer"), user("u2", "now")]
+    recorder = _SummaryCalibration()
 
     await compact(
         messages,
-        service=CompactionService(usage_recorder=cast(Any, _SummaryCalibration())),
+        service=CompactionService(usage_recorder=cast(Any, recorder)),
         summary_adapter=summary,
         summary_model_id="summary",
         summary_model_reference="openai/summary",
@@ -280,6 +294,12 @@ async def test_compaction_request_carries_its_corrected_input_budget(
         # Chat's measured Context of the active request plus the appended
         # reminder, whose corrected estimate alone carries the margin.
         assert target.budgets == [RequestInput(context_tokens + 10 * 2, True, 10 * 2)]
+    # A measured input teaches the target Model's calibration against the
+    # uncorrected estimate of exactly the sent request, whatever the budget built on.
+    reference = "openai/summary" if strategy == "summary_tail" else "openai/active"
+    assert recorder.input_estimates == (
+        [] if measured is None else [(reference, measured, 10 * sent + 5)]
+    )
 
 
 @pytest.mark.asyncio
@@ -353,6 +373,11 @@ async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_on
         call["usage"] == {"input_tokens": 75, "usage_call_id": call["id"]}
         for call in recorder.calls
     )
+    # Every attempt's measured input teaches the calibration, failed or not.
+    assert [sample[:2] for sample in recorder.input_estimates] == [("openai/active", 75)] * len(
+        statuses
+    )
+    assert len({sample[2] for sample in recorder.input_estimates}) == 1
     # Only a retryable Provider failure waits the shared backoff and retries once.
     assert len(waits) == (1 if outcomes[0] == "dropped" else 0)
     assert all(1.0 <= wait <= 1.5 for wait in waits)

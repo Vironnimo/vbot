@@ -2,8 +2,9 @@
 
 vBot counts every Model's text with one shared local encoding, while Providers
 tokenize privately (Claude, Gemini and others count the same text differently).
-Each Chat step whose Provider reports its input yields one sample: the measured
-input and the local estimate of exactly that request. The ratio of their
+Each request whose Provider reports its input (a Chat step, a Compaction or
+Decision Model request) yields one sample: the measured input and the local
+estimate of exactly that request. The ratio of their
 exponentially decayed, size-weighted sums corrects later estimates for the same
 Model. It absorbs Provider framing and systematic reserve bias as well; it is an
 average over recent requests, not a tokenizer. Sums learned against another
