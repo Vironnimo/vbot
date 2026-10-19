@@ -204,7 +204,11 @@ async def test_history_hides_notes(history: _History) -> None:
     session.add_note("Sub-agent batch completed.\n\nResults:\n- worker/sub-session: Done")
     session.add_note(
         "Model switch note for the Model",
-        model_fallback=ModelFallback(from_model="openai/gpt-5.2", to_model="anthropic/claude"),
+        model_fallback=ModelFallback(
+            from_model="openai/gpt-5.2",
+            to_model="anthropic/claude",
+            retry_at="2026-10-19T12:15:00.000000Z",
+        ),
     )
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Visible response"))
     session.add_note("Goal note for the Model", goal_event=GoalEvent("paused", reason="stop"))
@@ -223,9 +227,12 @@ async def test_history_hides_notes(history: _History) -> None:
     assert "Goal note" not in str(result["messages"])
     # A Model fallback note appears only as its display notice, inside its Run.
     fallback = result["messages"][1]
-    assert {key: fallback[key] for key in ("from_model", "to_model", "history_run_id")} == {
+    assert {
+        key: fallback[key] for key in ("from_model", "to_model", "retry_at", "history_run_id")
+    } == {
         "from_model": "openai/gpt-5.2",
         "to_model": "anthropic/claude",
+        "retry_at": "2026-10-19T12:15:00.000000Z",
         "history_run_id": "run-one",
     }
     assert "content" not in fallback

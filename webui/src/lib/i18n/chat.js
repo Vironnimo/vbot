@@ -188,6 +188,8 @@ export default Object.freeze({
   'chat.modelFallbackActivated': 'Switched to {model}',
   'chat.modelFallbackFrom':
     '{from} was unavailable. Switched to {to} for this Run.',
+  'chat.modelFallbackUntil':
+    '{from} was unavailable. Switched to {to}. New Runs try {from} again from {time}.',
   'chat.errorViaProvider': '(via {name})',
   'chat.providerWorking':
     'Provider connected · waiting {seconds}s for the next model chunk',

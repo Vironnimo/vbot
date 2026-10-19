@@ -19,7 +19,11 @@ from core.chat._tool_epoch import tool_change_from_note
 from core.chat.messages import ModelFallback
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.providers.errors import ProviderAuthError, ProviderRateLimitError
+from core.providers.errors import (
+    ProviderAuthError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
 from core.runs import (
     ERROR_MESSAGE_PERSISTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
@@ -109,18 +113,22 @@ def _probe_tools(handler: Any) -> ToolRegistry:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure",
+    ("failures", "cools_down"),
     [
-        # A rate limit skips the remaining same-Model restarts on a dead quota.
-        ProviderRateLimitError("primary rate limited"),
-        _model_not_found(),
+        # A rate limit skips the remaining same-Model restarts on a dead quota,
+        # and new Runs pass over the route for a while.
+        ([ProviderRateLimitError("primary rate limited")], True),
+        # Each hang costs minutes, so two of them hand over.
+        ([ProviderTimeoutError("primary hung")] * 2, True),
+        # A retired Model fails at once; there is no outage to wait out.
+        ([_model_not_found()], False),
     ],
-    ids=["rate-limit", "model-not-found"],
+    ids=["rate-limit", "hangs", "model-not-found"],
 )
 async def test_route_scoped_failure_switches_to_the_fallback_for_this_run(
-    tmp_path: Path, failure: ProviderError
+    tmp_path: Path, failures: list[ProviderError], cools_down: bool
 ) -> None:
-    primary = StubAdapter([failure])
+    primary = StubAdapter(list(failures))
     fallback = StubAdapter([{"content": "Recovered", "tool_calls": None}])
     runtime = _fallback_runtime(tmp_path, primary, fallback)
 
@@ -136,7 +144,10 @@ async def test_route_scoped_failure_switches_to_the_fallback_for_this_run(
         messages[1].content == f"Model {PRIMARY} unavailable. Switched to {FALLBACK} for this run."
     )
     # The note records the switch for the Run's display notice; only its text reaches the Model.
-    assert messages[1].model_fallback == ModelFallback(from_model=PRIMARY, to_model=FALLBACK)
+    fallback_record = messages[1].model_fallback
+    assert fallback_record is not None
+    assert (fallback_record.from_model, fallback_record.to_model) == (PRIMARY, FALLBACK)
+    assert (fallback_record.retry_at is not None) is cools_down
     assert "model_fallback" not in json.dumps(fallback_requests[0]["messages"])
     # Usage and cost belong to the Model that actually answered.
     assert messages[2].model == FALLBACK
@@ -144,7 +155,7 @@ async def test_route_scoped_failure_switches_to_the_fallback_for_this_run(
     assert run.iteration_count == 1
     assert messages[-1].iteration_count == 1
     assert run.events[-1].payload["iteration_count"] == 1
-    assert [request["model_id"] for request in primary_requests] == ["gpt-5.2"]
+    assert [request["model_id"] for request in primary_requests] == ["gpt-5.2"] * len(failures)
     assert [request["model_id"] for request in fallback_requests] == ["claude-sonnet-4"]
 
 
@@ -181,12 +192,39 @@ async def test_rate_limit_without_a_fallback_fails_the_run_after_same_model_reco
 
 
 @pytest.mark.asyncio
-async def test_account_wide_fatal_error_never_advances_the_fallback_chain(tmp_path: Path) -> None:
-    primary = StubAdapter([ProviderAuthError("invalid credential")])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ProviderAuthError("invalid credential"),
+        ProviderError("Provider error: insufficient_quota", retryable=False),
+    ],
+    ids=["auth", "billing"],
+)
+async def test_account_scoped_failure_advances_only_to_another_connection(
+    tmp_path: Path, failure: ProviderError
+) -> None:
+    same_connection = "openai/gpt-5.2-mini::api-key"
+    primary = StubAdapter([failure])
+    fallback = StubAdapter([{"content": "Recovered", "tool_calls": None}])
+    runtime = _fallback_runtime(
+        tmp_path, primary, fallback, fallback_models=[same_connection, FALLBACK]
+    )
+
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+
+    # The candidate on the failed account is never tried; the other account answers.
+    assert assistant.content == "Recovered"
+    assert [request["model_id"] for request in primary.requests] == ["gpt-5.2"]
+    assert await _fallback_events(runtime, last_run(runtime)) == [(PRIMARY, FALLBACK)]
+
+
+@pytest.mark.asyncio
+async def test_failure_no_route_can_fix_never_advances_the_fallback_chain(tmp_path: Path) -> None:
+    primary = StubAdapter([ProviderError("context_length_exceeded", retryable=False)])
     fallback = StubAdapter([{"content": "Should not be used", "tool_calls": None}])
     runtime = _fallback_runtime(tmp_path, primary, fallback)
 
-    with pytest.raises(ProviderAuthError, match="invalid credential"):
+    with pytest.raises(ProviderError, match="context_length_exceeded"):
         await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = last_run(runtime)
@@ -197,13 +235,16 @@ async def test_account_wide_fatal_error_never_advances_the_fallback_chain(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_fallback_serves_the_rest_of_the_run_and_the_next_run_starts_on_the_primary(
-    tmp_path: Path,
+async def test_fallback_serves_new_runs_until_the_failed_route_cooled_down(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    now = [1_000_000.0]
+    monkeypatch.setattr("core.chat.recovery._wall_clock", lambda: now[0])
     primary = StubAdapter(
         [
             ProviderRateLimitError("primary rate limited"),
-            {"content": "Primary turn 2", "tool_calls": None},
+            ProviderRateLimitError("primary still limited"),
+            {"content": "Primary turn 4", "tool_calls": None},
         ]
     )
     fallback = StubAdapter(
@@ -213,21 +254,48 @@ async def test_fallback_serves_the_rest_of_the_run_and_the_next_run_starts_on_th
                 "tool_calls": [{"id": "call_1", "name": "probe", "arguments": {"value": "x"}}],
             },
             {"content": "Fallback turn 1", "tool_calls": None},
+            {"content": "Fallback turn 2", "tool_calls": None},
+            {"content": "Fallback turn 3", "tool_calls": None},
         ]
     )
     tools = _probe_tools(lambda _context, arguments: tool_success({"value": arguments["value"]}))
     runtime = _fallback_runtime(tmp_path, primary, fallback, allowed_tools=["probe"], tools=tools)
+    chat_loop = build_chat_loop(runtime)
 
-    first = await build_chat_loop(runtime).send("coder", "turn 1", session_id="session-one")
-    first_run = last_run(runtime)
-    second = await build_chat_loop(runtime).send("coder", "turn 2", session_id="session-one")
+    async def turn(text: str) -> tuple[Any, list[ModelFallback]]:
+        reply = await chat_loop.send("coder", text, session_id="session-one")
+        notes = [
+            message.model_fallback
+            for message in history(runtime)
+            if message.model_fallback is not None and message.run_id == last_run(runtime).id
+        ]
+        return reply, notes
 
-    assert (first.content, first.model) == ("Fallback turn 1", FALLBACK)
-    assert (second.content, second.model) == ("Primary turn 2", PRIMARY)
-    assert [request["model_id"] for request in primary.requests] == ["gpt-5.2", "gpt-5.2"]
-    assert [request["model_id"] for request in fallback.requests] == ["claude-sonnet-4"] * 2
-    assert await _fallback_events(runtime, first_run) == [(PRIMARY, FALLBACK)]
-    assert await _fallback_events(runtime, last_run(runtime)) == []
+    # The fallback serves the rest of the Run, Tool round included.
+    first, first_notes = await turn("turn 1")
+    # A new Run starts on the fallback while the primary route cools down.
+    second, second_notes = await turn("turn 2")
+    # After the pause one probe fails again: the next pause is twice as long.
+    now[0] += 15 * 60
+    third, third_notes = await turn("turn 3")
+    now[0] += 30 * 60
+    fourth, fourth_notes = await turn("turn 4")
+
+    assert [(reply.content, reply.model) for reply in (first, second, third, fourth)] == [
+        ("Fallback turn 1", FALLBACK),
+        ("Fallback turn 2", FALLBACK),
+        ("Fallback turn 3", FALLBACK),
+        ("Primary turn 4", PRIMARY),
+    ]
+    assert [request["model_id"] for request in primary.requests] == ["gpt-5.2"] * 3
+    assert [len(notes) for notes in (first_notes, second_notes, third_notes)] == [1, 1, 1]
+    assert fourth_notes == []
+    retry_at = [notes[0].retry_at for notes in (first_notes, second_notes, third_notes)]
+    assert retry_at == [
+        "1970-01-12T14:01:40.000000Z",
+        "1970-01-12T14:01:40.000000Z",
+        "1970-01-12T14:31:40.000000Z",
+    ]
 
 
 class _RecordingAdapter(StubAdapter):
@@ -298,7 +366,8 @@ async def test_candidate_whose_adapter_cannot_be_built_is_skipped(tmp_path: Path
 @pytest.mark.asyncio
 async def test_fallback_failure_persists_the_fallback_error(tmp_path: Path) -> None:
     primary = StubAdapter([ProviderRateLimitError("primary rate limited")])
-    fallback = StubAdapter([ProviderRateLimitError("fallback rate limited")])
+    # The last route of the chain keeps the full same-Model recovery.
+    fallback = StubAdapter([ProviderRateLimitError("fallback rate limited")] * 9)
     runtime = _fallback_runtime(tmp_path, primary, fallback)
 
     with pytest.raises(ProviderRateLimitError, match="fallback rate limited"):

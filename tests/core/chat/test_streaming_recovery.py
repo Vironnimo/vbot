@@ -182,7 +182,7 @@ _FAIL = StreamRecoveryAction.FAIL
         (ProviderError("overloaded", retryable=True), {}, _RESTART),
         (NetworkError("dropped"), {"can_restart": False}, _INTERRUPT),
         (ProviderError("overloaded", retryable=True), {"can_restart": False}, _FAIL),
-        (ProviderRateLimitError("quota"), {"has_fallback_chain": True}, _FAIL),
+        (ProviderRateLimitError("quota"), {"fallback_follows": True}, _FAIL),
         (ProviderError("fatal", retryable=False), {}, _FAIL),
         (NetworkError("dropped"), {"has_partial_content": True}, _PRESERVE),
         (ProviderStreamingUnsupportedError("no"), {"has_partial_content": True}, _PRESERVE),

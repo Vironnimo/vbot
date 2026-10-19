@@ -458,6 +458,7 @@ class RunTimeline:
                 "content": payload.get("to_model", ""),
                 "from_model": payload.get("from_model", ""),
                 "to_model": payload.get("to_model", ""),
+                **({"retry_at": payload["retry_at"]} if payload.get("retry_at") else {}),
                 "timestamp": event.get("timestamp"),
                 "events": [copy.deepcopy(event)],
             }

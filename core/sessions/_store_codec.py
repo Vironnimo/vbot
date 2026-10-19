@@ -229,9 +229,14 @@ def insert_entry(
             )
         case "note" if message.model_fallback is not None:
             connection.execute(
-                "INSERT INTO note_model_fallbacks (entry_key, from_model, to_model) "
-                "VALUES (?, ?, ?)",
-                (entry_key, message.model_fallback.from_model, message.model_fallback.to_model),
+                "INSERT INTO note_model_fallbacks (entry_key, from_model, to_model, retry_at) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    entry_key,
+                    message.model_fallback.from_model,
+                    message.model_fallback.to_model,
+                    message.model_fallback.retry_at,
+                ),
             )
         case "note" if message.goal_event is not None:
             goal = message.goal_event
@@ -539,6 +544,8 @@ class EntryBatch:
                         "from_model": str(fallback["from_model"]),
                         "to_model": str(fallback["to_model"]),
                     }
+                    if fallback["retry_at"] is not None:
+                        data["model_fallback"]["retry_at"] = str(fallback["retry_at"])
                 case "note" if key in self.goal_events:
                     goal = self.goal_events[key]
                     data["goal_event"] = {
@@ -826,7 +833,7 @@ def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) ->
     )
     batch.model_fallbacks = _rows_by_key(
         connection,
-        f"SELECT entry_key, from_model, to_model FROM note_model_fallbacks WHERE entry_key {_KEYS}",
+        f"SELECT entry_key, from_model, to_model, retry_at FROM note_model_fallbacks WHERE entry_key {_KEYS}",
         by_role.get("note", []),
     )
     batch.goal_events = _rows_by_key(

@@ -139,7 +139,7 @@ async def consume_stream_response(
     stream_draft: StreamDraft | None,
     temperature: float | None,
     top_p: float | None,
-    has_fallback_chain: bool,
+    fallback_follows: bool,
     recovery_deadline: float | None,
     message_id: str | None,
     on_tool_calls: ToolCallSink | None,
@@ -223,7 +223,7 @@ async def consume_stream_response(
                 accumulator.finish_reason is not None
                 and not isinstance(exc, IncompleteResponseError)
             ),
-            has_fallback_chain=has_fallback_chain,
+            fallback_follows=fallback_follows,
             tools_started=tools_started,
         )
         if action is StreamRecoveryAction.ACCEPT_COMPLETE:

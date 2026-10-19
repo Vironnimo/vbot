@@ -70,19 +70,6 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("chat")
 
 
-def _has_fallback_chain(agent: Any) -> bool:
-    """Whether a model-fallback chain beyond the primary model is configured.
-
-    Cheap config-only check for the stream-recovery fast path: it reads the
-    agent's candidate list without touching provider/model registries. Entries
-    equal to the primary binding are ignored because the chain resolver skips
-    them at advance time anyway.
-    """
-    candidates = tuple(getattr(agent, "fallback_models", None) or ())
-    primary = getattr(agent, "model", "")
-    return any(candidate != primary for candidate in candidates)
-
-
 def _normalize_non_streaming_step(
     normalized: JsonObject,
     *,
@@ -263,15 +250,16 @@ class WireRequestRunner:
                                 output_cwd=output_cwd,
                                 temperature=temperature,
                                 top_p=top_p,
-                                has_fallback_chain=_has_fallback_chain(agent),
-                                recovery_deadline=budget.deadline,
+                                fallback_follows=budget.patience(response_model).fallback_follows,
+                                recovery_deadline=budget.deadline(response_model),
                                 message_id=message_id,
                                 on_tool_calls=on_tool_calls,
                             )
                         else:
+                            deadline = budget.deadline(response_model)
                             remaining = (
-                                max(0.0, budget.deadline - budget.clock())
-                                if budget.deadline is not None
+                                max(0.0, deadline - budget.clock())
+                                if deadline is not None
                                 else None
                             )
                             try:
@@ -315,7 +303,8 @@ class WireRequestRunner:
                         (not use_streaming or isinstance(exc, IncompleteResponseError))
                         and getattr(exc, "retryable", False)
                         and not (
-                            isinstance(exc, ProviderRateLimitError) and _has_fallback_chain(agent)
+                            isinstance(exc, ProviderRateLimitError)
+                            and budget.patience(response_model).fallback_follows
                         )
                         and budget.available(response_model)
                     ):
@@ -333,7 +322,7 @@ class WireRequestRunner:
                 elif not step.message.interrupted:
                     # A complete response ends this Model step. The next request
                     # starts a new step without its attempts, deadline or backoff.
-                    budget.reset()
+                    budget.complete(response_model)
                 return step
         finally:
             run.emit(PROVIDER_REQUEST_STATUS_EVENT, {"state": "finished"})
@@ -431,7 +420,7 @@ class WireRequestRunner:
         stream_draft: StreamDraft | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
-        has_fallback_chain: bool = False,
+        fallback_follows: bool = False,
         recovery_deadline: float | None = None,
         message_id: str | None = None,
         on_tool_calls: ToolCallSink | None = None,
@@ -457,7 +446,7 @@ class WireRequestRunner:
                 stream_draft=stream_draft,
                 temperature=temperature,
                 top_p=top_p,
-                has_fallback_chain=has_fallback_chain,
+                fallback_follows=fallback_follows,
                 recovery_deadline=recovery_deadline,
                 message_id=message_id,
                 on_tool_calls=on_tool_calls,
