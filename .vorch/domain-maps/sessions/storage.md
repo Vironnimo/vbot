@@ -47,4 +47,4 @@ Connection and journal policy, the serialized writer, the read pool, error class
 
 ## Operator inspection
 
-Runtime Session readers use `ChatSessionManager`. The bundled `vbot-docs` Skill additionally documents deliberate read-only SQLite inspection for extended Session search and transcripts, scoped by Project/Agent/Session, live generation, current view and canonical sequence; these operator-style recipes do not create another runtime storage owner.
+Runtime Session readers use `ChatSessionManager`. The bundled `vbot-docs` Skill's script `scripts/sessions.py` additionally reads the Session database read-only for extended Session search and transcripts, scoped by Project/Agent/Session, live generation, current view and canonical sequence; it mirrors that view logic in SQL and creates no other runtime storage owner, so a schema change to those tables updates the script and `tests/resources/skills/test_vbot_docs_sessions.py`.

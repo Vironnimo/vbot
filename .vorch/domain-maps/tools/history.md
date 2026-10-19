@@ -8,7 +8,7 @@ prompt cache.
 
 The `vbot-docs` Skill's Session search reference
 (`resources/skills/vbot-docs/references/session-search.md`, `session_search.md` ->
-Extended inspection) replaces it: a read-only SQLite query through the shell Tool
+Extended inspection) replaces it: the Skill's read-only script `scripts/sessions.py`, run through the shell Tool,
 reads the current Session's complete transcript, Messages before any Compaction
 checkpoint included, and exact Tool Results. The shell Tool names the current
 Session in `VBOT_RUN_AGENT_ID`, `VBOT_RUN_SESSION_ID` and `VBOT_RUN_PROJECT_ID`.
