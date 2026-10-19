@@ -346,17 +346,36 @@ def test_space_fingerprint_covers_target_options_and_family_handling(
 
     api_key = "openrouter/google/gemini-embedding-2::api-key:work"
     baseline = space(api_key, dimensions=768, extra_options={"user": "recall"})
+    unpinned = space(OPENROUTER_TARGET, dimensions=768, extra_options={"user": "recall"})
 
     assert (baseline.provider_id, baseline.model_id) == ("openrouter", "google/gemini-embedding-2")
     assert space(api_key, extra_options={"user": "recall"}, dimensions=768) == baseline
+    # Already-persisted fingerprints for the normal public spelling stay
+    # valid; fixing an alias must not re-embed every existing index.
     assert (
-        space(
-            "openrouter/google/gemini-embedding-2::oauth:work",
-            dimensions=768,
-            extra_options={"user": "recall"},
-        ).fingerprint
-        != baseline.fingerprint
+        baseline.fingerprint == "e48b5df3e7302eb392a4834a12df84c9e2bc5cbcc470f74b7991f41fc1b032ca"
     )
+    assert (
+        unpinned.fingerprint == "1fb90afffcfb1ca145057855f783e513a576ebfb3f5074957d0bac9ba6595a45"
+    )
+    for target, expected in (
+        ("openrouter/google/gemini-embedding-2::openrouter:api-key:work", baseline),
+        ("openrouter/google/gemini-embedding-2::openrouter:api-key", unpinned),
+    ):
+        assert space(target, dimensions=768, extra_options={"user": "recall"}) == expected
+    distinct = [
+        space(target, dimensions=768, extra_options={"user": "recall"}).fingerprint
+        for target in (
+            api_key,
+            OPENROUTER_TARGET,
+            "openrouter/google/gemini-embedding-2::oauth:work",
+            "openrouter/google/gemini-embedding-2::api-key:home",
+            "openrouter/google/gemini-embedding-2::api-key:default",
+            "openrouter/google/gemini-embedding-001::api-key:work",
+            "other/google/gemini-embedding-2::api-key:work",
+        )
+    ]
+    assert len(set(distinct)) == len(distinct)
     assert (
         space(api_key, dimensions=256, extra_options={"user": "recall"}).fingerprint
         != baseline.fingerprint
