@@ -13,7 +13,8 @@ The function retries up to ``MAX_RETRIES`` times with exponential backoff
 random jitter to avoid thundering-herd effects.
 
 When a retryable error carries a ``retry_after`` hint (parsed from a provider's
-``Retry-After`` response header), it is honored as a *floor* over the computed
+``Retry-After`` response header or a 429's reported rate-limit reset, see
+``core.utils.http_status``), it is honored as a *floor* over the computed
 backoff — capped at ``MAX_RETRY_AFTER_SECONDS`` so a buggy or hostile header
 cannot stall an interactive request indefinitely. Retrying earlier than the
 provider asked tends to earn another 429, so we never wait less than the hint.
@@ -181,7 +182,7 @@ async def retry_async[T](
                     type(error).__name__,
                     error,
                     delay,
-                    " (honoring server Retry-After)" if honored_retry_after else "",
+                    " (honoring the server's requested wait)" if honored_retry_after else "",
                 )
                 _notify_retry(RetryNotice(error, attempt + 2, max_retries + 1, delay, True))
                 await _sleep(delay)

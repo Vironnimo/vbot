@@ -47,7 +47,7 @@ The two successful probes selected `none` and returned no Reasoning state. They 
 
 ## Usage cost normalization (2026-09-20)
 
-OpenRouter `usage.cost` becomes canonical `reported_cost_usd` on both Chat Completions and Responses, streaming and non-streaming. Only finite non-negative numeric values are accepted; explicit zero is preserved. `cost_details.upstream_inference_cost` is not the amount charged to the OpenRouter account and is never substituted. Optional `prompt_tokens_details.cache_write_tokens` / `input_tokens_details.cache_write_tokens` is retained separately from cache reads. No request or routing policy changed.
+OpenRouter `usage.cost` becomes canonical `reported_cost_usd` on both Chat Completions and Responses, streaming and non-streaming. Only finite non-negative numeric values are accepted; explicit zero is preserved. `reported_cost_usd` is what the user pays for the request (user requirement 2026-10-19). For a BYOK request (`usage.is_byok: true`), `cost` is only OpenRouter's fee and the upstream Provider bills `cost_details.upstream_inference_cost` to the user's own key, so the two are added; a missing or invalid upstream amount leaves `cost` alone, and without a valid `cost` nothing is reported. Without BYOK, `cost` already includes upstream inference, so an `upstream_inference_cost` there is never added. Both fields appear in the `ChatUsage` and Responses `Usage` schemas of OpenRouter's [OpenAPI document](https://openrouter.ai/openapi.json) (read 2026-10-19); BYOK is not live-verified, since no BYOK key is configured. Optional `prompt_tokens_details.cache_write_tokens` / `input_tokens_details.cache_write_tokens` is retained separately from cache reads. No request or routing policy changed.
 
 Official contract: https://openrouter.ai/docs/cookbook/administration/usage-accounting (read 2026-09-20). The following short synthetic requests exercised the actual Adapter, shared stream accumulator, completed Assistant preparation, SQLite save/reopen, and Statistics index. They verify cost transport for these exact Models and shapes, not other Models, discounted billing agreements, Tools, or modality pricing.
 
@@ -58,7 +58,7 @@ Official contract: https://openrouter.ai/docs/cookbook/administration/usage-acco
 | api-key | openai/gpt-5.6-luna | POST /responses | non-streaming, store=false, minimal | 12/5 | 0.0000084 | persisted unchanged |
 | api-key | openai/gpt-5.6-luna | POST /responses | streaming, store=false, minimal | 12/5 | 0.0000084 | persisted unchanged |
 
-Tests: `tests/core/providers/test_openrouter_costs.py` protects both wires, zero cost, invalid values, and cache-write preservation. Generic estimation is owned by `models/pricing.md`; report coverage is owned by `statistics.md`.
+Tests: `tests/core/providers/test_openrouter_costs.py` protects both wires, zero cost, invalid values, BYOK and non-BYOK upstream amounts, and cache-write preservation. Generic estimation is owned by `models/pricing.md`; report coverage is owned by `statistics.md`.
 
 ## Provider Routing
 

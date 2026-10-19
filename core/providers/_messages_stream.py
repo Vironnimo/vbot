@@ -44,7 +44,6 @@ class AnthropicMessagesStreamDecoder:
         error_detail: Callable[[dict[str, Any]], str] | None = None,
         reasoning_block_normalizer: Callable[[Any], dict[str, Any]] | None = None,
         text_delta_in_thinking: bool = False,
-        emit_usage_without_start: bool = True,
         drop_stopped_reasoning_block: bool = False,
     ) -> None:
         self.content_blocks_by_index: dict[int, dict[str, Any]] = {}
@@ -54,7 +53,6 @@ class AnthropicMessagesStreamDecoder:
         self._error_detail = error_detail or self._anthropic_error_detail
         self._reasoning_block_normalizer = reasoning_block_normalizer or self._copy_reasoning_block
         self._text_delta_in_thinking = text_delta_in_thinking
-        self._emit_usage_without_start = emit_usage_without_start
         self._drop_stopped_reasoning_block = drop_stopped_reasoning_block
 
     def normalize(self, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -130,7 +128,6 @@ class AnthropicMessagesStreamDecoder:
             and isinstance(output_tokens, int)
             and not isinstance(output_tokens, bool)
             and output_tokens >= 0
-            and (input_usage is not None or self._emit_usage_without_start)
         ):
             normalized["output_tokens"] = output_tokens
             apply_anthropic_reasoning_usage(normalized, self._usage)
