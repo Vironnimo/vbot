@@ -73,7 +73,11 @@ def color(handle: int) -> tuple[int, int, int]:
 
 @dataclass
 class FakeTarget:
-    """An in-memory ``DesktopTarget``: windows topmost first, input recorded in order."""
+    """An in-memory ``DesktopTarget``: windows topmost first, input recorded in order.
+
+    The foreground window is the topmost one; a mouse button press brings the
+    window under it to the front.
+    """
 
     displays_: list[Display] = field(default_factory=lambda: [PRIMARY, WIDE])
     windows_: list[WindowInfo] = field(
@@ -157,9 +161,16 @@ class FakeTarget:
     def cursor(self) -> tuple[int, int]:
         return self.pointer
 
-    def _input(self, *record: Any) -> None:
+    def _input(self, *record: Any, at: tuple[int, int] | None = None) -> None:
+        """Record input; a button press *at* a point first activates the window there."""
         if record[0] in self.fail:
             raise self.fail[record[0]]
+        if at is not None:
+            pressed = self.window_at(*at)
+            # The desktop and taskbar keep their place in the z-order.
+            if pressed is not None and not pressed.app.matches(EXPLORER):
+                self.windows_.remove(pressed)
+                self.windows_.insert(0, pressed)
         if self.on_input is not None:
             self.on_input(record)
         if self.stop_event is not None and self.stop_event.is_set():
@@ -171,14 +182,14 @@ class FakeTarget:
         self.pointer = (x, y)
 
     def button(self, button: str, down: bool) -> None:
-        self._input("button", button, down)
+        self._input("button", button, down, at=self.pointer if down else None)
 
     def click(self, x: int, y: int, button: str, count: int, modifiers: list[str]) -> None:
-        self._input("click", x, y, button, count, modifiers)
+        self._input("click", x, y, button, count, modifiers, at=(x, y))
         self.pointer = (x, y)
 
     def drag(self, path: list[tuple[int, int]], seconds: float, modifiers: list[str]) -> None:
-        self._input("drag", path, seconds, modifiers)
+        self._input("drag", path, seconds, modifiers, at=path[0])
         self.pointer = path[-1]
 
     def scroll(self, x: int, y: int, direction: str, amount: int, modifiers: list[str]) -> None:

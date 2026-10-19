@@ -33,7 +33,7 @@ computer moves the user's real mouse and keyboard on the desktop of the computer
 
 ## Keys and text
 
-- type and key go to the foreground window, wherever the pointer is. Click the field first. If another app came to the front since your latest screenshot, they are refused; click into the window you want, then type.
+- type and key go to the foreground window, wherever the pointer is. Click the field first. They are refused if the app in front is not the one your last click in the same call went into or, without a click, the one in front in your latest screenshot; click into the window you want, then type.
 - key presses keys or chords: `enter`, `escape`, `tab`, `ctrl+s`, `ctrl+shift+t`, `alt+f4`. Separate several chords with spaces to press them in order.
 - On clicks, scrolls and drags, text names modifier keys to hold, such as `shift` or `ctrl`.
 

@@ -28,6 +28,8 @@ CLICKS = {
     "double_click": ("left", 2),
     "triple_click": ("left", 3),
 }
+# Pressing a mouse button brings the window under the pointer to the front for later keys.
+PRESSES = frozenset({*CLICKS, "left_click_drag", "left_mouse_down"})
 MAX_SECONDS = 100.0
 DEFAULT_SCROLL_AMOUNT = 3
 DEFAULT_WAIT_SECONDS = 1.0
@@ -342,6 +344,7 @@ def _seconds(value: Any, name: str, default: float | None) -> tuple[float, str |
 __all__ = [
     "CLICKS",
     "KEYBOARD",
+    "PRESSES",
     "READ_ACTIONS",
     "Action",
     "ActionError",

@@ -67,6 +67,8 @@ class Frame:
     window: WindowInfo | None = None
     # The app whose window was in front when the image was taken.
     front: AppInfo | None = None
+    # The windows over the image's area when it was taken, topmost first.
+    stack: tuple[WindowInfo, ...] = ()
 
     @classmethod
     def of(cls, display: Display) -> Frame:
@@ -112,6 +114,26 @@ class Frame:
             left + round(x1 * (right - left) / self.width),
             top + round(y1 * (bottom - top) / self.height),
         )
+
+    def owner(self, x: int, y: int) -> AppInfo | None:
+        """The app the image shows at screen pixel (x, y), if the image covers it."""
+        left, top, right, bottom = self.area
+        if not (left <= x < right and top <= y < bottom):
+            return None
+        return app_at(self.stack, x, y)
+
+
+def app_at(windows: Sequence[WindowInfo], x: int, y: int) -> AppInfo | None:
+    """The app of the topmost of *windows* (topmost first) at screen pixel (x, y)."""
+    return next((item.app for item in windows if item.contains(x, y)), None)
+
+
+def overlaps(window: WindowInfo, area: Area) -> bool:
+    """Whether *window* covers part of the physical *area*."""
+    left, top, right, bottom = area
+    return (
+        window.left < right and left < window.right and window.top < bottom and top < window.bottom
+    )
 
 
 def display_area(display: Display) -> Area:
@@ -267,6 +289,7 @@ __all__ = [
     "MAX_AREA",
     "MAX_LONG_EDGE",
     "Frame",
+    "app_at",
     "choose_display",
     "describe_displays",
     "display_area",
@@ -275,6 +298,7 @@ __all__ = [
     "fit",
     "zoom_fit",
     "mask",
+    "overlaps",
     "publish_image",
     "resized",
 ]

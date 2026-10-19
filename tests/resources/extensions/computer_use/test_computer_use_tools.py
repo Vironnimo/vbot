@@ -18,8 +18,10 @@ from resources.extensions.computer_use import extension as computer_use
 from resources.extensions.computer_use.extension import _new_target as platform_target
 from tests.resources.extensions.computer_use.computer_use_test_support import (
     CHROME,
+    NOTEPAD,
     PAINT,
     TOOLS,
+    VBOT,
     Harness,
     images,
     model_text,
@@ -164,6 +166,7 @@ async def test_screenshot_coordinates_use_returned_pixels_and_keep_the_display(
         action="left_click", screenshot_id=wide_id, coordinate=[1568, 10]
     )
     assert result["error"]["code"] == "invalid_arguments"
+    computer.target.front(NOTEPAD)  # the clicks brought Paint on "Wide" to the front
     result = await computer.computer(action="screenshot")
     assert '"Wide"' in model_text(result)
     result = await computer.computer(action="screenshot", display="auto")
@@ -259,9 +262,7 @@ async def test_window_view_includes_owned_popups_and_spans_displays(
     assert computer.target.inputs[-1] == ("click", 450, 150, "left", 1, [])
 
 
-@pytest.mark.parametrize(
-    "reason", ["missing", "other_session", "expired", "layout", "window", "covered"]
-)
+@pytest.mark.parametrize("reason", ["missing", "other_session", "expired", "layout", "window"])
 async def test_image_references_refuse_missing_or_changed_targets_before_input(
     computer: Harness, reason: str
 ) -> None:
@@ -278,12 +279,8 @@ async def test_image_references_refuse_missing_or_changed_targets_before_input(
         computer.service.sessions.clock = lambda: now + 1801
     elif reason == "layout":
         computer.target.displays_[0] = replace(computer.target.displays_[0], left=1)
-    elif reason == "window":
-        computer.target.windows_[0] = replace(computer.target.windows_[0], left=101)
     else:
-        chrome = computer.target.windows_[1]
-        computer.target.windows_[1] = replace(chrome, left=100, top=100, right=600, bottom=500)
-        computer.target.front(chrome.app)
+        computer.target.windows_[0] = replace(computer.target.windows_[0], left=101)
     result = await computer.call(
         "computer",
         {"action": "left_click", "screenshot_id": reference, "coordinate": [100, 50]},
@@ -454,11 +451,44 @@ async def test_keys_are_refused_when_another_app_came_to_the_front(computer: Har
     assert result["ok"], result
     assert computer.target.inputs == [("click", 150, 150, "left", 1, []), ("type", "x")]
     # After a screenshot of Chrome, keys go through, unless they name the Notepad image.
+    computer.target.front(CHROME)
     await computer.computer(action="screenshot")
     result = await computer.computer(action="key", text="enter")
     assert result["ok"] and computer.target.inputs[-1] == ("keys", ["enter"], 1)
     result = await computer.computer(action="key", text="enter", screenshot_id=notepad)
     assert result["error"]["code"] == "focus_changed"
+
+
+@pytest.mark.parametrize(("view", "point"), [("display", [200, 150]), ("window", [100, 50])])
+async def test_pointer_input_is_refused_where_another_app_lies_than_in_the_image(
+    computer: Harness, view: str, point: list[int]
+) -> None:
+    context = computer.context_for("computer")
+    await computer.call("computer", {"action": "screenshot", "view": view}, context)
+    shot = screenshot_id(context)
+    # The user brings vBot to the front, over the point where the image shows Notepad.
+    vbot = next(item for item in computer.target.windows_ if item.app == VBOT)
+    computer.target.windows_.remove(vbot)
+    computer.target.windows_.insert(0, replace(vbot, left=0, top=0, right=1280, bottom=720))
+    computer.target.pointer = (200, 150)
+    computer.target.inputs.clear()
+    for arguments in [
+        {"action": "left_click", "coordinate": point},
+        {"action": "scroll", "scroll_direction": "down"},  # at the pointer, in the same place
+    ]:
+        result = await computer.call("computer", arguments)
+        assert result["error"]["code"] == "screen_changed", result
+        message = result["error"]["message"]
+        assert f'Image "{shot}" shows Notepad at {point}, but vBot is there now' in message
+    assert computer.target.inputs == []
+    # A menu of the same app over the point is fine: Notepad still lies there.
+    computer.target.front(NOTEPAD)
+    notepad = computer.target.windows_[0]
+    menu = replace(notepad, handle=8, left=150, top=150, right=350, bottom=300, owner=1)
+    computer.target.windows_.insert(0, menu)
+    result = await computer.computer(action="left_click", coordinate=point)
+    assert result["ok"], result
+    assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
 
 
 @pytest.mark.parametrize(

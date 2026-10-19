@@ -13,6 +13,7 @@ from resources.extensions.computer_use import _desktop
 from resources.extensions.computer_use import extension as computer_use
 from tests.resources.extensions.computer_use.computer_use_test_support import (
     PAINT,
+    VBOT,
     Harness,
     images,
     model_text,
@@ -116,6 +117,35 @@ async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Har
         f'screenshot_id="{shot}". Use positions in this image as coordinates.'
     )
     assert len(images(context)) == 1
+    assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
+
+
+async def test_batch_refuses_keys_when_another_app_came_to_the_front_after_its_click(
+    computer: Harness,
+) -> None:
+    await computer.computer(action="screenshot", view="display")
+    computer.target.inputs.clear()
+
+    def user_brings_vbot_to_the_front(record: tuple) -> None:
+        if record[0] == "click":
+            computer.target.front(VBOT)
+
+    computer.target.on_input = user_brings_vbot_to_the_front
+    actions = [
+        CLICK,
+        {"action": "type", "text": "execfile('x')"},
+        {"action": "key", "text": "enter"},
+    ]
+    context = computer.context_for("computer_batch")
+    result = await computer.call("computer_batch", {"actions": actions}, context)
+    assert result["error"]["code"] == "focus_changed"
+    message = result["error"]["message"]
+    assert message.startswith(
+        "Action 2 of 3 (type) failed: Your last click went into Notepad, but the foreground "
+        "window now belongs to vBot"
+    )
+    assert "The remaining 1 did not run.\nActions that ran:\n1. left_click at [200, 150]" in message
+    assert "\nThe screen now: Screenshot of display" in message and len(images(context)) == 1
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
 
 
