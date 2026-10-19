@@ -52,12 +52,15 @@ CREATE TABLE usage_imports (
 
 -- Input estimate calibration (_calibration.py): per provider/model, decayed
 -- sums of Provider-measured and locally estimated Chat request input.
+-- estimator_version: the local estimator the sums were learned against
+-- (core.utils.tokens.ESTIMATOR_VERSION); NULL means before versioning.
 CREATE TABLE input_estimate_calibration (
     model TEXT PRIMARY KEY,
     measured_tokens REAL NOT NULL,
     estimated_tokens REAL NOT NULL,
     samples INTEGER NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    estimator_version INTEGER
 ) STRICT;
 """
 

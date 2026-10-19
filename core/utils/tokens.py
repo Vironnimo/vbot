@@ -73,6 +73,18 @@ _ENCODING_LOCK = Lock()
 # fields keep counting as prose.
 OPAQUE_REASONING_BLOB_MIN_CHARS = 128
 OPAQUE_REASONING_BLOB_TOKEN_RESERVE = 512
+# A replayed Assistant turn's reasoning costs the reasoning tokens its Provider
+# reported for that turn, readable and opaque parts together, whatever the
+# visible text or blob size (measured 2026-10-19 on OpenAI Responses, Anthropic
+# Messages, native Gemini and OpenRouter, within Tool loops and across finished
+# turns: +2, +3, 0 and -1% respectively). Chat carries that count on the request
+# message in this field, which no wire renders; the blob reserve above is only
+# for reasoning without a reported count.
+REPORTED_REASONING_TOKENS_FIELD = "reported_reasoning_tokens"
+REPLAYED_REASONING_FRAMING_TOKENS = 3
+# Changes whenever the estimate of the same request changes, so measured
+# anchors and learned calibration of an older estimator are not mixed with it.
+ESTIMATOR_VERSION = 2
 REASONING_TEXT_FIELD = "text"
 # Gateways such as OpenRouter stream ``reasoning.text`` details as one tiny
 # fragment per delta (observed 2026-08-25 on stealth/ox-alpha: ~4-character
@@ -278,6 +290,36 @@ def _estimate_normalized(value: Any, *, model_id: str | None) -> int:
     return estimated + media_tokens + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE
 
 
+def split_reported_reasoning(
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[list[Mapping[str, Any]], int]:
+    """Separate replayed reasoning whose cost the Provider reported.
+
+    Returns the messages without that reasoning and without the internal count
+    field, plus the reported cost. A message whose reasoning is not replayed
+    only loses the field; one without a count keeps its reasoning for the
+    local estimate. Copies only the messages it changes.
+    """
+    result: list[Mapping[str, Any]] = []
+    reported = 0
+    for message in messages:
+        if REPORTED_REASONING_TOKENS_FIELD not in message:
+            result.append(message)
+            continue
+        count = message[REPORTED_REASONING_TOKENS_FIELD]
+        dropped: tuple[str, ...] = (REPORTED_REASONING_TOKENS_FIELD,)
+        if (
+            (message.get("reasoning") or message.get("reasoning_meta"))
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+            and count >= 0
+        ):
+            reported += count + REPLAYED_REASONING_FRAMING_TOKENS
+            dropped = (REPORTED_REASONING_TOKENS_FIELD, "reasoning", "reasoning_meta")
+        result.append({key: value for key, value in message.items() if key not in dropped})
+    return result, reported
+
+
 def estimate_request_input_tokens(
     messages: Sequence[Mapping[str, Any]],
     tools: Sequence[Mapping[str, Any]] | None = None,
@@ -294,7 +336,7 @@ def estimate_request_input_tokens(
     other media and unsupported image inputs retain the fixed reserve.
     """
 
-    total_tokens = 0
+    messages, total_tokens = split_reported_reasoning(messages)
     media_tokens = 0
     for message in messages:
         normalized, message_media_tokens = _normalize_native_media(message, model_id=model_id)

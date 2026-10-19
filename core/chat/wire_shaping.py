@@ -109,6 +109,7 @@ from core.sessions import (
     skill_context_note_payload,
 )
 from core.tools import model_tool_name, tool_failure
+from core.utils.tokens import REPORTED_REASONING_TOKENS_FIELD
 
 INTERRUPTED_TOOL_RESULT_CODE = "result_unavailable"
 INTERRUPTED_TOOL_RESULT_MESSAGE = (
@@ -204,6 +205,7 @@ def _message_to_request_dict(
             data.pop("reasoning", None)
             data.pop("reasoning_meta", None)
         data.pop("reasoning_scope", None)
+        _carry_reported_reasoning_tokens(message, data)
         data.pop("usage", None)
         # ``interrupted`` is a vBot-internal turn annotation, never a wire field.
         data.pop("interrupted", None)
@@ -445,6 +447,7 @@ def _assistant_continuation_dict(
     """
     data = message.to_dict()
     data.pop("run_id", None)
+    _carry_reported_reasoning_tokens(message, data)
     data.pop("usage", None)
     data.pop("timing", None)
     data.pop("tool_display", None)
@@ -465,6 +468,17 @@ def _assistant_continuation_dict(
         data.pop("reasoning", None)
         data.pop("reasoning_meta", None)
     return data
+
+
+def _carry_reported_reasoning_tokens(message: ChatMessage, data: JsonObject) -> None:
+    """Keep the turn's reported reasoning count for Context estimates; never a wire field.
+
+    Replayed reasoning costs what the Provider reported for it, which no local
+    count of its text or opaque blobs predicts (``core.utils.tokens``).
+    """
+    count = (message.usage or {}).get("reasoning_tokens")
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        data[REPORTED_REASONING_TOKENS_FIELD] = count
 
 
 def _strip_assistant_reasoning_fields(messages: list[JsonObject]) -> None:

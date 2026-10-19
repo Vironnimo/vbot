@@ -22,6 +22,7 @@ from core.tools import (
     ToolRegistry,
     tool_success,
 )
+from core.utils.tokens import REPORTED_REASONING_TOKENS_FIELD
 from tests.core.chat.chat_loop_support import (
     PolicyStubAdapter,
     StubAdapter,
@@ -119,6 +120,7 @@ async def test_full_history_policy_replays_same_model_reasoning_exactly_across_r
             content="A1",
             reasoning=EXACT_REASONING,
             reasoning_meta={"content_blocks": [{"type": "thinking", "signature": "signed"}]},
+            usage={"input_tokens": 100, "output_tokens": 40, "reasoning_tokens": 30},
         )
     )
     session.append(ChatMessage.user("Q2"))
@@ -150,6 +152,8 @@ async def test_full_history_policy_replays_same_model_reasoning_exactly_across_r
         "content_blocks": [{"type": "thinking", "signature": "signed"}]
     }
     assert "usage" not in same_model_entry
+    # Context estimates count replayed reasoning by its reported tokens.
+    assert same_model_entry[REPORTED_REASONING_TOKENS_FIELD] == 30
     mismatched_entry = request[4]
     assert "reasoning" not in mismatched_entry
     assert "reasoning_meta" not in mismatched_entry

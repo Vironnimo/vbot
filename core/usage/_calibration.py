@@ -6,7 +6,9 @@ Each Chat step whose Provider reports its input yields one sample: the measured
 input and the local estimate of exactly that request. The ratio of their
 exponentially decayed, size-weighted sums corrects later estimates for the same
 Model. It absorbs Provider framing and systematic reserve bias as well; it is an
-average over recent requests, not a tokenizer.
+average over recent requests, not a tokenizer. Sums learned against another
+version of the local estimator (``ESTIMATOR_VERSION``) correct a different
+estimate, so they are ignored and the next sample starts the Model afresh.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from typing import NamedTuple
 
 from core.database import Database
 from core.utils.timestamps import utc_now_timestamp
+from core.utils.tokens import ESTIMATOR_VERSION
 
 # Weight of the previous sums per new sample: about the last fifty requests count.
 _DECAY = 0.98
@@ -62,7 +65,8 @@ class InputEstimateCalibration:
         with database.read() as connection:
             rows = connection.execute(
                 "SELECT model,measured_tokens,estimated_tokens,samples "
-                "FROM input_estimate_calibration"
+                "FROM input_estimate_calibration WHERE estimator_version=?",
+                (ESTIMATOR_VERSION,),
             ).fetchall()
         self._sums = {
             row["model"]: _Sums(row["measured_tokens"], row["estimated_tokens"], row["samples"])
@@ -82,8 +86,8 @@ class InputEstimateCalibration:
         def operation(connection: sqlite3.Connection) -> _Sums:
             row = connection.execute(
                 "SELECT measured_tokens,estimated_tokens,samples "
-                "FROM input_estimate_calibration WHERE model=?",
-                (key,),
+                "FROM input_estimate_calibration WHERE model=? AND estimator_version=?",
+                (key, ESTIMATOR_VERSION),
             ).fetchone()
             previous = (
                 _Sums(0.0, 0.0, 0)
@@ -97,12 +101,20 @@ class InputEstimateCalibration:
             )
             connection.execute(
                 "INSERT INTO input_estimate_calibration "
-                "(model,measured_tokens,estimated_tokens,samples,updated_at) "
-                "VALUES (?,?,?,?,?) ON CONFLICT(model) DO UPDATE SET "
+                "(model,measured_tokens,estimated_tokens,samples,updated_at,estimator_version) "
+                "VALUES (?,?,?,?,?,?) ON CONFLICT(model) DO UPDATE SET "
                 "measured_tokens=excluded.measured_tokens,"
                 "estimated_tokens=excluded.estimated_tokens,"
-                "samples=excluded.samples,updated_at=excluded.updated_at",
-                (key, sums.measured, sums.estimated, sums.samples, utc_now_timestamp()),
+                "samples=excluded.samples,updated_at=excluded.updated_at,"
+                "estimator_version=excluded.estimator_version",
+                (
+                    key,
+                    sums.measured,
+                    sums.estimated,
+                    sums.samples,
+                    utc_now_timestamp(),
+                    ESTIMATOR_VERSION,
+                ),
             )
             return sums
 

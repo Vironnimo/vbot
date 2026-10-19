@@ -24,7 +24,7 @@ from core.chat.messages import (
 )
 from core.chat.wire_shaping import _embed_notes_into_request
 from core.providers.adapter import estimate_wire_request_input_tokens
-from core.utils.tokens import estimate_request_input_tokens
+from core.utils.tokens import ESTIMATOR_VERSION, estimate_request_input_tokens
 
 JsonObject = dict[str, Any]
 # Whole-request counts by digest, for a request that is neither the newest
@@ -543,8 +543,10 @@ def _context_key(
     # Stable across Runs and processes: an anchor outlives the Run's Adapter.
     # Only the System Prompt text reaches the wire; every request build makes a
     # system message with a new id and timestamp, which must not end the anchor.
+    # An anchor's estimate from another estimator version is no base for a delta.
     return _context_digest(
         [
+            ESTIMATOR_VERSION,
             target.model_reference,
             scope,
             tools,

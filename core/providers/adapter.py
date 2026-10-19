@@ -166,16 +166,18 @@ def estimate_wire_request_input_tokens(
     richer Adapter contract.
     """
 
+    from core.utils.tokens import estimate_request_input_tokens, split_reported_reasoning
+
+    # Replayed reasoning with a reported count costs that count on every wire.
+    messages, reported = split_reported_reasoning(messages)
     estimator = getattr(adapter, "estimate_request_input_tokens", None)
     if callable(estimator):
         estimated = estimator(messages, model_id=model_id, tools=tools)
         if isinstance(estimated, int) and not isinstance(estimated, bool) and estimated >= 0:
-            return estimated
-
-    from core.utils.tokens import estimate_request_input_tokens
+            return estimated + reported
 
     estimated, _ = estimate_request_input_tokens(messages, tools, model_id=model_id)
-    return estimated
+    return estimated + reported
 
 
 def is_local_provider_base_url(base_url: str | None) -> bool:

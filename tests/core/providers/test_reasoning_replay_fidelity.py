@@ -17,7 +17,7 @@ import httpx
 import pytest
 import respx
 
-from core.providers.adapter import ProviderAdapter
+from core.providers.adapter import ProviderAdapter, estimate_wire_request_input_tokens
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.kimi import KimiAdapter
 from core.providers.minimax import MiniMaxAdapter
@@ -31,7 +31,11 @@ from core.providers.reasoning import (
     REASONING_REPLAY_FIDELITY_META_PREFERRED,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
 )
-from core.utils.tokens import estimate_structured_tokens
+from core.utils.tokens import (
+    REPLAYED_REASONING_FRAMING_TOKENS,
+    REPORTED_REASONING_TOKENS_FIELD,
+    estimate_structured_tokens,
+)
 
 from .adapter_test_support import bind_connection
 from .github_copilot_test_support import copilot_metadata
@@ -223,3 +227,38 @@ async def test_replay_serializes_and_estimates_exactly_one_reasoning_class(
     replayed = wire_messages[1]
     assert {key: replayed[key] for key in REASONING_KEYS if key in replayed} == expected_reasoning
     assert estimate == estimate_structured_tokens(wire_messages)[0]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_replayed_reasoning_counts_its_reported_tokens_and_never_reaches_the_wire() -> None:
+    """Replay costs what the Provider reported for the turn (measured 2026-10-19)."""
+    route = respx.post("https://minimal.example/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=CHAT_RESPONSE)
+    )
+    adapter = OpenAICompatibleAdapter(_config("minimal"), API_KEY)
+    replayed = {**BOTH_CLASSES_MESSAGE, REPORTED_REASONING_TOKENS_FIELD: 2476}
+    history = [
+        {"role": "user", "content": "Question"},
+        replayed,
+        {"role": "user", "content": "Next"},
+    ]
+    without_reasoning = [history[0], dict(ANSWER), history[2]]
+    unreplayed = {**ANSWER, REPORTED_REASONING_TOKENS_FIELD: 2476}
+
+    try:
+        await adapter.send(history, model_id="m")
+        estimate = estimate_wire_request_input_tokens(adapter, history, model_id="m")
+        baseline = estimate_wire_request_input_tokens(adapter, without_reasoning, model_id="m")
+        stripped = estimate_wire_request_input_tokens(
+            adapter, [history[0], unreplayed, history[2]], model_id="m"
+        )
+    finally:
+        await adapter.aclose()
+
+    sent = json.loads(route.calls.last.request.content)["messages"][1]
+    assert REPORTED_REASONING_TOKENS_FIELD not in sent
+    assert sent["reasoning_details"] == DETAILS
+    assert estimate == baseline + 2476 + REPLAYED_REASONING_FRAMING_TOKENS
+    # A turn whose reasoning is not replayed adds nothing.
+    assert stripped == baseline

@@ -52,7 +52,11 @@ it absent; public address or Run-id reuse never proves historical ownership.
   Model in `input_estimate_calibration`, loaded once when the recorder opens;
   reading the factor touches no database. It is an average over recent
   requests: it also absorbs Provider framing and fixed estimator reserves, and
-  varies with the content mix (code, prose, languages).
+  varies with the content mix (code, prose, languages). Each row records the
+  `ESTIMATOR_VERSION` it was learned against (`estimator_version`, NULL before
+  2026-10-19); rows of another version are ignored and the next sample starts
+  that Model afresh, because a factor learned against a different estimate
+  would distort the new one.
 - `read_since(revision, *, page_size=1000)` streams the current versions of
   changed calls as `UsagePage(revision, records)` pages in revision order, each
   from its own short read transaction (never one read held open while the

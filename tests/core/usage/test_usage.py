@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -474,5 +475,24 @@ async def test_input_estimate_calibration_learns_per_model_and_survives_restart(
     reopened = UsageRecorder(path)
     try:
         assert reopened.input_estimate_factor(model) == learned
+    finally:
+        reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_input_estimate_calibration_of_another_estimator_version_starts_afresh(recorder):
+    model = "openai/gpt::openai:subscription"
+    for _ in range(40):
+        recorder.record_input_estimate(model, measured=50_000, estimated=100_000)
+    assert recorder.input_estimate_factor(model) < 0.6
+    path = recorder.database.path
+    recorder.close()
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE input_estimate_calibration SET estimator_version=NULL")
+    reopened = UsageRecorder(path)
+    try:
+        assert reopened.input_estimate_factor(model) == 1.0
+        reopened.record_input_estimate(model, measured=100_000, estimated=100_000)
+        assert reopened.input_estimate_factor(model) == 1.0
     finally:
         reopened.close()
