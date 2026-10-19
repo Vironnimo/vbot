@@ -213,6 +213,7 @@
 .working-block > .working-block__summary {
   min-width: 0;
   max-width: 100%;
+  align-items: baseline;
   gap: 10px;
   padding: 2px 0;
   color: var(--text-lo);
@@ -229,20 +230,25 @@
   box-shadow: var(--focus-ring);
 }
 
+/* An icon is exactly as tall as the capitals beside it and stands on their
+   baseline (the line aligns its items on the baseline), so it never reaches
+   above or below the text. Its viewBox is cropped to the drawing. */
 .working-block__icon {
   flex: 0 0 auto;
+  width: 0.7em;
+  height: 0.7em;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.4;
+  stroke-width: 1.6;
 }
 
 /* Only a transform turns, which the compositor animates without repainting;
    at most one group of a Session is active at a time. */
 .working-block__icon--active {
   color: var(--accent);
-  stroke-width: 1.8;
+  stroke-width: 2;
   animation: working-spin 1s linear infinite;
 }
 
@@ -319,6 +325,7 @@
 
 .working-block__chevron {
   flex: 0 0 auto;
+  align-self: center;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;

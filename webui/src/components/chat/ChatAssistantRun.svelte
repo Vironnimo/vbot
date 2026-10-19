@@ -723,9 +723,7 @@
             {#if summary.active}
               <svg
                 class="working-block__icon working-block__icon--active"
-                viewBox="0 0 16 16"
-                width="14"
-                height="14"
+                viewBox="1.4 1.4 13.2 13.2"
                 aria-hidden="true"
               >
                 <path d="M8 2.5a5.5 5.5 0 1 0 5.5 5.5" />
@@ -736,9 +734,7 @@
             {:else}
               <svg
                 class="working-block__icon"
-                viewBox="0 0 16 16"
-                width="14"
-                height="14"
+                viewBox="1.9 1.6 12.8 12.8"
                 aria-hidden="true"
               >
                 <path
