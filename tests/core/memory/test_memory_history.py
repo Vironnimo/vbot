@@ -148,12 +148,130 @@ def test_edits_outside_the_service_are_recorded_when_next_noticed(
             ["A", "A"],
             id="replacement-restores-entry-even-if-text-exists-elsewhere",
         ),
+        pytest.param(
+            [("external", "A", "B"), ("external", "B", "A")],
+            [2],
+            ["A", "B"],
+            id="reordered-entries-return-to-their-positions",
+        ),
+        pytest.param(
+            [
+                ("external", "A", "B", "C", "D"),
+                ("external", "C", "D", "A", "B"),
+                ("add", "Unrelated"),
+            ],
+            [2],
+            ["A", "B", "C", "D", "Unrelated"],
+            id="rotation-preserves-later-unrelated-entry",
+        ),
+        pytest.param(
+            [("external", "A", "A", "B"), ("external", "A", "B")],
+            [2],
+            ["A", "A", "B"],
+            id="removing-a-duplicate-restores-its-occurrence",
+        ),
+        pytest.param(
+            [("external", "A", "B", "A", "B", "A"), ("replace-index", "2", "C")],
+            [2],
+            ["A", "B", "A", "B", "A"],
+            id="rpc-replacement-among-duplicates-replays-and-reverts",
+        ),
+        pytest.param(
+            [("external", "A", "B", "C", "D"), ("external", "D", "A2", "B", "C")],
+            [2],
+            ["A", "B", "C", "D"],
+            id="replacement-positions-account-for-moved-entries",
+        ),
+        pytest.param(
+            [
+                ("external", "A", "C", "B"),
+                ("replace-index", "3", "C"),
+                ("external", "X", "A", "C", "C"),
+            ],
+            [2],
+            ["X", "A", "C", "B"],
+            id="replacement-among-duplicates-after-unrelated-prefix-addition",
+        ),
+        pytest.param(
+            [
+                ("external", "A", "C", "B"),
+                ("replace-index", "3", "C"),
+                ("external", "C", "C"),
+            ],
+            [2],
+            ["C", "B"],
+            id="replacement-among-duplicates-after-unrelated-prefix-removal",
+        ),
+        pytest.param(
+            [("external", "A", "B"), ("external", "B", "A"), ("external", "X", "B", "A")],
+            [2],
+            ["X", "A", "B"],
+            id="reorder-preserves-later-prefix-insertion",
+        ),
+        pytest.param(
+            [
+                ("external", "A", "C", "B"),
+                ("replace-index", "3", "C"),
+                ("remove-index", "3"),
+                ("external", "X", "A", "C"),
+            ],
+            [2, 3],
+            ["X", "A", "C", "B"],
+            id="several-reverts-rebase-restored-duplicate-occurrence",
+        ),
+        pytest.param(
+            [("external", "C"), ("external", "C", "C"), ("remove-index", "2")],
+            [2],
+            ["C"],
+            id="already-removed-addition-leaves-identical-survivor-alone",
+        ),
+        pytest.param(
+            [
+                ("external", "A", "B"),
+                ("replace-index", "2", "C"),
+                ("remove-index", "2"),
+                ("revert", "3"),
+            ],
+            [2],
+            ["A", "B"],
+            id="separate-undo-restores-replacement-after-restored-removal",
+        ),
+        pytest.param(
+            [("external", "A"), ("add", "B"), ("remove-index", "2"), ("revert", "3")],
+            [2],
+            ["A"],
+            id="separate-undo-removes-addition-after-restored-removal",
+        ),
+        pytest.param(
+            [
+                ("external", "A", "C", "B"),
+                ("replace-index", "3", "C"),
+                ("remove-index", "3"),
+                ("revert", "3"),
+                ("external", "X", "A", "C", "C"),
+            ],
+            [2],
+            ["X", "A", "C", "B"],
+            id="separate-undo-retains-duplicate-identity-through-restore-and-prefix",
+        ),
+        pytest.param(
+            [
+                ("external", "A"),
+                ("remove-index", "1"),
+                ("revert", "2"),
+                ("replace-index", "1", "B"),
+            ],
+            [2],
+            ["B"],
+            id="already-restored-removal-does-not-duplicate-later-replacement",
+        ),
     ],
 )
 def test_revert_takes_back_the_named_revisions(
     service: MemoryService,
     workspace: Path,
     setup: list[tuple[str, ...]],
+    monkeypatch: pytest.MonkeyPatch,
     revert: list[int],
     expected: list[str],
 ) -> None:
@@ -162,12 +280,31 @@ def test_revert_takes_back_the_named_revisions(
             service.add_entry(workspace, "agent", step[1], writer=_TOOL)
         elif step[0] == "replace":
             service.replace_matching(workspace, "agent", step[1], step[2], writer=_TOOL)
+        elif step[0] == "replace-index":
+            service.replace_entry(workspace, "agent", int(step[1]), step[2], writer=_RPC)
+        elif step[0] == "remove-index":
+            service.remove_entry(workspace, "agent", int(step[1]), writer=_RPC)
+        elif step[0] == "revert":
+            service.revert(workspace, [int(item) for item in step[1:]], writer=_RPC)
+        elif step[0] == "external":
+            workspace.mkdir(exist_ok=True)
+            (workspace / "MEMORY.md").write_text(
+                "".join(f"- {entry}\n" for entry in step[1:]), encoding="utf-8"
+            )
+            service.history(workspace, "coder")
         else:
             service.remove_matching(workspace, "agent", step[1], writer=_TOOL)
 
-    before = service.entries_at(workspace, "coder", None)["agent"]
+    # Reload the persisted log, as after a restart: a cached state must not hide
+    # a replay failure or cause a spurious external revision on the next read.
+    recorded = service.recorded_revisions("coder")
+    monkeypatch.setattr(MemoryHistory, "_logs", {})
+    before = [entry.content for entry in service.list_entries(workspace, "agent")]
+    assert service.entries_at(workspace, "coder", None)["agent"] == before
+    assert service.history(workspace, "coder") == recorded
     reverted = service.revert(workspace, revert, writer=_RPC)
 
+    monkeypatch.setattr(MemoryHistory, "_logs", {})
     assert service.entries_at(workspace, "coder", None)["agent"] == expected
     assert [entry.content for entry in service.list_entries(workspace, "agent")] == expected
     if reverted.revisions:
@@ -222,6 +359,33 @@ def test_revert_refuses_to_overwrite_later_changes_and_changes_nothing(
     service.revert(workspace, [2, 4, 5], writer=_RPC)
 
     assert service.entries_at(workspace, "coder", None)["agent"] == ["Baseline.", "Unrelated."]
+
+
+@pytest.mark.parametrize("later_action", ["remove", "replace"])
+def test_revert_does_not_confuse_a_changed_occurrence_with_an_identical_survivor(
+    service: MemoryService, workspace: Path, later_action: str
+) -> None:
+    workspace.mkdir()
+    memory_file = workspace / "MEMORY.md"
+    memory_file.write_text("- A\n- C\n- B\n", encoding="utf-8")
+    service.history(workspace, "coder")
+    replacement = service.replace_entry(workspace, "agent", 3, "C", writer=_RPC)
+    assert replacement.revision is not None
+    if later_action == "remove":
+        service.remove_entry(workspace, "agent", 3, writer=_RPC)
+    else:
+        service.replace_entry(workspace, "agent", 3, "D", writer=_RPC)
+    before = memory_file.read_bytes()
+    revisions = service.recorded_revisions("coder")
+
+    with pytest.raises(MemoryRevertError) as error:
+        service.revert(workspace, [replacement.revision], writer=_RPC)
+
+    assert [
+        (conflict.revision, conflict.text, conflict.later) for conflict in error.value.conflicts
+    ] == [(2, "C", (3,))]
+    assert memory_file.read_bytes() == before
+    assert service.recorded_revisions("coder") == revisions
 
 
 def test_a_revert_whose_write_fails_changes_nothing(
