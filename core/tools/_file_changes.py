@@ -320,6 +320,8 @@ def _commit(
     before: dict[Path, _Snapshot],
     pending: dict[Path, _Snapshot],
     warnings: dict[Path, list[str]],
+    *,
+    moved_unseen: bool = False,
 ) -> tuple[list[str], JsonObject | None]:
     completed: list[str] = []
     expected = before.copy()
@@ -389,13 +391,13 @@ def _commit(
             return completed, _error_data(_PatchError("file_changed", path=path), batch)
         pending[path] = expected[path] = batch.after[path] = batch.observed[path] = actual
         if actual.payload is not None:
-            state.record_change(context.session_id, path, merged=stale)
+            state.record_change(context.session_id, path, merged=stale or moved_unseen)
     for path in before:
         batch.observed[path] = pending[path]
         if path not in changed and pending[path].payload is not None:
             # A file left as it was shows the Session no more than it had read.
             unread = state.check_stale(context.session_id, path) is StaleReason.MODIFIED
-            state.record_change(context.session_id, path, merged=unread)
+            state.record_change(context.session_id, path, merged=unread or moved_unseen)
     return completed, None
 
 
@@ -409,6 +411,7 @@ def _rename(
 ) -> tuple[list[str], JsonObject | None]:
     """Move a link itself, or respell a file name, as one directory-entry rename."""
     snapshot = before[source]
+    unread = state.check_stale(context.session_id, source) in _UNREAD_CHANGES
     try:
         _rename_entry(source, destination, before)
     except OSError as error:
@@ -435,7 +438,7 @@ def _rename(
         return completed, _error_data(error, batch)
     batch.after[destination] = batch.observed[destination] = actual
     if actual.payload is not None:
-        state.record_read(context.session_id, destination)
+        state.record_change(context.session_id, destination, merged=unread)
     return completed, None
 
 
@@ -639,7 +642,13 @@ def _run_step(
                 if _snapshot(path) != before[path]:
                     batch.blocked.update(resolved)
                     raise _PatchError("file_changed", path=path)
-            completed, failure = _commit(context, state, batch, before, pending, warnings)
+            # Moving the file does not show the content a previous change merged over.
+            moved_unseen = (
+                moving and state.check_stale(context.session_id, source) in _UNREAD_CHANGES
+            )
+            completed, failure = _commit(
+                context, state, batch, before, pending, warnings, moved_unseen=moved_unseen
+            )
             if not failure:
                 batch.change_ends.update(change_ends)
                 if skipped:

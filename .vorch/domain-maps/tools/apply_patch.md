@@ -776,7 +776,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   open for 5 to 30 seconds and read the former `permission denied` as a real
   permission problem (Sessions, 2026-09).
 - Successful surviving files, including verified no-ops, receive Session read
-  stamps. Metadata drift can produce a post-success warning. Text mutations
+  stamps. Moves, including case-only renames, carry the source's unread-change
+  protection to the destination (`file_state.md`); a move result is not a read
+  of that content. Metadata drift can produce a post-success warning. Text mutations
   feed the existing ChangeTracker with actual before/after contents and publish
   presentation-only counts: added and removed lines, the applied edits (each
   hunk, Add, Delete and Move; for `edit`, each edit that was not skipped; `write`
