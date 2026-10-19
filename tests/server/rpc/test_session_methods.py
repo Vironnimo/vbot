@@ -463,13 +463,21 @@ async def test_session_list_pages_with_a_last_activity_cursor(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_session_project_groups_list_every_agent_by_working_project(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "defined", [True, False], ids=["defined-team-member", "removed-team-member"]
+)
+async def test_session_project_groups_list_every_agent_by_working_project(
+    tmp_path: Path, defined: bool
+) -> None:
     state = _make_state(tmp_path)
     runtime = state.runtime
     runtime.chat_run_manager = state.chat_runs
     runtime.storage = SimpleNamespace(load_compaction_settings=lambda: {})
     repo = tmp_path / "repo"
-    _write_agent(repo, "builder.md", model="openai/unavailable")
+    if defined:
+        _write_agent(repo, "builder.md", model="openai/unavailable")
+    else:
+        repo.mkdir()
     runtime.projects.create("vbot", "vBot", repo)
     runtime.projects.create("idle", "Idle", tmp_path / "idle")
     runtime.agents.create("coder")
@@ -496,6 +504,15 @@ async def test_session_project_groups_list_every_agent_by_working_project(tmp_pa
         assert [(row["id"], row["agent_address"]) for row in rest["sessions"]] == [
             ("in-vbot", "coder")
         ]
+        single = await rpc_result(state, "session.list", agent_id="builder@vbot")
+        assert [row["id"] for row in single["sessions"]] == ["team"]
+        assert (
+            single["sessions"][0]["compaction_policy_effective"]
+            == row["compaction_policy_effective"]
+        )
+        batch = await rpc_result(state, "session.list", agent_ids=["coder", "builder@vbot"])
+        assert {item["id"] for item in batch["sessions"]} == {"workspace", "in-vbot", "team"}
+        assert batch["total_count"] == 3
         unknown = await rpc_error(state, "session.list", working_project_id="gone")
         assert "gone" in unknown["message"]
     finally:
