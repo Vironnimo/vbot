@@ -113,7 +113,14 @@ CREATE TABLE indexer_state (
   total_tokens INTEGER NOT NULL,
   cost_reports INTEGER NOT NULL,
   cost REAL NOT NULL,
-  last_completed_at TEXT
+  last_completed_at TEXT,
+  classified_requests INTEGER NOT NULL DEFAULT 0,
+  measured_characters INTEGER NOT NULL DEFAULT 0,
+  measured_tokens INTEGER NOT NULL DEFAULT 0,
+  priced_tokens INTEGER NOT NULL DEFAULT 0,
+  priced_cost REAL NOT NULL DEFAULT 0.0,
+  unpriced_tokens INTEGER NOT NULL DEFAULT 0,
+  unpriced_characters INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
 CREATE TRIGGER passages_queue_vector AFTER INSERT ON passages BEGIN
@@ -257,10 +264,33 @@ class IndexCounts:
 
 
 @dataclass(frozen=True)
+class SpentMeasure:
+    """Spent embedding requests by what their provider reported.
+
+    ``requests`` counts the classified requests. Spent usage counts more when
+    the index holds usage from before this measure or from a call that
+    reported tokens or cost for only some of its requests.
+    """
+
+    requests: int = 0
+    # Requests that reported tokens: the characters of their texts and the tokens.
+    characters: int = 0
+    tokens: int = 0
+    # The tokens and cost of requests that reported both.
+    priced_tokens: int = 0
+    priced_cost: float = 0.0
+    # Requests without a cost report: the tokens they reported, and the
+    # characters of the texts of those that reported none.
+    unpriced_tokens: int = 0
+    unpriced_characters: int = 0
+
+
+@dataclass(frozen=True)
 class IndexSpent:
     """Provider usage of document embedding since the current space was pinned."""
 
     usage: EmbeddingUsage = EmbeddingUsage()
+    measure: SpentMeasure = SpentMeasure()
     last_completed_at: str | None = None
 
 
@@ -455,12 +485,14 @@ class PassageIndex(PassageCatalog):
         vectors: Mapping[str, Sequence[float]],
         *,
         usage: EmbeddingUsage | None = None,
+        characters: int = 0,
     ) -> bool:
         """Store one vector per text hash for every Passage still waiting for it.
 
-        *usage* adds to the spent usage of the space. Returns ``False``, storing
-        nothing, when the pinned space is no longer *header*'s: the vectors
-        belong to a space the index has left.
+        *usage* adds to the spent usage of the space; *characters* is the length
+        of the texts it embedded. Returns ``False``, storing nothing, when the
+        pinned space is no longer *header*'s: the vectors belong to a space the
+        index has left.
         """
         serialized: dict[str, bytes] = {}
         for text_hash, vector in vectors.items():
@@ -484,7 +516,7 @@ class PassageIndex(PassageCatalog):
                 ).fetchall()
                 _insert_vectors(connection, rows, embedding)
             if usage is not None:
-                _add_spent(connection, usage)
+                _add_spent(connection, usage, characters)
             return True
 
         return await self.write(store)
@@ -871,12 +903,18 @@ def _ensure_indexer_state(connection: sqlite3.Connection) -> None:
     )
 
 
-def _add_spent(connection: sqlite3.Connection, usage: EmbeddingUsage) -> None:
+def _add_spent(connection: sqlite3.Connection, usage: EmbeddingUsage, characters: int) -> None:
     _ensure_indexer_state(connection)
+    measure = _measure(usage, characters)
     connection.execute(
         "UPDATE indexer_state SET requests = requests + ?, token_reports = token_reports + ?, "
         "input_tokens = input_tokens + ?, total_tokens = total_tokens + ?, "
-        "cost_reports = cost_reports + ?, cost = cost + ? WHERE singleton = 1",
+        "cost_reports = cost_reports + ?, cost = cost + ?, "
+        "classified_requests = classified_requests + ?, "
+        "measured_characters = measured_characters + ?, measured_tokens = measured_tokens + ?, "
+        "priced_tokens = priced_tokens + ?, priced_cost = priced_cost + ?, "
+        "unpriced_tokens = unpriced_tokens + ?, unpriced_characters = unpriced_characters + ? "
+        "WHERE singleton = 1",
         (
             usage.requests,
             usage.token_reports,
@@ -884,14 +922,49 @@ def _add_spent(connection: sqlite3.Connection, usage: EmbeddingUsage) -> None:
             usage.total_tokens,
             usage.cost_reports,
             float(usage.cost),
+            measure.requests,
+            measure.characters,
+            measure.tokens,
+            measure.priced_tokens,
+            measure.priced_cost,
+            measure.unpriced_tokens,
+            measure.unpriced_characters,
         ),
+    )
+
+
+def _measure(usage: EmbeddingUsage, characters: int) -> SpentMeasure:
+    """Classify the requests of one embedding call by what their provider reported.
+
+    A call that reported tokens or cost for only some of its requests stays
+    unclassified: its reports cannot be matched to its texts.
+    """
+    requests = usage.requests
+    if requests == 0 or {usage.token_reports, usage.cost_reports} - {0, requests}:
+        return SpentMeasure()
+    priced = usage.cost_reports == requests
+    if usage.token_reports == 0:
+        return SpentMeasure(requests=requests, unpriced_characters=0 if priced else characters)
+    tokens = usage.input_tokens if usage.input_token_reports == requests else usage.total_tokens
+    if priced:
+        return SpentMeasure(
+            requests=requests,
+            characters=characters,
+            tokens=tokens,
+            priced_tokens=tokens,
+            priced_cost=float(usage.cost),
+        )
+    return SpentMeasure(
+        requests=requests, characters=characters, tokens=tokens, unpriced_tokens=tokens
     )
 
 
 def _read_spent(connection: sqlite3.Connection) -> IndexSpent:
     row = connection.execute(
         "SELECT requests, token_reports, input_tokens, total_tokens, cost_reports, cost, "
-        "last_completed_at FROM indexer_state WHERE singleton = 1"
+        "last_completed_at, classified_requests, measured_characters, measured_tokens, "
+        "priced_tokens, priced_cost, unpriced_tokens, unpriced_characters "
+        "FROM indexer_state WHERE singleton = 1"
     ).fetchone()
     if row is None:
         return IndexSpent()
@@ -903,6 +976,15 @@ def _read_spent(connection: sqlite3.Connection) -> IndexSpent:
             total_tokens=int(row["total_tokens"]),
             cost_reports=int(row["cost_reports"]),
             cost=float(row["cost"]),
+        ),
+        measure=SpentMeasure(
+            requests=int(row["classified_requests"]),
+            characters=int(row["measured_characters"]),
+            tokens=int(row["measured_tokens"]),
+            priced_tokens=int(row["priced_tokens"]),
+            priced_cost=float(row["priced_cost"]),
+            unpriced_tokens=int(row["unpriced_tokens"]),
+            unpriced_characters=int(row["unpriced_characters"]),
         ),
         last_completed_at=(
             str(row["last_completed_at"]) if row["last_completed_at"] is not None else None
@@ -977,6 +1059,7 @@ __all__ = [
     "TRIGRAM_RANKING",
     "IndexCounts",
     "IndexSpent",
+    "SpentMeasure",
     "KnnMatches",
     "LiteralQuery",
     "PassageIndex",

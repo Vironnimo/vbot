@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from collections.abc import Callable, Iterator
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, override
@@ -26,7 +27,11 @@ from core.runs import RunKind
 from core.sessions import ChatSessionManager, SessionAddress
 from core.utils.errors import ProviderError
 from core.utils.timestamps import format_canonical_timestamp
-from tests.core.recall.recall_test_support import StubEmbeddings, timestamp
+from tests.core.recall.recall_test_support import (
+    StubEmbeddings,
+    connect_store,
+    timestamp,
+)
 from tests.core.sessions.history_fixtures import admit_run
 
 pytestmark = pytest.mark.asyncio
@@ -52,7 +57,8 @@ class _Monotonic:
 class _Embeddings(StubEmbeddings):
     """Stub embeddings that report usage, reject chosen calls and track overlap.
 
-    Each call lasts ``call_seconds`` on *monotonic* when one is given.
+    Each call lasts ``call_seconds`` on *monotonic* when one is given. Without
+    *report* a call reports one token per character and no cost.
     """
 
     def __init__(
@@ -61,11 +67,13 @@ class _Embeddings(StubEmbeddings):
         *,
         monotonic: _Monotonic | None = None,
         call_seconds: float = 0.0,
+        report: Callable[[list[str]], EmbeddingUsage] | None = None,
     ) -> None:
         super().__init__()
         self.reject = reject
         self.monotonic = monotonic
         self.call_seconds = call_seconds
+        self.report = report
         self.in_flight = 0
         self.max_in_flight = 0
 
@@ -85,6 +93,8 @@ class _Embeddings(StubEmbeddings):
             result = await super().embed(texts, purpose=purpose)
         finally:
             self.in_flight -= 1
+        if self.report is not None:
+            return dataclasses.replace(result, usage=self.report(texts))
         characters = sum(len(text) for text in texts)
         return dataclasses.replace(
             result,
@@ -235,8 +245,9 @@ async def test_status_estimates_waiting_texts_and_keeps_spent_usage_per_space(
 
     waiting = await indexer.status()
 
-    assert (waiting.waiting, waiting.estimate_characters, waiting.estimate_tokens) == (1, 15, 4)
-    assert waiting.estimate_cost == pytest.approx(4 * PRICE_PER_MILLION / 1_000_000)
+    # The space's requests reported one token per character.
+    assert (waiting.waiting, waiting.estimate_characters, waiting.estimate_tokens) == (1, 15, 15)
+    assert waiting.estimate_cost == pytest.approx(15 * PRICE_PER_MILLION / 1_000_000)
     # Spent usage is persisted with the index.
     reopened = PassageIndex(tmp_path)
     try:
@@ -261,6 +272,45 @@ async def test_status_estimates_waiting_texts_and_keeps_spent_usage_per_space(
     assert (moved.model, moved.indexed, moved.waiting) == ("other-embed", 2, 0)
     assert moved.spent_input_tokens == 29
     assert moved.spent_cost is None
+
+
+async def test_status_takes_rates_from_what_the_provider_reported_and_estimates_the_rest(
+    index: PassageIndex, sessions: ChatSessionManager
+) -> None:
+    reports = {
+        # 10 characters, 5 tokens, priced at 0.00002 USD per token (the Model
+        # DB says 0.000002).
+        "apple pie!": EmbeddingUsage(
+            requests=1, token_reports=1, input_tokens=5, total_tokens=5, cost_reports=1, cost=1e-4
+        ),
+        # 20 characters, 10 tokens, no cost.
+        "banana split sundae!": EmbeddingUsage(
+            requests=1, token_reports=1, input_tokens=10, total_tokens=10
+        ),
+        # 20 characters, nothing reported.
+        "cherry crumble cake!": EmbeddingUsage(requests=1),
+    }
+    for day, text in enumerate(reports, start=1):
+        _conversation(sessions, f"day-{day}", text, day)
+    embeddings = _Embeddings(report=lambda texts: reports[texts[0]])
+    indexer = _indexer(index, sessions, embeddings, batch_size=1)
+    await indexer.run_pass()
+    _conversation(sessions, "waiting", "damson jam toast!!!!", 4)
+    embeddings.reject = lambda _texts: _provider_failure(503, retryable=True)
+    await indexer.run_pass()
+
+    status = await indexer.status()
+
+    # 30 measured characters took 15 tokens. The requests without a cost add
+    # 10 reported and 10 estimated tokens at the reported price.
+    assert status.spent_cost == pytest.approx(1e-4 + 20 * 2e-5)
+    assert (status.estimate_characters, status.estimate_tokens) == (20, 10)
+    assert status.estimate_cost == pytest.approx(10 * 2e-5)
+
+    # Usage spent before requests were classified is exact only when uniform.
+    with closing(connect_store(index.path)) as connection, connection:
+        connection.execute("UPDATE indexer_state SET classified_requests = 0")
+    assert (await indexer.status()).spent_cost is None
 
 
 @pytest.mark.parametrize(
@@ -292,8 +342,14 @@ async def test_local_embedding_space_costs_nothing_and_names_local_failures(
 
     status = await indexer.status()
 
-    # No Model DB price exists for a local Model; it is free, not unknown.
-    assert (status.provider, status.waiting, status.estimate_cost) == ("local", 1, 0.0)
+    # No Model DB price exists for a local Model; it is free, not unknown. No
+    # request reported tokens yet, so 14 characters estimate at four per token.
+    assert (status.provider, status.waiting, status.estimate_tokens, status.estimate_cost) == (
+        "local",
+        1,
+        4,
+        0.0,
+    )
     assert status.state == "error"
     assert status.last_error is not None and status.last_error.code == code
 

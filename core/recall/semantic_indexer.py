@@ -38,6 +38,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from fractions import Fraction
 from typing import Any, Literal
 
 from core.model_tasks import (
@@ -55,6 +56,7 @@ from core.recall.passage_index import (
     IndexCounts,
     IndexSpent,
     PassageIndex,
+    SpentMeasure,
     VectorHeader,
     space_change_reason,
 )
@@ -72,7 +74,8 @@ BACKOFF_MAX_S = 1800.0
 BATCH_SIZE = 64
 # Pushed status updates while indexing are at least this far apart.
 STATUS_INTERVAL_S = 2.0
-# The estimate assumes this many characters per token.
+# Until a request of the space reported its tokens, estimates assume this
+# many characters per token.
 CHARS_PER_TOKEN = 4
 # A pass reports its rate, and with it the time left, once it has measured
 # its finished batches over at least this many seconds.
@@ -118,11 +121,15 @@ class IndexStatus:
 
     Counts are distinct stored Passages of the Sessions Recall may return.
     ``spent`` is the document embedding usage since the current space was
-    pinned; ``estimate_*`` describe the texts still waiting. Costs are USD and
-    ``None`` when unknown. While a pass embeds, ``rate`` is the texts it
-    embedded or skipped per second so far and ``eta_seconds`` the time the
-    texts still waiting take at that rate; both are ``None`` outside a pass
-    and until the pass has finished a batch and run ``RATE_MIN_SECONDS``.
+    pinned; ``estimate_*`` describe the texts still waiting. Estimates use the
+    tokens per character and the price per token the space's requests
+    reported, else ``CHARS_PER_TOKEN`` and the Model DB input price;
+    ``spent_cost`` is the reported cost plus such an estimate for the requests
+    that reported none. Costs are USD and ``None`` when unknown. While a pass
+    embeds, ``rate`` is the texts it embedded or skipped per second so far and
+    ``eta_seconds`` the time the texts still waiting take at that rate; both
+    are ``None`` outside a pass and until the pass has finished a batch and
+    run ``RATE_MIN_SECONDS``.
     Passages that share a text share its vector, so a text is the unit the
     embedding model works through.
     """
@@ -384,8 +391,9 @@ class SemanticIndexer:
                 spent = await self._index.spent()
             except Exception as error:
                 self._debug("Recall index status unavailable (error=%s)", type(error).__name__)
-        price = self._input_price(identity)
-        tokens = math.ceil(counts.waiting_characters / CHARS_PER_TOKEN)
+        tokens_per_character = _tokens_per_character(spent.measure)
+        price = _token_price(spent.measure, self._catalog_token_price(identity))
+        tokens = math.ceil(counts.waiting_characters * tokens_per_character)
         state = self._visible_state(configured)
         rate, eta_seconds = (
             self._pace(counts.waiting_texts) if state == "indexing" else (None, None)
@@ -404,10 +412,10 @@ class SemanticIndexer:
             spent_requests=spent.usage.requests,
             spent_input_tokens=spent.usage.input_tokens,
             spent_total_tokens=spent.usage.total_tokens,
-            spent_cost=_spent_cost(spent.usage, price),
+            spent_cost=_spent_cost(spent, price, tokens_per_character),
             estimate_characters=counts.waiting_characters,
             estimate_tokens=tokens,
-            estimate_cost=None if price is None else tokens * price / _TOKENS_PER_PRICE_UNIT,
+            estimate_cost=None if price is None else tokens * price,
             rate=rate,
             eta_seconds=eta_seconds,
         )
@@ -437,15 +445,16 @@ class SemanticIndexer:
         delay = max(0.0, self._due - self._monotonic())
         return format_canonical_timestamp(self._clock() + timedelta(seconds=delay))
 
-    def _input_price(self, identity: EmbeddingSpaceIdentity | None) -> float | None:
+    def _catalog_token_price(self, identity: EmbeddingSpaceIdentity | None) -> float | None:
+        """The Model DB input price per token; a local Model is free."""
         if identity is not None and identity.local:
             return 0.0
         if identity is None or self._pricing is None:
             return None
         pricing = self._pricing(f"{identity.provider_id}/{identity.model_id}")
-        if pricing is None or not pricing.supported:
+        if pricing is None or not pricing.supported or pricing.rates.input is None:
             return None
-        return pricing.rates.input
+        return pricing.rates.input / _TOKENS_PER_PRICE_UNIT
 
     # -- Scheduling ----------------------------------------------------------------
 
@@ -726,7 +735,10 @@ class SemanticIndexer:
             text_hash: vector
             for (text_hash, _text), vector in zip(items, result.vectors, strict=True)
         }
-        if not await self._index.store_vectors(header, vectors, usage=result.usage):
+        characters = sum(len(text) for _text_hash, text in items)
+        if not await self._index.store_vectors(
+            header, vectors, usage=result.usage, characters=characters
+        ):
             raise _SpaceMovedError()
         outcome.succeeded = True
         outcome.embedded += len(items)
@@ -846,14 +858,42 @@ def _is_context_overflow(error: BaseException) -> bool:
     )
 
 
-def _spent_cost(usage: EmbeddingUsage, price: float | None) -> float | None:
-    """Reported cost when the provider reported any, else a catalog price estimate."""
-    if usage.cost_reports > 0:
+def _tokens_per_character(measure: SpentMeasure) -> Fraction:
+    """Tokens per character the space's requests reported, else ``CHARS_PER_TOKEN``."""
+    if measure.characters > 0 and measure.tokens > 0:
+        return Fraction(measure.tokens, measure.characters)
+    return Fraction(1, CHARS_PER_TOKEN)
+
+
+def _token_price(measure: SpentMeasure, catalog_price: float | None) -> float | None:
+    """USD per token the space's requests reported with their tokens, else *catalog_price*."""
+    if measure.priced_tokens > 0:
+        return measure.priced_cost / measure.priced_tokens
+    return catalog_price
+
+
+def _spent_cost(
+    spent: IndexSpent, price: float | None, tokens_per_character: Fraction
+) -> float | None:
+    """The reported cost plus, at *price* per token, an estimate for requests that reported none.
+
+    A request without a cost counts the tokens it reported, else its texts'
+    characters at *tokens_per_character*.
+    """
+    usage, measure = spent.usage, spent.measure
+    if usage.cost_reports == usage.requests:
         return usage.cost
-    if usage.requests == 0:
-        return 0.0
-    if price is not None and usage.token_reports > 0:
-        return usage.input_tokens * price / _TOKENS_PER_PRICE_UNIT
+    if price is None:
+        return None
+    if measure.requests == usage.requests:
+        tokens = measure.unpriced_tokens + math.ceil(
+            measure.unpriced_characters * tokens_per_character
+        )
+        return usage.cost + tokens * price
+    # Usage the measure does not classify (spent before it existed) is exact
+    # only when no request reported a cost and every one reported its tokens.
+    if usage.cost_reports == 0 and usage.token_reports == usage.requests:
+        return usage.total_tokens * price
     return None
 
 
