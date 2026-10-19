@@ -5,21 +5,21 @@ from typing import Any, cast
 import pytest
 
 from core.model_tasks.decision_types import DecisionError
-from core.model_tasks.decisions import (
-    ITEM_LIMIT,
-    QUESTION_TOKEN_LIMIT,
-    REQUEST_TOKEN_LIMIT,
-    DecisionService,
-)
+from core.model_tasks.decisions import ITEM_LIMIT, DecisionService
 from core.model_tasks.model_tasks import TaskModelService
 
 QUESTIONS = [{"id": "q", "type": "noul", "instructions": "Relevant?"}]
 
 
-def service(*, provider: str = "openrouter", usable: bool = True) -> DecisionService:
+def service(
+    *, provider: str = "openrouter", usable: bool = True, window: int | None = 262_144
+) -> DecisionService:
+    """A Decision binding whose Model reports *window* for its Connection ``api_key``."""
+    model = SimpleNamespace(context_window_for={"api_key": window}.get)
     bindings = SimpleNamespace(
         binding_is_usable=lambda task: usable,
         binding_for=lambda task: SimpleNamespace(target=f"{provider}/typesafe/jev-1.13::api_key"),
+        model_for_target=lambda ref: model,
     )
     return DecisionService(cast(TaskModelService, bindings), cast(Any, None))
 
@@ -68,8 +68,9 @@ class _Calibration:
 
 
 @pytest.mark.asyncio
-async def test_an_oversized_item_fails_alone_without_a_request(monkeypatch):
-    owner = service()
+@pytest.mark.parametrize("window", [1_000, None], ids=["reported-window", "no-reported-window"])
+async def test_an_item_beyond_the_reported_context_window_fails_alone_unsent(monkeypatch, window):
+    owner = service(window=window)
     sent: list[Any] = []
 
     async def evaluate(target, state, questions, *, http_client=None, usage_context=None):
@@ -77,31 +78,32 @@ async def test_an_oversized_item_fails_alone_without_a_request(monkeypatch):
         return {"answers": {"q": {"type": "noul", "noul": 0.5}}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
-    # Each question fits alone with the item, together they exceed the request limit.
-    question_sized = "word " * (QUESTION_TOKEN_LIMIT // 2)
-    many = [{**QUESTIONS[0], "id": f"q{n}", "instructions": question_sized} for n in range(5)]
+    long = "word " * 2_000
 
-    small, alone = await owner.classify(["small", "word " * QUESTION_TOKEN_LIMIT], QUESTIONS)
-    [together] = await owner.classify(["x"], many)
+    small, beyond = await owner.classify(["small", long], QUESTIONS)
 
-    assert sent == ["small"] and small["answers"]["q"]["noul"] == 0.5
-    assert isinstance(alone, DecisionError) and alone.code == "too_large"
-    assert isinstance(together, DecisionError) and "all questions" in str(together)
-    assert 5 * QUESTION_TOKEN_LIMIT // 2 > REQUEST_TOKEN_LIMIT
+    assert small["answers"]["q"]["noul"] == 0.5
+    if window is None:
+        # Without a reported window the Provider decides what is too large.
+        assert sent == ["small", long]
+    else:
+        assert sent == ["small"]
+        assert isinstance(beyond, DecisionError) and beyond.code == "too_large"
+        assert "at most 1000 tokens" in str(beyond)
 
 
 @pytest.mark.asyncio
 async def test_reported_input_tokens_correct_the_size_check(monkeypatch):
     calibration = _Calibration(factor=2.0)
-    owner = service()
+    owner = service(window=1_000)
     owner._usage_recorder = cast(Any, calibration)
 
     async def evaluate(target, state, questions, *, http_client=None, usage_context=None):
         return {"answers": {}, "usage": {"input_tokens": 1234}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
-    # About 0.6 of the per-question limit: fits as estimated, not as corrected.
-    halfway = "word " * (QUESTION_TOKEN_LIMIT * 6 // 10)
+    # About 0.8 of the window: fits as estimated, not as corrected.
+    halfway = "word " * 600
 
     rejected, answered = await owner.classify([halfway, "small"], QUESTIONS)
 

@@ -2,8 +2,9 @@
 
 `core/usage/` owns durable per-request accounting in `<data-dir>/model-usage.db`.
 Statistics consumes it as a source; the Statistics index remains disposable.
-The same owner keeps the input estimate calibration, which Chat learns from
-measured requests (Interfaces).
+The same owner keeps the input estimate calibration, which Chat and the
+Decision Model (`model_tasks/decisions.md`) learn from measured requests
+(Interfaces).
 
 ## Ownership and lifetime
 

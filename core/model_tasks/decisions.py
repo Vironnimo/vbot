@@ -26,10 +26,6 @@ from core.utils.workers import BoundedWorkerPool
 
 # The most items one classify call judges.
 ITEM_LIMIT = 100
-# TypeSafe's context limits (docs.typesafe.ai/models, without the opt-in long
-# context): the state plus all questions, and the state plus any one question.
-REQUEST_TOKEN_LIMIT = 64_000
-QUESTION_TOKEN_LIMIT = 32_000
 # Items judged at the same time; each is one Provider request.
 _ITEM_CONCURRENCY = 8
 _DECISION_SETUP_WORKERS = BoundedWorkerPool(name="decision-setup", max_workers=2)
@@ -63,10 +59,14 @@ class DecisionService:
         ref = parse_task_model_target_id(self._model_tasks.binding_for("decision").target)
         return ref.provider_id == "openrouter"
 
-    def _target(self) -> str:
+    def _target(self) -> _Target:
         if not self.available():
             raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured")
-        return self._model_tasks.binding_for("decision").target
+        target = self._model_tasks.binding_for("decision").target
+        ref = parse_task_model_target_id(target)
+        model = self._model_tasks.model_for_target(ref)
+        window = model.context_window_for(ref.local_connection_id) if model is not None else None
+        return _Target(target, window if isinstance(window, int) and window > 0 else None)
 
     async def classify(
         self,
@@ -98,7 +98,7 @@ class DecisionService:
         for state in states:
             if not isinstance(state, str | dict | list):
                 raise DecisionError("Each item must be text, a JSON object, or a JSON array.")
-        target = await _DECISION_SETUP_WORKERS.run(self._target)
+        target, limit = await _DECISION_SETUP_WORKERS.run(self._target)
         slots = asyncio.Semaphore(_ITEM_CONCURRENCY)
 
         async def judge(
@@ -112,7 +112,7 @@ class DecisionService:
                 )
                 # Copying and counting an item of up to 1 MB must not block the Event Loop.
                 state, estimate = await _DECISION_SETUP_WORKERS.run(
-                    _sized_state, state, questions, factor
+                    _sized_state, state, questions, factor, limit
                 )
                 async with slots:
                     result = await self._evaluate(
@@ -122,7 +122,7 @@ class DecisionService:
                         http_client=http_client,
                         usage_context=usage_context,
                     )
-                await self._learn_input_estimate(target, result, estimate.request)
+                await self._learn_input_estimate(target, result, estimate)
                 return result
             except DecisionError as exc:
                 return exc
@@ -178,42 +178,31 @@ class DecisionService:
             raise DecisionError(str(exc), code="provider_error") from exc
 
 
-class _InputEstimate(NamedTuple):
-    """Uncorrected estimates of one request: the whole of it and its largest question."""
+class _Target(NamedTuple):
+    """The configured target and the context window its catalog reports, if any."""
 
-    request: int
-    question: int
-
-
-def _input_estimate(state: Any, questions: list[dict[str, Any]]) -> _InputEstimate:
-    request, _ = estimate_json_tokens({"state": state, "questions": wire_questions(questions)})
-    state_tokens, _ = estimate_json_tokens({"state": state})
-    largest = max(estimate_json_tokens(wire_questions([q]))[0] for q in questions)
-    return _InputEstimate(request, state_tokens + largest)
+    target: str
+    context_window: int | None
 
 
 def _sized_state(
-    state: Any, questions: list[dict[str, Any]], factor: float
-) -> tuple[Any, _InputEstimate]:
-    """A private copy of ``state`` and its estimate; raises when it exceeds a limit."""
+    state: Any, questions: list[dict[str, Any]], factor: float, limit: int | None
+) -> tuple[Any, int]:
+    """A private copy of ``state`` and the uncorrected estimate of its whole request.
+
+    The estimate times the Model's input estimate *factor* must fit *limit*,
+    the reported context window for the state plus all questions. Without a
+    reported window nothing is checked here: the Provider rejects what is too
+    large.
+    """
     state = json_copy(state)
-    estimate = _input_estimate(state, questions)
-    _check_input_size(estimate, factor)
+    estimate, _ = estimate_json_tokens({"state": state, "questions": wire_questions(questions)})
+    tokens = math.ceil(estimate * factor)
+    if limit is not None and tokens > limit:
+        raise DecisionError(
+            f"This item has about {tokens} tokens together with context and all questions; "
+            f"the Decision Model reads at most {limit} tokens. Shorten the item, context or "
+            "questions.",
+            code="too_large",
+        )
     return state, estimate
-
-
-def _check_input_size(estimate: _InputEstimate, factor: float) -> None:
-    request = math.ceil(estimate.request * factor)
-    question = math.ceil(estimate.question * factor)
-    if request > REQUEST_TOKEN_LIMIT:
-        raise DecisionError(
-            f"This item has about {request} tokens together with context and all "
-            f"questions; the Decision Model reads at most {REQUEST_TOKEN_LIMIT}.",
-            code="too_large",
-        )
-    if question > QUESTION_TOKEN_LIMIT:
-        raise DecisionError(
-            f"This item has about {question} tokens together with context and its largest "
-            f"question; the Decision Model reads at most {QUESTION_TOKEN_LIMIT} per question.",
-            code="too_large",
-        )

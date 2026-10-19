@@ -91,6 +91,7 @@ class _Bindings:
 
     def model_for_target(self, _target: Any) -> Any:
         return SimpleNamespace(
+            context_window_for=lambda _connection: None,
             capabilities=SimpleNamespace(
                 task_types=TASKS,
                 task_options={
@@ -99,7 +100,7 @@ class _Bindings:
                     }
                 },
                 input_modalities=("text",),
-            )
+            ),
         )
 
     def image_profile(self, target: Any) -> Any:
