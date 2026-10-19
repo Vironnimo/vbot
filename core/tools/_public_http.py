@@ -381,7 +381,7 @@ async def _validate_public_target(scheme: str, host: str | None, port: int) -> t
     if scheme not in {"http", "https"}:
         raise _InvalidUrlError(f"Only http and https URLs can be fetched, not {scheme}: URLs.")
 
-    normalized_host = (host or "").rstrip(".").lower()
+    normalized_host = (host or "").encode("idna").decode("ascii").rstrip(".").lower()
     if not normalized_host:
         raise _InvalidUrlError(
             "The URL has no host name. Pass a full URL such as https://example.com/page."
@@ -394,7 +394,7 @@ async def _validate_public_target(scheme: str, host: str | None, port: int) -> t
     if literal_address is not None:
         if _is_blocked_ip(literal_address):
             raise _BlockedUrlError(_private_address(normalized_host))
-        return normalized_host, str(literal_address)
+        return str(literal_address), str(literal_address)
 
     resolved_addresses = await _resolve_host_addresses(normalized_host, port)
     for resolved in resolved_addresses:
@@ -543,7 +543,18 @@ async def _fetch_with_retry(
                     f"{url} redirected to an address that is not followed. {error}"
                 ) from error
             raise
-        resolve_map[(normalized_host, port)] = pinned_ip
+        # curl must parse exactly the host that was validated, including IDNA
+        # and trailing-dot normalization. Otherwise RESOLVE misses its cache key
+        # and curl performs a second, unchecked DNS lookup.
+        parsed = urlparse(current_url)
+        authority = f"[{normalized_host}]" if ":" in normalized_host else normalized_host
+        if parsed.port is not None:
+            authority = f"{authority}:{port}"
+        current_url = parsed._replace(netloc=authority).geturl()
+        # Literals already name the validated address; no DNS lookup can rebind
+        # them, and a bare IPv6 host is not a valid RESOLVE entry.
+        if _parse_ip_literal(normalized_host) is None:
+            resolve_map[(normalized_host, port)] = pinned_ip
         # curl's RESOLVE is an slist option and accepts a list; the type stub
         # narrows the dict value to str, so the assignment is annotated away.
         session.curl_options[CurlOpt.RESOLVE] = [  # type: ignore[assignment]
