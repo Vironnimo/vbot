@@ -11,10 +11,12 @@ import os
 import re
 import stat
 import zipfile
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -447,6 +449,45 @@ def test_authenticated_installation_requires_a_compatible_package_before_admissi
 
 
 _DOWNLOADS = "https://github.com/Vironnimo/vbot/releases"
+
+
+@pytest.mark.parametrize("oversized", [False, True])
+def test_download_bounds_release_identity_while_reading_and_closes_the_stream(
+    tmp_path: Path, oversized: bool
+) -> None:
+    respx = pytest.importorskip("respx")
+    install = _install(tmp_path / "install", public_key="key")
+    install.root.mkdir()
+    (install.root / "active-version").write_text("rel_active\n", encoding="ascii")
+    identity = json.dumps({"schema_version": 1, "version_id": "rel_active"}).encode()
+
+    class Body(httpx.SyncByteStream):
+        closed = False
+
+        @override
+        def __iter__(self) -> Iterator[bytes]:
+            yield identity.ljust(packages.MAX_IDENTITY_BYTES, b" ")
+            if oversized:
+                yield b" "
+                raise AssertionError("The updater consumed data beyond the identity limit")
+
+        @override
+        def close(self) -> None:
+            self.closed = True
+
+    body = Body()
+    with respx.mock() as router:
+        router.get(f"{install.download_base}/{RELEASE_IDENTITY_ASSET}").mock(
+            return_value=httpx.Response(200, stream=body)
+        )
+        if oversized:
+            with pytest.raises(ApplicationError):
+                download_release(install, "upd_bounded")
+        else:
+            assert download_release(install, "upd_bounded") is None
+
+    assert body.closed
+    assert not (install.root / "downloads").exists()
 
 
 @pytest.mark.parametrize(
