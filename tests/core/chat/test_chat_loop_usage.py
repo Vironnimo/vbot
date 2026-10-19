@@ -15,7 +15,7 @@ from core.providers.errors import NetworkError, ProviderError
 from core.runs import RunCancelledError
 from core.tools import ToolRegistry, tool_success
 from core.usage import UsageRecorder
-from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
+from core.utils.tokens import estimate_output_tokens, estimate_request_input_tokens
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -198,9 +198,7 @@ async def test_missing_usage_is_estimated_from_the_sent_request_and_answer(
             request["messages"], request["kwargs"]["tools"]
         )[0],
         "input_tokens_estimated": True,
-        "output_tokens": estimate_message_tokens({"role": "assistant", "content": answer.content})[
-            0
-        ],
+        "output_tokens": estimate_output_tokens({"content": answer.content}),
         "output_tokens_estimated": True,
         "estimated": True,
     }
@@ -260,6 +258,28 @@ async def test_unusable_provider_input_is_estimated_and_measured_output_kept(
     }
     assert completed["context_usage"] == {
         "tokens": estimated_input + _hello_tokens(),
+        "estimated": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_missing_output_is_estimated_beside_reported_reasoning(tmp_path: Path) -> None:
+    response: JsonObject = {
+        "content": "Hello",
+        "reasoning": "Thinking it through. " * 50,
+        "tool_calls": None,
+        "usage": {"input_tokens": 50, "reasoning_tokens": 300},
+    }
+    runtime = _runtime(tmp_path, StubAdapter([response]))
+
+    answer = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+
+    # The reported reasoning is part of the output; only the answer is estimated.
+    assert _counters(answer.usage) == {
+        "input_tokens": 50,
+        "output_tokens": estimate_output_tokens({"content": "Hello"}) + 300,
+        "output_tokens_estimated": True,
+        "reasoning_tokens": 300,
         "estimated": True,
     }
 

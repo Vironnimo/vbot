@@ -248,6 +248,30 @@ def estimate_message_tokens(
     return estimated_tokens + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE, True
 
 
+def estimate_output_tokens(
+    message: Mapping[str, Any], *, reasoning_tokens: int | None = None
+) -> int:
+    """Estimate the output tokens one Assistant message took to generate.
+
+    Counts the answer and Tool Calls once. Reasoning costs the reported
+    *reasoning_tokens* when given; otherwise its readable text plus one fixed
+    reservation per opaque blob in ``reasoning_meta``. Copies of the answer,
+    Tool Calls or reasoning text that ``reasoning_meta`` carries for replay are
+    never counted again.
+    """
+    visible = {key: message[key] for key in ("content", "tool_calls") if key in message}
+    estimated, _ = estimate_message_tokens(visible)
+    if reasoning_tokens is not None:
+        return estimated + reasoning_tokens
+    reasoning = message.get("reasoning")
+    if isinstance(reasoning, str):
+        estimated += estimate_tokens(reasoning)[0]
+    _, blob_count = _normalize_opaque_reasoning_blobs(
+        _deduplicate_reasoning_meta_carriers(message.get("reasoning_meta"))
+    )
+    return estimated + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE
+
+
 def estimate_json_tokens(value: Any, *, model_id: str | None = None) -> tuple[int, bool]:
     """Estimate tokens for a JSON-serializable value via its compact JSON size.
 

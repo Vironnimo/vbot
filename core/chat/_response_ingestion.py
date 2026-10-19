@@ -22,7 +22,7 @@ from core.providers.adapter import (
     normalize_tool_call_candidates,
 )
 from core.tools import registry_tool_name
-from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
+from core.utils.tokens import estimate_output_tokens, estimate_request_input_tokens
 
 
 def _assistant_message_from_response(
@@ -81,8 +81,11 @@ def _complete_usage_with_estimates(
         usage[USAGE_INPUT_TOKENS_ESTIMATED_FIELD] = True
 
     if _optional_usage_token_count(usage.get("output_tokens")) is None:
-        estimated_output, _ = estimate_message_tokens(message.to_dict())
-        usage["output_tokens"] = estimated_output
+        # A reported reasoning count is part of the output; only the rest is estimated.
+        usage["output_tokens"] = estimate_output_tokens(
+            message.to_dict(),
+            reasoning_tokens=_optional_usage_token_count(usage.get("reasoning_tokens")),
+        )
         usage[USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD] = True
 
     if usage_token_is_estimated(usage, "input_tokens") or usage_token_is_estimated(
