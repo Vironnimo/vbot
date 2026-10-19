@@ -3,6 +3,7 @@
 import pytest
 
 from core.extensions.operations import ExtensionOperations
+from core.tools.availability import ToolAccess, resolve_tool_access
 from core.tools.tools import ToolRegistry, tool_success
 
 
@@ -57,6 +58,43 @@ def test_dynamic_hidden_catalog_tool_stays_registered_for_dispatch_ownership():
     assert operations.catalog_visible_tool_names == ()
     assert registry.get("private").catalog_visible is False
     assert [tool.name for tool in registry.list_tools(include_catalog_hidden=False)] == []
+
+
+def test_dynamic_followers_stay_with_their_owners_capability():
+    registry = ToolRegistry()
+    registry.register(**declaration("read"))
+    registry.register(**declaration("other"), extension="other")
+    operations = ExtensionOperations("example")
+    operations.bind(registry)
+    parent = {**declaration("parent"), "requires_opt_in": True}
+    follower = {
+        **declaration("child"),
+        "activation": "follows",
+        "activation_source": "parent",
+    }
+    # One live catalog can contain its parent and follower in either order.
+    operations.replace_tools("connection", [follower, parent])
+    policy = ToolAccess(mode="selected", allowed=("parent",), granted=("parent",))
+    assert set(resolve_tool_access(policy, registry.list_tools(), "always").allowed_tools) == {
+        "parent",
+        "child",
+    }
+    previous = registry.list_tools()
+    # Built-ins, foreign owners and absent parents cannot activate this Extension.
+    for source in ("read", "other", "missing", ("parent", "read")):
+        with pytest.raises(ValueError):
+            operations.replace_tools(
+                "connection", [parent, {**follower, "activation_source": source}]
+            )
+        assert registry.list_tools() == previous
+    # A catalog cannot leave its followers dangling for another owner to claim.
+    operations.replace_tools("companion", [{**follower, "name": "companion"}])
+    with pytest.raises(ValueError):
+        operations.replace_tools("connection", [])
+    assert registry.get("parent").extension == "example"
+    operations.replace_tools("companion", [])
+    operations.replace_tools("connection", [])
+    assert {tool.name for tool in registry.list_tools()} == {"read", "other"}
 
 
 @pytest.mark.asyncio
