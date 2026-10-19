@@ -176,6 +176,25 @@ def _paired_token(client: TestClient, kind: str = "cli") -> tuple[str, str]:
         (_authenticated(), {**_INTERNET, "X-Forwarded-For": "not-an-address"}, "/health", 403),
         (
             _authenticated(),
+            {"x-test-peer": _PROXY, "X-Forwarded-Proto": "https"},
+            "/health",
+            403,
+        ),
+        (_authenticated(), {**_INTERNET, "X-Forwarded-For": _PROXY}, "/health", 403),
+        (
+            access_config("authenticated", public_url=_PUBLIC_URL, trusted_proxies=["10.0.0.0/24"]),
+            {**_INTERNET, "X-Forwarded-For": "10.0.0.8, 10.0.0.9"},
+            "/health",
+            403,
+        ),
+        (
+            access_config("authenticated", public_url=_PUBLIC_URL, trusted_proxies=["10.0.0.0/24"]),
+            {**_INTERNET, "X-Forwarded-For": "198.51.100.1, 203.0.113.7, 10.0.0.9"},
+            "/health",
+            200,
+        ),
+        (
+            _authenticated(),
             {"x-test-peer": "10.0.0.3", "X-Forwarded-For": "203.0.113.7"},
             "/health",
             403,
