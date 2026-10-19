@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import logging
+import random
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from PIL import Image, ImageDraw
 
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
@@ -174,6 +178,46 @@ async def test_screenshot_coordinates_use_returned_pixels_and_keep_the_display(
     result = await computer.computer(action="screenshot", display="Projector")
     assert result["error"]["code"] == "invalid_arguments"
     assert '1. "Main" 1280x720 (primary, current)\n2. "Wide" 3136x1000' in model_text(result)
+
+
+def desktop_like(width: int, height: int) -> Image.Image:
+    """Windows with text over a gradient, plus a noise patch any lossy encoding alters."""
+    rng = random.Random(7)
+    image = Image.linear_gradient("L").resize((width, height)).convert("RGB")
+    draw = ImageDraw.Draw(image)
+    for top in range(40, height - 60, 180):
+        for left in range(30, width - 300, 420):
+            draw.rectangle((left, top, left + 380, top + 160), (250, 250, 250), (90, 90, 90))
+            for line in range(8):
+                ink = (rng.randrange(80), rng.randrange(80), rng.randrange(80))
+                draw.text((left + 10, top + 8 + line * 18), f"Line {rng.random():.12f}", ink)
+    noise = Image.frombytes("RGB", (160, 90), rng.randbytes(160 * 90 * 3))
+    image.paste(noise, (width - 200, height - 120))
+    return image
+
+
+async def test_screenshots_carry_the_captured_pixels_as_compact_lossless_png(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = desktop_like(1280, 720)
+    monkeypatch.setattr(computer.target, "capture", lambda display: source.copy())
+    context = computer.context_for("computer")
+    result = await computer.call("computer", {"action": "screenshot", "view": "display"}, context)
+    assert result["ok"], result
+    [media] = context.result_media
+    sent = base64.b64decode(media["base64"])
+    assert media["media_type"] == "image/png" and media["filename"].endswith(".png")
+    # The Model, the displayed file and Chat's Attachment copy get the same bytes.
+    assert Path(media["path"]).read_bytes() == sent
+    # Agents read small text and exact colours: every pixel arrives unchanged.
+    with Image.open(io.BytesIO(sent)) as image:
+        assert (image.format, image.mode, image.size) == ("PNG", "RGB", source.size)
+        assert image.tobytes() == source.tobytes()
+    # Every later request uploads the screenshot again, so it is stored smaller than
+    # the fastest setting would store it.
+    fastest = io.BytesIO()
+    source.save(fastest, format="PNG", compress_level=1)
+    assert len(sent) < len(fastest.getvalue())
 
 
 async def test_zoom_is_for_looking_only(computer: Harness) -> None:
