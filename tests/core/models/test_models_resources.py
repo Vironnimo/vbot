@@ -9,6 +9,7 @@ import pytest
 from core.models.models import Model, ModelRegistry
 from core.models.query import ModelQuery
 from core.providers.ollama import OllamaCloudAdapter
+from core.providers.openai import OpenAIAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.providers import ProviderRegistry
@@ -43,6 +44,7 @@ def _profile(model: Model, *keys: str, wire: WireProfile | None = None) -> dict[
     if wire is not None:
         facts["replay_scope"] = wire.replay.scope
         facts["list_announced_tools"] = wire.request.list_announced_tools
+        facts["on_demand_tools"] = wire.request.on_demand_tools
     return {key: facts[key] for key in keys}
 
 
@@ -51,15 +53,16 @@ def _wire_profile(
 ) -> WireProfile:
     """The bundled wire profile of one catalog Model on the selected Connection."""
 
-    adapter = {
-        "ollama-cloud": OllamaCloudAdapter,
-        "opencode-go": OpenCodeGoAdapter,
-        "opencode-zen": OpenCodeZenAdapter,
+    protocols = {
+        "ollama-cloud": OllamaCloudAdapter.WIRE_PROTOCOLS,
+        "openai": OpenAIAdapter.WIRE_PROTOCOLS,
+        "opencode-go": OpenCodeGoAdapter.WIRE_PROTOCOLS,
+        "opencode-zen": OpenCodeZenAdapter.WIRE_PROTOCOLS,
     }[provider_id]
     return standalone_wire_binding(
         provider_id=provider_id,
         connection_id=connection_id,
-        protocols=adapter.WIRE_PROTOCOLS,
+        protocols=protocols,
         model_lookup=lambda selected: registry.get(provider_id, selected),
     ).profile(model_id)
 
@@ -421,7 +424,11 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
         # System Reminder announced outside ``tools[]`` (vBot probes 2026-09-28).
         pytest.param(
             "glm-5.3",
-            {"replay_scope": "full_history", "list_announced_tools": False},
+            {
+                "replay_scope": "full_history",
+                "list_announced_tools": False,
+                "on_demand_tools": True,
+            },
             id="glm-5.3",
         ),
         pytest.param(
@@ -430,6 +437,7 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                 "context_window": 1_000_000,
                 "replay_scope": "full_history",
                 "list_announced_tools": True,
+                "on_demand_tools": False,
             },
             id="glm-5.3-flash",
         ),
@@ -503,6 +511,21 @@ def test_openai_reasoning_models_load_connection_specific_limits(
 
     alias = registry.get("openai", "gpt-5.6")
     assert alias.connections == ("api-key",)
+
+
+@pytest.mark.parametrize("connection_id", ["subscription", "api-key"])
+def test_openai_routes_serve_no_on_demand_tools(
+    registry: ModelRegistry, connection_id: str
+) -> None:
+    """OpenAI Models call only listed Tools, so every Tool stays in the request's list.
+
+    GPT-6.1 Sol through Codex kept calling other Tools instead of a loaded one
+    (2026-10-19). The rule is the Provider's default, for every protocol.
+    """
+
+    wire = _wire_profile(registry, "openai", "gpt-6.1-sol", connection_id)
+
+    assert wire.request.on_demand_tools is False
 
 
 def test_gpt6_astra_profile_loads(registry: ModelRegistry) -> None:

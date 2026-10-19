@@ -792,6 +792,10 @@ class ChatLoop:
             agent, session_tool_grants=session_tool_grants
         )
 
+    async def serves_on_demand_tools(self, agent: Any) -> bool:
+        """Return whether *agent*'s Runs get On-demand Tools on its Model's route."""
+        return await self._requests.tool_catalog.serves_on_demand_tools(agent)
+
     async def start_external_run(
         self,
         agent_id: str,

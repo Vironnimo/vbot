@@ -521,6 +521,7 @@ def _declarations(adapter: ProviderAdapter, model_id: str, masker: Masker) -> di
         "request_body_limit": adapter.request_body_limit,
         "request_image_limit": adapter.request_image_limit,
         "list_announced_tools": adapter.list_announced_tools,
+        "on_demand_tools": adapter.on_demand_tools,
     }
     for name, probe in probes.items():
         try:

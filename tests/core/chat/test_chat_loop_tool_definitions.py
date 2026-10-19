@@ -843,6 +843,35 @@ async def test_on_demand_tools_are_listed_in_the_system_prompt_and_loaded_when_n
 
 
 @pytest.mark.asyncio
+async def test_a_route_without_on_demand_tools_lists_every_tool(tmp_path: Path) -> None:
+    """A Model that calls only listed Tools gets every Tool listed, whatever tool_loading says."""
+
+    tools, dispatched = _on_demand_tools()
+    runtime = tool_runtime(
+        tmp_path,
+        tools,
+        [],
+        allowed_tools=["read", "search", "fetch"],
+        tool_loading=_ON_DEMAND,
+        adapter=StubAdapter(
+            [tool_turn(("use", "search", {"query": "vbot"})), final("done")],
+            on_demand_tools=False,
+        ),
+    )
+
+    await build_chat_loop(runtime).send("coder", "Search", session_id="session-one")
+
+    assert dispatched == ["search"]
+    sent = _tools_sent(runtime)
+    assert sorted(tool["name"] for tool in sent[0]) == ["fetch", "read", "search"]
+    assert sent == [sent[0]] * 2
+    system = runtime.adapter.requests[0]["messages"][0]["content"]
+    assert "load_tools" not in system
+    assert "Search the web." not in system
+    assert _announced(runtime) == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("allowed_tools", "pinned", "announced"),
     [

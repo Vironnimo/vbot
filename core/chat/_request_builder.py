@@ -456,6 +456,7 @@ class RequestBuilder:
                     if inputs.tool_route_model_family is None
                     else inputs.tool_route_model_family
                 ),
+                route_on_demand=inputs.tool_route_on_demand_tools,
                 told=pin.names if pin is not None else (),
             )
         if pin is None:

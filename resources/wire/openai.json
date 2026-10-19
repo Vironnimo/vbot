@@ -1,6 +1,7 @@
 {
   "format_version": 1,
-  "_comment": "OpenAI first-party wire. The api-key Connection defaults new Models to public Responses; legacy GPT-3/GPT-4 and chat-audio families keep Chat Completions. These are inferred defaults, not per-Model verification. The subscription Connection is ChatGPT Codex Responses for every Model. Chat Completions accepts reasoning_effort 'none', wants explicit non-strict Tool schemas and carries images, wav/mp3 audio and PDF documents. Public Responses carries images and PDF documents and treats unknown reasoning support as supported. Codex rejects every optional parameter (so no output limit is budgeted), carries images only and never receives the 'none' effort.",
+  "_comment": "OpenAI first-party wire. The api-key Connection defaults new Models to public Responses; legacy GPT-3/GPT-4 and chat-audio families keep Chat Completions. These are inferred defaults, not per-Model verification. The subscription Connection is ChatGPT Codex Responses for every Model. Chat Completions accepts reasoning_effort 'none', wants explicit non-strict Tool schemas and carries images, wav/mp3 audio and PDF documents. Public Responses carries images and PDF documents and treats unknown reasoning support as supported. Codex rejects every optional parameter (so no output limit is budgeted), carries images only and never receives the 'none' effort. OpenAI Models call only Tools the request lists (GPT-6.1 Sol through Codex kept calling other Tools for a loaded one, 2026-10-19; the Responses tool search guide documents the same), so no route serves On-demand Tools.",
+  "defaults": {"request": {"on_demand_tools": false}},
   "protocols": {
     "chat_completions": {
       "request": {"tool_schema": "explicit_non_strict"},

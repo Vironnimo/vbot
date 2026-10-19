@@ -27,12 +27,14 @@ class StubAdapter(AdapterHookDefaults):
         stream_responses: list[Any] | None = None,
         wire_media_types: frozenset[str] = frozenset(),
         list_announced_tools: bool = False,
+        on_demand_tools: bool = True,
     ) -> None:
         self._responses = responses
         # Without scripted stream responses, the ``send`` responses stream.
         self._stream_responses = stream_responses
         self._wire_media_types = wire_media_types
         self._list_announced_tools = list_announced_tools
+        self._on_demand_tools = on_demand_tools
         self.requests: list[JsonObject] = []
         self.stream_requests: list[JsonObject] = []
 
@@ -62,6 +64,11 @@ class StubAdapter(AdapterHookDefaults):
     def list_announced_tools(self, model_id: str) -> bool:
         del model_id
         return self._list_announced_tools
+
+    @override
+    def on_demand_tools(self, model_id: str) -> bool:
+        del model_id
+        return self._on_demand_tools
 
     def estimate_request_input_tokens(
         self,

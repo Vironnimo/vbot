@@ -257,13 +257,18 @@ def _preview_state(
     skills_for: Any = None,
     session_projects: dict[str, str | None] | None = None,
     estimate_factor: float = 1.0,
+    route_on_demand: bool = True,
 ) -> Any:
     """State whose resolver serves one Agent and fails like the real one otherwise.
 
     Every Project exists; ``session_projects`` names the Project each existing
     Session works in; every Model's learned input estimate factor is
-    ``estimate_factor``.
+    ``estimate_factor``; the Agent's Model route serves On-demand Tools while
+    ``route_on_demand`` is true.
     """
+
+    async def serves_on_demand_tools(_agent: Any) -> bool:
+        return route_on_demand
 
     def resolve_agent(
         _project_id: str | None, agent_id: str, *, session_id: str | None = None
@@ -279,7 +284,7 @@ def _preview_state(
         dict,
         sessions=cast(Any, _SessionProjects(session_projects or {})),
     )
-    return _state(
+    state = _state(
         manager,
         runtime_extra={
             "agent_resolver": SimpleNamespace(
@@ -291,6 +296,8 @@ def _preview_state(
             "usage_recorder": SimpleNamespace(input_estimate_factor=lambda _model: estimate_factor),
         },
     )
+    state.chat_loop = SimpleNamespace(serves_on_demand_tools=serves_on_demand_tools)
+    return state
 
 
 # --- log.list / log.read -----------------------------------------------------
@@ -907,7 +914,10 @@ async def test_preview_inspects_only_effective_provider_definitions(
 
 
 @pytest.mark.asyncio
-async def test_preview_counts_only_the_tool_list_and_marks_on_demand_tools(tmp_path: Path) -> None:
+@pytest.mark.parametrize("route_on_demand", [True, False], ids=["on-demand", "route-lists-all"])
+async def test_preview_counts_only_the_tool_list_and_marks_on_demand_tools(
+    tmp_path: Path, route_on_demand: bool
+) -> None:
     agent = StubAgent(
         id="coder", name="Coder", tool_loading={"on_demand": True, "always_loaded": ["kept"]}
     )
@@ -922,11 +932,17 @@ async def test_preview_counts_only_the_tool_list_and_marks_on_demand_tools(tmp_p
         tools=registry,
         block_definitions=prompt_blocks.block_definitions(),
     )
-    state = _preview_state(manager, agent)
+    state = _preview_state(manager, agent, route_on_demand=route_on_demand)
 
     result = await _preview_prompt(state, {"agent_id": "coder", "include_tools": True})
 
     entries = [(entry["definition"]["name"], entry.get("on_demand")) for entry in result["tools"]]
+    if not route_on_demand:
+        # A Model that calls only listed Tools gets every Tool listed.
+        assert entries == [("kept", None), ("lazy", None)]
+        assert result["tool_count"] == 2
+        assert "## Tools Loaded on Demand" not in result["text"]
+        return
     assert entries == [("kept", None), ("lazy", True), ("load_tools", None)]
     listed = [entry["definition"] for entry in result["tools"] if "on_demand" not in entry]
     assert result["tool_count"] == 2

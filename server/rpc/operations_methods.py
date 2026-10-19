@@ -11,7 +11,7 @@ from core.projects import (
     runtime_agent_body,
 )
 from core.prompts import ProjectPromptContext, PromptError, SystemPromptManager
-from core.tools.on_demand import on_demand_tools
+from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tools
 from core.utils.log_viewer import LogViewer
 from core.utils.logging import get_logger
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
@@ -305,6 +305,9 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     # identity agent's private home).
     skill_project_id, identity_agent_id = resolve_skill_scope(project_id, prompt_project, agent)
 
+    # A route whose Model calls only listed Tools lists every Tool, whatever the
+    # Agent's tool_loading says; the preview shows what its Runs get.
+    route_on_demand = await state.chat_loop.serves_on_demand_tools(agent)
     try:
         prompt_manager = state.runtime.system_prompts
         working_project_context = (
@@ -325,6 +328,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
             working_project_context=working_project_context,
             agent_project_id=project_id,
             skill_registry=skill_registry,
+            **({} if route_on_demand else {"on_demand_tools": ()}),
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -333,7 +337,17 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     # reflects the request's real prompt-side footprint. An On-demand Tool is
     # not in that array (the prompt text lists it), so only listed Tools count.
     tool_definitions = await prompt_manager.provider_tool_definitions_async(agent)
-    left_out = on_demand_tools(agent, (str(definition["name"]) for definition in tool_definitions))
+    if not route_on_demand:
+        tool_definitions = [
+            definition
+            for definition in tool_definitions
+            if definition["name"] != LOAD_TOOLS_TOOL_NAME
+        ]
+    left_out = (
+        on_demand_tools(agent, (str(definition["name"]) for definition in tool_definitions))
+        if route_on_demand
+        else frozenset()
+    )
     listed = [definition for definition in tool_definitions if definition["name"] not in left_out]
 
     def estimate_preview() -> tuple[int, bool, int, list[JsonObject]]:

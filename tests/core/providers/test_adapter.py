@@ -78,6 +78,7 @@ def test_optional_capabilities_degrade_safely_by_default() -> None:
     assert adapter.reasoning_replay_fidelity("any-model") == profile.replay.fidelity
     assert adapter.reasoning_replay_policy("any-model") == REASONING_REPLAY_FULL_HISTORY
     assert adapter.list_announced_tools("any-model") is False
+    assert adapter.on_demand_tools("any-model") is True
     # Debug context is a no-op without a recorder.
     adapter.set_debug_context(
         DebugContext(
