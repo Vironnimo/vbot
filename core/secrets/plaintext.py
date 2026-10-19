@@ -21,9 +21,10 @@ its credentials:
    first normal start, or ``convert``): it deletes each recorded file whose
    content is unchanged and whose entries the store holds, then purges the
    plaintext copies from configuration backups, data snapshots and the JSON
-   document quarantine. The record forgets the files before they are deleted,
-   so an interrupted retire never leaves a record naming a deleted file. A
-   file that cannot be deleted safely stays and is reported.
+   document quarantine. Before deletion, the record moves the files out of
+   the mirrored sources into a separate retirement journal: an interrupted
+   retire retries without allowing an import to remove the stored credentials.
+   A file that cannot be deleted safely stays and is reported.
 
 A plaintext file that is a link, or lies in an ``oauth`` directory that is a
 link, is imported from the file it reaches, but vBot never deletes it or the
@@ -60,6 +61,7 @@ from core.secrets._plaintext_files import (
     _find_plaintext,
     _inspect,
     _label,
+    _pending_sources,
     _recorded_sources,
     _section_of,
 )
@@ -183,6 +185,7 @@ def import_plaintext_credentials(
     def change(transaction: SecretTransaction) -> _ImportOutcome:
         record = transaction.import_record or {}
         recorded = _recorded_sources(record)
+        retiring = _recorded_sources(record, "retiring_sources")
         imported_before = _recorded_values(recorded)
         held: dict[Section, set[str]] = {CREDENTIALS: set(), OAUTH_TOKENS: set()}
         for source in sources:
@@ -204,6 +207,10 @@ def import_plaintext_credentials(
                         outcome.removed.append(_label(section, name))
         recorded_now: dict[str, dict[str, Any]] = {}
         for source in sources:
+            # A committed source waits only for deletion. Re-importing it would
+            # let a later missing-source reconciliation remove its credentials.
+            if source.path in retiring:
+                continue
             section = source.section
             entries: dict[str, str] = {}
             for name, value in sorted(source.entries.items()):
@@ -269,8 +276,9 @@ def retire_plaintext_credentials(store: SecretStore) -> PlaintextRetirement | No
 
     Runs only for a recorded import, and only deletes a file whose content is
     unchanged since the import and whose every entry the store holds; never a
-    link or the file it points to. Each file leaves the record before it is
-    deleted. Returns ``None`` when no import is recorded. Raises
+    link or the file it points to. Each file leaves the mirrored sources before
+    deletion, but stays journaled until deleted so the next start retries.
+    Returns ``None`` when no import is recorded. Raises
     :class:`SecretStoreError` when the store is not available.
     """
     record = store.import_record()
@@ -282,15 +290,17 @@ def retire_plaintext_credentials(store: SecretStore) -> PlaintextRetirement | No
     kept: dict[str, str] = {}
     # Sources that stay recorded: a file that cannot be read now is retried.
     stay: dict[str, dict[str, Any]] = {}
+    retiring = _recorded_sources(record, "retiring_sources")
+    retry_retiring: dict[str, dict[str, Any]] = {}
     deletable: dict[str, dict[str, Any]] = {}
-    for path, recorded in sorted(_recorded_sources(record).items()):
+    for path, recorded in sorted(_pending_sources(record).items()):
         if path not in found:
             continue
         try:
             source = _inspect(data_dir, path, found[path])
         except OSError as exc:
             kept[path] = f"cannot be read: {exc}"
-            stay[path] = recorded
+            (retry_retiring if path in retiring else stay)[path] = recorded
             continue
         if source is None:
             continue
@@ -305,12 +315,11 @@ def retire_plaintext_credentials(store: SecretStore) -> PlaintextRetirement | No
             kept[path] = problem
             continue
         deletable[path] = recorded
-    # The record forgets the files before they are deleted: an interrupted retire
-    # never leaves a record naming a deleted file, whose entries a later import
-    # would remove as gone. The record stays until the purge below is done.
+    # Persist the deletion journal before unlink: every crash point is retryable,
+    # without giving an import authority to remove credentials of deleted files.
     store.update(
         lambda transaction: transaction.set_import_record(
-            _narrowed_record(record, stay, backups_pending=True)
+            _narrowed_record(record, stay, {**retry_retiring, **deletable}, backups_pending=True)
         )
     )
     for path, recorded in deletable.items():
@@ -321,14 +330,14 @@ def retire_plaintext_credentials(store: SecretStore) -> PlaintextRetirement | No
         except OSError as exc:
             kept[path] = f"cannot be deleted: {exc}"
             # Unchanged and held by the store: the next start tries again.
-            stay[path] = recorded
+            retry_retiring[path] = recorded
             continue
         deleted.append(path)
     _remove_empty_oauth_directory(data_dir)
     purge = _purge_copies(store)
     store.update(
         lambda transaction: transaction.set_import_record(
-            _narrowed_record(record, stay, backups_pending=not purge.complete)
+            _narrowed_record(record, stay, retry_retiring, backups_pending=not purge.complete)
         )
     )
     result = PlaintextRetirement(
@@ -419,9 +428,12 @@ def _set_import_record(
     sources: dict[str, dict[str, Any]],
 ) -> None:
     current: dict[str, Any] = {"sources": sources}
+    retiring = _recorded_sources(record, "retiring_sources")
+    if retiring:
+        current["retiring_sources"] = retiring
     if record.get("backups_pending"):
         current["backups_pending"] = True
-    elif not sources:
+    elif not sources and not retiring:
         # Nothing to mirror, delete or purge: no record (an absent store stays absent).
         transaction.set_import_record(None)
         return
@@ -432,11 +444,17 @@ def _set_import_record(
 
 
 def _narrowed_record(
-    record: Mapping[str, Any], sources: dict[str, dict[str, Any]], *, backups_pending: bool
+    record: Mapping[str, Any],
+    sources: dict[str, dict[str, Any]],
+    retiring: dict[str, dict[str, Any]],
+    *,
+    backups_pending: bool,
 ) -> dict[str, Any] | None:
-    if not sources and not backups_pending:
+    if not sources and not retiring and not backups_pending:
         return None
     narrowed: dict[str, Any] = {"sources": dict(sources)}
+    if retiring:
+        narrowed["retiring_sources"] = dict(retiring)
     if backups_pending:
         narrowed["backups_pending"] = True
     if "imported_at" in record:

@@ -414,7 +414,10 @@ class SecretStore:
                     for section in SECTIONS
                     for name in view.damaged.get(section, ())
                 ),
-                import_pending=bool(isinstance(record, dict) and record.get("sources")),
+                import_pending=bool(
+                    isinstance(record, dict)
+                    and (record.get("sources") or record.get("retiring_sources"))
+                ),
                 key_locations=locations,
                 new_key_location=self._protections[0].new_key_location(),
             )

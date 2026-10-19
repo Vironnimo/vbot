@@ -46,7 +46,7 @@ _KEY_SHAPE = json_object({"id", "protection", "check", "wrapped"})
 # ``credentials`` and ``oauth_tokens`` are the name lists of the first record
 # format, still read (``core.secrets.plaintext``) but no longer written.
 _IMPORT_SHAPE = json_object(
-    {"imported_at", "sources", "credentials", "oauth_tokens", "backups_pending"}
+    {"imported_at", "sources", "retiring_sources", "credentials", "oauth_tokens", "backups_pending"}
 )
 
 SECRET_STORE_SHAPE = json_document(
@@ -101,11 +101,12 @@ def _validate_import_record(diagnostics: list[JsonDiagnostic], record: Any) -> N
     if not isinstance(record, dict):
         add_error(diagnostics, path, "must be an object")
         return
-    sources = record.get("sources", {})
-    if not isinstance(sources, dict) or any(
-        not _is_import_source(value) for value in sources.values()
-    ):
-        add_error(diagnostics, f"{path}.sources", "must map file paths to source records")
+    for field in ("sources", "retiring_sources"):
+        sources = record.get(field, {})
+        if not isinstance(sources, dict) or any(
+            not _is_import_source(value) for value in sources.values()
+        ):
+            add_error(diagnostics, f"{path}.{field}", "must map file paths to source records")
     for name in (CREDENTIALS, OAUTH_TOKENS):
         value = record.get(name, [])
         if not isinstance(value, list) or any(not isinstance(item, str) for item in value):

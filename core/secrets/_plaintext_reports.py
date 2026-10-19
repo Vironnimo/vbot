@@ -10,7 +10,7 @@ from core.secrets._plaintext_files import (
     _find_plaintext,
     _inspect_for_report,
     _label,
-    _recorded_sources,
+    _pending_sources,
     _Source,
     plaintext_credential_files,
     quarantined_plaintext_files,
@@ -31,7 +31,7 @@ def ignored_plaintext_files(store: SecretStore) -> tuple[str, ...]:
     files = plaintext_credential_files(store.data_dir)
     if not files:
         return ()
-    pending = _recorded_sources(store.import_record() or {})
+    pending = _pending_sources(store.import_record() or {})
     return tuple(path for path in files if path not in pending)
 
 
@@ -105,7 +105,7 @@ def credential_file_reports(data_dir: str | Path) -> list[JsonValidationReport]:
     if found:
         store = SecretStore(root)
         try:
-            pending = _recorded_sources(store.import_record() or {})
+            pending = _pending_sources(store.import_record() or {})
         except SecretStoreError:
             pending = {}
         for path, link in found.items():
@@ -142,7 +142,7 @@ def _ignored_sources(store: SecretStore) -> list[_Source]:
     found = _find_plaintext(store.data_dir)
     if not found:
         return []
-    pending = _recorded_sources(store.import_record() or {})
+    pending = _pending_sources(store.import_record() or {})
     return [
         source
         for path, link in found.items()
