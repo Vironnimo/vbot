@@ -12,6 +12,7 @@ import pytest
 from resources.extensions.computer_use import _desktop
 from resources.extensions.computer_use import extension as computer_use
 from tests.resources.extensions.computer_use.computer_use_test_support import (
+    EXPLORER,
     PAINT,
     VBOT,
     Harness,
@@ -147,6 +148,28 @@ async def test_batch_refuses_keys_when_another_app_came_to_the_front_after_its_c
     assert "The remaining 1 did not run.\nActions that ran:\n1. left_click at [200, 150]" in message
     assert "\nThe screen now: Screenshot of display" in message and len(images(context)) == 1
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
+
+
+async def test_batch_keys_follow_an_app_its_own_keys_brought_up(computer: Harness) -> None:
+    # The Start menu after win stands for any app the call's own keys bring up.
+    await computer.computer(action="screenshot", view="display")
+    computer.target.inputs.clear()
+
+    def win_opens_another_app(record: tuple) -> None:
+        if record[0] == "keys":
+            computer.target.front(EXPLORER)
+
+    computer.target.on_input = win_opens_another_app
+    actions = [
+        {"action": "key", "text": "win"},
+        {"action": "type", "text": "paint"},
+        {"action": "key", "text": "enter"},
+    ]
+    result = await computer.call(
+        "computer_batch", {"actions": actions}, computer.context_for("computer_batch")
+    )
+    assert result["ok"]
+    assert [record[0] for record in computer.target.inputs] == ["keys", "type", "keys"]
 
 
 @pytest.mark.parametrize("failure", ["target", "artifact", "unexpected"])

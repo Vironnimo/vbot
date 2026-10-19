@@ -60,6 +60,9 @@ class Desktop:
         self.failure_screen: str | None = None
         # The app this call's last mouse button press went into; keys must reach it.
         self.clicked: AppInfo | None = None
+        # Whether keys were sent since the last press: they can bring up another app
+        # themselves, such as the Start menu or a dialog, so later keys are not checked.
+        self.keyed = False
 
     # Frames and displays
 
@@ -332,7 +335,7 @@ class Desktop:
         windows = self.target.windows() if points else []
         if action.frame_points() or (action.uses_pointer and action.screenshot_id is not None):
             self.validate_frame(frame, windows)
-        if action.name in KEYBOARD:
+        if action.name in KEYBOARD and not self.keyed:
             self._check_front(action, frame)
         for point in points:
             self._check_owner(action, frame, point, windows)
@@ -368,6 +371,9 @@ class Desktop:
         if name in PRESSES:
             # The press activated the window under it; later keys of this call must go there.
             self.clicked = receivers[0].app
+            self.keyed = False
+        elif name in KEYBOARD:
+            self.keyed = True
         return action.describe()
 
     def _points(self, action: Action, frame: Frame) -> list[Point]:
@@ -446,9 +452,9 @@ class Desktop:
         """Refuse keys unless the app in front is the one the Agent expects them to reach.
 
         That is the app this call's last mouse button press went into, else the app
-        in front in the image (the latest screenshot or the named one). Keys of the
-        call itself do not change it: when they bring up another app, such as the
-        Start menu, later keys need a screenshot or a click first.
+        in front in the image (the latest screenshot or the named one). Keys that
+        follow other keys of this call are not checked: those keys can bring up
+        another app themselves, such as the Start menu after win.
         """
         expected, current = self.clicked or frame.front, self.target.foreground()
         if expected is None or current is None or current.app.matches(expected):
