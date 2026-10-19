@@ -31,7 +31,7 @@ Runtime and discovery use separate Adapter-selector maps: `_ADAPTER_MAP` constru
 
 Every discovered Model receives `connections: [<local_connection_id>]`. Refresh replaces only the existing generated Models whose allowlist includes the current Connection and keeps Models belonging to other Connections. Multiple Accounts on the same Connection never create duplicate catalog partitions.
 
-Adapter normalizers must preserve durable discoverable facts such as modalities, output/context limits, reasoning capability, task options, and Provider-scoped wire metadata. Missing optional facts stay unknown; sparse OpenAI-compatible lists still produce usable text-chat Models rather than authoritative negatives.
+Adapter normalizers must preserve durable discoverable facts such as modalities, output/context limits, reasoning capability, task options, and Provider-scoped wire metadata. Missing optional facts stay unknown; sparse OpenAI-compatible lists still produce usable text-chat Models rather than authoritative negatives. The generic OpenAI-compatible normalizer (Custom Providers among others) reads the Context window from `context_length`, `context_window`, `contextWindow` or `max_model_len`, the window vLLM and SGLang serve, which their `/v1/models` entries report (`ModelCard.max_model_len` in both servers' sources, read 2026-10-19).
 
 LM Studio discovery uses its native `GET /api/v1/models` response rather than the sparse OpenAI-compatible `/v1/models` list so installed chat Models retain display name, capabilities, theoretical context, locality, and loaded-instance facts. Entries of any type other than `llm` and `embedding` are skipped.
 

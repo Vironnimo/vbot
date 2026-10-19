@@ -38,7 +38,9 @@ OPENAI_NATIVE_TRANSPORT_FINISH_REASONS = frozenset({"network_error", "server_err
 
 DEFAULT_MAX_OUTPUT_TOKENS = 8192
 
-CONTEXT_WINDOW_KEYS = ("context_length", "context_window", "contextWindow")
+# ``max_model_len`` is the window vLLM and SGLang serve, reported on each
+# ``/v1/models`` entry (their ``ModelCard``).
+CONTEXT_WINDOW_KEYS = ("context_length", "context_window", "contextWindow", "max_model_len")
 
 MAX_OUTPUT_TOKEN_KEYS = (
     "max_output_tokens",
