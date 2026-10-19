@@ -14,8 +14,10 @@ import {
   durationColumns,
   errorKindLabel,
   errorKindTooltip,
+  firstTokenTooltip,
   formatCost,
   formatDurationMs,
+  formatOutputSpeed,
   formatPercent,
   formatSeriesDate,
   formatShare,
@@ -23,6 +25,7 @@ import {
   formatTokens,
   hourColumns,
   insightLines,
+  outputSpeedTooltip,
   parseOrigin,
   periodChange,
   rollupSeries,
@@ -128,6 +131,12 @@ describe('statisticsView numbers', () => {
     expect(
       [null, 850, 12_340, 245_000, 7_800_000].map(formatDurationMs),
     ).toEqual(['—', '850 ms', '12.3 s', '4m 05s', '2h 10m']);
+    // Output speed rounds like the composer footer: one decimal below 10.
+    expect(
+      [null, 4.25, 9.96, 48.4, 1234.6].map((rate) =>
+        formatOutputSpeed(rate, 'en'),
+      ),
+    ).toEqual(['—', '4.3 tok/s', '10.0 tok/s', '48 tok/s', '1,235 tok/s']);
 
     // Table dates: in the application zone, the year only when it differs.
     const now = new Date('2026-10-02T12:00:00Z');
@@ -354,6 +363,29 @@ describe('statisticsView labels and tooltips', () => {
     });
     expect(Object.keys(byLabel(cost))).toHaveLength(3);
     expect(costTooltip({ cost_usd: 0 })).toBe('');
+
+    // A token-weighted speed names what it divides and how many calls back it.
+    const speed = outputSpeedTooltip(
+      {
+        output_tokens_per_second: 266.66,
+        speed_calls: 2,
+        estimated_speed_calls: 1,
+        speed_tokens: 400,
+        speed_window_ms: 1500,
+      },
+      'en',
+    );
+    expect(speed.title).toBe('266.7 tok/s');
+    expect(byLabel(speed)['Measured over'].value).toBe('400 tokens in 1.5 s');
+    expect(byLabel(speed)['Measured calls'].value).toBe('2');
+    expect(byLabel(speed)['With estimated tokens'].value).toBe('1');
+    expect(
+      outputSpeedTooltip({ output_tokens_per_second: null, speed_calls: 0 }),
+    ).toBe('');
+    expect(byLabel(firstTokenTooltip({ first_token_calls: 14 }, 'en'))).toEqual(
+      { 'Measured calls': { label: 'Measured calls', value: '14' } },
+    );
+    expect(firstTokenTooltip({ first_token_calls: 0 })).toBe('');
 
     const catalog = callCostTooltip(
       {

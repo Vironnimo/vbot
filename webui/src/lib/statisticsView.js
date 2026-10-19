@@ -9,10 +9,12 @@ import {
   numberFormat,
   formatPercent,
   formatInteger,
+  formatDecimal,
   formatTokensExact,
   formatCost,
   formatCostExact,
   formatDateTime,
+  formatDurationMs,
 } from './statisticsView/formatting.js';
 
 export * from './statisticsView/query.js';
@@ -372,6 +374,71 @@ export function costTooltip(totals, locale = 'en') {
   }
   if (rows.length === 0) return '';
   return { title: formatCostExact(totals.cost_usd, locale), rows };
+}
+
+/**
+ * Output speed in tokens per second, rounded like the composer footer: one
+ * decimal below 10, else whole; a dash without a measured call.
+ */
+export function formatOutputSpeed(rate, locale = 'en') {
+  const value = finite(rate);
+  if (value === null) return EM_DASH;
+  const digits = value < 10 ? 1 : 0;
+  return t('statistics.usage.speedValue', {
+    rate: numberFormat(locale, {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(value),
+  });
+}
+
+/**
+ * The evidence behind a row's token-weighted output speed: the tokens and
+ * writing time it divides, the calls measured and those with estimated
+ * tokens.
+ */
+export function outputSpeedTooltip(row, locale = 'en') {
+  const calls = toFiniteNumber(row?.speed_calls);
+  if (calls <= 0 || finite(row?.output_tokens_per_second) === null) return '';
+  const rows = [
+    {
+      label: t('statistics.usage.speedMeasured'),
+      value: t('statistics.usage.speedMeasuredValue', {
+        tokens: formatInteger(row.speed_tokens, locale),
+        duration: formatDurationMs(row.speed_window_ms),
+      }),
+    },
+    {
+      label: t('statistics.usage.measuredCalls'),
+      value: formatInteger(calls, locale),
+    },
+  ];
+  if (toFiniteNumber(row.estimated_speed_calls) > 0) {
+    rows.push({
+      label: t('statistics.usage.estimatedSpeedCalls'),
+      value: formatInteger(row.estimated_speed_calls, locale),
+    });
+  }
+  return {
+    title: t('statistics.usage.speedValue', {
+      rate: formatDecimal(row.output_tokens_per_second, locale),
+    }),
+    rows,
+  };
+}
+
+/** How many calls a row's average time to first token covers. */
+export function firstTokenTooltip(row, locale = 'en') {
+  const calls = toFiniteNumber(row?.first_token_calls);
+  if (calls <= 0) return '';
+  return {
+    rows: [
+      {
+        label: t('statistics.usage.measuredCalls'),
+        value: formatInteger(calls, locale),
+      },
+    ],
+  };
 }
 
 const COST_REASONS = Object.freeze({

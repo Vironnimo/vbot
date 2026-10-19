@@ -441,8 +441,17 @@ USAGE_MEASURES = (
     "uncached_nusd",
     "uncached_calls",
     "estimated_token_calls",
+    "speed_calls",
+    "estimated_speed_calls",
+    "speed_tokens",
+    "speed_window_ms",
+    "first_token_calls",
+    "first_token_ms",
 )
-# Each measure's sum over calls ``c`` of requests ``r``.
+# Each measure's sum over calls ``c`` of requests ``r``. Output speed stays
+# additive: the calls with a measured window, their tokens and window
+# durations (a token-weighted speed divides the sums), and the calls with a
+# time to first token with its sum (an average divides it by their count).
 _MEASURE_SQL = {
     "calls": "COUNT(*)",
     "failed_calls": f"SUM({FAILED_STATUS_SQL})",
@@ -470,6 +479,12 @@ _MEASURE_SQL = {
         "SUM((c.input_estimated = 1 OR c.output_estimated = 1) "
         "AND c.input_tokens IS NOT NULL AND c.output_tokens IS NOT NULL)"
     ),
+    "speed_calls": "SUM(c.speed_window_ms IS NOT NULL)",
+    "estimated_speed_calls": "SUM(c.speed_estimated = 1)",
+    "speed_tokens": "SUM(COALESCE(c.speed_tokens, 0))",
+    "speed_window_ms": "SUM(COALESCE(c.speed_window_ms, 0))",
+    "first_token_calls": "SUM(c.first_token_ms IS NOT NULL)",
+    "first_token_ms": "SUM(COALESCE(c.first_token_ms, 0))",
 }
 _USAGE_CUBE_MEASURES = tuple(name for name in USAGE_MEASURES if name != "failed_calls")
 _USAGE_KEYS = "hour, unit_key, origin, model_key, kind, status"

@@ -206,6 +206,45 @@ async def test_breakdowns_rank_every_dimension_by_cost_with_runs_and_sessions(
     assert usage["recent_calls"][1]["session_title"] in {"Title p1", "Title r1"}
 
 
+@pytest.mark.asyncio
+async def test_output_speed_is_token_weighted_per_model_with_its_measured_calls(
+    statistics: StatisticsFactory, ledger: UsageRecorder
+) -> None:
+    def chat(model: str, **speed: Any) -> Any:
+        usage = {"input_tokens": 10, "output_tokens": 500, "speed": speed}
+        return _call(ledger, usage, model=model)
+
+    # 100 tokens in 1 s and 300 in 0.5 s: 400 tokens in 1.5 s, not the mean of 100 and 600.
+    await chat("fast/m", first_token_ms=200, tokens=100, window_ms=1000, basis="output")
+    await chat("fast/m", first_token_ms=400, tokens=300, window_ms=500, estimated=True)
+    # Too short to measure, or a window without time: only the first token counts.
+    await chat("fast/m", first_token_ms=900, duration_ms=950)
+    await chat("fast/m", first_token_ms=500, tokens=5, window_ms=0)
+    await chat("slow/m", first_token_ms=1000, tokens=50, window_ms=1000, basis="provider")
+    # A request without a speed counts in neither figure.
+    await _call(ledger, {"input_tokens": 4}, kind="text_embedding", model="embed/m")
+
+    usage = _usage(statistics(usage_recorder=ledger, clock=_clock))
+
+    def speed(row: Report) -> tuple[Any, ...]:
+        return (
+            row["output_tokens_per_second"],
+            row["speed_calls"],
+            row["estimated_speed_calls"],
+            row["speed_tokens"],
+            row["speed_window_ms"],
+            row["avg_first_token_ms"],
+            row["first_token_calls"],
+        )
+
+    models = _rows(usage, "model")
+    assert speed(models["fast/m"]) == (266.7, 2, 1, 400, 1500, 500, 4)
+    assert speed(models["slow/m"]) == (50.0, 1, 0, 50, 1000, 1000, 1)
+    assert speed(models["embed/m"]) == (None, 0, 0, 0, 0, None, 0)
+    assert speed(usage["totals"]) == (180.0, 3, 1, 450, 2500, 600, 5)
+    assert speed(_rows(usage, "provider")["fast"]) == speed(models["fast/m"])
+
+
 # -- Cache figures ------------------------------------------------------------
 
 

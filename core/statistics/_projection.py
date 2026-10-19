@@ -1,7 +1,7 @@
 """Project canonical Session messages into typed Statistics index rows.
 
 Only the facts that report sections aggregate enter the index: roles,
-timestamps, Run ids, normalized Usage and cost accounting, Tool outcomes,
+timestamps, Run ids, normalized Usage, output speed and cost accounting, Tool outcomes,
 error kinds, Compaction measurements, Run terminal facts and Skill activation
 names. Message text, Reasoning, Tool arguments and results, and Skill content
 never do. Every derived value mirrors the normalization the report applies, so
@@ -23,6 +23,7 @@ from core.statistics._measurements import (
     _duration_ms,
     _parse_envelope,
     _provider_model_key,
+    _speed_facts,
     _timing_field,
     _usage_nonnegative_int,
 )
@@ -45,7 +46,8 @@ CALL_COLUMNS = (
     "input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, "
     "input_estimated, output_estimated, has_cache, reasoning_present, cache_read_present, "
     "cache_write_present, price_estimated, reported_cost_usd, retrospective, priced, "
-    "cost_usd, cost_source, cost_json, purpose"
+    "cost_usd, cost_source, cost_json, purpose, speed_tokens, speed_window_ms, "
+    "speed_estimated, first_token_ms"
 )
 # The column definitions of every call table (Session calls and ledger calls),
 # in ``CALL_COLUMNS`` order and keyed by ``(session_key, seq)``.
@@ -78,6 +80,10 @@ CALL_TABLE_DEFINITION = """(
     cost_source INTEGER NOT NULL,
     cost_json TEXT,
     purpose TEXT NOT NULL,
+    speed_tokens INTEGER,
+    speed_window_ms INTEGER,
+    speed_estimated INTEGER NOT NULL,
+    first_token_ms INTEGER,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID"""
 
@@ -348,6 +354,7 @@ class ProjectedRows:
             cost = project_cost(snapshot) or dict(UNKNOWN_COST)
             cost_class, cost_amount = cost_source_class(cost)
             serialized_cost = cost_json(cost)
+        speed_tokens, speed_window_ms, speed_estimated, first_token_ms = _speed_facts(values)
         self.calls.append(
             (
                 self.session_key,
@@ -378,6 +385,10 @@ class ProjectedRows:
                 cost_class,
                 serialized_cost,
                 purpose or ("compaction" if kind == CALL_KIND_COMPACTION else "chat"),
+                speed_tokens,
+                speed_window_ms,
+                int(speed_estimated),
+                first_token_ms,
             )
         )
 

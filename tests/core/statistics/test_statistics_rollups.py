@@ -206,7 +206,11 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
             _run_summary(status="completed", at=_at(5), duration_ms=4000, run_id="a1"),
         ],
     )
-    usage = {"input_tokens": 100, "output_tokens": 10}
+    usage = {
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "speed": {"first_token_ms": 300, "tokens": 8, "window_ms": 200, "basis": "output"},
+    }
     await _call(ledger, usage, address=alpha.address, run_id="a1")
     await _call(ledger, {"input_tokens": 7, "output_tokens": 1}, address=alpha.address)
     await _call(ledger, {"input_tokens": 3}, kind="text_embedding", model="embed/m")
@@ -215,7 +219,15 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
     seed_history(
         beta,
         [
-            _assistant(model="chat/m", at=_at(10), usage={"input_tokens": 40, "output_tokens": 4}),
+            _assistant(
+                model="chat/m",
+                at=_at(10),
+                usage={
+                    "input_tokens": 40,
+                    "output_tokens": 4,
+                    "speed": {"first_token_ms": 120, "tokens": 30, "window_ms": 600},
+                },
+            ),
             _tool(name="write", at=_at(11), envelope=tool_failure("denied", "no"), duration_ms=9),
             _run_summary(status="failed", at=_at(12), duration_ms=2000, run_id="b1"),
         ],
@@ -284,9 +296,21 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
         model="chat/m", kind="chat", agent_id="main", session_id="alpha", run_id="a2"
     )
     check()
-    await ledger.update(pending, {"input_tokens": 75, "input_tokens_estimated": True})
+    # Its output speed changes with its counters: a latency first, then an estimated window.
+    await ledger.update(
+        pending,
+        {"input_tokens": 75, "input_tokens_estimated": True, "speed": {"first_token_ms": 900}},
+    )
     check()
-    await ledger.finish(pending, {"input_tokens": 50, "output_tokens": 2, "reported_cost_usd": 0.1})
+    await ledger.finish(
+        pending,
+        {
+            "input_tokens": 50,
+            "output_tokens": 2,
+            "reported_cost_usd": 0.1,
+            "speed": {"first_token_ms": 700, "tokens": 20, "window_ms": 500, "estimated": True},
+        },
+    )
     check()
 
     # A call that moves to another Session and Run.
@@ -319,6 +343,17 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
     final = check()
 
     assert all(final.values())
+    # Both measured ledger calls keep their speed, the moved one as estimated.
+    assert sorted(
+        (
+            row["speed_calls"],
+            row["estimated_speed_calls"],
+            row["speed_tokens"],
+            row["first_token_ms"],
+        )
+        for row in final["agg_usage"]
+        if row["first_token_calls"]
+    ) == [(1, 0, 8, 300), (1, 1, 20, 700)]
     assert {row["origin"] for row in final["agg_usage"]} == {
         "background",
         "channel",

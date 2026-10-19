@@ -241,14 +241,35 @@ def _format_usage(section: Section, window: object) -> str:
     return "\n".join(lines)
 
 
+# Output speed is a property of the Model that answered, so only Model and
+# Provider rows show it; the others mix Models.
+_SPEED_DIMENSIONS = frozenset({"model", "provider"})
+
+
 def _breakdown_line(row: Mapping[str, Any], dimension: str) -> str:
     key = row.get("key")
     label = "(no project)" if dimension == "project" and key == "" else _text(key)
-    return (
+    line = (
         f"  {label}: calls={_int(row.get('calls'))} failed={_int(row.get('failed_calls'))} "
         f"runs={_int(row.get('runs'))} sessions={_int(row.get('sessions'))} "
         f"{_token_pair(row)} cache_hit={_cache_hit(row)} cost={_usd(row.get('cost_usd'))}"
     )
+    if dimension not in _SPEED_DIMENSIONS:
+        return line
+    return (
+        f"{line} speed={_speed(row.get('output_tokens_per_second'))} "
+        f"speed_calls={_int(row.get('speed_calls'))} "
+        f"avg_first_token={_duration(row.get('avg_first_token_ms'))} "
+        f"first_token_calls={_int(row.get('first_token_calls'))}"
+    )
+
+
+def _speed(value: object) -> str:
+    """Tokens per second: one decimal below 10, else whole; ``-`` without a measurement."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return _MISSING
+    return f"{value:.1f}tok/s" if value < 10 else f"{round(value)}tok/s"
 
 
 def _totals_lines(totals: Mapping[str, Any]) -> list[str]:

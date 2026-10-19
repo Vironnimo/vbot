@@ -17,15 +17,19 @@
     callCostTooltip,
     costPerMillionTokens,
     costTooltip,
+    firstTokenTooltip,
     formatCost,
     formatCostExact,
+    formatDurationMs,
     formatInteger,
+    formatOutputSpeed,
     formatPercent,
     formatShare,
     formatTokens,
     modelCallKindLabel,
     modelCallStatusLabel,
     originLabel,
+    outputSpeedTooltip,
     shareOf,
     tokenTooltip,
     totalTokens,
@@ -50,6 +54,8 @@
     bucket = 'day',
     metric = $bindable('cost'),
   } = $props();
+
+  const SPEED_DIMENSIONS = new Set(['model', 'provider']);
 
   const locale = $derived(activeLocaleTag());
   const totals = $derived(section.totals ?? {});
@@ -159,6 +165,25 @@
       sortValue: costPerMillionTokens,
       format: (row) => formatCost(costPerMillionTokens(row), locale),
     },
+    // Output speed belongs to the Model that answered; other dimensions mix Models.
+    ...(SPEED_DIMENSIONS.has(activeDimension)
+      ? [
+          {
+            id: 'output_tokens_per_second',
+            label: t('statistics.col.speed'),
+            align: 'end',
+            hint: t('statistics.usage.speedHint'),
+            cell: speedCell,
+          },
+          {
+            id: 'avg_first_token_ms',
+            label: t('statistics.col.firstToken'),
+            align: 'end',
+            hint: t('statistics.usage.firstTokenHint'),
+            cell: firstTokenCell,
+          },
+        ]
+      : []),
   ]);
 
   const sessionColumns = $derived([
@@ -315,6 +340,28 @@
 
 {#snippet costCell(row)}
   <CostValue amount={row.cost_usd} basis={costTooltip(row, locale)} />
+{/snippet}
+
+{#snippet speedCell(row)}
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the measured calls here.) -->
+  <span
+    class="stats-number"
+    class:stats-muted={row.output_tokens_per_second == null}
+    tabindex="0"
+    use:tooltip={() => outputSpeedTooltip(row, locale)}
+    >{formatOutputSpeed(row.output_tokens_per_second, locale)}</span
+  >
+{/snippet}
+
+{#snippet firstTokenCell(row)}
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the measured calls here.) -->
+  <span
+    class="stats-number"
+    class:stats-muted={row.avg_first_token_ms == null}
+    tabindex="0"
+    use:tooltip={() => firstTokenTooltip(row, locale)}
+    >{formatDurationMs(row.avg_first_token_ms)}</span
+  >
 {/snippet}
 
 {#snippet sessionCell(row)}
