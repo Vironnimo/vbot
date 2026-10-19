@@ -590,7 +590,7 @@ The human Board composer retains one request id for retries of an unchanged
 payload after a failed or lost reply. Its fingerprint includes the Swarm,
 discussion, text, reply target and recipients; a changed payload or a successfully
 acknowledged post starts a new request identity. This lets the Store replay a
-saved post without creating another one (`SwarmPage.board.test.js`).
+saved post without creating another one (`SwarmPage.board.test.js`). The composer's text and other payload controls are disabled while the post is pending, so a successful reply cannot discard text entered after submission. A failed reply leaves the draft intact and editable for retry.
 
 Preparing a batch is not delivery. Only a matching canonical Session receipt
 acknowledges its contents. Tool batches are acknowledged after their complete

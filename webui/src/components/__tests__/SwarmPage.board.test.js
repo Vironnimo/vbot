@@ -1132,11 +1132,13 @@ describe('Swarm Board composer', () => {
     const { bridge, operation } = createBridge();
     const saved = new Map();
     let loseReply = true;
+    const firstReply = Promise.withResolvers();
     overrideOperations(operation, {
-      'board.post': (args, fallback) => {
+      'board.post': async (args, fallback) => {
         if (!saved.has(args.request_id)) saved.set(args.request_id, fallback());
         if (loseReply) {
           loseReply = false;
+          await firstReply.promise;
           throw new Error('post-failed-sentinel');
         }
         return saved.get(args.request_id);
@@ -1153,10 +1155,15 @@ describe('Swarm Board composer', () => {
     await tick();
     button(POST).click();
     await vi.waitFor(() =>
+      expect(document.getElementById('swarm-post').disabled).toBe(true),
+    );
+    firstReply.resolve();
+    await vi.waitFor(() =>
       expect(
         document.querySelector('[role="dialog"] [role="alert"]').textContent,
       ).toContain('post-failed-sentinel'),
     );
+    expect(document.getElementById('swarm-post').disabled).toBe(false);
     expect(document.getElementById('swarm-post').value).toBe(
       'retained-draft-sentinel',
     );
