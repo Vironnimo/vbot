@@ -44,3 +44,40 @@ def _history_tokens(
     if not history:
         return 0
     return estimate(history_request_messages(history, request_messages))
+
+
+def _model_request_input_budget(
+    adapter: Any,
+    model_id: str,
+    messages: Sequence[JsonObject],
+    tools: Sequence[JsonObject] | None,
+    *,
+    factor: float,
+    planned: Sequence[JsonObject] = (),
+    active_request: Sequence[JsonObject] = (),
+    active_context_tokens: int | None = None,
+) -> int:
+    """Return the corrected input of one Compaction Model request, for its output limit.
+
+    *messages* is the request as sent and *planned* the Strategy's request
+    before route shaping. When *planned* appends to the complete
+    *active_request*, whose Context Chat knows as *active_context_tokens* (its
+    measurement plus the corrected change), the budget is that Context plus
+    the appended messages' corrected estimate. Otherwise it is the corrected
+    estimate of the whole request.
+    """
+
+    def estimate(request: Sequence[JsonObject]) -> int:
+        return estimate_wire_request_input_tokens(adapter, request, model_id=model_id, tools=tools)
+
+    total = estimate(messages)
+    known = len(active_request)
+    appended = len(planned) - known
+    if (
+        active_context_tokens is None
+        or known == 0
+        or not 0 < appended < len(messages)
+        or list(planned[:known]) != list(active_request)
+    ):
+        return round(total * factor)
+    return active_context_tokens + round(max(0, total - estimate(messages[:-appended])) * factor)

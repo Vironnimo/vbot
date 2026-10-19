@@ -28,7 +28,11 @@ from core.chat.wire_shaping import (
     notes_missing_from_request,
     route_effort,
 )
-from core.compaction._estimates import _history_tokens, _request_estimator
+from core.compaction._estimates import (
+    _history_tokens,
+    _model_request_input_budget,
+    _request_estimator,
+)
 from core.compaction._model_request import _send_streaming_model_request
 from core.compaction._tail import (
     _is_compaction_checkpoint_note,
@@ -47,6 +51,7 @@ from core.compaction.errors import (
     CompactionInsufficientReclaimError as CompactionInsufficientReclaimError,
 )
 from core.models.pricing import TokenPricing, price_usage
+from core.providers.adapter import request_input_budget
 from core.sessions import (
     SessionAddress,
     current_skill_activation_contents,
@@ -446,13 +451,20 @@ class CompactionService:
         active_effort: EffortState | None = None,
         minimum_reclaim_tokens: int = 0,
         estimate_factor: float = 1.0,
+        active_context_tokens: int | None = None,
         summary_model_reference: str | None = None,
         active_model_reference: str | None = None,
         run_id: str | None = None,
         owner_name: str | None = None,
         group_id: str | None = None,
     ) -> ChatMessage:
-        """Execute at most one Model request and persist its assembled projection."""
+        """Execute at most one Model request and persist its assembled projection.
+
+        *estimate_factor* corrects local estimates for the active Model and
+        *active_context_tokens* is Chat's Context of *request_messages* with
+        *active_tools* (its measurement plus the corrected change), when known.
+        The Model request's input budget builds on them like a Chat request's.
+        """
         if trigger not in COMPACTION_TRIGGERS:
             raise CompactionError(f"Unknown compaction trigger: {trigger}")
         if minimum_reclaim_tokens < 0:
@@ -517,18 +529,32 @@ class CompactionService:
                     if plan.model_target == "summary"
                     else active_model_reference
                 )
+                budget = await _COMPACTION_WORKERS.run(
+                    _model_request_input_budget,
+                    adapter,
+                    model_id,
+                    model_messages,
+                    request_options.get("tools"),
+                    factor=(
+                        estimate_factor if same_target else self._input_estimate_factor(reference)
+                    ),
+                    planned=plan.model_messages,
+                    active_request=request_messages or (),
+                    active_context_tokens=active_context_tokens if same_target else None,
+                )
                 try:
-                    response = await _send_streaming_model_request(
-                        adapter,
-                        model_messages,
-                        request_options,
-                        usage_recorder=self._usage_recorder,
-                        model_reference=reference,
-                        session_address=session_address,
-                        run_id=run_id,
-                        owner_name=owner_name,
-                        group_id=group_id,
-                    )
+                    with request_input_budget(model_id, budget):
+                        response = await _send_streaming_model_request(
+                            adapter,
+                            model_messages,
+                            request_options,
+                            usage_recorder=self._usage_recorder,
+                            model_reference=reference,
+                            session_address=session_address,
+                            run_id=run_id,
+                            owner_name=owner_name,
+                            group_id=group_id,
+                        )
                 except CompactionError as error:
                     error.model = reference or model_id
                     raise
@@ -558,6 +584,12 @@ class CompactionService:
             raise
         except Exception as exc:
             raise CompactionError(f"Compaction failed: {exc}") from exc
+
+    def _input_estimate_factor(self, model_reference: str | None) -> float:
+        """Return the input estimate correction of another target's Model."""
+        if self._usage_recorder is None or model_reference is None:
+            return 1.0
+        return self._usage_recorder.input_estimate_factor(model_reference)
 
     def _prepare_compaction(
         self,
