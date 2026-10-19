@@ -104,6 +104,7 @@ from core.secrets._document import (
     validate_secret_store_data as validate_secret_store_data,
 )
 from core.secrets._keys import (
+    KEY_FILE_PROTECTION,
     KeyProtection,
     KeyUnavailableError,
     default_key_protections,
@@ -112,6 +113,7 @@ from core.utils.errors import StorageError
 from core.utils.file_status import stat_or_none
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
+from core.utils.owner_only import restrict_to_owner
 
 #: The quarantine child of a store that ``reset`` replaced.
 QUARANTINE_NAME = "secret-store"
@@ -378,6 +380,7 @@ class SecretStore:
             raise ValueError("a Secret Store needs at least one key protection")
         self._lock = RLock()
         self._view: _View | None = None
+        self._private_stamp: tuple[int, int, int] | None = None
         self._keys: dict[tuple[str, str, str, str], bytes] = {}
         self._conditions = LoggedConditions()
         # The inter-process write lock, re-entered by a write inside ``reset``.
@@ -589,7 +592,11 @@ class SecretStore:
 
     def _current(self) -> _View:
         view = self._view
-        if view is not None and view.stamp is not None:
+        if (
+            view is not None
+            and view.stamp is not None
+            and view.key_record.get("protection") != KEY_FILE_PROTECTION
+        ):
             try:
                 stamp = _stamp(stat_or_none(self.path))
             except OSError:
@@ -618,6 +625,10 @@ class SecretStore:
         try:
             with self.path.open("rb") as handle:
                 stamp = _stamp(os.fstat(handle.fileno()))
+                if stamp != self._private_stamp:
+                    # Also protect documents written before owner-only writes.
+                    restrict_to_owner(self.path)
+                    self._private_stamp = stamp
                 raw = handle.read()
         except FileNotFoundError, NotADirectoryError:
             return _View("absent")
@@ -687,6 +698,11 @@ class SecretStore:
     def _open_key(
         self, protection: KeyProtection, store_id: str, record: Mapping[str, Any]
     ) -> bytes:
+        # The document does not identify the current contents of an external
+        # key file. Re-read it so removal, replacement and restoration take
+        # effect before either a read or a write uses the old in-memory key.
+        if protection.name == KEY_FILE_PROTECTION:
+            return protection.load(store_id, str(record["id"]), record)
         cache_key = (protection.name, store_id, str(record["id"]), str(record.get("wrapped", "")))
         key = self._keys.get(cache_key)
         if key is None:
@@ -712,8 +728,14 @@ class SecretStore:
             "check": key_check(created.key, store_id, created.key_id),
             **dict(created.record),
         }
-        cache_key = (protection.name, store_id, created.key_id, created.record.get("wrapped", ""))
-        self._keys[cache_key] = created.key
+        if protection.name != KEY_FILE_PROTECTION:
+            cache_key = (
+                protection.name,
+                store_id,
+                created.key_id,
+                created.record.get("wrapped", ""),
+            )
+            self._keys[cache_key] = created.key
         return created.key
 
     def _require_data_dir(self) -> None:
@@ -765,6 +787,7 @@ class SecretStore:
                 SECRET_STORE_FORMAT,
                 data_dir=self.data_dir,
                 mode=0o600,
+                owner_only=True,
             )
         except JsonDocumentWriteError as exc:
             raise SecretStoreUnavailableError(str(exc)) from exc

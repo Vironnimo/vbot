@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import os
+import re
 import stat
 import sys
 import time
@@ -25,6 +26,7 @@ from core.secrets import (
     SecretStoreUnavailableError,
 )
 from core.secrets import store as store_module
+from core.utils.atomic import atomic_write_text
 from tests.core.secrets.secrets_test_support import (
     TOKEN_TEXT,
     data_directory,
@@ -55,6 +57,8 @@ def test_entries_round_trip_sealed_in_an_owner_only_document(
     assert store.set_entry(CREDENTIALS, "SAME_VALUE", "sk-openai-value") is True
     assert store.set_entry(OAUTH_TOKENS, "github-copilot-oauth", TOKEN_TEXT) is True
 
+    # A document from an older release has inherited permissions until first read.
+    atomic_write_text(store.path, store.path.read_text(encoding="utf-8"), mode=0o644)
     restarted = open_store(tmp_path)
     assert restarted.entries(CREDENTIALS) == {
         "OPENAI_API_KEY": "sk-openai-value",
@@ -81,7 +85,14 @@ def test_entries_round_trip_sealed_in_an_owner_only_document(
     for value in ("sk-openai-value", "token-value", "refresh"):
         assert value not in raw
         assert value not in caplog.text
-    if sys.platform != "win32":
+    if sys.platform == "win32":
+        from tests.core.utils.test_atomic import _windows_dacl
+
+        assert re.fullmatch(
+            r"D:P(AI)?\(A;;FA;;;(?:S-1-5-[0-9-]+|LA)\)\(A;;FA;;;SY\)",
+            _windows_dacl(store.path),
+        )
+    else:
         assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
         assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
 
@@ -167,6 +178,10 @@ def test_a_store_that_cannot_be_opened_is_never_written(
     store = open_store(tmp_path)
     store.set_entry(CREDENTIALS, "OPENAI_API_KEY", "sk-openai")
     key_file = Path(str(store.status().key_location))
+    original_key = key_file.read_bytes()
+    # Exercise the live instance as well as a fresh process, beyond its cache window.
+    os.utime(store.path, (time.time() - 60, time.time() - 60))
+    assert store.status().state == "available"
     document = _document(store.path)
     if problem == "missing key":
         key_file.unlink()
@@ -205,6 +220,17 @@ def test_a_store_that_cannot_be_opened_is_never_written(
     assert len(warnings) == 1
     assert "vbot data-store secrets reset --yes" in warnings[0]
     assert "sk-openai" not in caplog.text
+
+    assert store.status().state == "unavailable"
+    assert store.entries(CREDENTIALS) == {}
+    assert store.reload().state == "unavailable"
+    with pytest.raises(SecretStoreUnavailableError):
+        store.set_entry(CREDENTIALS, "OTHER_KEY", "other")
+    assert store.path.read_bytes() == store_bytes
+    if problem in {"missing key", "another key", "wrong key"}:
+        key_file.write_bytes(original_key)
+        assert store.status().state == "available"
+        assert store.entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai"
 
 
 def test_a_reset_quarantines_the_store_which_its_key_still_opens(tmp_path: Path) -> None:

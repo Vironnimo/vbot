@@ -29,7 +29,7 @@ The `plaintext_import` field: which plaintext files a conversion imported and th
 
 ## Data Model
 
-`secrets.json` is a Generation 1 JSON document (`SECRET_STORE_FORMAT`, written by `write_json_document` with mode 0o600, sorted keys, unknown fields preserved):
+`secrets.json` is a Generation 1 JSON document (`SECRET_STORE_FORMAT`, written by `write_json_document` owner-only on every platform, with mode 0o600 on POSIX, sorted keys, unknown fields preserved):
 
 - `store_id`: random 128-bit hex id.
 - `key`: `{id, protection, check, wrapped?}`. `protection` is `dpapi` or `key_file`; `check` is a sealed constant that proves a key belongs to this store; `wrapped` is the DPAPI-wrapped data key (DPAPI only).
@@ -68,7 +68,7 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 - `absent`: no document. Reads are empty; the first write creates the store and its key. A write never creates a missing data directory, and the data-directory check runs before a key is created.
 - `available`: the key opens the key check. Damaged entries are listed in `status().damaged` and logged once.
 - `unavailable`: the document fails to load or validate, its protection is not available on this system, or the key is missing or wrong. Reads are empty, `entry` raises, every write raises `SecretStoreUnavailableError`, and the files stay byte-identical. One WARN names the reason and `vbot data-store secrets reset --yes`; the server keeps starting, credentials report as not configured, `doctor` reports an error on `$.key`, and the data-store status degrades.
-- A read that fails with an I/O error (a scanner or backup tool holding `secrets.json`, a key file that cannot be read now) is retried after 50 ms and 200 ms; when it keeps failing, the store reads as unavailable for that access only (`_View.transient`, never cached), logs its own WARN, and the next access tries again. Only format, validation and key failures are cached until the document changes.
+- A read that fails with an I/O error (a scanner or backup tool holding `secrets.json`, a key file that cannot be read now) is retried after 50 ms and 200 ms; when it keeps failing, the store reads as unavailable for that access only (`_View.transient`, never cached), logs its own WARN, and the next access tries again. Format and validation failures can be cached until the document changes; key-file-backed views are rechecked on every access. Loading a new document version also repairs inherited file permissions from earlier releases.
 - `reset()` refuses a store this process opens and a transient failure, then moves the document to `<data-dir>/quarantine/secret-store/<UTC stamp>-<hex>/secrets.json` (never deleted; it opens again with its key, for example with `SecretStore(<that folder>)`) and creates a new empty store. Nothing else ever replaces a store.
 
 ## Conventions
@@ -81,7 +81,7 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 
 ## Constraints & Gotchas
 
-- An unavailable state from a format or key failure is cached until `secrets.json` changes: restoring a lost key file takes effect after a server restart (Runtime snapshots credentials at start anyway).
+- Key-file-backed stores re-read the external key before each access, including writes: removal or replacement makes the store unavailable immediately, and restoring the original key restores access without restarting. Document-backed protections can cache a view until `secrets.json` changes (Runtime still snapshots credentials at start).
 - Key lookup depends on the process: its account (DPAPI, `HOME`) and `VBOT_SECRET_KEY_FILE`. A CLI started with another account or variable can fail to open a store the server opens; `secrets reset` therefore defers to the running server, and the store is never destroyed.
 - Because restores keep the live store, a future store format change needs its own rollback story. Restoring a named copy from before a `reset` brings back a document whose key may be gone.
 
