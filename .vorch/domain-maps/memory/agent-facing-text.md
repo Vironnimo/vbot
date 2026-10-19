@@ -4,6 +4,7 @@ Why each sentence of the Agent-facing text the Memory domain owns exists: the `m
 
 | Text | Reason |
 |---|---|
+| Entry bullets `- <JSON string>` in prompt and Tool scope lists | Keeps stored text quoted as data; escaped angle brackets prevent an entry from closing the `<memory>` wrapper. The encoding round-trips the stored content and the text-addressed Tool accepts a copied complete bullet. |
 | `Memory file <path> exceeds the 128 KiB limit. Nothing was changed. Inspect and shorten this file with file tools or a text editor before using Memory again.` | A hand-edited file could make both prompt assembly and `memory list` read and render unbounded input; refusal preserves every byte and gives a way to inspect and repair the file without partial Memory writes. |
 | `Memory holds facts that matter in every future Session, whatever the task.` (`memory:guidance`, `_MEMORY_GUIDANCE`) | Leads with the test for an entry: every entry costs prompt space in every Session. |
 | `Lessons about how to do one kind of task, including the user's preferences and corrections for that work, belong in that task's Skill, not in Memory, even when you cannot change Skills.` | The routing rule all learning texts share (`learning-routing.md`). Hermes moved preferences out of Memory into Skills after reviews wrote the same lesson to both stores until both hit their limits (Hermes 562ee8ab76, #30220); vBot's earlier texts routed style preferences to user Memory. |

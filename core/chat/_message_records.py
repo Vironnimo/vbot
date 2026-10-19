@@ -209,8 +209,9 @@ class ToolCall:
 class MessageSender:
     """Platform identity of the human who sent a user message.
 
-    Captured from platform metadata (never from message text) so request-time
-    attribution tags cannot be spoofed by typing a look-alike prefix.
+    Captured from platform metadata, never from message text. The request prefix
+    uses this identity; look-alike tags in the message body do not change it or
+    the sender role used for authorization.
     """
 
     id: str
