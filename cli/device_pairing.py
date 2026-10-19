@@ -42,6 +42,7 @@ from cli._progress import operation_progress
 from cli._server_target import CommandResult, RpcFailure, ServerInstance, is_loopback_target
 from cli.formatting import inline_text
 from cli.sign_ins import PendingPairing, SignIn, SignInStore, SignInStoreError
+from core.utils.http_status import parse_retry_after
 from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
@@ -232,6 +233,9 @@ class _Pairing:
                     pause = max(pause, _retry_after(response) or 0.0)
                     problem = "The server asked to check less often."
                 elif result != "pending":
+                    pause = max(pause, _retry_after(response) or 0.0)
+                    if _error(response).get("code") == "devices_unavailable":
+                        pause = max(pause, 30.0)
                     problem = (
                         f"The last check got an unexpected answer (HTTP {response.status_code})."
                     )
@@ -452,6 +456,8 @@ def _revoke_own_device(
 ) -> tuple[str, Literal["revoked", "gone", "kept"]]:
     """Call ``devices.logout`` as the Device itself; returns (reason, outcome)."""
 
+    if urlsplit(instance.url).scheme != "https":
+        return "the saved sign-in uses plain http:// and its token was not sent", "kept"
     try:
         with _client(instance, transport) as client:
             response = client.post(
@@ -513,10 +519,8 @@ def _error(response: httpx.Response) -> Mapping[str, Any]:
 
 
 def _retry_after(response: httpx.Response) -> float | None:
-    try:
-        return max(1.0, float(response.headers.get("Retry-After", "")))
-    except ValueError:
-        return None
+    seconds = parse_retry_after(response.headers)
+    return max(1.0, seconds) if seconds is not None and math.isfinite(seconds) else None
 
 
 def _minutes(seconds: float) -> str:

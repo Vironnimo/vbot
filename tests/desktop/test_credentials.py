@@ -34,15 +34,40 @@ def test_a_stored_sign_in_survives_a_restart(tmp_path: Path) -> None:
     assert _store(tmp_path).get(OTHER_ORIGIN) is None
 
 
-def test_only_the_refused_token_is_dropped(tmp_path: Path) -> None:
+@pytest.mark.parametrize("replace_on_unlock", [False, True])
+def test_only_the_refused_token_is_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replace_on_unlock: bool
+) -> None:
     store = _store(tmp_path)
     store.save_device(ORIGIN, TOKEN, DEVICE_ID)
     store.save_device(OTHER_ORIGIN, TOKEN, DEVICE_ID)
 
     assert store.drop_device(ORIGIN, f"vbt_{DEVICE_ID}_{'X' * 43}") is False
+    replacement = f"vbt_{DEVICE_ID}_{'N' * 43}"
+    if replace_on_unlock:
+        original_lock = store._lock
+
+        class ReplaceOnUnlock:
+            pending = True
+
+            def __enter__(self) -> None:
+                original_lock.acquire()
+
+            def __exit__(self, *_args: object) -> None:
+                original_lock.release()
+                if self.pending:
+                    self.pending = False
+                    # Model a successful pairing that acquires the lock as
+                    # soon as the rejected request releases it.
+                    store.save_device(ORIGIN, replacement, DEVICE_ID)
+
+        monkeypatch.setattr(store, "_lock", ReplaceOnUnlock())
     assert store.drop_device(ORIGIN, TOKEN) is True
 
-    assert _store(tmp_path).get(ORIGIN) is None
+    current = _store(tmp_path).get(ORIGIN)
+    assert (None if current is None else current.token) == (
+        replacement if replace_on_unlock else None
+    )
     other = _store(tmp_path).get(OTHER_ORIGIN)
     assert other is not None and other.token == TOKEN
 

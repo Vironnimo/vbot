@@ -109,15 +109,16 @@ class DeviceTokenStore:
         with self._lock:
             record = self._servers().get(origin)
             stored = _stored(origin, record) if isinstance(record, dict) else None
-        if stored is None or stored.token != token:
-            return False
-
-        def change(record: dict[str, Any]) -> None:
+            if stored is None or stored.token != token:
+                return False
+            document = copy.deepcopy(self._loaded(for_write=True))
+            record = document[_SERVERS_KEY][origin]
             for key in (_TOKEN_KEY, _DPAPI_TOKEN_KEY, _DEVICE_ID_KEY, _PAIRED_AT_KEY):
                 record.pop(key, None)
-
-        self._update(origin, change)
-        return True
+            if not record:
+                del document[_SERVERS_KEY][origin]
+            self._write(document)
+            return True
 
     def remove(self, origin: str) -> StoredSignIn | None:
         """Forget everything stored for ``origin``; returns what was stored."""

@@ -654,7 +654,9 @@ async def test_transport_explains_access_refusals(
 ) -> None:
     async def respond(request: httpx.Request) -> httpx.Response:
         error = {"code": code, "message": "Refused"}
-        return httpx.Response(status, json={"ok": False, "error": error})
+        return httpx.Response(
+            status, headers={"Retry-After": "45"}, json={"ok": False, "error": error}
+        )
 
     class RefusedSocket:
         async def __aenter__(self) -> RefusedSocket:
@@ -677,25 +679,53 @@ async def test_transport_explains_access_refusals(
         with pytest.raises(ClientError) as stream_refusal:
             async for _event in client.events():
                 pass
+        with pytest.raises(ClientError) as timeline_refusal:
+            async for _event in client.timeline("/api/runs/run-one/timeline"):
+                pass
 
     assert rpc_refusal.value.code == code
     assert explained in str(rpc_refusal.value)
     assert stream_refusal.value.code == close_code
+    assert timeline_refusal.value.code == code
+    assert rpc_refusal.value.retry_after == timeline_refusal.value.retry_after == 45
+    assert stream_refusal.value.retry_after == (30 if close == 4503 else None)
 
 
 @pytest.mark.asyncio
-async def test_events_stop_after_a_repeated_access_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("code", "expected_attempts", "expected_waits"),
+    [
+        ("auth_required", 2, []),
+        ("access_denied", 1, []),
+        ("devices_unavailable", 3, [30, 30]),
+    ],
+)
+async def test_events_retry_only_when_an_access_refusal_can_recover(
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+    expected_attempts: int,
+    expected_waits: list[float],
+) -> None:
+    waits: list[float] = []
+
     class RefusingServer(Server):
         attempts = 0
 
         @override
         async def events(self) -> AsyncIterator[JsonObject]:
             RefusingServer.attempts += 1
-            raise ClientError("Sign in with: vbot devices pair", code="auth_required")
+            if RefusingServer.attempts == 3:
+                await asyncio.Event().wait()
+            raise ClientError(
+                "Access refusal",
+                code=code,
+                retry_after=30 if code == "devices_unavailable" else None,
+            )
             yield {}
 
-    async def no_delay(_seconds: float) -> None:
-        return
+    async def no_delay(seconds: float) -> None:
+        waits.append(seconds)
+        await asyncio.sleep(0)
 
     monkeypatch.setattr(conversation_module, "_sleep", no_delay)
     app = ConversationApp(RefusingServer(), agent_id="main")
@@ -703,10 +733,56 @@ async def test_events_stop_after_a_repeated_access_refusal(monkeypatch: pytest.M
         await pilot.pause()
         await pilot.pause()
 
-        # One immediate retry reads the credential again; then the stream stays closed.
-        assert RefusingServer.attempts == 2
+        assert RefusingServer.attempts == expected_attempts
+        assert waits == expected_waits
         assert not app.navigation.connected
-        assert "vbot devices pair" in app.last_notice
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["stream", "snapshot"])
+@pytest.mark.parametrize("code", ["auth_required", "access_denied", "devices_unavailable"])
+async def test_timeline_access_refusals_stop_or_delay_recovery(
+    monkeypatch: pytest.MonkeyPatch, stage: str, code: str
+) -> None:
+    waits: list[float] = []
+
+    class RefusingServer(Server):
+        attempts = 0
+
+        @override
+        async def timeline(self, path: str) -> AsyncIterator[JsonObject]:
+            self.attempts += 1
+            if stage == "stream":
+                raise ClientError("Access refusal", code=code, retry_after=45)
+            if False:
+                yield {}
+
+        @override
+        async def rpc(self, method: str, params: JsonObject | None = None) -> JsonObject:
+            raise ClientError("Access refusal", code=code, retry_after=45)
+
+    server = RefusingServer()
+    app = ConversationApp(server, agent_id="main")
+    view = app.conversation = Conversation("main", session="session-one")
+    monkeypatch.setattr(app, "_notice", lambda *_args, **_kwargs: None)
+
+    async def no_delay(seconds: float) -> None:
+        waits.append(seconds)
+        if seconds == 45:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(conversation_module, "_sleep", no_delay)
+    if code == "devices_unavailable":
+        with pytest.raises(asyncio.CancelledError):
+            await app.navigation.follow(view, "/api/runs/run-one/timeline")
+    else:
+        await app.navigation.follow(view, "/api/runs/run-one/timeline")
+
+    assert server.attempts == 1
+    if code == "devices_unavailable":
+        assert waits == ([45] if stage == "stream" else [0.5, 45])
+    else:
+        assert waits == ([] if stage == "stream" else [0.5])
 
 
 def test_tool_details_preserve_diffs_and_offer_media_downloads() -> None:

@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import ssl
 import threading
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -30,6 +34,24 @@ def shared_ssl_context() -> ssl.SSLContext:
         if _context is None:
             _context = httpx.create_ssl_context(trust_env=False)
         return _context
+
+
+def retry_after_seconds(headers: Mapping[str, str]) -> float | None:
+    """The HTTP retry hint, as seconds or an HTTP date; invalid hints are ignored."""
+    raw = headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        try:
+            deadline = parsedate_to_datetime(raw)
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=UTC)
+            seconds = (deadline - datetime.now(UTC)).total_seconds()
+        except TypeError, ValueError, OverflowError:
+            return None
+    return max(0.0, seconds) if math.isfinite(seconds) else None
 
 
 def prewarm_outbound_http() -> None:

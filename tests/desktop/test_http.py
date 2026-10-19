@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ssl
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import httpx
@@ -29,3 +30,26 @@ def test_shared_context_keeps_verification_ignores_environment_and_builds_once(
     assert contexts[0].check_hostname
     assert contexts[0].get_ca_certs()
     create.assert_called_once_with(trust_env=False)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("30", 30.0),
+        ("Mon, 19 Oct 2026 12:00:30 GMT", 30.0),
+        ("Sun, 18 Oct 2026 12:00:00 GMT", 0.0),
+        ("not-a-delay", None),
+        ("NaN", None),
+        ("Infinity", None),
+        (None, None),
+    ],
+)
+def test_retry_hint_keeps_the_servers_wait(
+    monkeypatch: pytest.MonkeyPatch, value: str | None, expected: float | None
+) -> None:
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = datetime(2026, 10, 19, 12, tzinfo=UTC)
+    monkeypatch.setattr(_http, "datetime", clock)
+    headers = httpx.Headers({} if value is None else {"Retry-After": value})
+
+    assert _http.retry_after_seconds(headers) == expected

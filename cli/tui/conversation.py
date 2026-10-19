@@ -271,6 +271,7 @@ class ConversationController:
     async def follow(self, view: Conversation, path: str) -> None:
         delay = 0.5
         while self.app.conversation is view:
+            retry_after = 0.0
             try:
                 async for event in self.app.client.timeline(path):
                     if self.app.conversation is not view:
@@ -285,17 +286,25 @@ class ConversationController:
                     delay = 0.5
             except ClientError as exc:
                 self.app._notice(str(exc))
+                if exc.code in _ACCESS_REFUSALS:
+                    return
+                retry_after = exc.retry_after or 0.0
             except TimelineGapError:
                 continue
             # Read the authoritative state before opening another stream. Never resubmit.
-            await _sleep(delay)
+            await _sleep(max(delay, retry_after))
             delay = min(10, delay * 2)
             try:
                 view.refresh_revision += 1
                 revision = view.refresh_revision
                 captured_sequence, captured_run = view.sequence, view.stream_run
                 candidate = await self.read_timeline(view, revision)
-            except ClientError:
+            except ClientError as exc:
+                if exc.code in _ACCESS_REFUSALS:
+                    self.app._notice(str(exc))
+                    return
+                if exc.retry_after is not None:
+                    await _sleep(exc.retry_after)
                 continue
             if self.app.conversation is not view:
                 return
@@ -324,6 +333,7 @@ class ConversationController:
         delay = 0.5
         refused = False
         while True:
+            retry_after = 0.0
             try:
                 async for event in self.app.client.events():
                     self.connected = True
@@ -379,13 +389,14 @@ class ConversationController:
                     self.app._notice(f"Event connection closed. {exc}", error=True)
                     return
                 self.app._notice(f"Reconnecting to {self.app.client.url} · {exc}")
+                retry_after = exc.retry_after or 0.0
             except OSError as exc:
                 self.app._notice(f"Reconnecting to {self.app.client.url} · {exc}")
             except Exception:
                 self.app._notice(f"Event connection lost. Reconnecting to {self.app.client.url}.")
             self.connected = False
             self.app._header()
-            await _sleep(delay)
+            await _sleep(max(delay, retry_after))
             delay = min(10, delay * 2)
 
     def event_targets_view(self, payload: JsonObject) -> bool:

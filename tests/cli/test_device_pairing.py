@@ -168,6 +168,20 @@ def test_pairing_stores_the_token_once_the_code_is_approved(
             [httpx.ConnectError("offline"), approved()], True, "Signed in", [2], id="network-blip"
         ),
         pytest.param(
+            [refused(503, "devices_unavailable", **{"Retry-After": "40"}), approved()],
+            True,
+            "Signed in",
+            [40],
+            id="device-store-outage",
+        ),
+        pytest.param(
+            [refused(503, "devices_unavailable", **{"Retry-After": "NaN"}), approved()],
+            True,
+            "Signed in",
+            [30],
+            id="device-store-outage-invalid-delay",
+        ),
+        pytest.param(
             [httpx.Response(200, json={"status": "denied"})], False, "denied", [], id="denied"
         ),
         pytest.param(
@@ -351,17 +365,22 @@ def test_pairing_over_plain_http_starts_nothing(
 
 
 @pytest.mark.parametrize(
-    ("reply", "outcome"),
+    ("origin", "reply", "outcome"),
     [
-        pytest.param(None, "revoked", id="revoked"),
-        pytest.param(refused(401, "auth_required"), "no longer accepted", id="already-revoked"),
-        pytest.param(httpx.ConnectError("offline"), "stays listed", id="unreachable"),
+        pytest.param(ORIGIN, None, "revoked", id="revoked"),
+        pytest.param(
+            ORIGIN, refused(401, "auth_required"), "no longer accepted", id="already-revoked"
+        ),
+        pytest.param(ORIGIN, httpx.ConnectError("offline"), "stays listed", id="unreachable"),
+        pytest.param("http://localhost:9000", None, "stays listed", id="plain-http-tunnel"),
+        pytest.param("http://192.168.1.5:8420", None, "stays listed", id="plain-http-lan"),
     ],
 )
 def test_logout_revokes_the_device_and_always_deletes_the_sign_in(
-    remote: ServerInstance, reply: httpx.Response | Exception | None, outcome: str
+    remote: ServerInstance, origin: str, reply: httpx.Response | Exception | None, outcome: str
 ) -> None:
-    SignInStore().save_sign_in(SignIn(ORIGIN, TOKEN, "dev7", "CLI on desk", "2026-10-17T10:00:00Z"))
+    remote = resolve_instance(url=origin, data_dir=remote.data_dir)
+    SignInStore().save_sign_in(SignIn(origin, TOKEN, "dev7", "CLI on desk", "2026-10-17T10:00:00Z"))
     server = FakeServer()
     if reply is not None:
         server.logout = reply
@@ -370,10 +389,14 @@ def test_logout_revokes_the_device_and_always_deletes_the_sign_in(
 
     assert result.ok and outcome in result.message
     assert TOKEN not in result.message
-    assert server.requests[0][1:] == (
-        f"Bearer {TOKEN}",
-        {"method": "devices.logout", "params": {}},
-    )
-    assert SignInStore().sign_in(ORIGIN) is None
+    if origin.startswith("https:"):
+        assert server.requests[0][1:] == (
+            f"Bearer {TOKEN}",
+            {"method": "devices.logout", "params": {}},
+        )
+    else:
+        assert server.requests == []
+        assert result.attention
+    assert SignInStore().sign_in(origin) is None
     assert not devices_logout(remote, transport=server.transport()).attention
-    assert len(server.requests) == 1
+    assert len(server.requests) == (1 if origin.startswith("https:") else 0)
