@@ -251,6 +251,9 @@ def test_on_demand_tools_are_known_by_name_until_a_silent_load_records_the_defin
 
     loads = view.loads(catalog)
     assert sorted(loads) == ["fetch", "search"]
+    # A fallback lists every callable Tool, and a load changes nothing in that list.
+    fallback_tools = view.fallback_request_tools(loads)
+    assert fallback_tools == [read, fetch, search]
     note = ChatMessage.note(loads["search"].note_content())
     assert tool_change_from_note(note) == loads["search"]
 
@@ -259,6 +262,7 @@ def test_on_demand_tools_are_known_by_name_until_a_silent_load_records_the_defin
     assert view.definitions() == [read, search]
     assert view.request_tools(list_announced=False) == [read]
     assert view.request_tools(list_announced=True) == [read, search]
+    assert view.fallback_request_tools(view.loads(catalog)) == fallback_tools
     assert _plan(view, catalog) == []
 
     # Removed and enabled again: the loaded Tool returns with its definition, so a route that

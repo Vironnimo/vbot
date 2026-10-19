@@ -569,8 +569,11 @@ class RequestBuildInputs:
     # them (Compaction commit).
     fresh_prompt_epoch: bool = False
     # List announced Tool additions in the request's Tool list: for a route
-    # that drops calls to unlisted Tools, and for every fallback route.
+    # that drops calls to unlisted Tools.
     list_announced_tools: bool = False
+    # List every Tool the Model may call, On-demand Tools included: for every
+    # fallback route, so its Tool list never changes while it serves the Run.
+    list_all_tools: bool = False
     # With ``fresh_prompt_epoch``: On-demand Tools the new Tool pin lists anyway
     # (those the Agent called in the epoch a Compaction ended).
     keep_listed_tools: frozenset[str] = frozenset()
@@ -612,9 +615,8 @@ class RequestBuildInputs:
             temporary_binding=context.request.temporary_binding,
             subagent_session=context.subagent_session,
             goal_session=context.goal_session,
-            list_announced_tools=(
-                target is not context.primary_target or not target.unlisted_tool_calls
-            ),
+            list_announced_tools=not target.unlisted_tool_calls,
+            list_all_tools=target is not context.primary_target,
         )
 
     def with_session_messages(self, messages: list[ChatMessage]) -> RequestBuildInputs:

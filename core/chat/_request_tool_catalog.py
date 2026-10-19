@@ -104,6 +104,7 @@ class RequestToolCatalog:
         *,
         unlisted_tool_calls: bool,
         list_announced: bool,
+        list_all: bool,
     ) -> _RequestState:
         """Add a note for each Tool change since *state*'s Tool epoch and adopt it.
 
@@ -127,6 +128,7 @@ class RequestToolCatalog:
             tool_epoch,
             catalog.session_tool_grants,
             list_announced=list_announced,
+            list_all=list_all,
             tool_loads=tool_loads,
         )
         return replace(
@@ -140,12 +142,18 @@ class RequestToolCatalog:
         )
 
     async def adopt_tool_changes(
-        self, state: _RequestState, changes: Sequence[ToolChange], *, list_announced: bool
+        self,
+        state: _RequestState,
+        changes: Sequence[ToolChange],
+        *,
+        list_announced: bool,
+        list_all: bool,
     ) -> _RequestState:
         """Return *state* after *changes* the Run persisted itself (Tools ``load_tools`` loaded).
 
         The loaded Tools join the request Tools on routes that list announced
-        Tools; every other route keeps sending the same Tool list.
+        Tools; every other route, a fallback included, keeps sending the same
+        Tool list.
         """
         tool_epoch = state.tool_epoch
         if tool_epoch is None or not changes:
@@ -155,6 +163,7 @@ class RequestToolCatalog:
             tool_epoch,
             state.session_tool_grants,
             list_announced=list_announced,
+            list_all=list_all,
             tool_loads=state.tool_loads,
         )
         return replace(
@@ -172,13 +181,15 @@ class RequestToolCatalog:
         live_tool_grants: Sequence[str],
         *,
         list_announced: bool,
+        list_all: bool = False,
         tool_loads: Mapping[str, ToolChange] | None = None,
     ) -> tuple[list[JsonObject], tuple[str, ...], tuple[str, ...], Mapping[str, ToolContract]]:
         """Return request Tools, allowlist, grants and contracts of *tool_epoch*.
 
         An On-demand Tool the Model may load gets its contract from *tool_loads*
         (the definition a load would return), so a call made without loading
-        it first validates against the same definition.
+        it first validates against the same definition. *list_all* (a fallback
+        route) lists every Tool the Model may call, On-demand Tools included.
         """
         allowed_tool_names = tool_epoch.allowed_names
         allowed = set(allowed_tool_names)
@@ -196,7 +207,11 @@ class RequestToolCatalog:
             ],
         )
         return (
-            tool_epoch.request_tools(list_announced=list_announced),
+            (
+                tool_epoch.fallback_request_tools(loads)
+                if list_all
+                else tool_epoch.request_tools(list_announced=list_announced)
+            ),
             allowed_tool_names,
             tuple(name for name in live_tool_grants if name in allowed),
             tool_contracts,

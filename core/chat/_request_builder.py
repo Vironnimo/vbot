@@ -518,6 +518,7 @@ class RequestBuilder:
             tool_epoch,
             live_tool_grants,
             list_announced=inputs.list_announced_tools,
+            list_all=inputs.list_all_tools,
             tool_loads=tool_loads,
         )
         if session_capability is not None and inputs.temporary_binding is not None:

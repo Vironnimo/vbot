@@ -518,10 +518,10 @@ class ToolEpochView:
     def request_tools(self, *, list_announced: bool) -> list[JsonObject]:
         """Return the request's Tool list: the pin, plus announced additions when listed.
 
-        A route that drops calls to Tools outside the request list, and every
-        fallback route, lists each Tool announced as added or loaded in this
-        epoch, in order of its first announcement, with the definition the Model
-        was last told to use: that of its latest addition, load or change.
+        A route that drops calls to Tools outside the request list lists each
+        Tool announced as added or loaded in this epoch, in order of its first
+        announcement, with the definition the Model was last told to use: that
+        of its latest addition, load or change.
         """
 
         tools = [dict(definition) for definition in self.pin.definitions]
@@ -543,6 +543,27 @@ class ToolEpochView:
                 if (definition := self._known[name].definition) is not None
             ),
         ]
+
+    def fallback_request_tools(self, loads: Mapping[str, ToolChange]) -> list[JsonObject]:
+        """Return a fallback route's Tool list: every Tool the Model may call.
+
+        The pin, then each other available Tool in the order the Model first
+        heard of it: an announced or loaded Tool with the definition it was last
+        told to use, an On-demand Tool known by name only with the definition
+        *loads* says a load returns (left out when it cannot be loaded now). A
+        load therefore changes no position, so the fallback's Tool list stays
+        the same while it serves the Run, and it can call every Tool even when
+        its Model calls only listed Tools.
+        """
+
+        tools = [dict(definition) for definition in self.pin.definitions]
+        for name in self.announced_names:
+            definition = self._known[name].definition
+            if definition is None and (load := loads.get(name)) is not None:
+                definition = load.definition
+            if definition is not None:
+                tools.append(dict(definition))
+        return tools
 
     def plan(
         self, catalog: LiveToolCatalog, *, unlisted_tool_calls: bool

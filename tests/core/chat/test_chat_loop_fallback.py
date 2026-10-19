@@ -33,6 +33,7 @@ from core.tools import (
     tool_success,
 )
 from core.tools.file_state import FileReadState
+from core.tools.load_tools import register_load_tools_tool
 from core.tools.read import register_read_tool
 from core.utils.errors import ConfigError, ProviderError
 from tests.core.chat.chat_loop_support import (
@@ -62,6 +63,7 @@ def _fallback_runtime(
     fallback_models: list[str] | None = None,
     model: str = PRIMARY,
     allowed_tools: list[str] | None = None,
+    tool_loading: dict[str, Any] | None = None,
     **runtime_options: Any,
 ) -> Any:
     """Primary route on openai:api-key; every fallback candidate on anthropic:api-key."""
@@ -73,6 +75,7 @@ def _fallback_runtime(
         model=model,
         fallback_models=[FALLBACK] if fallback_models is None else fallback_models,
         allowed_tools=["*"] if allowed_tools is None else allowed_tools,
+        tool_loading=tool_loading,
     )
     return StubRuntime(
         data_dir=tmp_path,
@@ -450,11 +453,13 @@ async def test_identical_tool_failures_share_the_circuit_breaker_across_fallback
 
 
 @pytest.mark.asyncio
-async def test_fallback_lists_the_pinned_tools_and_announced_additions_without_new_notes(
-    tmp_path: Path,
+@pytest.mark.parametrize("on_demand", [False, True], ids=["listed-tools", "on-demand-tools"])
+async def test_fallback_lists_every_tool_the_model_may_call_without_new_notes(
+    tmp_path: Path, on_demand: bool
 ) -> None:
-    # The fallback route's cache is cold anyway, so it lists every Tool announced as
-    # added; it neither re-pins nor re-applies the route gates of its own Model.
+    # The fallback route's cache is cold anyway, so it lists every Tool the Model may
+    # call, On-demand Tools included, and a load changes nothing in that list; it
+    # neither re-pins nor re-applies the route gates of its own Model.
     tools = ToolRegistry()
     tools.register(
         ANALYZE_IMAGE_TOOL_NAME,
@@ -462,6 +467,15 @@ async def test_fallback_lists_the_pinned_tools_and_announced_additions_without_n
         {"type": "object"},
         lambda _context, _arguments: tool_success({"analysis": "ok"}),
     )
+    if on_demand:
+        register_load_tools_tool(tools)
+        tools.register(
+            "lazy",
+            "Lazy Tool.",
+            {"type": "object"},
+            lambda _context, _arguments: tool_success({}),
+            summary="Lazy Tool.",
+        )
     primary = StubAdapter(
         [{"content": "First", "tool_calls": None}, ProviderRateLimitError("rate limited")]
     )
@@ -479,6 +493,9 @@ async def test_fallback_lists_the_pinned_tools_and_announced_additions_without_n
             input_modalities={("anthropic", "claude-sonnet-4"): ("text", "image")},
         ),
         available_task_models={TASK_IMAGE_UNDERSTANDING},
+        tool_loading=(
+            {"on_demand": True, "always_loaded": [ANALYZE_IMAGE_TOOL_NAME]} if on_demand else None
+        ),
     )
     loop = build_chat_loop(runtime)
 
@@ -495,7 +512,15 @@ async def test_fallback_lists_the_pinned_tools_and_announced_additions_without_n
     extra = {"name": "extra", "description": "Extra Tool.", "parameters": {"type": "object"}}
     assert ANALYZE_IMAGE_TOOL_NAME in {tool["name"] for tool in pinned}
     assert primary.requests[1]["kwargs"]["tools"] == pinned
-    assert fallback.requests[0]["kwargs"]["tools"] == [*pinned, extra]
+    if on_demand:
+        lazy = {"name": "lazy", "description": "Lazy Tool.", "parameters": {"type": "object"}}
+        assert [tool["name"] for tool in pinned] == [ANALYZE_IMAGE_TOOL_NAME, "load_tools"]
+        listed = fallback.requests[0]["kwargs"]["tools"]
+        assert listed[: len(pinned)] == pinned
+        assert [tool["name"] for tool in listed[len(pinned) :]] == ["get_weather", "lazy", "extra"]
+        assert lazy in listed and extra in listed
+    else:
+        assert fallback.requests[0]["kwargs"]["tools"] == [*pinned, extra]
     notes = [message for message in history(runtime) if message.role == "note"]
     assert [change.tool for m in notes if (change := tool_change_from_note(m))] == ["extra"]
 
