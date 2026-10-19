@@ -3,25 +3,58 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import respx
 
+from core.model_tasks.constants import TASK_DECISION
 from core.model_tasks.decision_types import DecisionError
-from core.model_tasks.decisions import (
-    ITEM_LIMIT,
-    QUESTION_TOKEN_LIMIT,
-    REQUEST_TOKEN_LIMIT,
-    DecisionService,
-)
+from core.model_tasks.decisions import ITEM_LIMIT, NOT_CONFIGURED_MESSAGE, DecisionService
 from core.model_tasks.model_tasks import TaskModelService
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.token_getter import StaticTokenGetter
+from tests.core.model_tasks.model_tasks_test_support import (
+    _Credentials,
+    _model,
+    _Models,
+    _Providers,
+    _Storage,
+)
 
 QUESTIONS = [{"id": "q", "type": "noul", "instructions": "Relevant?"}]
+DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 
 
-def service(*, provider: str = "openrouter", usable: bool = True) -> DecisionService:
+def service(
+    *, provider: str = "openrouter", usable: bool = True, window: int | None = 262_144
+) -> DecisionService:
+    """A Decision binding whose Model reports *window* for its Connection ``api_key``.
+
+    Its runtime reaches the real OpenRouter wire, which tests mock with respx.
+    """
+    model = SimpleNamespace(context_window_for={"api_key": window}.get)
     bindings = SimpleNamespace(
         binding_is_usable=lambda task: usable,
         binding_for=lambda task: SimpleNamespace(target=f"{provider}/typesafe/jev-1.13::api_key"),
+        model_for_target=lambda ref: model,
     )
-    return DecisionService(cast(TaskModelService, bindings), cast(Any, None))
+    connection = ConnectionConfig(
+        id="api_key",
+        type="api_key",
+        label="API Key",
+        auth=AuthConfig(header="Authorization", prefix="Bearer ", credential_key="TEST_KEY"),
+    )
+    openrouter = ProviderConfig(
+        id="openrouter",
+        name="OpenRouter",
+        adapter="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        connections=[connection],
+    )
+    runtime = SimpleNamespace(
+        providers=SimpleNamespace(get=lambda _provider: openrouter),
+        get_connection_token_getter=lambda _connection: StaticTokenGetter("test-token"),
+        provider_debug_recorder=lambda **_: None,
+    )
+    return DecisionService(cast(TaskModelService, bindings), cast(Any, runtime))
 
 
 @pytest.mark.asyncio
@@ -68,8 +101,9 @@ class _Calibration:
 
 
 @pytest.mark.asyncio
-async def test_an_oversized_item_fails_alone_without_a_request(monkeypatch):
-    owner = service()
+@pytest.mark.parametrize("window", [1_000, None], ids=["reported-window", "no-reported-window"])
+async def test_an_item_beyond_the_reported_context_window_fails_alone_unsent(monkeypatch, window):
+    owner = service(window=window)
     sent: list[Any] = []
 
     async def evaluate(target, state, questions, *, http_client=None, usage_context=None):
@@ -77,31 +111,66 @@ async def test_an_oversized_item_fails_alone_without_a_request(monkeypatch):
         return {"answers": {"q": {"type": "noul", "noul": 0.5}}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
-    # Each question fits alone with the item, together they exceed the request limit.
-    question_sized = "word " * (QUESTION_TOKEN_LIMIT // 2)
-    many = [{**QUESTIONS[0], "id": f"q{n}", "instructions": question_sized} for n in range(5)]
+    long = "word " * 2_000
 
-    small, alone = await owner.classify(["small", "word " * QUESTION_TOKEN_LIMIT], QUESTIONS)
-    [together] = await owner.classify(["x"], many)
+    small, beyond = await owner.classify(["small", long], QUESTIONS)
 
-    assert sent == ["small"] and small["answers"]["q"]["noul"] == 0.5
-    assert isinstance(alone, DecisionError) and alone.code == "too_large"
-    assert isinstance(together, DecisionError) and "all questions" in str(together)
-    assert 5 * QUESTION_TOKEN_LIMIT // 2 > REQUEST_TOKEN_LIMIT
+    assert small["answers"]["q"]["noul"] == 0.5
+    if window is None:
+        # Without a reported window the Provider decides what is too large.
+        assert sent == ["small", long]
+    else:
+        assert sent == ["small"]
+        assert isinstance(beyond, DecisionError) and beyond.code == "too_large"
+        assert "at most 1000 tokens" in str(beyond)
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    ("status", "error", "code"),
+    [
+        (413, {"code": 413, "message": "Payload Too Large"}, "too_large"),
+        (
+            400,
+            {
+                "code": 400,
+                "message": "Provider returned error",
+                "metadata": {"raw": '{"error":{"type":"max_tokens_exceeded"}}'},
+            },
+            "too_large",
+        ),
+        (
+            400,
+            {"code": 400, "message": "This endpoint's maximum context length is 262144 tokens."},
+            "too_large",
+        ),
+        (400, {"code": 400, "message": "Invalid request parameters"}, "provider_error"),
+    ],
+    ids=["body-too-large", "upstream-max-tokens", "router-context-length", "other-bad-request"],
+)
+async def test_a_size_rejection_by_the_provider_is_too_large(status, error, code):
+    route = respx.post(DECISIONS_URL).respond(status, json={"error": error})
+
+    [outcome] = await service().classify(["x"], QUESTIONS)
+
+    assert isinstance(outcome, DecisionError) and outcome.code == code
+    assert ("at most 262144 tokens" in str(outcome)) is (code == "too_large")
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio
 async def test_reported_input_tokens_correct_the_size_check(monkeypatch):
     calibration = _Calibration(factor=2.0)
-    owner = service()
+    owner = service(window=1_000)
     owner._usage_recorder = cast(Any, calibration)
 
     async def evaluate(target, state, questions, *, http_client=None, usage_context=None):
         return {"answers": {}, "usage": {"input_tokens": 1234}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
-    # About 0.6 of the per-question limit: fits as estimated, not as corrected.
-    halfway = "word " * (QUESTION_TOKEN_LIMIT * 6 // 10)
+    # About 0.8 of the window: fits as estimated, not as corrected.
+    halfway = "word " * 600
 
     rejected, answered = await owner.classify([halfway, "small"], QUESTIONS)
 
@@ -149,3 +218,28 @@ async def test_invalid_calls_and_missing_bindings_send_nothing(
         await owner.classify(items, questions)
 
     assert error.value.code == code
+
+
+@pytest.mark.asyncio
+async def test_a_stored_binding_to_another_decision_model_reads_as_not_configured(monkeypatch):
+    stored = {TASK_DECISION: {"target": "openrouter/cloudflare/clef::api-key", "options": {}}}
+    storage = _Storage(stored)
+    model_tasks = TaskModelService(
+        _Providers(),
+        _Models([_model("cloudflare/clef", (TASK_DECISION,), name="Cloudflare: Clef")]),
+        _Credentials(),
+        storage,
+    )
+    owner = DecisionService(model_tasks, cast(Any, None))
+
+    async def evaluate(*args, **kwargs):
+        raise AssertionError("no request may be sent")
+
+    monkeypatch.setattr(owner, "_evaluate", evaluate)
+
+    with pytest.raises(DecisionError) as error:
+        await owner.classify(["x"], QUESTIONS)
+
+    assert not owner.available()
+    assert (error.value.code, str(error.value)) == ("not_configured", NOT_CONFIGURED_MESSAGE)
+    assert storage.load_model_task_settings() == stored

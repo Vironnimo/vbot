@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from core.model_tasks.decision_providers import ProviderDecisionClient
-from core.providers.errors import ProviderOutcomeUnknownError
+from core.model_tasks.decision_types import DecisionError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 
@@ -57,16 +57,49 @@ async def test_exact_alpha_wire_uses_existing_auth_and_preserves_json():
     assert result["answers"]["id"]["noul"] == 0.75
 
 
+_ANSWER = {
+    "model": "typesafe/jev-version",
+    "answers": {"id": {"type": "noul", "noul": 0.5}},
+    "usage": {"input_tokens": 10, "output_tokens": 1},
+}
+
+
 @pytest.mark.asyncio
 @respx.mock
-async def test_ambiguous_transport_failure_never_replays_billed_request():
+@pytest.mark.parametrize(
+    "failure",
+    [
+        httpx.Response(529, json={"error": {"code": 529, "message": "Provider overloaded"}}),
+        httpx.Response(503, json={"error": {"code": 503, "message": "Service unavailable"}}),
+        httpx.Response(524, json={"error": {"code": 524, "message": "Request timed out"}}),
+        httpx.ReadTimeout("fixture"),
+    ],
+    ids=["overloaded", "unavailable", "edge-timeout", "read-timeout"],
+)
+async def test_an_unanswered_judgment_is_asked_again(failure):
     route = respx.post("https://openrouter.ai/api/alpha/decisions").mock(
-        side_effect=httpx.ReadTimeout("fixture")
+        side_effect=[failure, httpx.Response(200, json=_ANSWER)]
     )
-    with pytest.raises(ProviderOutcomeUnknownError):
+
+    result = await client().evaluate(
+        "state", [{"id": "id", "type": "noul", "instructions": "Has data?"}]
+    )
+
+    assert result["answers"]["id"]["noul"] == 0.5
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_body_that_is_not_json_is_an_invalid_result_and_not_repeated():
+    route = respx.post("https://openrouter.ai/api/alpha/decisions").respond(200, text="<html>")
+
+    with pytest.raises(DecisionError) as error:
         await client().evaluate(
             "state", [{"id": "id", "type": "noul", "instructions": "Has data?"}]
         )
+
+    assert error.value.code == "invalid_result"
     assert route.call_count == 1
 
 

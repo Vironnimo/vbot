@@ -17,7 +17,7 @@ from core.model_tasks.decision_types import (
 )
 from core.model_tasks.model_tasks import TaskModelService, parse_task_model_target_id
 from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
-from core.providers.errors import NetworkError, ProviderError, ProviderOutcomeUnknownError
+from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
 from core.utils.tls import shared_ssl_context
@@ -26,10 +26,6 @@ from core.utils.workers import BoundedWorkerPool
 
 # The most items one classify call judges.
 ITEM_LIMIT = 100
-# TypeSafe's context limits (docs.typesafe.ai/models, without the opt-in long
-# context): the state plus all questions, and the state plus any one question.
-REQUEST_TOKEN_LIMIT = 64_000
-QUESTION_TOKEN_LIMIT = 32_000
 # Items judged at the same time; each is one Provider request.
 _ITEM_CONCURRENCY = 8
 _DECISION_SETUP_WORKERS = BoundedWorkerPool(name="decision-setup", max_workers=2)
@@ -63,10 +59,14 @@ class DecisionService:
         ref = parse_task_model_target_id(self._model_tasks.binding_for("decision").target)
         return ref.provider_id == "openrouter"
 
-    def _target(self) -> str:
+    def _target(self) -> _Target:
         if not self.available():
             raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured")
-        return self._model_tasks.binding_for("decision").target
+        target = self._model_tasks.binding_for("decision").target
+        ref = parse_task_model_target_id(target)
+        model = self._model_tasks.model_for_target(ref)
+        window = model.context_window_for(ref.local_connection_id) if model is not None else None
+        return _Target(target, window if isinstance(window, int) and window > 0 else None)
 
     async def classify(
         self,
@@ -98,7 +98,8 @@ class DecisionService:
         for state in states:
             if not isinstance(state, str | dict | list):
                 raise DecisionError("Each item must be text, a JSON object, or a JSON array.")
-        target = await _DECISION_SETUP_WORKERS.run(self._target)
+        resolved = await _DECISION_SETUP_WORKERS.run(self._target)
+        target = resolved.target
         slots = asyncio.Semaphore(_ITEM_CONCURRENCY)
 
         async def judge(
@@ -112,17 +113,17 @@ class DecisionService:
                 )
                 # Copying and counting an item of up to 1 MB must not block the Event Loop.
                 state, estimate = await _DECISION_SETUP_WORKERS.run(
-                    _sized_state, state, questions, factor
+                    _sized_state, state, questions, factor, resolved.context_window
                 )
                 async with slots:
                     result = await self._evaluate(
-                        target,
+                        resolved,
                         state,
                         questions,
                         http_client=http_client,
                         usage_context=usage_context,
                     )
-                await self._learn_input_estimate(target, result, estimate.request)
+                await self._learn_input_estimate(target, result, estimate)
                 return result
             except DecisionError as exc:
                 return exc
@@ -149,14 +150,14 @@ class DecisionService:
 
     async def _evaluate(
         self,
-        target: str,
+        target: _Target,
         state: Any,
         questions: list[dict[str, Any]],
         *,
         http_client: httpx.AsyncClient | None = None,
         usage_context: TaskUsageContext | None = None,
     ) -> dict[str, Any]:
-        ref = parse_task_model_target_id(target)
+        ref = parse_task_model_target_id(target.target)
         try:
             client = await ProviderDecisionClient.from_runtime_async(
                 self._runtime,
@@ -166,54 +167,70 @@ class DecisionService:
                 ),
             )
             return await client.evaluate(state, questions, http_client=http_client)
-        except ProviderOutcomeUnknownError as exc:
-            raise DecisionError(
-                (
-                    "The Provider may have processed this request, but no usable result "
-                    "arrived. Asking again may incur another charge."
-                ),
-                code="outcome_unknown",
-            ) from exc
-        except (ProviderError, NetworkError) as exc:
+        except ProviderError as exc:
+            if isinstance(exc, ProviderRequestTooLargeError) or (
+                exc.status_code == 400 and _reports_context_overflow(str(exc))
+            ):
+                raise _rejected_as_too_large(target.context_window) from exc
+            raise DecisionError(str(exc), code="provider_error") from exc
+        except NetworkError as exc:
             raise DecisionError(str(exc), code="provider_error") from exc
 
 
-class _InputEstimate(NamedTuple):
-    """Uncorrected estimates of one request: the whole of it and its largest question."""
+# How a 400 body names a request beyond the context window: TypeSafe's
+# documented code (docs.typesafe.ai/api#errors, 2026-10-19), the OpenAI-style
+# code and OpenRouter's own message. OpenRouter's wrapping of upstream errors
+# is undocumented, so only these exact markers count.
+_CONTEXT_OVERFLOW_MARKERS = (
+    "max_tokens_exceeded",
+    "context_length_exceeded",
+    "maximum context length",
+)
 
-    request: int
-    question: int
+
+def _reports_context_overflow(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in _CONTEXT_OVERFLOW_MARKERS)
 
 
-def _input_estimate(state: Any, questions: list[dict[str, Any]]) -> _InputEstimate:
-    request, _ = estimate_json_tokens({"state": state, "questions": wire_questions(questions)})
-    state_tokens, _ = estimate_json_tokens({"state": state})
-    largest = max(estimate_json_tokens(wire_questions([q]))[0] for q in questions)
-    return _InputEstimate(request, state_tokens + largest)
+def _rejected_as_too_large(limit: int | None) -> DecisionError:
+    reads = (
+        f"; it reads at most {limit} tokens together with context and all questions"
+        if limit is not None
+        else ""
+    )
+    return DecisionError(
+        f"The Decision Model rejected this item as too large{reads}. Shorten the item, "
+        "context or questions.",
+        code="too_large",
+    )
+
+
+class _Target(NamedTuple):
+    """The configured target and the context window its catalog reports, if any."""
+
+    target: str
+    context_window: int | None
 
 
 def _sized_state(
-    state: Any, questions: list[dict[str, Any]], factor: float
-) -> tuple[Any, _InputEstimate]:
-    """A private copy of ``state`` and its estimate; raises when it exceeds a limit."""
+    state: Any, questions: list[dict[str, Any]], factor: float, limit: int | None
+) -> tuple[Any, int]:
+    """A private copy of ``state`` and the uncorrected estimate of its whole request.
+
+    The estimate times the Model's input estimate *factor* must fit *limit*,
+    the reported context window for the state plus all questions. Without a
+    reported window nothing is checked here: the Provider rejects what is too
+    large.
+    """
     state = json_copy(state)
-    estimate = _input_estimate(state, questions)
-    _check_input_size(estimate, factor)
+    estimate, _ = estimate_json_tokens({"state": state, "questions": wire_questions(questions)})
+    tokens = math.ceil(estimate * factor)
+    if limit is not None and tokens > limit:
+        raise DecisionError(
+            f"This item has about {tokens} tokens together with context and all questions; "
+            f"the Decision Model reads at most {limit} tokens. Shorten the item, context or "
+            "questions.",
+            code="too_large",
+        )
     return state, estimate
-
-
-def _check_input_size(estimate: _InputEstimate, factor: float) -> None:
-    request = math.ceil(estimate.request * factor)
-    question = math.ceil(estimate.question * factor)
-    if request > REQUEST_TOKEN_LIMIT:
-        raise DecisionError(
-            f"This item has about {request} tokens together with context and all "
-            f"questions; the Decision Model reads at most {REQUEST_TOKEN_LIMIT}.",
-            code="too_large",
-        )
-    if question > QUESTION_TOKEN_LIMIT:
-        raise DecisionError(
-            f"This item has about {question} tokens together with context and its largest "
-            f"question; the Decision Model reads at most {QUESTION_TOKEN_LIMIT} per question.",
-            code="too_large",
-        )

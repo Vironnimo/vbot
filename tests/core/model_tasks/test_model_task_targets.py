@@ -19,6 +19,7 @@ from core.model_tasks import (
     LocalTaskTargetRegistry,
     TaskModelService,
 )
+from core.model_tasks.constants import TASK_DECISION
 from core.models.pricing import TokenPricing
 from tests.core.model_tasks.model_tasks_test_support import (
     _Credentials,
@@ -58,6 +59,15 @@ from tests.core.model_tasks.model_tasks_test_support import (
             [("openrouter/text-to-video::api-key", "Text to Video")],
             id="video-generation",
         ),
+        # vBot's Decisions wire is verified only for TypeSafe Jev.
+        pytest.param(
+            TASK_DECISION,
+            [
+                ("openrouter/typesafe/jev-1.14::api-key", "TypeSafe: Jev 1.14"),
+                ("openrouter/~typesafe/jev-latest::api-key", "TypeSafe: Jev Latest"),
+            ],
+            id="decision",
+        ),
         pytest.param(TASK_LIVE_VOICE, [], id="no-matching-model"),
     ],
 )
@@ -83,6 +93,11 @@ def test_list_targets_offers_only_models_tagged_for_the_task(
                 },
             ),
             _model("video-upscale", (TASK_VIDEO_GENERATION,), name="Video Upscale"),
+            _model("typesafe/jev-1.14", (TASK_DECISION,), name="TypeSafe: Jev 1.14"),
+            _model("~typesafe/jev-latest", (TASK_DECISION,), name="TypeSafe: Jev Latest"),
+            _model("cloudflare/clef", (TASK_DECISION,), name="Cloudflare: Clef"),
+            # Jev's Chat router is no Jev release, whatever its tags.
+            _model("typesafe/jev-router", (TASK_DECISION,), name="TypeSafe: Jev Router"),
         ]
     )
     service = TaskModelService(_Providers(), models, _Credentials(), _Storage())

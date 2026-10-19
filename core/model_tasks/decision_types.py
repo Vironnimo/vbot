@@ -30,7 +30,7 @@ def json_copy(value: Any) -> Any:
     except (ValueError, TypeError, RecursionError) as exc:
         raise DecisionError("Supply finite JSON values.") from exc
     if len(encoded.encode("utf-8")) > 1_000_000:
-        raise DecisionError("The decision input exceeds the 1 MB limit.")
+        raise DecisionError("The decision input exceeds the 1 MB limit.", code="too_large")
     return json.loads(encoded)
 
 

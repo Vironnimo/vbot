@@ -258,6 +258,10 @@ def test_extra_options_add_fields_but_never_override_authored_payload() -> None:
 # Retry policies
 # ---------------------------------------------------------------------------
 
+_IN_FLIGHT_BUDGET = {
+    "reason": "in_flight_budget_exhausted",
+    "limit_source": "openrouter_in_flight_budget",
+}
 _VERIFIED_503_POLICY = TaskRequestRetryPolicy(
     replay_safe=False, verified_safe_retry_status_codes=frozenset({503})
 )
@@ -348,6 +352,41 @@ _VERIFIED_503_POLICY = TaskRequestRetryPolicy(
             2,
             None,
             id="non-idempotent-retries-rate-limit",
+        ),
+        # OpenRouter rejects a request that its in-flight budget cannot hold
+        # before any provider sees it; credits and key limits need the user.
+        pytest.param(
+            [
+                httpx.Response(
+                    402,
+                    headers={"Retry-After": "1"},
+                    json={"error": {"code": 402, "metadata": _IN_FLIGHT_BUDGET}},
+                ),
+                httpx.Response(200, json=_OK),
+            ],
+            NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+            _OK,
+            2,
+            None,
+            id="non-idempotent-retries-in-flight-budget",
+        ),
+        *(
+            pytest.param(
+                [
+                    httpx.Response(
+                        402, json={"error": {"code": 402, "metadata": _IN_FLIGHT_BUDGET | change}}
+                    )
+                ],
+                DEFAULT_TASK_REQUEST_RETRY_POLICY,
+                ProviderError,
+                1,
+                "402",
+                id=case,
+            )
+            for case, change in (
+                ("credits-402-is-not-retried", {"limit_source": "openrouter_credits"}),
+                ("over-budget-request-is-not-retried", {"reason": "weight_exceeds_budget"}),
+            )
         ),
         pytest.param(
             [httpx.Response(503, text="not processed"), httpx.Response(200, json=_OK)],
