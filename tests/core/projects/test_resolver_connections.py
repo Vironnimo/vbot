@@ -1,8 +1,14 @@
 """Connection-bound Model configuration and Run override tests."""
 
 import asyncio
+import json
 
-from core.agents import LIBRARIAN_AGENT_ID, SKILL_AGENT_ID_KEY, skill_subject_id
+from core.agents import (
+    LIBRARIAN_AGENT_ID,
+    SKILL_AGENT_CREATED_AT_KEY,
+    SKILL_AGENT_ID_KEY,
+    skill_subject_id,
+)
 from core.projects import AgentOverrides, AgentResolutionError, ModelConfigurationError
 from core.sessions import SessionAddress
 
@@ -229,10 +235,28 @@ def test_remembered_start_values_leave_other_sessions_and_provider_default_uncha
     assert resolver.session_overrides(current).model == "openai/gpt-mini"
 
 
+@pytest.mark.parametrize("legacy_agent", [False, True])
 def test_a_librarian_session_runs_on_the_skills_of_its_bound_agent(
-    agents: AgentStore, projects: ProjectStore
+    agents: AgentStore,
+    projects: ProjectStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_agent: bool,
 ) -> None:
     agents.create("coder", model="openai/gpt-5.2", allowed_skills=["review"])
+    agent_path = agents.data_dir / "agents" / "coder" / "agent.json"
+    if legacy_agent:
+        stored = json.loads(agent_path.read_text(encoding="utf-8"))
+        stored.pop("created_at")
+        stored["future_field"] = {"kept": True}
+        agent_path.write_text(json.dumps(stored), encoding="utf-8")
+    # New pass admission establishes missing identity evidence once, via the owner.
+    subject_created_at = agents.capture_creation_identity("coder")
+    assert agents.capture_creation_identity("coder") == subject_created_at
+    stored = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert stored["created_at"] == subject_created_at
+    if legacy_agent:
+        assert stored["future_field"] == {"kept": True}
     agents.ensure_builtin_agents()
     librarian = agents.librarian()
     assert librarian is not None
@@ -240,7 +264,11 @@ def test_a_librarian_session_runs_on_the_skills_of_its_bound_agent(
     sessions = agents._session_manager()
     bound = SessionAddress(None, LIBRARIAN_AGENT_ID, sessions.create(LIBRARIAN_AGENT_ID).id)
     unbound = sessions.create(LIBRARIAN_AGENT_ID).id
-    sessions.mutate_metadata(bound, lambda metadata: metadata.update({SKILL_AGENT_ID_KEY: "coder"}))
+    subject_binding = {
+        SKILL_AGENT_ID_KEY: "coder",
+        SKILL_AGENT_CREATED_AT_KEY: subject_created_at,
+    }
+    sessions.mutate_metadata(bound, lambda metadata: metadata.update(subject_binding))
 
     for view in (
         resolver.resolve_agent(None, LIBRARIAN_AGENT_ID, session_id=bound.session_id),
@@ -268,6 +296,46 @@ def test_a_librarian_session_runs_on_the_skills_of_its_bound_agent(
     ):
         assert skill_subject_id(view) == owner
         assert getattr(view, "skill_agent_id", None) is None
+    # Legacy or malformed identity evidence never binds itself to whoever holds
+    # the id now. Refusal leaves the stored metadata intact, including unknown fields.
+    for identity in (None, "", 12, "another-incarnation"):
+        metadata = {**subject_binding, SKILL_AGENT_CREATED_AT_KEY: identity, "future": {"x": 1}}
+        if identity is None:
+            metadata.pop(SKILL_AGENT_CREATED_AT_KEY)
+        sessions.set_metadata(bound, metadata)
+        with pytest.raises(AgentResolutionError):
+            resolver.resolve_agent(None, LIBRARIAN_AGENT_ID, session_id=bound.session_id)
+        with pytest.raises(AgentResolutionError):
+            asyncio.run(
+                resolver.resolve_agent_async(None, LIBRARIAN_AGENT_ID, session_id=bound.session_id)
+            )
+        assert sessions.get_metadata(bound) == metadata
+
+    sessions.set_metadata(bound, subject_binding)
+    archived = tmp_path / "original-subject"
+    with agents.archive_files("coder", archived):
+        pass
+    # Recreating under the exact same wall clock still gets another incarnation.
+    monkeypatch.setattr(
+        "core.agents._delegation.utc_now_timestamp",
+        lambda: subject_binding[SKILL_AGENT_CREATED_AT_KEY],
+    )
+    replacement = agents.create("coder", allowed_skills=["replacement-library"])
+    assert replacement.created_at != subject_binding[SKILL_AGENT_CREATED_AT_KEY]
+    with pytest.raises(AgentResolutionError):
+        resolver.resolve_agent(None, LIBRARIAN_AGENT_ID, session_id=bound.session_id)
+    with pytest.raises(AgentResolutionError):
+        asyncio.run(
+            resolver.resolve_agent_async(None, LIBRARIAN_AGENT_ID, session_id=bound.session_id)
+        )
+    # Restoring the original incarnation makes its old Session usable again.
+    with agents.archive_files("coder", tmp_path / "replacement-subject"):
+        pass
+    with agents.restore_files(archived, "coder", workspace=None, root_project_id=None):
+        pass
+    restored = resolver.resolve_agent(None, LIBRARIAN_AGENT_ID, session_id=bound.session_id)
+    assert restored.allowed_skills == ["review"]
+
     # A Session whose Agent is gone, or names the Librarian itself, cannot run.
     for subject in ("ghost", LIBRARIAN_AGENT_ID):
         sessions.set_metadata(bound, {SKILL_AGENT_ID_KEY: subject})

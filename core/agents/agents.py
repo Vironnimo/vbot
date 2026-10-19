@@ -51,6 +51,7 @@ from core.agents._types import (
     LIVE_BACKEND_BUILTIN,
     LIVE_VOICE_AGENT_ID,
     LIVE_VOICE_BUILTIN,
+    SKILL_AGENT_CREATED_AT_KEY,
     SKILL_AGENT_ID_KEY,
     Agent,
     AgentAlreadyExistsError,
@@ -127,6 +128,7 @@ __all__ = [
     "LIVE_VOICE_AGENT_ID",
     "LIVE_VOICE_BUILTIN",
     "LibrarianProblem",
+    "SKILL_AGENT_CREATED_AT_KEY",
     "SKILL_AGENT_ID_KEY",
     "WORKSPACE_IDENTITY_FILES",
     "WORKSPACE_TEMPLATE_FILES",
@@ -783,6 +785,17 @@ class AgentStore:
                 return _delegation.target_allowed(self, target_id, binding)
             except AgentError, OSError:
                 return False
+
+    def capture_creation_identity(self, agent_id: str) -> str:
+        """Bind new work to the persisted Agent incarnation, stamping legacy configs once.
+
+        Call at explicit admission, never to infer the owner of existing work.
+        """
+        with self._change():
+            self._require_agent_path(agent_id)
+            identity = _delegation._stamp(self, agent_id)
+            assert identity is not None
+            return identity
 
     def capture_delegation_bindings(self, tools: Mapping[str, Any]) -> dict[str, str | int]:
         """Bind a new temporary Agent's explicit Identity targets to their incarnations."""

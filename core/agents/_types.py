@@ -54,6 +54,8 @@ LibrarianProblem = BuiltinAgentProblem
 # it maintains, its Skill subject. vBot writes it when a pass starts; a Session
 # without it works on the Librarian's own Skills.
 SKILL_AGENT_ID_KEY = "skill_agent_id"
+# The immutable creation timestamp distinguishes the subject from a reused Agent id.
+SKILL_AGENT_CREATED_AT_KEY = "skill_agent_created_at"
 
 
 class AgentError(ValueError):

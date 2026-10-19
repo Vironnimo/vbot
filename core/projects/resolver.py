@@ -6,6 +6,7 @@ from collections.abc import Hashable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Protocol
 
+from core.agents import SKILL_AGENT_CREATED_AT_KEY
 from core.projects._model_configuration import (
     ConnectionRestrictedModel,
     CredentialProbe,
@@ -259,7 +260,9 @@ class AgentResolver:
         key = _skill_binding_key(agent) if project_id is None else None
         if key is not None:
             agent = self._session_resolution._bind_skill_subject(
-                agent, self._session_resolution._session_value(address, key)
+                agent,
+                self._session_resolution._session_value(address, key),
+                self._session_resolution._session_value(address, SKILL_AGENT_CREATED_AT_KEY),
             )
         return agent
 
@@ -331,8 +334,14 @@ class AgentResolver:
         if address is not None and key is not None:
             subject_id = await self._session_resolution._session_value_async(address, key)
             if subject_id is not None:
+                subject_created_at = await self._session_resolution._session_value_async(
+                    address, SKILL_AGENT_CREATED_AT_KEY
+                )
                 agent = await _RESOLUTION_WORKERS.run(
-                    self._session_resolution._bind_skill_subject, agent, subject_id
+                    self._session_resolution._bind_skill_subject,
+                    agent,
+                    subject_id,
+                    subject_created_at,
                 )
         return agent
 

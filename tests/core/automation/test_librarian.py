@@ -103,6 +103,7 @@ class _Harness:
                 ],
                 exists=lambda agent_id: agent_id in self.agents,
                 lifecycle_guard=nullcontext,
+                capture_creation_identity=self.capture_creation_identity,
                 librarian_problem=lambda: self.librarian_problem,
             ),
             agent_resolver=SimpleNamespace(resolve_agent_async=resolve_agent_async),
@@ -143,9 +144,15 @@ class _Harness:
             clock=lambda: self.now,
         )
 
+    def capture_creation_identity(self, agent_id: str) -> str:
+        # An admission snapshot is distinct from a legacy loader's read-time fallback.
+        return "2026-09-02T00:00:00.000000Z"
+
     @staticmethod
     def agent(*, name: str = "Main", librarian_enabled: bool = True) -> Any:
-        return SimpleNamespace(name=name, librarian_enabled=librarian_enabled)
+        return SimpleNamespace(
+            name=name, librarian_enabled=librarian_enabled, created_at="2026-09-01T00:00:00.000000Z"
+        )
 
     def announce(self) -> None:
         self.announced += 1
@@ -380,6 +387,7 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
             "working_project_id": None,
             "metadata": {
                 "skill_agent_id": "main",
+                "skill_agent_created_at": harness.capture_creation_identity("main"),
                 "auto_title": harness.title("Main"),
                 "auto_title_initialized": True,
             },
