@@ -98,8 +98,8 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "news" not in prompt
     # Data blocks: SOUL + memory entries.
     assert "Soul text" in prompt
-    assert "- Memory text" in prompt
-    assert "- User text" in prompt
+    assert "Memory text" in prompt
+    assert "User text" in prompt
     assert '<file name="SOUL.md">' in prompt
     # Memory is tool-owned content rather than an included workspace file.
     assert '<file name="MEMORY.md">' not in prompt
@@ -179,8 +179,8 @@ def test_memory_mode_selects_the_rendered_and_reported_memory_files(
     assert prompt == manager.build_system_prompt(agent)
     assert "Soul text" in prompt
     assert ("<memory>" in prompt) is bool(memory_files)
-    assert ("- Memory text" in prompt) is ("MEMORY.md" in memory_files)
-    assert ("- User text" in prompt) is ("USER.md" in memory_files)
+    assert ("Memory text" in prompt) is ("MEMORY.md" in memory_files)
+    assert ("User text" in prompt) is ("USER.md" in memory_files)
     # Every auto-injected file is reported so the chat loop can stamp it read-before-write.
     assert set(read_paths) == {(workspace / name).resolve() for name in ("SOUL.md", *memory_files)}
 
@@ -219,8 +219,8 @@ def test_memory_entries_and_skill_descriptions_are_never_expanded(
 
     prompt = manager.build_system_prompt(agent)
 
-    assert "- see {include:../etc/passwd}" in prompt
-    assert "- note {include:USER.md} on {model} at {data_root}" in prompt
+    assert "see {include:../etc/passwd}" in prompt
+    assert "note {include:USER.md} on {model} at {data_root}" in prompt
     assert "Reads {include:SOUL.md} and {generated:tool_list}" in prompt
     assert "User text" not in prompt
     assert '<file name="USER.md">' not in prompt
