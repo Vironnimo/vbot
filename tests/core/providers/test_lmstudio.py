@@ -12,7 +12,7 @@ from core.models.models import REASONING_CONTROL_ON_OFF
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.providers import (
-    REQUEST_MIN_RESERVE_TOKENS,
+    REQUEST_ESTIMATE_MIN_MARGIN_TOKENS,
     AuthConfig,
     ConnectionConfig,
     ProviderConfig,
@@ -175,4 +175,4 @@ async def test_chat_runs_against_the_window_of_the_loaded_instance(
     # The output allowance is clamped to the window the instance serves, not
     # to the catalog maximum or the window vBot would load the Model with.
     max_tokens = json.loads(chat_request.content)["max_tokens"]
-    assert served_window // 2 < max_tokens < served_window - REQUEST_MIN_RESERVE_TOKENS
+    assert served_window // 2 < max_tokens < served_window - REQUEST_ESTIMATE_MIN_MARGIN_TOKENS

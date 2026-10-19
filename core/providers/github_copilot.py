@@ -35,7 +35,6 @@ from core.providers._wire_learning import (
     execute_learning_from_rejections,
     stream_learning_from_rejections,
 )
-from core.providers.adapter import resolve_request_input_budget
 from core.providers.errors import CatalogEntrySkipped, NetworkError, ProviderError
 from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
@@ -354,31 +353,21 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         estimated_input_tokens: int | Callable[[], int] | None = None,
     ) -> None:
         self._validate_image_limits(model_id, _copilot_message_images(messages))
-        max_prompt_tokens = self._runtime_metadata_for_model(model_id).get("max_prompt_tokens")
-        if isinstance(max_prompt_tokens, int) and not isinstance(max_prompt_tokens, bool):
-            tools = request_kwargs.get("tools")
-            tool_definitions = tools if isinstance(tools, list) else None
-            estimated_input = resolve_request_input_budget(
-                model_id,
-                lambda: self.estimate_request_input_tokens(
-                    messages,
-                    model_id=model_id,
-                    tools=tool_definitions,
-                ),
-            )
-            if estimated_input > max_prompt_tokens:
-                raise ProviderError(
-                    "Request input exceeds the GitHub Copilot Model prompt limit "
-                    f"(estimated_input_tokens={estimated_input}, "
-                    f"max_prompt_tokens={max_prompt_tokens})",
-                    retryable=False,
-                )
         super()._apply_model_output_limit(
             request_kwargs,
             model_id,
             messages,
             estimated_input_tokens=estimated_input_tokens,
         )
+
+    @override
+    def input_token_limit(self, model_id: str) -> int | None:
+        """The catalog's ``max_prompt_tokens``: Copilot accepts less input than the window."""
+
+        limit = self._runtime_metadata_for_model(model_id).get("max_prompt_tokens")
+        if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+            return limit
+        return None
 
     @override
     def estimate_request_input_tokens(

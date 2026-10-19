@@ -14,6 +14,7 @@ from core.chat.messages import ChatMessage, JsonObject
 from core.chat.wire_shaping import history_request_messages
 from core.compaction._tail_types import RequestTokenEstimator
 from core.providers.adapter import estimate_wire_request_input_tokens
+from core.providers.providers import RequestInput
 from core.utils.tokens import estimate_request_input_tokens
 
 
@@ -55,16 +56,17 @@ def _model_request_input_budget(
     factor: float,
     planned: Sequence[JsonObject] = (),
     active_request: Sequence[JsonObject] = (),
-    active_context_tokens: int | None = None,
-) -> int:
+    active_context: RequestInput | None = None,
+) -> RequestInput:
     """Return the corrected input of one Compaction Model request, for its output limit.
 
     *messages* is the request as sent and *planned* the Strategy's request
     before route shaping. When *planned* appends to the complete
-    *active_request*, whose Context Chat knows as *active_context_tokens* (its
+    *active_request*, whose Context Chat knows as *active_context* (its
     measurement plus the corrected change), the budget is that Context plus
-    the appended messages' corrected estimate. Otherwise it is the corrected
-    estimate of the whole request.
+    the appended messages' corrected estimate, and only the estimated parts
+    carry the Adapter's estimation margin. Otherwise the whole budget is the
+    corrected estimate of the request.
     """
 
     def estimate(request: Sequence[JsonObject]) -> int:
@@ -74,10 +76,13 @@ def _model_request_input_budget(
     known = len(active_request)
     appended = len(planned) - known
     if (
-        active_context_tokens is None
+        active_context is None
         or known == 0
         or not 0 < appended < len(messages)
         or list(planned[:known]) != list(active_request)
     ):
-        return round(total * factor)
-    return active_context_tokens + round(max(0, total - estimate(messages[:-appended])) * factor)
+        return RequestInput.estimate(round(total * factor))
+    added = round(max(0, total - estimate(messages[:-appended])) * factor)
+    return RequestInput(
+        active_context.tokens + added, True, active_context.estimated_tokens + added
+    )

@@ -206,7 +206,7 @@ class ModelStepBoundary:
             target=target,
             tools=request_tools,
             scope=context.prompt_cache_affinity_id,
-            context_window=await self._requests.targets.resolve_context_window_async(
+            context_window=await self._requests.targets.resolve_context_capacity_async(
                 context.agent, target
             ),
         )

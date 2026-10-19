@@ -17,6 +17,7 @@ from core.providers.adapter import (
 from core.providers.errors import ProviderError
 from core.providers.github_copilot import CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
+from core.providers.providers import RequestInput
 from core.utils.tokens import estimate_structured_tokens
 from tests.core.providers.github_copilot_test_support import (
     COPILOT_CONFIG,
@@ -200,7 +201,7 @@ async def test_send_renders_user_and_tool_result_images_as_image_blocks() -> Non
 async def test_send_rejects_media_the_endpoint_cannot_carry(media_block: dict[str, Any]) -> None:
     # Chat scopes an input budget around every send, so no local estimate runs first.
     with (
-        request_input_budget("claude-sonnet-4.6", 0),
+        request_input_budget("claude-sonnet-4.6", RequestInput.measured(0)),
         pytest.raises(ProviderError) as caught,
     ):
         await send_exchange(

@@ -20,7 +20,7 @@ import pytest
 import respx
 
 from core.providers.errors import ProviderAuthError, ProviderError
-from core.providers.providers import REQUEST_MIN_RESERVE_TOKENS
+from core.providers.providers import REQUEST_ESTIMATE_MIN_MARGIN_TOKENS
 from core.utils.retry import caller_owns_retries
 
 from . import anthropic_test_support as anthropic
@@ -65,7 +65,7 @@ class _Within:
     def __eq__(self, value: object) -> bool:
         return (
             isinstance(value, int)
-            and self._window // 2 < value <= self._window - REQUEST_MIN_RESERVE_TOKENS
+            and self._window // 2 < value <= self._window - REQUEST_ESTIMATE_MIN_MARGIN_TOKENS
         )
 
     @override

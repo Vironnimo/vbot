@@ -59,12 +59,11 @@ GLOBAL_CONTEXT_WINDOW_FLOOR = 32768
 # ``resolve_effective_context_window``).
 LOCAL_CONTEXT_DEFAULT_CAP = 32768
 
-# Tokenizers and Provider-side Tool framing differ slightly from vBot's shared
-# request estimator. Keep both a request-relative and window-relative reserve,
-# plus a small absolute floor, then use whichever is largest.
-REQUEST_INPUT_ESTIMATE_RESERVE_RATIO = 0.25
-REQUEST_CONTEXT_WINDOW_RESERVE_RATIO = 0.01
-REQUEST_MIN_RESERVE_TOKENS = 256
+# Tokenizers and Provider-side Tool framing differ from vBot's shared request
+# estimator. The estimated part of a request's input carries this margin: a
+# share of the estimate with a small absolute floor. Measured input carries none.
+REQUEST_ESTIMATE_MARGIN_RATIO = 0.25
+REQUEST_ESTIMATE_MIN_MARGIN_TOKENS = 256
 
 
 def custom_provider_credential_key(provider_id: str) -> str:
@@ -73,31 +72,77 @@ def custom_provider_credential_key(provider_id: str) -> str:
     return f"VBOT_CUSTOM_{provider_id.replace('-', '_').upper()}_API_KEY"
 
 
+@dataclass(frozen=True)
+class RequestInput:
+    """One request's input tokens and the part of them that rests on a local estimate.
+
+    ``tokens`` is the input the request is budgeted with. When the Provider
+    measured an earlier request, ``tokens`` is that measurement plus the
+    estimated change since, and only the change is estimated; otherwise the
+    whole value is a local estimate. Only the estimated part carries the
+    estimation margin: a measured value is used as reported.
+    """
+
+    tokens: int
+    estimated: bool
+    estimated_tokens: int
+
+    @classmethod
+    def estimate(cls, tokens: int) -> RequestInput:
+        """A request whose whole input is a local estimate."""
+        tokens = max(0, int(tokens))
+        return cls(tokens, True, tokens)
+
+    @classmethod
+    def measured(cls, tokens: int, *, estimated_change: int | None = None) -> RequestInput:
+        """Provider-measured input, plus an estimated change since the measurement if any."""
+        if estimated_change is None:
+            return cls(max(0, int(tokens)), False, 0)
+        return cls(max(0, int(tokens)), True, abs(int(estimated_change)))
+
+    @property
+    def margin(self) -> int:
+        """Tokens the estimated part may be off by; zero for an unchanged measurement."""
+        if not self.estimated:
+            return 0
+        return max(
+            math.ceil(self.estimated_tokens * REQUEST_ESTIMATE_MARGIN_RATIO),
+            REQUEST_ESTIMATE_MIN_MARGIN_TOKENS,
+        )
+
+    @property
+    def upper_bound(self) -> int:
+        """The largest input this request may really have."""
+        return self.tokens + self.margin
+
+
 def resolve_request_output_limit(
     *,
     explicit_limit: Any,
     model_output_limit: Any,
     provider_default: Any,
     effective_context_window: int,
-    estimated_input_tokens: int,
+    request_input: RequestInput,
+    input_limit: int | None = None,
     minimum_output_tokens: int = 0,
 ) -> int | None:
     """Resolve and context-clamp one request's output-token allowance.
 
     Precedence remains explicit positive caller limit, positive Model ceiling,
-    then positive Provider default. When an allowance exists, it is capped so
-    the estimated messages, Tool definitions, uncertainty reserve, and output
-    all fit inside the effective context window. The local window check runs
-    regardless of whether an allowance exists — Models without any known
-    ceiling get no ``max_tokens`` on the wire (their Provider default applies)
-    but still fail locally instead of overflowing remotely. The reserve doubles
-    as the estimator's declared uncertainty margin: a request fails locally
-    only when the estimate overflows the window even at best-case accuracy —
-    an estimate inside that margin goes out unclamped, because an inflated
-    estimate must not kill a request whose measured Context still fits.
-    A positive ``minimum_output_tokens`` protects a stable thinking budget:
-    clamping can consume the reserve but cannot cross that floor. Insufficient
-    remaining capacity then fails before I/O rather than changing thinking.
+    then positive Provider default. The input must fit the Provider's input
+    limit (``input_limit``, when it reports one) and leave room in the effective
+    context window; otherwise the request fails before I/O with a
+    non-retryable error asking for Compaction. That check runs whether or not
+    an allowance exists: Models without a known ceiling get no ``max_tokens``
+    on the wire but still fail locally instead of overflowing remotely.
+
+    An allowance is capped to the room the input leaves, minus the estimation
+    margin of its estimated part (:attr:`RequestInput.margin`). The margin takes
+    at most half of the remaining room, so the allowance shrinks steadily as
+    the input grows and never jumps back up near the window's end. A positive
+    ``minimum_output_tokens`` protects a stable thinking budget: clamping can
+    consume the margin but cannot cross that floor, and insufficient room for
+    it fails before I/O rather than changing thinking.
     """
 
     requested = next(
@@ -111,67 +156,35 @@ def resolve_request_output_limit(
     if requested is not None:
         requested = int(requested)
 
-    input_tokens = max(0, int(estimated_input_tokens))
+    input_tokens = request_input.tokens
+    if input_limit is not None and input_tokens > input_limit:
+        raise ProviderError(
+            "Request input exceeds the Model's input limit; compact the Context before "
+            f"retrying (input_tokens={input_tokens}, input_limit={input_limit})",
+            retryable=False,
+        )
     remaining = effective_context_window - input_tokens
-    reserve = max(
-        math.ceil(input_tokens * REQUEST_INPUT_ESTIMATE_RESERVE_RATIO),
-        math.ceil(effective_context_window * REQUEST_CONTEXT_WINDOW_RESERVE_RATIO),
-        REQUEST_MIN_RESERVE_TOKENS,
-    )
     if minimum_output_tokens > 0 and remaining < minimum_output_tokens:
         raise ProviderError(
             "Request input leaves insufficient capacity for the unchanged thinking budget; "
             "compact the Context before retrying "
-            f"(estimated_input_tokens={input_tokens}, "
+            f"(input_tokens={input_tokens}, "
             f"minimum_output_tokens={minimum_output_tokens}, "
             f"context_window={effective_context_window})",
             retryable=False,
         )
     if remaining <= 0:
-        if remaining + reserve > 0:
-            _LOGGER.debug(
-                "Estimated input %d fills the %d-token context window only within "
-                "the %d-token estimation reserve; sending without output clamping.",
-                input_tokens,
-                effective_context_window,
-                reserve,
-            )
-            return requested
         raise ProviderError(
-            "Request input leaves no output capacity in the Model context window "
-            f"(estimated_input_tokens={input_tokens}, reserve_tokens={reserve}, "
-            f"context_window={effective_context_window})",
+            "Request input leaves no output capacity in the Model context window; "
+            "compact the Context before retrying "
+            f"(input_tokens={input_tokens}, context_window={effective_context_window})",
             retryable=False,
         )
     if requested is None:
-        # No output allowance to resolve — the window check above was the job.
+        # No output allowance to resolve — the capacity checks above were the job.
         return None
-    available_output = remaining - reserve
-    if available_output <= 0:
-        available_output = remaining
+    available_output = max(remaining - request_input.margin, (remaining + 1) // 2)
     return min(requested, max(available_output, minimum_output_tokens))
-
-
-def request_input_limit_for_output(context_window: int, output_tokens: int) -> int | None:
-    """Largest input estimate leaving the output reservation and uncertainty margin.
-
-    The same reserve bounds output clamping above. Compaction uses this limit
-    before the reserve would have to be consumed to preserve a thinking budget.
-    """
-    if output_tokens <= 0:
-        return None
-    return max(
-        0,
-        min(
-            math.floor(
-                (context_window - output_tokens) / (1 + REQUEST_INPUT_ESTIMATE_RESERVE_RATIO)
-            ),
-            context_window
-            - output_tokens
-            - math.ceil(context_window * REQUEST_CONTEXT_WINDOW_RESERVE_RATIO),
-            context_window - output_tokens - REQUEST_MIN_RESERVE_TOKENS,
-        ),
-    )
 
 
 def _positive_int(value: Any) -> int | None:
@@ -437,6 +450,18 @@ def resolve_context_window(
         if provider_default is not None and provider_default > 0:
             return provider_default
     return GLOBAL_CONTEXT_WINDOW_FLOOR
+
+
+def context_capacity(context_window: int, input_limit: int | None) -> int:
+    """The input tokens one request may hold: the context window or a smaller input limit.
+
+    ``input_limit`` is the Provider-reported maximum input of one request
+    (``ProviderAdapter.input_token_limit``); ``None`` means none is reported.
+    """
+
+    if input_limit is None or input_limit <= 0:
+        return context_window
+    return min(context_window, input_limit)
 
 
 def model_is_local(model_metadata: Mapping[str, Any] | None) -> bool:

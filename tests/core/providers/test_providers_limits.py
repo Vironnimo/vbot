@@ -1,7 +1,9 @@
-"""Providers: context-window resolution and the per-request output limit."""
+"""Providers: context-window resolution, Context capacity and the per-request output limit."""
 
 from __future__ import annotations
 
+import itertools
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -9,8 +11,9 @@ import pytest
 from core.providers.providers import (
     GLOBAL_CONTEXT_WINDOW_FLOOR,
     LOCAL_CONTEXT_DEFAULT_CAP,
-    REQUEST_MIN_RESERVE_TOKENS,
     ProviderConfig,
+    RequestInput,
+    context_capacity,
     model_is_local,
     resolve_context_window,
     resolve_effective_context_window,
@@ -118,39 +121,66 @@ def test_resolve_effective_context_window(
 
 
 @pytest.mark.parametrize(
-    ("limits", "window", "input_tokens", "expected"),
+    ("limits", "window", "request_input", "expected"),
     [
-        pytest.param((500, 8_000, 4_096), 10_000, 1_000, 500, id="explicit-limit-fits"),
+        pytest.param(
+            (500, 8_000, 4_096), 10_000, RequestInput.estimate(1_000), 500, id="explicit-fits"
+        ),
         pytest.param(
             (None, 10_000, 4_096),
             10_000,
-            1_000,
-            10_000 - 1_000 - REQUEST_MIN_RESERVE_TOKENS,
-            id="model-limit-clamped-to-remaining-context",
+            RequestInput.estimate(1_000),
+            10_000 - 1_000 - 256,
+            id="model-limit-clamped-to-remaining-context-minus-margin",
         ),
-        # No ceiling means no wire max_tokens, but the window check still runs.
-        pytest.param((None, None, None), 10_000, 1_000, None, id="no-ceiling-fits"),
-        # Live evidence 2026-08-25: replayed reasoning blobs estimated ~1.06M
-        # against a 1M window while real prompt tokens were ~220k. Inside the
-        # estimation reserve the request goes out unclamped.
+        # No ceiling means no wire max_tokens, but the capacity checks still run.
         pytest.param(
-            (None, 8_192, None), 8_192, 8_192, 8_192, id="overflow-within-reserve-unclamped"
+            (None, None, None), 10_000, RequestInput.estimate(1_000), None, id="no-ceiling-fits"
         ),
-        # Live Luna hit estimated 218470 / 272000: the 25% reserve (54618) must
-        # not abort a request with 53530 tokens of real capacity left.
+        # A measured value is used as reported: no estimation margin.
+        pytest.param(
+            (None, 64_000, None),
+            200_000,
+            RequestInput.measured(150_000),
+            50_000,
+            id="measured-input-carries-no-margin",
+        ),
+        pytest.param(
+            (None, 64_000, None),
+            200_000,
+            RequestInput.measured(150_000, estimated_change=2_000),
+            50_000 - 500,
+            id="only-the-estimated-change-carries-the-margin",
+        ),
+        pytest.param(
+            (None, 64_000, None),
+            200_000,
+            RequestInput.measured(150_000, estimated_change=-2_000),
+            50_000 - 500,
+            id="a-shrinking-change-carries-the-margin-too",
+        ),
+        pytest.param(
+            (None, 128_000, None),
+            200_000,
+            RequestInput.estimate(100_000),
+            100_000 - 25_000,
+            id="an-estimated-input-carries-the-margin",
+        ),
+        # Live Luna hit estimated 218470 / 272000: the 25% margin (54618) must
+        # not abort a request with 53530 tokens of room; it takes half of it.
         pytest.param(
             (None, 272_000, 8_192),
             272_000,
-            218_470,
-            272_000 - 218_470,
-            id="reserve-larger-than-remaining",
+            RequestInput.estimate(218_470),
+            (272_000 - 218_470) // 2,
+            id="margin-takes-at-most-half-the-room",
         ),
     ],
 )
 def test_resolve_request_output_limit(
     limits: tuple[int | None, int | None, int | None],
     window: int,
-    input_tokens: int,
+    request_input: RequestInput,
     expected: int | None,
 ) -> None:
     explicit_limit, model_output_limit, provider_default = limits
@@ -160,22 +190,93 @@ def test_resolve_request_output_limit(
         model_output_limit=model_output_limit,
         provider_default=provider_default,
         effective_context_window=window,
-        estimated_input_tokens=input_tokens,
+        request_input=request_input,
     )
 
     assert resolved == expected
 
 
-def test_request_output_limit_fails_locally_beyond_the_reserve() -> None:
-    """Models without a ceiling still fail locally instead of overflowing remotely."""
+@pytest.mark.parametrize(
+    "request_input",
+    [RequestInput.estimate, RequestInput.measured],
+    ids=["estimated", "measured"],
+)
+def test_output_allowance_shrinks_steadily_until_the_window_is_full(
+    request_input: Callable[[int], RequestInput],
+) -> None:
+    """A growing input never earns a larger allowance, up to the last free token."""
 
-    with pytest.raises(ProviderError) as exc_info:
+    allowances = [
         resolve_request_output_limit(
             explicit_limit=None,
-            model_output_limit=None,
+            model_output_limit=64_000,
             provider_default=None,
+            effective_context_window=200_000,
+            request_input=request_input(tokens),
+        )
+        for tokens in range(120_000, 200_000)
+    ]
+
+    assert all(
+        later is not None and earlier is not None and later <= earlier
+        for earlier, later in itertools.pairwise(allowances)
+    )
+    assert allowances[-1] == 1
+
+
+@pytest.mark.parametrize(
+    ("limits", "request_input", "input_limit"),
+    [
+        # An estimate that fills the window is no longer sent unclamped.
+        pytest.param((None, 8_192, None), RequestInput.estimate(10_000), None, id="window-full"),
+        pytest.param((None, None, None), RequestInput.measured(20_000), None, id="no-ceiling"),
+        pytest.param(
+            (None, 8_192, None), RequestInput.measured(8_001), 8_000, id="above-input-limit"
+        ),
+    ],
+)
+def test_request_input_that_does_not_fit_fails_locally(
+    limits: tuple[int | None, int | None, int | None],
+    request_input: RequestInput,
+    input_limit: int | None,
+) -> None:
+    """Input beyond the window or a reported input limit fails before I/O, asking for Compaction."""
+
+    explicit_limit, model_output_limit, provider_default = limits
+    with pytest.raises(ProviderError, match="compact the Context") as exc_info:
+        resolve_request_output_limit(
+            explicit_limit=explicit_limit,
+            model_output_limit=model_output_limit,
+            provider_default=provider_default,
             effective_context_window=10_000,
-            estimated_input_tokens=20_000,
+            request_input=request_input,
+            input_limit=input_limit,
         )
 
     assert exc_info.value.retryable is False
+
+
+def test_input_at_the_input_limit_still_fits() -> None:
+    assert (
+        resolve_request_output_limit(
+            explicit_limit=None,
+            model_output_limit=32_000,
+            provider_default=None,
+            effective_context_window=200_000,
+            request_input=RequestInput.measured(128_000),
+            input_limit=128_000,
+        )
+        == 32_000
+    )
+
+
+@pytest.mark.parametrize(
+    ("window", "input_limit", "expected"),
+    [
+        pytest.param(200_000, 128_000, 128_000, id="input-limit-below-window"),
+        pytest.param(200_000, None, 200_000, id="no-input-limit"),
+        pytest.param(100_000, 128_000, 100_000, id="input-limit-above-window"),
+    ],
+)
+def test_context_capacity(window: int, input_limit: int | None, expected: int) -> None:
+    assert context_capacity(window, input_limit) == expected

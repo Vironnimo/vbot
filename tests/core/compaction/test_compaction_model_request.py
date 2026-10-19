@@ -23,6 +23,7 @@ from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import NetworkError
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.providers import RequestInput
 from core.sessions import SessionAddress
 from core.utils.errors import ProviderError
 from tests.core.chat.usage_recorder_support import RecordingUsageRecorder
@@ -220,7 +221,7 @@ class _BudgetAdapter(StubAdapter):
 
     def __init__(self) -> None:
         super().__init__("Summary")
-        self.budgets: list[int] = []
+        self.budgets: list[RequestInput] = []
 
     def estimate_request_input_tokens(
         self, messages: list[dict[str, Any]], *, model_id: str, tools: Any = None
@@ -265,19 +266,20 @@ async def test_compaction_request_carries_its_corrected_input_budget(
         settings=CompactionSettings(strategy=strategy, tail_tokens=1),
         request_messages=provider_request(messages),
         estimate_factor=2.0,
-        active_context_tokens=context_tokens,
+        active_context=None if context_tokens is None else RequestInput.measured(context_tokens),
     )
 
     [target] = [adapter for adapter in (summary, active) if adapter.requests]
     sent = len(target.requests[0]["messages"])
     if strategy == "summary_tail":
         # The Summary Model's own correction applies to its whole request.
-        assert target.budgets == [round((10 * sent + 5) * 1.5)]
+        assert target.budgets == [RequestInput.estimate(round((10 * sent + 5) * 1.5))]
     elif context_tokens is None:
-        assert target.budgets == [(10 * sent + 5) * 2]
+        assert target.budgets == [RequestInput.estimate((10 * sent + 5) * 2)]
     else:
-        # Chat's Context of the active request plus the appended reminder.
-        assert target.budgets == [context_tokens + 10 * 2]
+        # Chat's measured Context of the active request plus the appended
+        # reminder, whose corrected estimate alone carries the margin.
+        assert target.budgets == [RequestInput(context_tokens + 10 * 2, True, 10 * 2)]
 
 
 @pytest.mark.asyncio

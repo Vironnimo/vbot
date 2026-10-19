@@ -43,6 +43,7 @@ from core.chat.streaming import (
 from core.chat.wire_shaping import limit_request_images
 from core.providers.adapter import request_input_budget
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.providers import RequestInput
 from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT
 from scripts.perf_bench_suite.fixtures import (
     AGENT_MODEL,
@@ -159,7 +160,7 @@ def _scoped_wire_setup(shape: HistoryShape) -> Callable[[BenchContext], Prepared
         standalone_payload = inputs.build_payload()
 
         def build_with_budget() -> dict[str, Any]:
-            with request_input_budget(MODEL_ID, tokens):
+            with request_input_budget(MODEL_ID, RequestInput.estimate(tokens)):
                 return inputs.build_payload()
 
         if build_with_budget() != standalone_payload:

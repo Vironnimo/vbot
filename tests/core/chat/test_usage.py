@@ -16,11 +16,13 @@ from core.chat.usage import (
     RequestContextUsage,
     aggregate_session_usage,
     latest_session_context_usage,
+    projected_request_input,
 )
 from core.providers.adapter import (
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     estimate_wire_request_input_tokens,
 )
+from core.providers.providers import RequestInput
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.providers.github_copilot_test_support import copilot_metadata
 from tests.core.providers.github_copilot_test_support import make_adapter as make_copilot_adapter
@@ -236,8 +238,17 @@ def test_request_measurement_cancels_existing_estimation_bias_and_counts_changes
     }
     # Output Usage measures generation, not how much of it is replayed.
     assert projection["tokens"] < 151_000
-    assert accounting.project(base, **{**args, "scope": "new-epoch"})["tokens"] > 120_000
-    assert "provider_input_tokens" not in accounting.project(base, **{**args, "scope": "new-epoch"})
+    unanchored = accounting.project(base, **{**args, "scope": "new-epoch"})
+    assert unanchored["tokens"] > 120_000
+    assert "provider_input_tokens" not in unanchored
+    # The send budget keeps the measured part apart: only estimates carry a margin.
+    assert projected_request_input(accounting.project(base, **args)) == RequestInput.measured(
+        150_000
+    )
+    assert projected_request_input(projection) == RequestInput.measured(
+        150_000 + delta, estimated_change=delta
+    )
+    assert projected_request_input(unanchored) == RequestInput.estimate(unanchored["tokens"])
 
 
 def test_estimate_factor_scales_only_the_estimated_part_of_a_projection():

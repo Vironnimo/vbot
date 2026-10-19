@@ -286,33 +286,41 @@ async def test_missing_output_is_estimated_beside_reported_reasoning(tmp_path: P
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("measured_input", "report", "estimation_bias", "install", "fits"),
+    ("measured_input", "report", "estimation_bias", "install", "input_limit", "fits"),
     [
-        (950, "x" * 400, 0, False, False),
+        (950, "x" * 400, 0, False, None, False),
         # An enabled Tool leaves the pinned Tool list, and so the measurement, valid.
-        (950, "x" * 400, 0, True, False),
-        (300, "", 0, False, True),
-        (300, "", 2_000, False, True),
+        (950, "x" * 400, 0, True, None, False),
+        (300, "", 0, False, None, True),
+        (300, "", 2_000, False, None, True),
+        # A Provider-reported input limit below the window is the Context capacity.
+        (300, "", 0, False, 250, False),
     ],
     ids=[
         "measured-fills-window",
         "measured-fills-window-after-tool-install",
         "measured-below-window",
         "biased-estimate-below-window",
+        "measured-fills-the-input-limit",
     ],
 )
-async def test_measured_context_decides_whether_the_next_request_fits_the_window(
+async def test_measured_context_decides_whether_the_next_request_fits_the_capacity(
     tmp_path: Path,
     measured_input: int,
     report: str,
     estimation_bias: int,
     install: bool,
+    input_limit: int | None,
     fits: bool,
 ) -> None:
     class BiasedAdapter(StubAdapter):
         @override
         def estimate_request_input_tokens(self, messages, *, model_id, tools=None):
             return estimation_bias + estimate_request_input_tokens(messages, tools)[0]
+
+        @override
+        def input_token_limit(self, model_id: str) -> int | None:
+            return input_limit
 
     adapter = _weather_adapter(
         {"input_tokens": measured_input, "output_tokens": 20}, adapter_type=BiasedAdapter

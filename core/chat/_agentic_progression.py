@@ -52,6 +52,7 @@ from core.chat.tool_dispatch import (
 from core.chat.usage import (
     add_session_turn_usage,
     aggregate_session_usage,
+    projected_request_input,
 )
 from core.chat.wire_shaping import (
     _message_to_request_dict,
@@ -449,22 +450,24 @@ class AgenticProgression:
 
             while True:
                 run.raise_if_cancelled()
-                context_window = await self._requests.targets.resolve_context_window_async(
+                context_capacity = await self._requests.targets.resolve_context_capacity_async(
                     agent, target
                 )
                 request_context_usage = context.context_usage.project_prepared(
                     request_estimate,
-                    context_window=context_window,
+                    context_window=context_capacity,
                 )
                 self._requests.targets.raise_if_measured_context_exhausted(
                     context.session_snapshot.active_messages,
                     run,
-                    context_window,
+                    context_capacity,
                     context_usage=request_context_usage,
                 )
                 try:
                     with (
-                        request_input_budget(target.model_id, int(request_context_usage["tokens"])),
+                        request_input_budget(
+                            target.model_id, projected_request_input(request_context_usage)
+                        ),
                         measure(
                             "provider.response",
                             track=track,
@@ -935,7 +938,7 @@ class AgenticProgression:
             messages[:] = limited_messages
             tool_context_usage = context.context_usage.project_prepared(
                 tool_context_estimate,
-                context_window=await self._requests.targets.resolve_context_window_async(
+                context_window=await self._requests.targets.resolve_context_capacity_async(
                     context.agent, target
                 ),
             )

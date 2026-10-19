@@ -56,9 +56,9 @@ class WireEstimateAdapter(StubAdapter):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("settings", "session_policy", "service_kwargs", "evaluated", "context_checks"),
+    ("settings", "session_policy", "service_kwargs", "reservation", "evaluated", "context_checks"),
     [
-        ({"auto": False}, None, {"should_auto": True}, False, 0),
+        ({"auto": False}, None, {"should_auto": True}, 0, False, 0),
         (
             {},
             {
@@ -67,23 +67,36 @@ class WireEstimateAdapter(StubAdapter):
                 "strategy": {"type": "summary_tail", "tail_tokens": 15_000},
             },
             {"should_auto": True},
+            0,
             False,
             0,
         ),
-        ({}, None, {"should_auto": False}, True, 0),
-        ({}, None, {"should_auto": True, "has_compactable_context": False}, True, 1),
+        ({}, None, {"should_auto": False}, 0, True, 0),
+        # Measured input that leaves exactly the thinking budget's room needs no
+        # Compaction: the estimation margin applies to estimated input only.
+        ({}, None, {"should_auto": False}, 10, True, 0),
+        ({}, None, {"should_auto": True, "has_compactable_context": False}, 0, True, 1),
     ],
-    ids=["global-policy-disabled", "session-policy-disabled", "below-trigger", "no-new-context"],
+    ids=[
+        "global-policy-disabled",
+        "session-policy-disabled",
+        "below-trigger",
+        "measured-input-leaves-the-thinking-room",
+        "no-new-context",
+    ],
 )
 async def test_automatic_compaction_needs_an_enabled_policy_a_trigger_and_new_context(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     settings: JsonObject,
     session_policy: JsonObject | None,
     service_kwargs: JsonObject,
+    reservation: int,
     evaluated: bool,
     context_checks: int,
 ) -> None:
     runtime = compaction_runtime(tmp_path, settings=settings)
+    monkeypatch.setattr(runtime.adapter, "minimum_output_tokens", lambda *_args: reservation)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
     if session_policy is not None:

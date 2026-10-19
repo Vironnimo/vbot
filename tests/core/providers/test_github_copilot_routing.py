@@ -491,7 +491,7 @@ async def test_image_within_catalog_limits_is_sent_with_the_vision_header() -> N
         pytest.param(
             copilot_metadata("OpenAI", "gpt-5.4", [RESPONSES_ENDPOINT], max_prompt_tokens=1),
             "Hello",
-            "max_prompt_tokens=1",
+            "input_limit=1",
             id="prompt-tokens",
         ),
         pytest.param(

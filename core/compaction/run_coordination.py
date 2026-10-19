@@ -17,6 +17,7 @@ from core.chat.usage import (
     checkpoint_context_usage,
     latest_context_window,
     latest_session_context_usage,
+    projected_request_input,
 )
 from core.compaction.compaction import (
     COMPACTION_POLICY_META_KEY,
@@ -29,7 +30,7 @@ from core.compaction.compaction import (
     effective_compaction_policy,
 )
 from core.performance import record_span, session_track
-from core.providers.providers import request_input_limit_for_output
+from core.providers.providers import context_capacity
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -308,6 +309,7 @@ class CompactionRunCoordinator:
                     active_thinking_effort=agent.thinking_effort,
                     active_effort=request.request_state.effort,
                     estimate_factor=accounting.factor(request.active_target),
+                    active_context=projected_request_input(context_usage),
                     summary_model_reference=f"{request.summary_provider_id}/{request.summary_model_id}",
                     active_model_reference=f"{request.active_provider_id}/{request.active_model_id}",
                 )
@@ -453,6 +455,8 @@ class CompactionRunCoordinator:
             if forced:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "context_window_unavailable"})
             return current_state
+        input_limit = target.adapter.input_token_limit(target.model_id)
+        capacity = context_capacity(context_window, input_limit)
 
         current_request_messages = continuation_request_messages or messages
         accounting = getattr(context, "context_usage", None) or RequestContextUsage()
@@ -460,7 +464,7 @@ class CompactionRunCoordinator:
             # Chat supplies this only with the exact completed continuation.
             # Calibration and the measurement anchor remain live at this boundary.
             effective_context_usage = accounting.project_prepared(
-                request_estimate, context_window=context_window
+                request_estimate, context_window=capacity
             )
         else:
             effective_context_usage = await self._host.run_transform(
@@ -469,26 +473,34 @@ class CompactionRunCoordinator:
                 target=target,
                 tools=tools,
                 scope=context.prompt_cache_affinity_id,
-                context_window=context_window,
+                context_window=capacity,
             )
         input_tokens = int(effective_context_usage["tokens"])
         run.terminal_payload_extras["context_usage"] = effective_context_usage
 
         should_compact = self._host.compaction_service.should_auto_compact(
             input_tokens,
-            context_window,
+            capacity,
             settings.threshold,
             settings=settings,
         )
+        # Compact before the request could exceed a hard limit, including the
+        # estimation margin of its estimated part: the Provider's input limit,
+        # or the room a stable thinking budget needs in the window.
+        request_input = projected_request_input(effective_context_usage)
         effort = current_state.effort
         reservation = target.adapter.minimum_output_tokens(
             target.model_id, effort.current if effort is not None else agent.thinking_effort
         )
-        input_limit = request_input_limit_for_output(context_window, reservation)
-        if input_limit is not None and input_tokens > input_limit:
+        limit_reason: str | None = None
+        if input_limit is not None and request_input.upper_bound > input_limit:
+            limit_reason = "input_limit"
+        elif reservation > 0 and request_input.upper_bound > context_window - reservation:
+            limit_reason = "output_reservation"
+        if limit_reason is not None:
             should_compact = True
             if not forced:
-                reason = "output_reservation"
+                reason = limit_reason
         if not should_compact and not forced:
             return current_state
         # Only this Run appends through its snapshot, but out-of-band writers
@@ -527,13 +539,15 @@ class CompactionRunCoordinator:
         )
         _LOGGER.debug(
             "Compaction triggered (run=%s agent=%s session=%s trigger=%s reason=%s "
-            "input_tokens=%d context_window=%d ratio_threshold=%s token_limit=%s)",
+            "input_tokens=%d context_capacity=%d context_window=%d ratio_threshold=%s "
+            "token_limit=%s)",
             run.id,
             run.agent_id,
             run.session_id,
             trigger,
             reason,
             input_tokens,
+            capacity,
             context_window,
             settings.threshold,
             token_limit,
@@ -591,6 +605,7 @@ class CompactionRunCoordinator:
                     active_effort=current_state.effort,
                     minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
                     estimate_factor=accounting.factor(target),
+                    active_context=request_input,
                 )
             except CompactionInsufficientReclaimError as exc:
                 run.emit(

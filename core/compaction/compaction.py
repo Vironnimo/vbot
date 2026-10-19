@@ -52,6 +52,7 @@ from core.compaction.errors import (
 )
 from core.models.pricing import TokenPricing, price_usage
 from core.providers.adapter import request_input_budget
+from core.providers.providers import RequestInput
 from core.sessions import (
     SessionAddress,
     current_skill_activation_contents,
@@ -451,7 +452,7 @@ class CompactionService:
         active_effort: EffortState | None = None,
         minimum_reclaim_tokens: int = 0,
         estimate_factor: float = 1.0,
-        active_context_tokens: int | None = None,
+        active_context: RequestInput | None = None,
         summary_model_reference: str | None = None,
         active_model_reference: str | None = None,
         run_id: str | None = None,
@@ -461,7 +462,7 @@ class CompactionService:
         """Execute at most one Model request and persist its assembled projection.
 
         *estimate_factor* corrects local estimates for the active Model and
-        *active_context_tokens* is Chat's Context of *request_messages* with
+        *active_context* is Chat's Context of *request_messages* with
         *active_tools* (its measurement plus the corrected change), when known.
         The Model request's input budget builds on them like a Chat request's.
         """
@@ -540,7 +541,7 @@ class CompactionService:
                     ),
                     planned=plan.model_messages,
                     active_request=request_messages or (),
-                    active_context_tokens=active_context_tokens if same_target else None,
+                    active_context=active_context if same_target else None,
                 )
                 try:
                     with request_input_budget(model_id, budget):

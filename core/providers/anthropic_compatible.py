@@ -532,7 +532,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             request_kwargs.pop("max_tokens", None)
             explicit = None
         tool_definitions = tools if isinstance(tools, list) else None
-        estimated_input = resolve_request_input_budget(
+        request_input = resolve_request_input_budget(
             model_id,
             lambda: self.estimate_request_input_tokens(
                 messages, model_id=model_id, tools=tool_definitions
@@ -547,7 +547,8 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             model_output_limit=self._model_max_output_tokens(model_id),
             provider_default=default,
             effective_context_window=self._request_context_window(model_id),
-            estimated_input_tokens=estimated_input,
+            request_input=request_input,
+            input_limit=self.input_token_limit(model_id),
             minimum_output_tokens=self.minimum_output_tokens(
                 model_id, request_kwargs.get("thinking_effort"), explicit_limit=explicit
             ),
