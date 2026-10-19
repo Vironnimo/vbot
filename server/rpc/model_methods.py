@@ -153,7 +153,7 @@ def _model_access_snapshot(
     runtime: Any, provider_ids: set[str]
 ) -> tuple[Any, dict[str, list[Any]]]:
     """Read credential/settings projections together, without loop-owned wire state."""
-    windows = runtime.storage.load_local_models_settings()["context_windows"]
+    windows = runtime.local_context_windows()
     usable: dict[str, list[Any]] = {}
     for provider_id in provider_ids:
         provider = _provider_config_or_none(runtime, provider_id)

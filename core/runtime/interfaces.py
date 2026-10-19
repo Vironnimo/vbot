@@ -250,5 +250,5 @@ class RuntimeServices(Protocol):
         ...
 
     def local_context_windows(self) -> Mapping[str, Any]:
-        """Live user-configured local-model context-window map, or empty."""
+        """Live local-model context-window map (Settings, overridden by served windows)."""
         ...

@@ -5,12 +5,14 @@ A Model that vBot has not verified can reject an optional request parameter
 together with ``top_p``), a reasoning effort value (``minimal``
 where only ``low`` exists) or the explicit off switch of its reasoning dialect
 (``thinking: {type: disabled}`` on an always-thinking Model) or a mid-conversation
-effort update (``core.providers.effort_updates``). Instead of failing
+effort update (``core.providers.effort_updates``). A rejection can also state
+the Model's output maximum or Context window. Instead of failing
 every later request the same way, the codec records the rejection as a learned
 wire fact, rebuilds the request from the updated wire profile and retries.
 Learned facts feed the profile below every explicit Model entry, so later
 requests start from the corrected shape and a configured Model entry is never
-silently overridden.
+silently overridden; a stated output maximum bounds every layer, and a stated
+Context window replaces the catalog window the Adapter budgets against.
 
 Every request path learns the same way. A request
 (:func:`execute_learning_from_rejections`) is established when its reply
@@ -52,8 +54,8 @@ __all__ = ["execute_learning_from_rejections", "stream_learning_from_rejections"
 _LOGGER = get_logger("providers.wire_learning")
 
 _MAX_LESSONS = 2
-"""At most two lessons (rejected parameter, parameter combination, effort or off
-switch) per request."""
+"""At most two lessons (rejected parameter, parameter combination, effort, off
+switch, effort update or stated limit) per request."""
 
 _SAMPLING_PARAMETERS: tuple[str, ...] = ("temperature", "top_p", "top_k")
 """Sampling parameters a backend may reject for one Model and accept for another."""
@@ -122,16 +124,58 @@ _EFFORT_UPDATE_REJECTION = re.compile(
 """A rejection of an effort update names its carrier: a per-message Messages
 ``output_config`` or a Responses ``configuration_update`` item."""
 
+_STATED_OUTPUT_MAXIMUM: tuple[re.Pattern[str], ...] = (
+    # OpenAI and backends that copy it: "max_tokens is too large: 384000. This
+    # model supports at most 131072 completion tokens."
+    re.compile(r"supports at most (\d+) completion tokens"),
+    # Anthropic Messages: "max_tokens: 128001 > 64000, which is the maximum
+    # allowed number of output tokens for claude-opus-4-5-20251101".
+    re.compile(r"max_tokens: \d+ > (\d+), which is the maximum allowed number of output tokens"),
+    # DeepSeek: "Invalid max_tokens value, the valid range of max_tokens is [1, 393216]".
+    re.compile(r"the valid range of max_tokens is \[1, (\d+)\]"),
+)
+"""Rejection wordings that state the Model's output maximum (lowercased)."""
+
+_STATED_CONTEXT_WINDOW: tuple[re.Pattern[str], ...] = (
+    # OpenAI and vLLM ("This model's ..."), OpenRouter ("This endpoint's ...").
+    re.compile(r"this (?:model|endpoint)'s maximum context length is (\d+) tokens"),
+    # SGLang: "Requested token count exceeds the model's maximum context length of 32768 tokens."
+    re.compile(r"exceeds the model's maximum context length of (\d+) tokens"),
+    # Anthropic Messages: "prompt is too long: 208310 tokens > 200000 maximum" and
+    # "input length and `max_tokens` exceed context limit: 197879 + 21333 > 200000".
+    re.compile(r"prompt is too long: \d+ tokens > (\d+) maximum"),
+    re.compile(r"exceed context limit: \d+ \+ \d+ > (\d+)"),
+)
+"""Rejection wordings that state the Model's Context window (lowercased)."""
+
+_LLAMA_CPP_CONTEXT_ERROR = "exceed_context_size_error"
+_LLAMA_CPP_CONTEXT_WINDOW = re.compile(r'"n_ctx"\s*:\s*(\d+)')
+"""llama.cpp's server rejects an oversized request with this error type and
+states the window of the serving slot as ``n_ctx`` in the error body."""
+
+_OUTPUT_LIMIT_FIELDS: tuple[tuple[str, ...], ...] = (
+    ("max_tokens",),
+    ("max_completion_tokens",),
+    ("max_output_tokens",),
+    ("generationConfig", "maxOutputTokens"),
+)
+"""Where a request carries its output allowance, on every protocol."""
+
 
 @dataclass(frozen=True)
 class _Lesson:
     """One rejection attributed to what the request carried."""
 
-    kind: Literal["parameter", "exclusive", "effort", "effort_updates"]
+    kind: Literal[
+        "parameter", "exclusive", "effort", "effort_updates", "max_output", "context_window"
+    ]
     rejected: tuple[str, ...]
     """The sampling parameter, the combined parameters (the one to keep first),
-    the effort value (``none`` for the off switch), or nothing (effort updates)."""
+    the effort value (``none`` for the off switch), or nothing (effort updates
+    and stated limits)."""
     description: str
+    limit: int = 0
+    """The stated output maximum or Context window."""
 
 
 async def execute_learning_from_rejections[T](
@@ -161,12 +205,19 @@ async def execute_learning_from_rejections[T](
       with its value next to a rejection marker, is recorded as a rejected
       ``none`` effort, which turns the off render into omission;
     - an effort update the payload carries, named by its carrier, turns effort
-      updates off for the Model, so the request sends the effort now in effect.
+      updates off for the Model, so the request sends the effort now in effect;
+    - an output maximum the detail states in a known wording, below the output
+      allowance the payload carries, becomes the Model's output cap;
+    - a Context window the detail states in a known wording becomes the window
+      the Adapter clamps the output allowance against.
 
     Parameters rejected or combined during this request stay removed even when
-    an explicit Model entry keeps sending them. Every other error (auth, retryable, a
-    rejection of something the payload does not carry, a detail without a
-    rejection marker), and a rebuild that changes nothing, propagates unchanged.
+    an explicit Model entry keeps sending them. A stated limit is learned from a
+    retryable error too (a router such as OpenRouter reports it as one), because
+    its number holds whatever the classification. Every other error (auth,
+    retryable, a rejection of something the payload does not carry, a detail
+    without a rejection marker), and a rebuild that changes nothing, propagates
+    unchanged.
     """
 
     request = await prepare_request(plan)
@@ -176,13 +227,17 @@ async def execute_learning_from_rejections[T](
         try:
             return await execute_attempt(request)
         except ProviderError as error:
-            if error.retryable or isinstance(error, ProviderAuthError):
+            if isinstance(error, ProviderAuthError):
                 raise
             profile = wire.profile(model_id)
-            lesson = _learn(str(error), request.payload, profile)
+            lesson = _learn(str(error), request.payload, profile, limits_only=error.retryable)
             if lesson is None:
                 raise
-            if lesson.kind == "parameter":
+            if lesson.kind == "max_output":
+                wire.observe_max_output_tokens(model_id, lesson.limit)
+            elif lesson.kind == "context_window":
+                wire.observe_context_window(model_id, lesson.limit)
+            elif lesson.kind == "parameter":
                 wire.observe_rejected_parameter(model_id, lesson.rejected[0])
                 rejected_parameters.add(lesson.rejected[0])
             elif lesson.kind == "exclusive":
@@ -307,8 +362,13 @@ class _LessonRevision:
         return rebuilt != self.sent
 
 
-def _learn(detail: str, payload: Mapping[str, Any], profile: WireProfile) -> _Lesson | None:
+def _learn(
+    detail: str, payload: Mapping[str, Any], profile: WireProfile, *, limits_only: bool
+) -> _Lesson | None:
     lowered = detail.lower()
+    limit = _learn_limit(lowered, payload)
+    if limit is not None or limits_only:
+        return limit
     named = tuple(
         parameter
         for parameter in _SAMPLING_PARAMETERS
@@ -335,6 +395,49 @@ def _learn(detail: str, payload: Mapping[str, Any], profile: WireProfile) -> _Le
     if _rejects_off_switch(lowered, payload, carriers):
         switch = ".".join(carriers.off_switch)
         return _Lesson("effort", ("none",), f"reasoning off switch {switch}={carriers.off_value!r}")
+    return None
+
+
+def _learn_limit(lowered: str, payload: Mapping[str, Any]) -> _Lesson | None:
+    """A limit the detail states in a known wording; never a number guessed from prose.
+
+    A stated output maximum teaches only when the payload asked for more, so a
+    rejection of something else that happens to quote a maximum is not learned.
+    """
+
+    maximum = _stated(lowered, _STATED_OUTPUT_MAXIMUM)
+    if maximum is not None:
+        sent = [
+            value
+            for path in _OUTPUT_LIMIT_FIELDS
+            if isinstance(value := _value_at(payload, path), int) and not isinstance(value, bool)
+        ]
+        if sent and max(sent) > maximum:
+            return _Lesson(
+                "max_output",
+                (),
+                f"an output allowance above its stated maximum of {maximum} tokens",
+                maximum,
+            )
+        return None
+    window = _stated(lowered, _STATED_CONTEXT_WINDOW)
+    if window is None and _LLAMA_CPP_CONTEXT_ERROR in lowered:
+        window = _stated(lowered, (_LLAMA_CPP_CONTEXT_WINDOW,))
+    if window is None:
+        return None
+    return _Lesson(
+        "context_window",
+        (),
+        f"a request beyond its stated Context window of {window} tokens",
+        window,
+    )
+
+
+def _stated(lowered: str, wordings: tuple[re.Pattern[str], ...]) -> int | None:
+    for wording in wordings:
+        match = wording.search(lowered)
+        if match is not None and (value := int(match.group(1))) > 0:
+            return value
     return None
 
 

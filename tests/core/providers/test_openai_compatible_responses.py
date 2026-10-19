@@ -69,6 +69,12 @@ def test_catalog_entry_maps_standard_fields_to_model() -> None:
     assert model.capabilities.output_modalities == ("text", "image")
     assert model.capabilities.supported_parameters == ("reasoning_effort", "response_format")
     assert "image_generation" in model.capabilities.task_types
+    # vLLM and SGLang report the window they serve as ``max_model_len``.
+    served = OpenAICompatibleAdapter.normalize_catalog_entry(
+        {"id": "Qwen/Qwen3-8B", "object": "model", "owned_by": "vllm", "max_model_len": 32768},
+        {},
+    )
+    assert served.context_window == 32768
 
 
 def test_catalog_entry_without_optional_fields_keeps_limits_and_reasoning_unknown() -> None:

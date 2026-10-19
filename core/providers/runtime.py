@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
@@ -88,6 +89,11 @@ class ProviderRuntime:
         self._catalog_changed_callbacks: list[Callable[[], None]] = []
         self.refresh_at: float | None = None
         self._connection_reachability: dict[str, bool] = {}
+        # Windows LM Studio reports for its loaded instances, keyed like the
+        # Settings map ("<provider>/<model>"); Adapters report them per request
+        # on the loop while worker threads read them.
+        self._loaded_context_windows: dict[str, int] = {}
+        self._loaded_context_lock = threading.Lock()
         self._wire_observations = self._load_wire_observations(storage)
         self._wire_profiles = WireProfiles(
             files=wire_profile_files(custom_providers, resources_path),
@@ -197,6 +203,8 @@ class ProviderRuntime:
         extra_kwargs: dict[str, Any] = {}
         if adapter_class in (OllamaAdapter, LMStudioAdapter):
             extra_kwargs["local_context_resolver"] = self._local_context_resolver(provider_id)
+        if adapter_class is LMStudioAdapter:
+            extra_kwargs["loaded_context_reporter"] = self._loaded_context_reporter(provider_id)
         if adapter_class is OpenRouterAdapter:
             extra_kwargs["routing"] = self._storage.load_openrouter_routing_settings()
 
@@ -429,12 +437,21 @@ class ProviderRuntime:
         return self._connection_reachability.get(connection_id)
 
     def local_context_windows(self) -> Mapping[str, Any]:
+        """The local Models' windows: the user's Settings, overridden by served windows.
+
+        A window LM Studio reports for a loaded instance replaces the Settings
+        value for that Model, because it is the window the server actually
+        serves; it lasts until the Adapter finds the Model unloaded.
+        """
         try:
-            windows = self._storage.load_local_models_settings()["context_windows"]
+            configured = self._storage.load_local_models_settings()["context_windows"]
         except StorageError as error:
             self._logger.warning("Failed to load local-model context windows: %s", error)
-            return {}
-        return cast(Mapping[str, Any], windows)
+            configured = {}
+        with self._loaded_context_lock:
+            if not self._loaded_context_windows:
+                return cast(Mapping[str, Any], configured)
+            return {**configured, **self._loaded_context_windows}
 
     def has_provider_credentials(self, provider_id: str) -> bool:
         return self._credentials.has_credentials(provider_id)
@@ -525,6 +542,22 @@ class ProviderRuntime:
             )
 
         return resolve
+
+    def _loaded_context_reporter(self, provider_id: str) -> Callable[[str, int | None], None]:
+        def report(model_id: str, window: int | None) -> None:
+            model_key = f"{provider_id}/{model_id}"
+            with self._loaded_context_lock:
+                previous = self._loaded_context_windows.get(model_key)
+                if window is None:
+                    self._loaded_context_windows.pop(model_key, None)
+                else:
+                    self._loaded_context_windows[model_key] = window
+            if previous != window:
+                self._logger.debug(
+                    "Loaded context window for %s: %s (was %s)", model_key, window, previous
+                )
+
+        return report
 
     def _token_getter(
         self,

@@ -472,6 +472,24 @@ class ProviderAdapter(ABC):
             return context_window
         return None
 
+    def _request_context_window(self, model_id: str) -> int:
+        """The Context window a request for ``model_id`` must fit on this Adapter's wire.
+
+        Output clamping and the local overflow check budget against it: the
+        window a Provider rejection stated for this Model on this Connection
+        (a learned wire fact), else the catalog window through the read-side
+        chain (``resolve_context_window``). An Adapter whose server reports the
+        window it actually serves (a loaded local instance) overrides this.
+        """
+        from core.providers.providers import resolve_context_window
+
+        stated = self.wire.learned_context_window(model_id)
+        if stated is not None:
+            return stated
+        return resolve_context_window(
+            self._model_context_window(model_id), getattr(self, "_config", None)
+        )
+
     def minimum_output_tokens(
         self, model_id: str, thinking_effort: str | None, *, explicit_limit: Any = None
     ) -> int:

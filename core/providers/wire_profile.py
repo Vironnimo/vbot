@@ -24,6 +24,10 @@ Profiles are resolved per ``(provider, connection, model id)`` from layers:
 9. The Model entry's ``set``.
 10. The Model entry's ``connections[<connection>]``.
 
+An output maximum a Provider stated in a rejection then bounds
+``request.output_limit_cap`` of every layer: a cap only lowers the output
+allowance, so the stricter of a configured cap and the stated maximum holds.
+
 The protocol itself is decided first, from the Model entry (its Connection
 block, then its ``set``), the last matching rule, the catalog protocol hint,
 the last matching family default, the Connection, the file defaults and the
