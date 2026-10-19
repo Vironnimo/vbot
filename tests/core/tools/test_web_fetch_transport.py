@@ -69,6 +69,9 @@ async def test_addresses_that_are_not_web_urls_are_refused_without_fetching(
     [
         ("http://127.0.0.1/private", "private or local network address"),
         ("http://10.0.0.1/internal", "private or local network address"),
+        ("http://100.64.0.1/internal", "private or local network address"),
+        ("http://100.127.255.254/internal", "private or local network address"),
+        ("http://[::ffff:100.64.0.1]/internal", "private or local network address"),
         ("https://localhost/admin", "private or local network address"),
         ("http://2130706433/private", "private or local network address"),
         ("http://0x7f000001/private", "private or local network address"),
@@ -95,11 +98,12 @@ async def test_private_and_credential_addresses_are_blocked_without_fetching(
     ("location", "code"),
     [
         ("http://127.0.0.1/admin", "blocked_url"),
+        ("http://100.64.0.1/admin", "blocked_url"),
         # A bot check redirects to a host that does not resolve (Swarm run 2026-10-13);
         # the Agent did not write that address, so it is not told to check it.
         ("https://validate.bot-check.invalid/?ssc=1", "redirect_unreachable"),
     ],
-    ids=["private-address", "unresolvable-host"],
+    ids=["private-address", "shared-address", "unresolvable-host"],
 )
 async def test_a_redirect_that_cannot_be_followed_says_where_it_led(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, location: str, code: str
