@@ -18,6 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import psutil  # type: ignore[import-untyped]
 import pytest
 
 from core.storage.temp_files import TemporaryFileManager
@@ -107,7 +108,10 @@ async def test_shell_exit_and_detached_descendant_lifetime_are_independent(
         descendant = int(await asyncio.wait_for(shell.read(), 5))
         assert await asyncio.wait_for(shell.wait(), 5) == 7
         facts = await asyncio.to_thread(shell.tree.facts)
-        assert descendant in {process.pid for process in facts.running}
+        # Orphan adoption can race enumeration: the live guardian then keeps
+        # the tree active until the descendant becomes visible to the tracker.
+        assert facts.running
+        assert psutil.Process(descendant).status() != psutil.STATUS_ZOMBIE
         await asyncio.to_thread(shell.tree.terminate)
         assert not (await asyncio.to_thread(shell.tree.facts)).running
         assert not Path(f"/proc/{descendant}").exists()
