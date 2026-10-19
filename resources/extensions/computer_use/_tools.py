@@ -51,10 +51,8 @@ COMPUTER_DESCRIPTION = (
     "the latest screenshot, counted from its top-left corner: use the position where you "
     "see the target, and the Tool maps it to the screen. To click in an earlier screenshot "
     "or in a zoom image, pass its screenshot_id. Input actions return a new screenshot "
-    "about half a second later. Zoom into a region to read small text. For exact work in one "
-    "area, such as drawing or clicking small controls, take a screenshot with region: later "
-    "screenshots show only that area, in full detail. If you have computer_batch, use it "
-    "for predictable steps. "
+    "about half a second later. Zoom into a region to read small text or to place a click "
+    "exactly on a small target. If you have computer_batch, use it for predictable steps. "
     "If you have computer_apps, use it to bring apps to the front and to release the "
     "computer when you are done. If the user requires approval per app, apps not approved "
     "yet appear as gray boxes and input into them is refused. This is the user's real "
@@ -176,11 +174,9 @@ _ACTION_PROPERTIES: dict[str, Any] = {
         "minItems": 4,
         "maxItems": 4,
         "description": (
-            "[x0, y0, x1, y1] in the selected image; x1 and y1 are excluded. zoom: returns "
-            "the area enlarged, with its own screenshot_id; to click in it, pass that "
-            "screenshot_id with positions in the zoom image. screenshot: from now on, every "
-            "screenshot, also after input, shows only this area in full detail, and "
-            "coordinates refer to it; a screenshot with view shows everything again."
+            "zoom: [x0, y0, x1, y1] in the selected image; x1 and y1 are excluded. The "
+            "zoom image shows the area fresh and enlarged, with its own screenshot_id; to "
+            "click in it, pass that screenshot_id with positions in the zoom image."
         ),
     },
 }

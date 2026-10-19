@@ -620,11 +620,7 @@ class ComputerUseService:
         lines: list[str] = []
         try:
             if action.name == "screenshot":
-                lines.append(
-                    await self._on_worker(
-                        desktop.screenshot, action.display, action.view, action.region, frame
-                    )
-                )
+                lines.append(await self._on_worker(desktop.screenshot, action.display, action.view))
             elif action.name == "zoom":
                 lines.append(await self._on_worker(desktop.zoom, frame, action))
             elif action.name == "cursor_position":
@@ -747,9 +743,7 @@ class ComputerUseService:
         self, context: ToolContext, desktop: Desktop, action: Action, frame: Any
     ) -> str:
         if action.name == "screenshot":
-            return await self._on_worker(
-                desktop.screenshot, None, action.view, action.region, frame
-            )
+            return await self._on_worker(desktop.screenshot, None, action.view)
         if action.name == "zoom":
             return await self._on_worker(desktop.zoom, frame, action)
         if action.name == "cursor_position":
@@ -883,8 +877,6 @@ class ComputerUseService:
                 desktop.input_started = True
                 await self._on_worker(self._target.open, match, interrupt_on_cancel=True)
                 await self._pause(OPEN_SETTLE_SECONDS)
-                # A region belongs to the app that was in front; show the opened app whole.
-                desktop.state.region = None
                 shot = await self._on_worker(desktop.screenshot)
             except InputInterrupted:
                 raise TargetError(

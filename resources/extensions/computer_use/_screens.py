@@ -123,21 +123,6 @@ class Frame:
         return app_at(self.stack, x, y)
 
 
-@dataclass
-class RegionView:
-    """An area the Agent chose with a screenshot's region; later screenshots show only it.
-
-    With a window, *area* is relative to the window's top-left corner and follows the
-    window when it moves; without one it is a fixed physical rectangle.
-    """
-
-    area: Area
-    window: WindowInfo | None
-    display: Display
-    # Window handles present at the latest region screenshot, to notice new windows.
-    seen: frozenset[int] = frozenset()
-
-
 def app_at(windows: Sequence[WindowInfo], x: int, y: int) -> AppInfo | None:
     """The app of the topmost of *windows* (topmost first) at screen pixel (x, y)."""
     return next((item.app for item in windows if item.contains(x, y)), None)
@@ -303,7 +288,6 @@ __all__ = [
     "MASK_FILL",
     "MAX_AREA",
     "MAX_LONG_EDGE",
-    "RegionView",
     "Frame",
     "app_at",
     "choose_display",

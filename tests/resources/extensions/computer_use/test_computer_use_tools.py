@@ -139,7 +139,7 @@ async def test_screenshot_coordinates_use_returned_pixels_and_keep_the_display(
     context = computer.context_for("computer")
     result = await computer.call("computer", {"action": "screenshot", "display": "2"}, context)
     assert model_text(result).startswith('Screenshot of display 2 of 2 "Wide": 1568x500 pixels')
-    reduced = "It is reduced: to read small text, zoom in. For exact clicks or drawing"
+    reduced = "It is reduced: for a small target, zoom in and click in the zoom image."
     assert reduced in model_text(result)
     assert [image.size for image in images(context)] == [(1568, 500)]
     wide_id = screenshot_id(context)
@@ -227,53 +227,6 @@ async def test_zoom_coordinates_are_local_to_the_returned_crop_when_named(
     )
     assert result["error"]["code"] == "invalid_arguments"
     assert "800x400" in result["error"]["message"]
-
-
-async def test_region_view_shows_only_its_area_until_a_view_is_chosen(
-    computer: Harness,
-) -> None:
-    # A display region: the reduced "Wide" screenshot maps 2x2 screen pixels to one.
-    await computer.computer(action="screenshot", display="Wide")
-    context = computer.context_for("computer")
-    result = await computer.call(
-        "computer", {"action": "screenshot", "region": [0, 0, 600, 300]}, context
-    )
-    assert result["ok"], result
-    # 1200x600 screen pixels fit the image limits, so the region is shown 1:1.
-    assert images(context)[0].size == (1200, 600)
-    assert 'Screenshot of your region of display "Wide"' in model_text(result)
-    assert "From now on, screenshots show only this area" in model_text(result)
-    assert '{"action":"screenshot","view":"display"} shows the whole display' in model_text(result)
-    context = computer.context_for("computer")
-    result = await computer.call(
-        "computer", {"action": "left_click", "coordinate": [400, 200]}, context
-    )
-    assert result["ok"], result
-    assert computer.target.inputs[-1] == ("click", -2736, 200, "left", 1, [])
-    # The screenshot after input shows the region again.
-    assert images(context)[0].size == (1200, 600)
-    result = await computer.computer(action="screenshot", view="display")
-    assert "1568x500 pixels" in model_text(result)
-
-    # A window region follows its window and notices windows opening outside it.
-    computer.target.front(NOTEPAD)
-    await computer.computer(action="screenshot", view="window")
-    result = await computer.computer(action="screenshot", region=[10, 10, 110, 60])
-    assert '{"action":"screenshot","view":"window"} shows the whole window' in model_text(result)
-    notepad = computer.target.windows_[0]
-    computer.target.windows_[0] = replace(notepad, left=150, right=650)
-    await computer.computer(action="screenshot")
-    result = await computer.computer(action="left_click", coordinate=[0, 0])
-    assert result["ok"], result
-    assert computer.target.inputs[-1] == ("click", 160, 110, "left", 1, [])
-    dialog = replace(notepad, handle=9, left=700, top=200, right=900, bottom=400, owner=1)
-    computer.target.windows_.insert(0, dialog)
-    result = await computer.computer(action="screenshot")
-    assert "A new window of Notepad opened outside this area" in model_text(result)
-    computer.target.windows_.remove(dialog)
-    computer.target.windows_.pop(0)
-    result = await computer.computer(action="screenshot")
-    assert model_text(result).startswith("The window of your region closed")
 
 
 async def test_window_view_includes_owned_popups_and_spans_displays(

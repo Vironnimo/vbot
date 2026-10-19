@@ -18,7 +18,6 @@ from ._actions import CLICKS, KEYBOARD, PRESSES, Action, Point
 from ._screens import (
     Area,
     Frame,
-    RegionView,
     app_at,
     choose_display,
     describe_displays,
@@ -41,26 +40,6 @@ class CallRefusedError(Exception):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
-
-
-# Windows smaller than this on a side, such as tooltips, are not noted outside a region.
-_MIN_NOTED_WINDOW = 40
-
-
-def _overlap(first: Area, second: Area) -> int:
-    width = min(first[2], second[2]) - max(first[0], second[0])
-    height = min(first[3], second[3]) - max(first[1], second[1])
-    return max(0, width) * max(0, height)
-
-
-def _inside(window: WindowInfo, area: Area) -> bool:
-    left, top, right, bottom = area
-    return (
-        left <= window.left
-        and top <= window.top
-        and window.right <= right
-        and window.bottom <= bottom
-    )
 
 
 def request_call(app: str) -> str:
@@ -197,26 +176,9 @@ class Desktop:
 
     # Images
 
-    def screenshot(
-        self,
-        display: str | None = None,
-        view: str | None = None,
-        region: tuple[int, int, int, int] | None = None,
-        source: Frame | None = None,
-    ) -> str:
-        """Publish the foreground window by default, an explicitly selected display, or
-        the area a screenshot with *region* chose in the *source* image."""
+    def screenshot(self, display: str | None = None, view: str | None = None) -> str:
+        """Publish the foreground window by default, or an explicitly selected display."""
         displays = self.target.displays()
-        if region is not None and source is not None:
-            return self._choose_region(source, region, displays)
-        if display is not None or view is not None:
-            self.state.region = None
-        lost = ""
-        if self.state.region is not None:
-            shown = self._region_screenshot(displays)
-            if shown is not None:
-                return shown
-            lost = "The window of your region closed, so this shows the whole view again. "
         if display is not None:
             self._select(displays, display)
             self.state.view = "display"
@@ -268,7 +230,7 @@ class Desktop:
             if window is not None
             else f'Screenshot of display{which} "{chosen.name}"'
         )
-        text = lost + self._publish(area, displays, chosen, label, window)
+        text = self._publish(area, displays, chosen, label, window)
         if self.state.display != "auto" and foreground is not None and visible(foreground):
             holding = display_of_window(displays, foreground)
             if holding is not None and holding.id != chosen.id:
@@ -278,85 +240,6 @@ class Desktop:
                 )
         return text
 
-    def _choose_region(
-        self, source: Frame, region: tuple[int, int, int, int], displays: Sequence[Display]
-    ) -> str:
-        """Show only *region* of *source* from now on, anchored to its window if it has one."""
-        self.validate_frame(source)
-        left, top, right, bottom = source.region(*region)
-        window = source.window
-        if window is not None:
-            left, top = left - window.left, top - window.top
-            right, bottom = right - window.left, bottom - window.top
-        self.state.region = RegionView((left, top, right, bottom), window, source.display)
-        text = self._region_screenshot(displays)
-        if text is None:
-            raise CallRefusedError(
-                "invalid_arguments",
-                f'The window in image "{source.screenshot_id}" closed. Take a new screenshot '
-                'with {"action":"screenshot"} and choose the region in it. Nothing was done.',
-            )
-        whole = "window" if window is not None else "display"
-        return (
-            f"{text} From now on, screenshots show only this area, also after input; "
-            f'{{"action":"screenshot","view":"{whole}"}} shows the whole {whole} again.'
-        )
-
-    def _region_screenshot(self, displays: Sequence[Display]) -> str | None:
-        """Publish the chosen region, or None after its window closed (the region ends)."""
-        view = self.state.region
-        assert view is not None
-        windows = self.target.windows()
-        left, top, right, bottom = view.area
-        window = view.window
-        if window is not None:
-            handle, app = window.handle, window.app
-            window = next(
-                (item for item in windows if item.handle == handle and item.app.matches(app)),
-                None,
-            )
-            if window is None:
-                self.state.region = None
-                return None
-            # The region moves with its window.
-            left, top, right, bottom = (
-                left + window.left,
-                top + window.top,
-                right + window.left,
-                bottom + window.top,
-            )
-            view.window = window
-        area = (left, top, right, bottom)
-        display = max(
-            displays,
-            key=lambda item: _overlap(display_area(item), area),
-            default=view.display,
-        )
-        where = f'"{window.app.name}"' if window is not None else f'display "{display.name}"'
-        text = self._publish(
-            area, displays, display, f"Screenshot of your region of {where}", window, "region"
-        )
-        # A menu or dialog that opens outside the region is invisible in it: say so.
-        visible = self.access.window_visible
-        opened = sorted(
-            {
-                item.app.name
-                for item in windows
-                if item.handle not in view.seen
-                and visible(item)
-                and min(item.right - item.left, item.bottom - item.top) >= _MIN_NOTED_WINDOW
-                and not _inside(item, area)
-            }
-        )
-        if view.seen and opened:
-            whole = "window" if view.window is not None else "display"
-            text += (
-                f" A new window of {', '.join(opened)} opened outside this area; see it with "
-                f'{{"action":"screenshot","view":"{whole}"}}.'
-            )
-        view.seen = frozenset(item.handle for item in windows)
-        return text
-
     def _publish(
         self,
         area: Area,
@@ -364,7 +247,7 @@ class Desktop:
         display: Display,
         label: str,
         window: WindowInfo | None = None,
-        kind: str = "screenshot",
+        zoom: bool = False,
     ) -> str:
         capture = Image.new("RGB", (area[2] - area[0], area[3] - area[1]))
         for item in displays:
@@ -379,9 +262,7 @@ class Desktop:
         visible = self.access.window_visible
         windows = self.target.windows()
         covered, hidden = mask(capture, area, windows, visible)
-        zoom = kind == "zoom"
-        # A zoom or a region shows its area at least at screen resolution, small ones enlarged.
-        size = fit(*covered.size) if kind == "screenshot" else zoom_fit(*covered.size)
+        size = zoom_fit(*covered.size) if zoom else fit(*covered.size)
         path = publish_image(self.context, resized(covered, size))
         foreground = self.target.foreground()
         front = foreground.app if foreground is not None and visible(foreground) else None
@@ -407,13 +288,7 @@ class Desktop:
             text += "Use positions in this image as coordinates."
         # Name no ratio: Agents used it to convert coordinates instead of clicking what they saw.
         if frame.screen_pixels >= 1.05:
-            text += {
-                "screenshot": " It is reduced: to read small text, zoom in. For exact clicks or "
-                'drawing in one area, show only that area with {"action":"screenshot",'
-                '"region":[x0, y0, x1, y1]}.',
-                "region": " It is reduced; a smaller region shows more detail.",
-                "zoom": " It is reduced; zoom into a smaller region for more detail.",
-            }[kind]
+            text += " It is reduced: for a small target, zoom in and click in the zoom image."
         if hidden:
             text += f" Hidden apps (gray, not approved): {', '.join(hidden)}."
         return text
@@ -428,7 +303,7 @@ class Desktop:
             frame.display,
             f"Zoom of {list(action.region)} in image {frame.screenshot_id}",
             frame.window,
-            kind="zoom",
+            zoom=True,
         )
 
     def cursor(self, frame: Frame) -> str:

@@ -18,7 +18,7 @@ from typing import Any
 
 from core.utils.ids import new_id
 
-from ._screens import Frame, RegionView
+from ._screens import Frame
 from .target import AppInfo, Display, WindowInfo
 
 # Approvals and the display choice end this long after the Session's last call.
@@ -39,8 +39,6 @@ class SessionState:
     display: str = "auto"
     shown: Display | None = None
     view: str = "window"
-    # Set by a screenshot with region: later screenshots show only this area.
-    region: RegionView | None = None
     images: dict[str, Frame] = field(default_factory=dict)
     latest_image: str | None = None
     last_used: float = 0.0

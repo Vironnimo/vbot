@@ -38,8 +38,7 @@ DRAG_PIXELS_PER_SECOND = 1000
 MIN_DRAG_SECONDS, MAX_DEFAULT_DRAG_SECONDS = 0.25, 5.0
 
 _FIELDS: dict[str, frozenset[str]] = {
-    # region chooses an area that later screenshots show alone, in the named or latest image.
-    "screenshot": frozenset({"display", "view", "region", "screenshot_id"}),
+    "screenshot": frozenset({"display", "view"}),
     "zoom": frozenset({"region", "screenshot_id"}),
     **dict.fromkeys(CLICKS, frozenset({"coordinate", "text", "screenshot_id"})),
     "mouse_move": frozenset({"coordinate", "screenshot_id"}),
@@ -198,20 +197,12 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
             'hold_key holds one key or chord, such as "shift" or "ctrl+alt". To press keys in '
             'order, use {"action":"key","text":"ctrl+a delete"}.'
         )
-    if name == "zoom" or (name == "screenshot" and arguments.get("region") is not None):
-        values["region"] = _region(arguments.get("region"), name)
+    if name == "zoom":
+        values["region"] = _region(arguments.get("region"))
     if name == "screenshot" and isinstance(arguments.get("display"), str):
         values["display"] = arguments["display"].strip() or None
     if name == "screenshot":
         values["view"] = arguments.get("view")
-        if values.get("region") is not None and (
-            values["view"] is not None or values.get("display") is not None
-        ):
-            raise ActionError(
-                "region shows an area of an image; view and display show a whole window or "
-                'monitor. Send one: {"action":"screenshot","region":[x0, y0, x1, y1]} or '
-                '{"action":"screenshot","view":"window"}. Nothing was done.'
-            )
         if values["view"] == "window" and values.get("display") is not None:
             raise ActionError(
                 'view "window" follows the foreground window. Omit display, or use '
@@ -219,10 +210,6 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
             )
     if "screenshot_id" in fields:
         values["screenshot_id"] = arguments.get("screenshot_id")
-    if name == "screenshot" and values.get("region") is None and values.get("screenshot_id"):
-        # Only a region refers to an image; a screenshot takes a new one.
-        values["screenshot_id"] = None
-        notes.append("Ignored screenshot_id: screenshot uses it only with region.")
     return Action(**values, notes=tuple(notes))
 
 
@@ -315,7 +302,7 @@ def _drag_seconds(values: Mapping[str, Any]) -> float:
     return round(min(MAX_DEFAULT_DRAG_SECONDS, max(MIN_DRAG_SECONDS, seconds)), 2)
 
 
-def _region(value: Any, name: str = "zoom") -> tuple[int, int, int, int]:
+def _region(value: Any) -> tuple[int, int, int, int]:
     if (
         isinstance(value, list)
         and len(value) == 4
@@ -325,8 +312,8 @@ def _region(value: Any, name: str = "zoom") -> tuple[int, int, int, int]:
         if x1 > x0 and y1 > y0:
             return x0, y0, x1, y1
     raise ActionError(
-        f'{name} needs "region": [x0, y0, x1, y1], the top-left and bottom-right corners of a '
-        f'rectangle in a screenshot, for example {{"action":"{name}","region":'
+        'zoom needs "region": [x0, y0, x1, y1], the top-left and bottom-right corners of a '
+        'rectangle in a screenshot, for example {"action":"zoom","region":'
         "[100, 200, 500, 400]}."
     )
 
