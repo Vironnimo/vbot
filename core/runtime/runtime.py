@@ -848,6 +848,26 @@ class Runtime(RuntimeServiceGraph):
         )
         return self._provider_runtime
 
+    async def close_session_transports(self, sessions: Iterable[tuple[str, str]]) -> None:
+        """Close the Provider transports kept open for these ``(agent_id, session_id)``.
+
+        A Codex WebSocket outlives its Run for the Session's next one; an
+        archived Session no longer needs it.
+        """
+        if self._provider_runtime is not None:
+            await self._provider_runtime.close_session_transports(sessions)
+
+    async def close_connection_transports(
+        self, provider_id: str, connection_id: str | None = None
+    ) -> None:
+        """Close the Provider transports kept open on a Connection whose credentials changed.
+
+        ``connection_id`` is the local id (``subscription``); without it every
+        Connection of the Provider closes.
+        """
+        if self._provider_runtime is not None:
+            await self._provider_runtime.close_connection_transports(provider_id, connection_id)
+
     def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
         """Return a fully wired Adapter for one exact Provider Connection."""
         return self._provider_operations().get_adapter(connection)

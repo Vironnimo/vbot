@@ -13,6 +13,7 @@ import contextvars
 import json
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from compression import zstd
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, override
 
@@ -350,29 +351,53 @@ class RequestPlan:
     ``body_limit`` is the wire's verified request byte limit, when known.
     ``payload_headers`` returns the headers that depend on the finished payload
     and may refuse it with a ``ProviderError``; it runs once per payload, not
-    once per attempt.
+    once per attempt. ``lazy_body`` defers the JSON body to its first use
+    (:meth:`PreparedRequest.encode_body`) for a wire that may send something
+    else, such as a WebSocket continuation; a ``body_limit`` needs the body to
+    check it, so it keeps the encoding in the preparation hop. ``digest``
+    summarizes the finished payload in the same hop for a wire that compares
+    each request with what it sent before (:attr:`PreparedRequest.digest`).
     """
 
     build: Callable[[], dict[str, Any]]
     body_limit: int | None = None
     payload_headers: Callable[[Mapping[str, Any]], dict[str, str]] | None = None
+    lazy_body: bool = False
+    digest: Callable[[Mapping[str, Any]], object] | None = None
+
+
+ZSTD_BODY_LEVEL = 3
+"""The zstd level of a compressed request body; OpenAI's Codex client uses it too."""
 
 
 class PreparedRequest:
     """One rendered request: its payload, exact JSON body and payload headers.
 
-    Every attempt of the request sends the same body bytes. An established
-    stream never sends its request again, so the stream owner calls
-    :meth:`release` and the payload and body need not live as long as the
-    stream; reading either afterwards is a programming error.
+    Every attempt of the request sends the same body bytes. A lazily planned
+    request encodes its body on first use, off the Event Loop, and keeps it
+    for every later attempt; so does its zstd-compressed variant. An
+    established stream never sends its request again, so the stream owner
+    calls :meth:`release` and the payload and bodies need not live as long as
+    the stream; reading any of them afterwards is a programming error.
+    ``digest`` is the plan's digest of the payload, if it has one; it is small
+    and outlives :meth:`release`.
     """
 
-    __slots__ = ("_body", "_payload", "headers")
+    __slots__ = ("_body", "_payload", "_released", "_zstd_body", "digest", "headers")
 
-    def __init__(self, payload: dict[str, Any], body: bytes, headers: dict[str, str]) -> None:
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        body: bytes | None,
+        headers: dict[str, str],
+        digest: object | None = None,
+    ) -> None:
         self._payload: dict[str, Any] | None = payload
         self._body: bytes | None = body
+        self._zstd_body: bytes | None = None
+        self._released = False
         self.headers = headers
+        self.digest = digest
 
     @property
     def payload(self) -> dict[str, Any]:
@@ -382,14 +407,39 @@ class PreparedRequest:
 
     @property
     def body(self) -> bytes:
-        if self._body is None:
+        """The exact JSON body; a lazily planned request needs :meth:`encode_body` first."""
+        if self._released:
             raise RuntimeError("The Provider request was released after it was established")
+        if self._body is None:
+            raise RuntimeError("The lazily planned Provider request body was not encoded yet")
         return self._body
 
+    async def encode_body(self) -> bytes:
+        """Return the exact JSON body, encoding it on the request-body worker on first use."""
+        if self._body is None:
+            self._body = await _REQUEST_BODY_WORKERS.run(_encode_json_body, self.payload)
+        return self._body
+
+    async def zstd_body(self) -> bytes:
+        """Return the JSON body compressed with zstd, compressed once off the Event Loop.
+
+        It is sent with ``Content-Encoding: zstd``; every attempt reuses it.
+        """
+        if self._zstd_body is None:
+            body = await self.encode_body()
+            self._zstd_body = await _REQUEST_BODY_WORKERS.run(_zstd_compress, body)
+        return self._zstd_body
+
     def release(self) -> None:
-        """Drop the payload and body; the headers stay for diagnostics."""
+        """Drop the payload and bodies; the headers stay for diagnostics."""
+        self._released = True
         self._payload = None
         self._body = None
+        self._zstd_body = None
+
+
+def _zstd_compress(body: bytes) -> bytes:
+    return zstd.compress(body, level=ZSTD_BODY_LEVEL)
 
 
 type PayloadRevision = Callable[[dict[str, Any]], bool]
@@ -397,11 +447,13 @@ type PayloadRevision = Callable[[dict[str, Any]], bool]
 
 
 async def prepare_request(plan: RequestPlan) -> PreparedRequest:
-    """Build, encode and check one request in a single request-body worker hop.
+    """Build, encode, check and digest one request in a single request-body worker hop.
 
-    The build runs in a copy of the caller's context, so a scoped Chat input
-    budget decides the same output limit it would on the Event Loop. A
-    cancelled caller waits until a started hop settles and sends nothing.
+    A ``plan.lazy_body`` request without a ``body_limit`` is built and checked
+    but not encoded. The build runs in a copy of the caller's context, so a
+    scoped Chat input budget decides the same output limit it would on the
+    Event Loop. A cancelled caller waits until a started hop settles and sends
+    nothing.
 
     Raises:
         ProviderRequestTooLargeError: the body exceeds ``plan.body_limit``.
@@ -430,11 +482,12 @@ def _render_request(
     payload = context.run(plan.build)
     if revise is not None and not revise(payload):
         return None
-    body = _encode_json_body(payload)
-    if plan.body_limit is not None and len(body) > plan.body_limit:
+    body = None if plan.lazy_body and plan.body_limit is None else _encode_json_body(payload)
+    if body is not None and plan.body_limit is not None and len(body) > plan.body_limit:
         raise ProviderRequestTooLargeError(len(body), plan.body_limit)
     headers = context.run(plan.payload_headers, payload) if plan.payload_headers is not None else {}
-    return PreparedRequest(payload, body, headers)
+    digest = plan.digest(payload) if plan.digest is not None else None
+    return PreparedRequest(payload, body, headers, digest)
 
 
 # Receives (status_code, error_body, response_headers) for every HTTP >= 400

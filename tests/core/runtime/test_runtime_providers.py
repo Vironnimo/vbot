@@ -352,6 +352,9 @@ _ADAPTER_WIRING: list[tuple[str, type, Callable[[Any], bool]]] = [
         lambda adapter: (
             adapter._connection_mode is None
             and adapter._config.base_url == "https://api.openai.com/v1"
+            # Codex sockets outlive the Adapter in the Runtime's transports.
+            and not adapter._owns_codex_transports
+            and adapter._codex_connection == ("openai", "api-key")
         ),
     ),
     (

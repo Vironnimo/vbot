@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx
@@ -22,8 +24,13 @@ from core.models.models import (
     Model,
 )
 from core.providers._codex_websocket import (
+    CodexConnectionKey,
+    CodexRequestDigest,
+    CodexTransports,
     CodexWebSocket,
     _CodexWebSocketTransportError,
+    codex_conversation_id,
+    codex_request_digest,
 )
 from core.providers._openai_constants import (
     _CODEX_CACHE_SCOPE_MAX_LENGTH,
@@ -103,6 +110,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
 from core.providers.wire_profile import Protocol
 from core.utils.http_status import parse_rate_limit_retry_after
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from datetime import tzinfo
@@ -119,6 +127,7 @@ __all__ = [
     "CODEX_WEBSOCKET_BETA",
     "CONVERSATION_ID_KWARG",
     "CodexTransport",
+    "CodexTransports",
     "CodexWebSocketConnector",
     "CodexWebSocketRoute",
     "DISCOVERY_JSON_PARAMETER_NAMES",
@@ -135,6 +144,19 @@ __all__ = [
     "STRUCTURED_OUTPUT_PARAMETER_NAMES",
     "TOOL_PARAMETER_NAMES",
 ]
+
+_LOGGER = get_logger("providers.openai")
+
+CODEX_ZSTD_MIN_BYTES = 32 * 1024
+"""A Codex HTTP request body at least this large is sent zstd-compressed, like
+OpenAI's Codex client sends its bodies; a smaller one uploads in milliseconds."""
+
+_COMPRESSION_REJECTION = re.compile(r"content[- ]encoding|zstd|compress|unsupported encoding")
+"""How a 400 names the request encoding it rejects (lowercased)."""
+
+
+class _CompressedBodyRejectedError(Exception):
+    """The Codex backend refused a zstd request body; resend it uncompressed."""
 
 
 class OpenAIAdapter(OpenAICompatibleAdapter):
@@ -163,7 +185,13 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         connection_mode: str | None = None,
         codex_transport: CodexTransport = _CODEX_TRANSPORT_AUTO,
         codex_websocket_connect: CodexWebSocketConnector | None = None,
+        codex_transports: CodexTransports | None = None,
+        codex_connection: CodexConnectionKey | None = None,
     ) -> None:
+        """``codex_transports`` keeps Codex sockets and Connection facts beyond this
+        Adapter (the Runtime passes its own, keyed by ``codex_connection``); without
+        it the Adapter owns a private one and closes it with :meth:`aclose`.
+        """
         if codex_transport not in {_CODEX_TRANSPORT_AUTO, _CODEX_TRANSPORT_SSE}:
             raise ValueError(f"unsupported Codex transport: {codex_transport}")
         super().__init__(
@@ -176,17 +204,28 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             connection_mode=connection_mode,
         )
         self._codex_transport = codex_transport
-        self._codex_websocket_disabled_routes: set[CodexWebSocketRoute] = set()
+        self._owns_codex_transports = codex_transports is None
+        self._codex_transports = codex_transports or CodexTransports()
+        self._codex_connection: CodexConnectionKey = codex_connection or (
+            config.id,
+            connection_mode or "",
+        )
         self._codex_socket = CodexWebSocket(
             base_url=str(self._client.base_url),
             connect=codex_websocket_connect or cast(CodexWebSocketConnector, websocket_connect),
             debug_recorder=self._debug_recorder,
+            transports=self._codex_transports,
+            connection=self._codex_connection,
         )
 
     @override
     async def aclose(self) -> None:
-        """Close the cached Codex WebSocket and inherited HTTP client."""
-        await self._codex_socket.aclose()
+        """Close the inherited HTTP client, and the Codex sockets this Adapter owns.
+
+        Shared Codex transports keep the Session's socket for its next Run.
+        """
+        if self._owns_codex_transports:
+            await self._codex_transports.aclose()
         await super().aclose()
 
     @classmethod
@@ -293,7 +332,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         ``previous_response_id`` continuation. The API-key paths ignore both.
         """
         del project_id
-        conversation_id = f"{agent_id}:{session_id}"
+        conversation_id = codex_conversation_id(agent_id, session_id)
         return {
             CONVERSATION_ID_KWARG: conversation_id,
             PROMPT_CACHE_AFFINITY_ID_KWARG: (prompt_cache_affinity_id or conversation_id),
@@ -622,6 +661,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         A failed WebSocket exchange drops its continuation and socket, so the
         rebuilt request opens a fresh exchange with full context. ``states``
         collects the stream state of every attempt (the last one completed).
+        When the request will try the WebSocket, its preparation hop digests it
+        for the socket's continuation, and its JSON body is encoded only if it
+        falls back to HTTP: a WebSocket request encodes just the
+        ``response.create`` it sends.
         """
 
         request_kwargs = dict(kwargs)
@@ -648,9 +691,12 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 state=state,
             )
 
+        plan = self._request_plan(messages, model_id, build)
+        if self._tries_codex_websocket(cache_scope_id, conversation_id):
+            plan = replace(plan, lazy_body=True, digest=codex_request_digest)
         return stream_learning_from_rejections(
             open_stream,
-            self._request_plan(messages, model_id, build),
+            plan,
             wire=self.wire,
             model_id=model_id,
             provider_label=self._config.id,
@@ -742,7 +788,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         return await post_json_with_retry(
             self._client,
             endpoint_path,
-            request.body,
+            await request.encode_body(),
             build_headers=lambda: self._attempt_headers(cache_scope_id, headers),
             handle_error_status=self._handle_error_status,
             provider_context="OpenAI provider",
@@ -757,15 +803,60 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
     ) -> httpx.Response:
+        """Establish one streaming POST; a large Codex body goes zstd-compressed.
+
+        A Codex body of at least ``CODEX_ZSTD_MIN_BYTES`` is compressed once,
+        off the Event Loop, and every attempt resends those bytes. When the
+        backend rejects the encoding (HTTP 415, a 400 naming it, or
+        ``x-openai-retry-uncompressed: true``), the request is sent once more
+        uncompressed and the Connection's later bodies stay uncompressed.
+        """
         headers = {**request.headers, **request_headers}
+        body = await request.encode_body()
+        if (
+            endpoint_path == CODEX_RESPONSES_ENDPOINT
+            and len(body) >= CODEX_ZSTD_MIN_BYTES
+            and self._codex_transports.compresses_requests(self._codex_connection)
+        ):
+            compressed_headers = {**headers, "Content-Encoding": "zstd"}
+            try:
+                return await connect_streaming_with_retry(
+                    self._client,
+                    endpoint_path,
+                    await request.zstd_body(),
+                    build_headers=lambda: self._attempt_headers(cache_scope_id, compressed_headers),
+                    handle_error_status=self._handle_compressed_error_status,
+                    auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
+                )
+            except _CompressedBodyRejectedError as rejected:
+                self._codex_transports.stop_compressing_requests(self._codex_connection)
+                _LOGGER.warning(
+                    "Codex backend rejected a zstd request body (%s); sending uncompressed",
+                    rejected,
+                )
         return await connect_streaming_with_retry(
             self._client,
             endpoint_path,
-            request.body,
+            body,
             build_headers=lambda: self._attempt_headers(cache_scope_id, headers),
             handle_error_status=self._handle_error_status,
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
         )
+
+    def _handle_compressed_error_status(
+        self,
+        status_code: int,
+        error_body: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        """Tell a rejected request encoding from any other error of a compressed request."""
+        if (
+            status_code == 415
+            or response_headers.get("x-openai-retry-uncompressed", "").strip().lower() == "true"
+            or (status_code == 400 and _COMPRESSION_REJECTION.search(error_body.lower()))
+        ):
+            raise _CompressedBodyRejectedError(f"HTTP {status_code}")
+        self._handle_error_status(status_code, error_body, response_headers)
 
     async def _stream_responses(
         self,
@@ -860,6 +951,17 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         finally:
             await response.aclose()
 
+    def _tries_codex_websocket(
+        self, cache_scope_id: str | None, conversation_id: str | None
+    ) -> bool:
+        """Whether a Codex request with these ids starts on the WebSocket."""
+        return bool(
+            cache_scope_id
+            and conversation_id
+            and self._codex_transport == _CODEX_TRANSPORT_AUTO
+            and self._codex_transports.websocket_available(self._codex_connection)
+        )
+
     async def _stream_codex_auto(
         self,
         request: PreparedRequest,
@@ -882,48 +984,40 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         # forks; the local route must remain Session-unique so one branch can
         # never consume another branch's ``previous_response_id`` state.
         route = (conversation_id, model_id, account_id)
-        if route in self._codex_websocket_disabled_routes:
-            async with aclosing(
-                self._stream_responses_sse(
-                    request,
-                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                    request_headers=request_headers,
-                    cache_scope_id=cache_scope_id,
-                    state=state,
-                )
-            ) as deltas:
-                async for delta in deltas:
-                    yield delta
-            return
-
-        try:
-            async with aclosing(
-                self._codex_socket.stream(
-                    request.payload,
-                    headers=websocket_headers,
-                    route=route,
-                    state=state,
-                )
-            ) as deltas:
-                async for delta in deltas:
-                    yield delta
-        except _CodexWebSocketTransportError as exc:
-            self._codex_websocket_disabled_routes.add(route)
-            if exc.events_received:
-                raise
-            # No event arrived, so no delta was yielded and the prepared body
-            # is still held for this fallback.
-            async with aclosing(
-                self._stream_responses_sse(
-                    request,
-                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                    request_headers=request_headers,
-                    cache_scope_id=cache_scope_id,
-                    state=state,
-                )
-            ) as deltas:
-                async for delta in deltas:
-                    yield delta
+        # A request planned while the WebSocket was unavailable has no digest.
+        digest = request.digest
+        if isinstance(digest, CodexRequestDigest) and self._codex_transports.websocket_available(
+            self._codex_connection
+        ):
+            try:
+                async with aclosing(
+                    self._codex_socket.stream(
+                        request.payload,
+                        digest=digest,
+                        headers=websocket_headers,
+                        route=route,
+                        state=state,
+                    )
+                ) as deltas:
+                    async for delta in deltas:
+                        yield delta
+                return
+            except _CodexWebSocketTransportError as exc:
+                if exc.events_received:
+                    raise
+                # No event arrived, so no delta was yielded and the prepared
+                # request is still held for SSE.
+        async with aclosing(
+            self._stream_responses_sse(
+                request,
+                endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                request_headers=request_headers,
+                cache_scope_id=cache_scope_id,
+                state=state,
+            )
+        ) as deltas:
+            async for delta in deltas:
+                yield delta
 
     async def _build_codex_websocket_headers(self, cache_scope_id: str) -> dict[str, str]:
         wire_cache_scope = _clamp_codex_cache_scope(cache_scope_id)

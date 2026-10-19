@@ -26,6 +26,8 @@ from core.tools.terminal_manager import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from core.runtime.runtime import Runtime
 
 
@@ -164,6 +166,11 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         resolver.invalidate_team_cache(project_id)
         runtime.invalidate_project_skills(project_id)
 
+    async def close_session_transports(addresses: Sequence[SessionAddress]) -> None:
+        await runtime.close_session_transports(
+            (address.agent_id, address.session_id) for address in addresses
+        )
+
     def retention_days() -> int | None:
         # Strict: a degraded settings file must never widen retention to the default.
         try:
@@ -191,6 +198,7 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         invalidate_agent_skills=runtime.invalidate_agent_skills,
         invalidate_project=invalidate_project,
         retention_days=retention_days,
+        close_session_transports=close_session_transports,
     )
 
 

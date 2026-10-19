@@ -10,6 +10,7 @@ the full aggregate body (streaming or not) under ``response.body`` and no
 from __future__ import annotations
 
 import threading
+from compression import zstd
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -99,6 +100,26 @@ class TestFullCycle:
         capture.finalize()
 
         assert _latest_trace(store)["response"]["body"] == "upstream failed"
+
+    @pytest.mark.parametrize(
+        ("body", "recorded"),
+        [
+            pytest.param(zstd.compress(b'{"model":"gpt-5"}'), '{"model":"gpt-5"}', id="zstd"),
+            pytest.param(b"not zstd", "not zstd", id="undecodable"),
+        ],
+    )
+    def test_a_zstd_request_body_is_recorded_as_the_payload_sent(
+        self, recorder, store, body, recorded
+    ):
+        capture = recorder.begin_capture(
+            method="POST",
+            url="https://api.example.com/v1/responses",
+            headers={"Content-Encoding": "zstd"},
+            body=body,
+        )
+        capture.finalize()
+
+        assert _latest_trace(store)["request"]["body"] == recorded
 
     def test_body_limit_keeps_the_start_of_each_body_and_counts_the_rest(self, store):
         recorder = ProviderDebugRecorder(store, body_limit=4)

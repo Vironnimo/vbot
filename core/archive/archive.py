@@ -83,6 +83,10 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+async def _keep_session_transports(_sessions: Sequence[SessionAddress]) -> None:
+    return None
+
+
 def _in_scope(address: SessionAddress, scope: ArchiveScope) -> bool:
     return address.project_id == scope.project_id and (
         scope.agent_id is None or address.agent_id == scope.agent_id
@@ -99,7 +103,9 @@ class ArchiveServices:
     Skill caches; ``retention_days`` reads the current retention period in days
     (``None`` keeps entries until they are deleted) and raises
     :class:`ArchiveRetentionUnknownError` when it cannot be read reliably;
-    ``clock`` is the current UTC time retention compares with.
+    ``clock`` is the current UTC time retention compares with;
+    ``close_session_transports`` closes the Provider transports (such as a Codex
+    WebSocket) kept open for archived Sessions.
     """
 
     data_dir: Path
@@ -121,6 +127,9 @@ class ArchiveServices:
     invalidate_project: Callable[[str], None]
     retention_days: Callable[[], int | None] = default_retention_days
     clock: Callable[[], datetime] = _utc_now
+    close_session_transports: Callable[[Sequence[SessionAddress]], Awaitable[None]] = (
+        _keep_session_transports
+    )
 
 
 class ArchiveService:
@@ -188,6 +197,7 @@ class ArchiveService:
                     )
                     outcome = replace(outcome, review_addresses=archived_reviews)
                 await services.scratch_areas.remove_areas(scratch_roots)
+                await self._close_session_transports(addresses)
             # The archive has succeeded; what follows only brings caches, listeners
             # and the Recall index in step, so a failure there never hides it.
             try:
@@ -247,6 +257,7 @@ class ArchiveService:
                     )
                     outcome = replace(outcome, review_addresses=archived_reviews)
                 await services.scratch_areas.remove_areas(scratch_roots)
+                await self._close_session_transports(addresses)
         try:
             services.invalidate_project(project_id)
         except Exception:
@@ -297,6 +308,13 @@ class ArchiveService:
                 TerminalOwner(address.project_id, address.agent_id, address.session_id)
             )
             await self._services.commands.close_scope(address)
+
+    async def _close_session_transports(self, addresses: Sequence[SessionAddress]) -> None:
+        # Only a resource release: a failure must never hide a finished archive.
+        try:
+            await self._services.close_session_transports(addresses)
+        except Exception:
+            _LOGGER.exception("Could not close archived Sessions' Provider transports")
 
     async def _finish_scope_archive(
         self, entry_id: str, scope: ArchiveScope, prepared: Sequence[SessionAddress]
@@ -399,6 +417,7 @@ class ArchiveService:
                         services.agents.reset_current_after_session_removed, review_agent, current
                     )
             await services.scratch_areas.remove_areas(scratch_roots)
+            await self._close_session_transports(archived_addresses)
             # Review forks carry a reflection Run kind, which keeps them out of Recall.
             await services.remove_session_from_recall(
                 address.agent_id, address.session_id, address.project_id

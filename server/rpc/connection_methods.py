@@ -544,6 +544,9 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
         oauth_config = connection.oauth
 
         async def on_complete(*, success: bool) -> None:
+            if success:
+                # Sockets opened with the account's previous token end here.
+                await state.runtime.close_connection_transports(provider_id, connection.id)
             _publish_provider_auth_completed_event(
                 state,
                 provider_id=provider_id,
@@ -593,6 +596,7 @@ async def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
         await _CONNECTION_WORKERS.run(
             token_store.delete, Account(provider_id, connection.id, account_id)
         )
+        await state.runtime.close_connection_transports(provider_id, connection.id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 

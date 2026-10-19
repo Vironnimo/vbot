@@ -70,7 +70,7 @@ Local regressions cover all six bundled OAuth flows, each Chat wire with and wit
 - `connection.list` combines static Provider/Connection config with Account/added/configured/enabled/usable state and optional local reachability. The Provider projection inside `settings.get` preserves the same Connection-level distinctions so management surfaces and behavior gates do not infer one state from another.
 - `connection.set_enabled` persists the explicit Connection override. Enabling an auto-refresh Connection forces an immediate local catalog attempt; enabled-but-unreachable remains a valid persisted state.
 - `provider.set_key`/`unset_key` address API-key Accounts through derived keys and never return secret values.
-- Provider connect/status/disconnect operate on OAuth Accounts and token-store state.
+- Provider connect/status/disconnect operate on OAuth Accounts and token-store state. A completed login and a disconnect also close the Connection's kept-open Provider transports (`Runtime.close_connection_transports`: Codex WebSockets opened with the previous token, `providers/openai.md`).
 
 Local endpoint reachability is Runtime probe state, not credential state. `Runtime.connection_reachability()` is `True`, `False`, or `None` (not probed) for auto-refresh Connections and is surfaced separately from enabled/usable.
 

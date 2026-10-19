@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -95,6 +95,7 @@ class ArchiveWorld:
     commands: _Commands = field(default_factory=_Commands)
     usage_imports: list[None] = field(default_factory=list)
     recall_removals: list[tuple[str | None, str, str | None]] = field(default_factory=list)
+    closed_transports: list[SessionAddress] = field(default_factory=list)
     skill_invalidations: list[str] = field(default_factory=list)
     changes: list[None] = field(default_factory=list)
     services: ArchiveServices = field(init=False)
@@ -203,6 +204,9 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
     async def forget_session(agent_id: str, session_id: str, project_id: str | None) -> None:
         world.recall_removals.append((project_id, agent_id, session_id))
 
+    async def close_session_transports(addresses: Sequence[SessionAddress]) -> None:
+        world.closed_transports.extend(addresses)
+
     world.services = ArchiveServices(
         data_dir=data_dir,
         sessions=sessions,
@@ -221,6 +225,7 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
         remove_session_from_recall=forget_session,
         invalidate_agent_skills=world.skill_invalidations.append,
         invalidate_project=lambda _project_id: None,
+        close_session_transports=close_session_transports,
     )
     world.service = ArchiveService(world.services)
     world.service.add_changed_callback(lambda: world.changes.append(None))
