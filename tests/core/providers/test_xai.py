@@ -11,6 +11,7 @@ import httpx
 import pytest
 import respx
 
+from core.chat.streaming import StreamingAccumulator
 from core.models.discovery import ModelDiscoveryError, refresh_models
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.accounts import Account
@@ -26,6 +27,7 @@ from core.providers.token_getter import OAuthTokenGetter, TokenGetter
 from core.providers.token_store import OAuthToken, TokenStore
 from core.providers.xai import XAIAdapter
 from core.secrets import SecretStore
+from tests.core.providers.openai_test_support import codex_sse_response
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
 XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
@@ -265,6 +267,47 @@ async def test_output_limit_budgets_against_wire_items_not_persisted_meta(
     body = await _sent_body(xai_adapter, messages, model_id="grok-4.5")
 
     assert body["max_output_tokens"] == 30000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    ("ticks", "reported_usd"),
+    [
+        # 10^10 ticks are one USD (https://docs.x.ai/developers/cost-tracking).
+        pytest.param(37_756_000, 0.0037756, id="billed"),
+        pytest.param(0, 0.0, id="zero-is-kept"),
+        # The full invalid-money vocabulary is owned by test_pricing.py.
+        pytest.param(-1, None, id="negative-omitted"),
+        pytest.param(None, None, id="absent-omitted"),
+    ],
+)
+@respx.mock
+async def test_billed_cost_ticks_become_reported_usd(
+    xai_adapter: XAIAdapter, streaming: bool, ticks: int | None, reported_usd: float | None
+) -> None:
+    response: dict[str, Any] = {
+        **SUCCESS_RESPONSE,
+        "status": "completed",
+        "usage": {"input_tokens": 199, "output_tokens": 1, "cost_in_usd_ticks": ticks},
+    }
+    if streaming:
+        respx.post(XAI_RESPONSES_URL).mock(return_value=codex_sse_response(response))
+        accumulator = StreamingAccumulator()
+        async for delta in xai_adapter.stream(HELLO, model_id="grok-4.5"):
+            accumulator.add_delta(delta)
+        usage = accumulator.finalize_assistant_fields().usage
+    else:
+        respx.post(XAI_RESPONSES_URL).mock(return_value=httpx.Response(200, json=response))
+        raw = await xai_adapter.send(HELLO, model_id="grok-4.5")
+        usage = xai_adapter.normalize_response(raw, model_id="grok-4.5")["usage"]
+
+    assert usage is not None
+    assert (usage["input_tokens"], usage["output_tokens"]) == (199, 1)
+    if reported_usd is None:
+        assert "reported_cost_usd" not in usage
+    else:
+        assert usage["reported_cost_usd"] == pytest.approx(reported_usd)
 
 
 def test_request_context_uses_shared_prompt_cache_affinity(xai_adapter: XAIAdapter) -> None:
