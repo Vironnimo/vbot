@@ -110,7 +110,7 @@ async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_
 ) -> None:
     # "fetch" is registered but not offered: it keeps its own name and is refused rather
     # than remapped to the offered web_fetch. An On-demand Tool resolves before it is loaded.
-    tools, dispatched = _name_recording_tools("web_fetch", "fetch", "background_tasks")
+    tools, dispatched = _name_recording_tools("web_fetch", "fetch", "background_tasks", "computer")
     register_load_tools_tool(tools)
     runtime = tool_runtime(
         tmp_path,
@@ -121,10 +121,12 @@ async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_
                 ("second", "TodoWrite", {"todos": [{"content": "Fetch"}]}),
                 ("third", "fetch"),
                 ("fourth", "KillShell"),
+                ("fifth", "computer_action"),
+                ("sixth", "functions.fetch"),
             ),
             final("done"),
         ],
-        allowed_tools=["web_fetch", "background_tasks"],
+        allowed_tools=["web_fetch", "background_tasks", "computer"],
         tool_loading=tool_loading,
     )
 
@@ -132,18 +134,28 @@ async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_
 
     messages = history(runtime)
     assert ("background_tasks" in _offered(runtime.adapter.requests[0])) is (tool_loading is None)
-    assert dispatched == ["web_fetch", "background_tasks"]
-    assert _call_names(messages) == ["web_fetch", "TodoWrite", "fetch", "background_tasks"]
+    assert dispatched == ["web_fetch", "background_tasks", "computer"]
+    assert _call_names(messages) == [
+        "web_fetch",
+        "TodoWrite",
+        "fetch",
+        "background_tasks",
+        "computer",
+        "fetch",
+    ]
     unknown = next(m for m in messages if m.role == "tool" and m.name == "TodoWrite")
     assert "Unknown Tool: TodoWrite. Call one of the available Tools instead: " in str(
         unknown.content
     )
     assert tool_results(messages)[2]["error"]["code"] == "tool_not_allowed"
+    assert tool_results(messages)[5]["error"]["code"] == "tool_not_allowed"
     assert _wire_call_names(runtime.adapter.requests[1]) == [
         "web_fetch",
         "TodoWrite",
         "fetch",
         "background_tasks",
+        "computer",
+        "fetch",
     ]
 
 

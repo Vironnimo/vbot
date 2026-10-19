@@ -65,6 +65,12 @@ _EXTRA_ARGUMENT = re.compile(
     rf"|Es wurde kein Positionsparameter gefunden, der das Argument [{_QUOTES}](.+)[{_QUOTES}] "
     r"akzeptiert"
 )
+# A cut-off Select-String pattern can end in the backslash meant to escape its
+# quote. The .NET regex diagnostic is also English in PowerShell's German error.
+_REGEX_TRAILING_BACKSLASH = re.compile(
+    r"Invalid pattern '([^\r\n]+)' at offset \d+\. Illegal \\ at end of pattern\."
+)
+_SELECT_STRING_PATTERN = re.compile(r"\s*(?:Select-String|sls)\s+[^|;\n]*-Pattern\s*", re.I)
 # A bare word, as PowerShell reads one in an argument: up to a blank, a quote or
 # a separator.
 _BARE_WORD = re.compile(rf"[^\s{_QUOTES};|&(){{}},]+")
@@ -325,6 +331,21 @@ def _hint_escaped_quote(
                 'In PowerShell, \\" does not escape a quote: it ended the string, so the rest '
                 f"became the extra argument `{argument}`. {_ESCAPED_QUOTE_FIX}"
             )
+    regex = _REGEX_TRAILING_BACKSLASH.search(window)
+    if regex is not None:
+        opening = next(start for start, stop in code.double_strings if stop == code.escaped_end)
+        # Match the actual failed pattern to the literal prefix before the quote;
+        # an unrelated regex error or expanded value proves no quote mistake.
+        pattern = command[opening + 1 : code.escaped_end]
+        boundary = max(code.flat.rfind(mark, 0, opening) for mark in "|;\n{")
+        if (
+            pattern == regex[1]
+            and (len(pattern) - len(pattern.rstrip("\\"))) % 2 == 1
+            and _EXPANDED_VARIABLE.search(pattern) is None
+            and "$(" not in pattern
+            and _SELECT_STRING_PATTERN.fullmatch(code.flat[boundary + 1 : opening])
+        ):
+            return _ESCAPED_QUOTE_HINT
     if "SyntaxError" in window and (exit_code or failed_programs):
         return _ESCAPED_QUOTE_HINT
     return None

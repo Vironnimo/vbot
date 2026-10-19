@@ -187,7 +187,8 @@ _SWITCH_WORDS: dict[str, tuple[list[str], list[str]]] = {
     **dict.fromkeys(("literal", "fixedstrings", "fixedstring", "fixed"), (["-F"], [])),
     **dict.fromkeys(("regex", "isregex", "useregex"), ([], ["-F"])),
     **dict.fromkeys(("word", "words", "wordregexp", "wholeword", "wholewords"), (["-w"], [])),
-    **dict.fromkeys(("multiline", "dotall"), (["-U", "--multiline-dotall"], [])),
+    "multiline": (["-U", "--multiline-dotall"], ["--no-multiline"]),
+    "dotall": (["-U", "--multiline-dotall"], ["--no-multiline-dotall"]),
     **dict.fromkeys(("invert", "invertmatch"), (["-v"], [])),
     **dict.fromkeys(("unrestricted", "noignore", "includeignored"), (["-u"], [])),
     **dict.fromkeys(("linenumbers", "linenumber", "showlinenumbers", "withfilename"), ([], [])),
@@ -218,6 +219,10 @@ _TARGET_VALUES = {
 
 
 def _normalize_output(value: Any) -> Any:
+    if isinstance(value, str) and (
+        wrapped := re.fullmatch(r"\s*output\s*>\s*(content|files|count)\s*", value, re.IGNORECASE)
+    ):
+        return wrapped[1].lower()
     return _OUTPUT_VALUES.get(_spelling(value), value) if isinstance(value, str) else value
 
 
@@ -280,6 +285,8 @@ def _translate_flag_fields(arguments: dict[str, Any]) -> dict[str, Any]:
                 raise unclear(key, value, "true or false")
             if switch:
                 tokens.extend(_SWITCH_LETTERS[letter])
+            elif letter == "U":
+                tokens.append("--no-multiline")
         elif word in _SWITCH_WORDS:
             if switch is None:
                 raise unclear(key, value, "true or false")

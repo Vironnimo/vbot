@@ -743,6 +743,60 @@ _ESCAPED_QUOTE = 'In PowerShell, \\" does not escape a quote'
             (),
             "`b\\:`",
         ),
+        # The cut-off pattern itself fails as a regex, rather than an extra argument.
+        (
+            'Select-String -Pattern "a|\\"b\\""',
+            1,
+            "Select-String: Invalid pattern 'a|\\' at offset 3. Illegal \\ at end of pattern.",
+            (),
+            "",
+        ),
+        (
+            'Select-String -Pattern "a|\\"b\\""; echo done',
+            0,
+            "Select-String: Die Zeichenfolge ist kein gültiger regulärer Ausdruck: "
+            "Invalid pattern 'a|\\' at offset 3. Illegal \\ at end of pattern.\ndone",
+            (),
+            "",
+        ),
+        # A literal regex error, one from another stage, a valid escaped backslash,
+        # or an expandable argument is not evidence that this quote cut the pattern.
+        (
+            "Select-String -Pattern 'a|\\'",
+            1,
+            "Select-String: Invalid pattern 'a|\\' at offset 3. Illegal \\ at end of pattern.",
+            (),
+            None,
+        ),
+        (
+            'Select-String -Pattern "a|\\"b\\""; Select-String -Pattern "other\\"',
+            1,
+            "Select-String: Invalid pattern 'other\\' at offset 6. Illegal \\ at end of pattern.",
+            (),
+            None,
+        ),
+        (
+            'Write-Output "a|\\"b\\""; Select-String -Pattern "a|\\"',
+            1,
+            "Select-String: Invalid pattern 'a|\\' at offset 3. Illegal \\ at end of pattern.",
+            (),
+            None,
+        ),
+        (
+            'Select-String -Pattern "a|\\\\"b\\""',
+            1,
+            "Select-String: Invalid pattern 'a|\\' at offset 3. Illegal \\ at end of pattern.",
+            (),
+            None,
+        ),
+        (
+            'Select-String -Pattern "$prefix|\\"b\\""',
+            1,
+            "Select-String: Invalid pattern '$prefix|\\' at offset 9. "
+            "Illegal \\ at end of pattern.",
+            (),
+            None,
+        ),
         # A SyntaxError printed as data, a \" that ends a path's string, and a
         # missing command from outside the string are not the early end's.
         (
@@ -1466,8 +1520,8 @@ def test_import_failures_name_where_python_looked(
         (("tests/test_errors.py",), ("tests/test_errors.py", "tests/__init__.py"), ()),
         (
             ("tests/__init__.py", "tests/test_errors.py"),
-            ("tests/test_errors.py", "-m"),
-            ("__init__.py",),
+            ("tests/test_errors.py", "sys.path", "__file__", "__path__"),
+            ("__init__.py", "-m"),
         ),
         # A module that is not there: the hint informs and never asks to write it.
         (("tests/support.py",), ("tests/test_errors.py",), ("create", "Add", "write")),

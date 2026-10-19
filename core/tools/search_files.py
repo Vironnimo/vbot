@@ -304,9 +304,9 @@ def _matching_names(execution: SearchExecution, query: SearchQuery, names: list[
         retry = None if query.literal else pattern_retry(str(error), query.name_patterns, query)
         if retry is None:
             raise
-        patterns, pcre2, note = retry
-        if pcre2:
-            query.rg_args.append("--pcre2")
+        patterns, flag, note = retry
+        if flag is not None:
+            query.rg_args.append(flag)
         try:
             matched = execution.match_names(query, patterns, unique)
         except SearchRefusedError:
@@ -593,9 +593,9 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -
         retry = None if query.literal else pattern_retry(str(error), patterns, query)
         if retry is None:
             raise
-        patterns, pcre2, note = retry
-        if pcre2:
-            query.rg_args.append("--pcre2")
+        patterns, flag, note = retry
+        if flag is not None:
+            query.rg_args.append(flag)
         try:
             results = [execution.count_scan(query, patterns, scope) for scope in scopes]
         except SearchRefusedError:

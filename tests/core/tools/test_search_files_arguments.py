@@ -334,6 +334,8 @@ async def test_a_file_list_search_for_file_names_names_the_files_with_those_name
         # Under -v or -F the same pattern matches no name.
         ({"args": ["--files", "-v"], "pattern": "."}, "", True),
         ({"args": ["--dirs", "-F"], "pattern": "*"}, "", True),
+        # Names stay separate records; a newline does not join two candidates.
+        ({"args": ["--files"], "pattern": r"app\.py\nsrc/view\.ts"}, "", True),
     ],
 )
 async def test_a_pattern_beside_a_listing_matches_names(
@@ -421,6 +423,12 @@ async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path
             "docs/guide.md",
         ),
         ({"pattern": "os", "output_mode": "count", "path": "src"}, "src/app.py:2"),
+        (
+            {"pattern": "load", "output": "output>content", "glob": "*.py"},
+            "src/app.py\n2:def load():",
+        ),
+        ({"pattern": "load", "output": "output>files", "glob": "*.py"}, "src/app.py"),
+        ({"pattern": "os", "output": "output>count", "path": "src"}, "src/app.py:2"),
         (
             {"pattern": "def", "-C": 1, "path": "src/app.py"},
             "src/app.py\n1-import os\n2:def load():\n3-    return os.name",
@@ -534,6 +542,9 @@ async def test_a_path_written_as_a_glob_or_list_searches_what_it_names(
         {"pattern": "load", "query": "other"},
         {"pattern": "load", "-l": True, "output": "count"},
         {"pattern": "load", "ignore_case": "maybe"},
+        {"pattern": "load", "output": "output>content>files"},
+        {"pattern": "load", "output": "target>content"},
+        {"pattern": "load", "output": "output>contents"},
     ],
 )
 async def test_unclear_or_conflicting_fields_are_rejected(project: Path, arguments: dict):
@@ -686,6 +697,54 @@ async def test_unbalanced_regex_characters_match_literally_with_a_note(
     assert result["data"].get("content", "") == content
     assert f'searched "{pattern}" as "{searched}"' in result["data"]["note"]
     assert "-F" in result["data"]["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pattern", "options", "content", "noted"),
+    [
+        (r"Alpha\nBeta", {}, "code\n1:Alpha\n2:Beta", True),
+        ("Alpha\nBeta", {}, "code\n1:Alpha\n2:Beta", True),
+        # Adding multiline does not make . match a line break.
+        (r"Alpha.*\nBeta", {}, "code\n1:Alpha\n2:Beta", True),
+        (
+            r"Alpha\nBeta",
+            {"args": ["--no-multiline-dotall"]},
+            "code\n1:Alpha\n2:Beta",
+            True,
+        ),
+        # Literal escapes and an explicit literal mode keep their meaning.
+        (r"Alpha\\nBeta", {}, "code\n6:Alpha\\nBeta", False),
+        (r"Alpha\nBeta", {"args": ["-F"]}, "code\n6:Alpha\\nBeta", False),
+        (r"Alpha\nBeta", {"literal": True}, "code\n6:Alpha\\nBeta", False),
+        (r"Alpha\nBeta", {"args": ["--no-multiline"]}, None, False),
+        (r"Alpha\nBeta", {"multiline": False}, None, False),
+        (r"Alpha\nBeta", {"-U": False}, None, False),
+        (r"Alpha\nBeta", {"args": ["-U", "--no-multiline"]}, None, False),
+        (
+            r"Alpha\nBeta",
+            {"args": ["--no-multiline", "-U"]},
+            "code\n1:Alpha\n2:Beta",
+            False,
+        ),
+    ],
+)
+async def test_rejected_regex_line_breaks_run_multiline_without_overriding_explicit_modes(
+    tmp_path, pattern, options, content, noted
+):
+    (tmp_path / "code").write_text(
+        "Alpha\nBeta\nAlpha\nbetween\nBeta\nAlpha\\nBeta\n", newline="\n"
+    )
+
+    result = await dispatch(tmp_path, {"pattern": pattern, "path": "code", **options})
+
+    if content is None:
+        assert result["ok"] is False
+        assert result["error"]["code"] == "search_error"
+        return
+    assert result["ok"], result
+    assert result["data"]["content"] == content
+    assert ("note" in result["data"]) is noted
 
 
 @pytest.mark.asyncio

@@ -49,8 +49,24 @@ def entity_line(entry: dict[str, Any], fields: tuple[str, ...] = ()) -> str:
         line += f" {unit}"
     if name := friendly_name(entry):
         line += f" ({name})"
-    shown = [f"{field}={_value_text(attributes[field])}" for field in fields if field in attributes]
+    percentage = str(entry.get("entity_id", "")).startswith("light.") and "brightness_pct" in fields
+    shown = []
+    for field in fields:
+        if percentage and field == "brightness_pct":
+            shown.append(_brightness_text(attributes.get("brightness")))
+        elif field in attributes and not (percentage and field == "brightness"):
+            shown.append(f"{field}={_value_text(attributes[field])}")
     return f"{line} {' '.join(shown)}" if shown else line
+
+
+def _brightness_text(value: Any) -> str:
+    """Report the light's returned brightness, never the requested percentage."""
+    if value is None:
+        return "brightness not reported"
+    text = f"brightness={_value_text(value)}"
+    if isinstance(value, int | float) and not isinstance(value, bool) and 0 <= value <= 255:
+        text += f" (~{round(value * 100 / 255, 1):g}%)"
+    return text
 
 
 def _value_text(value: Any) -> str:

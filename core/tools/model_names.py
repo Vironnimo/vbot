@@ -42,6 +42,7 @@ _TYPO_MIN_LENGTH = 5
 # preference. A name maps only to the first of them offered in the Model request;
 # the target's own argument handling then decides whether the call runs.
 _HARNESS_NAMES: dict[str, tuple[str, ...]] = {
+    "computeraction": ("computer",),
     **dict.fromkeys(
         (
             "shell",
@@ -234,6 +235,8 @@ def called_tool_name(
             bare = bare[len(prefix) :]
             break
     bare = bare.removesuffix("()")
+    if bare in registered:
+        return bare
     if registry_tool_name(bare) in offered:
         return registry_tool_name(bare)
     key = _spelling_key(bare)

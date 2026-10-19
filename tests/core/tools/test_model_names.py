@@ -21,6 +21,9 @@ OFFERED = (
     "generate_speech",
     "skill",
     "background_tasks",
+    "computer",
+    "computer_batch",
+    "computer_apps",
 )
 
 
@@ -58,6 +61,7 @@ def test_shell_tool_is_offered_under_the_host_shell_name() -> None:
         ("KillShell", "background_tasks"),
         ("BashOutput", "background_tasks"),
         ("TaskStop", "background_tasks"),
+        ("computer_action", "computer"),
         # One inserted, removed, replaced or swapped character.
         pytest.param(
             "powerhell",
@@ -90,6 +94,18 @@ def test_called_names_resolve_to_the_offered_tool_they_mean(called: str, expecte
         pytest.param("memory", OFFERED, (), id="tool-not-offered"),
         pytest.param("Grep", ("read", "apply_patch"), (), id="harness-target-not-offered"),
         pytest.param("fetch", OFFERED, ("fetch", "web_fetch"), id="registered-tool-name"),
+        pytest.param(
+            "computer_action",
+            ("computer_batch", "computer_apps"),
+            ("computer",),
+            id="computer-target-not-offered",
+        ),
+        pytest.param(
+            "computer_action",
+            OFFERED,
+            ("computer", "computer_action"),
+            id="registered-computer-action",
+        ),
         pytest.param("WebFetch", ("web_fetch", "webfetch"), (), id="ambiguous-spelling"),
         pytest.param("ReadFile", ("read", "read_file", "readfile"), (), id="ambiguous-harness"),
         pytest.param(
@@ -121,7 +137,12 @@ def test_file_edit_names_resolve_to_the_offered_edit_dialect(
     assert called_tool_name(called, (BASH_TOOL_NAME, "read", "edit", "write")) == replace_route
 
 
-def test_an_offered_tool_wins_over_a_harness_name() -> None:
+def test_a_real_tool_wins_over_a_harness_name() -> None:
     assert called_tool_name("terminal", (BASH_TOOL_NAME, "terminal")) == "terminal"
     assert called_tool_name("Terminal", (BASH_TOOL_NAME, "terminal")) == "terminal"
     assert called_tool_name("terminal", (BASH_TOOL_NAME,)) == BASH_TOOL_NAME
+    assert called_tool_name("computer_action", (*OFFERED, "computer_action")) == "computer_action"
+    assert (
+        called_tool_name("functions.computer_action()", OFFERED, registered=("computer_action",))
+        == "computer_action"
+    )

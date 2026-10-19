@@ -86,7 +86,11 @@ _SERVICES: list[dict[str, Any]] = [
     {"domain": "shell_command", "services": {"run": {"description": "", "fields": {}}}},
 ]
 
-_KITCHEN = {"entity_id": "light.kitchen", "state": "on", "attributes": {"friendly_name": "Kitchen"}}
+_KITCHEN: dict[str, Any] = {
+    "entity_id": "light.kitchen",
+    "state": "on",
+    "attributes": {"friendly_name": "Kitchen"},
+}
 
 
 def _mock_services() -> respx.Route:
@@ -199,7 +203,25 @@ async def test_list_services_unknown_names_list_close_ones(
 # ha_call_service
 @respx.mock
 @pytest.mark.asyncio
-async def test_call_service_reports_changed_states_as_lines() -> None:
+@pytest.mark.parametrize(
+    ("requested", "returned", "expected_brightness", "expected_percentage"),
+    [
+        ({"brightness": 128}, {"brightness": 128}, "128", None),
+        ({"brightness_pct": 60}, {"brightness": 128}, "128", "50.2%"),
+        ({"brightness_pct": 0}, {"brightness": 0}, "0", "0%"),
+        ({"brightness_pct": 60}, {}, None, None),
+        ({"brightness_pct": 60}, {"brightness": None}, None, None),
+        ({"brightness_pct": 60}, {"brightness": True}, "true", None),
+        ({"brightness_pct": 60}, {"brightness": "128"}, "128", None),
+        ({"brightness_pct": 60}, {"brightness": 256}, "256", None),
+    ],
+)
+async def test_call_service_reports_changed_states_as_lines(
+    requested: dict[str, Any],
+    returned: dict[str, Any],
+    expected_brightness: str | None,
+    expected_percentage: str | None,
+) -> None:
     route = respx.post(f"{HASS_URL}/api/services/light/turn_on").mock(
         return_value=httpx.Response(
             200,
@@ -208,7 +230,7 @@ async def test_call_service_reports_changed_states_as_lines() -> None:
                 {
                     "entity_id": "light.living_room",
                     "state": "on",
-                    "attributes": {"friendly_name": "Living Room", "brightness": 128},
+                    "attributes": {"friendly_name": "Living Room", **returned},
                 },
             ],
         )
@@ -222,20 +244,28 @@ async def test_call_service_reports_changed_states_as_lines() -> None:
             "domain": "light",
             "service": "turn_on",
             "entity_id": "light.living_room",
-            "data": {"brightness": 128},
+            "data": requested,
         },
     )
 
     data = assert_success_envelope(result)
-    assert request_body(route) == {"brightness": 128, "entity_id": "light.living_room"}
-    assert data == {
-        "service": "light.turn_on",
-        "changed": 1,
-        "content": "light.living_room: on (Living Room) brightness=128",
-    }
-    assert model_text(result) == (
-        "service: light.turn_on\nchanged: 1\n\nlight.living_room: on (Living Room) brightness=128"
-    )
+    assert request_body(route) == {**requested, "entity_id": "light.living_room"}
+    assert len(respx.calls) == 1
+    assert data["service"] == "light.turn_on"
+    assert data["changed"] == 1
+    assert "light.living_room: on" in data["content"]
+    assert "light.living_room: off" not in data["content"]
+    text = model_text(result)
+    assert "brightness" in text
+    if expected_brightness is None:
+        assert "brightness=" not in text
+    else:
+        assert f"brightness={expected_brightness}" in text
+    if expected_percentage is None:
+        assert "%" not in text
+    else:
+        assert expected_percentage in text
+        assert "60%" not in text
 
 
 @respx.mock
@@ -455,27 +485,44 @@ async def test_call_service_names_candidates_instead_of_acting_on_a_name(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_call_service_without_change_reports_the_current_state() -> None:
+@pytest.mark.parametrize("requested", [{}, {"brightness_pct": 60}])
+async def test_call_service_without_change_reports_the_current_state(
+    requested: dict[str, Any],
+) -> None:
     respx.post(f"{HASS_URL}/api/services/light/turn_on").mock(
         return_value=httpx.Response(200, json=[])
     )
     respx.get(f"{HASS_URL}/api/states/light.kitchen").mock(
-        return_value=httpx.Response(200, json=_KITCHEN)
+        return_value=httpx.Response(
+            200,
+            json={**_KITCHEN, "attributes": {**_KITCHEN["attributes"], "brightness": 128}},
+        )
     )
     tools = tools_with_token()
 
     result = await dispatch(
         tools,
         HA_CALL_SERVICE_NAME,
-        {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"},
+        {
+            "domain": "light",
+            "service": "turn_on",
+            "entity_id": "light.kitchen",
+            "data": requested,
+        },
     )
 
-    assert assert_success_envelope(result) == {
-        "service": "light.turn_on",
-        "changed": 0,
-        "note": "No entity state changed.",
-        "content": "light.kitchen: on (Kitchen) [unchanged]",
-    }
+    data = assert_success_envelope(result)
+    assert len(respx.calls) == 2
+    assert data["service"] == "light.turn_on"
+    assert data["changed"] == 0
+    assert "light.kitchen: on" in data["content"]
+    assert "[unchanged]" in data["content"]
+    if requested:
+        assert "brightness=128" in data["content"]
+        assert "50.2%" in data["content"]
+        assert "60%" not in data["content"]
+    else:
+        assert "brightness" not in data["content"]
 
 
 @respx.mock
