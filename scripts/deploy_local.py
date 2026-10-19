@@ -80,6 +80,9 @@ def _export_head(destination: Path) -> None:
         assert process.stdout is not None
         with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
             archive.extractall(destination, filter="data")
+        # tarfile stops at the end-of-archive marker; git still writes the record padding
+        # after it and fails on a closed pipe unless the rest is read.
+        process.stdout.read()
     if process.returncode != 0:
         raise DeployError("git archive HEAD failed")
     # The digest-locked search engine is verified again when the package collects it;
