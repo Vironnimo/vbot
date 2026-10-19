@@ -8,7 +8,7 @@ reported tokens, times the Model's input estimate factor.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 from core.chat.messages import ChatMessage, JsonObject
 from core.chat.wire_shaping import history_request_messages
@@ -47,6 +47,15 @@ def _history_tokens(
     return estimate(history_request_messages(history, request_messages))
 
 
+class _ModelRequestInput(NamedTuple):
+    """One Compaction Model request's input, counted once for its send and its response."""
+
+    budget: RequestInput
+    """The corrected input, for the Adapter's output limit and prompt-limit checks."""
+    estimated: int
+    """The uncorrected selected-wire estimate of exactly the sent messages and Tools."""
+
+
 def _model_request_input_budget(
     adapter: Any,
     model_id: str,
@@ -57,8 +66,8 @@ def _model_request_input_budget(
     planned: Sequence[JsonObject] = (),
     active_request: Sequence[JsonObject] = (),
     active_context: RequestInput | None = None,
-) -> RequestInput:
-    """Return the corrected input of one Compaction Model request, for its output limit.
+) -> _ModelRequestInput:
+    """Return the input of one Compaction Model request: its budget and uncorrected estimate.
 
     *messages* is the request as sent and *planned* the Strategy's request
     before route shaping. When *planned* appends to the complete
@@ -66,7 +75,8 @@ def _model_request_input_budget(
     measurement plus the corrected change), the budget is that Context plus
     the appended messages' corrected estimate, and only the estimated parts
     carry the Adapter's estimation margin. Otherwise the whole budget is the
-    corrected estimate of the request.
+    corrected estimate of the request. The uncorrected estimate is the
+    calibration sample's base when the Provider measures the request's input.
     """
 
     def estimate(request: Sequence[JsonObject]) -> int:
@@ -81,8 +91,9 @@ def _model_request_input_budget(
         or not 0 < appended < len(messages)
         or list(planned[:known]) != list(active_request)
     ):
-        return RequestInput.estimate(round(total * factor))
+        return _ModelRequestInput(RequestInput.estimate(round(total * factor)), total)
     added = round(max(0, total - estimate(messages[:-appended])) * factor)
-    return RequestInput(
-        active_context.tokens + added, True, active_context.estimated_tokens + added
+    return _ModelRequestInput(
+        RequestInput(active_context.tokens + added, True, active_context.estimated_tokens + added),
+        total,
     )

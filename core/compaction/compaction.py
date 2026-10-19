@@ -44,6 +44,7 @@ from core.compaction._tail_types import COMPACTION_USER_QUOTE_PREFIX as COMPACTI
 from core.compaction._tail_types import TAIL_FLOOR_PERCENT as TAIL_FLOOR_PERCENT
 from core.compaction._tail_types import TAIL_SOFT_LIMIT_PERCENT as TAIL_SOFT_LIMIT_PERCENT
 from core.compaction._tail_types import RequestTokenEstimator as RequestTokenEstimator
+from core.compaction._workers import COMPACTION_WORKERS
 from core.compaction.errors import (
     CompactionError as CompactionError,
 )
@@ -63,7 +64,6 @@ from core.sessions import (
     skill_tool_activation,
 )
 from core.settings.normalizers import normalize_compaction_policy
-from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.chat import EffortState
@@ -95,15 +95,6 @@ SKILL_COMPACTION_GUIDANCE = (
 )
 
 MIN_AUTO_COMPACTION_RECLAIM_TOKENS = 4_096
-# ``tail_tokens`` is the size the Tail should reach: the first whole-step cut at
-# or above it wins up to the soft limit; without one, the largest cut down to the
-# floor; without that either, the first cut past the soft limit.
-COMPACTION_WORKER_LIMIT = 4
-
-_COMPACTION_WORKERS = BoundedWorkerPool(
-    name="compaction",
-    max_workers=COMPACTION_WORKER_LIMIT,
-)
 
 ModelTarget = Literal["active", "summary"]
 
@@ -464,14 +455,16 @@ class CompactionService:
         *estimate_factor* corrects local estimates for the active Model and
         *active_context* is Chat's Context of *request_messages* with
         *active_tools* (its measurement plus the corrected change), when known.
-        The Model request's input budget builds on them like a Chat request's.
+        The Model request's input budget builds on them like a Chat request's,
+        and every attempt whose Provider measures its input teaches the target
+        Model's input estimate calibration, as a Chat step does.
         """
         if trigger not in COMPACTION_TRIGGERS:
             raise CompactionError(f"Unknown compaction trigger: {trigger}")
         if minimum_reclaim_tokens < 0:
             raise CompactionError("minimum_reclaim_tokens cannot be negative")
         try:
-            prepared = await _COMPACTION_WORKERS.run(
+            prepared = await COMPACTION_WORKERS.run(
                 self._prepare_compaction,
                 messages,
                 storage=storage,
@@ -509,7 +502,7 @@ class CompactionService:
                         prompt_cache_affinity_id=prompt_cache_affinity_id,
                     )
                 )
-                model_messages, model_tools = await _COMPACTION_WORKERS.run(
+                model_messages, model_tools = await COMPACTION_WORKERS.run(
                     _prepare_compaction_model_request,
                     plan,
                     active_tools,
@@ -530,7 +523,7 @@ class CompactionService:
                     if plan.model_target == "summary"
                     else active_model_reference
                 )
-                budget = await _COMPACTION_WORKERS.run(
+                model_input = await COMPACTION_WORKERS.run(
                     _model_request_input_budget,
                     adapter,
                     model_id,
@@ -544,13 +537,14 @@ class CompactionService:
                     active_context=active_context if same_target else None,
                 )
                 try:
-                    with request_input_budget(model_id, budget):
+                    with request_input_budget(model_id, model_input.budget):
                         response = await _send_streaming_model_request(
                             adapter,
                             model_messages,
                             request_options,
                             usage_recorder=self._usage_recorder,
                             model_reference=reference,
+                            input_estimate=model_input.estimated,
                             session_address=session_address,
                             run_id=run_id,
                             owner_name=owner_name,
@@ -570,7 +564,7 @@ class CompactionService:
                 if "cost" not in usage:
                     usage["cost"] = price_usage(usage, pricing)
                 model_call = {"model": reference, "usage": usage}
-            checkpoint = await _COMPACTION_WORKERS.run(
+            checkpoint = await COMPACTION_WORKERS.run(
                 _finalize_compaction,
                 prepared,
                 response=response,

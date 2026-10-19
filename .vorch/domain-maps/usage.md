@@ -2,9 +2,9 @@
 
 `core/usage/` owns durable per-request accounting in `<data-dir>/model-usage.db`.
 Statistics consumes it as a source; the Statistics index remains disposable.
-The same owner keeps the input estimate calibration, which Chat and the
-Decision Model (`model_tasks/decisions.md`) learn from measured requests
-(Interfaces).
+The same owner keeps the input estimate calibration, which Chat, Compaction
+(`compaction/strategies-and-checkpoints.md` -> Model call) and the Decision
+Model (`model_tasks/decisions.md`) learn from measured requests (Interfaces).
 
 ## Ownership and lifetime
 
@@ -45,7 +45,8 @@ it absent; public address or Run-id reuse never proves historical ownership.
   ratio. Chat's Context accounting records each step whose Provider measured its
   input together with the uncorrected local estimate of exactly that request
   (`chat/usage.md` -> One Context rule); `record_input_estimate` writes
-  synchronously and runs on Chat's transform workers; the
+  synchronously, so its callers run it on their workers (Chat on its transform
+  workers, Compaction on the Compaction workers); the
   factor is the ratio of their exponentially decayed sums (decay 0.98 per
   sample) with a 20,000-token prior at 1.0, clamped to 0.5-2.0. Samples below
   1,000 estimated tokens or with a ratio beyond 4x either way are ignored. The
