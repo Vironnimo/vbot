@@ -28,6 +28,10 @@ MAX_AREA = 1_150_000
 MASK_FILL = (128, 128, 128)
 # Temporary-file category of published images (``TEMPORARY_FILE_RETENTION``).
 IMAGE_CATEGORY = "computer_use"
+# Lossless PNG at zlib level 4: every later request uploads each screenshot of the
+# history again, and level 4 is the strongest within the encode budget (about 30 ms).
+# Not WebP: xAI carries only JPEG and PNG (extensions/computer-use.md -> Screenshot encoding).
+_PNG_COMPRESS_LEVEL = 4
 
 type Area = tuple[int, int, int, int]
 
@@ -247,7 +251,7 @@ def resized(image: Image.Image, size: tuple[int, int]) -> Image.Image:
 def publish_image(context: ToolContext, image: Image.Image) -> Path:
     """Attach *image* to the Tool Result for the Model and show it to the user."""
     stream = io.BytesIO()
-    image.save(stream, format="PNG", compress_level=1)
+    image.save(stream, format="PNG", compress_level=_PNG_COMPRESS_LEVEL)
     raw = stream.getvalue()
     directory = DataDirectoryLayout(context.data_root).temporary / IMAGE_CATEGORY
     path = write_id_file(directory, "shot", ".png", raw)
