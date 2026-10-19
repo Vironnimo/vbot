@@ -8,6 +8,7 @@ ones or changing the durable tree.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +37,7 @@ from core.subagents.links import SubAgentLink, children, read_link
 from core.tools.terminal_manager import TerminalOwner
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
+from core.utils.retry import sleep_for_retry
 
 if TYPE_CHECKING:
     from core.chat import ChatMessage
@@ -148,7 +150,7 @@ class SubAgentForwarding:
     async def _follow(self, run: Run) -> None:
         sessions = self._runtime.chat_sessions
         address = _run_address(run)
-        link = await sessions.run_async(read_link, sessions, address)
+        link = await self._read_link(address)
         if link is None:
             return
         activity = await self._activities.ensure(address)
@@ -158,7 +160,7 @@ class SubAgentForwarding:
         if result is None:
             return
         outcome, answer, answer_ids, mark_read = result
-        link = await sessions.run_async(read_link, sessions, address)
+        link = await self._read_link(address)
         if link is None or run.id in self._silenced:
             return
         if not await sessions.run_async(sessions.exists, link.parent):
@@ -199,6 +201,37 @@ class SubAgentForwarding:
                 parent=parent,
                 answer_ids=answer_ids,
             )
+
+    async def _read_link(self, address: SessionAddress) -> SubAgentLink | None:
+        """A missing link is terminal; unavailable metadata gets bounded retries."""
+        sessions = self._runtime.chat_sessions
+        for attempt in range(3):
+            try:
+                link = await sessions.run_async(read_link, sessions, address, strict=True)
+            except Exception:
+                if attempt == 2:
+                    # The watcher callback reports the terminal failure with its
+                    # traceback instead of silently treating this as a root Session.
+                    raise
+                _LOGGER.log(
+                    logging.WARNING if attempt == 0 else logging.DEBUG,
+                    "Sub-Agent forwarding metadata unavailable; retrying "
+                    "(agent=%s session=%s attempt=%d)",
+                    address.agent_id,
+                    address.session_id,
+                    attempt + 1,
+                    exc_info=True,
+                )
+                await sleep_for_retry(attempt)
+            else:
+                if attempt:
+                    _LOGGER.info(
+                        "Sub-Agent forwarding metadata recovered (agent=%s session=%s)",
+                        address.agent_id,
+                        address.session_id,
+                    )
+                return link
+        raise AssertionError("forwarding metadata retry did not settle")
 
     async def _siblings_text(self, link: SubAgentLink, run_id: str) -> str | None:
         """Name the Parent's other Sub-Agents whose answers are still to come, as of now.
@@ -242,7 +275,7 @@ class SubAgentForwarding:
 
     async def _notify_user_reply(self, address: SessionAddress, message_id: str) -> None:
         sessions = self._runtime.chat_sessions
-        link = await sessions.run_async(read_link, sessions, address)
+        link = await self._read_link(address)
         if (
             link is None
             or link.reply_target != "user"
