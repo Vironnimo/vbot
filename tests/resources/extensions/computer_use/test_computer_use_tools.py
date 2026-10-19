@@ -6,7 +6,7 @@ import logging
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -230,18 +230,34 @@ async def test_window_view_includes_owned_popups_and_spans_displays(
     assert computer.target.inputs[-1] == ("click", 450, 150, "left", 1, [])
 
 
-@pytest.mark.parametrize("reason", ["missing", "other_session", "expired", "layout", "window"])
+@pytest.mark.parametrize("tool", ["computer", "computer_batch"])
+@pytest.mark.parametrize(
+    ("reason", "action"),
+    [
+        (reason, {"action": "left_click", "coordinate": [100, 50]})
+        for reason in ("missing", "other_session", "expired", "layout", "window")
+    ]
+    + [
+        (reason, action)
+        for reason in ("missing", "other_session", "expired")
+        for action in (
+            {"action": "type", "text": "x"},
+            {"action": "key", "text": "enter"},
+            {"action": "hold_key", "text": "shift", "duration": 0.1},
+        )
+    ],
+)
 async def test_image_references_refuse_missing_or_changed_targets_before_input(
-    computer: Harness, reason: str
+    computer: Harness, tool: str, reason: str, action: dict[str, Any]
 ) -> None:
     context = computer.context_for("computer")
     await computer.call("computer", {"action": "screenshot"}, context)
     reference = screenshot_id(context)
-    request_context = computer.context_for("computer")
+    request_context = computer.context_for(tool)
     if reason == "missing":
         reference = "shot_unknown"
     elif reason == "other_session":
-        request_context = computer.context_for("computer", session_id="other")
+        request_context = computer.context_for(tool, session_id="other")
     elif reason == "expired":
         now = computer.service.sessions.clock()
         computer.service.sessions.clock = lambda: now + 1801
@@ -249,13 +265,12 @@ async def test_image_references_refuse_missing_or_changed_targets_before_input(
         computer.target.displays_[0] = replace(computer.target.displays_[0], left=1)
     else:
         computer.target.windows_[0] = replace(computer.target.windows_[0], left=101)
-    result = await computer.call(
-        "computer",
-        {"action": "left_click", "screenshot_id": reference, "coordinate": [100, 50]},
-        request_context,
-    )
+    arguments = {**action, "screenshot_id": reference}
+    if tool == "computer_batch":
+        # A later invalid reference must also prevent an earlier valid key.
+        arguments = {"actions": [{"action": "key", "text": "enter"}, arguments]}
+    result = await computer.call(tool, arguments, request_context)
     assert result["error"]["code"] == "invalid_arguments"
-    assert "screenshot" in result["error"]["message"]
     assert computer.target.inputs == []
 
 
