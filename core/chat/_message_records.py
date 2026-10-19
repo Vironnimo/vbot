@@ -13,6 +13,7 @@ from core.providers.adapter import (
     TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD,
     TOOL_CALL_REJECTION_FIELD,
 )
+from core.utils.timestamps import is_canonical_timestamp
 
 # Why a streamed Assistant turn or a Run stopped before it was complete.
 InterruptionCause = Literal["user", "provider", "network", "timeout", "process_restart", "internal"]
@@ -240,20 +241,27 @@ class ModelFallback:
     """The Model switch a fallback note records, for display in the Run's history.
 
     Presentation only: the note's text is what the Model reads; this record
-    never enters a Provider request.
+    never enters a Provider request. ``retry_at`` is the canonical timestamp
+    from which new Runs try ``from_model`` again, when it cools down.
     """
 
     from_model: str
     to_model: str
+    retry_at: str | None = None
 
     def __post_init__(self) -> None:
         for key, value in (("from_model", self.from_model), ("to_model", self.to_model)):
             if not isinstance(value, str) or not value:
                 raise ChatMessageValidationError(f"model fallback {key} must be a non-empty string")
+        if self.retry_at is not None and not is_canonical_timestamp(self.retry_at):
+            raise ChatMessageValidationError("model fallback retry_at must be a timestamp")
 
     def to_dict(self) -> JsonObject:
         """Return a JSON-serializable fallback dictionary."""
-        return {"from_model": self.from_model, "to_model": self.to_model}
+        data: JsonObject = {"from_model": self.from_model, "to_model": self.to_model}
+        if self.retry_at is not None:
+            data["retry_at"] = self.retry_at
+        return data
 
     @classmethod
     def from_dict(cls, data: Any) -> ModelFallback:
@@ -262,7 +270,9 @@ class ModelFallback:
             raise ChatMessageValidationError("model_fallback must be an object")
         # The constructor validates both Models.
         return cls(
-            from_model=cast(str, data.get("from_model")), to_model=cast(str, data.get("to_model"))
+            from_model=cast(str, data.get("from_model")),
+            to_model=cast(str, data.get("to_model")),
+            retry_at=cast("str | None", data.get("retry_at")),
         )
 
 

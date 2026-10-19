@@ -5,7 +5,7 @@
   import CopyButton from '../ui/CopyButton.svelte';
   import { isContextMenuKey } from '../ui/contextMenu.js';
   import { t } from '$lib/i18n.js';
-  import { formatMoment } from '$lib/timeText.js';
+  import { formatAbsoluteTime, formatMoment } from '$lib/timeText.js';
   import { INTENTIONAL_HOVER_SHOW_DELAY_MS, tooltip } from '$lib/tooltip.js';
   import ChangeStats from './ChangeStats.svelte';
   import CopyableValueCard from './CopyableValueCard.svelte';
@@ -692,14 +692,20 @@
         />
       {:else if child.type === 'model_fallback'}
         <Banner variant="info" class="run-inline-banner">
-          {child.from_model
-            ? t('chat.modelFallbackFrom', {
+          {child.from_model && child.retry_at
+            ? t('chat.modelFallbackUntil', {
                 from: child.from_model,
                 to: child.to_model,
+                time: formatAbsoluteTime(child.retry_at),
               })
-            : t('chat.modelFallbackActivated', {
-                model: child.to_model,
-              })}
+            : child.from_model
+              ? t('chat.modelFallbackFrom', {
+                  from: child.from_model,
+                  to: child.to_model,
+                })
+              : t('chat.modelFallbackActivated', {
+                  model: child.to_model,
+                })}
         </Banner>
       {:else if child.type === 'compaction_separator'}
         <ChatCompactionSeparator item={child} inRun />

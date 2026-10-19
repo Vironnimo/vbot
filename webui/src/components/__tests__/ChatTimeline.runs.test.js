@@ -23,6 +23,7 @@ import {
 } from './timelineItems.support.js';
 import { applyTimelineEvent } from '../../lib/chatTimeline.js';
 import { t } from '../../lib/i18n.js';
+import { formatAbsoluteTime } from '../../lib/timeText.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 // A variable path keeps Vite from rewriting the URL into an asset URL.
@@ -445,6 +446,34 @@ describe('ChatTimeline Runs', () => {
       );
     },
   );
+
+  it('names when new Runs try a cooling-down Model again', () => {
+    const sessionState = timelineSession();
+    const retryAt = '2026-10-19T12:15:00.000000Z';
+    sessionState.timelineItems = [
+      assistantRun('fallback', [
+        {
+          id: 'fallback-note',
+          type: 'model_fallback',
+          content: 'anthropic/claude-sonnet-4',
+          from_model: 'openai/gpt-5',
+          to_model: 'anthropic/claude-sonnet-4',
+          retry_at: retryAt,
+        },
+        outputItem('Recovered'),
+      ]),
+    ];
+    timeline.render(sessionState);
+
+    const notice = document.querySelector('.assistant-run .run-inline-banner');
+    expect(notice.textContent.trim()).toBe(
+      t('chat.modelFallbackUntil', {
+        from: 'openai/gpt-5',
+        to: 'anthropic/claude-sonnet-4',
+        time: formatAbsoluteTime(retryAt),
+      }),
+    );
+  });
 
   it('renders goal changes as status rows inside a Run and between Runs', () => {
     const sessionState = timelineSession();

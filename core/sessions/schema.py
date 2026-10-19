@@ -423,10 +423,13 @@ CREATE TABLE history_edit_entries (
 
 -- The Model switch a fallback note records. The WebUI Chat History shows it as
 -- a display notice in place of the hidden note; it never reaches the Model.
+-- retry_at is when new Runs try from_model again, NULL when it was not cooling
+-- down.
 CREATE TABLE note_model_fallbacks (
   entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
   from_model TEXT NOT NULL,
-  to_model TEXT NOT NULL
+  to_model TEXT NOT NULL,
+  retry_at TEXT
 ) STRICT;
 
 -- The Session goal change a note records (set, a pause and its reason, an

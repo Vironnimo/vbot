@@ -438,9 +438,18 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
         ),
         (
             ChatMessage.note(
-                "Model a unavailable.", model_fallback=ModelFallback(from_model="a", to_model="b")
+                "Model a unavailable.",
+                model_fallback=ModelFallback(
+                    from_model="a", to_model="b", retry_at="2026-10-19T12:15:00.000000Z"
+                ),
             ),
-            {"model_fallback": {"from_model": "a", "to_model": "b"}},
+            {
+                "model_fallback": {
+                    "from_model": "a",
+                    "to_model": "b",
+                    "retry_at": "2026-10-19T12:15:00.000000Z",
+                }
+            },
         ),
         (
             ChatMessage.note("", goal_event=GoalEvent("turn", turn=2, max_turns=30)),
@@ -597,6 +606,14 @@ _CHECKPOINT = {
             "model_fallback",
         ),
         (_payload("note", content="Switched.", model_fallback={"from_model": "a"}), "to_model"),
+        (
+            _payload(
+                "note",
+                content="Switched.",
+                model_fallback={"from_model": "a", "to_model": "b", "retry_at": "soon"},
+            ),
+            "retry_at",
+        ),
         (_payload("user", content="Hi", goal_event={"event": "set"}), "goal_event"),
         (_payload("note", content="", goal_event={"event": "turn", "turn": 0}), "turn"),
     ],
@@ -645,6 +662,7 @@ _CHECKPOINT = {
         "assistant-without-output",
         "fallback-on-assistant",
         "fallback-without-target",
+        "fallback-retry-not-a-timestamp",
         "goal-event-on-user",
         "goal-turn-not-positive",
     ],

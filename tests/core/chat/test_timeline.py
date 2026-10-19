@@ -322,7 +322,13 @@ def test_checkpoint_and_fallback_stay_between_their_surrounding_phases() -> None
     messages = [
         message("before", "assistant", content="Before"),
         checkpoint,
-        message("fallback", "model_fallback", from_model="first/model", to_model="second/model"),
+        message(
+            "fallback",
+            "model_fallback",
+            from_model="first/model",
+            to_model="second/model",
+            retry_at="2026-10-19T12:15:00.000000Z",
+        ),
         message("after", "assistant", content="After"),
         message("summary", "run_summary", run_id="run", status="completed"),
     ]
@@ -338,7 +344,11 @@ def test_checkpoint_and_fallback_stay_between_their_surrounding_phases() -> None
         items[1]["contextTokensAfter"],
         items[1]["durationMs"],
     ) == (120000, 30000, 2000)
-    assert (items[2]["from_model"], items[2]["to_model"]) == ("first/model", "second/model")
+    assert (items[2]["from_model"], items[2]["to_model"], items[2]["retry_at"]) == (
+        "first/model",
+        "second/model",
+        "2026-10-19T12:15:00.000000Z",
+    )
 
 
 def test_goal_rows_stay_in_order_without_splitting_a_run() -> None:

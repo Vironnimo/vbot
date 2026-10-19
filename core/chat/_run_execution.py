@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from core.chat._message_history import (
@@ -12,6 +14,7 @@ from core.chat._message_history import (
     _append_reply_surface_note,
 )
 from core.chat._request_history import _assign_session_image_references
+from core.chat._request_targets import _resolved_model_reference
 from core.chat._run_state import (
     RequestBuildInputs,
     _SessionSnapshot,
@@ -51,7 +54,8 @@ from core.chat.model_resolution import (
     _split_agent_model,
     parse_bare_model,
 )
-from core.chat.streaming import should_advance_model_fallback_chain
+from core.chat.recovery import RouteHealth, RoutePatience
+from core.chat.streaming import model_fallback_scope
 from core.chat.usage import (
     aggregate_session_usage,
     latest_session_context_usage,
@@ -76,6 +80,7 @@ from core.tools.scratch_areas import ScratchUnavailableError
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
+from core.utils.timestamps import format_canonical_timestamp
 from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
@@ -85,12 +90,49 @@ if TYPE_CHECKING:
         ChatLoopDependencies,
         ReflectionNotifier,
         SessionTitleNotifier,
+        _ModelTarget,
         _RunExecutionContext,
         _RunRequest,
     )
     from core.compaction import CompactionService
 
 _LOGGER = get_logger("chat")
+
+
+@dataclass(frozen=True)
+class _ChainRoute:
+    """One route of a Run's Model fallback chain, the primary route first."""
+
+    binding: str
+    provider_id: str
+    connection_id: str
+    model_id: str
+    # Exact Provider/Model/Connection/account scope (``_ModelTarget.model_reference``).
+    reference: str
+
+    @property
+    def connection_scope(self) -> str:
+        """The Provider, Connection and account the route's credentials belong to."""
+        return f"{self.provider_id}::{self.reference.partition('::')[2]}"
+
+
+def _resolve_chain_routes(dependencies: ChatLoopDependencies, agent: Any) -> list[_ChainRoute]:
+    """Resolve the Agent's fallback candidates into routes. Blocking."""
+    routes = []
+    for binding, provider_id, connection_id in _resolve_fallback_chain(dependencies, agent):
+        _, model_id = _split_agent_model(binding)
+        routes.append(
+            _ChainRoute(
+                binding=binding,
+                provider_id=provider_id,
+                connection_id=connection_id,
+                model_id=model_id,
+                reference=_resolved_model_reference(
+                    dependencies, provider_id, connection_id, model_id
+                ),
+            )
+        )
+    return routes
 
 
 class RunExecution:
@@ -107,6 +149,8 @@ class RunExecution:
     ) -> None:
         self._dependencies = dependencies
         self._scratch_failures = LoggedConditions()
+        # Routes that recently gave up, shared by every Run of this Chat Loop.
+        self._route_health = RouteHealth()
         self._requests = requests
         self._progression = progression
         self._compaction_service = compaction_service
@@ -443,24 +487,7 @@ class RunExecution:
 
             context.request_build_started = request_build_started
 
-            try:
-                return await self._progression._send_until_final(context, target)
-            except (ProviderError, RunInterruptedError) as primary_exc:
-                (
-                    completed_assistant,
-                    chain_error,
-                ) = await self._advance_fallback_chain(context, run, session, primary_exc)
-                if completed_assistant is not None:
-                    return completed_assistant
-                if not isinstance(chain_error, RunInterruptedError):
-                    await _persist_run_error(run, session, chain_error)
-                if chain_error is primary_exc:
-                    # Keep the failure behind it for the terminal log line.
-                    raise
-                raise chain_error from primary_exc
-            except (ChatError, ConfigError, VBotError) as exc:
-                await _persist_run_error(run, session, exc)
-                raise
+            return await self._serve_with_fallback(context, run, session)
 
         except BaseException as exc:
             # Preparation can fail before Provider progression installs its own
@@ -646,112 +673,209 @@ class RunExecution:
         )
         return True
 
-    async def _advance_fallback_chain(
+    async def _serve_with_fallback(
         self,
         context: _RunExecutionContext,
         run: Run,
         session: ChatSession,
-        first_failure: ProviderError | RunInterruptedError,
-    ) -> tuple[ChatMessage | None, ProviderError | RunInterruptedError]:
-        """Advance through the resolved fallback chain after a provider failure.
+    ) -> ChatMessage:
+        """Serve the Run on the primary route, then on the Model fallback chain.
 
-        Returns ``(assistant, error_to_report)``. ``assistant`` is set when a
-        chain candidate completed the Run. Otherwise ``error_to_report`` is the
-        last actual send failure (the primary failure when no candidate ever
-        ran) and the caller owns persisting it. Raises directly — already
-        persisted — when a candidate fails in a way that must replace the
-        reported outcome: a non-qualifying ProviderError (auth, billing,
-        permission, content policy, context limits) or any Chat/Config/VBot
-        error during a candidate Run. Candidate construction failures only log
-        a warning and skip that candidate — one broken binding must never take
-        down the whole escape route.
+        A route gives up once its recovery budget is spent; the next route then
+        serves the rest of the Run. Routes that recently gave up in any Run of
+        this Chat Loop (:class:`RouteHealth`) go last, so a new Run starts on
+        the first route expected to answer. A failure scoped to an account
+        skips later routes on the same Connection and account; a failure no
+        other route can fix ends the Run. When no route completes, the last
+        failure determines the outcome. Candidate construction failures only
+        log a warning and skip that candidate: one broken binding must never
+        take down the whole escape route.
         """
         agent = context.agent
-        chain = list(
-            await _CHAT_TRANSFORM_WORKERS.run(_resolve_fallback_chain, self._dependencies, agent)
+        primary = context.primary_target
+        health = self._route_health
+        primary_route = _ChainRoute(
+            binding=agent.model,
+            provider_id=primary.provider_id,
+            connection_id=primary.connection_id,
+            model_id=primary.model_id,
+            reference=primary.model_reference,
         )
-        if not chain or not should_advance_model_fallback_chain(first_failure):
-            return None, first_failure
+        # The chain resolves when the Run needs it: at once while the primary
+        # route cools down, otherwise only after it gave up.
+        configured = any(
+            candidate != agent.model for candidate in getattr(agent, "fallback_models", None) or ()
+        )
+        chain: list[_ChainRoute] | None = None
+        served: set[str] = set()
+        excluded_scopes: set[str] = set()
 
-        from_binding = agent.model
-        last_failure: ProviderError | RunInterruptedError = first_failure
-        for binding, provider_id, connection_id in chain:
-            if not context.recovery.available():
+        def remaining() -> list[_ChainRoute]:
+            candidates = [
+                route
+                for route in (primary_route, *(chain or ()))
+                if route.reference not in served and route.connection_scope not in excluded_scopes
+            ]
+            ready = [route for route in candidates if health.retry_at(route.reference) is None]
+            return ready + [route for route in candidates if route not in ready]
+
+        async def resolve_chain() -> list[_ChainRoute]:
+            return await _CHAT_TRANSFORM_WORKERS.run(
+                _resolve_chain_routes, self._dependencies, agent
+            )
+
+        if configured and health.retry_at(primary_route.reference) is not None:
+            chain = await resolve_chain()
+        previous: _ChainRoute | None = None
+        first_failure: ProviderError | RunInterruptedError | None = None
+        last_failure: ProviderError | RunInterruptedError | None = None
+        while True:
+            if previous is not None and chain is None:
+                chain = await resolve_chain() if configured else []
+            order = remaining()
+            if not order:
                 break
-            _, candidate_model_id = _split_agent_model(binding)
-            try:
-                candidate_target = await self._requests.targets.create(
-                    provider_id,
-                    connection_id,
-                    candidate_model_id,
-                    public_model=binding,
-                )
-            except (ConfigError, VBotError) as construction_exc:
-                _LOGGER.warning(
-                    "Skipping fallback candidate %s for agent %s (%s)",
-                    binding,
-                    getattr(agent, "id", "?"),
-                    construction_exc,
-                )
-                continue
+            route = order[0]
+            served.add(route.reference)
+            fallback_follows = len(order) > 1 if chain is not None else configured
+            if route is primary_route:
+                target = primary
+            else:
+                try:
+                    target = await self._requests.targets.create(
+                        route.provider_id,
+                        route.connection_id,
+                        route.model_id,
+                        public_model=route.binding,
+                    )
+                except (ConfigError, VBotError) as construction_exc:
+                    _LOGGER.warning(
+                        "Skipping fallback candidate %s for agent %s (%s)",
+                        route.binding,
+                        getattr(agent, "id", "?"),
+                        construction_exc,
+                    )
+                    continue
 
-            try:
-
-                def _close_candidate_adapter(
-                    _adapter: Any = candidate_target.adapter,
-                ) -> Any:
+                def _close_candidate_adapter(_adapter: Any = target.adapter) -> Any:
                     return _close_adapter(_adapter)
 
                 run.add_cancel_callback(_close_candidate_adapter)
-                run.model = parse_bare_model(binding)
-                _LOGGER.warning(
-                    "Model fallback activated (run=%s from=%s to=%s)",
-                    run.id,
-                    from_binding,
-                    binding,
+            try:
+                context.recovery.serve(
+                    route.reference,
+                    RoutePatience.for_route(
+                        fallback_follows=fallback_follows,
+                        failed_recently=health.failed_recently(route.reference),
+                    ),
                 )
-                run.emit(
-                    MODEL_FALLBACK_ACTIVATED_EVENT,
-                    {"from_model": from_binding, "to_model": binding},
-                )
-                await session.add_note_async(
-                    f"Model {from_binding} unavailable. Switched to {binding} for this run.",
-                    model_fallback=ModelFallback(from_model=from_binding, to_model=binding),
-                )
-                if (
-                    isinstance(last_failure, RunInterruptedError)
-                    and last_failure.result is not None
-                ):
-                    await session.add_note_async(OUTPUT_INTEGRITY_RECOVERY_NOTE)
-                await context.session_snapshot.refresh(session)
-                context.request_state = await self._requests.rebuild_live_request_state(
-                    agent,
-                    session,
-                    inputs=RequestBuildInputs.from_context(
-                        context, candidate_target
-                    ).with_session_messages(context.session_snapshot.active_messages),
-                    live_messages=context.request_state.messages if context.request_state else [],
-                )
-                # Rebuilding applies the fallback route's media and Tool
-                # capabilities. The persisted previous tool cycle may still carry
-                # Provider-specific reasoning, which must never cross the Provider
-                # boundary.
-                _strip_assistant_reasoning_fields(context.request_state.messages)
+                if route is not primary_route or previous is not None:
+                    await self._switch_route(
+                        context,
+                        run,
+                        session,
+                        from_route=previous or primary_route,
+                        to_route=route,
+                        target=target,
+                        failure=last_failure,
+                    )
                 try:
-                    completed = await self._progression._send_until_final(context, candidate_target)
-                    return completed, last_failure
-                except (ProviderError, RunInterruptedError) as candidate_failure:
-                    if not should_advance_model_fallback_chain(candidate_failure):
-                        if isinstance(candidate_failure, RunInterruptedError):
-                            raise
-                        await _persist_run_error(run, session, candidate_failure)
-                        raise
-                    last_failure = candidate_failure
-                    from_binding = binding
+                    completed = await self._progression._send_until_final(context, target)
+                except (ProviderError, RunInterruptedError) as failure:
+                    if context.recovery.completed(route.reference):
+                        health.recovered(route.reference)
+                    first_failure = first_failure or failure
+                    last_failure = failure
+                    scope = model_fallback_scope(failure)
+                    if scope is None:
+                        break
+                    if scope == "connection":
+                        excluded_scopes.add(route.connection_scope)
+                    elif fallback_follows and (
+                        isinstance(failure, RunInterruptedError) or failure.retryable
+                    ):
+                        health.failed(route.reference)
+                    previous = route
                     continue
-                except (ChatError, ConfigError, VBotError) as candidate_failure:
-                    await _persist_run_error(run, session, candidate_failure)
+                except (ChatError, ConfigError, VBotError) as failure:
+                    await _persist_run_error(run, session, failure)
                     raise
+                health.recovered(route.reference)
+                return completed
             finally:
-                await _close_adapter(candidate_target.adapter)
-        return None, last_failure
+                if target is not primary:
+                    await _close_adapter(target.adapter)
+        # A route always runs first, so a failure ended the loop.
+        assert first_failure is not None and last_failure is not None
+        if not isinstance(last_failure, RunInterruptedError):
+            await _persist_run_error(run, session, last_failure)
+        if last_failure is first_failure:
+            raise last_failure
+        raise last_failure from first_failure
+
+    async def _switch_route(
+        self,
+        context: _RunExecutionContext,
+        run: Run,
+        session: ChatSession,
+        *,
+        from_route: _ChainRoute,
+        to_route: _ChainRoute,
+        target: _ModelTarget,
+        failure: ProviderError | RunInterruptedError | None,
+    ) -> None:
+        """Record the switch to ``to_route`` and rebuild the request for ``target``."""
+        retry_at = self._route_health.retry_at(from_route.reference)
+        retry_at_text = (
+            format_canonical_timestamp(datetime.fromtimestamp(retry_at, UTC))
+            if retry_at is not None
+            else None
+        )
+        run.model = parse_bare_model(to_route.binding)
+        if failure is None:
+            # The route gave up in an earlier Run and still cools down.
+            _LOGGER.info(
+                "Model route cooling down; Run starts on fallback (run=%s from=%s to=%s until=%s)",
+                run.id,
+                from_route.binding,
+                to_route.binding,
+                retry_at_text,
+            )
+        else:
+            _LOGGER.warning(
+                "Model fallback activated (run=%s from=%s to=%s)",
+                run.id,
+                from_route.binding,
+                to_route.binding,
+            )
+        run.emit(
+            MODEL_FALLBACK_ACTIVATED_EVENT,
+            {
+                "from_model": from_route.binding,
+                "to_model": to_route.binding,
+                **({"retry_at": retry_at_text} if retry_at_text is not None else {}),
+            },
+        )
+        await session.add_note_async(
+            f"Model {from_route.binding} unavailable. Switched to {to_route.binding} for this run.",
+            model_fallback=ModelFallback(
+                from_model=from_route.binding,
+                to_model=to_route.binding,
+                retry_at=retry_at_text,
+            ),
+        )
+        if isinstance(failure, RunInterruptedError) and failure.result is not None:
+            await session.add_note_async(OUTPUT_INTEGRITY_RECOVERY_NOTE)
+        await context.session_snapshot.refresh(session)
+        context.request_state = await self._requests.rebuild_live_request_state(
+            context.agent,
+            session,
+            inputs=RequestBuildInputs.from_context(context, target).with_session_messages(
+                context.session_snapshot.active_messages
+            ),
+            live_messages=context.request_state.messages if context.request_state else [],
+        )
+        # Rebuilding applies the new route's media and Tool capabilities. The
+        # persisted previous tool cycle may still carry Provider-specific
+        # reasoning, which must never cross the Provider boundary.
+        _strip_assistant_reasoning_fields(context.request_state.messages)

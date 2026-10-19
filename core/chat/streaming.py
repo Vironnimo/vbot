@@ -9,7 +9,7 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
@@ -96,7 +96,7 @@ def decide_stream_recovery(
     can_restart: bool,
     has_partial_content: bool,
     finish_received: bool = False,
-    has_fallback_chain: bool = False,
+    fallback_follows: bool = False,
     tools_started: bool = False,
 ) -> StreamRecoveryAction:
     """Decide how to recover from a broken streaming attempt.
@@ -121,10 +121,10 @@ def decide_stream_recovery(
     (``tools_started``) block replay the same way: a second attempt would run
     them again.
 
-    A rate-limit failure with a configured model-fallback chain fails
-    immediately (advancing the chain) instead of burning same-model restarts:
-    quota pressure rarely clears within seconds. Without a chain the shared
-    Chat budget and Retry-After backoff apply.
+    A rate-limit failure fails immediately when another route of the Model
+    fallback chain can take over (``fallback_follows``) instead of burning
+    same-model restarts: quota pressure rarely clears within seconds. On the
+    last route the Chat budget and Retry-After backoff apply.
     """
     if finish_received:
         return StreamRecoveryAction.ACCEPT_COMPLETE
@@ -132,7 +132,7 @@ def decide_stream_recovery(
         if _is_streaming_fallback_error(error):
             return StreamRecoveryAction.FALLBACK
         if _is_stream_restartable_error(error):
-            if has_fallback_chain and _is_rate_limit_error(error):
+            if fallback_follows and _is_rate_limit_error(error):
                 # A retryable Provider failure still belongs to the Run-local
                 # Model fallback policy; rate limits skip straight to it.
                 return StreamRecoveryAction.FAIL
@@ -196,8 +196,9 @@ def _is_rate_limit_error(error: Exception) -> bool:
 
 # Message markers of a fatal error that is clearly model-scoped: the requested
 # model is unknown, deactivated, or not served by this account. Deliberately
-# narrow — billing, permission, content-policy, and context-overflow fatals
-# must never match, because switching models cannot fix them.
+# narrow: billing and permission refusals are account-scoped, and
+# content-policy and context-overflow fatals must never match, because
+# switching models cannot fix them.
 _MODEL_SCOPED_FATAL_MARKERS = (
     "model not found",
     "model_not_found",
@@ -209,32 +210,63 @@ _MODEL_SCOPED_FATAL_MARKERS = (
 )
 
 
-def should_advance_model_fallback_chain(error: ProviderError | RunInterruptedError) -> bool:
-    """Whether a failed attempt should advance to the next fallback-chain candidate.
+# Message markers of a fatal error scoped to the account behind a Connection:
+# billing, quota and permission refusals. Another Connection can still serve.
+_ACCOUNT_SCOPED_FATAL_MARKERS = (
+    "payment_required",
+    "payment required",
+    "billing",
+    "insufficient_quota",
+    "insufficient quota",
+    "insufficient credit",
+    "insufficient balance",
+    "credit_balance",
+    "credit balance",
+    "spend_limit",
+    "spend limit",
+    "usage_not_included",
+    "permission_denied",
+    "permission_error",
+    "permission denied",
+)
 
-    Advances on retryable ``ProviderError`` failures (transient and
-    provider-specific), exhausted provider/network/timeout interruptions, and
-    fatal errors that are clearly
-    model-scoped (404 or unknown-model wording): the binding itself is dead, so
-    the next candidate is the only sensible recovery.
 
-    Raw ``NetworkError`` must first exhaust same-Model recovery. A configured
-    route may use a different host, so its normalized interruption can advance.
-    Never advances on auth failures (account-wide), streaming-unsupported,
-    or any other fatal class (billing, permission, context/token limits,
-    content policy) where an identical-shaped retry on another model either
-    fails again or silently changes the outcome's meaning.
+def model_fallback_scope(
+    error: ProviderError | RunInterruptedError,
+) -> Literal["route", "connection"] | None:
+    """Which later routes of the Model fallback chain may take over after ``error``.
+
+    ``"route"``: any later route. That holds for retryable ``ProviderError``
+    failures (transient and provider-specific), exhausted
+    provider/network/timeout interruptions, and fatal errors that are clearly
+    model-scoped (404 or unknown-model wording): the binding itself is dead.
+    Raw ``NetworkError`` must first exhaust same-Model recovery; a later route
+    may use a different host, so its normalized interruption can advance.
+
+    ``"connection"``: only routes on another Connection or account. That holds
+    for auth failures and billing, quota and permission refusals, which belong
+    to the account behind the failed route's Connection.
+
+    ``None``: no route. Streaming-unsupported and every other fatal class
+    (context/token limits, content policy) would either fail again or silently
+    change the outcome's meaning on another Model.
     """
     if isinstance(error, RunInterruptedError):
-        return error.cause in {"provider", "network", "timeout"}
-    if isinstance(error, (ProviderAuthError, ProviderStreamingUnsupportedError)):
-        return False
-    if error.retryable:
-        return True
-    if getattr(error, "status_code", None) == 404:
-        return True
+        return "route" if error.cause in {"provider", "network", "timeout"} else None
+    if isinstance(error, ProviderStreamingUnsupportedError):
+        return None
+    if isinstance(error, ProviderAuthError):
+        return "connection"
+    if error.retryable or getattr(error, "status_code", None) == 404:
+        return "route"
     message = str(error).lower()
-    return any(marker in message for marker in _MODEL_SCOPED_FATAL_MARKERS)
+    if any(marker in message for marker in _MODEL_SCOPED_FATAL_MARKERS):
+        return "route"
+    if getattr(error, "status_code", None) == 402 or any(
+        marker in message for marker in _ACCOUNT_SCOPED_FATAL_MARKERS
+    ):
+        return "connection"
+    return None
 
 
 def stream_stall_timeout(adapter: Any) -> float | None:
