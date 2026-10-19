@@ -14,6 +14,7 @@ from core.database import (
     DatabaseConversionRequiredError,
     DatabaseFormatError,
     DatabaseSchemaMismatchError,
+    DatabaseUnavailableError,
     Migration,
     open_database,
     open_offline_database,
@@ -409,15 +410,23 @@ def test_a_new_migration_runs_once_with_the_additive_reconcile(data_dir: Path) -
         assert connection.execute("SELECT pinned FROM notes").fetchone()[0] == 1
 
 
-def test_a_failing_migration_rolls_back_its_reconcile(data_dir: Path) -> None:
+@pytest.mark.parametrize(
+    "error_type", [RuntimeError, sqlite3.IntegrityError, DatabaseUnavailableError]
+)
+def test_a_failing_migration_rolls_back_its_reconcile(
+    data_dir: Path, error_type: type[Exception]
+) -> None:
     _created(data_dir)
 
     def fail(_connection: sqlite3.Connection) -> None:
-        raise RuntimeError("injected migration failure")
+        raise error_type("injected migration failure")
 
     grown = NOTES_SCHEMA_SQL + "\nALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;"
     spec = notes_spec(data_dir, schema_sql=grown, migrations=(Migration("notes.fail", apply=fail),))
-    with pytest.raises(RuntimeError, match="injected migration failure"):
+    expected = (
+        DatabaseUnavailableError if error_type is DatabaseUnavailableError else DatabaseFormatError
+    )
+    with pytest.raises(expected):
         open_database(spec)
 
     assert "pinned" not in _columns(spec.path)

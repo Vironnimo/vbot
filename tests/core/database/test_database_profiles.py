@@ -9,6 +9,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import Future
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from core.database import (
     CANONICAL,
     DISPOSABLE,
     DatabaseCorruptError,
+    DatabaseFormatError,
     DatabaseSchemaMismatchError,
     DatabaseSpec,
     DatabaseUnavailableError,
@@ -139,6 +141,45 @@ def test_an_outdated_foreign_newer_or_damaged_projection_is_discarded_and_rebuil
     with closing(sqlite3.connect(path)) as connection:
         identity = dict(connection.execute("SELECT key, value FROM kernel_meta").fetchall())
     assert identity["projection_version"] == str(projection_version)
+
+
+@pytest.mark.parametrize("profile", [CANONICAL, DISPOSABLE])
+@pytest.mark.parametrize("phase", ["migration", "after_open"])
+def test_failed_python_open_callbacks_keep_canonical_data_and_rebuild_projections(
+    data_dir: Path, profile: str, phase: str
+) -> None:
+    spec = notes_spec(data_dir) if profile == CANONICAL else projection_spec(data_dir / "index.db")
+    database = open_database(spec)
+    add_note(database, "existing data")
+    database.close()
+    calls = 0
+
+    def reject_existing(connection: sqlite3.Connection) -> None:
+        nonlocal calls
+        calls += 1
+        if connection.execute("SELECT COUNT(*) FROM notes").fetchone()[0]:
+            raise RuntimeError("injected callback failure")
+
+    changed = replace(
+        spec,
+        migrations=(Migration("notes.fail", apply=reject_existing),)
+        if phase == "migration"
+        else (),
+        after_open=reject_existing if phase == "after_open" else None,
+    )
+    if profile == CANONICAL:
+        with pytest.raises(DatabaseFormatError) as failure:
+            open_database(changed)
+        assert isinstance(failure.value.__cause__, RuntimeError)
+        reopened = open_database(spec)
+    else:
+        reopened = open_database(changed)
+    try:
+        assert note_bodies(reopened) == (["existing data"] if profile == CANONICAL else [])
+        assert (reopened.database_id == database.database_id) == (profile == CANONICAL)
+        assert calls == (2 if profile == DISPOSABLE and phase == "after_open" else 1)
+    finally:
+        reopened.close()
 
 
 def test_a_busy_projection_is_unavailable_and_never_discarded(

@@ -577,7 +577,14 @@ def _open_existing(
             try:
                 _evolve(writer, spec, declared)
                 if spec.after_open is not None:
-                    spec.after_open(writer)
+                    try:
+                        spec.after_open(writer)
+                    except DatabaseError, sqlite3.Error:
+                        raise
+                    except Exception as exc:
+                        raise DatabaseFormatError(
+                            f"the {spec.name} database failed its open check: {exc}"
+                        ) from exc
                 _probe_structure(writer, spec, declared)
             except sqlite3.Error as exc:
                 # Evolve and the probe classify their own statements; what remains
@@ -712,8 +719,10 @@ def _evolve(writer: sqlite3.Connection, spec: DatabaseSpec, declared: DeclaredSc
             if migration.apply is not None:
                 try:
                     migration.apply(writer)
-                except sqlite3.DatabaseError as exc:
-                    if classified_error(exc, "") is not None:
+                except DatabaseError:
+                    raise
+                except Exception as exc:
+                    if isinstance(exc, sqlite3.Error) and classified_error(exc, "") is not None:
                         raise
                     raise DatabaseFormatError(
                         f"the {spec.name} database migration {migration.name} failed: {exc}; "
