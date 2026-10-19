@@ -371,7 +371,7 @@ class WindowsTarget(WindowsInput):
         self._nudge()
         if _win32.set_foreground(handle) or _win32.attach_and_activate(handle):
             return
-        self._tap_alt()
+        self._tap_unbound_key()
         _win32.set_foreground(handle)
         deadline = time.monotonic() + _ACTIVATION_WAIT
         while _win32.foreground_window() != handle:

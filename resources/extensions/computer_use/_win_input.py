@@ -99,6 +99,7 @@ _KEYUP, _EXTENDED, _UNICODE = 0x2, 0x1, 0x4
 _MOVE, _ABSOLUTE_VIRTUAL, _WHEEL, _HWHEEL = 0x1, 0x8000 | 0x4000, 0x800, 0x1000
 _BUTTON_FLAGS = {"left": (0x2, 0x4), "right": (0x8, 0x10), "middle": (0x20, 0x40)}
 _WHEEL_DELTA = 120
+_VK_F24 = 0x87
 # Windows 11 Notepad and other WinUI text boxes drop or repeat keys that go down and
 # up in the same instant; a held key followed by a short gap reads like real typing.
 _KEY_HOLD, _KEY_GAP = 0.02, 0.02
@@ -352,9 +353,14 @@ class WindowsInput:
         """A zero mouse move: makes this process the source of the latest input."""
         self._send([mouse_event(_MOVE)])
 
-    def _tap_alt(self) -> None:
-        key = self._named("alt")
-        self._send([key.event(False), key.event(True)])
+    def _tap_unbound_key(self) -> None:
+        """Tap F24, a key no app binds: makes this process the source of the latest input.
+
+        Not Alt: an Alt tap puts the window brought to the front into menu mode (Paint
+        shows its key tips), which swallows the next click and turns letters into
+        shortcuts.
+        """
+        self._send([key_event(_VK_F24, 0, 0), key_event(_VK_F24, 0, _KEYUP)])
 
     # Mechanics
 
