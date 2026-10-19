@@ -26,6 +26,7 @@ import psutil  # type: ignore[import-untyped]
 from cli.application import processes
 from cli.application.packages import (
     download_release,
+    require_access_compatible_release,
     stage_package,
     validate_release,
     version_label,
@@ -361,7 +362,10 @@ def recover_interrupted(install: Installation, operation: Operation) -> bool:
             )
             return True
         validate_release(
-            install.version(candidate), shape=install.install_shape, remove_bytecode_caches=True
+            install.version(candidate),
+            shape=install.install_shape,
+            remove_bytecode_caches=True,
+            access=install.access,
         )
         operation.transition(
             install, "completed", "Recovered the verified active application update"
@@ -407,14 +411,18 @@ def execute(install: Installation, operation: Operation) -> None:
         else:
             progress("Unpacking and verifying the downloaded package")
             candidate = stage_package(install, archive, local=False)
+    candidate_release = read_json(install.version(candidate) / "release.json", limit=32 * 1024**2)
+    if candidate != install.version().name:
+        # Before dependencies, stopping, or a verification launch; prepared
+        # updates re-enter here as well. Rollback keeps the original pointer and
+        # may restart the exact previous baseline even when it predates the marker.
+        require_access_compatible_release(candidate_release, install.access)
     from cli.application.dependencies import prepare_for_version
 
     progress("Checking Extension dependencies")
     prepare_for_version(install, candidate)
     operation.candidate_version = candidate
-    operation.target_label = version_label(
-        read_json(install.version(candidate) / "release.json", limit=32 * 1024**2)
-    )
+    operation.target_label = version_label(candidate_release)
     operation.save(install)
     if install.version().name == candidate:
         operation.transition(

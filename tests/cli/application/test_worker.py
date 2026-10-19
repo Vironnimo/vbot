@@ -7,6 +7,7 @@ import logging
 import threading
 from collections.abc import Callable
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ from cli.application.state import (
     exclusive,
     load_operation,
 )
+from core.access.config import access_config
 from core.database import (
     DatabaseUnavailableError,
     begin_maintenance,
@@ -363,10 +365,26 @@ def test_a_stopped_server_is_neither_stopped_nor_started_by_the_update(
     assert calls == [("rel_new", True), "stop"]
 
 
+@pytest.mark.parametrize("authenticated", [False, True])
 def test_candidate_failure_restores_the_update_snapshot_before_the_previous_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    authenticated: bool,
 ):
     install = _install(tmp_path)
+    if authenticated:
+        install = replace(
+            install,
+            server_access=access_config(
+                "authenticated", public_url="https://vbot.example", trusted_proxies=["127.0.0.1"]
+            ),
+        )
+        # The previous version predates the manifest marker but already served
+        # authentication. Only the new candidate needs the compatibility proof.
+        (install.version("rel_new") / "release.json").write_text(
+            '{"server_access_protocol": 1}', encoding="utf-8"
+        )
     data_dir = _server_data(install)
     operation = Operation(
         id="upd_rollback", previous_version="rel_old", package="release.zip", local_package=True
@@ -424,6 +442,34 @@ def test_candidate_failure_restores_the_update_snapshot_before_the_previous_vers
     incident = read_incident(data_dir, "notes")
     assert incident is not None
     assert incident["restored_snapshot_id"] == snapshot_id
+
+
+def test_incompatible_authenticated_candidate_is_refused_before_update_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install = replace(
+        _install(tmp_path),
+        server_access=access_config(
+            "authenticated", public_url="https://vbot.example", trusted_proxies=["127.0.0.1"]
+        ),
+    )
+    operation = Operation(
+        id="upd_incompatible", previous_version="rel_old", package="release.zip", local_package=True
+    )
+    operation.save(install)
+    monkeypatch.setattr(worker, "stage_package", lambda *_a, **_k: "rel_new")
+    monkeypatch.setattr(worker.processes, "start", lambda *_a, **_k: pytest.fail("must not start"))
+    monkeypatch.setattr(worker.processes, "stop", lambda *_a, **_k: pytest.fail("must not stop"))
+    monkeypatch.setattr(
+        worker, "take_update_snapshot", lambda *_a, **_k: pytest.fail("must not snapshot")
+    )
+
+    worker.run(install, operation.id)
+
+    saved = load_operation(install, operation.id)
+    assert saved.phase == "failed" and saved.error
+    assert install.version().name == "rel_old"
 
 
 def test_a_candidate_that_changed_nothing_needs_no_restore(

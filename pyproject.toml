@@ -47,6 +47,11 @@ exclude = ["/archive", "**/node_modules/**"]
 packages = ["core", "server", "cli", "desktop"]
 exclude = ["**/node_modules/**"]
 
+[tool.vbot.package]
+# This source enforces persisted Access Modes and authenticates protected requests.
+# Package builders copy this declaration into the signed release manifest.
+server-access-protocol = 1
+
 [tool.vbot.native-dependencies]
 ripgrep = "resources/ripgrep.lock.json"
 

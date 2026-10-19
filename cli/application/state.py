@@ -25,6 +25,7 @@ from core.access.config import (
     inferred_access_mode,
 )
 from core.utils.atomic import atomic_write_text
+from core.utils.file_status import exists_strict
 from core.utils.ids import is_safe_id, new_id
 
 SHAPES = frozenset({"server", "server-desktop", "desktop-client"})
@@ -226,9 +227,14 @@ class Installation:
         return executable
 
     def activate(self, version_id: str) -> None:
+        from cli.application.packages import require_access_compatible_release
+
         candidate = self.version(version_id)
         if not (candidate / "release.json").is_file():
             raise ApplicationError("Cannot activate an incomplete application version")
+        require_access_compatible_release(
+            read_json(candidate / "release.json", limit=32 * 1024**2), self.access
+        )
         atomic_write_text(contained(self.root, "active-version"), safe_id(version_id) + "\n")
 
     def save(self) -> None:
@@ -297,7 +303,10 @@ def _module_install_root(source: Path) -> Path | None:
     if app.name != "app" or app.parent.parent.name != "versions":
         return None
     root = app.parent.parent.parent
-    return root if (root / "application.json").is_file() else None
+    # The loaded package layout establishes provenance even when the record is
+    # missing or unavailable. Loading it must fail, never fall back to another
+    # installation or a weaker data-directory access record.
+    return root
 
 
 def loaded_version_id(source: Path) -> str | None:
@@ -320,7 +329,13 @@ def _native_install_root(executable: Path) -> Path | None:
     if executable.name.casefold() not in NATIVE_HOST_NAMES:
         return None
     candidates = (executable.parent, executable.parent.parent.parent.parent)
-    return next((path for path in candidates if (path / "application.json").is_file()), None)
+    for path in candidates:
+        try:
+            if exists_strict(path / "application.json"):
+                return path
+        except OSError as exc:
+            raise ApplicationError("Cannot check application record: application.json") from exc
+    return None
 
 
 def discover(root: Path | None = None) -> Installation | None:

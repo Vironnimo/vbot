@@ -34,6 +34,7 @@ from cli.application.state import (
     current_platform,
     package_name,
 )
+from core.access.config import access_config
 from tests.directory_links import cloud_placeholder_status, link_directory
 
 _VERSION = "rel_example"
@@ -77,6 +78,7 @@ def _archive(
     symlink: str | None = None,
     hash_override: dict[str, str] | None = None,
     platform: str | None = None,
+    access_protocol: object = None,
 ) -> Path:
     payload = _payload(shape=shape, marker=marker)
     files = {name: hashlib.sha256(data).hexdigest() for name, data in payload.items()}
@@ -90,6 +92,8 @@ def _archive(
     }
     if hash_override:
         files.update(hash_override)
+    if access_protocol is not None:
+        manifest["server_access_protocol"] = access_protocol
     with zipfile.ZipFile(path, "w") as bundle:
         for name, data in payload.items():
             bundle.writestr(name, data)
@@ -401,6 +405,45 @@ def test_same_identity_is_idempotent_only_for_the_exact_same_payload(tmp_path: P
     assert not cache.exists()
     with pytest.raises(ApplicationError, match="different payload"):
         stage_package(install, changed, local=True)
+
+
+@pytest.mark.parametrize("protocol", [None, True, 2, 1])
+@pytest.mark.parametrize("admission", ["staging", "activation"])
+def test_authenticated_installation_requires_a_compatible_package_before_admission(
+    tmp_path: Path, protocol: object, admission: str
+) -> None:
+    original = _install(tmp_path / "install")
+    original.root.mkdir()
+    pointer = original.root / "active-version"
+    pointer.write_text("rel_current\n", encoding="ascii")
+    install = replace(
+        original,
+        server_access=access_config(
+            "authenticated", public_url="https://vbot.example", trusted_proxies=["127.0.0.1"]
+        ),
+    )
+    archive = _archive(tmp_path / "release.zip", access_protocol=protocol)
+    if admission == "activation":
+        # A package prepared while access was local is checked again after the
+        # host enables authentication; merely being staged grants no exemption.
+        stage_package(original, archive, local=True)
+
+    def admit() -> None:
+        if admission == "staging":
+            stage_package(install, archive, local=True)
+        else:
+            install.activate(_VERSION)
+
+    if type(protocol) is int and protocol == 1:
+        admit()
+        assert install.version(_VERSION).is_dir()
+        assert install.version().name == (_VERSION if admission == "activation" else "rel_current")
+    else:
+        with pytest.raises(ApplicationError):
+            admit()
+        assert pointer.read_text(encoding="ascii") == "rel_current\n"
+        if admission == "staging":
+            assert not install.version(_VERSION).exists()
 
 
 _DOWNLOADS = "https://github.com/Vironnimo/vbot/releases"

@@ -96,6 +96,40 @@ def test_every_pin_names_the_one_python_version_the_packages_bundle() -> None:
     assert {value for _name, value in versions} == {f'"{PYTHON_VERSION}"'}, versions
 
 
+@pytest.mark.parametrize("protocol", [None, 1, True])
+def test_manifest_declares_only_the_packaged_sources_access_contract(
+    tmp_path: Path, protocol: object
+) -> None:
+    app = tmp_path / "app"
+    app.mkdir()
+    text = "[project]\nname='vbot'\n"
+    if protocol is not None:
+        value = "true" if protocol is True else str(protocol)
+        text += f"[tool.vbot.package]\nserver-access-protocol={value}\n"
+    (app / "pyproject.toml").write_text(text, encoding="utf-8")
+
+    def build() -> dict:
+        return write_manifest(
+            tmp_path,
+            version="1.0.0",
+            revision="abcdef",
+            platform=current_platform(),
+            shape="server",
+            channel="main",
+        )
+
+    if protocol is True:
+        with pytest.raises(RuntimeError):
+            build()
+        assert not (tmp_path / "release.json").exists()
+    else:
+        manifest = build()
+        if protocol is None:
+            assert "server_access_protocol" not in manifest
+        else:
+            assert manifest["server_access_protocol"] == protocol
+
+
 def test_packaged_bytecode_is_deterministic_verified_and_loads_after_extraction(
     tmp_path: Path,
 ) -> None:
@@ -114,7 +148,9 @@ def test_packaged_bytecode_is_deterministic_verified_and_loads_after_extraction(
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source, encoding="utf-8")
-    (root / "app/pyproject.toml").write_text("[project]\nname='vbot'\n", encoding="utf-8")
+    (root / "app/pyproject.toml").write_text(
+        "[project]\nname='vbot'\n[tool.vbot.package]\nserver-access-protocol=1\n", encoding="utf-8"
+    )
     (root / "app/webui/dist").mkdir(parents=True)
     (root / "app/webui/dist/index.html").write_text("ready", encoding="utf-8")
     stale = root / "app/cli/__pycache__/main.cpython-313.pyc"
@@ -153,6 +189,7 @@ def test_packaged_bytecode_is_deterministic_verified_and_loads_after_extraction(
         channel="main",
     )
     assert all(relative.as_posix() in manifest["files"] for relative in caches)
+    assert manifest["server_access_protocol"] == 1
     archive = tmp_path / "package.zip"
     write_archive(other, archive)
     extracted = tmp_path / "extracted"

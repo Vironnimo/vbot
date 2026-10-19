@@ -85,7 +85,9 @@ def install_payload(
     ):
         raise ApplicationError("Invalid application installation options")
     server_access, server_host = _server_access(shape, access, host)
-    manifest = validate_release(payload, shape=shape, platform=current_platform())
+    manifest = validate_release(
+        payload, shape=shape, platform=current_platform(), access=server_access
+    )
     if (root / "application.json").exists():
         install = load_installation(root)
         raise ApplicationError(

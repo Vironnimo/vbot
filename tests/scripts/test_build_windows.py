@@ -87,6 +87,9 @@ def _source(tmp_path: Path) -> Path:
     (source / "docs").mkdir()
     for filename in build_windows.APP_FILES:
         (source / filename).write_text(filename, encoding="utf-8")
+    (source / "pyproject.toml").write_text(
+        "[tool.vbot.package]\nserver-access-protocol = 1\n", encoding="utf-8"
+    )
     native = source / "resources/native/ripgrep/fixture/x86_64-pc-windows-msvc/rg.exe"
     native.parent.mkdir(parents=True)
     native.write_bytes(b"verified fixture executable")

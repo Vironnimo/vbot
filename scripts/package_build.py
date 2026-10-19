@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 import zipfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -234,6 +235,18 @@ def write_manifest(
         "channel": channel,
         "files": file_hashes(version_root),
     }
+    if shape != "desktop-client":
+        # --source can name an older checkout than the running builder. Only
+        # the staged source's own declaration proves its authentication contract.
+        with (version_root / "app" / "pyproject.toml").open("rb") as stream:
+            project = tomllib.load(stream)
+        protocol = (
+            project.get("tool", {}).get("vbot", {}).get("package", {}).get("server-access-protocol")
+        )
+        if protocol is not None:
+            if type(protocol) is not int or protocol < 1:
+                raise BuildError("server-access-protocol must be a positive integer")
+            manifest["server_access_protocol"] = protocol
     (version_root / "release.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
