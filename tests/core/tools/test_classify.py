@@ -158,26 +158,22 @@ async def test_answers_of_several_questions_read_as_one_line(tmp_path):
 
 @pytest.mark.asyncio
 async def test_failed_items_are_named_while_the_others_are_kept(tmp_path):
-    unknown = DecisionError(
-        "The Provider may have processed this request, but no usable result arrived. Asking "
-        "again may incur another charge.",
-        code="outcome_unknown",
-    )
-    tool = Classify(tmp_path, errors={1: unknown})
+    overloaded = DecisionError("Provider error: 529 Provider overloaded", code="provider_error")
+    tool = Classify(tmp_path, errors={1: overloaded})
     question = [{"type": "yes_no", "instructions": "Spam?"}]
 
     _result, text = await tool.call({"items": ["first", "second", "third"], "questions": question})
-    _all, failed = await Classify(tmp_path, errors={0: unknown}).call(
+    _all, failed = await Classify(tmp_path, errors={0: overloaded}).call(
         {"items": ["only"], "questions": question}
     )
 
     assert text == (
         "item 1 (first): probability of yes 0.82\n"
-        f"item 2 (second): not classified: {unknown}\n"
+        f"item 2 (second): not classified: {overloaded}\n"
         "item 3 (third): probability of yes 0.82\n"
         "\nItem 2 was not classified; the others were. Repeat the call with only those items."
     )
-    assert failed == f"Error (outcome_unknown): {unknown}"
+    assert failed == f"Error (provider_error): {overloaded}"
 
 
 class TestOtherShapes:

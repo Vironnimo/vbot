@@ -8,10 +8,14 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from core.model_tasks.decision_types import DecisionError, validate_answers, wire_questions
-from core.providers.task_client import NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY, ProviderTaskClient
+from core.providers.task_client import DEFAULT_TASK_REQUEST_RETRY_POLICY, ProviderTaskClient
 
 
 class ProviderDecisionClient(ProviderTaskClient):
+    # OpenRouter documents 524 (edge timeout) and 529 (Provider overloaded) for
+    # this endpoint; TypeSafe asks to retry 529 with backoff (2026-10-19).
+    EXTRA_RETRYABLE_STATUS_CODES = frozenset({524, 529})
+
     async def evaluate(
         self,
         state: Any,
@@ -31,11 +35,21 @@ class ProviderDecisionClient(ProviderTaskClient):
             endpoint,
             timeout=60,
             http_client=http_client,
-            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+            # A judgment changes nothing beyond its small charge, and Usage
+            # records every attempt, so an unanswered request is safe to repeat.
+            retry_policy=DEFAULT_TASK_REQUEST_RETRY_POLICY,
             json={
                 "model": self._model_id,
                 "state": state,
                 "questions": wire_questions(questions),
             },
-            parse=lambda response: validate_answers(response.json(), questions),
+            parse=lambda response: validate_answers(_json_or_none(response), questions),
         )
+
+
+def _json_or_none(response: httpx.Response) -> Any:
+    """The response JSON; ``None`` (an invalid result) when the body is not JSON."""
+    try:
+        return response.json()
+    except ValueError, UnicodeError:
+        return None

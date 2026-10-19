@@ -17,12 +17,7 @@ from core.model_tasks.decision_types import (
 )
 from core.model_tasks.model_tasks import TaskModelService, parse_task_model_target_id
 from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
-from core.providers.errors import (
-    NetworkError,
-    ProviderError,
-    ProviderOutcomeUnknownError,
-    ProviderRequestTooLargeError,
-)
+from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
 from core.utils.tls import shared_ssl_context
@@ -172,14 +167,6 @@ class DecisionService:
                 ),
             )
             return await client.evaluate(state, questions, http_client=http_client)
-        except ProviderOutcomeUnknownError as exc:
-            raise DecisionError(
-                (
-                    "The Provider may have processed this request, but no usable result "
-                    "arrived. Asking again may incur another charge."
-                ),
-                code="outcome_unknown",
-            ) from exc
         except ProviderError as exc:
             if isinstance(exc, ProviderRequestTooLargeError) or (
                 exc.status_code == 400 and _reports_context_overflow(str(exc))
