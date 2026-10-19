@@ -26,7 +26,7 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 
 ## Offline document validation
 
-API 15 directory Extensions declare `config_documents` in `extension.json`: a mapping from owner-state-relative glob patterns to `module:function` file validators. Core `doctor config` discovers these in normal first-wins root order, even when disabled, then loads only the named module under an isolated package path; it never runs the Extension's `__init__`, `register` or startup. The callable receives the absolute Path and returns `JsonValidationReport`. Patterns cannot escape the owner's state directory. Declaration/import/validation failures become diagnostics; an in-scope known document without its owner's validator also reports an error. Implementation: `core/extensions/config_validation.py`; evidence: `tests/core/settings/test_validation.py`.
+API 15 directory Extensions declare `config_documents` in `extension.json`: a mapping from owner-state-relative glob patterns to `module:function` file validators. Core `doctor config` discovers these in normal first-wins root order, even when disabled, then loads only the named module under an isolated package path; it never runs the Extension's `__init__`, `register` or startup. The callable receives the absolute Path and returns `JsonValidationReport`. Patterns cannot escape the owner's state directory; validator module paths cannot start with `__init__`. Declaration/import/validation failures become diagnostics; an in-scope known document without its owner's validator also reports an error. Implementation: `core/extensions/config_validation.py`; evidence: `tests/core/settings/test_validation.py`.
 
 ## Settings schemas and live values
 

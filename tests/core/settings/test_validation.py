@@ -804,12 +804,21 @@ def test_runtime_settings_leave_out_unknown_fields_and_the_version(tmp_path: Pat
     assert ignored == ()
 
 
-def test_extension_documents_validate_without_running_the_extension(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "validator", ["validate:check", "__init__:check", "__init__.validate:check"]
+)
+def test_extension_documents_validate_without_running_the_extension(
+    tmp_path: Path, validator: str
+) -> None:
     extension = tmp_path / "extensions" / "example"
     extension.mkdir(parents=True)
-    (extension / "__init__.py").write_text("raise AssertionError('registration ran')")
+    marker = tmp_path / "entrypoint-ran"
+    (extension / "__init__.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+        "raise AssertionError('registration ran')"
+    )
     (extension / "extension.json").write_text(
-        json.dumps({"config_documents": {"state.json": "validate:check"}})
+        json.dumps({"config_documents": {"state.json": validator}})
     )
     (extension / "validate.py").write_text(
         "from core.config_validation import validate_json_file, JsonDiagnostic\n"
@@ -821,6 +830,8 @@ def test_extension_documents_validate_without_running_the_extension(tmp_path: Pa
     document.parent.mkdir(parents=True)
     document.write_text('{"format_version":1}')
     reports = validate_data_dir_config(tmp_path)
-    [report] = [item for item in reports if item.file_path == document]
+    assert not marker.exists()
+    expected_path = document if validator == "validate:check" else extension / "extension.json"
+    [report] = [item for item in reports if item.file_path == expected_path]
     assert not report.ok
-    assert report.diagnostics[0].path == "$.sentinel"
+    assert report.diagnostics[0].path == ("$.sentinel" if validator == "validate:check" else "$")
