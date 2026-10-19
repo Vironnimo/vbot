@@ -192,6 +192,57 @@ def test_a_file_with_entries_that_cannot_be_imported_stays_and_is_reported(
         assert text not in reason and text not in caplog.text
 
 
+@pytest.mark.parametrize("previous_import", ["none", "credentials", "template"])
+def test_a_template_without_credentials_is_neither_imported_nor_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, previous_import: str
+) -> None:
+    data_dir = _data_dir(tmp_path)
+    template = "# provider keys\nOPENAI_API_KEY=\n"
+    env = _write(data_dir, ".env", template)
+    store = open_store(tmp_path)
+    if previous_import == "credentials":
+        env.write_text("OPENAI_API_KEY=sk-openai\n", encoding="utf-8")
+        import_plaintext_credentials(store)
+        with monkeypatch.context() as older:
+            older.setattr(
+                config_backups_module,
+                "CONFIGURATION_FILE_PATTERNS",
+                (*config_backups_module.CONFIGURATION_FILE_PATTERNS, ".env"),
+            )
+            assert capture_config_backup(data_dir, reason="older") is not None
+        env.write_text(template, encoding="utf-8")
+    elif previous_import == "template":
+        # A record written by an earlier version must not authorize deletion
+        # of a file with no credentials either.
+        store.update(
+            lambda transaction: transaction.set_import_record(
+                {
+                    "sources": {
+                        ".env": {
+                            "fingerprint": transaction.fingerprint(env.read_bytes()),
+                            "entries": {},
+                        }
+                    }
+                }
+            )
+        )
+        retired = retire_plaintext_credentials(store)
+        assert retired is not None and retired.deleted == ()
+
+    imported = import_plaintext_credentials(store)
+
+    assert imported is not None and imported.sources == () and imported.credentials == ()
+    assert imported.removed == (("OPENAI_API_KEY",) if previous_import == "credentials" else ())
+    settle_plaintext_credentials(open_store(tmp_path), mode="normal")
+    assert env.read_text(encoding="utf-8") == template
+    assert store.import_record() is None
+    assert store.entries(CREDENTIALS) == {}
+    assert all(".env" not in backup.files for backup in list_config_backups(data_dir))
+    if previous_import == "none":
+        assert store.status().state == "absent"
+    assert ignored_plaintext_files(store) == (".env",)
+
+
 def test_retiring_deletes_only_unchanged_imported_files_and_their_backup_copies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

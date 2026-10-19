@@ -220,14 +220,14 @@ def import_plaintext_credentials(
                 else:
                     outcome.conflicts.append(_label(section, name))
             # A file without anything importable is no source: nothing to mirror or delete.
-            if source.content is not None and (source.entries or not source.problems):
+            if source.content is not None and source.entries:
                 recorded_now[source.path] = {
                     "fingerprint": transaction.fingerprint(source.content),
                     "entries": entries,
                 }
-        if not found and recorded:
+        if not recorded_now and recorded:
             # Normal startup must still retire plaintext copies in backups after
-            # the last source disappeared during a rolled-back update.
+            # the last source disappeared or became a template during rollback.
             record = {**record, "backups_pending": True}
         _set_import_record(transaction, record, recorded_now)
         outcome.sources = tuple(sorted(recorded_now))
