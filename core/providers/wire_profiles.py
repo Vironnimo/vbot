@@ -145,6 +145,27 @@ class WireBinding:
                 self.provider_id, self.connection_id, model_id
             )
 
+    def observe_max_output_tokens(self, model_id: str, limit: int) -> None:
+        if self.observations is not None:
+            self.observations.record_max_output_tokens(
+                self.provider_id, self.connection_id, model_id, limit
+            )
+
+    def observe_context_window(self, model_id: str, window: int) -> None:
+        if self.observations is not None:
+            self.observations.record_context_window(
+                self.provider_id, self.connection_id, model_id, window
+            )
+
+    def learned_context_window(self, model_id: str) -> int | None:
+        """The Context window a rejection stated for ``model_id`` on this Connection."""
+
+        if self.observations is None:
+            return None
+        return self.observations.facts_for(
+            self.provider_id, self.connection_id, model_id
+        ).context_window
+
 
 @dataclass(frozen=True)
 class _CacheEntry:
@@ -437,6 +458,8 @@ class _Resolution:
         if entry is not None:
             self._apply(entry.values, LAYER_MODEL)
             self._apply(entry.connections.get(self.connection_id, _EMPTY), LAYER_MODEL_CONNECTION)
+        if self.observed is not None and self.observed.max_output_tokens is not None:
+            self._bound_output_limit(self.observed.max_output_tokens)
 
         status, verification = self._status(entry, rules)
         return WireProfile(
@@ -684,6 +707,19 @@ class _Resolution:
         if narrowed_map is not None:
             # A rejected mapping must disappear, not merge with the earlier map.
             self.values["reasoning"]["effort_map"] = narrowed_map
+
+    def _bound_output_limit(self, stated: int) -> None:
+        """Bound the output cap of every layer by the maximum the Provider stated.
+
+        Applied after the Model entry: no configured value can make the wire
+        accept more, and a configured cap below the stated maximum stays.
+        """
+
+        request = self.values.setdefault("request", {})
+        configured = request.get("output_limit_cap")
+        if configured is None or stated < configured:
+            request["output_limit_cap"] = stated
+            self.provenance["request.output_limit_cap"] = LAYER_OBSERVED
 
     # -- status ---------------------------------------------------------------
 

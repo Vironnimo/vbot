@@ -92,6 +92,10 @@ def _profiles(
                 store.record_rejected_parameter("acme", "api-key", target, parameter)
             for effort in observed.rejected_efforts:
                 store.record_rejected_effort("acme", "api-key", target, effort)
+            if observed.max_output_tokens is not None:
+                store.record_max_output_tokens(
+                    "acme", "api-key", target, observed.max_output_tokens
+                )
 
     profiles = WireProfiles(
         files=files,
@@ -210,12 +214,18 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
             "models": {
                 "m": {
                     "set": {"response": {"reasoning_fields": ["thinking"]}},
-                    "connections": {"api-key": {"request": {"output_limit_cap": 3000}}},
+                    "connections": {
+                        "api-key": {
+                            "request": {"output_limit_cap": 3000, "list_announced_tools": True}
+                        }
+                    },
                 }
             },
         },
         {"m": model, "m-disabled": _model("m-disabled", supported=False)},
-        observed=ObservedFacts(reasoning_field="reasoning", rejected_parameters=("top_k",)),
+        observed=ObservedFacts(
+            reasoning_field="reasoning", rejected_parameters=("top_k",), max_output_tokens=2500
+        ),
     )
 
     profile = _resolve(profiles, "m::pinned")
@@ -224,8 +234,11 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
     assert profile.model_id == "m"
     assert profile.request.output_limit_field == "max_tokens"
     assert profile.source_of("request.output_limit_field") == "protocol"
-    assert profile.request.output_limit_cap == 3000
-    assert profile.source_of("request.output_limit_cap") == "model_connection"
+    assert profile.request.list_announced_tools is True
+    assert profile.source_of("request.list_announced_tools") == "model_connection"
+    # A stated output maximum bounds every layer, the Model entry's cap of 3000 included.
+    assert profile.request.output_limit_cap == 2500
+    assert profile.source_of("request.output_limit_cap") == "observed"
     assert dict(profile.request.body_defaults) == {"a": 1, "b": 3}
     assert profile.source_of("request.body_defaults.b") == "family_default[0]"
     # The catalog control beats file defaults; rules beat the catalog.
@@ -246,6 +259,7 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
 
     # Inference is scoped to the Connection; observations do not leak across it either.
     assert _resolve(profiles, "m", "other").request.body_defaults == {"a": 1, "b": 1}
+    assert _resolve(profiles, "m", "other").request.output_limit_cap == 2000
     disabled = _resolve(profiles, "m-disabled")
     assert disabled.reasoning.supported is False
     assert disabled.reasoning.mandatory is False
@@ -714,6 +728,8 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     store.record_exclusive_parameters("acme", "api-key", "m", ("temperature", "top_p"))
     store.record_off_ignored("acme", "api-key", "m")
     store.record_effort_updates_rejected("acme", "api-key", "m")
+    store.record_max_output_tokens("acme", "api-key", "m", 4000)
+    store.record_context_window("acme", "api-key", "m", 65536)
     store.flush()
     after = _resolve(profiles, "m")
 
@@ -731,11 +747,13 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     assert after.reasoning.plan("none") == ReasoningIntent("effort", "low")
     assert set(after.request.parameters) == {"temperature"}
     assert after.request.exclusive_parameters == (("temperature", "top_p"),)
+    assert (before.request.output_limit_cap, after.request.output_limit_cap) == (None, 4000)
     assert _resolve(profiles, "unknown").reasoning.supported is True
 
     reloaded = WireObservations.load(path, save_delay=None)
     assert reloaded.facts_for("acme", "api-key", "m") == store.facts_for("acme", "api-key", "m")
     assert reloaded.facts_for("acme", "api-key", "m").effort_updates_rejected
+    assert reloaded.facts_for("acme", "api-key", "m").context_window == 65536
     assert reloaded.forget("acme", model_id="unknown") == 1
     assert reloaded.facts_for("acme", "api-key", "m").reasoning_field == "reasoning_content"
     assert reloaded.forget("acme", "api-key") == 1
@@ -754,12 +772,15 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
     store.record_exclusive_parameters("acme", "api-key", "m", ("temperature", "top_k"))
     store.record_off_ignored("acme", "api-key", "m")
     store.record_effort_updates_rejected("acme", "api-key", "m")
+    store.record_max_output_tokens("acme", "api-key", "m", 4000)
+    store.record_context_window("acme", "api-key", "m", 65536)
     now[0] += timedelta(days=10)
     store.record_rejected_parameter("acme", "api-key", "m", "top_p")
     store.flush()
     assert set(_resolve(profiles, "m").request.parameters) == {"temperature", "top_p"}
     assert _resolve(profiles, "m").request.exclusive_parameters == (("temperature", "top_k"),)
     assert _resolve(profiles, "m").reasoning.off == "lowest"
+    assert _resolve(profiles, "m").request.output_limit_cap == 4000
 
     now[0] += REJECTION_TTL - timedelta(days=10)
     remaining = ObservedFacts(
@@ -770,6 +791,7 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
     assert set(_resolve(profiles, "m").request.parameters) == {"top_p"}
     assert _resolve(profiles, "m").request.exclusive_parameters == ()
     assert _resolve(profiles, "m").reasoning.off == "auto"
+    assert _resolve(profiles, "m").request.output_limit_cap is None
     assert store.facts_for("acme", "api-key", "m") == remaining
     store.flush()
     assert (

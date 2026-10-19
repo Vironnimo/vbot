@@ -378,6 +378,8 @@ def _wire_profile_detail_response(profile: Any, learned: Any) -> JsonObject:
             ],
             "rejected_efforts": list(learned.rejected_efforts),
             "reasoning_returned": learned.reasoning_returned,
+            "max_output_tokens": learned.max_output_tokens,
+            "context_window": learned.context_window,
         },
     }
 

@@ -13,18 +13,21 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
 import respx
 
 from core.providers.errors import ProviderAuthError, ProviderError
+from core.providers.providers import REQUEST_MIN_RESERVE_TOKENS
+from core.utils.retry import caller_owns_retries
 
 from . import anthropic_test_support as anthropic
 from . import openai_compatible_test_support as compatible
 from . import openai_test_support as openai
 from . import opencode_go_test_support as go
+from . import openrouter_test_support as openrouter
 from . import wire_paths_test_support as paths
 
 ABSENT = object()
@@ -50,6 +53,27 @@ def _error(message: str) -> dict[str, Any]:
 
 
 _THINKING_OFF = {"type": "disabled"}
+
+
+class _Within:
+    """Equals an output allowance clamped into a ``window``, its reserve included."""
+
+    def __init__(self, window: int) -> None:
+        self._window = window
+
+    @override
+    def __eq__(self, value: object) -> bool:
+        return (
+            isinstance(value, int)
+            and self._window // 2 < value <= self._window - REQUEST_MIN_RESERVE_TOKENS
+        )
+
+    @override
+    def __repr__(self) -> str:
+        return f"<output within {self._window}>"
+
+
+_WITHIN_4096 = _Within(4096)
 
 
 @pytest.mark.parametrize(
@@ -227,6 +251,98 @@ _THINKING_OFF = {"type": "disabled"}
             ["low", "minimal", "minimal"],
             id="zen-gemini-stream-effort",
         ),
+        pytest.param(
+            paths.CHAT,
+            {"max_tokens": 9000},
+            "max_tokens is too large: 9000. This model supports at most 4000 completion tokens.",
+            ("max_tokens",),
+            [9000, 4000, 4000],
+            id="chat-send-output-maximum",
+        ),
+        pytest.param(
+            paths.CHAT,
+            {"max_tokens": 9000},
+            "Invalid max_tokens value, the valid range of max_tokens is [1, 4000]",
+            ("max_tokens",),
+            [9000, 4000, 4000],
+            id="chat-send-output-range",
+        ),
+        pytest.param(
+            paths.MESSAGES,
+            {"max_tokens": 9000, "thinking_effort": "none"},
+            _error(
+                "max_tokens: 9000 > 4000, which is the maximum allowed number of output "
+                "tokens for claude-test"
+            ),
+            ("max_tokens",),
+            [9000, 4000, 4000],
+            id="messages-send-output-maximum",
+        ),
+        pytest.param(
+            paths.CHAT.streaming(paths.chat_sse),
+            {"max_tokens": 9000},
+            "This model's maximum context length is 4096 tokens. However, you requested 9010 "
+            "tokens (10 in the messages, 9000 in the completion).",
+            ("max_tokens",),
+            [9000, _WITHIN_4096, _WITHIN_4096],
+            id="chat-stream-context-window",
+        ),
+        pytest.param(
+            paths.CHAT,
+            {"max_tokens": 9000},
+            "Requested token count exceeds the model's maximum context length of 4096 tokens.",
+            ("max_tokens",),
+            [9000, _WITHIN_4096, _WITHIN_4096],
+            id="chat-send-sglang-context-window",
+        ),
+        pytest.param(
+            paths.CHAT,
+            {"max_tokens": 9000},
+            {
+                "error": {
+                    "code": 400,
+                    "message": "the request exceeds the available context size, try increasing it",
+                    "n_ctx": 4096,
+                    "n_prompt_tokens": 9010,
+                    "type": "exceed_context_size_error",
+                }
+            },
+            ("max_tokens",),
+            [9000, _WITHIN_4096, _WITHIN_4096],
+            id="chat-send-llama-cpp-context-window",
+        ),
+        pytest.param(
+            paths.MESSAGES,
+            {"max_tokens": 9000, "thinking_effort": "none"},
+            _error(
+                "input length and `max_tokens` exceed context limit: 10 + 9000 > 4096, "
+                "decrease input length or `max_tokens` and try again"
+            ),
+            ("max_tokens",),
+            [9000, _WITHIN_4096, _WITHIN_4096],
+            id="messages-send-context-window",
+        ),
+        pytest.param(
+            # OpenRouter reports the limit of the endpoint it routed to as a
+            # retryable error; the stated number is learned all the same.
+            replace(
+                paths.OPENROUTER,
+                url=openrouter.CHAT_URL,
+                model_id="meta-llama/llama-4-scout",
+                success=lambda: httpx.Response(200, json=openrouter.CHAT_SUCCESS),
+            ),
+            {"max_tokens": 9000},
+            {
+                "error": {
+                    "code": 400,
+                    "message": "This endpoint's maximum context length is 4096 tokens. However, "
+                    "you requested about 9010 tokens (10 of text input, 9000 in the output).",
+                }
+            },
+            ("max_tokens",),
+            [9000, _WITHIN_4096, _WITHIN_4096],
+            id="openrouter-chat-send-context-window",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -238,7 +354,8 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
     expected: list[Any],
 ) -> None:
     adapter = path.adapter()
-    with respx.mock:
+    # Like Chat, the caller owns retries: a retryable rejection reaches the learner at once.
+    with respx.mock, caller_owns_retries():
         route = respx.post(path.url).mock(
             side_effect=[_rejection(400, rejection), path.success(), path.success()]
         )
@@ -313,6 +430,25 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
             ProviderError,
             1,
             id="off-value-not-named",
+        ),
+        pytest.param(
+            paths.CHAT,
+            {"max_tokens": 3000},
+            400,
+            "max_tokens is too large: 3000. This model supports at most 4000 completion tokens.",
+            ProviderError,
+            1,
+            id="output-maximum-not-exceeded",
+        ),
+        pytest.param(
+            paths.CHAT,
+            {"max_tokens": 9000},
+            400,
+            "Your input exceeds the context window of this model. Please adjust your input "
+            "and try again.",
+            ProviderError,
+            1,
+            id="context-window-not-stated",
         ),
     ],
 )

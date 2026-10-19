@@ -390,6 +390,8 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
     runtime.wire_observations.record_reasoning_field(
         "openai", "oauth", "gpt-5.2", "reasoning_content"
     )
+    runtime.wire_observations.record_max_output_tokens("openai", "oauth", "gpt-5.2", 64000)
+    runtime.wire_observations.record_context_window("openai", "oauth", "gpt-5.2", 272000)
 
     listed = {model["id"]: model for model in (await rpc_result(state, "model.list"))["models"]}
     model = (await rpc_result(state, "model.get", model="openai/gpt-5.2"))["model"]
@@ -416,6 +418,8 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
                 "exclusive_parameters": [["temperature", "top_k"]],
                 "rejected_efforts": [],
                 "reasoning_returned": True,
+                "max_output_tokens": 64000,
+                "context_window": 272000,
             },
         },
         "api-key": {
@@ -431,6 +435,8 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
                 "exclusive_parameters": [],
                 "rejected_efforts": [],
                 "reasoning_returned": False,
+                "max_output_tokens": None,
+                "context_window": None,
             },
         },
     }

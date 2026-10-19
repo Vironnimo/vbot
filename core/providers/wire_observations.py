@@ -1,20 +1,24 @@
-"""Wire facts learned from live Provider traffic (wire profile layer 7).
+"""Wire facts learned from live Provider traffic (wire profile layer 8).
 
 Codecs report what a Provider actually did for one (Provider, Connection,
 Model): which readable field carried reasoning, whether reasoning came back at
 all, which optional parameter the wire rejected, which parameters it accepts
 only one of at a time, which effort value it refused (``none`` also for a
-refused explicit off), and whether the Model reasons although the request
-turned reasoning off. The resolver turns these facts
+refused explicit off), whether the Model reasons although the request
+turned reasoning off, and the output maximum and Context window a rejection
+stated. The resolver turns these facts
 into profile values below every explicit Model entry, so a configured or
 verified profile always wins and an unconfigured Model improves after its first
-responses instead of failing the same way on every request.
+responses instead of failing the same way on every request. A stated output
+maximum is the exception: it bounds every layer (``wire_profiles``), because no
+entry can make the wire accept more than the Provider says it does.
 
 A rejection is not forever: each rejected parameter, parameter group or effort,
-and an ignored off, expires ``REJECTION_TTL`` after it was learned, so a one-off
-or misattributed rejection heals by itself (the learner retries a rejected
-request at once, so re-learning a rejection that still holds costs one extra
-request). ``forget`` drops facts on request (``model.forget_wire_facts``).
+an ignored off and a stated limit expire ``REJECTION_TTL`` after they were
+learned, so a one-off or misattributed rejection heals by itself (the learner
+retries a rejected request at once, so re-learning a rejection that still holds
+costs one extra request). ``forget`` drops facts on request
+(``model.forget_wire_facts``).
 
 The store is a disposable cache, not a durable document: it lives at
 ``<data-dir>/artifacts/wire-observations.json``, an unreadable or foreign file
@@ -45,12 +49,14 @@ _MAX_LIST_ENTRIES = 16
 
 Clock = Callable[[], datetime]
 # A rejection's identity within one target: ("parameter" | "exclusive" | "effort", name),
-# _OFF_IGNORED or _EFFORT_UPDATES_REJECTED; an exclusive group's name joins its
-# parameters with ``+`` in the order kept first.
+# _OFF_IGNORED, _EFFORT_UPDATES_REJECTED or a stated limit; an exclusive group's
+# name joins its parameters with ``+`` in the order kept first.
 _Rejection = tuple[str, str]
 _RejectionTimes = dict[str, dict[_Rejection, datetime]]
 _OFF_IGNORED: _Rejection = ("off", "ignored")
 _EFFORT_UPDATES_REJECTED: _Rejection = ("effort_updates", "rejected")
+_MAX_OUTPUT_STATED: _Rejection = ("limit", "max_output_tokens")
+_CONTEXT_WINDOW_STATED: _Rejection = ("limit", "context_window")
 
 
 @dataclass(frozen=True)
@@ -67,6 +73,10 @@ class ObservedFacts:
     """The Model reasoned although the request turned reasoning off."""
     effort_updates_rejected: bool = False
     """The wire rejected a mid-conversation effort update for this Model."""
+    max_output_tokens: int | None = None
+    """The output maximum a rejection stated for this Model on this Connection."""
+    context_window: int | None = None
+    """The Context window a rejection stated for this Model on this Connection."""
 
     def is_empty(self) -> bool:
         return self == _NO_FACTS
@@ -91,6 +101,10 @@ class ObservedFacts:
             return replace(self, off_ignored=False)
         if rejection == _EFFORT_UPDATES_REJECTED:
             return replace(self, effort_updates_rejected=False)
+        if rejection == _MAX_OUTPUT_STATED:
+            return replace(self, max_output_tokens=None)
+        if rejection == _CONTEXT_WINDOW_STATED:
+            return replace(self, context_window=None)
         return replace(
             self, rejected_efforts=tuple(item for item in self.rejected_efforts if item != name)
         )
@@ -265,6 +279,34 @@ class WireObservations:
             rejection=_EFFORT_UPDATES_REJECTED,
         )
 
+    def record_max_output_tokens(
+        self, provider_id: str, connection_id: str, model_id: str, limit: int
+    ) -> None:
+        """A rejection stated ``limit`` as the Model's output maximum on the wire."""
+
+        self._update(
+            provider_id,
+            connection_id,
+            model_id,
+            lambda facts: replace(facts, max_output_tokens=limit),
+            f"the wire allows at most {limit} output tokens",
+            rejection=_MAX_OUTPUT_STATED,
+        )
+
+    def record_context_window(
+        self, provider_id: str, connection_id: str, model_id: str, window: int
+    ) -> None:
+        """A rejection stated ``window`` as the Model's Context window on the wire."""
+
+        self._update(
+            provider_id,
+            connection_id,
+            model_id,
+            lambda facts: replace(facts, context_window=window),
+            f"the wire serves a Context window of {window} tokens",
+            rejection=_CONTEXT_WINDOW_STATED,
+        )
+
     def forget(
         self,
         provider_id: str,
@@ -372,6 +414,8 @@ class WireObservations:
                     | {("effort", name) for name in updated.rejected_efforts}
                     | ({_OFF_IGNORED} if updated.off_ignored else set())
                     | ({_EFFORT_UPDATES_REJECTED} if updated.effort_updates_rejected else set())
+                    | ({_MAX_OUTPUT_STATED} if updated.max_output_tokens is not None else set())
+                    | ({_CONTEXT_WINDOW_STATED} if updated.context_window is not None else set())
                 )
                 for evicted in [item for item in times if item not in kept]:
                     del times[evicted]
@@ -465,6 +509,16 @@ def _document(facts: Mapping[str, ObservedFacts], learned_at: _RejectionTimes) -
             entry["off_ignored"] = _stamp(times.get(_OFF_IGNORED))
         if item.effort_updates_rejected:
             entry["effort_updates_rejected"] = _stamp(times.get(_EFFORT_UPDATES_REJECTED))
+        if item.max_output_tokens is not None:
+            entry["max_output_tokens"] = {
+                "value": item.max_output_tokens,
+                "learned_at": _stamp(times.get(_MAX_OUTPUT_STATED)),
+            }
+        if item.context_window is not None:
+            entry["context_window"] = {
+                "value": item.context_window,
+                "learned_at": _stamp(times.get(_CONTEXT_WINDOW_STATED)),
+            }
         if entry:
             targets[key] = entry
     return {"format_version": OBSERVATIONS_FORMAT_VERSION, "targets": targets}
@@ -505,6 +559,8 @@ def _read(
         efforts = _rejections(entry.get("rejected_efforts"), now)
         off_ignored = _flag(entry.get("off_ignored"), now)
         effort_updates_rejected = _flag(entry.get("effort_updates_rejected"), now)
+        max_output = _limit(entry.get("max_output_tokens"), now)
+        context_window = _limit(entry.get("context_window"), now)
         times: dict[_Rejection, datetime] = {
             ("parameter", name): at for name, at in parameters.items()
         }
@@ -514,6 +570,10 @@ def _read(
             times[_OFF_IGNORED] = off_ignored
         if effort_updates_rejected is not None:
             times[_EFFORT_UPDATES_REJECTED] = effort_updates_rejected
+        if max_output is not None:
+            times[_MAX_OUTPUT_STATED] = max_output[1]
+        if context_window is not None:
+            times[_CONTEXT_WINDOW_STATED] = context_window[1]
         if times:
             learned_at[key] = times
         facts[key] = ObservedFacts(
@@ -524,8 +584,22 @@ def _read(
             reasoning_returned=entry.get("reasoning_returned") is True,
             off_ignored=off_ignored is not None,
             effort_updates_rejected=effort_updates_rejected is not None,
+            max_output_tokens=max_output[0] if max_output is not None else None,
+            context_window=context_window[0] if context_window is not None else None,
         )
     return facts, learned_at
+
+
+def _limit(value: Any, now: datetime) -> tuple[int, datetime] | None:
+    """Read a stated limit ``{value, learned_at}``; ``None`` when absent or unreadable."""
+
+    if not isinstance(value, Mapping):
+        return None
+    limit = value.get("value")
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+        return None
+    learned_at = _flag(value.get("learned_at"), now)
+    return limit, learned_at if learned_at is not None else now
 
 
 def _flag(stamp: Any, now: datetime) -> datetime | None:
