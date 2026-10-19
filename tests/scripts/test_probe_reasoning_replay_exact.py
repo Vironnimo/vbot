@@ -34,7 +34,7 @@ def test_probe_runs_a_scenario_through_the_configured_connection(
             "--provider",
             "opencode-go",
             "--model",
-            "deepseek-flash",
+            "deepseek-v4-pro",
             "--scenario",
             "instruction",
             "--repeats",
