@@ -316,6 +316,10 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
             platform=current_platform(),
             access=install.access,
         )
+        if not local and manifest.get("channel") != install.channel:
+            raise ApplicationError(
+                f"Release package does not match the selected update channel '{install.channel}'."
+            )
         version_id = manifest["version_id"]
         destination = install.version(version_id)
         if destination.exists():
@@ -357,6 +361,10 @@ def download_release(
     expected = package_name(install.install_shape)
     with httpx.Client(timeout=60, follow_redirects=True, trust_env=False) as client:
         identity = _release_identity(client, f"{install.download_base}/{RELEASE_IDENTITY_ASSET}")
+        if identity.get("channel") != install.channel:
+            raise ApplicationError(
+                f"Release identity does not match the selected update channel '{install.channel}'."
+            )
         label = version_label(identity)
         if identity["version_id"] == install.version().name:
             if progress:
