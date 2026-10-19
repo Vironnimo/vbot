@@ -353,23 +353,35 @@ def explain_failure(message: str, patterns: Sequence[str] = ()) -> str:
 
 def pattern_retry(
     error: str, patterns: list[str], query: SearchQuery
-) -> tuple[list[str], bool, str] | None:
+) -> tuple[list[str], str | None, str] | None:
     """Return the evident reading of patterns the regex engine rejected, if any.
 
-    Returns the patterns to search, whether PCRE2 is needed, and a note for the
-    Agent. A pattern that uses look-around or backreferences needs PCRE2. An
+    Returns the patterns to search, a flag to add, and a note for the Agent.
+    A rejected newline needs multiline unless the call explicitly disabled it.
+    A pattern that uses look-around or backreferences needs PCRE2. An
     unmatched parenthesis, a brace that starts no repetition, or a repetition
     operator with nothing to repeat cannot be regex syntax, so those characters
     match literally; everything else keeps its regex meaning. Literal (-F)
     searches never reach here.
     """
+    if (
+        error.startswith('the literal "\\n" is not allowed in a regex')
+        and query.searches_contents
+        and not query.literal
+        and "--no-multiline" not in query.rg_args
+    ):
+        return (
+            patterns,
+            "--multiline",
+            "The pattern matches across lines, so the search ran with -U.",
+        )
     if not any(marker in error for marker in _PATTERN_ERRORS):
         return None
     pcre2 = any(arg in {"--pcre2", "-P", "--engine=pcre2"} for arg in query.rg_args)
     if "--pcre2" in error and not pcre2:
         return (
             patterns,
-            True,
+            "--pcre2",
             "The pattern needs PCRE2 (look-around or backreferences), so it ran with -P.",
         )
     unescaped = [_unescape_unicode_punctuation(pattern) for pattern in patterns]
@@ -387,7 +399,7 @@ def pattern_retry(
         explanation = "Unbalanced regex characters were matched literally: "
     return (
         repaired,
-        False,
+        None,
         explanation + f'searched {described}. Add "-F" to args to search plain text.',
     )
 

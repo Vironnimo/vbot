@@ -231,6 +231,10 @@ names from other search Tools and command-line habits when their meaning is exac
 
 - **Renamed fields:** `query`, `include`, `output_mode`, `head_limit`, `argv`, and
   the old `options`, `patterns` and `paths`.
+- **Output value wrappers:** `output>content`, `output>files` and `output>count`
+  silently select the named canonical output; another prefix, value or a chain
+  of values stays invalid. Two Calls on 2026-10-19 were retried with only
+  `output>content` changed to `content`.
 - **Flag fields:** `-i`, `ignore_case`, `literal`, `-C`, `type`, `exclude`,
   `recursive: false` (becomes `-d 1`), Hermes-style `target: "files"`, and others.
 
@@ -427,10 +431,14 @@ Diagnostics (`_judge`):
   `search_error` and a correction. Exit 1 means no match.
 - If ripgrep rejects a regex and the call is not literal, `pattern_retry` runs
   once:
+  - a rejected newline in a content search reruns with `--multiline` unless
+    `--no-multiline` was explicit (also `multiline: false` or `-U: false`);
+    the pattern and dotall setting stay unchanged, and name matching never
+    enables multiline implicitly;
   - look-around or backreferences rerun with PCRE2;
   - unbalanced parentheses, braces and dangling repetition operators are escaped;
   - unnecessary escapes before Unicode punctuation are removed;
-  - the `note` names the change and `-F`.
+  - the `note` names the change; pattern repairs also name `-F`.
 
   When nothing applies, the call fails with the error kind, the offending
   pattern as sent with a caret under the offending part, and the `-F`
@@ -622,6 +630,7 @@ blank placeholders, so no sentence has to warn about them.
 | `path_not_found` for a page number: `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki {...}.` | Three searches named a Wiki page number as `path` and got `Path not found` (Swarm Sessions, 2026-10-12). Only when `swarm_wiki` is offered. |
 | Bare flag beside its field: `--glob in args had no value and was ignored; glob gives "tools/*.py".` | The call runs as the named field says; the note tells the Agent the flag had no effect, so it does not repeat it (Swarm run 2026-10-12: one call failed with `needs a value as the next item` although `glob` gave the value). |
 | Across lines: `Within one line, pattern matches nothing; across lines it occurs in 1 file. Add -U to args to let a match span lines.` | A search whose regex was written to cross a line break (`[\s\S]`) found nothing without `-U`, and the empty result gave no cause (Sessions, 2026-10-13). Names the flag; only when the `-U` count finds the text, so the note never sends the Agent to a search that also comes back empty. |
+| Rejected newline: `The pattern matches across lines, so the search ran with -U.` | Names the inferred multiline mode without claiming dotall or a changed pattern. A rejected `\n` search on 2026-10-19 led the Agent to abandon the relation between two lines and make two weaker searches instead (F2, F5). Explicit literal mode and `--no-multiline` keep their meaning. |
 | Literal text: `As a regular expression, pattern matches nothing ("?" is an operator); as literal text it occurs in 1 file. Add -F to args to search for it literally.` | An empty result for a URL with `?` read as "the URL is absent" (Swarm run 2026-10-12). Names the operator so the Agent sees why, and the flag that searches the text. |
 | File names: `No file name matches pattern either. To list similar file names, pass glob "harvest_*.txt" without pattern.` | `No matches` alone did not tell the Agent that names were checked too; it searched the same missing files three times (Swarm run 2026-10-12). "without pattern" keeps the suggested call a listing, since `glob` beside `pattern` still searches contents. |
 | Count: `The counts are matching lines, which hold 3 matches in all. Add --count-matches to args to count matches per file.` | The Agent wanted occurrences and needed a second call (Swarm run 2026-10-12); the total answers most such calls without one. |
