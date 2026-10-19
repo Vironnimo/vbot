@@ -215,10 +215,9 @@ def _missing_submodule(name: str, workdir: Path | None) -> str:
                     f"{top}/__init__.py."
                 )
             return (
-                f"{shown} exists in the working directory, but Python imported another "
-                f"package named '{top}', which comes earlier on its import path and shadows "
-                "the working directory's. Start Python in the working directory with -m, which "
-                "puts the working directory first."
+                f"{shown} exists in the working directory, but Python did not find it on the "
+                f"active import path. Check sys.path and the loaded {parent} package's __file__ "
+                "and __path__; correct import-path entries that select another package."
             )
         if (workdir / package).is_dir():
             return (

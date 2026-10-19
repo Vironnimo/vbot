@@ -605,7 +605,7 @@ def _ended(report: CommandReport, subagent: str | None, names: ToolNames) -> Jso
         data["subagent"] = subagent
     shell.pop("command_id", None)
     data.update(shell)
-    location = output_location(report, str(data.get("output", "")))
+    location = output_location(report, f"{data.get('output', '')}\n{data.get('next', '')}")
     if location is not None:
         data["next"] = f"{data['next']} {location}" if "next" in data else location
     return data

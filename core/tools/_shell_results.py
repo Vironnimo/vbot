@@ -349,6 +349,9 @@ def ended_result(
             "The shell exited, but processes the command started still run: "
             f"{processes_text(report.still_running)}. {leftovers_stop(report, names)}"
         )
+        location = output_location(report, output)
+        if location is not None:
+            data["next"] += f" {location}"
     return data
 
 

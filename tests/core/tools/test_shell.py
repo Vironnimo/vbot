@@ -31,6 +31,7 @@ import pytest_asyncio
 from core.projects import ProjectNotFoundError
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
+from core.tools import _command_output as command_output_module
 from core.tools import _shell_definition as shell_definition
 from core.tools import _shell_hint_common as shell_hint_common
 from core.tools import shell as shell_module
@@ -40,8 +41,9 @@ from core.tools._powershell import (
     PowerShellCulture,
     powershell_culture,
 )
-from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
+from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME, register_background_tasks_tool
 from core.tools.command_manager import CommandManager, NotRunReason
+from core.tools.file_state import os_error_reason
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.process_tree import ProcessTreeFacts, ProgramExit, RunningProcess
 from core.tools.scratch_areas import ScratchAreas
@@ -780,16 +782,37 @@ async def test_the_user_stops_the_command_or_moves_it_to_the_background(
 
 
 @pytest.mark.parametrize(
-    ("background", "tools"),
-    [(False, COMPANIONS), (True, ())],
-    ids=["result-with-background_tasks", "delivery-without-background_tasks"],
+    ("background", "tools", "output", "log_limit"),
+    [
+        (False, COMPANIONS, "ready\n", None),
+        (False, COMPANIONS, "line\n" * 7_000, None),
+        (False, COMPANIONS, "ready\n", 3),
+        (False, COMPANIONS, "ready\n", 0),
+        (True, (), "ready\n", None),
+    ],
+    ids=["result", "truncated", "partial-log", "unavailable-log", "delivery-without-tools"],
 )
 @pytest.mark.asyncio
 async def test_processes_left_running_are_named_with_the_call_that_stops_them(
-    shell: Shell, background: bool, tools: tuple[str, ...]
+    shell: Shell,
+    monkeypatch: pytest.MonkeyPatch,
+    background: bool,
+    tools: tuple[str, ...],
+    output: str,
+    log_limit: int | None,
 ) -> None:
+    if log_limit is not None:
+        room = [log_limit]
+
+        def full_disk(fd: int, content: bytes) -> tuple[int, OSError | None]:
+            count = os.write(fd, content[: room[0]]) if room[0] else 0
+            room[0] -= count
+            return count, OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(command_output_module, "_write_all", full_disk)
     call = shell.call({"command": "start-server", "run_in_background": background}, tools=tools)
     process = await shell.started()
+    process.write(output)
     process.exit(0, leftovers=[RunningProcess(42, "server.exe")])
 
     if background:
@@ -811,6 +834,34 @@ async def test_processes_left_running_are_named_with_the_call_that_stops_them(
         assert stop_calls(result["next"]) == [{"action": "stop", "id": command_id}]
         # The result showed the end: nothing more is delivered.
         assert shell.sink.submissions == []
+        # Its processes make it a background command. Both this result and a later
+        # status name the raw log once, including partial or unavailable logs.
+        register_background_tasks_tool(shell.registry, shell.manager)
+        status = data(
+            await dispatch_as_executor(
+                shell.registry,
+                dataclasses.replace(shell.context(), tool_name=BACKGROUND_TASKS_TOOL_NAME),
+                {"action": "status", "id": command_id},
+                [SHELL_TOOL_NAME, *COMPANIONS],
+            )
+        )
+        report = shell.manager.report(command_id)
+        for shown in (result, status):
+            text = json.dumps(shown)
+            if report.log_path is not None:
+                assert text.count(model_path(report.log_path)) == 1
+                assert report.log_path.read_bytes() == output.encode()[:log_limit]
+            else:
+                assert ".log" not in text
+            if log_limit is not None:
+                assert "complete" not in text
+                assert report.log_loss is not None and report.log_loss.kept_bytes == log_limit
+                assert isinstance(report.log_loss.error, OSError)
+                assert text.count(os_error_reason(report.log_loss.error)) == 1
+            if len(output) > 30_000:
+                assert report.log_path is not None
+                assert model_path(report.log_path) in shown["output"]
+                assert model_path(report.log_path) not in shown["next"]
     # They stay tied to the command, so the named call finds them.
     assert [row.command_id for row in shell.manager.commands([OWNER])] == [command_id]
     assert shell.manager.report(command_id).still_running == (RunningProcess(42, "server.exe"),)
