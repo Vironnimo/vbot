@@ -82,6 +82,45 @@ export function describeDeviceUse(device, devices = []) {
   return parts.join(' · ');
 }
 
+// Describe the known cascade for confirmation; the server still determines
+// every affected Device, including browsers created while this dialog is open.
+export function deviceRevocationMessage(
+  device,
+  devices = [],
+  { signingOut = false } = {},
+) {
+  const parts = [
+    signingOut
+      ? t('settings.access.signOut.body')
+      : t('settings.access.revoke.body', { name: device?.name ?? '' }),
+    t('settings.access.revoke.cascade'),
+  ];
+  const affected = [];
+  let issuers = device ? [device.id] : [];
+  while (issuers.length > 0) {
+    const next = devices.filter(
+      (entry) =>
+        entry.via === 'ticket' &&
+        issuers.includes(entry.approved_by) &&
+        entry.id !== device.id &&
+        !affected.some((known) => known.id === entry.id),
+    );
+    affected.push(...next);
+    issuers = next.map((entry) => entry.id);
+  }
+  if (affected.length > 0) {
+    parts.push(
+      t('settings.access.revoke.browsers', {
+        names: affected.map((entry) => entry.name).join(', '),
+      }),
+    );
+  }
+  if (affected.some((entry) => entry.current)) {
+    parts.push(t('settings.access.revoke.currentBrowser'));
+  }
+  return parts.join(' ');
+}
+
 // The message for a failed Device request (list, rename, remove, sign out).
 export function deviceErrorMessage(error) {
   if (error?.code === 'devices_unavailable') {

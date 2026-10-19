@@ -6,6 +6,7 @@
   // shows the pairing screen). The list follows the server's `devices`
   // invalidation, so a Device approved elsewhere appears once it claimed its
   // approval.
+  import { onDestroy } from 'svelte';
   import AddDeviceDialog from './AddDeviceDialog.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
@@ -32,6 +33,7 @@
     accessModeDescription,
     describeDeviceUse,
     deviceErrorMessage,
+    deviceRevocationMessage,
   } from '$lib/settingsView.js';
   import { t } from '$lib/i18n.js';
 
@@ -46,6 +48,15 @@
   let devices = $state([]);
   let devicesLoaded = $state(false);
   let devicesError = $state('');
+  let statusRequest = 0;
+  let devicesRequest = 0;
+  let destroyed = false;
+
+  onDestroy(() => {
+    destroyed = true;
+    statusRequest += 1;
+    devicesRequest += 1;
+  });
 
   let addOpen = $state(false);
   let renameTarget = $state(null);
@@ -72,21 +83,30 @@
   });
 
   async function loadStatus() {
+    if (destroyed) return;
+    const current = ++statusRequest;
     try {
-      status = await getAuthStatus();
+      const result = await getAuthStatus();
+      if (current !== statusRequest) return;
+      status = result;
       statusError = '';
     } catch (error) {
+      if (current !== statusRequest) return;
       statusError = `${t('settings.access.statusError')} ${error.message ?? ''}`;
     }
   }
 
   async function loadDevices() {
+    if (destroyed) return;
+    const current = ++devicesRequest;
     try {
       const result = await listDevices();
+      if (current !== devicesRequest) return;
       devices = Array.isArray(result?.devices) ? result.devices : [];
       devicesError = '';
       devicesLoaded = true;
     } catch (error) {
+      if (current !== devicesRequest) return;
       devicesError = deviceErrorMessage(error);
     }
   }
@@ -400,7 +420,7 @@
 {#if revokeTarget}
   <ConfirmDialog
     title={t('settings.access.revoke.title', { name: revokeTarget.name })}
-    body={t('settings.access.revoke.body', { name: revokeTarget.name })}
+    body={deviceRevocationMessage(revokeTarget, devices)}
     confirmLabel={t('settings.access.revoke.confirm')}
     busy={dialogBusy}
     error={dialogError}
@@ -426,7 +446,11 @@
 {#if signOutOpen}
   <ConfirmDialog
     title={t('settings.access.signOut.title')}
-    body={t('settings.access.signOut.body')}
+    body={deviceRevocationMessage(
+      devices.find((device) => device.current),
+      devices,
+      { signingOut: true },
+    )}
     confirmLabel={t('settings.access.signOut.confirm')}
     busy={dialogBusy}
     error={dialogError}

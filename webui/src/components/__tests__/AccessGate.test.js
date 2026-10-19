@@ -113,10 +113,10 @@ describe('access gate', () => {
     expect(appShown()).toBeNull();
     expect(heading().textContent.trim()).toBe(t('access.pairing.title'));
     expect(document.activeElement).toBe(heading());
-    expect(api.startPairing).toHaveBeenCalledExactlyOnceWith({
-      kind: 'browser',
-      name: expect.any(String),
-    });
+    expect(api.startPairing).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'browser', name: expect.any(String) },
+      { signal: expect.any(AbortSignal) },
+    );
     // The code reaches screen readers spelled out, in the live region.
     expect(liveRegion().textContent).toContain('K7QM-4XPA');
     expect(liveRegion().textContent).toContain('K 7 Q M, 4 X P A');
@@ -155,6 +155,34 @@ describe('access gate', () => {
     expect(api.startPairing).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['startPairing', 'pollPairing'])(
+    'waits before restarting pairing after %s reports unavailable devices',
+    async (endpoint) => {
+      api.getAuthStatus.mockResolvedValue(SIGNED_OUT);
+      api[endpoint].mockRejectedValueOnce(
+        Object.assign(new Error('unavailable'), {
+          code: 'devices_unavailable',
+          retryAfter: 45,
+        }),
+      );
+      await render();
+      if (endpoint === 'pollPairing') await settle(2_000);
+      const retry = [...document.querySelectorAll('button')].find(
+        (item) => item.textContent.trim() === t('access.pairing.startAgain'),
+      );
+      expect(retry.disabled).toBe(true);
+      retry.click();
+      await settle(44_999);
+      expect(api.startPairing).toHaveBeenCalledOnce();
+      expect(retry.disabled).toBe(true);
+      await settle(1);
+      expect(retry.disabled).toBe(false);
+      retry.click();
+      await settle();
+      expect(api.startPairing).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it.each([
     ['access_denied', 'access.denied.title'],
     // The server cannot check devices: the sign-in stays, nothing pairs again.
@@ -173,6 +201,11 @@ describe('access gate', () => {
 
       clickButton(t('common.retry'));
       await settle();
+      if (code === 'devices_unavailable') {
+        expect(appShown()).toBeNull();
+        expect(api.getAuthStatus).toHaveBeenCalledOnce();
+        await settle(30_000);
+      }
       expect(appShown()).toBeTruthy();
     },
   );

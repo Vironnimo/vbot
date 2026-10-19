@@ -63,8 +63,8 @@ function gateFixture(...answers) {
     gate,
     getAuthStatus,
     beforeLeaveApp,
-    lose: async (reason = 'auth_required') => {
-      for (const listener of lossListeners) listener(reason);
+    lose: async (reason = 'auth_required', retryAfter) => {
+      for (const listener of lossListeners) listener(reason, retryAfter);
       await vi.advanceTimersByTimeAsync(0);
     },
     listening: () => lossListeners.size,
@@ -158,23 +158,35 @@ describe('createAccessGate()', () => {
     expect(f.gate.state.screen).toBe(GATE_APP);
   });
 
-  it('waits as long as the server asks while it cannot check devices', async () => {
-    const f = gateFixture(
-      SIGNED_IN,
-      Object.assign(failure('devices_unavailable'), { retryAfter: 30 }),
-      SIGNED_IN,
-    );
-    await f.gate.start();
+  it.each([
+    [undefined, 30],
+    [45, 45],
+  ])(
+    'waits before rechecking unavailable devices (wait %s)',
+    async (retryAfter, expectedWait) => {
+      const f = gateFixture(
+        SIGNED_IN,
+        Object.assign(failure('devices_unavailable'), { retryAfter: 60 }),
+        SIGNED_IN,
+      );
+      await f.gate.start();
 
-    await f.lose('devices_unavailable');
-    expect(f.gate.state.screen).toBe(GATE_UNAVAILABLE);
-    await vi.advanceTimersByTimeAsync(29_000);
-    expect(f.getAuthStatus).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1_500);
+      await f.lose('devices_unavailable', retryAfter);
+      expect(f.gate.state.screen).toBe(GATE_UNAVAILABLE);
+      await f.gate.retry();
+      await vi.advanceTimersByTimeAsync(expectedWait * 1000 - 1);
+      expect(f.getAuthStatus).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(f.getAuthStatus).toHaveBeenCalledTimes(2);
+      await f.gate.retry();
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(f.getAuthStatus).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
 
-    expect(f.getAuthStatus).toHaveBeenCalledTimes(3);
-    expect(f.gate.state.screen).toBe(GATE_APP);
-  });
+      expect(f.getAuthStatus).toHaveBeenCalledTimes(3);
+      expect(f.gate.state.screen).toBe(GATE_APP);
+    },
+  );
 
   it('stops after repeated losses right after the server let the app in', async () => {
     const f = gateFixture(SIGNED_IN);

@@ -98,7 +98,11 @@
         </p>
         <p class="access-gate__text">{t('access.unavailable.hint')}</p>
         <div class="access-gate__actions">
-          <Button variant="primary" onClick={() => gate.retry()}>
+          <Button
+            variant="primary"
+            disabled={gateState.retryAt !== null}
+            onClick={() => gate.retry()}
+          >
             {t('common.retry')}
           </Button>
         </div>

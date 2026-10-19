@@ -22,6 +22,12 @@ const STARTED = {
 const failure = (code, extra = {}) =>
   Object.assign(new Error(code), { code, ...extra });
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => (resolve = done));
+  return { promise, resolve };
+}
+
 let pairings;
 
 beforeEach(() => {
@@ -77,10 +83,10 @@ describe('createPairing()', () => {
     expect(f.pairing.state.phase).toBe(PAIRING_STARTING);
     await started;
 
-    expect(f.startPairing).toHaveBeenCalledExactlyOnceWith({
-      kind: 'browser',
-      name: 'Firefox on Linux',
-    });
+    expect(f.startPairing).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'browser', name: 'Firefox on Linux' },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(f.pairing.state).toEqual({
       phase: PAIRING_WAITING,
       code: 'K7QM-4XPA',
@@ -93,10 +99,10 @@ describe('createPairing()', () => {
     await vi.advanceTimersByTimeAsync(1_999);
     expect(f.pollPairing).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(f.pollPairing).toHaveBeenCalledWith({
-      requestId: 'request-1',
-      pollSecret: 'secret-1',
-    });
+    expect(f.pollPairing).toHaveBeenCalledWith(
+      { requestId: 'request-1', pollSecret: 'secret-1' },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(f.pairing.state.phase).toBe(PAIRING_WAITING);
     await vi.advanceTimersByTimeAsync(2_000);
 
@@ -186,10 +192,11 @@ describe('createPairing()', () => {
   });
 
   it('keeps polling through server outages until the code expires', async () => {
+    const stalled = deferred();
     const f = pairingFixture({
       start: [{ ...STARTED, expires_in: 60 }],
       poll: [
-        failure('network_error'),
+        stalled.promise,
         { status: 'pending' },
         failure('network_error', { status: 502 }),
       ],
@@ -197,19 +204,52 @@ describe('createPairing()', () => {
     await f.pairing.start();
 
     await vi.advanceTimersByTimeAsync(2_000);
+    const pollSignal = f.pollPairing.mock.calls[0][1].signal;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(pollSignal.aborted).toBe(true);
     expect(f.pairing.state).toMatchObject({
       phase: PAIRING_WAITING,
       unstable: true,
     });
     await vi.advanceTimersByTimeAsync(2_500);
     expect(f.pollPairing).toHaveBeenCalledTimes(2);
+    expect(f.pollPairing.mock.calls.map(([payload]) => payload)).toEqual([
+      { requestId: 'request-1', pollSecret: 'secret-1' },
+      { requestId: 'request-1', pollSecret: 'secret-1' },
+    ]);
     expect(f.pairing.state.unstable).toBe(false);
 
+    // A response from the timed-out attempt cannot end the current request.
+    stalled.resolve({ status: 'denied' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.pairing.state.phase).toBe(PAIRING_WAITING);
+
     // Every later poll fails: the local deadline ends the request.
-    await vi.advanceTimersByTimeAsync(55_000);
+    await vi.advanceTimersByTimeAsync(45_000);
     expect(f.pairing.state.phase).toBe(PAIRING_WAITING);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(f.pairing.state.phase).toBe(PAIRING_EXPIRED);
+  });
+
+  it('releases a stalled start for retry and ignores its late response', async () => {
+    const stalled = deferred();
+    const f = pairingFixture({ start: [stalled.promise, STARTED] });
+    const starting = f.pairing.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await starting;
+
+    expect(f.startPairing.mock.calls[0][1].signal.aborted).toBe(true);
+    expect(f.pairing.state).toEqual({
+      phase: PAIRING_FAILED,
+      error: 'network_error',
+    });
+    await f.pairing.start();
+    stalled.resolve({ ...STARTED, code: 'OLD2-OLD2' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.pairing.state).toMatchObject({
+      phase: PAIRING_WAITING,
+      code: STARTED.code,
+    });
   });
 
   it.each([
@@ -243,7 +283,14 @@ describe('createPairing()', () => {
     await f.pairing.start();
     await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(f.pairing.state).toEqual({ phase: PAIRING_FAILED, error });
+    expect(f.pairing.state).toMatchObject({ phase: PAIRING_FAILED, error });
+    if (error === 'devices_unavailable') {
+      expect(f.pairing.state.canRetry).toBe(false);
+      await f.pairing.start();
+      expect(f.startPairing).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(f.pairing.state.canRetry).toBe(true);
+    }
   });
 
   it.each([
@@ -260,15 +307,27 @@ describe('createPairing()', () => {
     expect(f.pairing.state.phase).toBeNull();
   });
 
-  it('stops polling once destroyed', async () => {
-    const f = pairingFixture();
-    await f.pairing.start();
+  it.each(['start', 'poll'])(
+    'aborts an in-flight %s and stops once destroyed',
+    async (endpoint) => {
+      const stalled = deferred();
+      const f = pairingFixture({ [endpoint]: [stalled.promise] });
+      const starting = f.pairing.start();
+      await vi.advanceTimersByTimeAsync(endpoint === 'poll' ? 2_000 : 0);
+      const request = endpoint === 'start' ? f.startPairing : f.pollPairing;
+      const signal = request.mock.calls[0][1].signal;
 
-    f.pairing.destroy();
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(f.pollPairing).not.toHaveBeenCalled();
-  });
+      f.pairing.destroy();
+      expect(signal.aborted).toBe(true);
+      await starting;
+      stalled.resolve(endpoint === 'start' ? STARTED : { status: 'approved' });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.pollPairing).toHaveBeenCalledTimes(endpoint === 'poll' ? 1 : 0);
+      expect(f.onApproved).not.toHaveBeenCalled();
+      await f.pairing.start();
+      expect(f.startPairing).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe('describeBrowserDevice()', () => {

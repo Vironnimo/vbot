@@ -10,6 +10,7 @@ import {
 import {
   WEBSOCKET_CLOSE_ACCESS_DENIED,
   WEBSOCKET_CLOSE_AUTH_REQUIRED,
+  WEBSOCKET_CLOSE_DEVICES_UNAVAILABLE,
   reportClosedSocket,
 } from './accessLoss.js';
 import { isPlainObject } from '../values.js';
@@ -36,6 +37,7 @@ const LIVE_SOCKET_CLOSE_OUTCOMES = new Map([
   [4000, 'replaced'],
   [WEBSOCKET_CLOSE_AUTH_REQUIRED, 'signed_out'],
   [WEBSOCKET_CLOSE_ACCESS_DENIED, 'signed_out'],
+  [WEBSOCKET_CLOSE_DEVICES_UNAVAILABLE, 'signed_out'],
 ]);
 
 export const LIVE_SOCKET_ERROR_RESPONSE = 'invalid_live_event';

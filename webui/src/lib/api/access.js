@@ -11,6 +11,7 @@ import {
   ACCESS_LOSS_ACCESS_DENIED,
   ACCESS_LOSS_AUTH_REQUIRED,
   ACCESS_LOSS_DEVICES_UNAVAILABLE,
+  retryAfterSeconds,
   signalAccessLoss,
 } from './accessLoss.js';
 import { isPlainObject } from '../values.js';
@@ -91,11 +92,6 @@ async function requestAccess(method, path, body, options = {}) {
   return payload;
 }
 
-function retryAfterSeconds(value) {
-  const seconds = Number.parseInt(value ?? '', 10);
-  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
-}
-
 // One shared check whether this page still has access, for transports that
 // cannot read the refusal themselves (an EventSource sees no status code).
 // Reports a loss when the server refuses this client, no longer knows its
@@ -114,7 +110,7 @@ export function verifyAccess(options = {}) {
         if (error?.code === 'access_denied') {
           signalAccessLoss(ACCESS_LOSS_ACCESS_DENIED);
         } else if (error?.code === 'devices_unavailable') {
-          signalAccessLoss(ACCESS_LOSS_DEVICES_UNAVAILABLE);
+          signalAccessLoss(ACCESS_LOSS_DEVICES_UNAVAILABLE, error.retryAfter);
         }
       },
     )

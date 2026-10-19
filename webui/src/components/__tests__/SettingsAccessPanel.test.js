@@ -60,6 +60,16 @@ let component;
 let onToast;
 let props;
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   document.body.innerHTML = '';
   init('en');
@@ -125,6 +135,35 @@ const rows = () =>
   );
 
 describe('Settings access panel', () => {
+  it.each(['response', 'failure'])(
+    'keeps a refreshed device list over an older %s',
+    async (outcome) => {
+      const staleDevices = deferred();
+      const staleStatus = deferred();
+      api.listDevices.mockReturnValueOnce(staleDevices.promise);
+      api.getAuthStatus.mockReturnValueOnce(staleStatus.promise);
+      await render();
+
+      api.listDevices.mockResolvedValue({ devices: [LAPTOP] });
+      props.devicesRefreshToken += 1;
+      await settle();
+      expect(rows()).toHaveLength(1);
+      if (outcome === 'response') {
+        staleDevices.resolve({ devices: [LAPTOP, PHONE] });
+        staleStatus.resolve({ mode: 'lan', mode_label: 'Old access mode' });
+      } else {
+        staleDevices.reject(new Error('Old list error'));
+        staleStatus.reject(new Error('Old status error'));
+      }
+      await settle();
+
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toContain(LAPTOP.name);
+      expect(document.body.textContent).toContain(SIGNED_IN.mode_label);
+      expect(document.body.textContent).not.toContain('Old');
+    },
+  );
+
   it('shows the mode and the devices, and signs this device out', async () => {
     api.logOutDevice.mockResolvedValue({ revoked: true });
     await render();
@@ -184,6 +223,46 @@ describe('Settings access panel', () => {
       t('settings.access.error.deviceNotFound'),
     );
     expect(onToast).not.toHaveBeenCalled();
+  });
+
+  it('names ticket browsers removed with their issuer and warns when this window is affected', async () => {
+    const desktop = {
+      ...PHONE,
+      id: 'desktop',
+      name: 'Desktop',
+      kind: 'desktop',
+    };
+    const firstBrowser = {
+      ...PHONE,
+      id: 'first-browser',
+      name: 'Opened browser',
+      via: 'ticket',
+      approved_by: desktop.id,
+    };
+    const thisBrowser = {
+      ...LAPTOP,
+      via: 'ticket',
+      approved_by: firstBrowser.id,
+    };
+    const separate = { ...PHONE, via: 'pairing', approved_by: desktop.id };
+    api.listDevices.mockResolvedValue({
+      devices: [desktop, firstBrowser, thisBrowser, separate],
+    });
+    await render();
+    await click(t('settings.access.revoke.aria', { name: desktop.name }));
+
+    const body = document.querySelector(
+      '[role="dialog"] .modal-body',
+    ).textContent;
+    expect(body).toContain(t('settings.access.revoke.cascade'));
+    expect(body).toContain(
+      t('settings.access.revoke.browsers', {
+        names: `${firstBrowser.name}, ${thisBrowser.name}`,
+      }),
+    );
+    expect(body).toContain(t('settings.access.revoke.currentBrowser'));
+    expect(body).not.toContain(separate.name);
+    expect(api.revokeDevice).not.toHaveBeenCalled();
   });
 
   it('signs out every other device', async () => {

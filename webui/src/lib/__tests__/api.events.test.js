@@ -442,6 +442,7 @@ describe('openLiveCallSocket()', () => {
     [4000, 'replaced'],
     [4401, 'signed_out'],
     [4403, 'signed_out'],
+    [4503, 'signed_out'],
     [1006, 'lost'],
   ])('reports server close code %i as %s', (code, outcome) => {
     const onClose = vi.fn();

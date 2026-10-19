@@ -194,7 +194,7 @@
     <div class="access-gate__actions" use:focusButton>
       <Button
         variant="primary"
-        disabled={phase === PAIRING_RATE_LIMITED && !pairingState.canRetry}
+        disabled={pairingState.canRetry === false}
         onClick={() => pairing.start()}
       >
         {restartLabel}

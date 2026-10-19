@@ -94,7 +94,11 @@ async function sendRpc(envelope, options) {
 
   const payload = await readRpcPayload(response, method);
   if (!response.ok) {
-    reportRefusedResponse(response.status, payload);
+    reportRefusedResponse(
+      response.status,
+      payload,
+      response.headers?.get?.('retry-after'),
+    );
     throw normalizeRpcError(payload.error, {
       method,
       status: response.status,
