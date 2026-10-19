@@ -148,7 +148,7 @@ class PromptFragmentStore:
             return prompt_path.read_text(encoding="utf-8")
         except FileNotFoundError, NotADirectoryError:
             return ""
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             raise StorageError(f"Cannot read Agent prompt fragment {safe_name}: {exc}") from exc
 
     def read_prompt_fragment(self, fragment_name: str) -> str:
@@ -166,7 +166,7 @@ class PromptFragmentStore:
                 return data_path.read_text(encoding="utf-8")
             except FileNotFoundError, NotADirectoryError:
                 return resource_path.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             raise StorageError(f"Cannot read prompt fragment {safe_name}: {exc}") from exc
 
     @staticmethod
