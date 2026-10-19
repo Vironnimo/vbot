@@ -17,7 +17,12 @@ from core.model_tasks.decision_types import (
 )
 from core.model_tasks.model_tasks import TaskModelService, parse_task_model_target_id
 from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
-from core.providers.errors import NetworkError, ProviderError, ProviderOutcomeUnknownError
+from core.providers.errors import (
+    NetworkError,
+    ProviderError,
+    ProviderOutcomeUnknownError,
+    ProviderRequestTooLargeError,
+)
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
 from core.utils.tls import shared_ssl_context
@@ -98,7 +103,8 @@ class DecisionService:
         for state in states:
             if not isinstance(state, str | dict | list):
                 raise DecisionError("Each item must be text, a JSON object, or a JSON array.")
-        target, limit = await _DECISION_SETUP_WORKERS.run(self._target)
+        resolved = await _DECISION_SETUP_WORKERS.run(self._target)
+        target = resolved.target
         slots = asyncio.Semaphore(_ITEM_CONCURRENCY)
 
         async def judge(
@@ -112,11 +118,11 @@ class DecisionService:
                 )
                 # Copying and counting an item of up to 1 MB must not block the Event Loop.
                 state, estimate = await _DECISION_SETUP_WORKERS.run(
-                    _sized_state, state, questions, factor, limit
+                    _sized_state, state, questions, factor, resolved.context_window
                 )
                 async with slots:
                     result = await self._evaluate(
-                        target,
+                        resolved,
                         state,
                         questions,
                         http_client=http_client,
@@ -149,14 +155,14 @@ class DecisionService:
 
     async def _evaluate(
         self,
-        target: str,
+        target: _Target,
         state: Any,
         questions: list[dict[str, Any]],
         *,
         http_client: httpx.AsyncClient | None = None,
         usage_context: TaskUsageContext | None = None,
     ) -> dict[str, Any]:
-        ref = parse_task_model_target_id(target)
+        ref = parse_task_model_target_id(target.target)
         try:
             client = await ProviderDecisionClient.from_runtime_async(
                 self._runtime,
@@ -174,8 +180,43 @@ class DecisionService:
                 ),
                 code="outcome_unknown",
             ) from exc
-        except (ProviderError, NetworkError) as exc:
+        except ProviderError as exc:
+            if isinstance(exc, ProviderRequestTooLargeError) or (
+                exc.status_code == 400 and _reports_context_overflow(str(exc))
+            ):
+                raise _rejected_as_too_large(target.context_window) from exc
             raise DecisionError(str(exc), code="provider_error") from exc
+        except NetworkError as exc:
+            raise DecisionError(str(exc), code="provider_error") from exc
+
+
+# How a 400 body names a request beyond the context window: TypeSafe's
+# documented code (docs.typesafe.ai/api#errors, 2026-10-19), the OpenAI-style
+# code and OpenRouter's own message. OpenRouter's wrapping of upstream errors
+# is undocumented, so only these exact markers count.
+_CONTEXT_OVERFLOW_MARKERS = (
+    "max_tokens_exceeded",
+    "context_length_exceeded",
+    "maximum context length",
+)
+
+
+def _reports_context_overflow(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
+def _rejected_as_too_large(limit: int | None) -> DecisionError:
+    reads = (
+        f"; it reads at most {limit} tokens together with context and all questions"
+        if limit is not None
+        else ""
+    )
+    return DecisionError(
+        f"The Decision Model rejected this item as too large{reads}. Shorten the item, "
+        "context or questions.",
+        code="too_large",
+    )
 
 
 class _Target(NamedTuple):

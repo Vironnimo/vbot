@@ -70,13 +70,20 @@ def test_rejects_invalid_complete_questions(mutation):
 
 
 @pytest.mark.parametrize(
-    "state",
-    [None, True, 1, {"x": float("nan")}, "x" * 1_000_001],
+    ("state", "code"),
+    [
+        (None, "invalid_request"),
+        (True, "invalid_request"),
+        (1, "invalid_request"),
+        ({"x": float("nan")}, "invalid_request"),
+        ("x" * 1_000_001, "too_large"),
+    ],
     ids=["null", "boolean", "integer", "nan", "oversize"],
 )
-def test_rejects_invalid_state(state):
-    with pytest.raises(DecisionError):
+def test_rejects_invalid_state(state, code):
+    with pytest.raises(DecisionError) as error:
         validate_input(state, QUESTIONS)
+    assert error.value.code == code
 
 
 @pytest.mark.parametrize(
