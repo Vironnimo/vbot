@@ -79,19 +79,26 @@ def build_responses_payload(
     model_id: str,
     policy: ResponsesRequestPolicy,
     reasoning_renderer: Callable[[dict[str, Any]], None],
+    output_limit: Callable[[dict[str, Any]], None],
     stream: bool = False,
     document_media_types: frozenset[str] = frozenset(),
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Build a stateless ``/responses`` request payload from canonical messages.
 
-    ``policy`` filters Tools, structured output and optional parameters;
-    ``reasoning_renderer`` writes the reasoning fields (the wire profile's
-    reasoning plan in its dialect). The caller has already consumed the
-    reasoning kwargs.
+    ``output_limit`` resolves the request's output allowance in the caller's
+    kwargs before anything is filtered: every Adapter passes its shared
+    output-limit owner (``OpenAICompatibleAdapter._apply_model_output_limit``),
+    so each Responses route resolves, clamps and refuses exactly like Chat
+    Completions and Messages. ``policy`` then filters Tools, structured output
+    and optional parameters, so a route that takes no output-limit field still
+    sends none. ``reasoning_renderer`` writes the reasoning fields (the wire
+    profile's reasoning plan in its dialect). The caller has already consumed
+    the reasoning kwargs.
     """
 
     wire_messages = normalize_tool_call_ids(messages, RESPONSES_TOOL_CALL_ID_PROFILE)
+    output_limit(kwargs)
     request_kwargs = policy.filter_request_kwargs(kwargs)
     payload: dict[str, Any] = {
         "model": model_id,

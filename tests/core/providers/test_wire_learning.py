@@ -343,6 +343,23 @@ _WITHIN_4096 = _Within(4096)
             [9000, _WITHIN_4096, _WITHIN_4096],
             id="openrouter-chat-send-context-window",
         ),
+        pytest.param(
+            paths.OPENROUTER,
+            {"max_tokens": 9000},
+            "max_tokens is too large: 9000. This model supports at most 4000 completion tokens.",
+            ("max_output_tokens",),
+            [9000, 4000, 4000],
+            id="openrouter-responses-send-output-maximum",
+        ),
+        pytest.param(
+            paths.OPENROUTER.streaming(lambda: paths.responses_sse()),
+            {"max_tokens": 9000},
+            "This model's maximum context length is 4096 tokens. However, you requested 9010 "
+            "tokens (10 in the messages, 9000 in the completion).",
+            ("max_output_tokens",),
+            [9000, _WITHIN_4096, _WITHIN_4096],
+            id="openrouter-responses-stream-context-window",
+        ),
     ],
 )
 @pytest.mark.asyncio

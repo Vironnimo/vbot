@@ -8,7 +8,7 @@ Adapter sends each request through the profile's protocol.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import aclosing
 from typing import Any, ClassVar, cast, override
 
@@ -282,21 +282,6 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             request_kwargs.pop(name, None)
         return request_kwargs
 
-    def _endpoint_request_kwargs(
-        self,
-        messages: list[dict[str, Any]],
-        model_id: str,
-        kwargs: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Messages and Responses kwargs: output limit, provider defaults, then the filter."""
-
-        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
-        self._apply_model_output_limit(request_kwargs, model_id, messages)
-        if self._config.defaults:
-            for key, value in self._config.defaults.items():
-                request_kwargs.setdefault(key, value)
-        return self._copilot_request_kwargs(model_id, request_kwargs)
-
     def _build_copilot_responses_payload(
         self,
         messages: list[dict[str, Any]],
@@ -305,7 +290,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         *,
         stream: bool = False,
     ) -> dict[str, Any]:
-        request_kwargs = self._endpoint_request_kwargs(messages, model_id, kwargs)
+        request_kwargs = self._copilot_request_kwargs(
+            model_id, self._request_kwargs_with_defaults(kwargs)
+        )
         profile = self.wire_profile(model_id)
         reasoning_renderer = take_reasoning_renderer(profile, request_kwargs)
         payload = build_responses_payload(
@@ -315,6 +302,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             stream=stream,
             document_media_types=profile.media.types & RESPONSES_DOCUMENT_TYPES,
             reasoning_renderer=reasoning_renderer,
+            output_limit=lambda kwargs: self._apply_model_output_limit(kwargs, model_id, messages),
             **request_kwargs,
         )
         rules = profile.request
@@ -335,12 +323,18 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         model_id: str,
         kwargs: Mapping[str, Any],
     ) -> dict[str, Any]:
+        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        self._apply_model_output_limit(request_kwargs, model_id, messages)
+        # Provider defaults join after the output clamp; the Messages codec
+        # sanitizes the output-limit aliases among them.
+        for key, value in (self._config.defaults or {}).items():
+            request_kwargs.setdefault(key, value)
         return build_copilot_messages_payload(
             messages,
             model_id=model_id,
             profile=self.wire_profile(model_id),
             provider_label=self._config.name,
-            **self._endpoint_request_kwargs(messages, model_id, kwargs),
+            **self._copilot_request_kwargs(model_id, request_kwargs),
         )
 
     @override
@@ -349,16 +343,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         request_kwargs: dict[str, Any],
         model_id: str,
         messages: list[dict[str, Any]],
-        *,
-        estimated_input_tokens: int | Callable[[], int] | None = None,
     ) -> None:
         self._validate_image_limits(model_id, _copilot_message_images(messages))
-        super()._apply_model_output_limit(
-            request_kwargs,
-            model_id,
-            messages,
-            estimated_input_tokens=estimated_input_tokens,
-        )
+        super()._apply_model_output_limit(request_kwargs, model_id, messages)
 
     @override
     def input_token_limit(self, model_id: str) -> int | None:

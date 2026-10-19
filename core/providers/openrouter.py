@@ -311,16 +311,6 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         # endpoint-specific condition, so classify from its structured fields.
         raise classify_in_band_provider_error(error, lenient_unknown=True)
 
-    def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        # Provider defaults are merged as if the caller had set them, so the
-        # Responses output limit is the flat default rather than the catalog
-        # ceiling; a ``None`` caller value removes the default.
-        request_kwargs: dict[str, Any] = {}
-        if self._config.defaults:
-            request_kwargs.update(self._config.defaults)
-        request_kwargs.update(kwargs)
-        return {key: value for key, value in request_kwargs.items() if value is not None}
-
     @override
     def estimate_request_input_tokens(
         self,
@@ -353,6 +343,9 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             stream=stream,
             document_media_types=profile.media.types & RESPONSES_DOCUMENT_TYPES,
             reasoning_renderer=reasoning_renderer,
+            output_limit=lambda request_kwargs: self._apply_model_output_limit(
+                request_kwargs, model_id, messages
+            ),
             **kwargs,
         )
         payload["store"] = False

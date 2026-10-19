@@ -25,6 +25,7 @@ from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import RequestInput
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
@@ -143,7 +144,7 @@ def test_request_input_budget_evaluates_a_fallback_only_without_a_matching_scope
     assert len(calls) == 2
 
 
-_BUDGET_MODEL_ID = "gpt-5.5"  # the OpenAI wire file routes it to Responses on api-key
+_BUDGET_MODEL_ID = "gpt-5.5"  # the OpenAI, xAI and Go wire files route it to Responses
 _BUDGET_MESSAGES = [{"role": "user", "content": "Keep this request unchanged."}]
 _BUDGET_TOOLS = [
     {
@@ -152,26 +153,33 @@ _BUDGET_TOOLS = [
         "parameters": {"type": "object", "properties": {}},
     }
 ]
-_BUDGET_WIRES: dict[str, tuple[str, Callable[..., ProviderAdapter], str]] = {
-    "chat": ("compatible", OpenAICompatibleAdapter, "/chat/completions"),
-    "messages": ("compatible", AnthropicCompatibleAdapter, "/messages"),
-    "openai-responses": ("openai", OpenAIAdapter, "/responses"),
-    "xai-responses": ("xai", XAIAdapter, "/responses"),
-    "copilot-chat": ("github-copilot", GitHubCopilotAdapter, "/chat/completions"),
-    "copilot-responses": ("github-copilot", GitHubCopilotAdapter, "/responses"),
+_BUDGET_WIRES: dict[str, tuple[str, Callable[..., ProviderAdapter], str, str]] = {
+    "chat": ("compatible", OpenAICompatibleAdapter, "/chat/completions", _BUDGET_MODEL_ID),
+    "messages": ("compatible", AnthropicCompatibleAdapter, "/messages", _BUDGET_MODEL_ID),
+    "openai-responses": ("openai", OpenAIAdapter, "/responses", _BUDGET_MODEL_ID),
+    "xai-responses": ("xai", XAIAdapter, "/responses", _BUDGET_MODEL_ID),
+    "copilot-chat": (
+        "github-copilot",
+        GitHubCopilotAdapter,
+        "/chat/completions",
+        _BUDGET_MODEL_ID,
+    ),
+    "copilot-responses": ("github-copilot", GitHubCopilotAdapter, "/responses", _BUDGET_MODEL_ID),
+    "openrouter-responses": ("openrouter", OpenRouterAdapter, "/responses", "openai/gpt-5.6-sol"),
+    "go-responses": ("opencode-go", OpenCodeGoAdapter, "/responses", _BUDGET_MODEL_ID),
 }
 
 
-def _budget_adapter(wire: str) -> tuple[Any, str]:
-    provider_id, adapter_type, path = _BUDGET_WIRES[wire]
+def _budget_adapter(wire: str) -> tuple[Any, str, str]:
+    provider_id, adapter_type, path, model_id = _BUDGET_WIRES[wire]
     model = catalog_model(
-        _BUDGET_MODEL_ID,
+        model_id,
         context_window=256_000,
         max_output_tokens=256_000,
         metadata={
             "github_copilot": {
                 "vendor": "OpenAI",
-                "family": _BUDGET_MODEL_ID,
+                "family": model_id,
                 "supported_endpoints": [path],
                 "max_prompt_tokens": 200_000,
                 "tool_calls": True,
@@ -180,7 +188,7 @@ def _budget_adapter(wire: str) -> tuple[Any, str]:
     )
     config = bearer_config(provider_id, base_url="https://provider.example/v1")
     adapter = adapter_type(config, TOKEN, model_lookup=lambda _model_id: model)
-    return adapter, f"https://provider.example/v1{path}"
+    return adapter, f"https://provider.example/v1{path}", model_id
 
 
 @pytest.mark.asyncio
@@ -188,7 +196,7 @@ def _budget_adapter(wire: str) -> tuple[Any, str]:
 async def test_matching_budget_replaces_wire_estimation_without_changing_the_request(
     wire: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    adapter, url = _budget_adapter(wire)
+    adapter, url, model_id = _budget_adapter(wire)
     calls: list[tuple[Any, ...]] = []
 
     def estimate(messages, *, model_id, tools=None):
@@ -199,7 +207,7 @@ async def test_matching_budget_replaces_wire_estimation_without_changing_the_req
         raise AssertionError("A matching Context budget must not re-estimate the request")
 
     async def sent_body() -> dict[str, Any]:
-        await adapter.send(_BUDGET_MESSAGES, model_id=_BUDGET_MODEL_ID, tools=_BUDGET_TOOLS)
+        await adapter.send(_BUDGET_MESSAGES, model_id=model_id, tools=_BUDGET_TOOLS)
         body: dict[str, Any] = json.loads(route.calls.last.request.content)
         return body
 
@@ -209,9 +217,7 @@ async def test_matching_budget_replaces_wire_estimation_without_changing_the_req
             monkeypatch.setattr(adapter, "estimate_request_input_tokens", estimate)
             standalone = await sent_body()
             assert calls
-            assert all(
-                call == (_BUDGET_MESSAGES, _BUDGET_MODEL_ID, _BUDGET_TOOLS) for call in calls
-            )
+            assert all(call == (_BUDGET_MESSAGES, model_id, _BUDGET_TOOLS) for call in calls)
             limit = "max_output_tokens" if "max_output_tokens" in standalone else "max_tokens"
             assert standalone[limit] == 68_500
 
@@ -221,7 +227,7 @@ async def test_matching_budget_replaces_wire_estimation_without_changing_the_req
             assert calls
 
             monkeypatch.setattr(adapter, "estimate_request_input_tokens", unexpected_estimate)
-            with request_input_budget(_BUDGET_MODEL_ID, RequestInput.estimate(150_000)):
+            with request_input_budget(model_id, RequestInput.estimate(150_000)):
                 assert await sent_body() == standalone
     finally:
         await adapter.aclose()
@@ -231,21 +237,21 @@ async def test_matching_budget_replaces_wire_estimation_without_changing_the_req
 async def test_matching_budget_still_enforces_the_reported_input_limit_before_io(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter, url = _budget_adapter("copilot-responses")
+    adapter, url, model_id = _budget_adapter("copilot-responses")
 
     def unexpected_estimate(*_args, **_kwargs):
         raise AssertionError("Input-limit validation must use the matching Context budget")
 
     monkeypatch.setattr(adapter, "estimate_request_input_tokens", unexpected_estimate)
-    assert adapter.input_token_limit(_BUDGET_MODEL_ID) == 200_000
+    assert adapter.input_token_limit(model_id) == 200_000
     try:
         with respx.mock:
             route = respx.post(url).mock(return_value=httpx.Response(200, json={"id": "reply"}))
             with (
-                request_input_budget(_BUDGET_MODEL_ID, RequestInput.measured(200_001)),
+                request_input_budget(model_id, RequestInput.measured(200_001)),
                 pytest.raises(ProviderError) as error,
             ):
-                await adapter.send(_BUDGET_MESSAGES, model_id=_BUDGET_MODEL_ID)
+                await adapter.send(_BUDGET_MESSAGES, model_id=model_id)
     finally:
         await adapter.aclose()
 

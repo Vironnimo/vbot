@@ -36,6 +36,7 @@ from tests.core.providers.openai_test_support import (
     jwt_with_account,
 )
 from tests.core.providers.responses_test_support import (
+    keep_output_limit,
     responses_policy,
     responses_reasoning,
 )
@@ -208,6 +209,7 @@ async def _render_responses(messages: list[dict[str, Any]]) -> dict[str, Any]:
         model_id="gpt-5.4",
         policy=responses_policy(),
         reasoning_renderer=responses_reasoning(),
+        output_limit=keep_output_limit,
     )
 
 

@@ -514,13 +514,27 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     message.pop(replay.history_field, None)
         return payload
 
+    def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """Caller kwargs over the Provider-config ``defaults``, for the Responses routes.
+
+        ``None``-valued caller kwargs mean unspecified and give way to a
+        default, as in :meth:`_build_payload`. Output-limit defaults stay out:
+        :meth:`_apply_model_output_limit` applies ``defaults.max_tokens`` as the
+        Provider default after the catalog ceiling, so a flat default never
+        poses as an explicit caller limit.
+        """
+
+        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        for key, value in (self._config.defaults or {}).items():
+            if key not in OUTPUT_LIMIT_PARAMETER_NAMES:
+                request_kwargs.setdefault(key, value)
+        return request_kwargs
+
     def _apply_model_output_limit(
         self,
         request_kwargs: dict[str, Any],
         model_id: str,
         messages: list[dict[str, Any]],
-        *,
-        estimated_input_tokens: int | Callable[[], int] | None = None,
     ) -> None:
         """Resolve the output allowance and clamp it to remaining context.
 
@@ -536,10 +550,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         a ceiling equal to the whole context cannot produce an invalid request.
         Mirrors the Anthropic adapter's context-aware ``max_tokens``.
 
-        Subclasses whose wire format differs from the chat-message shape (e.g.
-        stateless Responses items) pass a wire-accurate ``estimated_input_tokens``
-        fallback callable so the context clamp budgets against what the Provider
-        actually receives without re-estimating a matching scoped Chat budget.
+        This is the output-limit step of every Chat Completions and Responses
+        request (the shared Responses codec requires it). The input estimate is
+        :meth:`estimate_request_input_tokens`, which a multi-wire Adapter renders
+        for the Model's selected wire, unless a matching scoped budget replaces it.
         """
 
         explicit_values: list[int] = []
@@ -556,18 +570,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         tool_definitions = tools if isinstance(tools, list) else None
 
         def estimate_input() -> int:
-            if estimated_input_tokens is None:
-                return self.estimate_request_input_tokens(
-                    messages,
-                    model_id=model_id,
-                    tools=tool_definitions,
-                )
-            value = (
-                estimated_input_tokens()
-                if callable(estimated_input_tokens)
-                else estimated_input_tokens
+            return self.estimate_request_input_tokens(
+                messages, model_id=model_id, tools=tool_definitions
             )
-            return max(0, int(value))
 
         rules = self.wire_profile(model_id).request
         resolved = resolve_request_output_limit(

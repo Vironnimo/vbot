@@ -10,13 +10,14 @@ import httpx
 import pytest
 import respx
 
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
-from core.providers.errors import ProviderAuthError
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, request_input_budget
+from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.openai import (
     CODEX_EXTRA_HEADERS,
     OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS,
     OpenAIAdapter,
 )
+from core.providers.providers import RequestInput
 
 from .openai_test_support import (
     ACCOUNT_ID,
@@ -389,30 +390,29 @@ async def test_codex_payload_adds_required_fields_and_drops_rejected_parameters(
 
 
 @pytest.mark.asyncio
-async def test_codex_send_skips_output_limit_clamp() -> None:
-    """Codex must not abort a still-fitting request over a reserve it never sends."""
+async def test_codex_budgets_like_every_wire_but_never_sends_an_output_limit() -> None:
+    """Input that fits goes out without an output field; input beyond the window fails locally.
 
+    The estimation margin only shrinks an allowance Codex never sends, so a
+    request whose input still fits is never refused over it.
+    """
+
+    model_id = "gpt-5.6-luna"
     adapter = codex_adapter(model_lookup=ladder_model_lookup(("low", "medium", "high", "xhigh")))
-    reasoning_item = {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque" * 20_000}
-    huge_messages: list[dict[str, Any]] = [
-        {"role": "system", "content": "Use concise answers."},
-        {"role": "user", "content": "x" * 50_000},
-        {
-            "role": "assistant",
-            "content": "ok",
-            "reasoning_meta": {
-                "response_output": [reasoning_item],
-                "reasoning_items": [reasoning_item],
-                "encrypted_content": ["opaque" * 20_000],
-            },
-        },
-        {"role": "user", "content": "continue"},
-    ]
-
-    payload = await codex_payload(adapter, huge_messages, model_id="gpt-5.6-luna")
-
+    with request_input_budget(model_id, RequestInput.estimate(127_999)):
+        payload = await codex_payload(adapter, model_id=model_id)
     assert "max_output_tokens" not in payload
     assert "max_tokens" not in payload
+
+    with (
+        respx.mock,
+        request_input_budget(model_id, RequestInput.measured(128_000)),
+        pytest.raises(ProviderError) as error,
+    ):
+        route = respx.post(OPENAI_SUBSCRIPTION_URL)
+        await adapter.send(SAMPLE_MESSAGES, model_id=model_id)
+    assert error.value.retryable is False
+    assert route.call_count == 0
 
 
 @pytest.mark.parametrize(
