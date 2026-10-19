@@ -40,7 +40,15 @@ def shown_range(data):
 
 
 @pytest.mark.asyncio
-async def test_continuations_recover_all_unicode_text_with_one_fetch(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "factor",
+    [
+        pytest.param(None, id="uncalibrated"),
+        # The calling Model counts twice the shared estimate, so parts hold half.
+        pytest.param(2.0, id="calibrated-model"),
+    ],
+)
+async def test_continuations_recover_all_unicode_text_with_one_fetch(tmp_path, monkeypatch, factor):
     body = "日本語 🧭 café\n" * 2500 + "THE END"
     calls = []
 
@@ -49,13 +57,15 @@ async def test_continuations_recover_all_unicode_text_with_one_fetch(tmp_path, m
         return make_result(text=body, headers={"content-type": "text/plain"}, url=url)
 
     install_http_get(monkeypatch, respond)
-    tool = web_fetch_registry()
-    context = make_context(tmp_path)
+    calibration = {} if factor is None else {"input_estimate_factor": {"p/model": factor}.get}
+    tool = web_fetch_registry(**calibration)
+    context = replace(make_context(tmp_path), agent_model="p/model")
+    max_tokens = pages.MAX_CONTENT_TOKENS / (factor or 1.0)
     response = await tool.dispatch(context, {"url": "https://example.com/long"})
     parts = []
     while True:
         data = response["data"]
-        assert response["ok"] and estimate_tokens(data["content"])[0] <= pages.MAX_CONTENT_TOKENS
+        assert response["ok"] and estimate_tokens(data["content"])[0] <= max_tokens
         assert estimate_json_tokens(response)[0] < 4500
         start, end, total = shown_range(data)
         assert start == sum(map(len, parts)) + 1

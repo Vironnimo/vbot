@@ -403,6 +403,7 @@ def bootstrap(runtime: Runtime) -> None:
             credential_resolver=runtime.resolve_environment_credential,
             settings_loader=runtime._storage.load_web_fetch_settings,
             browser=runtime._page_browser,
+            input_estimate_factor=runtime._usage_recorder.input_estimate_factor,
         )
         register_web_search_tool(
             runtime._tools,

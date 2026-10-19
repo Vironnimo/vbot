@@ -105,14 +105,15 @@ def _continuation(ref: str, scope: str, offset: int) -> str:
     return f"{ref}.{'p' if scope == 'page' else 'm'}.{offset}"
 
 
-def _bounded(text: str, max_chars: int) -> str:
+def _bounded(text: str, max_chars: int, max_tokens: float) -> str:
+    """The longest prefix within *max_chars* whose estimate stays within *max_tokens*."""
     candidate = text[:max_chars]
-    if estimate_tokens(candidate)[0] <= MAX_CONTENT_TOKENS:
+    if estimate_tokens(candidate)[0] <= max_tokens:
         return candidate
     low, high = 0, len(candidate)
     while low < high:
         middle = (low + high + 1) // 2
-        if estimate_tokens(candidate[:middle])[0] <= MAX_CONTENT_TOKENS:
+        if estimate_tokens(candidate[:middle])[0] <= max_tokens:
             low = middle
         else:
             high = middle - 1
@@ -252,10 +253,15 @@ def _note(snapshot: dict[str, Any], *, first_read: bool, scope: str) -> str:
 
 
 def _read_text(
-    snapshot: dict[str, Any], text: str, scope: str, offset: int, max_chars: int
+    snapshot: dict[str, Any],
+    text: str,
+    scope: str,
+    offset: int,
+    max_chars: int,
+    max_tokens: float,
 ) -> dict[str, Any]:
     ref = snapshot["ref"]
-    content = _bounded(text[offset:], max_chars)
+    content = _bounded(text[offset:], max_chars, max_tokens)
     end = offset + len(content)
     data: dict[str, Any] = {}
     if offset > 0 or end < len(text) or scope == "page":
@@ -289,7 +295,13 @@ def _passage_window(
 
 
 def _find_text(
-    snapshot: dict[str, Any], text: str, scope: str, offset: int, find: str, max_chars: int
+    snapshot: dict[str, Any],
+    text: str,
+    scope: str,
+    offset: int,
+    find: str,
+    max_chars: int,
+    max_tokens: float,
 ) -> dict[str, Any]:
     ref = snapshot["ref"]
     before, after = _CODE_PASSAGE if snapshot.get("source") == "direct" else _PROSE_PASSAGE
@@ -322,7 +334,7 @@ def _find_text(
         else:
             trial = [*spans, [first, last]]
         rendered = render(trial)
-        if spans and _bounded(rendered, max_chars) != rendered:
+        if spans and _bounded(rendered, max_chars, max_tokens) != rendered:
             # A match next to the last passage continues the search where it ends.
             next_offset = spans[-1][1] if len(trial) == len(spans) else position
             break
@@ -356,7 +368,7 @@ def _find_text(
             "More matches. Continue with "
             f"{_call({'ref': _continuation(ref, scope, next_offset), 'find': find})}."
         )
-    data["content"] = _bounded(render(spans), max_chars)
+    data["content"] = _bounded(render(spans), max_chars, max_tokens)
     return data
 
 
@@ -386,8 +398,14 @@ def _past_the_end(snapshot: dict[str, Any], scope: str, offset: int) -> str:
     return f"{situation} Read it from the start with {_call({'ref': snapshot['ref']})}."
 
 
-def read_page(snapshot: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
-    """Return a contiguous part or literal search hits with copyable follow-up calls."""
+def read_page(
+    snapshot: dict[str, Any], arguments: dict[str, Any], estimate_factor: float = 1.0
+) -> dict[str, Any]:
+    """Return a contiguous part or literal search hits with copyable follow-up calls.
+
+    The part holds about ``MAX_CONTENT_TOKENS`` tokens of the calling Model:
+    *estimate_factor* corrects the shared estimator for it.
+    """
     find = arguments.get("find")
     ref = arguments.get("ref", snapshot["ref"])
     identifier, view, cursor = _decode_ref(ref)
@@ -399,6 +417,7 @@ def read_page(snapshot: dict[str, Any], arguments: dict[str, Any]) -> dict[str, 
             "invalid_arguments", _past_the_end(snapshot, scope, offset), retryable=False
         )
     max_chars = arguments.get("max_chars", DEFAULT_MAX_CHARS)
+    max_tokens = MAX_CONTENT_TOKENS / estimate_factor if estimate_factor > 0 else MAX_CONTENT_TOKENS
     data: dict[str, Any] = {
         key: snapshot[key]
         for key in ("url", "title", "author", "published")
@@ -406,9 +425,9 @@ def read_page(snapshot: dict[str, Any], arguments: dict[str, Any]) -> dict[str, 
     }
     data["ref"] = snapshot["ref"]
     if find:
-        data.update(_find_text(snapshot, text, scope, offset, find, max_chars))
+        data.update(_find_text(snapshot, text, scope, offset, find, max_chars, max_tokens))
     else:
-        data.update(_read_text(snapshot, text, scope, offset, max_chars))
+        data.update(_read_text(snapshot, text, scope, offset, max_chars, max_tokens))
     note = _note(snapshot, first_read=offset == 0 and not find, scope=scope)
     if note:
         data["note"] = note

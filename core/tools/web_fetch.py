@@ -659,12 +659,22 @@ def make_web_fetch_handler(
     credential_resolver: Callable[[str], str | None] | None = None,
     settings_loader: Callable[[], Mapping[str, Any]] | None = None,
     browser: PageBrowser | None = None,
+    input_estimate_factor: Callable[[str], float] | None = None,
 ) -> ToolHandler:
-    """Bind transport, optional services, and saved views to existing owners."""
+    """Bind transport, optional services, and saved views to existing owners.
+
+    *input_estimate_factor* corrects token estimates for a Model, so a view's
+    token bound holds for the calling Agent's Model.
+    """
     # The address of the page each conversation (Session and Agent, as a saved
     # page's owner) read last, the site a root-relative url belongs to. Kept in
     # memory: after a restart a path fails until a page is read again.
     last_pages: OrderedDict[tuple[str, str], str] = OrderedDict()
+
+    def estimate_factor(context: ToolContext) -> float:
+        if input_estimate_factor is None or not context.agent_model:
+            return 1.0
+        return input_estimate_factor(context.agent_model)
 
     def remember(context: ToolContext, results: list[JsonObject]) -> None:
         for result in results:
@@ -795,7 +805,7 @@ def make_web_fetch_handler(
                 "Could not save the fetched page. Check available disk space and retry.",
                 retryable=False,
             )
-        result = await run_tool_worker(read_page, snapshot, view)
+        result = await run_tool_worker(read_page, snapshot, view, estimate_factor(context))
         return _with_notes(result, [_redirect_note(url, snapshot["url"])])
 
     async def unusable_ref(
@@ -850,7 +860,7 @@ def make_web_fetch_handler(
                 "fetch the other address.",
                 retryable=False,
             )
-        result = await run_tool_worker(read_page, snapshot, request.view)
+        result = await run_tool_worker(read_page, snapshot, request.view, estimate_factor(context))
         if request.urls:
             return _with_notes(result, [_redirect_note(request.urls[0], snapshot["url"])])
         return result
@@ -952,6 +962,7 @@ def register_web_fetch_tool(
     credential_resolver: Callable[[str], str | None] | None = None,
     settings_loader: Callable[[], Mapping[str, Any]] | None = None,
     browser: PageBrowser | None = None,
+    input_estimate_factor: Callable[[str], float] | None = None,
 ) -> None:
     """Register the web_fetch tool with a vBot tool registry."""
     registry.register(
@@ -964,6 +975,7 @@ def register_web_fetch_tool(
             credential_resolver=credential_resolver,
             settings_loader=settings_loader,
             browser=browser,
+            input_estimate_factor=input_estimate_factor,
         ),
         summary="Read a web page or online file.",
         family="web",
