@@ -32,6 +32,7 @@ def _payload(root: Path, shape: str = "server") -> Path:
     manifest = {
         "schema_version": 1,
         "bootstrap_protocol": 1,
+        "server_access_protocol": 1,
         "version_id": "v1_test",
         "version": "1.0",
         "revision": "abcdef",
@@ -241,3 +242,25 @@ def test_installers_refuse_an_access_mode_the_server_could_not_start_with(
         install.main([*common, "--data-dir", str(tmp_path / "data"), *options])
 
     assert not root.exists()
+
+
+def test_authenticated_install_refuses_an_unmarked_payload_before_creating_files(
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path)
+    manifest_path = payload / "release.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["server_access_protocol"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    root, data = tmp_path / "installation", tmp_path / "data"
+    with pytest.raises(ApplicationError):
+        install_payload(
+            root,
+            payload,
+            shape="server",
+            data_dir=data,
+            access=access_config(
+                "authenticated", public_url="https://vbot.example", trusted_proxies=["127.0.0.1"]
+            ),
+        )
+    assert not root.exists() and not data.exists()

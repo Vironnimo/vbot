@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
@@ -20,26 +21,54 @@ from tests.server.app_test_support import ServerStubRuntime
 _SAME_ORIGIN = f"http://127.0.0.1:{DEFAULT_PORT}"
 
 
-def test_browser_origin_guard_admits_only_the_served_origin(tmp_path: Path) -> None:
-    app = create_app(runtime=ServerStubRuntime(tmp_path))
+@pytest.mark.parametrize(
+    ("public_url", "same_origin", "other_origin"),
+    [
+        (None, _SAME_ORIGIN, _SAME_ORIGIN.replace("http:", "https:")),
+        ("https://vbot.example.org.", "https://vbot.example.org.", "https://vbot.example.org"),
+        (
+            "https://[2001:0db8:0:0:0:0:0:1]",
+            "https://[2001:db8::1]",
+            "https://[2001:db8::2]",
+        ),
+        (
+            "https://[::ffff:192.0.2.1]",
+            "https://[::ffff:c000:201]",
+            "https://192.0.2.1",
+        ),
+    ],
+)
+def test_browser_origin_guard_admits_only_the_served_origin(
+    tmp_path: Path, public_url: str | None, same_origin: str, other_origin: str
+) -> None:
+    access = (
+        None
+        if public_url is None
+        else access_config("authenticated", public_url=public_url, trusted_proxies=["127.0.0.1"])
+    )
+    app = create_app(runtime=ServerStubRuntime(tmp_path), access=access)
+    headers = {"Host": urlsplit(same_origin).netloc}
+    if public_url is not None:
+        headers.update({"X-Forwarded-For": "203.0.113.7", "X-Forwarded-Proto": "https"})
     foreign_origins = [
         "https://attacker.example",
         f"http://testserver:{DEFAULT_PORT}",
         "https://testserver",
         "null",
+        other_origin,
     ]
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=headers) as client:
         foreign = [client.get("/health", headers={"origin": origin}) for origin in foreign_origins]
         # A rebinding page cannot pass by making Host match its own Origin.
         rebinding = client.get(
             "/health", headers={"origin": "http://attacker.example", "host": "attacker.example"}
         )
-        same_origin = client.get("/health", headers={"origin": _SAME_ORIGIN})
+        same = client.get("/health", headers={"origin": same_origin})
         without_origin = client.get("/health")
 
-    assert [response.status_code for response in [*foreign, rebinding]] == [403] * 5
-    assert same_origin.json() == without_origin.json() == {"status": "ok"}
+    assert [response.status_code for response in [*foreign, rebinding]] == [403] * 6
+    assert same.json() == without_origin.json() == {"status": "ok"}
 
 
 @pytest.mark.parametrize(

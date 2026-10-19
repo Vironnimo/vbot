@@ -213,8 +213,9 @@ def test_packaged_module_uses_its_recorded_install_over_foreign_environment(
     assert discovered.root == own_root
 
 
+@pytest.mark.parametrize("unavailable", [False, True])
 def test_native_bootstrap_uses_its_recorded_install_over_foreign_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unavailable: bool
 ):
     own_root = tmp_path / "own"
     foreign_root = tmp_path / "foreign"
@@ -225,6 +226,18 @@ def test_native_bootstrap_uses_its_recorded_install_over_foreign_environment(
     )
     monkeypatch.setattr(sys, "executable", str(own_root / "vBot.exe"))
     monkeypatch.setenv("VBOT_INSTALL_ROOT", str(foreign_root))
+    if unavailable:
+        original = os.stat
+
+        def stat(path, *args, **kwargs) -> os.stat_result:
+            if path == own_root / "application.json":
+                raise PermissionError("record metadata unavailable")
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", stat)
+        with pytest.raises(ApplicationError, match="Cannot check application record"):
+            state.discover()
+        return
 
     discovered = state.discover()
 

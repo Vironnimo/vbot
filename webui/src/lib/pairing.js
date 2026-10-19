@@ -20,7 +20,8 @@ const DEFAULT_POLL_INTERVAL_S = 2;
 const DEFAULT_EXPIRES_IN_S = 600;
 const MAX_POLL_INTERVAL_S = 30;
 const MAX_POLL_RETRY_DELAY_MS = 15_000;
-const DEFAULT_RATE_LIMIT_WAIT_S = 30;
+const DEFAULT_RETRY_WAIT_S = 30;
+const REQUEST_TIMEOUT_MS = 10_000;
 // Polls normally see the server's `expired`; the local deadline ends a
 // request whose polls keep failing.
 const EXPIRY_GRACE_MS = 5_000;
@@ -47,6 +48,8 @@ export function createPairing({
   let pollTimer = null;
   let expiryTimer = null;
   let retryTimer = null;
+  let activeRequest = null;
+  let destroyed = false;
 
   function set(next) {
     state = next;
@@ -65,8 +68,44 @@ export function createPairing({
   function end(next) {
     generation += 1;
     clearTimers();
+    activeRequest?.cancel();
     request = null;
     set(next);
+  }
+
+  // A stalled response must leave time to retry a claim within the server's
+  // claim grace. Cancellation also releases fetch when this screen goes away.
+  function ask(endpoint, payload) {
+    return new Promise((resolve, reject) => {
+      const controller = new AbortController();
+      let settled = false;
+      const operation = {
+        cancel: () => finish(reject, requestFailure('cancelled'), true),
+      };
+      const timer = setTimeoutFn(
+        () => finish(reject, requestFailure('timed out'), true),
+        REQUEST_TIMEOUT_MS,
+      );
+      activeRequest = operation;
+
+      function finish(complete, value, abort = false) {
+        if (settled) return;
+        settled = true;
+        clearTimeoutFn(timer);
+        if (activeRequest === operation) activeRequest = null;
+        if (abort) controller.abort();
+        complete(value);
+      }
+
+      Promise.resolve()
+        .then(() => {
+          if (!settled) return endpoint(payload, { signal: controller.signal });
+        })
+        .then(
+          (answer) => finish(resolve, answer),
+          (error) => finish(reject, error),
+        );
+    });
   }
 
   function seconds(value, fallback, max = Number.POSITIVE_INFINITY) {
@@ -77,13 +116,14 @@ export function createPairing({
 
   async function start() {
     if (
+      destroyed ||
       state.phase === PAIRING_STARTING ||
       state.phase === PAIRING_WAITING ||
       state.phase === PAIRING_APPROVED
     ) {
       return;
     }
-    if (state.phase === PAIRING_RATE_LIMITED && now() < state.retryAt) {
+    if (now() < state.retryAt) {
       return;
     }
     const current = ++generation;
@@ -92,7 +132,7 @@ export function createPairing({
     set({ phase: PAIRING_STARTING });
     let answer;
     try {
-      answer = await startPairing({ kind, name: deviceName });
+      answer = await ask(startPairing, { kind, name: deviceName });
     } catch (error) {
       if (current === generation) refused(error, { starting: true });
       return;
@@ -154,7 +194,7 @@ export function createPairing({
     }
     let answer;
     try {
-      answer = await pollPairing({
+      answer = await ask(pollPairing, {
         requestId: request.id,
         pollSecret: request.secret,
       });
@@ -206,19 +246,20 @@ export function createPairing({
       return;
     }
     if (code === 'rate_limited') {
-      const waitMs =
-        seconds(error.retryAfter, DEFAULT_RATE_LIMIT_WAIT_S) * 1000;
+      const waitMs = seconds(error.retryAfter, DEFAULT_RETRY_WAIT_S) * 1000;
       if (!starting) {
         // Polled too fast: wait as told, then keep polling.
         schedulePoll(waitMs);
         return;
       }
-      const retryAt = now() + waitMs;
-      end({ phase: PAIRING_RATE_LIMITED, retryAt, canRetry: false });
-      retryTimer = setTimeoutFn(() => {
-        retryTimer = null;
-        set({ ...state, canRetry: true });
-      }, waitMs);
+      waitBeforeRestart({ phase: PAIRING_RATE_LIMITED }, waitMs);
+      return;
+    }
+    if (code === 'devices_unavailable') {
+      waitBeforeRestart(
+        { phase: PAIRING_FAILED, error: code },
+        seconds(error.retryAfter, DEFAULT_RETRY_WAIT_S) * 1000,
+      );
       return;
     }
     if (!starting && isTransient(error)) {
@@ -236,17 +277,33 @@ export function createPairing({
     end({ phase: PAIRING_FAILED, error: code });
   }
 
+  function waitBeforeRestart(next, waitMs) {
+    end({ ...next, retryAt: now() + waitMs, canRetry: false });
+    retryTimer = setTimeoutFn(() => {
+      retryTimer = null;
+      set({ ...state, canRetry: true });
+    }, waitMs);
+  }
+
   return {
     get state() {
       return state;
     },
     start,
     destroy() {
+      destroyed = true;
       generation += 1;
       clearTimers();
+      activeRequest?.cancel();
       request = null;
     },
   };
+}
+
+function requestFailure(reason) {
+  return Object.assign(new Error(`Pairing request ${reason}`), {
+    code: 'network_error',
+  });
 }
 
 function isTransient(error) {

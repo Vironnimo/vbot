@@ -27,12 +27,15 @@ from cli.application.state import (
     read_json,
     safe_id,
 )
+from core.access.config import AccessConfig
 from core.utils.file_status import is_link_status
 from core.utils.ids import is_reserved_name
 
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_PAYLOAD_BYTES = 12 * 1024**3
 MAX_FILES = 100_000
+#: The persisted Access Mode and request-authentication contract this updater admits.
+SERVER_ACCESS_PROTOCOL = 1
 #: Published beside the packages of a release; names the version they contain so an
 #: update can skip a download when that version is already active.
 RELEASE_IDENTITY_ASSET = "vbot-release.json"
@@ -156,12 +159,26 @@ def _remove_bytecode_caches(root: Path, names: list[str]) -> None:
     )
 
 
+def require_access_compatible_release(release: dict[str, Any], access: AccessConfig | None) -> None:
+    """Refuse a new package that cannot guarantee the installation's login boundary."""
+    if access is None or access.mode != "authenticated":
+        return
+    protocol = release.get("server_access_protocol")
+    if type(protocol) is not int or protocol != SERVER_ACCESS_PROTOCOL:
+        raise ApplicationError(
+            "This package does not declare compatible server authentication support. "
+            "It cannot replace a server in authenticated access mode. "
+            "Choose a package that supports authenticated access."
+        )
+
+
 def validate_release(
     root: Path,
     *,
     shape: str | None = None,
     platform: str | None = None,
     remove_bytecode_caches: bool = False,
+    access: AccessConfig | None = None,
 ) -> dict[str, Any]:
     """Verify a release's exact payload against its manifest inventory.
 
@@ -175,6 +192,7 @@ def validate_release(
         raise ApplicationError("Unsupported release manifest")
     if release["bootstrap_protocol"] != 1:
         raise ApplicationError("Release requires an incompatible application bootstrap")
+    require_access_compatible_release(release, access)
     safe_id(release.get("version_id"))
     if shape is not None and release.get("install_shape") != shape:
         raise ApplicationError("Release does not match the installed application shape")
@@ -292,7 +310,10 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
                 if os.name != "nt" and mode & 0o111:
                     target.chmod(0o755)
         manifest = validate_release(
-            temporary, shape=install.install_shape, platform=current_platform()
+            temporary,
+            shape=install.install_shape,
+            platform=current_platform(),
+            access=install.access,
         )
         version_id = manifest["version_id"]
         destination = install.version(version_id)

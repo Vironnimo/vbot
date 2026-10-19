@@ -5,21 +5,31 @@ import { jsonResponse, MockEventSource, MockWebSocket } from './api.support.js';
 const BASE_URL = 'https://localhost:8420/';
 
 let losses;
+let waits;
 let stopListening;
 
 beforeEach(() => {
   losses = [];
-  stopListening = api.onAccessLoss((reason) => losses.push(reason));
+  waits = [];
+  stopListening = api.onAccessLoss((reason, retryAfter) => {
+    losses.push(reason);
+    waits.push(retryAfter);
+  });
 });
 
 afterEach(() => {
   stopListening();
+  vi.restoreAllMocks();
 });
 
-const refusal = (status, code) =>
+const refusal = (status, code, retryAfter) =>
   jsonResponse(
     { ok: false, error: { code, message: `${code} sentinel` } },
-    { ok: false, status },
+    {
+      ok: false,
+      status,
+      headers: retryAfter ? { 'Retry-After': retryAfter } : {},
+    },
   );
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -41,7 +51,7 @@ describe('access loss', () => {
     ['a route’s own rate limit', refusal(429, 'too_many_runs'), []],
     [
       'a server that cannot check devices',
-      refusal(503, 'devices_unavailable'),
+      refusal(503, 'devices_unavailable', '45'),
       ['devices_unavailable'],
     ],
     ['another unavailable service', refusal(503, 'service_unavailable'), []],
@@ -51,14 +61,17 @@ describe('access loss', () => {
     ).rejects.toBeInstanceOf(api.ApiClientError);
 
     expect(losses).toEqual(expected);
+    if (response.status === 503 && expected.length) expect(waits).toEqual([45]);
   });
 
   it('reports refused uploads and speech playback', async () => {
     await expect(
       api.uploadAttachment(new File(['hello'], 'notes.txt'), {
-        fetch: vi.fn().mockResolvedValue(refusal(401, 'auth_required')),
+        fetch: vi
+          .fn()
+          .mockResolvedValue(refusal(503, 'devices_unavailable', '90')),
       }),
-    ).rejects.toMatchObject({ status: 401 });
+    ).rejects.toMatchObject({ status: 503 });
     const playback = new Response(
       JSON.stringify({ ok: false, error: { code: 'access_denied' } }),
       { status: 403 },
@@ -71,7 +84,8 @@ describe('access loss', () => {
         .next(),
     ).rejects.toMatchObject({ status: 403 });
 
-    expect(losses).toEqual(['auth_required', 'access_denied']);
+    expect(losses).toEqual(['devices_unavailable', 'access_denied']);
+    expect(waits).toEqual([90, null]);
   });
 
   it.each([
@@ -216,27 +230,32 @@ describe('pairing endpoints', () => {
     ]);
   });
 
-  it('rejects a refused pairing request with its code, status and Retry-After', async () => {
-    const fetch = vi
-      .fn()
-      .mockResolvedValue(
+  it.each(['42', 'Mon, 19 Oct 2026 12:00:42 GMT'])(
+    'rejects a refused pairing request with Retry-After %s',
+    async (retryAfter) => {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-19T12:00:00Z'));
+      const fetch = vi.fn().mockResolvedValue(
         jsonResponse(
-          { ok: false, error: { code: 'rate_limited', message: 'slow down' } },
-          { ok: false, status: 429, headers: { 'Retry-After': '42' } },
+          {
+            ok: false,
+            error: { code: 'rate_limited', message: 'slow down' },
+          },
+          { ok: false, status: 429, headers: { 'Retry-After': retryAfter } },
         ),
       );
 
-    await expect(
-      api.startPairing({ name: 'Firefox on Linux' }, { fetch }),
-    ).rejects.toMatchObject({
-      name: 'ApiClientError',
-      code: 'rate_limited',
-      status: 429,
-      retryAfter: 42,
-    });
-    // A pairing refusal is the pairing screen's to handle, not an access loss.
-    expect(losses).toEqual([]);
-  });
+      await expect(
+        api.startPairing({ name: 'Firefox on Linux' }, { fetch }),
+      ).rejects.toMatchObject({
+        name: 'ApiClientError',
+        code: 'rate_limited',
+        status: 429,
+        retryAfter: 42,
+      });
+      // A pairing refusal is the pairing screen's to handle, not an access loss.
+      expect(losses).toEqual([]);
+    },
+  );
 
   it('rejects an unreachable server as a network error', async () => {
     await expect(

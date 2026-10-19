@@ -199,6 +199,7 @@ async def test_websocket_disconnect_during_hello_unregisters_client(tmp_path: Pa
                 "accessor": "browser",
             }
             self.headers: dict[str, str] = {}
+            self.scope: dict[str, Any] = {}
 
         async def accept(self) -> None:
             return None

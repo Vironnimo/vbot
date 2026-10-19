@@ -52,7 +52,12 @@ LIVE_CALLS_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 
 
 def _initialize_app_state(
-    app: FastAPIType, runtime: Runtime, *, server_bind: ServerBindState, log_viewer: LogViewer
+    app: FastAPIType,
+    runtime: Runtime,
+    *,
+    server_bind: ServerBindState,
+    log_viewer: LogViewer,
+    file_delivery: FileDelivery,
 ) -> None:
     app.state.runtime = runtime
     app.state.chat_runs = runtime.chat_run_manager
@@ -70,7 +75,7 @@ def _initialize_app_state(
         )
     )
     app.state.client_registry = ClientRegistry()
-    app.state.file_delivery = FileDelivery()
+    app.state.file_delivery = file_delivery
     app.state.run_event_bridge_run_ids = OrderedDict()
     app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
     app.state.session_title_bridge_unsubscribe = _register_session_title_bridge(app.state)

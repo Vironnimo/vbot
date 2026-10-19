@@ -26,6 +26,7 @@ from asyncio.sslproto import SSLProtocol
 from typing import Any, override
 
 from core.access.config import AccessConfigError, load_tls_context
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("server.access")
@@ -49,35 +50,41 @@ class TlsContextHolder:
         self._key = key
         self._stamp = self._file_stamp()
         self.context: ssl.SSLContext = load_tls_context(cert, key)
-        self._failing = False
+        self._conditions = LoggedConditions(limit=1)
 
     def reload_if_changed(self) -> bool:
         """Load the files again if they changed; returns whether the context changed.
 
         A renewal that is half written or broken keeps the previous certificate:
-        the failure is logged once, and the next change is tried again.
+        the failure is logged once, and every check retries until loading succeeds.
         """
         stamp = self._file_stamp()
-        if stamp is None or stamp == self._stamp:
+        if stamp is None:
+            self._reload_failed("the certificate or key file cannot be checked")
             return False
-        self._stamp = stamp
+        if stamp == self._stamp:
+            if self._conditions.ended("certificate"):
+                _LOGGER.info("TLS certificate reload recovered (cert=%s)", self._cert)
+            return False
         try:
             context = load_tls_context(self._cert, self._key)
         except AccessConfigError as exc:
-            if not self._failing:
-                _LOGGER.warning(
-                    "TLS certificate reload failed; serving the previous certificate (error=%s)",
-                    exc,
-                )
-            self._failing = True
+            self._reload_failed(str(exc))
             return False
         self.context = context
-        if self._failing:
+        self._stamp = stamp
+        if self._conditions.ended("certificate"):
             _LOGGER.info("TLS certificate reload recovered (cert=%s)", self._cert)
         else:
             _LOGGER.info("TLS certificate reloaded (cert=%s)", self._cert)
-        self._failing = False
         return True
+
+    def _reload_failed(self, reason: str) -> None:
+        if self._conditions.started("certificate"):
+            _LOGGER.warning(
+                "TLS certificate reload failed; serving the previous certificate (error=%s)",
+                reason,
+            )
 
     async def watch(self, interval: float = CERTIFICATE_CHECK_INTERVAL_SECONDS) -> None:
         """Check the files every ``interval`` seconds until cancelled."""

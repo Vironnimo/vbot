@@ -35,6 +35,7 @@ export const GATE_NOTICE_NOT_KEPT = 'not_kept';
 const STATUS_TIMEOUT_MS = 10_000;
 const RETRY_INITIAL_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 30_000;
+const DEVICES_UNAVAILABLE_RETRY_S = 30;
 const LOSS_LOOP_LIMIT = 3;
 const LOSS_LOOP_WINDOW_MS = 60_000;
 
@@ -63,9 +64,10 @@ export function createAccessGate({
   let losses = [];
   let stopListening = null;
   let destroyed = false;
+  let retryNotBefore = 0;
 
   function show(next) {
-    state = { status: null, notice: null, ...next };
+    state = { status: null, notice: null, retryAt: null, ...next };
     onChange(state);
   }
 
@@ -114,7 +116,10 @@ export function createAccessGate({
       if (error?.code === 'access_denied') {
         show({ screen: GATE_DENIED });
       } else if (error?.code === 'devices_unavailable') {
-        scheduleRetry(GATE_UNAVAILABLE, error.retryAfter);
+        scheduleRetry(
+          GATE_UNAVAILABLE,
+          error.retryAfter ?? DEVICES_UNAVAILABLE_RETRY_S,
+        );
       } else if (reason === 'boot') {
         show({ screen: GATE_APP });
       } else {
@@ -140,7 +145,8 @@ export function createAccessGate({
   // Shows `screen` and checks again after a backoff, or after `retryAfter`
   // seconds when the server asked for a longer wait.
   function scheduleRetry(screen, retryAfter = null) {
-    show({ screen });
+    retryNotBefore = now() + (retryAfter ?? 0) * 1000;
+    show({ screen, retryAt: retryAfter > 0 ? retryNotBefore : null });
     const backoff = reconnectBackoffDelay(retryAttempt, {
       initialDelayMs: RETRY_INITIAL_DELAY_MS,
       maxDelayMs: RETRY_MAX_DELAY_MS,
@@ -153,13 +159,22 @@ export function createAccessGate({
     }, delay);
   }
 
-  function handleLoss() {
+  function handleLoss(reason, retryAfter) {
     // Only the mounted app can lose access; the gate's own screens handle
     // their refusals themselves.
     if (destroyed || state.screen !== GATE_APP) {
       return;
     }
     beforeLeaveApp();
+    if (reason === 'devices_unavailable') {
+      generation += 1;
+      clearRetry();
+      scheduleRetry(
+        GATE_UNAVAILABLE,
+        retryAfter ?? DEVICES_UNAVAILABLE_RETRY_S,
+      );
+      return;
+    }
     const at = now();
     losses = [...losses.filter((time) => at - time < LOSS_LOOP_WINDOW_MS), at];
     if (losses.length >= LOSS_LOOP_LIMIT) {
@@ -181,6 +196,7 @@ export function createAccessGate({
     },
     // Retry from `unavailable`, `unreachable`, `looping` or `denied`.
     retry() {
+      if (now() < retryNotBefore) return;
       losses = [];
       retryAttempt = 0;
       return check();

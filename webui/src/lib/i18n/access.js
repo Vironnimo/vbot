@@ -69,7 +69,7 @@ export default Object.freeze({
   'settings.access.copyCommand': 'Copy command',
   'settings.access.devices.title': 'Devices',
   'settings.access.devices.description':
-    'Every device that signed in by pairing. Removing a device signs it out at once; it has to be paired again to come back.',
+    'Devices that signed in by pairing or were opened from a signed-in device. Removing a device also signs out the browsers opened from it.',
   'settings.access.devices.descriptionOpen':
     'No device needs to sign in in this access mode. Devices paired while the server asked for sign-in stay listed until you remove them.',
   'settings.access.devices.empty': 'No device is paired yet.',
@@ -99,21 +99,26 @@ export default Object.freeze({
   'settings.access.revoke.aria': 'Remove {name}',
   'settings.access.revoke.title': 'Remove {name}?',
   'settings.access.revoke.body':
-    '{name} is signed out at once and has to be paired again to use vBot.',
+    '{name} is signed out at once and has to sign in again to use vBot.',
+  'settings.access.revoke.cascade':
+    'Browsers opened from this device, and browsers opened from them, also lose access. Devices approved separately with a pairing code stay signed in.',
+  'settings.access.revoke.browsers': 'Affected browsers: {names}.',
+  'settings.access.revoke.currentBrowser':
+    'This browser is among them: this window will be signed out too.',
   'settings.access.revoke.confirm': 'Remove device',
   'settings.access.revoke.done': '{name} was removed.',
   'settings.access.revokeOthers.button': 'Sign out other devices',
   'settings.access.revokeOthers.title': 'Sign out all other devices?',
   'settings.access.revokeOthers.body':
-    'Every other device is signed out at once and has to be paired again. This device stays signed in.',
+    'Every other device is signed out at once and has to sign in again. This device stays signed in.',
   'settings.access.revokeOthers.bodyAll':
-    'Every paired device is signed out at once and has to be paired again.',
+    'Every paired device is signed out at once and has to sign in again.',
   'settings.access.revokeOthers.confirm': 'Sign out devices',
   'settings.access.revokeOthers.done': 'Devices signed out: {count}.',
   'settings.access.signOut.button': 'Sign out',
   'settings.access.signOut.title': 'Sign out this device?',
   'settings.access.signOut.body':
-    'This browser loses its access to vBot right away. To use vBot here again, pair it again with a code.',
+    'This browser loses its access to vBot right away. To use vBot here again, sign in again.',
   'settings.access.signOut.confirm': 'Sign out',
   'settings.access.add.button': 'Add device…',
   'settings.access.add.title': 'Add device',

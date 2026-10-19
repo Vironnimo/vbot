@@ -46,7 +46,7 @@ from typing import Any, Protocol, Self
 
 import httpx
 
-from desktop._http import shared_ssl_context
+from desktop._http import retry_after_seconds, shared_ssl_context
 
 logger = logging.getLogger("vbot.desktop.speech.server_client")
 
@@ -440,7 +440,10 @@ class SpeechServerClient:
                 continue
             if response.status_code in RETRYABLE_STATUS_CODES and not last_attempt:
                 logger.info("Retrying %s after HTTP %s", path, response.status_code)
-                self._wait_before_retry(attempt)
+                retry_after = retry_after_seconds(response.headers) or 0.0
+                if _error_code(_json_object(response)) == "devices_unavailable":
+                    retry_after = max(30.0, retry_after)
+                self._wait_before_retry(attempt, retry_after=retry_after)
                 continue
             return response
         raise AssertionError("attempts must be at least 1")
@@ -460,8 +463,8 @@ class SpeechServerClient:
             authorization.rejected(self._server_url, header)
         return response
 
-    def _wait_before_retry(self, attempt: int) -> None:
-        if self._cancel.wait(_backoff_delay(attempt)):
+    def _wait_before_retry(self, attempt: int, *, retry_after: float = 0.0) -> None:
+        if self._cancel.wait(max(_backoff_delay(attempt), retry_after)):
             raise SpeechRequestCancelled("Speech server request cancelled")
 
     def _raise_if_cancelled(self) -> None:

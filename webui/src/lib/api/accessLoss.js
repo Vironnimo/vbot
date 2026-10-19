@@ -21,15 +21,16 @@ export const WEBSOCKET_CLOSE_DEVICES_UNAVAILABLE = 4503;
 
 const listeners = new Set();
 
-// Calls `listener(reason)` on every reported loss; returns the unsubscribe.
+// Calls `listener(reason, retryAfter)` on every reported loss; the optional
+// wait is in seconds. Returns the unsubscribe.
 export function onAccessLoss(listener) {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
 
-export function signalAccessLoss(reason) {
+export function signalAccessLoss(reason, retryAfter = null) {
   for (const listener of [...listeners]) {
-    listener(reason);
+    listener(reason, retryAfter);
   }
 }
 
@@ -66,10 +67,10 @@ export function accessLossFromClose(event) {
 }
 
 // Reports a refused HTTP response; returns whether it was an access loss.
-export function reportRefusedResponse(status, payload) {
+export function reportRefusedResponse(status, payload, retryAfter = null) {
   const loss = accessLossFromResponse(status, payload);
   if (loss) {
-    signalAccessLoss(loss);
+    signalAccessLoss(loss, retryAfterSeconds(retryAfter));
   }
   return loss !== null;
 }
@@ -86,7 +87,11 @@ export async function reportRefusedHttpResponse(response) {
   } catch {
     return false;
   }
-  return reportRefusedResponse(response.status, payload);
+  return reportRefusedResponse(
+    response.status,
+    payload,
+    response.headers?.get?.('retry-after'),
+  );
 }
 
 // Close listener for a socket: reports a 4401 / 4403 / 4503 close.
@@ -96,4 +101,16 @@ export function reportClosedSocket(event) {
     signalAccessLoss(loss);
   }
   return loss !== null;
+}
+
+// Retry-After permits either seconds or an HTTP date. A missing or invalid
+// header leaves the owner's protocol-specific fallback in charge.
+export function retryAfterSeconds(value, now = Date.now()) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  if (/^\d+$/.test(value.trim())) {
+    const seconds = Number(value);
+    return Number.isFinite(seconds) ? seconds : null;
+  }
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, Math.ceil((at - now) / 1000)) : null;
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import UTC, datetime
 from html import unescape
 from pathlib import Path
 from typing import Any, cast
@@ -11,10 +12,13 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.access.config import access_config
+from core.access.devices import DeviceStore, new_device
 from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
 from core.sessions import SessionAddress
 from server.app import create_app
+from server.events import RUN_OUTPUT_SERVER_EVENT
 from server.file_delivery import (
     EXTENSION_ASSET_URL_PREFIX,
     FILE_SNIFF_BYTES,
@@ -25,6 +29,161 @@ from server.rpc.payloads import _visible_message
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
 _FILE_URL_PATTERN = re.compile(r"\(/api/files/([^\s)]+)(?=[\s)])")
+
+
+def test_capability_binding_is_recipient_specific_and_cannot_transfer_or_extend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("server.file_delivery.time.time", lambda: 1000)
+    entry = tmp_path / "index.html"
+    entry.write_text("<h1>Site</h1>")
+    delivery = FileDelivery()
+    file_url = _only_file_url(delivery.project_message(_assistant_payload(entry))["content"])
+    preview = delivery.open_preview(str(entry))
+    page = delivery.open_extension_page(
+        extension="fixture", page="main", epoch="epoch", entry=entry
+    )
+    run = delivery.open_extension_run(
+        extension="fixture", page="main", epoch="epoch", group_id="group", run_id="run"
+    )
+    payload: dict[str, Any] = {
+        "file": file_url,
+        "markdown": f'[a \\[label\\]]({file_url} "title &quot;")',
+        "html": f'<img src="{file_url}?download=true&amp;other=1">',
+        "preview": preview,
+        "page": page,
+        "run": run,
+        "unrelated": "https://example.org/not.a-capability",
+        "external": [
+            f"https://example.org{file_url}",
+            f"https://example.org/?next=({file_url})",
+            f"//example.org{file_url}",
+            f"[remote](https://example.org/?next=]({file_url}))",
+            f"[remote](https://example.org/(nested)?next=]({file_url}))",
+            f"[remote](https://example.org/escaped\\)?next=]({file_url}))",
+            f"[remote](<https://example.org/unbalanced)?next=]({file_url})>)",
+            f'<img src="https://example.org/with space?next={file_url}">',
+            f"Other relative path: /prefix{file_url}",
+        ],
+    }
+    first = delivery.bind_payload(payload, "device-one", expires_at=1100)
+    second = delivery.bind_payload(payload, "device-two", expires_at=1100)
+    ordinary = delivery.bind_payload(payload, "device-one")
+    ordinary_claims = delivery.access_claims(ordinary["file"])
+    run_claims = delivery.access_claims(ordinary["run"]["url"])
+    assert ordinary_claims is not None and ordinary_claims["expires_at"] is None
+    assert run_claims is not None and run_claims["expires_at"] is None
+    assert first["file"] != second["file"]
+    assert payload["file"] == file_url
+    assert delivery.bind_payload(first, "device-two", expires_at=2000) == first
+    assert first["markdown"] == payload["markdown"].replace(file_url, first["file"])
+    assert first["html"] == payload["html"].replace(file_url, first["file"])
+    assert first["unrelated"] == payload["unrelated"]
+    assert first["external"] == payload["external"]
+    for url in (first["file"], first["preview"]["url"], first["page"]["url"], first["run"]["url"]):
+        claims = delivery.access_claims(url)
+        assert claims is not None and claims["actor"] == "device-one"
+        assert claims["expires_at"] == 1100
+    assert first["preview"]["token"] in first["preview"]["url"]
+    assert first["page"]["token"] in first["page"]["url"]
+    assert delivery.resolve_token(first["file"].removeprefix(FILE_URL_PREFIX)) is not None
+    assert delivery.preview_file(first["preview"]["token"], "index.html").path == entry
+    assert delivery.extension_page_asset(first["page"]["token"], "index.html")[1].path == entry
+    wrong_domain = first["preview"]["url"].replace("preview-assets", "files")
+    assert delivery.access_claims(wrong_domain) is None
+    assert delivery.access_claims(file_url) is None
+    monkeypatch.setattr("server.file_delivery.time.time", lambda: 1100)
+    assert delivery.access_claims(first["file"]) is None
+    assert delivery.resolve_token(first["file"].removeprefix(FILE_URL_PREFIX)) is None
+    monkeypatch.setattr("server.file_delivery.time.time", lambda: 100_000)
+    assert delivery.access_claims(ordinary["file"]) == ordinary_claims
+    assert delivery.access_claims(ordinary["run"]["url"]) is None
+
+
+def test_internal_links_stop_serving_on_issuer_revocation_even_with_another_credential(
+    tmp_path: Path,
+) -> None:
+    site = tmp_path / "site"
+    site.mkdir()
+    entry = site / "index.html"
+    entry.write_text("<h1>Before</h1>")
+    (site / "app.js").write_text("const before = 1;")
+    data = tmp_path / "data"
+    store = DeviceStore(data)
+    store.load()
+    issuer, issuer_token = new_device(
+        name="Issuer", kind="cli", approved_by="host", client=None, now=datetime.now(UTC)
+    )
+    other, other_token = new_device(
+        name="Other", kind="cli", approved_by="host", client=None, now=datetime.now(UTC)
+    )
+    store.add(issuer)
+    store.add(other)
+    app = create_app(
+        runtime=cast(Any, StubRuntime(data, StubAdapter())),
+        access=access_config(
+            "authenticated", public_url="https://testserver", trusted_proxies=["127.0.0.1"]
+        ),
+    )
+    bearer = {"Authorization": f"Bearer {issuer_token}"}
+    other_bearer = {"Authorization": f"Bearer {other_token}"}
+    with TestClient(app, base_url="https://testserver") as client:
+        delivery = cast(Any, app).state.file_delivery
+        shared = delivery.project_message(_assistant_payload(entry))
+        internal = _only_file_url(shared["content"])
+        assert client.get(internal, headers=bearer).status_code == 404
+        with (
+            client.websocket_connect("/ws", headers=bearer) as issuer_socket,
+            client.websocket_connect("/ws", headers=other_bearer) as other_socket,
+        ):
+            assert issuer_socket.receive_json()["type"] == "connection_ready"
+            assert other_socket.receive_json()["type"] == "connection_ready"
+            cast(Any, app).state.event_bus.publish(RUN_OUTPUT_SERVER_EVENT, shared)
+            received = []
+            for socket in (issuer_socket, other_socket):
+                while (event := socket.receive_json())["type"] != RUN_OUTPUT_SERVER_EVENT:
+                    pass
+                received.append(_only_file_url(event["payload"]["content"]))
+            assert received[0] != received[1]
+            assert delivery.access_claims(received[0])["actor"] == issuer.id
+            assert delivery.access_claims(received[1])["actor"] == other.id
+            assert _only_file_url(shared["content"]) == internal
+        issued = delivery.bind_payload({"url": internal}, issuer.id)["url"]
+        preview = client.post(
+            "/api/rpc",
+            json={"method": "file.preview_open", "params": {"source": str(entry)}},
+            headers=bearer,
+        ).json()["result"]
+        other_preview = client.post(
+            "/api/rpc",
+            json={"method": "file.preview_open", "params": {"source": str(entry)}},
+            headers=other_bearer,
+        ).json()["result"]
+        redirect = client.get(issued, headers=other_bearer, follow_redirects=False)
+        assert redirect.status_code == 307
+        child_claims = delivery.access_claims(redirect.headers["location"])
+        parent_claims = delivery.access_claims(issued)
+        assert child_claims["actor"] == issuer.id
+        assert child_claims["expires_at"] == parent_claims["expires_at"]
+        base = preview["url"].rsplit("/", 1)[0]
+        urls = [issued + "?download=true", preview["url"], f"{base}/app.js", f"{base}/.revision"]
+        for url in urls:
+            assert client.get(url).status_code == 200
+        assert client.get(f"{base}/app.js", headers={"Origin": "null"}).status_code == 200
+        revoked = client.post(
+            "/api/rpc",
+            json={"method": "devices.revoke", "params": {"id": issuer.id}},
+            headers=other_bearer,
+        )
+        assert revoked.json()["ok"], revoked.text
+        entry.write_text("<h1>After revocation</h1>")
+        for url in urls:
+            assert client.get(url).status_code == 404
+            assert client.get(url, headers=other_bearer).status_code == 404
+        assert client.get(f"{base}/app.js", headers={"Origin": "null"}).status_code == 404
+        still_allowed = client.get(other_preview["url"])
+        assert still_allowed.status_code == 200
+        assert "After revocation" in still_allowed.text
 
 
 def test_website_preview_serves_the_site_under_an_opaque_origin_capability(
@@ -429,8 +588,10 @@ def test_public_projection_is_fail_closed_and_regenerates_urls(tmp_path: Path) -
     assert first["content"] != second["content"]
 
 
+@pytest.mark.parametrize("authenticated", [False, True])
 def test_rpc_final_message_and_history_share_signed_original_file_projection(
     tmp_path: Path,
+    authenticated: bool,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -448,9 +609,25 @@ def test_rpc_final_message_and_history_share_signed_original_file_projection(
         model="openai/gpt-5.2::api-key",
         workspace=str(workspace),
     )
-    app = create_app(runtime=cast(Any, runtime))
+    actor = None
+    token = None
+    access = None
+    if authenticated:
+        store = DeviceStore(tmp_path / "data")
+        store.load()
+        device, token = new_device(
+            name="Reader", kind="cli", approved_by="host", client=None, now=datetime.now(UTC)
+        )
+        store.add(device)
+        actor = device.id
+        access = access_config(
+            "authenticated", public_url="https://testserver", trusted_proxies=["127.0.0.1"]
+        )
+    app = create_app(runtime=cast(Any, runtime), access=access)
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="https://testserver") as client:
+        if token is not None:
+            client.headers["Authorization"] = f"Bearer {token}"
         created = client.post(
             "/api/rpc",
             json={
@@ -486,6 +663,12 @@ def test_rpc_final_message_and_history_share_signed_original_file_projection(
         urls = _file_urls(sent_content)
         image_response = client.get(urls[0])
         report_response = client.get(urls[1])
+        timeline = client.get(sent.json()["result"]["timeline_url"])
+        assert timeline.status_code == 200
+        assert urls[0] in timeline.text and urls[1] in timeline.text
+        if authenticated:
+            delivery = cast(Any, app).state.file_delivery
+            assert all(delivery.access_claims(url)["actor"] == actor for url in urls)
 
     assert created.json()["ok"] is True
     assert sent.json()["ok"] is True

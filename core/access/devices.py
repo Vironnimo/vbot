@@ -45,6 +45,7 @@ from core.config_validation import (
 from core.json_documents import (
     DURABLE_DOCUMENTS,
     JsonDocumentFormat,
+    JsonDocumentWriteError,
     json_document,
     json_list,
     json_object,
@@ -78,9 +79,9 @@ _APPROVER_PATTERN = re.compile(rf"{HOST_PRINCIPAL}|{_DEVICE_ID}")
 #: What a stored name must not carry; names written before the stricter rule
 #: below keep loading.
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
-#: What a new name must not carry: controls (escape sequences), format characters
-#: (bidirectional overrides, zero-width marks), line and paragraph separators.
-_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+#: What a new name must not carry: controls, formatting, unpaired surrogates,
+#: line and paragraph separators.
+_HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
 
 _DEVICE_FIELDS = frozenset(
     (
@@ -105,7 +106,7 @@ LookupOutcome = Literal["valid", "expired", "invalid"]
 
 
 class DeviceStoreUnavailableError(RuntimeError):
-    """The device store failed to load; it must be repaired before it changes."""
+    """The device store could not be read; repair and reload it before it changes."""
 
 
 class DeviceNotFoundError(LookupError):
@@ -177,11 +178,13 @@ def normalize_device_name(value: Any) -> str:
     """A new display name: 1 to 80 characters, whitespace runs collapsed to one space.
 
     Names reach terminals, approval dialogs and logs, so characters that are
-    invisible or steer the display (Unicode categories Cc, Cf, Zl, Zp) are refused.
+    invisible, steer the display or cannot encode as UTF-8 are refused.
     """
     name = _collapsed_name(value)
     if any(unicodedata.category(character) in _HIDDEN_CATEGORIES for character in name):
-        raise ValueError("device name must not contain control or formatting characters")
+        raise ValueError(
+            "device name must not contain control, formatting or invalid Unicode characters"
+        )
     return name
 
 
@@ -225,6 +228,7 @@ class DeviceStore:
         self._devices: Mapping[str, Device] = MappingProxyType({})
         self._usage: dict[str, tuple[datetime, str | None]] = {}
         self._error: str | None = "The device store is not loaded"
+        self._pending_removals: dict[str, Device] = {}
 
     # Reading -----------------------------------------------------------------
 
@@ -250,6 +254,7 @@ class DeviceStore:
                 self._devices = MappingProxyType(devices)
                 self._usage.clear()
                 self._error = None
+                self._pending_removals.clear()
 
     @property
     def available(self) -> bool:
@@ -270,6 +275,11 @@ class DeviceStore:
         with self._state_lock:
             device = self._devices.get(device_id)
             return None if device is None else self._with_usage(device)
+
+    def removal_pending(self, device_id: str) -> bool:
+        """Whether this process still owes the durable removal of this device."""
+        with self._state_lock:
+            return device_id in self._pending_removals
 
     def lookup(self, token: str, *, now: datetime) -> tuple[LookupOutcome, Device | None]:
         """Check a device token in memory: ``valid``, ``expired`` or ``invalid``.
@@ -296,13 +306,17 @@ class DeviceStore:
         ]
 
     def record_use(self, device_id: str, client: str | None, *, now: datetime) -> bool:
-        """Remember a use in memory; ``True`` when it is due to be written."""
+        """Remember activity, including ticket issuers; ``True`` when a write is due."""
         with self._state_lock:
             device = self._devices.get(device_id)
-            if device is None:
-                return False
-            self._usage[device_id] = (now, client)
-            return now - device.last_used_at >= LAST_USE_WRITE_INTERVAL
+            seen: set[str] = set()
+            due = False
+            while device is not None and device.id not in seen:
+                seen.add(device.id)
+                self._usage[device.id] = (now, client)
+                due |= now - device.last_used_at >= LAST_USE_WRITE_INTERVAL
+                device = self._devices.get(device.approved_by) if device.via == "ticket" else None
+            return due
 
     # Writing (blocking) --------------------------------------------------------
 
@@ -331,42 +345,73 @@ class DeviceStore:
             renamed = replace(current[device_id], name=normalized)
             self._write({**current, device_id: renamed})
             with self._state_lock:
-                self._devices = MappingProxyType({**self._devices, device_id: renamed})
-                return self._with_usage(renamed)
+                return self._with_usage(self._devices[device_id])
+
+    def rebind_ticket_browser(self, device_id: str, approved_by: str) -> Device:
+        """Move an existing ticket browser under a fresh grant, without a cycle.
+
+        Validation and persistence share the ordered write with revocation, so
+        neither a removed browser nor a removed issuer can be resurrected.
+        Independently paired browsers and self-issued tickets keep their grant.
+        """
+        with self._write_lock:
+            current = self._require_available()
+            device = current.get(device_id)
+            if device is None or (approved_by != HOST_PRINCIPAL and approved_by not in current):
+                raise DeviceNotFoundError(device_id)
+            if device.via != "ticket" or approved_by in {device.id, device.approved_by}:
+                return self.get(device_id) or device
+            ancestor = current.get(approved_by)
+            seen: set[str] = set()
+            while ancestor is not None:
+                if ancestor.id == device_id or ancestor.id in seen:
+                    raise ValueError("a ticket browser cannot be delegated to its descendant")
+                seen.add(ancestor.id)
+                ancestor = current.get(ancestor.approved_by) if ancestor.via == "ticket" else None
+            rebound = replace(device, approved_by=approved_by)
+            self._write({**current, device_id: rebound})
+            with self._state_lock:
+                return self._with_usage(self._devices[device_id])
 
     def remove(self, device_ids: Iterable[str]) -> list[Device]:
         """Remove devices: at once in memory, then on disk.
 
         Raises ``OSError`` when the write fails; the devices stay removed for this
-        process, but a restart would read them back.
+        process. Their removals remain pending for a retry, any later successful
+        write, or the shutdown flush. A crash before recovery can read them back.
         """
         with self._write_lock:
             self._require_available()
             with self._state_lock:
                 removed = [
-                    self._with_usage(self._devices[device_id])
+                    self._with_usage(device)
                     for device_id in dict.fromkeys(device_ids)
-                    if device_id in self._devices
+                    if (
+                        device := self._devices.get(device_id)
+                        or self._pending_removals.get(device_id)
+                    )
+                    is not None
                 ]
-                if not removed:
+                if not removed and not self._pending_removals:
                     return []
                 gone = {device.id for device in removed}
                 remaining = {
                     key: device for key, device in self._devices.items() if key not in gone
                 }
                 self._devices = MappingProxyType(remaining)
+                self._pending_removals.update((device.id, device) for device in removed)
                 for device_id in gone:
                     self._usage.pop(device_id, None)
             self._write(remaining)
             return removed
 
     def flush_usage(self) -> None:
-        """Write remembered uses that are newer than the stored ones."""
+        """Persist pending removals and remembered uses newer than stored ones."""
         with self._write_lock:
             if not self.available:
                 return
             with self._state_lock:
-                if not any(
+                if not self._pending_removals and not any(
                     device_id in self._devices and used > self._devices[device_id].last_used_at
                     for device_id, (used, _client) in self._usage.items()
                 ):
@@ -378,13 +423,19 @@ class DeviceStore:
         with self._state_lock:
             folded = {key: self._with_usage(device) for key, device in devices.items()}
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        write_json_document(
-            self.path,
-            {"devices": [_device_record(device) for device in folded.values()]},
-            DEVICES_FORMAT,
-            owner_only=True,
-        )
+        try:
+            write_json_document(
+                self.path,
+                {"devices": [_device_record(device) for device in folded.values()]},
+                DEVICES_FORMAT,
+                owner_only=True,
+            )
+        except JsonDocumentWriteError as exc:
+            with self._state_lock:
+                self._error = str(exc)
+            raise DeviceStoreUnavailableError(str(exc)) from exc
         with self._state_lock:
+            self._pending_removals.clear()
             self._devices = MappingProxyType(
                 {key: folded.get(key, device) for key, device in self._devices.items()}
             )

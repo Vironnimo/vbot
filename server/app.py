@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -97,7 +97,7 @@ from server.access import (
 )
 from server.access._rules import host_policy
 from server.events import RESOURCE_KIND_DEVICES, SERVER_STOPPING_EVENT
-from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX
+from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX, FileDelivery
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import publish_resource_changed
@@ -205,6 +205,7 @@ def create_app(
         local_token=local_access_token,
         bind_host=resolved_server_bind["listen_host"],
     )
+    file_delivery = FileDelivery()
 
     @asynccontextmanager
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
@@ -216,6 +217,7 @@ def create_app(
             app_runtime,
             server_bind=resolved_server_bind,
             log_viewer=await build_log_viewer(app_runtime.storage.data_dir),
+            file_delivery=file_delivery,
         )
         app.state.shutdown_event = shutdown_event if shutdown_event is not None else asyncio.Event()
         app.state.access = access_service
@@ -311,7 +313,7 @@ def create_app(
         allow_same_origin_ip=resolved_server_bind["listen_host"] in {"0.0.0.0", "::"},
     )
     # Added last, so it runs first: before the Origin guard and routing.
-    app.add_middleware(AccessGuard, service=access_service)
+    app.add_middleware(AccessGuard, service=access_service, file_delivery=file_delivery)
     register_access_routes(app, access_service)
 
     @app.get("/health")
@@ -352,7 +354,12 @@ def create_app(
         try:
             # Only handlers of this request act for its principal, never tasks it starts.
             with bound_principal(scope_principal(request.scope)):
-                return await dispatch_rpc(request.app.state, payload)
+                result = await dispatch_rpc(request.app.state, payload)
+                principal = scope_principal(request.scope)
+                return cast(
+                    JsonObject,
+                    file_delivery.bind_payload(result, principal.actor if principal else None),
+                )
         except Exception:
             # The dispatcher logged the original failure; never expose its details.
             response.status_code = 500
@@ -374,6 +381,12 @@ def create_app(
             try:
                 preview = await FILE_PREVIEW_WORKERS.run(
                     delivery.open_preview, f"/api/files/{token}"
+                )
+                principal = scope_principal(request.scope)
+                preview = delivery.bind_payload(
+                    preview,
+                    principal.actor if principal else None,
+                    expires_at=request.scope.get("vbot.capability_expires_at"),
                 )
             except (ValueError, OSError) as exc:
                 raise HTTPException(status_code=404) from exc
@@ -490,6 +503,7 @@ def create_app(
                 after_sequence=after_sequence,
                 shutdown_event=request.app.state.shutdown_event,
                 file_delivery=request.app.state.file_delivery,
+                file_actor=_file_actor(request.scope),
             ),
             media_type="text/event-stream",
             headers={
@@ -519,6 +533,7 @@ def create_app(
                 run,
                 shutdown_event=request.app.state.shutdown_event,
                 child_limit=child_limit,
+                file_actor=_file_actor(request.scope),
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -568,6 +583,8 @@ def create_app(
                         inspection.run,
                         shutdown_event=request.app.state.shutdown_event,
                         include_file_urls=True,
+                        file_actor=_file_actor(request.scope),
+                        file_expires_at=request.scope.get("vbot.capability_expires_at"),
                     )
                 ) as stream:
                     async for chunk in stream:
@@ -597,6 +614,8 @@ def create_app(
                 shutdown_event=request.app.state.shutdown_event,
                 file_delivery=delivery,
                 include_file_urls=True,
+                file_actor=_file_actor(request.scope),
+                file_expires_at=request.scope.get("vbot.capability_expires_at"),
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -636,7 +655,9 @@ def create_app(
                 "queues": _queues_snapshot(websocket.app.state),
                 "server": websocket.app.state.server_identity,
             }
-            await websocket.send_json(hello_frame)
+            await websocket.send_json(
+                file_delivery.bind_payload(hello_frame, _file_actor(websocket.scope))
+            )
             if replay_status == REPLAY_STATUS_RESUMED:
                 subscribe_after_sequence = client_after_sequence
             else:
@@ -644,7 +665,12 @@ def create_app(
             async with aclosing(
                 event_bus.subscribe(after_sequence=subscribe_after_sequence)
             ) as stream:
-                await _stream_websocket_events(websocket, stream)
+                await _stream_websocket_events(
+                    websocket,
+                    stream,
+                    file_delivery=file_delivery,
+                    file_actor=_file_actor(websocket.scope),
+                )
         except WebSocketDisconnect:
             return
         finally:
@@ -700,7 +726,12 @@ def create_app(
         try:
             async with aclosing(owner.frames()) as frames:
                 await _stream_websocket_events(
-                    websocket, frames, on_binary=owner.receive_audio, on_text=owner.receive_text
+                    websocket,
+                    frames,
+                    on_binary=owner.receive_audio,
+                    on_text=owner.receive_text,
+                    file_delivery=file_delivery,
+                    file_actor=_file_actor(websocket.scope),
                 )
             if owner.finished and owner.close_code is not None:
                 await websocket.close(code=owner.close_code)
@@ -712,6 +743,11 @@ def create_app(
     _mount_webui(app)
 
     return app
+
+
+def _file_actor(scope: Mapping[str, Any]) -> str | None:
+    principal = scope_principal(scope)
+    return principal.actor if principal is not None else None
 
 
 def _build_default_runtime(

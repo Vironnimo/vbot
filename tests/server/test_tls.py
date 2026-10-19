@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 from core.access.config import AccessConfigError
+from server.access import tls
 from server.access.tls import TlsContextHolder, sniffing_protocol_class
 
 
@@ -235,3 +236,37 @@ def test_a_missing_or_broken_certificate_refuses_the_start(tmp_path: Path) -> No
         TlsContextHolder(cert, key)
     with pytest.raises(AccessConfigError, match="does not exist"):
         TlsContextHolder(str(tmp_path / "missing.pem"), key)
+
+
+@pytest.mark.parametrize(("failure", "renew"), [("load", True), ("stat", True), ("stat", False)])
+def test_certificate_reload_retries_after_io_recovery_without_another_file_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+    renew: bool,
+) -> None:
+    cert, key = _write_certificate(tmp_path, serial=1)
+    holder = TlsContextHolder(cert, key)
+    original = holder.context
+    if renew:
+        _write_certificate(tmp_path, serial=2)
+    with monkeypatch.context() as transient:
+        if failure == "load":
+
+            def unavailable(*_args: str) -> ssl.SSLContext:
+                raise AccessConfigError("temporary file lock")
+
+            transient.setattr(tls, "load_tls_context", unavailable)
+        else:
+            transient.setattr(holder, "_file_stamp", lambda: None)
+        assert not holder.reload_if_changed()
+        assert not holder.reload_if_changed()
+        assert holder.context is original
+    with caplog.at_level("INFO", logger="vbot.server.access"):
+        assert holder.reload_if_changed() is renew
+        assert not holder.reload_if_changed()
+    assert (holder.context is not original) is renew
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    recoveries = [record for record in caplog.records if record.levelname == "INFO"]
+    assert len(warnings) == len(recoveries) == 1

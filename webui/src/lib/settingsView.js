@@ -80,6 +80,7 @@ export {
   accessModeDescription,
   describeDeviceUse,
   deviceErrorMessage,
+  deviceRevocationMessage,
   deviceKindLabel,
   pairingErrorMessage,
 } from './settingsView/access.js';

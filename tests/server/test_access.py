@@ -438,11 +438,18 @@ def test_a_denied_or_unknown_pairing_ends_without_a_device(served: Any) -> None:
         json={"request_id": started["request_id"], "poll_secret": "guess"},
         headers=_INTERNET,
     ).json()
+    malformed = client.post(
+        "/api/auth/pair/poll",
+        content=json.dumps({"request_id": started["request_id"], "poll_secret": "\ud800"}),
+        headers={**_INTERNET, "Content-Type": "application/json"},
+    )
 
     assert unknown["error"]["code"] == "pairing_not_found"
     assert denied["result"]["status"] == "denied"
     assert polled == {"status": "denied"}
     assert forged == {"status": "expired"}
+    assert malformed.status_code == 400
+    assert malformed.json()["error"]["code"] == "invalid_request"
     assert _rpc(client, "devices.list")["result"]["devices"] == []
 
 
@@ -731,6 +738,11 @@ def test_pairing_requests_are_rate_limited_per_client(tmp_path: Path) -> None:
             # This computer's own clients pair even when the shared budget is spent.
             "this_computer": starts(11, "local"),
         }
+        # Choosing another loopback source cannot multiply the local budget.
+        scope = {**_local_scope(), "client": ("127.0.0.2", 40000)}
+        with pytest.raises(AccessError) as another_loopback:
+            service.pair_start({"kind": "cli", "name": "x"}, service.inspect(scope))
+        assert another_loopback.value.code == "rate_limited"
         await service.close()
         return answers
 
@@ -747,6 +759,7 @@ def test_a_full_pairing_table_makes_room_at_the_expense_of_the_crowding_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(_pairing, "MAX_PENDING_PAIRINGS", 3)
+    monkeypatch.setattr(_pairing, "MAX_LOCAL_PENDING_PAIRINGS", 3)
 
     async def scenario() -> dict[str, Any]:
         service = AccessService(_authenticated(), local_token=None)
@@ -764,11 +777,13 @@ def test_a_full_pairing_table_makes_room_at_the_expense_of_the_crowding_client(
         other = start("198.51.100.4")
         newcomer = start("198.51.100.5")
         local = [start("local") for _attempt in range(3)]
+        replacement = start("local")
         outcome: dict[str, Any] = {
             "crowding": [await status(started) for started in crowding],
             "other": await status(other),
             "newcomer": await status(newcomer),
             "local": [await status(started) for started in local],
+            "local_replacement": await status(replacement),
         }
         for started in (crowding[1], other, newcomer):
             service.decide_pairing(started["code"], Principal("host"), approved=True)
@@ -784,7 +799,8 @@ def test_a_full_pairing_table_makes_room_at_the_expense_of_the_crowding_client(
         "other": "pending",
         "newcomer": "pending",
         # This computer's requests are not counted and never make room.
-        "local": ["pending"] * 3,
+        "local": ["expired", "pending", "pending"],
+        "local_replacement": "pending",
         # Approved requests wait for their device; nothing gives way.
         "approved_table": 429,
     }
@@ -912,25 +928,48 @@ async def _service_device(service: AccessService, kind: str = "cli") -> tuple[st
 
 @pytest.mark.parametrize("spec", ["2.3", "2.4"])
 def test_a_device_event_stream_ends_when_the_device_is_revoked(tmp_path: Path, spec: str) -> None:
+    from core.utils.workers import settle_before_cancelling
+
     async def events() -> AsyncIterator[str]:
         yield "data: ready\n\n"
         await asyncio.Event().wait()
 
     answering = asyncio.Event()
+    admission = asyncio.Lock()
+    body_waiting = asyncio.Event()
+    admission_waiting = asyncio.Event()
+    durable_started = asyncio.Event()
+    effects: list[str] = []
+
+    async def durable_change() -> None:
+        durable_started.set()
+        await answering.wait()
+        effects.append("durable")
 
     async def app(scope: Any, receive: Any, send: Any) -> None:
         if scope["path"].endswith("/events"):
             await StreamingResponse(events(), media_type="text/event-stream")(scope, receive, send)
             return
+        if scope["path"].endswith("/body"):
+            await receive()
+            effects.append("body")
+        elif scope["path"].endswith("/admission"):
+            admission_waiting.set()
+            async with admission:
+                effects.append("admission")
+        elif scope["path"].endswith("/durable"):
+            await settle_before_cancelling(durable_change())
         # A slow answer: it starts only after the revocation.
         await answering.wait()
         await JSONResponse({"ok": True})(scope, receive, send)
 
-    async def scenario() -> tuple[dict[str, list[dict[str, Any]]], asyncio.Task[None], int]:
+    async def scenario() -> tuple[dict[str, list[dict[str, Any]]], list[asyncio.Task[None]], int]:
         service = AccessService(_authenticated(), local_token=None)
         await service.start(tmp_path)
         device_id, token = await _service_device(service)
-        sent: dict[str, list[dict[str, Any]]] = {"stream": [], "answer": []}
+        sent: dict[str, list[dict[str, Any]]] = {
+            name: [] for name in ("stream", "answer", "body", "admission", "durable")
+        }
         streaming = asyncio.Event()
         never = asyncio.Event()
 
@@ -945,33 +984,57 @@ def test_a_device_event_stream_ends_when_the_device_is_revoked(tmp_path: Path, s
             await never.wait()
             return {"type": "http.disconnect"}
 
+        async def delayed_body() -> dict[str, Any]:
+            body_waiting.set()
+            try:
+                await answering.wait()
+            except asyncio.CancelledError:
+                # A body arriving concurrently with revocation must not reach
+                # dispatch, even if its reader settles before returning.
+                await answering.wait()
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
         def request(path: str, name: str) -> asyncio.Task[None]:
             bearer = (b"authorization", f"Bearer {token}".encode())
             scope = _internet_scope(path, bearer, spec=spec)
             guard = AccessGuard(app, service=service)
-            return asyncio.create_task(guard(scope, receive, sender(name)))
+            return asyncio.create_task(
+                guard(scope, delayed_body if name == "body" else receive, sender(name))
+            )
 
         stream = request("/api/runs/run_1/events", "stream")
         answer = request("/api/runs/run_1", "answer")
-        await streaming.wait()
-        open_requests = service.connections.count(device_id)
-        await service.revoke_devices([device_id], Principal("host"))
+        async with admission:
+            body = request("/api/probe/body", "body")
+            waiting = request("/api/probe/admission", "admission")
+            durable = request("/api/probe/durable", "durable")
+            await asyncio.gather(
+                streaming.wait(),
+                body_waiting.wait(),
+                admission_waiting.wait(),
+                durable_started.wait(),
+            )
+            open_requests = service.connections.count(device_id)
+            await service.revoke_devices([device_id], Principal("host"))
         answering.set()
-        await asyncio.wait_for(asyncio.gather(stream, answer), 2)
+        tasks = [stream, answer, body, waiting, durable]
+        await asyncio.wait_for(asyncio.gather(*tasks), 2)
         await service.close()
-        return sent, stream, open_requests
+        return sent, tasks, open_requests
 
-    sent, stream, open_requests = asyncio.run(scenario())
+    sent, tasks, open_requests = asyncio.run(scenario())
 
-    assert open_requests == 2
+    assert open_requests == 5
     # The stream ends cleanly; the request task carries no leftover cancellation.
     assert sent["stream"][0]["type"] == "http.response.start"
     assert sent["stream"][-1] == {"type": "http.response.body", "body": b"", "more_body": False}
-    assert not stream.cancelled() and stream.cancelling() == 0
+    assert all(not task.cancelled() and task.cancelling() == 0 for task in tasks)
+    assert effects == ["durable"]
     # An answer that starts after the revocation is refused instead.
-    start, body = sent["answer"]
-    assert start["status"] == 401
-    assert json.loads(body["body"])["error"]["code"] == "auth_required"
+    for name in ("answer", "body", "admission", "durable"):
+        start, body = sent[name]
+        assert start["status"] == 401
+        assert json.loads(body["body"])["error"]["code"] == "auth_required"
 
 
 def test_pairing_requests_and_login_tickets_expire(tmp_path: Path) -> None:

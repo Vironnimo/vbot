@@ -10,15 +10,13 @@ from dataclasses import dataclass, field
 class LiveConnection:
     """One request of a device, registered while the access guard runs it.
 
-    ``streaming`` marks what revocation cancels: a WebSocket, or an HTTP
-    response that has started and not finished (an SSE stream, a download). A
-    request whose response has not started is only marked ``revoked``; the guard
-    refuses it when it starts to answer.
+    Revocation cancels every request, including one waiting for its body or for
+    mutation admission. Owners settle already-admitted durable work before
+    propagating cancellation; the guard then refuses any pending answer.
     """
 
     device_id: str
     task: asyncio.Task[object] | None
-    streaming: bool = False
     revoked: bool = False
     _cancels: int = field(default=0, repr=False)
 
@@ -37,8 +35,8 @@ class LiveConnections:
     def __init__(self) -> None:
         self._by_device: dict[str, set[LiveConnection]] = {}
 
-    def register(self, device_id: str, *, streaming: bool) -> LiveConnection:
-        connection = LiveConnection(device_id, asyncio.current_task(), streaming=streaming)
+    def register(self, device_id: str) -> LiveConnection:
+        connection = LiveConnection(device_id, asyncio.current_task())
         self._by_device.setdefault(device_id, set()).add(connection)
         return connection
 
@@ -64,7 +62,7 @@ class LiveConnections:
                 count += 1
                 connection.revoked = True
                 task = connection.task
-                if connection.streaming and task is not None and not task.done():
+                if task is not None and not task.done():
                     task.cancel()
                     connection._cancels += 1
         return count

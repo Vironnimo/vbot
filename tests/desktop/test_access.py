@@ -295,19 +295,22 @@ def test_a_pairing_expires_at_its_deadline_without_another_poll(tmp_path: Path) 
     assert _polls(server) == 4
 
 
-def test_a_pairing_poll_without_an_answer_is_repeated(tmp_path: Path) -> None:
+@pytest.mark.parametrize("retry_after", [7.0, 120.0])
+def test_a_pairing_poll_without_an_answer_is_repeated(tmp_path: Path, retry_after: float) -> None:
     server, access, fake_time, request = _start(tmp_path, "approved")
     server.unreachable["/api/auth/pair/poll"] = 1
     server.scripted["/api/auth/pair/poll"] = [
         httpx.Response(
-            429, headers={"Retry-After": "7"}, json={"ok": False, "error": {"code": "rate_limited"}}
+            429,
+            headers={"Retry-After": str(retry_after)},
+            json={"ok": False, "error": {"code": "rate_limited"}},
         ),
         httpx.Response(502, text="Bad gateway"),  # a proxy while the server restarts
     ]
 
     assert access.await_pairing(request, threading.Event()).status == "approved"
     # Unreachable, rate limited (waits as long as asked), proxy error, approved.
-    assert fake_time.waits == [2.0, 2.0, 7.0, 2.0]
+    assert fake_time.waits == [2.0, 2.0, retry_after, 2.0]
 
 
 def test_a_cancelled_pairing_stops_polling(tmp_path: Path) -> None:

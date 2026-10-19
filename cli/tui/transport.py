@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import mimetypes
 import sys
 import uuid
@@ -28,6 +29,7 @@ from cli.server_client import (
     http_options,
     websocket_target,
 )
+from core.utils.http_status import parse_retry_after
 
 type JsonObject = dict[str, Any]
 
@@ -44,10 +46,12 @@ class ClientError(Exception):
         *,
         state: Literal["not_sent", "unknown", "responded"] = "responded",
         code: str = "",
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(message)
         self.state = state
         self.code = code
+        self.retry_after = retry_after
 
 
 class TerminalClient:
@@ -72,10 +76,29 @@ class TerminalClient:
             **http_options(target),
         )
 
-    def refusal(self, code: str) -> ClientError:
+    def refusal(self, code: str, *, retry_after: float | None = None) -> ClientError:
         """The error for an access refusal, saying what this target needs."""
 
-        return ClientError(access_refusal(self.target, code) or code, code=code)
+        if code == DEVICES_UNAVAILABLE:
+            retry_after = max(30.0, retry_after or 0.0)
+        return ClientError(
+            access_refusal(self.target, code) or code, code=code, retry_after=retry_after
+        )
+
+    async def _check_access(self, response: httpx.Response) -> None:
+        """Preserve access refusals, including the Device store's retry interval."""
+        code = _REFUSAL_STATUSES.get(response.status_code)
+        if response.status_code == 503:
+            await response.aread()
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+            error = body.get("error") if isinstance(body, dict) else None
+            if isinstance(error, dict) and error.get("code") == DEVICES_UNAVAILABLE:
+                code = DEVICES_UNAVAILABLE
+        if code is not None:
+            raise self.refusal(code, retry_after=_retry_after(response))
 
     async def __aenter__(self) -> Self:
         return self
@@ -115,8 +138,8 @@ class TerminalClient:
                 message, code = error.get("message"), error.get("code")
                 if isinstance(message, str) and isinstance(code, str):
                     if response.status_code in _REFUSAL_STATUSES or code == DEVICES_UNAVAILABLE:
-                        raise self.refusal(code)
-                    raise ClientError(message, code=code)
+                        raise self.refusal(code, retry_after=_retry_after(response))
+                    raise ClientError(message, code=code, retry_after=_retry_after(response))
             if (
                 response.status_code == 200
                 and body.get("ok") is True
@@ -143,10 +166,12 @@ class TerminalClient:
             async with self.http.stream(
                 "GET", self.server_path(path), timeout=httpx.Timeout(10, read=60)
             ) as response:
-                if response.status_code in _REFUSAL_STATUSES:
-                    raise self.refusal(_REFUSAL_STATUSES[response.status_code])
+                await self._check_access(response)
                 if response.status_code != 200:
-                    raise ClientError(f"Timeline unavailable (HTTP {response.status_code}).")
+                    raise ClientError(
+                        f"Timeline unavailable (HTTP {response.status_code}).",
+                        retry_after=_retry_after(response),
+                    )
                 data: list[str] = []
                 name = ""
                 async for line in response.aiter_lines():
@@ -200,8 +225,7 @@ class TerminalClient:
                 response = await self.http.post(
                     "/api/upload", files={"file": (path.name, source, media_type)}
                 )
-            if response.status_code in _REFUSAL_STATUSES:
-                raise self.refusal(_REFUSAL_STATUSES[response.status_code])
+            await self._check_access(response)
             response.raise_for_status()
             result = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -225,8 +249,7 @@ class TerminalClient:
         opened = False
         try:
             async with self.http.stream("GET", path) as response:
-                if response.status_code in _REFUSAL_STATUSES:
-                    raise self.refusal(_REFUSAL_STATUSES[response.status_code])
+                await self._check_access(response)
                 response.raise_for_status()
                 with destination.open("xb") as output:
                     opened = True
@@ -236,3 +259,8 @@ class TerminalClient:
             if opened:
                 destination.unlink(missing_ok=True)
             raise
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    seconds = parse_retry_after(response.headers)
+    return seconds if seconds is not None and math.isfinite(seconds) else None

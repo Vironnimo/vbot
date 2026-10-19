@@ -180,15 +180,45 @@ def test_transcribe_accepts_another_container(make_client: Callable[..., Any]) -
     assert b"Content-Type: audio/flac" in server.requests[0].content
 
 
-def test_transcribe_retries_retryable_failures(make_client: Callable[..., Any]) -> None:
+@pytest.mark.parametrize(
+    ("reply", "delay"),
+    [
+        pytest.param(httpx.Response(503), 0.0, id="ordinary-outage"),
+        pytest.param(httpx.Response(503, headers={"Retry-After": "40"}), 40.0, id="retry-after"),
+        pytest.param(
+            httpx.Response(
+                503,
+                headers={"Retry-After": "NaN"},
+                json={"ok": False, "error": {"code": "devices_unavailable"}},
+            ),
+            30.0,
+            id="device-store-default-wait",
+        ),
+    ],
+)
+def test_transcribe_retries_retryable_failures(
+    make_client: Callable[..., Any],
+    cancel: threading.Event,
+    monkeypatch: pytest.MonkeyPatch,
+    reply: httpx.Response,
+    delay: float,
+) -> None:
+    waits: list[float] = []
+
+    def wait(seconds: float) -> bool:
+        waits.append(seconds)
+        return False
+
+    monkeypatch.setattr(cancel, "wait", wait)
     server = ScriptedServer(
-        httpx.Response(503),
+        reply,
         connect_error(),
         httpx.Response(200, json={"text": "hi"}),
     )
 
     assert make_client(server).transcribe(b"audio") == "hi"
     assert len(server.requests) == 3
+    assert waits == [delay, 0.0]
 
 
 def test_transcribe_reports_a_persistent_provider_failure(make_client: Callable[..., Any]) -> None:

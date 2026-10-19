@@ -49,7 +49,7 @@ from typing import Any, Literal
 
 import httpx
 
-from desktop._http import shared_ssl_context
+from desktop._http import retry_after_seconds, shared_ssl_context
 from desktop.credentials import (
     DEVICE_TOKEN_PATTERN,
     CredentialStoreError,
@@ -335,7 +335,7 @@ class ServerAccess:
                 continue
             code, retry_after = _failure(response)
             if code == ERROR_RATE_LIMITED:
-                interval = min(max(retry_after or interval, interval), MAX_POLL_WAIT_SECONDS)
+                interval = max(retry_after or interval, interval)
                 continue
             if code is None:
                 # A proxy or a restarting server: the request may still be decided.
@@ -616,7 +616,7 @@ def _failure(response: httpx.Response) -> tuple[str | None, float | None]:
     payload = _json_object(response)
     error = payload.get("error") if payload is not None and payload.get("ok") is False else None
     code = error.get("code") if isinstance(error, dict) else None
-    retry_after = _seconds(response.headers.get("Retry-After"))
+    retry_after = retry_after_seconds(response.headers)
     data = error.get("data") if isinstance(error, dict) else None
     if retry_after is None and isinstance(data, dict):
         retry_after = _seconds(data.get("retry_after"))

@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import html
 import json
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -29,6 +30,25 @@ PREVIEW_URL_PREFIX = "/api/preview-assets/"
 EXTENSION_ASSET_URL_PREFIX = "/api/extension-assets/"
 EXTENSION_RUN_URL_PREFIX = "/api/extension-runs/"
 EXTENSION_RUN_CAPABILITY_SECONDS = 120
+_CAPABILITY_DOMAINS = {
+    FILE_URL_PREFIX: b"",
+    PREVIEW_URL_PREFIX: b"preview:",
+    EXTENSION_ASSET_URL_PREFIX: b"extension-page:",
+    EXTENSION_RUN_URL_PREFIX: b"extension-run:",
+}
+_CAPABILITY_URL = re.compile(
+    "(" + "|".join(re.escape(prefix) for prefix in _CAPABILITY_DOMAINS) + ")"
+    r"([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"
+)
+_ABSOLUTE_URL = re.compile(r"(?:[A-Za-z][A-Za-z0-9+.-]*://|//)")
+_FORMATTED_REFERENCE = re.compile(
+    # Match complete destinations/attributes, so an absolute URL's path or
+    # query can never be mistaken for a local URL and receive a fresh grant.
+    r"(?P<attribute>\b(?:src|href)\s*=\s*)(?P<quote>[\"'])"
+    r"(?P<attribute_value>.*?)(?P=quote)"
+    r"|(?P<markdown>\]\()"
+    r"|(?P<absolute>(?:[A-Za-z][A-Za-z0-9+.-]*:|//)[^\s<>\"']*)"
+)
 PREVIEW_MAX_ENTRIES = 5000
 PREVIEW_TYPES = {
     ".html": "text/html",
@@ -127,6 +147,144 @@ class FileDelivery:
         if not self._secret:
             raise ValueError("file delivery secret must not be empty")
 
+    def bind_payload(self, value: Any, actor: str | None, *, expires_at: int | None = None) -> Any:
+        """Bind internal references to one recipient without changing shared data.
+
+        Internal references stay in History projections and replay buffers. Only
+        the transport gives them authority, separately for each recipient.
+        Existing access envelopes are never renewed or transferred here.
+        """
+        if actor is None or actor == "open":
+            return value
+
+        def bind(token: str, domain: bytes | None = None) -> str:
+            domains = (domain,) if domain is not None else tuple(_CAPABILITY_DOMAINS.values())
+            if not any(self._valid_signature(token, candidate) for candidate in domains):
+                return token
+            claims: JsonObject = {"capability": token, "actor": actor}
+            if expires_at is not None:
+                claims["expires_at"] = expires_at
+            encoded = _urlsafe_encode(json.dumps(claims, separators=(",", ":")).encode())
+            signature = _urlsafe_encode(
+                hmac.digest(self._secret, b"access:" + encoded.encode("ascii"), hashlib.sha256)
+            )
+            return f"{encoded}.{signature}"
+
+        def project(item: Any) -> Any:
+            if isinstance(item, dict):
+                return {key: project(child) for key, child in item.items()}
+            if isinstance(item, list):
+                return [project(child) for child in item]
+            if isinstance(item, str):
+                # Bare token fields and recognized local URLs only. The HMAC
+                # check excludes unrelated text, links and user-supplied paths.
+                bound = bind(item)
+                if bound != item:
+                    return bound
+                if _ABSOLUTE_URL.match(item):
+                    return item
+                if _CAPABILITY_URL.match(item):
+                    return bind_url(item)
+                return bind_formatted(item)
+            return item
+
+        def bind_url(url: str) -> str:
+            match = _CAPABILITY_URL.match(url)
+            if match is None:
+                return url
+            return match[1] + bind(match[2], _CAPABILITY_DOMAINS[match[1]]) + url[match.end() :]
+
+        def bind_formatted(content: str) -> str:
+            parts: list[str] = []
+            cursor = 0
+            while (match := _FORMATTED_REFERENCE.search(content, cursor)) is not None:
+                parts.append(content[cursor : match.start()])
+                cursor = match.end()
+                if match["attribute"] is not None:
+                    parts.append(
+                        match["attribute"]
+                        + match["quote"]
+                        + bind_url(match["attribute_value"])
+                        + match["quote"]
+                    )
+                elif match["markdown"] is not None:
+                    end = _markdown_destination_end(content, cursor)
+                    value = content[cursor:end]
+                    trimmed = value.lstrip()
+                    prefix = value[: len(value) - len(trimmed)]
+                    if trimmed.startswith("<"):
+                        prefix, trimmed = prefix + "<", trimmed[1:]
+                    parts.append(match[0] + prefix + bind_url(trimmed))
+                    cursor = end
+                else:
+                    parts.append(match[0])
+            parts.append(content[cursor:])
+            return "".join(parts)
+
+        return project(value)
+
+    def access_claims(self, path: str) -> JsonObject | None:
+        """Verify an access envelope and its route domain without filesystem I/O.
+
+        The access guard separately resolves ``actor`` against the live Device
+        store and tracks the resulting principal for the connection lifetime.
+        """
+        match = _CAPABILITY_URL.match(path)
+        if match is None:
+            return None
+        claims = self._access_envelope(match[2])
+        if claims is None or not self._valid_signature(
+            claims["capability"], _CAPABILITY_DOMAINS[match[1]]
+        ):
+            return None
+        if match[1] == EXTENSION_RUN_URL_PREFIX:
+            try:
+                self.extension_run_claims(claims["capability"])
+            except ValueError:
+                return None
+        return claims
+
+    def _valid_signature(self, token: str, domain: bytes) -> bool:
+        if not token or len(token) > MAX_FILE_TOKEN_LENGTH:
+            return False
+        try:
+            encoded, signature = token.split(".")
+            expected = _urlsafe_encode(
+                hmac.digest(self._secret, domain + encoded.encode("ascii"), hashlib.sha256)
+            )
+            return hmac.compare_digest(expected, signature)
+        except UnicodeError, ValueError, TypeError:
+            return False
+
+    def _access_envelope(self, token: str) -> JsonObject | None:
+        if not self._valid_signature(token, b"access:"):
+            return None
+        try:
+            claims = json.loads(_urlsafe_decode(token.split(".")[0]).decode("utf-8"))
+            if (
+                not isinstance(claims, dict)
+                or not isinstance(claims.get("actor"), str)
+                or not claims["actor"]
+                or not isinstance(claims.get("capability"), str)
+                or (
+                    "expires_at" in claims
+                    and (
+                        not isinstance(claims["expires_at"], int)
+                        or isinstance(claims["expires_at"], bool)
+                        or claims["expires_at"] <= int(time.time())
+                    )
+                )
+            ):
+                return None
+            claims.setdefault("expires_at", None)
+            return claims
+        except UnicodeError, ValueError, TypeError:
+            return None
+
+    def _inner_token(self, token: str) -> str:
+        claims = self._access_envelope(token)
+        return claims["capability"] if claims is not None else token
+
     def open_preview(self, source: str) -> JsonObject:
         """Grant read-only access to a website rooted beside its entry HTML file."""
         if source.startswith(FILE_URL_PREFIX):
@@ -208,6 +366,7 @@ class FileDelivery:
 
     def extension_page_claims(self, token: str) -> JsonObject:
         """Return signed page claims for the server's current-owner check."""
+        token = self._inner_token(token)
         try:
             if len(token) > MAX_FILE_TOKEN_LENGTH:
                 raise ValueError("Invalid extension page")
@@ -295,6 +454,7 @@ class FileDelivery:
 
     def extension_run_claims(self, token: str) -> JsonObject:
         """Return a valid, unexpired Extension Run capability's claims."""
+        token = self._inner_token(token)
         try:
             if len(token) > MAX_FILE_TOKEN_LENGTH:
                 raise ValueError("Invalid extension Run")
@@ -391,6 +551,7 @@ class FileDelivery:
         return f"{payload}.{signature}"
 
     def _preview_root(self, token: str, *, require_directory: bool = True) -> Path:
+        token = self._inner_token(token)
         try:
             if len(token) > MAX_FILE_TOKEN_LENGTH:
                 raise ValueError("Invalid preview")
@@ -656,20 +817,10 @@ class FileDelivery:
 
     def resolve_token(self, token: str) -> DeliveredFile | None:
         """Verify one capability and return the original file's current facts."""
-        if not token or len(token) > MAX_FILE_TOKEN_LENGTH:
+        token = self._inner_token(token)
+        if not self._valid_signature(token, b""):
             return None
-        payload, separator, signature = token.partition(".")
-        if not separator or not payload or not signature:
-            return None
-        try:
-            payload_bytes = payload.encode("ascii")
-        except UnicodeEncodeError:
-            return None
-        expected_signature = _urlsafe_encode(
-            hmac.digest(self._secret, payload_bytes, hashlib.sha256)
-        )
-        if not hmac.compare_digest(signature, expected_signature):
-            return None
+        payload = token.split(".")[0]
         try:
             claims = json.loads(_urlsafe_decode(payload).decode("utf-8"))
             if not isinstance(claims, dict) or not isinstance(claims.get("path"), str):
@@ -740,6 +891,36 @@ class FileDelivery:
                 media_type in BROWSER_MEDIA_TYPES or media_type.startswith(("audio/", "video/"))
             ),
         )
+
+
+def _markdown_destination_end(content: str, start: int) -> int:
+    """Consume a complete destination, including nested or escaped parentheses.
+
+    Treat an unfinished link as opaque through the end of the text. References
+    inside an external destination must never receive a recipient's authority.
+    """
+    cursor = start
+    depth = 1
+    while cursor < len(content) and content[cursor].isspace():
+        cursor += 1
+    if cursor < len(content) and content[cursor] == "<":
+        closing = content.find(">", cursor + 1)
+        if closing < 0:
+            return len(content)
+        cursor = closing + 1
+    while cursor < len(content):
+        character = content[cursor]
+        if character == "\\":
+            cursor += 2
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return cursor
+        cursor += 1
+    return len(content)
 
 
 def _urlsafe_encode(value: bytes) -> str:

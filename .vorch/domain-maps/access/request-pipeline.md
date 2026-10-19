@@ -15,9 +15,11 @@ The access guard's per-request rules in detail: peer and transport checks, forwa
 
 `AccessService.authenticate`: `Authorization: Bearer` wins over the `__Host-vbot_device` cookie; a second `Authorization` header, another scheme, or more than one device cookie value is malformed (those cookies are not cleared: one of them may be valid). A `vbl_` token is checked against this start's local token, and only from a direct loopback peer; a `vbt_` token through the device store (in memory, constant-time hash comparison). In `local`/`lan` a refused credential still yields `open`; in `authenticated` it is logged, counted per effective client, and a dead cookie is cleared (`Max-Age=0`), unless the response sets a new device cookie itself (a ticket redemption or a browser's pairing claim). A well-formed `vbt_` token that an unavailable device store cannot check is neither accepted nor refused (Invariants).
 
+For capability routes in `authenticated` mode, `FileDelivery.access_claims` verifies the signed recipient and any capability-specific request-admission deadline, then `AccessService.principal_for_capability` resolves that issuer. The issuer becomes this request's principal regardless of any cookie or Bearer token. An internal unsigned-for-recipient reference, invalid/expired capability or revoked/expired issuer returns 404; an unavailable Device store returns 503. Another Device's credential cannot revive a capability. File and preview token projection belongs to `server/browser-capabilities.md`.
+
 ## Live connections
 
-Every request of a Device registers in `LiveConnections` at entry. Revoking or expiring the Device cancels its WebSockets (close 4401 `Device signed out`) and its responses that started and have not finished (an SSE stream or a download ends); a response that has not started yet becomes 401 `auth_required` "Device signed out". The request that revokes still answers (`devices.logout`).
+Every request of a Device registers in `LiveConnections` at entry, including requests admitted by its capability. Revoking or expiring the Device cancels all its other request tasks: body reads and mutation-admission waits stop before dispatch, WebSockets close with 4401 `Device signed out`, and SSE streams/downloads end. Owners settle already-admitted durable mutations before propagating cancellation; a response not yet started becomes 401 `auth_required` "Device signed out". The request that revokes still answers (`devices.logout`). An Extension Run capability's existing deadline limits new request admission; it does not interrupt an already-admitted stream, which remains subject to issuer revocation. Ordinary file, preview and page grants last for the process and their issuing Device; there is no additional wall-clock deadline.
 
 ## Response headers
 
@@ -25,7 +27,7 @@ Every HTTP response gets `X-Content-Type-Options: nosniff`, HSTS (`max-age=31536
 
 ## Exempt routes
 
-The exempt set today: `/health`, `GET /api/auth/status`, `POST /api/auth/pair/start|poll`, `GET /api/oauth/callback` (the `SameSite=Strict` cookie is not sent on the cross-site return; the pending sign-in's state protects it), `POST /_vbot/control/shutdown` (its control secret protects it), `GET /auth/ticket/<ticket>` (the guard also exempts HEAD there; no handler answers it), and GET/HEAD of `/api/files/<cap>`, `/api/preview-assets/<cap>/<path>`, `/api/extension-assets/<cap>/<path>` and `/api/extension-runs/<cap>/events|timeline`. Any other method or shape under these prefixes is `protected`.
+The exempt set today: `/health`, `GET /api/auth/status`, `POST /api/auth/pair/start|poll`, `GET /api/oauth/callback` (the `SameSite=Strict` cookie is not sent on the cross-site return; the pending sign-in's state protects it), `POST /_vbot/control/shutdown` (its control secret protects it), `GET /auth/ticket/<ticket>` (the guard also exempts HEAD there; no handler answers it), and GET/HEAD of `/api/files/<cap>`, `/api/preview-assets/<cap>/<path>`, `/api/extension-assets/<cap>/<path>` and `/api/extension-runs/<cap>/events|timeline`. Capability routes are exempt from Bearer/cookie requirements, not from the signed-issuer checks above. Any other method or shape under these prefixes is `protected`.
 
 ## Refusal reasons
 

@@ -21,6 +21,7 @@ from core.access.server_record import (
     RecordedServerAccess,
     read_server_access,
     server_access_path,
+    write_server_access,
 )
 from core.database import DataStoreMarker, read_marker
 from core.utils.log_viewer import LOG_LINE_PATTERN
@@ -660,19 +661,45 @@ def test_a_packaged_server_serves_the_access_mode_its_installation_records(
     assert "[WARN] vbot.server - Server binds the data directory's recorded address" in log
 
 
+@pytest.mark.parametrize("failure", ["missing", "directory", "unavailable", "invalid"])
 def test_a_packaged_server_with_an_unreadable_installation_record_does_not_start(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
 ) -> None:
     from cli.application import state as application_state
 
-    def discover() -> None:
-        raise application_state.ApplicationError("Installation record is damaged")
+    root, data_dir = tmp_path / "installation", tmp_path / "data"
+    source = root / "versions" / "rel_current" / "app" / "cli" / "application" / "state.py"
+    source.parent.mkdir(parents=True)
+    record = root / "application.json"
+    if failure == "directory":
+        record.mkdir()
+    elif failure != "missing":
+        record.write_text("invalid", encoding="utf-8")
+    write_server_access(data_dir, RecordedServerAccess(access_config("lan"), "0.0.0.0"))
+    monkeypatch.setattr(application_state, "__file__", str(source))
+    # The supported Linux service execs python3 -m server.main directly. There
+    # is no native-host/CLI record check before the server's discovery.
+    monkeypatch.setattr(application_state.sys, "executable", str(root / "runtime" / "python3"))
+    monkeypatch.setenv("VBOT_INSTALL_ROOT", str(root))
+    if failure == "unavailable":
+        original_stat, original_isfile = Path.stat, os.path.isfile
 
-    monkeypatch.setattr(application_state, "discover", discover)
+        def stat(path: Path, *args: Any, **kwargs: Any) -> os.stat_result:
+            if path == record:
+                raise PermissionError("record metadata unavailable")
+            return original_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", stat)
+        monkeypatch.setattr(
+            os.path, "isfile", lambda path: False if Path(path) == record else original_isfile(path)
+        )
     calls = _patch_serving(monkeypatch, _serve_until("control"))
 
     with pytest.raises(SystemExit) as exited:
-        main(["--data-dir", str(tmp_path / "data"), "--port", "8765"])
+        main(["--data-dir", str(data_dir), "--port", "8765"])
 
     # Without the record the server cannot know which access mode it must enforce.
     assert exited.value.code == STARTUP_FAILED_EXIT_CODE and calls == []
