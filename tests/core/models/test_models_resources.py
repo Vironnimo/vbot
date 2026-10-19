@@ -44,7 +44,6 @@ def _profile(model: Model, *keys: str, wire: WireProfile | None = None) -> dict[
     if wire is not None:
         facts["replay_scope"] = wire.replay.scope
         facts["list_announced_tools"] = wire.request.list_announced_tools
-        facts["on_demand_tools"] = wire.request.on_demand_tools
     return {key: facts[key] for key in keys}
 
 
@@ -427,7 +426,6 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
             {
                 "replay_scope": "full_history",
                 "list_announced_tools": False,
-                "on_demand_tools": True,
             },
             id="glm-5.3",
         ),
@@ -437,7 +435,6 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                 "context_window": 1_000_000,
                 "replay_scope": "full_history",
                 "list_announced_tools": True,
-                "on_demand_tools": False,
             },
             id="glm-5.3-flash",
         ),

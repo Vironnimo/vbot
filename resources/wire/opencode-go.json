@@ -243,8 +243,8 @@
     },
     {
       "when": {"ids": ["glm-5.3-flash"]},
-      "set": {"request": {"list_announced_tools": true, "on_demand_tools": false}},
-      "note": "GLM 5.3 Flash drops calls to Tools that are not in the request's Tool list, so it gets no On-demand Tools."
+      "set": {"request": {"list_announced_tools": true}},
+      "note": "GLM 5.3 Flash drops calls to Tools that are not in the request's Tool list."
     },
     {
       "when": {"prefix": ["qwen"]},
