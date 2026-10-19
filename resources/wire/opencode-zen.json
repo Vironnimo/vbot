@@ -135,6 +135,11 @@
   ],
   "rules": [
     {
+      "when": {"ids": ["minimax-m3.1-flash-free"]},
+      "set": {"reasoning": {"off": "low"}},
+      "note": "M3.1 Flash always reasons; none selects its lowest effort on the documented Chat Completions route (https://opencode.ai/v2/docs/console/models/, 2026-10-19)."
+    },
+    {
       "when": {"ids": ["glm-5.1", "kimi-k2.6", "kimi-k2.7-code"]},
       "set": {"reasoning": {"floor": ["low", "medium", "high"]}},
       "note": "Preserve the earlier Zen GLM and Kimi Models' established fallback where their catalog supplies no effort ladder; later versions inherit the current family ladder."

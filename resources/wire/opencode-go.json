@@ -151,6 +151,11 @@
   ],
   "rules": [
     {
+      "when": {"ids": ["minimax-m3.1-flash-free"]},
+      "set": {"protocol": "chat_completions", "reasoning": {"off": "low"}},
+      "note": "M3.1 Flash uses Chat Completions rather than Go's older MiniMax Messages route (https://opencode.ai/v2/docs/console/go/, 2026-10-19). Mandatory thinking uses the lowest effort for none."
+    },
+    {
       "when": {"ids": ["glm-5.1"]},
       "set": {"reasoning": {"floor": ["low", "medium", "high"]}},
       "note": "Preserve Go GLM5.1's established effort-only fallback; its catalog supplies no ladder. Later versions inherit the current GLM5.3 ladder."

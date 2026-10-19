@@ -16,6 +16,11 @@
   },
   "rules": [
     {
+      "when": {"ids": ["minimax-m3.1-flash"]},
+      "set": {"reasoning": {"off": "low"}},
+      "note": "M3.1 Flash keeps reasoning when sent none (live 2026-10-19); use the accepted low effort for an off selection."
+    },
+    {
       "when": {
         "ids": [
           "deepseek-v4-pro:0813",
@@ -32,6 +37,7 @@
           "kimi-k3",
           "minimax-m2.7",
           "minimax-m3",
+          "minimax-m3.1-flash",
           "mistral-large-4",
           "nemotron-3-nano:30b",
           "nemotron-3-super",

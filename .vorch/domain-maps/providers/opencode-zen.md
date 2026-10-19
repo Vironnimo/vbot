@@ -84,6 +84,10 @@ Replay used real streamed plain and parallel-Tool responses, canonical Chat accu
 
 The comparable B/C increases support inherited `full_history` for this exact route. Two parallel Calls, correlated Results, later replies, and terminal Usage completed; no Tools were dispatched. A request without an explicit output budget sent the catalog ceiling of 131072 and completed. The tests extend the catalog admission/access-denial and bundled request/control contracts. Media accuracy, structured output, sampling efficacy, forced Tool choice, maximum capacities, and the OAuth Connection were not audited for Qwen.
 
+### MiniMax M3.1 Flash Free (2026-10-19)
+
+The catalog replaces `space-bunny-free` with `minimax-m3.1-flash-free`, and its display-name Override follows the new id without aliasing stored selections. The [Zen table](https://opencode.ai/v2/docs/console/models/) lists Chat Completions and temporary free pricing. Raw default/none requests and the production Adapter's stream on `api-key` return HTTP 403 with the OpenCode-only free-tier refusal. The id remains selectable under the new-Model policy; this access observation is not generalized to other Models or the untested account Connection. The lowest-effort mapping is inferred from M3.1's mandatory-Reasoning contract, not a successful Zen inference check. Do not transfer Space Bunny's earlier verification to the released id.
+
 ### Space Bunny free route (checked 2026-09-24)
 
 - The public Zen listing and [Zen Model documentation](https://opencode.ai/docs/zen/) now include `space-bunny-free` on `/zen/v1/chat/completions`. With the existing shared Go credential, synthetic requests returned HTTP 200 for the default and `reasoning_effort: low`; `reasoning_effort: none` returned HTTP 400. This is an observed exception to the older free-tier client restriction, not evidence that the other excluded free Models have become accessible.

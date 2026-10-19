@@ -2790,7 +2790,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -2845,7 +2845,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9099,6 +9099,47 @@
       },
       "release_date": "2026-06-01",
       "temperature": true
+    },
+    "minimax/MiniMax-M3.1-Flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "minimax",
+      "last_updated": "2026-10-19",
+      "max_output_tokens": 512000,
+      "name": "MiniMax-M3.1-Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.015,
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:minimax/MiniMax-M3.1-Flash"
+      },
+      "release_date": "2026-10-19",
+      "temperature": false
     },
     "minimax/MiniMax-M3.1-Flash-Preview": {
       "capabilities": {
@@ -15853,6 +15894,51 @@
       "max_output_tokens": 5529,
       "name": "ReMM SLERP 13B",
       "release_date": "2023-07-22",
+      "temperature": true
+    },
+    "upstage/solar-mini4": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 524288,
+      "family": "solar-mini",
+      "knowledge": "2026-02",
+      "last_updated": "2026-09-22",
+      "max_output_tokens": 131072,
+      "name": "Solar Mini 4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "input": 0.1,
+          "output": 0.4
+        },
+        "source": "models.dev:upstage/solar-mini4"
+      },
+      "release_date": "2026-09-22",
       "temperature": true
     },
     "upstage/solar-pro2": {

@@ -349,6 +349,9 @@ async def test_current_and_future_gpt_models_use_their_resolved_effort(
     [
         ("space-bunny-free", "none", "low", None, ("effort", "low")),
         ("space-bunny-free", "high", "high", None, ("effort", "high")),
+        ("minimax-m3.1-flash-free", None, None, None, ("default", None)),
+        ("minimax-m3.1-flash-free", "none", "low", None, ("effort", "low")),
+        ("minimax-m3.1-flash-free", "max", "max", None, ("effort", "max")),
         ("qwen3.8-max", None, None, {"type": "enabled"}, ("on", None)),
         ("qwen3.8-max", "none", None, {"type": "disabled"}, ("off", None)),
         ("qwen3.8-max", "high", None, {"type": "enabled"}, ("on", None)),

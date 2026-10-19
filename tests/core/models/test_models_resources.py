@@ -210,7 +210,7 @@ def test_ollama_cloud_gateway_output_limits(registry: ModelRegistry) -> None:
 
 def test_ollama_cloud_reasoning_controls(registry: ModelRegistry) -> None:
     # Documented ladders exclude ``none``, which stays the wire's explicit off
-    # switch. MiniMax ignores both documented off-control shapes: no control.
+    # switch. Older MiniMax Models ignore both documented off-control shapes.
     ladder = (True, "levels", ("low", "high", "max"))
     expected = {
         "deepseek-v4.1-flash": ladder,
@@ -218,12 +218,17 @@ def test_ollama_cloud_reasoning_controls(registry: ModelRegistry) -> None:
         "glm-5.3": ladder,
         "minimax-m2.7": (True, None, ()),
         "minimax-m3": (True, None, ()),
+        "minimax-m3.1-flash": (True, "levels", ("low", "medium", "high", "xhigh", "max")),
     }
 
     assert {
         model_id: _profile(registry.get("ollama-cloud", model_id), "reasoning")["reasoning"]
         for model_id in expected
     } == expected
+
+    minimax = _wire_profile(registry, "ollama-cloud", "minimax-m3.1-flash")
+    assert minimax.reasoning.plan("none").effort_level == "low"
+    assert (minimax.replay.scope, minimax.replay.history_field) == ("full_history", "reasoning")
 
 
 def test_ollama_cloud_deepseek_v41_verified_profile(registry: ModelRegistry) -> None:
@@ -286,7 +291,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "mimo-v2.6-pro",
             "hy4-preview",
             "hy3",
-            "space-bunny",
+            "minimax-m3.1-flash-free",
             "step-5-preview",
             "omen-alpha",
         ),
@@ -350,14 +355,14 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
     ("model_id", "expected"),
     [
         pytest.param(
-            "space-bunny",
+            "minimax-m3.1-flash-free",
             {
-                "name": "Space Bunny",
-                "context_window": 1_048_576,
-                "max_output_tokens": 524_288,
+                "name": "MiniMax M3.1 Flash Free",
+                "context_window": 1_000_000,
+                "max_output_tokens": 512_000,
                 "reasoning": _FIVE_LEVELS,
             },
-            id="space-bunny",
+            id="minimax-m3.1-flash-free",
         ),
         pytest.param(
             "step-5-preview",

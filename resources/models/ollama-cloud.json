@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-18T21:04:02.299347+00:00",
+  "fetched_at": "2026-10-19T17:27:28.027955+00:00",
   "models": {
     "beam": {
       "capabilities": {
@@ -770,6 +770,60 @@
           "output": 2.4
         },
         "source": "models.dev:ollama-cloud/minimax-m3"
+      }
+    },
+    "minimax-m3.1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "minimax",
+      "max_output_tokens": 512000,
+      "metadata": {
+        "ollama": {
+          "remote": true
+        }
+      },
+      "name": "minimax-m3.1-flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.015,
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:ollama-cloud/minimax-m3.1-flash"
       }
     },
     "mistral-large-3:675b": {

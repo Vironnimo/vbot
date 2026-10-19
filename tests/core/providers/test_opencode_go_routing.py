@@ -82,6 +82,7 @@ def test_request_context_is_an_opaque_prompt_cache_affinity() -> None:
     [
         pytest.param("messages", MESSAGES_MODEL, id="messages"),
         pytest.param("chat", CHAT_MODEL, id="chat"),
+        pytest.param("chat", "minimax-m3.1-flash-free", id="minimax-chat-exception"),
         pytest.param("responses", "gpt-5.6-luna", id="responses"),
         pytest.param("gemini", GEMINI_MODEL, id="gemini"),
     ],

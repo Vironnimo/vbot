@@ -138,22 +138,33 @@ async def test_direct_wire_renders_controls_for_the_model_generation(
 
 
 @pytest.mark.parametrize(
-    ("model_id", "request_kwargs", "max_tokens"),
+    ("model_id", "request_kwargs", "output_field", "max_tokens"),
     [
-        pytest.param("MiniMax-M2.7", {}, 65536, id="m2-recommended-ceiling"),
-        pytest.param("MiniMax-M3", {}, 131072, id="m3-recommended-ceiling"),
-        pytest.param("MiniMax-M2.7", {"max_tokens": 1024}, 1024, id="explicit-limit-wins"),
+        pytest.param("MiniMax-M2.7", {}, "max_tokens", 65536, id="m2-recommended-ceiling"),
+        pytest.param("MiniMax-M3", {}, "max_tokens", 131072, id="m3-recommended-ceiling"),
+        pytest.param(
+            "MiniMax-M3.1-Flash",
+            {},
+            "max_completion_tokens",
+            131072,
+            id="m31-recommended-ceiling",
+        ),
+        pytest.param(
+            "MiniMax-M2.7", {"max_tokens": 1024}, "max_tokens", 1024, id="explicit-limit-wins"
+        ),
     ],
 )
 @pytest.mark.asyncio
 async def test_output_limit_defaults_to_the_recommended_ceiling_not_the_flat_default(
-    model_id: str, request_kwargs: dict[str, Any], max_tokens: int
+    model_id: str, request_kwargs: dict[str, Any], output_field: str, max_tokens: int
 ) -> None:
     request = await _sent_request(
         _adapter("chat", catalog=True), CHAT_URL, HELLO, model_id=model_id, **request_kwargs
     )
 
-    assert json.loads(request.content)["max_tokens"] == max_tokens
+    body = json.loads(request.content)
+    assert body[output_field] == max_tokens
+    assert {"max_tokens", "max_completion_tokens"} & body.keys() == {output_field}
 
 
 @pytest.mark.asyncio

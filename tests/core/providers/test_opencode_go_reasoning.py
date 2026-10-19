@@ -78,6 +78,9 @@ def _sent_payload(route: respx.Route) -> dict[str, Any]:
         ("space-bunny", None, None, None, ("default", None)),
         ("space-bunny", "none", None, "low", ("effort", "low")),
         ("space-bunny", "high", None, "high", ("effort", "high")),
+        ("minimax-m3.1-flash-free", None, None, None, ("default", None)),
+        ("minimax-m3.1-flash-free", "none", None, "low", ("effort", "low")),
+        ("minimax-m3.1-flash-free", "max", None, "max", ("effort", "max")),
         ("step-5-preview-free", "none", None, "low", ("effort", "low")),
     ],
 )

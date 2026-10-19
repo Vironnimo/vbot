@@ -43,6 +43,10 @@ GLM-5.2, GLM-5.3, GLM-5.3-Flash, and Kimi K3 accept cross-Run `reasoning` with i
 
 The native `/api/chat` and Anthropic-compatible `/v1/messages` probes produced no wider replay scope for the selected Models than `/v1/chat/completions`; the native probe must send explicit `think` or its result is invalid. `/v1/responses` is documented as non-stateful, lacks `previous_response_id` and `conversation`, and lists reasoning summaries rather than a historical Reasoning carrier or request effort control. It returns reasoning output items, but manually replaying those items for Kimi K2.7 Code and MiniMax M2.7/M3 changed Provider input tokens by zero with and without Tools while visible controls added 47 to 125 tokens. Direct Cloud therefore stays on `/v1/chat/completions`: it has the verified common Reasoning control, response/history carrier, streaming Usage, Tool, and image contract vBot needs. This is a Provider-wire decision, not a claim that the same endpoint is best for local Ollama.
 
+### MiniMax M3.1 Flash (2026-10-19)
+
+The direct Cloud catalog adds `minimax-m3.1-flash`. Production Adapter send, stream, Tool continuation, the accepted effort levels and PNG input pass on `api-key`. The Cloud vocabulary still maps `xhigh` to `max`. Explicit `none` also returns Reasoning, so an exact rule maps that selection to `low`; the response carrier is `reasoning`, and its readable history carrier is pinned accordingly. Context 1,000,000 and output 512,000 remain catalog facts, not measured maximum capacities. No replay-accounting audit was performed: the new id keeps `full_history` and does not inherit M3's measured `none` replay exception. Local Ollama and alternate endpoints were not tested.
+
 ### MiniMax M3 replay follow-up (2026-09-21)
 
 Rechecked only `ollama-cloud:api-key` / `minimax-m3` on `POST https://ollama.com/v1/chat/completions`; local Ollama and alternate endpoints were excluded. The effective policy is still the explicit Model override `none`. The diagnostic B case deliberately forced `full_history` without modifying that override, proving that the negative result is remote behavior rather than Chat removing the candidate field.
