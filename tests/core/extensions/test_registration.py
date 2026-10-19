@@ -355,9 +355,9 @@ def test_page_declarations_are_checked_and_scoped_to_the_live_registry_epoch(
 
 
 def _lifecycle_source(
-    name: str, marker: Path, *, startup_boom: bool = False, hang: bool = False
+    name: str, marker: Path, *, failure: str | None = None, hang: bool = False
 ) -> str:
-    boom = "        raise RuntimeError('startup boom')\n" if startup_boom else ""
+    boom = f"        raise {failure}('handler failure')\n" if failure else ""
     # Hanging handlers never finish on their own; only the deadline moves on.
     define = "    async def" if hang else "    def"
     wait = "        await asyncio.Event().wait()\n" if hang else ""
@@ -374,21 +374,22 @@ def _lifecycle_source(
         f"{boom}{wait}"
         f"{define} _shutdown():\n"
         f"        _write({name!r} + ':shutdown')\n"
-        f"{wait}"
+        f"{boom if failure == 'asyncio.CancelledError' else ''}{wait}"
         "    api.on_startup(_startup)\n"
         "    api.on_shutdown(_shutdown)\n"
     )
 
 
+@pytest.mark.parametrize("failure", ["RuntimeError", "asyncio.CancelledError"])
 def test_lifecycle_handlers_fire_in_load_order_and_fail_open(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failure: str
 ) -> None:
     monkeypatch.setattr(extension_callbacks, "_SLOW_EXTENSION_HANDLER_SECONDS", 0)
     monkeypatch.setattr(extension_callbacks, "_LIFECYCLE_HANDLER_TIMEOUT_SECONDS", 0.05)
     caplog.set_level(logging.WARNING, logger="vbot.extensions")
     root = tmp_path / "extensions"
     marker = tmp_path / "lifecycle.txt"
-    write_extension(root, "alpha", _lifecycle_source("alpha", marker, startup_boom=True))
+    write_extension(root, "alpha", _lifecycle_source("alpha", marker, failure=failure))
     write_extension(root, "dormant", _lifecycle_source("dormant", marker))
     write_extension(root, "stuck", _lifecycle_source("stuck", marker, hang=True))
     write_extension(root, "zeta", _lifecycle_source("zeta", marker))
@@ -417,4 +418,36 @@ def test_lifecycle_handlers_fire_in_load_order_and_fail_open(
         (entry.levelno, entry.exc_info is not None, "timed out" in entry.getMessage())
         for entry in caplog.records
         if entry.name == "vbot.extensions"
-    ] == [(logging.ERROR, True, False)] + [(logging.ERROR, False, True)] * 3
+    ] == (
+        [(logging.ERROR, True, False), (logging.ERROR, False, True)] * 3
+        if failure == "asyncio.CancelledError"
+        else [(logging.ERROR, True, False)] + [(logging.ERROR, False, True)] * 3
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancelling_lifecycle_caller_cancels_the_active_callback(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    write_extension(
+        root,
+        "cancellable",
+        "import asyncio\n"
+        "entered = asyncio.Event()\n"
+        "finished = asyncio.Event()\n"
+        "async def startup():\n"
+        "    entered.set()\n"
+        "    try:\n"
+        "        await asyncio.Event().wait()\n"
+        "    finally:\n"
+        "        finished.set()\n"
+        "def register(api):\n"
+        "    api.on_startup(startup)\n",
+    )
+    registry = await ExtensionRegistry.aload(root)
+    active = sys.modules["vbot_ext.cancellable"]
+    firing = asyncio.create_task(registry.fire_startup())
+    await active.entered.wait()
+    firing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await firing
+    await active.finished.wait()

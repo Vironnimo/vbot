@@ -78,6 +78,9 @@ async def invoke_lifecycle_handler(
             task.cancel()
         detach_extension_task(task, extension_name=extension_name, description=description)
         raise ExtensionHandlerTimeoutError(_LIFECYCLE_HANDLER_TIMEOUT_SECONDS)
+    if task.cancelled():
+        # The wait above, not the child result, carries caller cancellation.
+        raise RuntimeError("Extension callback cancelled itself")
     return task.result()
 
 
