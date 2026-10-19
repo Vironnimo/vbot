@@ -180,10 +180,10 @@ def test_bundled_provider_configs_expose_their_connections(shared_runtime: Runti
 
 def test_get_model_reads_the_bundled_catalogs(shared_runtime: Runtime) -> None:
     expected = {
-        ("openrouter", "anthropic/claude-sonnet-4"): (
-            "Anthropic: Claude Sonnet 4",
-            200000,
-            64000,
+        ("openrouter", "anthropic/claude-sonnet-4.6"): (
+            "Anthropic: Claude Sonnet 4.6",
+            1000000,
+            128000,
             {"vision": True, "tools": True},
         ),
         ("openrouter", "anthropic/claude-haiku-4.5"): (
