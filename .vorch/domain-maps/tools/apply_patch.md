@@ -165,6 +165,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   `raise E, "message"`, tuple parameters) are taken as Python 2 and not checked,
   since vBot has no Python 2 parser (`syntax_check._is_python2_syntax`; valid
   GIMP Python-Fu scripts warned on every write, Sessions 2026-10).
+  The `<>` check uses the operator at the parser's error column, independent of
+  diagnostic suggestions appended by newer Python patch versions.
   A written line (a created or replaced file's lines, an Update's changed and
   added lines) holding at least 5 literal `\n` sequences followed by
   indentation, the first outside a quoted string (`#` or `//` outside a string

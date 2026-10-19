@@ -94,14 +94,12 @@ def _is_python2_syntax(error: SyntaxError) -> bool:
     if error.text is None or not error.offset:
         return False
     text, column = error.text, error.offset - 1
+    # Python may append a suggestion to its message; the operator identifies Python 2.
+    if text.startswith("<>", column):
+        return True
     if error.msg == "invalid syntax":
-        return (
-            text.startswith("<>", column)
-            or _BACKTICK_REPR.match(text, column) is not None
-            or (
-                text.startswith(",", column)
-                and _RAISE_BEFORE_COMMA.search(text, 0, column) is not None
-            )
+        return _BACKTICK_REPR.match(text, column) is not None or (
+            text.startswith(",", column) and _RAISE_BEFORE_COMMA.search(text, 0, column) is not None
         )
     if error.msg in _LITERAL_ERRORS:
         # The parser names the literal's last digit, just before the L.
