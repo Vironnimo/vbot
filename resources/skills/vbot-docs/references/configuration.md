@@ -3,8 +3,7 @@
 ## Settings
 
 ```bash
-vbot config                                      # list the public Settings catalog
-vbot config list [<path-prefix>]                 # filter catalog paths, values, types, lifecycle, and source
+vbot config list [<path-prefix>]                 # catalog paths with values, types, lifecycle and source
 vbot config describe <path>                      # show type, constraints, default, source, and lifecycle
 vbot config get <path> [--details]               # show the effective value, optionally with metadata
 vbot config set <path> (<value> | --stdin)                    # atomically set one path
@@ -17,8 +16,8 @@ vbot config raw                                   # diagnostic-only internal set
 - Use cataloged public paths, never raw storage-key names. Fixed segments are dotted (`web_search.searxng.base_url`); user-controlled map keys are bracketed JSON strings (`'local_models.context_windows["ollama/qwen2.5:7b"]'`, `'providers.connections["openai:api-key"]'`). Quote the whole path whenever it contains brackets so the shell passes it unchanged.
 - `<value>` is parsed as JSON first, falling back to a plain string. Numbers, booleans, arrays, objects, and `null` therefore use JSON syntax; pass arrays and objects as one shell argument, for example `vbot config set skills.directories '["C:/skills"]'`. For shells that alter quotes, pipe the exact JSON value to `config set <path> --stdin`; malformed JSON fails before mutation. A JSON string on stdin includes its surrounding double quotes.
 - `unset` is not the same as setting `null`: `unset` removes the configured override and restores the default/inherited value, while `null` is an explicit value accepted only by nullable paths. `describe` reports whether a path is nullable and unsettable.
-- `patch` is the right command when fields must change together. Every operation is validated first; an invalid value, unknown path, duplicate path, or parent/child overlap persists nothing. A successful mutation reports each active value, any pending next-start value, whether the setting applies live or on restart, and an aggregate `restart_required` result.
-- `effective` includes normalized defaults and active runtime values. `raw` exposes the internal persistence shape only for diagnosis; do not derive paths from it and do not edit `settings.json` when a public command can express the change. After an unavoidable manual edit, run `vbot doctor settings` (or `vbot doctor config` for every JSON document in the data directory) — see `server.md`.
+- Use `patch` when fields must change together. Every operation is validated first; an invalid value, unknown path, duplicate path, or parent/child overlap persists nothing. A successful mutation reports each active value, any pending next-start value, whether the setting applies live or on restart, and an aggregate `restart_required` result.
+- `effective` includes normalized defaults and active runtime values. `raw` shows the internal storage shape for diagnosis only; take paths from `list`, not from `raw`.
 - Secrets are not Settings paths. Use `provider key set`, `extensions set <name> <field> --stdin`, the Channel token commands, or `data-store secrets set <NAME>` for any other named credential, so credentials never enter `settings.json` or normal command output.
 
 Switch `web_search` to SearXNG in one atomic live change:
@@ -59,7 +58,7 @@ vbot prompt preview <agent>
 - Every command accepts `--scope default|agent:<id>` (default: `default`). An Agent scope exists only for a known Identity Agent with custom System Prompt enabled; it does not target a Project Agent.
 - Read `prompt show <block-id> --scope <scope>` before replacing a block; it includes its complete effective content and metadata. `list` shows one row per block: id, owner, kind, enabled, editable, source, modified, plus the available scopes. `update`/`reset` target a block by id (e.g. `core:tools`) and work only on editable blocks.
 - `create` creates `user:<slug>` and optionally inserts it at a 0-based layout position. `remove` deletes only a custom `user:` block. `layout set` takes the complete ordered `[ {"id": "...", "enabled": true} ]` array as one shell argument; `layout reset` restores the bundled order and enabled states without resetting text overrides.
-- Prefer `--file` for multi-line content. Do not edit block override files directly when these commands can express the change.
+- Pass multiline content with `--file`.
 - `preview` renders one Agent's complete System Prompt with text-token and Tool-definition token metadata; its Agent positional accepts `agent@project` unless an Identity Agent scope is explicitly selected.
 
 ## Extensions
@@ -73,13 +72,13 @@ vbot extensions set <name> <field> --stdin    # read the value from stdin (secre
 vbot extensions enable|disable <name>
 ```
 
-Extension settings and enable/disable changes apply live. Read commands only inspect state:
+Extension settings and enable/disable changes apply live.
 
-- `set` routes by the field's declared type: a secret field is stored in the data directory's Secret Store under the credential name the extension declares; any other field is type-validated and written to the extension's live config. `<field>` is the schema field key (e.g. `token`), not an env-variable name — inspect with `vbot extensions show <name>` first.
+- `set` routes by the field's declared type: a secret field is stored in the data directory's Secret Store under the credential name the extension declares; any other field is type-validated and written to the extension's live config. `<field>` is the schema field key (e.g. `token`), not an env-variable name; inspect with `vbot extensions show <name>` first.
 - For secrets, use `--stdin`, never the `<value>` argument, and never echo the value back. An empty value clears a secret.
 - `enable` rebuilds the extension layer so freshly-loaded code takes effect at once (a failed activation or failed activation check exits nonzero while preserving the saved enabled setting); `disable` deactivates the extension immediately.
 - For managed operations, run `vbot extensions operations <name>`, then `vbot extensions run <name> <operation> --help`. Put vBot target/output options before the operation; arguments after it belong to the Extension. These are Extension-owned actions with their own completion and job states; MCP has a dedicated reference.
-- `reload` reports each failed Extension and exits nonzero if any failed. It rebuilds the whole extension layer from disk — use it after editing extension code or adding/removing extension directories.
+- `reload` rebuilds every Extension from disk; run it after editing Extension code or adding or removing an Extension. It reports each failed Extension and exits nonzero if any failed.
 - `list` shows loaded/failed/overridden/disabled extensions with their capabilities, and for a loaded-but-unconfigured extension what it is waiting for.
 
 Typical setup flow when the user hands you an extension secret ("here is my Home Assistant token"):

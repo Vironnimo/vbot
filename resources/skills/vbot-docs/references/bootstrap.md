@@ -19,7 +19,7 @@ Read `show <job-id>` for the full prompt, target and execution record before edi
 
 Without `--session`, each firing creates a fresh Session. `--session` targets an existing Session. `--current-session` is create-only, must not be combined with an explicit Agent or `--session`, and is available only from a shell command inside a vBot Run; it uses the Run's exact Agent/Project/Session context. It is intentionally rejected for a remote CLI target because the injected context belongs to the server hosting the current Run.
 
-Jobs targeting the same Session execute in order; independent Sessions may run concurrently. A fixed-Session Bootstrap can continue an interrupted Run only when vBot classifies the interruption as `process_restart`. This is what lets a post-update verification continue the user conversation without turning ordinary internal Runs into user-message continuations.
+Jobs targeting the same Session execute in order; independent Sessions can run concurrently. A fixed-Session Bootstrap can continue an interrupted Run only when vBot classifies the interruption as `process_restart`.
 
 Updating execution fields or enabling a paused/failed job rearms it for the next startup. Completed one-shot jobs are immutable history; delete and recreate one when another one-shot is needed. Non-terminal jobs prevent their referenced Agent, Project, or Session from being removed; retarget, complete, or delete the job first.
 

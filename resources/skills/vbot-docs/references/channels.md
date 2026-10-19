@@ -1,12 +1,12 @@
 # Messaging Channels
 
-For first-time Telegram setup — BotFather, token storage, chat-id discovery, group privacy mode — follow `telegram-setup.md` instead of improvising.
+A Channel connects an Agent to Telegram, Discord, Slack, Mattermost or WhatsApp. For a first Telegram setup, follow "Set up Telegram" below.
 
 ```bash
-vbot channel add <channel-id> --platform telegram|discord|slack|mattermost --agent <agent-id> (--token-stdin | --token-env <ENV_VAR>) [--dm-scope <scope>] [--allow <chat-id> ...] [group-policy flags]
+vbot channel add <channel-id> --platform telegram|discord|slack|mattermost|whatsapp --agent <agent-id> (--token-stdin | --token-env <ENV_VAR>) [--dm-scope <scope>] [--allow <chat-id>...] [--disabled] [group flags]
 vbot channel list
 vbot channel status <channel-id>
-vbot channel update <channel-id> [--platform ...] [--agent ...] [--token-env ...] [--dm-scope ...] [--allow <chat-id> ...] [--enabled true|false] [group-policy flags]
+vbot channel update <channel-id> [--platform ...] [--agent ...] [--token-env ...] [--dm-scope ...] [--allow <chat-id>...] [--enabled true|false] [group flags]
 vbot channel token set <channel-id> --stdin [--slot bot|app]
 vbot channel identity <channel-id> [--user <platform-user-id>]
 vbot channel access <channel-id> --group <group-id>
@@ -17,36 +17,52 @@ vbot channel disable <channel-id>
 vbot channel remove <channel-id>
 ```
 
-Start by reading `channel list` for the saved configuration and `channel status <id>` for listener health. Use the exact existing id when updating.
+Read `channel list` for the saved configuration and `channel status <channel-id>` for the connection before you change a Channel, and use its exact id.
 
-Rules and gotchas:
+## Tokens
 
-- Prefer `--token-stdin` on `add`: the server stores the token under a collision-free managed key in the data directory's Secret Store, reloads Credentials live, and starts the Channel without a server restart. Never put the token itself in a CLI argument.
-- `channel token set <id> --stdin` rotates the configured Channel credential, reloads Credentials live, and restarts only that Channel adapter when its effective token changed. Its result reports the effective source plus immediate enabled/running/failed state; follow with `channel status` because an upstream token rejection may arrive asynchronously.
-- `--token-env` is the advanced path for an externally managed process environment variable. Process environment takes precedence over the Secret Store; `token set` reports `applied=no` and does not restart the adapter while such an override is active.
-- `--allow` empty (or omitted on `add`) denies all inbound chats — a safe starting point that the discovery flow expects. On `update`, `--allow` replaces the whole list: pass every id that should stay allowed. All other `update` fields are partial (omitted = unchanged).
-- Chat-id discovery: have the user message the bot, then read the denied inbound chats (chat id, kind, name, last seen) from `channel status`, and allow the id via `update --allow`. The denied list is in-memory — cleared on channel restart (a `channel update` restarts the channel too) and capped at the most recent 20 chats.
-- `channel status` reports enabled/running/failed with a failure reason. A token-related failure means the credential is missing or the platform rejected it; rotate it with `channel token set <channel-id> --stdin`.
-- `--dm-scope`: `per_conversation` (default), `main`, `per_peer`, `per_account_channel_peer`.
-- Telegram allowlist entries are chat ids; groups have negative ids (e.g. `-100123456789`). Discord entries are channel/thread ids, not guild ids, and the bot needs the Message Content Intent enabled in the Discord Developer Portal.
-- Group-policy flags are `--response-mode mention|all`, `--mention-pattern <pattern> ...`, and `--observe-unaddressed true|false`. Mention patterns replace their complete list on `update`; pass the flag with no values to clear it. `response_mode=mention` answers addressed group messages, while `all` answers every allowed message; `observe_unaddressed` lets the Agent receive unaddressed group context without answering it.
-- Group access uses exactly `admin` and `member`. Set the Channel account's own identity from a previously seen participant with `channel identity <id> --user <user-id>`; it is an admin in every group and cannot be demoted. `channel access` lists one group's durable participants and roles. `admin grant` and `admin revoke` are additive, idempotent one-user actions; neither replaces the group list or restarts the adapter.
-- Members may authorize only `web_search` and `web_fetch`; admins retain the Agent's existing Tool access. Group Commands and reserved Run buttons require admin. A grant affects new messages only, while a revoke blocks non-web Tools before the next Tool call of an active admin Run.
-- `add`, `update`, `enable`, and `disable` return the saved Channel config so the caller can verify routing and group policy immediately. Use `status` separately for listener health and denied-chat discovery.
+- Create a Channel with `--token-stdin` and pipe the token in: vBot saves it in the Secret Store and starts the Channel without a server restart. `channel token set <channel-id> --stdin` replaces it later and restarts only that Channel when the token changed. Never pass the token as an argument.
+- `--token-env <ENV_VAR>` instead reads the token from a variable that already exists in the server's process environment. Such a variable wins over the stored token: `token set` then reports `applied=no` and restarts nothing.
+- `add`, `update`, `enable`, `disable` and `token set` print the saved state. The platform can reject a token after the command returned, so check `channel status`: `failed=yes` with a token failure means the token is missing, malformed or rejected; replace it with `token set`.
+
+## Allowed chats
+
+- An empty `--allow`, also an omitted one on `add`, denies every inbound chat. On `update`, `--allow` replaces the whole list: pass every id that stays allowed. All other `update` flags change only their own field.
+- To find a chat's id, have the user send the bot a message, then read the denied chats (id, kind, name, last seen) from `channel status` and allow the id with `update --allow`. The denied list holds the last 20 chats and is cleared when the Channel restarts, which every `channel update` does.
+- Telegram entries are chat ids: direct chats positive, groups negative (`-100123456789`). Discord entries are channel or thread ids, not server ids, and the bot needs the Message Content Intent in the Discord Developer Portal. Slack and Mattermost entries are conversation ids, not user, team or workspace ids. Keep ids as strings.
+- `--dm-scope` decides which direct messages share a Session: `per_conversation` (default), `main`, `per_peer` or `per_account_channel_peer`.
+
+## Groups
+
+- `--response-mode mention` answers group messages addressed to the bot, `all` every allowed message. `--mention-pattern <pattern>...` replaces the list of extra wake words; the flag without values clears it. `--observe-unaddressed true` lets the Agent read group messages it does not answer.
+- Group members are `admin` or `member`. Members can use only `web_search` and `web_fetch`; admins keep the Agent's full Tool access, and only admins can use group Commands and Run buttons. A grant applies to new messages; a revoke blocks other Tools before the next Tool call of a running admin Run.
+- `channel identity <channel-id> --user <user-id>` names the user's own account on the platform, from a participant vBot has seen; it is an admin in every group and cannot be demoted. `channel access` lists one group's participants and roles. `admin grant` and `admin revoke` change one user without restarting the Channel.
 
 ```bash
-vbot channel add tg-main --platform telegram --agent assistant --token-stdin
 vbot channel add dc-main --platform discord --agent assistant --token-env DISCORD_BOT_TOKEN --allow 123456789012345678
-vbot channel token set tg-main --stdin
 vbot channel update tg-main --allow 12345 67890
-vbot channel identity tg-main --user 50
 vbot channel admin grant tg-main --group -100123456789 --user 51
 ```
 
+## Set up Telegram
 
-## WhatsApp: existing account, self chat only
+The user does the steps in Telegram; you run the vBot commands and guide them.
 
-WhatsApp uses linked-device pairing with the user's existing account. It needs Node.js 22 or newer and npm on the vBot server. Create it without a token and with `--allow self`; creation leaves it disabled. The only supported inbound and outbound target is literal `self`. Other chats cannot trigger Runs. This unofficial connection may be restricted by WhatsApp; do not describe it as a Business API bot or promise account eligibility.
+1. The user opens a chat with `@BotFather`, sends `/newbot`, chooses a display name and a username ending in `bot`, and receives the bot token (`123456789:AA...`). Done when the user has the token.
+2. Create the Channel with the token on stdin: `vbot channel add tg-main --platform telegram --agent <agent-id> --token-stdin`. When the user has not given you the token, give them that command to run in their terminal. Done when `vbot channel status tg-main` reports `running=yes`.
+3. Find and allow the chat: the user opens the bot and presses Start or sends a message; in a group, they add the bot and send a command addressed to it, such as `/start@<bot_username>`. Read the denied chat's id from `channel status` and allow it with `vbot channel update tg-main --allow <chat-id>`, listing every id that stays allowed. Done when the user's next message gets an answer.
+4. For a group where the bot reacts to its name, wake words or `--observe-unaddressed true`, the bot must receive plain group messages: the user sends `/setprivacy` to BotFather, chooses the bot and `Disable`, then removes the bot from the group and adds it again. Without that, Telegram delivers only commands addressed to the bot and replies to it. A bot that is a group administrator receives all messages anyway.
+5. Once the relevant people have written in the group, set the user's own account with `vbot channel identity tg-main --user <telegram-user-id>` and check the roles with `vbot channel access tg-main --group <group-id>`.
+
+When a group becomes a supergroup, its chat id changes; vBot moves the allowlist entry itself.
+
+- No reply in a direct chat: check `channel status` for a failure or a denied chat; when neither explains it, check the Agent's effective Model and the logs.
+- The bot ignores its name or plain group messages: privacy mode is still on, or the text matched no wake word. Test with a command addressed to the bot.
+- Group commands are ignored: they need the sender's `admin` role; check `channel identity` and `channel access`.
+
+## WhatsApp: the user's account, self chat only
+
+WhatsApp links vBot as a device of the user's existing account and needs Node.js 22 or newer and npm on the vBot server. Create it without a token and with `--allow self`; it is saved disabled. Only the user's own chat with themself, `self`, can start Runs and receive replies. WhatsApp can restrict such unofficial connections; do not call it a Business API bot or promise that an account qualifies.
 
 ```bash
 vbot channel add wa-main --platform whatsapp --agent assistant --allow self
@@ -55,11 +71,11 @@ vbot channel whatsapp status wa-main
 vbot channel whatsapp pair wa-main
 ```
 
-Setup runs asynchronously. Read `whatsapp status` until `installed: True`; on failure follow the returned error before retrying setup. Pair only after installation. Ask the user to open Settings > Channels and scan the QR from WhatsApp's Settings > Linked devices > Link a device. QR images and linked-device credentials are private; never copy them into chat or logs. `state: connected` confirms the connection, but only a live self-chat exchange establishes end-to-end delivery. After `logged_out`, use `whatsapp pair <id> --reset` to request a new QR. Ordinary restarts reuse the saved device. Re-pairing does not revoke the old device remotely; the user removes it in WhatsApp.
+Setup runs in the background: repeat `whatsapp status` until it reports `installed: True`, and on a failure follow its error before retrying. Then pair: the user opens Settings > Channels in vBot and scans the QR code in WhatsApp under Settings > Linked devices > Link a device. Never copy the QR code or device credentials into the chat or logs. `state: connected` confirms the link; only a message in the self chat and its answer prove delivery. After `logged_out`, `whatsapp pair <channel-id> --reset` requests a new QR code. Pairing again does not remove the old device in WhatsApp; the user removes it there.
 
 ## Slack and Mattermost
 
-Slack requires a bot token and a separate Socket Mode app token. Use distinct variable names with `--token-env` and `--app-token-env`. If credentials are not configured yet, create with `--disabled`, save each token from stdin, then enable:
+Slack needs a bot token and a separate Socket Mode app token. Without saved tokens, create the Channel disabled, save each token from stdin, then enable it:
 
 ```bash
 vbot channel add slack-main --platform slack --agent assistant --token-env SLACK_BOT_TOKEN --app-token-env SLACK_APP_TOKEN --disabled
@@ -68,8 +84,8 @@ vbot channel token set slack-main --slot app --stdin
 vbot channel enable slack-main
 ```
 
-The Slack app must enable Socket Mode; its app-level token needs `connections:write`. Bot scopes: `chat:write`, `files:read`, `files:write`, and the `read`/`history` scopes for `channels`, `groups`, `im` and `mpim`. Subscribe to `message.channels`, `message.groups`, `message.im` and `message.mpim`; enable the App Home Messages tab and invite the bot to each target channel. Reinstall after scope changes. An `app_mention` subscription alone is insufficient.
+The Slack app needs Socket Mode with an app-level token with `connections:write`; the bot scopes `chat:write`, `files:read`, `files:write` and the `read` and `history` scopes for `channels`, `groups`, `im` and `mpim`; the events `message.channels`, `message.groups`, `message.im` and `message.mpim`; and the App Home Messages tab. An `app_mention` subscription alone is not enough. The user reinstalls the app after a scope change and invites the bot to each channel.
 
-Mattermost requires `--server-url <https://server[/subpath]>` and a bot token via `--token-stdin` or `--token-env`. Use the server root without `/api/v4`, credentials, query or fragment. The server administrator may need to enable bot accounts and add the bot to teams/channels.
+Mattermost needs `--server-url <https://server[/subpath]>`, without `/api/v4`, credentials, query or fragment, and a bot token through `--token-stdin` or `--token-env`. When the bot cannot connect or sees no messages, the server administrator enables bot accounts and adds the bot to the teams and channels.
 
-Both platforms use conversation IDs as allowlist entries, not user/team/workspace IDs. Use denied-chat discovery and preserve IDs as strings. `channel status` additionally reports `connected`; `running=yes` alone means the listener task exists. Mention-only groups require a bot mention or configured wake regex even in threads. Threads share their parent conversation Session. These adapters support text and files, but not buttons, typing indicators, offline history backfill or fetched quoted-message content. Disable a running Channel and wait for shutdown before removing it. Never infer live delivery from mocked tests or saved configuration.
+For both, `channel status` also reports `connected`; `running=yes` alone means only that the listener started. In groups set to `mention`, also in threads, the bot answers only when mentioned or woken by a pattern. A thread shares its parent conversation's Session. They support text and files, but no buttons, typing indicators, missed-message history or quoted-message content. Disable a running Channel and wait until it stopped before you remove it.

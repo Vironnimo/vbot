@@ -19,7 +19,7 @@ Supplementary to `cli.md`. Covers the command shapes and output of the `agent`, 
 ## Session area
 
 - `session list` returns one page of up to 100 Sessions by default; `--limit` and JSON `--cursor` select a page, and `--all` follows pages with repeated-cursor protection. `session fork` optionally re-homes the fork via `--target-agent`; `set-compaction-policy` sets a full JSON Session Policy or clears it to resume inheritance and prints override/effective/source; `delete` archives or deletes (`cli/archive-commands.md`); `link-channel` links a Channel to an identity-owned session.
-- Extended Session inspection is documented in the bundled `vbot-docs/references/session-search.md`: CLI listing and `vbot home` locate the exact target, then read-only SQLite recipes retrieve active transcripts or exact Tool Results. There is no new CLI transcript command.
+- Extended Session inspection is documented in the bundled `vbot-docs/references/session-search.md`: `session list` locates the Session, then the Skill's read-only script `scripts/sessions.py` (stdlib, Python 3.9+) prints transcripts, substring matches and exact Tool Results from the Session database. There is no CLI transcript command.
 
 ## Cron and Bootstrap
 

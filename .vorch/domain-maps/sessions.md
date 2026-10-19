@@ -109,7 +109,7 @@ Read these only when your task matches - not by default.
 - Forks, moves, history edits, deletion, review-fork lifecycle, which entries a view holds -> `sessions/lineage.md`
 - Message search, the FTS indexes, their upkeep, rebuild or status health -> `sessions/search.md`
 - Temporary bindings, owned Runs, group titles, delivery, Note, Extension Tool or command receipts -> `sessions/owned-execution.md`
-- Store modules, tables, indexes, named migrations, write budgets, snapshot facts, bootstrap, `vbot-docs` SQL -> `sessions/storage.md`
+- Store modules, tables, indexes, named migrations, write budgets, snapshot facts, bootstrap, `vbot-docs` script -> `sessions/storage.md`
 - Run admission, settlement or restart recovery, Tool call storage, Stream drafts, change statistics or completion activity -> `sessions/runs.md`
 - History appends and reads, cursors, Chat History snapshot, Compaction commit, reply targets, deferred Notes, Skill cache, write lock -> `sessions/history-api.md`
 - Session creation and lookup, lists, summaries, batched reads, metadata keys, prompt-state APIs or Recall visibility -> `sessions/lists-and-metadata.md`

@@ -1,20 +1,21 @@
 # Writing vBot Extensions
 
-An **extension** is in-process Python that adds capabilities to vBot without forking the app. One extension is the unit of discovery, identity, config, and enable/disable; it can contribute several **capabilities** — hooks, commands, tools, and recall backends — through a single `register(api)` entry point.
+An Extension is Python code that runs inside vBot's process and adds hooks, Commands, Tools, prompt blocks, settings, pages and more, all declared through one `register(api)` function. Extensions run with the full rights of vBot itself, without a sandbox: install only code you would run by hand.
 
-Read this reference when creating or changing an Extension. For settings and enable/disable operations, read [configuration.md](configuration.md#extensions); for MCP setup, read [mcp.md](mcp.md). Swarm and Computer Use operation live in [extension-usage.md](extension-usage.md). Browser automation uses the separate `playwright-cli` Skill.
+This covers creating and changing an Extension. Settings and enable/disable of an installed one: [configuration.md](configuration.md#extensions); MCP: [mcp.md](mcp.md); Swarm and Computer Use: [extension-usage.md](extension-usage.md); a page or Extension-owned Sessions: [extension-pages.md](extension-pages.md) after this file.
 
-Paths beginning with `core/`, `resources/` or `webui/` below are relative to the `vbot_root` reported by `vbot home` on the server machine. Templates are bundled with this Skill under `assets/extensions/`; read them through the `skill` Tool with `name: "vbot-docs"` and the relative file path, or copy from `<vbot_root>/resources/skills/vbot-docs/assets/extensions/`.
+Paths beginning with `core/`, `resources/` or `webui/` are relative to the `vbot_root` that `vbot home` prints on the server's computer.
+
+Contents: [Build and verify](#build-and-verify), [Install](#install-and-reload), [register(api)](#the-entry-point-registerapi), [Hooks](#hooks), [Tools](#tools), [Commands](#slash-commands), [Recall backends](#recall-backends), [Channel buttons](#channel-interaction-handlers), [Settings](#settings-schema), [Prompt blocks](#prompt-blocks), [Lifecycle](#lifecycle-startup-and-shutdown), [Config, logging, secrets](#config-and-logging), [Manifest and API versions](#manifest-extensionjson), [Managed operations](#managed-operations), [Databases](#extension-databases), [Tool result payloads](#tool-result-payloads), [Tool summary](#tool-summary), [Tool changes in a Session](#tool-changes-in-a-session), [Explicit Tool permission](#explicit-tool-permission). Read only the sections the task needs.
 
 ## Build and verify
 
-1. Resolve the target instance on the server machine with `vbot home` and inspect `vbot extensions list`. Keep the same server target (`--host`/`--port` or `--url`) on subsequent management calls. The reported local `data_dir` does not describe a remote server.
-2. Choose one template and inspect it before adapting it. Copy only that file or directory into `<data_dir>/extensions/`, preserving nested files. For a new Extension, use a distinct filesystem name; existing names can shadow another Extension. Keep the identity when updating an installed Extension.
-3. Declare only the needed capabilities in `register(api)`. Acquire resources in startup and release them in shutdown. Put workflow guidance in a bundled Skill, standing Model instructions in a prompt block, and callable behavior in a Tool.
-4. Load the declarations with `vbot extensions reload`, then configure declared fields through `vbot extensions set <name> <field> ...`; send secrets through `--stdin`. See [configuration.md](configuration.md#extensions) for settings behavior.
-5. After code changes, run `vbot extensions reload`, then inspect `vbot extensions list` for the intended identity, loaded status and capability diagnostics. Reload rebuilds every loaded Extension; a failure in another Extension also makes the command fail.
-6. Verify the actual capability and its failure behavior in a disposable test context. For a Tool, exercise valid and invalid inputs through the real Tool registry and check its result envelope. For a hook, check both affected and unaffected calls. For a Command, check its outcome and follow-up Run address. Loading alone does not prove behavior.
-7. Check access for the intended Agent before a live call: its Tool Access Policy, any Project Tool Whitelist, explicit opt-in grants and bundled Skill availability still apply. Check reload/disable cleanup when the Extension owns resources or background work.
+1. Run `vbot home` on the server's computer and `vbot extensions list`. Done when you know the `data_dir` and the installed Extensions. When you manage a remote server, keep the same `--host`/`--port` or `--url` on every later call; a local `vbot home` does not describe it.
+2. Pick the template below that fits, read it, and copy only that file or directory into `<data_dir>/extensions/`, nested files included. Read a template with the `skill` Tool (`name` `vbot-docs`, `file_path` such as `assets/extensions/word_count.py`), or copy it from `<vbot_root>/resources/skills/vbot-docs/assets/extensions/`. Give a new Extension a name no other Extension uses; keep the name when you update one. Install only the Extension the user asked for.
+3. Declare only the capabilities you need in `register(api)`. Acquire resources in startup and release them in shutdown. Put a workflow into a bundled Skill, standing instructions for the Model into a prompt block, and callable behavior into a Tool.
+4. Run `vbot extensions reload`, then set declared fields with `vbot extensions set <name> <field> ...`, secrets through `--stdin`. Done when `vbot extensions list` shows the Extension loaded with the intended capabilities and no diagnostics. A failure in any other Extension also makes `reload` fail.
+5. Test the real behavior and its failures in a disposable context: a Tool with valid and invalid input through the real Tool registry, checking its result envelope; a hook with affected and unaffected calls; a Command with its outcome and follow-up Run. Loading alone proves no behavior.
+6. Before a live call, check the intended Agent's access: its Tool policy, a Project's Tool ceiling, explicit opt-in grants and whether a bundled Skill is allowed. When the Extension owns resources or background work, check that reload and disable clean them up.
 
 | Template | Use when | Read/copy |
 |---|---|---|
@@ -22,40 +23,21 @@ Paths beginning with `core/`, `resources/` or `webui/` below are relative to the
 | Bash guard | Intercepting Tool calls with `Deny` and a System Reminder; illustrative, not a security boundary | [guard_bash.py](../assets/extensions/guard_bash.py) |
 | Workflow Command | Starting a Skill as a follow-up Run in the same Agent/Session/Project address | [workflow_command/](../assets/extensions/workflow_command/) |
 
-Read only the capability sections needed for the task: [entry point](#the-entry-point-registerapi), [hooks](#hooks), [Tools](#tools), [pages and owned Sessions](extension-pages.md), [Commands](#slash-commands), [Recall](#recall-backends), [channel interactions](#channel-interaction-handlers), [settings](#settings-schema), [prompt blocks](#prompt-blocks), [lifecycle](#lifecycle-startup-and-shutdown), [managed operations](#managed-operations), [Extension databases](#extension-databases), and [explicit Tool permission](#explicit-tool-permission).
+## Install and reload
 
-> **Trust boundary.** Extensions run in-process with the **same trust as the
-> kernel** — arbitrary Python, no sandbox, no permission system. Only install
-> extensions you would run by hand. This is intentional: vBot is a single-user,
-> technical-user tool.
+Extensions live in the data directory's `extensions/` folder; the Settings path `extensions.directories` adds further folders. vBot scans only the direct children of each folder, and an Extension's file or directory name is its identity everywhere: settings, CLI and WebUI.
 
-`API_VERSION` is currently **15**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 or v2 remain compatible. Require the version that added what you use, so older vBot versions reject the Extension cleanly: v3 Tool Families; v4 managed operations and live Tool catalogs; v5 `requires_opt_in=True`; v6 page declarations and explicit Tool catalog visibility; v7 Extension databases (`host.open_database`); v8 Tool result payloads (`context.attach_result_payload`, `host.load_result_payload`); v9 Tool-gated prompt blocks (`requires_tool`); v10 owned Session group listing and archiving (`temporary_agents.groups()`, `temporary_agents.archive_group()`); v11 OAuth browser redirects (`host.oauth_redirects`, documented in `core/extensions/oauth_redirects.py`); v12 server folder listing for pages (`client.listDirectory`, documented in [extension-pages.md](extension-pages.md#pages)); v13 Tool summaries (`summary=` on `api.register_tool`).
-
-## Install and discovery
-
-Copy a file or directory into the data directory's `extensions/` folder
-(`~/.vbot/extensions/` by default), or configure additional roots through the public `extensions.directories` Settings path (see [configuration.md](configuration.md#settings)). The persisted storage key is `extension_directories`. Only the **immediate children** of
-each root are scanned. The extension's **name is its filesystem name** — that is
-its identity everywhere (settings, CLI, the WebUI panel).
-
-Three entry-point shapes are accepted:
-
-| Shape | Layout | Manifest? |
+| Shape | Layout | Manifest |
 |---|---|---|
-| Single-file module | `<root>/<name>.py` | no |
-| Package module | `<root>/<name>/__init__.py` | optional |
-| Directory fallback | `<root>/<name>/extension.py` | optional |
+| Single file | `<root>/<name>.py` | none |
+| Package | `<root>/<name>/__init__.py` | optional |
+| Directory | `<root>/<name>/extension.py` | optional |
 
-Everything applies **live** — no restart. Config-value and secret changes are read
-live per call; enabling, disabling, or editing an extension's code takes effect
-through the [extension reload](#reloading-extensions) (enabling and the explicit
-`extensions reload` both rebuild the whole layer from disk, disabling deactivates
-just that one extension). A disabled extension is never imported until it is
-enabled and the layer reloads.
+Nothing needs a server restart. Config values and secrets are read on every call. Code, added or removed Extensions and enabling go through a reload, `vbot extensions reload`: it rebuilds every Extension from disk, the same end state as a fresh server start, and cycles every loaded Extension through shutdown and startup. Disabling stops only that Extension. A disabled Extension is not imported. A failing Extension loads as `failed` with its error and never stops the others.
 
 ## The entry point: `register(api)`
 
-Every extension exposes one function. It may be sync or async (async `register()` is awaited before any declaration goes live, with a hard 10-second deadline so a broken Extension cannot block server start or Extension reload indefinitely):
+Every Extension exposes one `register(api)`, synchronous or asynchronous; an asynchronous one must finish within 10 seconds.
 
 ```python
 def register(api):
@@ -63,64 +45,38 @@ def register(api):
     api.register_tool("word_count", "Count words.", PARAMETERS, my_tool)
 ```
 
-`register(api)` **only declares**. Keep import-time code free of side effects; the runtime
-applies your declarations at the correct bootstrap points (tools late, recall
-backends early, hooks after every extension has registered). Extensions never
-touch the live registries directly.
-
-The `api` object (`ExtensionAPI`) offers:
+`register` and the module import only declare: no connections, files or tasks there. vBot applies the declarations at the right moment and never lets Extensions touch its registries directly.
 
 | Call | Declares |
 |---|---|
 | `api.on(event, handler)` | a hook handler for one event |
-| `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=())` | a slash command |
+| `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=())` | a slash Command |
 | `api.register_tool_family(family_id, label)` | a Tool Family owned by this Extension |
-| `api.register_tool(name, description, parameters, handler, *, summary=None, internal=False, catalog_visible=True, requires_opt_in=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False, unadvertised_parameters=None, family=None)` | an agent tool |
-| `api.register_page(page_id, title, entry, *, icon="network")` | an Extension-owned HTML page declaration |
-| `api.register_recall_backend(name, factory)` | a session-recall backend |
+| `api.register_tool(name, description, parameters, handler, *, summary=None, internal=False, catalog_visible=True, requires_opt_in=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False, unadvertised_parameters=None, argument_normalizer=None, family=None, announce_changes=())` | an Agent Tool |
+| `api.register_page(page_id, title, entry, *, icon="network")` | an Extension page ([extension-pages.md](extension-pages.md)) |
+| `api.register_recall_backend(name, factory)` | a Session recall backend |
 | `api.register_prompt_block(slug, *, default_text=None, render=None, requires_tool=None)` | a System Prompt block |
-| `api.register_interaction_handler(prefix, handler)` | a channel button-tap handler (see [Channel interaction handlers](#channel-interaction-handlers)) |
-| `api.register_settings(fields)` | a settings schema (see [Settings schema](#settings-schema)) |
-| `api.on_startup(handler)` / `api.on_shutdown(handler)` | a lifecycle callback (sync or async, no args) |
-| `api.config` | your config **snapshot** from `settings.extensions.config.<name>`, taken at register time (default `{}`) |
-| `api.get_config()` | your config read **live** per call — reflects a UI change without a restart |
-| `api.resolve_credential(key)` | resolve a credential **live** per call (process env, then the Secret Store) |
-| `api.logger` | a ready-made `vbot.extensions.<name>` logger |
+| `api.register_interaction_handler(prefix, handler)` | a Channel button handler |
+| `api.register_settings(fields)` | a settings schema |
+| `api.on_startup(handler)` / `api.on_shutdown(handler)` | a lifecycle callback (sync or async, no arguments) |
+| `api.config` | the config at register time, from `settings.extensions.config.<name>` (default `{}`) |
+| `api.get_config()` | the current config, read on every call |
+| `api.resolve_credential(key)` | a credential, read on every call: process environment first, then the Secret Store |
+| `api.logger` | the `vbot.extensions.<name>` logger |
 
 ## Hooks
 
-Declare a hook with `api.on(event, handler)`. Every handler is called as
-`handler(ctx, **payload)` — `ctx` first, then the event's keyword payload.
-Handlers may be sync or async. A handler that raises is logged and skipped; it
-never aborts the run.
-
-`ctx` is a `HookContext` with `session_id`, `agent_id`, `run_id`, and
-`add_note(text)` — append a kernel-internal `<system-reminder>` for the model.
-
-There are exactly five events. Each has a fixed **composition rule** that decides
-how return values are used:
+`api.on(event, handler)` calls `handler(ctx, **payload)`, synchronous or asynchronous. A handler that raises is logged and skipped; it never stops the Run. `ctx` is a `HookContext` with `session_id`, `agent_id`, `run_id` and `add_note(text)`, which adds a System Reminder for the Model.
 
 | Event | Composition | Payload (after `ctx`) | Return |
 |---|---|---|---|
 | `run_start` | observer | `session_id, agent_id` | ignored |
-| `context` | pipeline | `messages` | a `list` that replaces the running messages, or `None` |
+| `context` | pipeline | `messages` | a `list` that replaces the messages, or `None` |
 | `tool_call` | decision pipeline | `tool_name, tool_call_id, input` | `None` / `Modify` / `Deny` / `Replace` |
-| `tool_result` | replace pipeline | `tool_name, tool_call_id, input, result` | a full replacement result envelope, or `None` |
+| `tool_result` | replace pipeline | `tool_name, tool_call_id, input, result` | a complete replacement result envelope, or `None` |
 | `run_end` | observer | `session_id, agent_id, outcome` | ignored |
 
-`outcome` is `"success"`, `"error"`, or `"cancelled"`. `run_end` runs in a
-`finally`, so it always fires.
-
-To add **standing text to the System Prompt**, do not use a hook — declare a
-**prompt block** instead (see [Prompt blocks](#prompt-blocks)). The prompt block
-is positioned in the prompt layout, gated, and user-overridable; a hook would
-have to rebuild the prompt every turn. Use the `context` hook only for
-**per-request, message-dependent** changes (the kind that needs to inspect the
-running `messages`).
-
-### The `tool_call` decision hook
-
-Import the decision objects from `core.extensions`:
+`outcome` is `"success"`, `"error"` or `"cancelled"`; `run_end` always fires. Standing System Prompt text is a [prompt block](#prompt-blocks), not a hook; use the `context` hook only for changes that depend on the current messages.
 
 ```python
 from core.extensions import Deny, Modify, Replace
@@ -135,23 +91,25 @@ def guard(ctx, *, tool_name, tool_call_id, input):
     return None
 ```
 
-- `None` — proceed unchanged (the common case).
-- `Modify(input)` — replace the tool arguments; the pipeline continues, and the
-  tool runs with the modified input.
-- `Deny(reason)` — stop the pipeline; the tool does not run. Chat builds a
-  `tool_call_denied` failure envelope naming your extension.
-- `Replace(result)` — stop the pipeline and skip execution; `result` must be a
-  valid result envelope (use `tool_success` / `tool_failure`) or it is dropped.
+- `None` proceeds unchanged.
+- `Modify(input)` replaces the arguments and continues the pipeline.
+- `Deny(reason)` stops it; the Tool does not run, and the Agent receives a `tool_call_denied` failure naming your Extension.
+- `Replace(result)` stops it and skips the Tool; `result` must be a valid envelope from `tool_success` or `tool_failure`, or it is dropped.
 
-`tool_result` is a **full-replace** pipeline: return a complete replacement envelope (re-validated against both the fixed envelope and the Tool's declared success-data contract) or `None` to leave it unchanged — there is no patching.
+A `tool_result` handler returns a complete replacement envelope, checked against the envelope and the Tool's success-data schema, or `None`; there is no patching.
 
 ## Tools
 
-`catalog_visible=False` hides a Tool from public Tool catalogs, Extension capability lists, and Project Tool selection. It does not grant access or establish Session scope: ordinary policy and dispatch checks still apply. Hidden Tools remain registered for collision detection, identity-safe replacement, and teardown. The default is `True`, preserving existing catalogs.
+An Extension Tool is a normal Tool: it appears in the Model's Tool definitions, follows the Agent's Tool policy, and its handler `(context, arguments)` returns the same envelope as built-in Tools: `tool_success(data)` or `tool_failure(code, message)` from `core.tools`, both `{ok, error, data, artifacts}`. Keep the description short and sufficient for correct use; it costs Model context on every request.
 
-`api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered Extension Tool is a **normal Tool**: it appears in Provider Tool definitions and is filtered by an Agent's Tool Access Policy like any other. The handler signature `(context, arguments)` and the result envelope are identical to built-ins. Registration compiles the canonical input schema; dispatch uses that schema to normalize a copied argument object for common unambiguous Model encodings before validation and the handler, then validates successful `data` against `result_schema`. Set `open_input_schema=True` for a Model-facing schema that omits `additionalProperties`. The root `properties` remain the Tool's complete parameter list: dispatch rejects unknown top-level arguments before the handler and drops unknown ones whose value is null or empty, so the handler checks only conditional rules, such as the fields one action requires. A schema accepts undeclared arguments only when it says so with `additionalProperties` or `patternProperties`. Without `open_input_schema=True`, fixed-shape objects must declare `additionalProperties: false`. `unadvertised_parameters` maps extra root parameter names to schemas the handler accepts without offering them to the Model (for example options from older conversation history); dispatch validates them but never shows them in Tool definitions or argument errors. Sibling calls are parallel by default within the shared limits; declare `parallel_safe=False` only when the Tool requires a whole-Tool ordering barrier. Provider strict Tool calling is always disabled; Runtime validation remains authoritative.
-
-When at least two Tools form one user-recognizable capability, declare a Family once with `api.register_tool_family(family_id, label)` and pass its local id as `family=` on each Tool. Family ids are local to the Extension; vBot namespaces them automatically, so another Extension can use the same local id without merging the groups. A Family changes only how current Tools are grouped and switched in configuration screens. It does not grant access or change activation. A group with fewer than two members in the current catalog or Project ceiling falls back to Individual Tools; a search filter does not dissolve an established Family.
+- vBot compiles the input schema at registration. Before validation it fixes common unambiguous Model encodings in a copy of the arguments; `argument_normalizer` adds your own rewrite of the raw arguments, such as aliases. It then validates successful `data` against `result_schema`.
+- The root `properties` are the complete parameter list: vBot refuses unknown top-level arguments before the handler and drops unknown ones whose value is null or empty, so the handler checks only conditional rules, such as the fields one action requires. A schema accepts undeclared arguments only through `additionalProperties` or `patternProperties`. Fixed-shape objects declare `additionalProperties: false`, unless `open_input_schema=True` sends a schema without it to the Model.
+- `unadvertised_parameters` maps extra root parameters the handler accepts to their schemas without showing them to the Model, such as options from older conversation history.
+- Sibling calls run in parallel; set `parallel_safe=False` only when calls of the Tool must not overlap.
+- `ready` is a cheap, I/O-free predicate; while it returns false, the Tool stays registered but hidden from Agents, for example until its credential is set. `readiness_hint` explains the precondition.
+- `catalog_visible=False` hides a Tool from Tool catalogs, capability lists and Project Tool selection. It grants nothing: ordinary policy still applies.
+- A Tool name that collides with a built-in or an earlier loaded Extension's Tool is skipped with a diagnostic in `vbot extensions list`; so is an invalid Tool contract. The Extension's other capabilities stay active.
+- When two or more Tools form one capability the user recognizes, declare a Family with `api.register_tool_family(family_id, label)` and pass `family=` on each Tool. Family ids are local to the Extension. A Family only groups the Tools in configuration screens; it grants nothing.
 
 ```python
 def register(api):
@@ -164,20 +122,11 @@ def register(api):
     )
 ```
 
-The complete [word-count template](../assets/extensions/word_count.py) demonstrates the open input schema, handler-owned unknown-field rejection, and a closed success-data schema. Return `tool_success(data)` or `tool_failure(code, message)` from `core.tools`; both create the standard `{ok, error, data, artifacts}` envelope.
-
-A Tool name that **collides** with a built-in or another Extension's Tool is skipped (built-in wins; between two Extensions the first-loaded wins) and the skip is recorded as a non-fatal diagnostic visible in `vbot extensions list` and the WebUI panel. An invalid Tool contract is likewise skipped and diagnosed without disabling the Extension's other capabilities. Make Tool descriptions concise and sufficient for correct use; they consume Model context.
-
-(Tools are code that does one thing. To teach the agent a *workflow*, write a
-Skill instead.)
-
-## Pages and owned Sessions
-
-API 6 Extensions can register an isolated HTML page (`register_page`) and private Session capabilities (`register_session_tool`, `register_session_prompt_block`, `register_session_runtime`), and own Sessions through the startup host's `temporary_agents`. Read [extension-pages.md](extension-pages.md) before building either.
+The [word-count template](../assets/extensions/word_count.py) shows an open input schema, the handler's own unknown-field check and a closed success-data schema. To teach an Agent a workflow, write a Skill instead of a Tool.
 
 ## Slash commands
 
-`api.register_command` adds a deterministic slash-command entry point to the same Chat-owned dispatcher used by Built-in Commands, RPC, Channels, `/help`, and WebUI autocomplete. A command can provide an immediate in-process result, report a state change, or start a model-driven follow-up Run that activates a Skill bundled in the same Extension.
+`api.register_command` adds a Command to the same dispatcher as the Built-in Commands, for Chat, Channels, RPC, `/help` and WebUI autocomplete. A Command returns a result at once, reports a state change, or starts a follow-up Run, for example one that activates a Skill bundled with the Extension.
 
 ```python
 from core.chat import CommandFeedback, CommandOutcome, CommandRun
@@ -204,52 +153,34 @@ def register(api):
     )
 ```
 
-The handler may be synchronous or asynchronous. It receives `(context, argument)`, where `argument` is the trimmed raw remainder after the slash token or `None`, and must return a `CommandOutcome` whose `command` exactly matches the declared name. `ExtensionCommandContext` exposes only `agent_id`, `session_id`, `project_id`, `reply_surface`, `report_change(...)`, and `await start_run(content, *, internal=False)`. The Run helper is bound to the current address and reply surface; it does not expose `Runtime` or another service locator.
-
-Command metadata uses the existing surface-neutral Command vocabulary:
+The handler, synchronous or asynchronous, receives `(context, argument)`: `argument` is the trimmed text after the Command, or `None`. It returns a `CommandOutcome` whose `command` equals the declared name. `ExtensionCommandContext` offers `agent_id`, `session_id`, `project_id`, `reply_surface`, `report_change(...)` and `await start_run(content, *, internal=False)`, which starts the Run at the same address and reply surface.
 
 | Option | Values and meaning |
 |---|---|
-| `argument` | `"none"`, `"optional"`, or `"required"`; controls recognition and autocomplete behavior |
-| `catalog_result` | `"notice"`, `"detail"`, or `"state_change"`; tells each accessor how to present the result |
-| `execution_mode` | `"immediate"` or `"serialized"`; serialized commands wait behind active Session work |
-| `argument_execution_mode` | optional mode override when an argument is present |
+| `argument` | `"none"`, `"optional"` or `"required"`; controls recognition and autocomplete |
+| `catalog_result` | `"notice"`, `"detail"` or `"state_change"`; how clients show the result |
+| `execution_mode` | `"immediate"` or `"serialized"`; serialized Commands wait behind active Session work |
+| `argument_execution_mode` | a different mode when an argument is present |
 | `unavailable_surfaces` | any of `"webui"` and `"channel"` |
 
-Names are lowercase slash tokens without `/`, using letters, digits, hyphens, or underscores and starting with a letter or digit. Built-ins always win collisions. Between Extensions, deterministic load order is first-wins; duplicate declarations in one Extension are also skipped. Invalid or losing declarations become non-fatal capability diagnostics, so the rest of the Extension remains active. A same-named Skill is still reachable explicitly as `$skill-name`; slash command recognition takes precedence over `/skill-name`.
+Names are lowercase, without `/`, of letters, digits, hyphens and underscores, starting with a letter or digit. Built-in Commands win collisions, then the earlier loaded Extension; a skipped declaration becomes a diagnostic. A Skill of the same name stays reachable as `$skill-name`. A Command removed or replaced while a call waits in the Queue answers that it is no longer available. A handler that raises or returns an invalid outcome is logged and answers with a neutral failure.
 
-Reload, enable, disable, and deletion update the live dispatcher without replacing it, so RPC and existing Channel workers see the same catalog immediately. A command already running may finish. Queued work revalidates an opaque registration identity before execution, so a command removed or replaced meanwhile returns neutral “no longer available” feedback instead of running stale code. Handler exceptions and invalid outcomes are logged with Extension ownership and return neutral failure feedback without crashing the Extension layer or a Channel worker.
-
-The complete runnable example is [workflow_command/](../assets/extensions/workflow_command/). It declares API v2, bundles the `workflow` Skill, and starts that Skill as a same-address follow-up Run.
-
-Bundle each Skill as `<extension>/skills/<skill-name>/SKILL.md`, with any helper files inside that Skill directory. Only loaded Extensions contribute their Skills; they enter the global Skill pool and still need to be available and allowed for the intended Agent. For a Project, enable the global Skill in its Skill selection. A user global Skill with the same name takes precedence. Reload, enable and disable refresh this pool live; starting `$workflow` does not bypass its Skill policy.
+Bundle each Skill as `<extension>/skills/<skill-name>/SKILL.md` with its helper files. Loaded Extensions add their Skills to the global Skill pool; an Agent still needs them allowed, and a Project needs the global Skill in its selection. A user's global Skill of the same name wins. `$workflow` does not bypass the Skill policy. The [workflow_command/](../assets/extensions/workflow_command/) template declares API v2, bundles the `workflow` Skill and starts it as a follow-up Run.
 
 ## Recall backends
 
-`api.register_recall_backend(name, factory)` adds a session-recall backend (`factory` is `RecallBackendContext -> RecallBackend`). The name must be lowercase snake_case and must not collide with a built-in. Once registered, a backend becomes selectable via `settings.recall.backend` (Settings → Recall). Implement `search_capabilities() -> RecallSearchCapabilities` and `search_page(request: RecallSearchRequest) -> RecallSearchPage`. Declare the supported controls and result unit in the capabilities; apply the request's scope, excluded Sessions, roles, and time range before ranking, and return canonical Message or Passage references with deterministic pagination and snapshot validation. Session listing and exact reads are handled by the built-in Tools. Prefer an async `search_page` so provider and other I/O can be cancelled naturally; synchronous implementations run outside the server event loop. Backends that only implement the retired browse/overview/search/scroll interface are rejected when selected. Read the protocol and request/page types in `core/recall/recall.py` before implementing a backend.
+`api.register_recall_backend(name, factory)` adds a Session recall backend; `factory` takes a `RecallBackendContext` and returns a `RecallBackend`. The name is lowercase snake_case and no built-in name; the user selects it with the Settings path `recall.backend`. Implement `search_capabilities() -> RecallSearchCapabilities` and `search_page(request: RecallSearchRequest) -> RecallSearchPage`: declare the supported controls and result unit, apply the request's scope, excluded Sessions, roles and time range before ranking, and return canonical Message or Passage references with deterministic pagination and snapshot validation. Prefer an async `search_page`, so I/O can be cancelled. Read the protocol in `core/recall/recall.py` before you implement one.
 
 ## Channel interaction handlers
 
-A channel message can carry inline **buttons**; tapping one produces a channel
-interaction event. `api.register_interaction_handler(prefix, handler)` lets your
-extension handle those taps **deterministically in-process** — no LLM run, no
-agent wake-up — which is what makes a tap fast and free.
-
-Routing is by **callback-data prefix**. A button's callback data is
-`"<prefix>:<payload>"` (the `prefix` never itself contains `:`); your handler
-receives every tap whose data begins with `"<prefix>:"`. A prefix already
-claimed by an earlier-loaded extension is skipped and diagnosed on your
-extension's record (first-wins, the same policy as a tool-name collision) — one
-prefix, one owner.
+A Channel message can carry buttons. `api.register_interaction_handler(prefix, handler)` handles taps on buttons whose callback data is `"<prefix>:<payload>"`, in vBot's process without a Model call. The prefix contains no `:`, and the first Extension to claim a prefix owns it. `run` and `chk` are reserved by vBot.
 
 ```python
 from core.extensions import InteractionButton
 
 
 async def _toggle(event, responder):
-    # event.buttons is the message's current keyboard (rows of InteractionButton),
-    # event.data is the tapped button's callback payload. Rebuild the keyboard and
-    # edit it back — the state lives in the message, there is no server-side store.
+    # The tapped message's keyboard arrives with every tap; rebuild and edit it.
     new_rows = [
         [
             InteractionButton(label=flip(b.label) if b.data == event.data else b.label, data=b.data)
@@ -265,38 +196,14 @@ def register(api):
     api.register_interaction_handler("pick", _toggle)
 ```
 
-The handler is called `handler(event, responder)`:
-
-- `event` (`InteractionEvent`) carries `platform`, `channel_id`, `chat_id`,
-  `user_id`, `message_id`, `data` (the tapped payload), `buttons` (the message's
-  current keyboard as rows of `InteractionButton`), and optional `text`,
-  `user_display_name`, `thread_id`. There is **no server-side persistence**: the
-  platform delivers the current message + keyboard with every tap, so recompute
-  the edit from the event.
-- `responder` (`InteractionResponder`) is the reply channel: `await
-  responder.answer(text=None, *, alert=False)` acknowledges the tap (an empty
-  `text` is a silent ack; a non-empty one shows a toast, or a modal when
-  `alert=True`), and `await responder.edit(*, text=None, buttons=None)` rewrites
-  the tapped message's text and/or keyboard.
-
-Every tap is acknowledged **exactly once** — if your handler does not call
-`answer()`, the channel sends a fallback ack so the tapper's spinner always
-stops. A handler that raises is logged and swallowed (fail-open), then the
-fallback ack still runs.
-
-To **send** buttons, use the `channel_send` tool's `buttons` parameter (rows of
-`{label, data}`), or a channel adapter's `send(..., buttons=...)`. Telegram is
-the only platform with interactive support today; callback data is capped at 64
-bytes. For a list the user ticks and then submits, `channel_send` has a
-`checklist` parameter that needs no extension.
-
-The prefixes `run` and `chk` are reserved by vBot; an extension cannot claim
-them. `chk` belongs to the item buttons of a `channel_send` checklist. `run`
-wakes the agent rather than an extension. Emit only the public form `run:<payload>`. When an Identity Agent Session sends that button through `channel_send`, vBot durably binds it to the sending Session: the tap starts at most one Run there, the Run's reply is delivered to Telegram, and later Telegram messages continue in that Session until `/new`. The private callback value placed on the Telegram message is an implementation detail; do not parse or construct it. If the origin Session was deleted, the tap reports that it is unavailable instead of recreating or falling back to another Session. Project Sessions keep the legacy behavior and route the tap to the Channel's current Identity Session.
+- `event` (`InteractionEvent`) carries `platform`, `channel_id`, `chat_id`, `user_id`, `message_id`, `data` (the tapped payload), `buttons` (the message's current keyboard as rows of `InteractionButton`) and optionally `text`, `user_display_name` and `thread_id`. vBot stores no button state; compute the edit from the event.
+- `responder.answer(text=None, *, alert=False)` acknowledges the tap: no text silently, a text as a toast, or as a dialog with `alert=True`. `responder.edit(*, text=None, buttons=None)` rewrites the message. Without `answer()`, and after a handler error, which is logged, vBot acknowledges the tap itself.
+- Send buttons with the `channel_send` Tool's `buttons` parameter (rows of `{label, data}`) or an adapter's `send(..., buttons=...)`. Only Telegram supports buttons; callback data holds at most 64 bytes. For a list the user ticks and submits, `channel_send` has a `checklist` parameter that needs no Extension.
+- A `run:<payload>` button wakes the Agent instead of an Extension. Sent through `channel_send` from an Identity Agent Session, its tap starts at most one Run in that Session, the reply goes to Telegram, and later Telegram messages continue there until `/new`; when that Session was deleted, the tap reports it unavailable. From a Project Session, the tap goes to the Channel's current Identity Session. Emit only `run:<payload>`; never build the value vBot puts on the Telegram message.
 
 ## Settings schema
 
-An extension declares a **settings schema** when it has user-editable configuration. The WebUI then renders the corresponding form under Settings → Extensions; without a schema, the extension row has no configuration disclosure. Declare the schema at register time — the same declaration pattern as hooks, tools, and recall backends — so single-file extensions (which carry no manifest) can use it too:
+Declare user-editable configuration once with `api.register_settings(fields)`; the WebUI then shows a form under Settings > Extensions, and single-file Extensions can use it too.
 
 ```python
 def register(api):
@@ -314,109 +221,55 @@ def register(api):
     )
 ```
 
-Each field is one dict. The v1 types are `text`, `number`, `toggle`, and `secret`:
-
 | Key | Rule |
 |---|---|
-| `key` | required, `^[a-z][a-z0-9_]*$`, unique within the schema |
-| `type` | required, one of `text` / `number` / `toggle` / `secret` |
-| `label` | required, non-empty string |
-| `description` | optional string (shown as a hint under the field) |
-| `default` | optional; **forbidden** for `secret`; must match the type (`text`→str, `number`→int/float, `toggle`→bool) |
+| `key` | required, `^[a-z][a-z0-9_]*$`, unique |
+| `type` | required: `text`, `number`, `toggle` or `secret` |
+| `label` | required, non-empty |
+| `description` | optional hint under the field |
+| `default` | optional, matching the type (`text` str, `number` int or float, `toggle` bool); not allowed for `secret` |
 | `required` | optional bool, default `False` |
-| `env_key` | **required** for `secret` (`^[A-Z][A-Z0-9_]*$`); **forbidden** on any other type |
+| `env_key` | required for `secret` (`^[A-Z][A-Z0-9_]*$`), not allowed for other types |
 
-Any violation raises `ValueError` inside `register()`, so the extension loads as `failed` with a message naming the bad field (the same policy as an invalid prompt block). Calling `api.register_settings` twice also raises — declare exactly one schema.
-
-**What the WebUI renders:** a `text` field is a text input (its `default` is shown as the placeholder), `number` a number input, `toggle` a checkbox, and `secret` a write-only password input with a Set/Not-set indicator and Save/Clear actions. Non-secret fields save together through a single "Save settings" button; a secret saves on its own (see [Secrets](#secrets)).
-
-**Server-side validation on save:** for a loaded extension with a schema, the `settings.update` RPC validates the submitted config against the schema before persisting — unknown keys are rejected, a key naming a `secret` field is rejected (secrets live in the Secret Store, never in config), types must match, and a `required` non-secret field must be present and non-empty. The generic backend config object remains part of the Extension API, but the WebUI exposes it only through a declared schema.
-
-**Live values.** A non-secret setting change (URL, a toggle, a number) is read **live** on the next tool call — no restart. Read your config through `api.get_config()` rather than the register-time `api.config` snapshot (see [Config and logging](#config-and-logging)). Enabling, disabling, or reloading a whole extension also applies live (see [Reloading extensions](#reloading-extensions)).
+A violation, or a second `register_settings` call, raises `ValueError` and the Extension loads as `failed`. On save, vBot refuses unknown keys, secret fields in the config, wrong types and empty required fields. A secret field is write-only in the WebUI and saved on its own.
 
 ## Prompt blocks
 
-To add standing content to the **System Prompt**, declare a block with
-`api.register_prompt_block`. The vBot System Prompt is built from ordered blocks;
-your block joins them — positioned in the layout, gated, and (for a static block)
-user-overridable from the System Prompt tab. This is the right tool for "always
-tell the model X"; do not try to append it from a hook.
+`api.register_prompt_block` adds a block to the System Prompt; the user can reorder and disable it in the System Prompt tab. Pass exactly one of:
 
-Pass **exactly one** of:
-
-- `default_text` — a **static** block. Its text is editable through the System
-  Prompt override cascade, so a user can tweak or disable it per scope.
-- `render` — a **dynamic** block: a build-time function `render(context) -> str`
-  that returns the text. It is not user-editable, and if it raises, only that one
-  block is dropped (the run is never aborted). `context` carries the agent and
-  run state but **no conversation messages** — message-dependent content belongs
-  in the `context` hook, not here.
+- `default_text`: a static block; the user can also edit its text.
+- `render`: a function `render(context) -> str` that builds the text when the System Prompt is built. The user cannot edit it, and when it raises, only this block is left out. `context` holds the Agent and Run state but no messages.
 
 ```python
 def register(api):
-    # A static block the user can edit/reorder/disable in the System Prompt tab.
     api.register_prompt_block(
         "house_style",
         default_text="Prefer SI units and ISO 8601 dates.",
     )
 
-    # A dynamic block computed at prompt-build time.
     def render_quota(context):
         return f"Daily quota remaining: {remaining_calls()}."
 
     api.register_prompt_block("quota", render=render_quota)
 ```
 
-Your block's id is `extension:<slug>` and its owner is `extension:<name>`, so it
-renders **only while your extension is loaded**. To show a block only when the
-Agent's Tool list contains one of your Tools, pass `requires_tool` with a Tool
-name, or a name prefix ending in `*` such as `"weather_*"`; declare
-`"api_version": 9` in `extension.json`. Declare several blocks by using
-distinct slugs. A slug that collides with another extension's block is resolved
-first-loaded-wins with a non-fatal diagnostic (same policy as tool names). The
-block list refreshes whenever extensions reload — no per-request cost.
+The block's id is `extension:<slug>`; it appears only while your Extension is loaded. `requires_tool` with a Tool name, or a prefix ending in `*` such as `"weather_*"`, shows the block only while the Agent's Tool list contains a matching Tool (API 9). Use one slug per block; a slug another Extension took first is skipped with a diagnostic.
 
 ## Lifecycle: startup and shutdown
 
 ```python
 def register(api):
-    api.on_startup(open_resources)  # fires once serving begins (loop running)
-    api.on_shutdown(close_resources)  # fires during runtime shutdown
+    api.on_startup(open_resources)  # once serving begins, with the event loop running
+    api.on_shutdown(close_resources)  # during shutdown, reload and disable
 ```
 
-Both may be sync or async and take no arguments. Coroutine startup handlers run on the serving event loop and may schedule background tasks. Synchronous handlers run in bounded workers; use an async handler for loop-owned resources, and keep blocking I/O out of it. Accessors that
-never serve (CLI local commands) do not fire startup. Both phases fail-open per
-handler.
+Both take no arguments. Async startup handlers run on the server's event loop and can start background tasks; keep blocking I/O out of them. Synchronous handlers run in worker threads. CLI commands that serve nothing fire no startup. A failing handler is logged and the others still run.
 
-**Contract (a reload leans on this).** `import` and `register(api)` must be
-**side-effect-free** — they only *declare*. Acquire resources (connections, tasks,
-file handles) in a **startup** handler and release them in a **shutdown** handler,
-and make both **idempotent**. This matters because an [extension
-reload](#reloading-extensions) cycles **every** loaded extension through
-shutdown+startup, not just the one that changed: a startup handler that assumes it
-runs once, or a shutdown handler that leaks, will misbehave across reloads.
+Acquire connections, tasks and file handles in startup, release them in shutdown, and make both idempotent: every reload runs shutdown and startup of every loaded Extension, not only the changed one.
 
 ## Config and logging
 
-Per-extension config arrives as `api.config` — the object under
-`settings.json` → `extensions.config.<name>` (default `{}`):
-
-```json
-{
-  "extensions": {
-    "disabled": ["some_old_extension"],
-    "config": { "guard_bash": { "deny": ["rm -rf /"] } }
-  }
-}
-```
-
-```python
-def register(api):
-    deny = api.config.get("deny", [])
-    api.logger.info("guard_bash loaded with %d patterns", len(deny))
-```
-
-`api.config` is a **snapshot** taken at register time — use it for structural decisions inside `register()`. For values you read while running (in a hook or tool handler), use `api.get_config()` instead: it re-reads the persisted config **per call**, so a change a user makes in the settings form takes effect on the next call without a restart. Enabling, disabling, and reloading the whole extension also apply live (see [Reloading extensions](#reloading-extensions)).
+`api.config` is the config at register time; use it for decisions inside `register()`. In handlers, read `api.get_config()`, which reflects a change from the settings form on the next call.
 
 ```python
 def register(api):
@@ -427,11 +280,11 @@ def register(api):
     api.register_tool("ha_ping", "Ping Home Assistant.", PARAMS, call_home)
 ```
 
-`api.logger` is a `vbot.extensions.<name>` logger through the normal logging pipeline (no `print`). Never log a secret value.
+`api.logger` writes to vBot's logs; never use `print` and never log a secret.
 
 ### Secrets
 
-A `secret` field's value is stored encrypted in the data directory's Secret Store (`secrets.json`) under the `env_key` you declared — **never** in `settings.json`. Read it live per call with `api.resolve_credential(env_key)`:
+A `secret` field's value lives encrypted in the Secret Store under the `env_key` you declared, never in `settings.json`. Read it on every call with `api.resolve_credential(env_key)`:
 
 ```python
 def register(api):
@@ -448,14 +301,12 @@ def register(api):
         ...
 ```
 
-- **Write-only in the UI.** The form shows only whether the secret is set; the stored value is never displayed. Saving or clearing it writes the Secret Store and refreshes the resolver immediately (no restart).
-- **You choose the credential name explicitly.** There is no derived naming — established keys keep their names (`HASS_TOKEN` stays `HASS_TOKEN`). To avoid clashing with another extension or an app credential, **prefix new keys** with your extension name (e.g. `MYEXT_API_KEY`).
-- **Process-env precedence.** A key present in the process environment **wins** over the stored value the UI writes. So if the same key is exported in the environment that launched vBot, that stale value overrides what a user sets in the form — worth knowing when a secret "won't change".
+- You choose the credential name; prefix a new one with your Extension's name (`MYEXT_API_KEY`) so it cannot clash with another.
+- A variable of the same name in the server's process environment wins over the stored value; when a secret seems not to change, check the environment.
 
-## Manifest (optional): `extension.json`
+## Manifest: `extension.json`
 
-Directory/package extensions may add an `extension.json` to enrich identity
-(single-file extensions can't, and don't need to). It is never required:
+A package or directory Extension can add an `extension.json`; it is never required.
 
 ```json
 {
@@ -466,86 +317,22 @@ Directory/package extensions may add an `extension.json` to enrich identity
 }
 ```
 
-Identity stays the **directory name**; the manifest `name` is display-only. An
-`api_version` greater than the app's `API_VERSION` fails the extension at load
-with a clear message (forward-compatibility guard).
+The identity stays the directory name; `name` is only shown. vBot refuses an Extension whose `api_version` is above its own, currently 15. Declare the version that added what you use: 3 Tool Families; 4 managed operations and live Tool catalogs; 5 `requires_opt_in`; 6 pages and `catalog_visible`; 7 [databases](#extension-databases); 8 [Tool result payloads](#tool-result-payloads); 9 `requires_tool` on prompt blocks; 10 listing and archiving owned Session groups; 11 OAuth browser redirects (`host.oauth_redirects`, see `core/extensions/oauth_redirects.py`); 12 server folder listing for pages; 13 [Tool summaries](#tool-summary); 14 [Tool-change announcements](#tool-changes-in-a-session); 15 `config_documents`, `host.resolve_tool_agent_async` and Tool-call receipts.
 
-API v15 also accepts `config_documents`, mapping file patterns under your Extension's
-state directory to `module:function` validators, for example
-`"config_documents": {"connections.json": "config:validate_connections_file"}`.
-Each validator receives an absolute `Path` and returns a
-`core.config_validation.JsonValidationReport`. Keep the validation module independent
-of registration: `vbot doctor config` loads it without running your `__init__`,
-`register` or startup, including when the Extension is disabled.
-
-## Managing extensions
-
-Extensions surface through the normal management flow:
-
-- **CLI** (an accessor — everything goes through server RPC):
-  ```bash
-  vbot extensions list                 # loaded / failed / disabled + capabilities
-  vbot extensions reload               # rebuild the whole layer from disk (live)
-  vbot extensions disable guard_bash   # applied live
-  vbot extensions enable guard_bash    # applied live (reloads the layer)
-  ```
-- **WebUI**: Settings → **Extensions** lists every extension with its status, version, capabilities, and failure reason, offers a "Reload extensions" button and a per-extension enable/disable toggle, and renders a settings disclosure only for an extension that declares a schema. Secret fields are write-only. Every change applies live; there is no restart notice.
-- **RPC**: `extensions.list` returns the records (with any declared settings
-  schema and live secret state); `extensions.reload` rebuilds the layer and
-  returns the same shape; `settings.update` accepts the `extensions` section (all
-  changes apply live); `extensions.set_secret` writes/clears a secret.
-
-A failed extension never aborts the others — it loads as `failed` with an error
-detail you can read in any of the surfaces above.
-
-## Reloading extensions
-
-Everything an extension change touches applies **live** — you never restart the
-server to pick up an extension. There are two live paths:
-
-- **Config values and secrets** are read per call (`api.get_config()` /
-  `api.resolve_credential()`), so a settings-form save takes effect on the next
-  call with no further action.
-- **Code, structure, and enable/disable** go through the **extension reload** — a
-  full, restart-equivalent rebuild of the whole extension layer from disk in the
-  running process. Trigger it explicitly with `vbot extensions reload`, the
-  WebUI "Reload extensions" button, or the `extensions.reload` RPC. **Enabling**
-  an extension runs the same rebuild for you; **disabling** deactivates just that
-  one extension.
-
-A reload picks up edited code of loaded extensions (including submodules of
-package extensions), extensions you added to or deleted from a scan root,
-previously `failed` extensions whose code you fixed, and boot-disabled extensions
-you enabled — the end state is exactly what a fresh server start would produce.
-Because a reload cycles **every** extension through shutdown+startup, keep those
-handlers idempotent (see [Lifecycle](#lifecycle-startup-and-shutdown)). Edit a
-`.py` file, then run `vbot extensions reload` to apply it.
+`config_documents` maps file patterns in your Extension's state directory to `module:function` validators, for example `"config_documents": {"connections.json": "config:validate_connections_file"}`. A validator receives the file's absolute `Path` and returns a `core.config_validation.JsonValidationReport`. `vbot doctor config` loads only that module, without your `__init__`, `register` or startup, also while the Extension is disabled; keep the module independent of registration.
 
 ## Managed operations
 
-API v4 Extensions can register schema-described management operations with `api.operations.register`, publish complete live Tool catalogs with `api.operations.replace_tools`, and receive injected host capabilities through `api.operations.startup`. The host validates operation arguments, exposes them through RPC and `vbot extensions operations <name>`, and prevents a retired Extension from republishing Tools. Operations that accept credentials must declare `secret=True`; the CLI then requires JSON through `--stdin`.
+`api.operations.register` adds management operations with a JSON Schema; vBot validates their arguments and offers them through `vbot extensions operations <name>` and `vbot extensions run <name> <operation>`. An operation that takes a credential declares `secret=True`, and the CLI then requires its JSON on `--stdin`. `api.operations.replace_tools` publishes a complete live Tool catalog. The declarations and host types are in `core/extensions/operations.py`.
 
-For the management declaration and host types, read `core/extensions/operations.py`. Register an async startup callback by appending it to `api.operations.startup`; its argument is the injected, owner-bound `ExtensionHost`: `state_dir` is a private directory for persistent Extension files, `open_database(...)` opens the Extension's [databases](#extension-databases), `load_result_payload(context, payload_id)` reads its [Tool result payloads](#tool-result-payloads), `catalog()` provides safe configured choices, and `publish_change(resource, ids, revision)` invalidates its [page](extension-pages.md). For MCP configuration and discovery, read [mcp.md](mcp.md).
+Append an async startup callback to `api.operations.startup`; it receives the Extension's `ExtensionHost`: `state_dir` (a private directory for persistent files), `open_database(...)`, `load_result_payload(context, payload_id)`, `catalog()` (configured choices) and `publish_change(resource, ids, revision)`, which refreshes your [page](extension-pages.md).
 
-API v15 provides `await host.resolve_tool_agent_async(context)` for Tool policy or
-sampling that needs the invoking Agent. Use it from async handlers because Agent
-and Session resolution reads storage.
-
-For a remote operation that returns a persistent task handle, capture
-`receipt = await host.capture_tool_call(context)` and persist the handle with that
-receipt in your Extension database. A `None` receipt means the call has no canonical
-Session owner. After a restart, `await host.restore_tool_call(receipt)` returns the
-original invocation's current context, following Session moves; `None` means it no
-longer needs delivery or has no live owner. Resume the remote task by its saved id,
-without resending the operation. Deliver its outcome with
-`await host.deliver_tool_outcome(receipt, content)`: it adds one persisted note for
-the next ordinary Run, without starting a Run. Quote external content as JSON and
-escape angle brackets; supply no reminder tags. Identical repeated delivery is
-ignored; different content for the same receipt is refused.
+- From async handlers, `await host.resolve_tool_agent_async(context)` returns the invoking Agent, for Tool policy or sampling.
+- For a remote task that outlives the call, take `receipt = await host.capture_tool_call(context)` and store it with the task's id in your database; `None` means the call has no Session. After a restart, `await host.restore_tool_call(receipt)` returns the original call's current context, following Session moves, or `None` when nothing needs delivery. Resume the remote task by its id without sending the operation again, and deliver the outcome with `await host.deliver_tool_outcome(receipt, content)`: it adds one note for the Session's next Run without starting a Run. Quote external content as JSON, escape angle brackets and write no reminder tags. Repeating the same content is ignored; different content for the same receipt is refused.
 
 ## Extension databases
 
-API v7 Extensions keep SQLite data in databases that vBot manages; do not open SQLite files yourself. In a callback appended to `api.operations.startup`, call `await host.open_database(name, schema_sql, migrations=(), retired_indexes=())`. It returns a `Database` stored at `<data_dir>/extension-data/<extension-id>/<name>.db`. `name` and the Extension id must be lowercase ids of letters, digits, `_` and `-` that start with a letter or digit, otherwise the call raises `ValueError`; each name can be open only once. vBot includes these databases in its data snapshots and restores them with the rest of its data. Declare `"api_version": 7` in `extension.json`.
+Keep SQLite data in databases vBot manages, never in SQLite files you open yourself (API 7). In a callback appended to `api.operations.startup`, `await host.open_database(name, schema_sql, migrations=(), retired_indexes=())` returns a `Database` at `<data_dir>/extension-data/<extension-id>/<name>.db`. `name` and the Extension id are lowercase letters, digits, `_` and `-`, starting with a letter or digit, otherwise it raises `ValueError`; each name opens once. vBot includes these databases in its data snapshots and restores.
 
 ```python
 from core.extensions.databases import Database
@@ -589,31 +376,27 @@ def register(api):
     api.operations.startup.append(notes.start)
 ```
 
-- From async code use `await database.write_async(fn)` and `await database.read_async(fn)`; `database.write(fn)` and `with database.read() as connection:` block the calling thread. `fn` receives a `sqlite3.Connection` whose rows support `row["column"]`. A write function runs in one transaction and is retried as a whole while the database is busy, so keep other side effects out of it. Read connections are read-only.
-- Change the schema only additively: add tables, indexes, or columns that are nullable or have a default to `schema_sql`, and vBot applies them on the next open. Never rename, retype, or drop columns or tables, and never change the constraints of an existing table; vBot refuses to open a database whose existing objects differ from their declaration. To remove an index, delete it from `schema_sql` and list its name in `retired_indexes`. Fill new structures with `Migration(name, apply=fn)` from `core.extensions.databases`: `apply(connection)` runs once per database and must be idempotent; a newly created database records it without running it.
-- Set `breaks_older=True`, as in `Migration(name, breaks_older=True, apply=fn)` (`apply` may be omitted), when older versions of your Extension would misread the data after the change: for example a new status value their code does not handle, or a column whose meaning changed. vBot records the migration in the database. An older version that does not declare that migration then refuses to open the database: its `host.open_database` call raises `DatabaseError` (from `core.extensions.databases`) and leaves the data unchanged. Going back to that older version means restoring the database from a data snapshot taken before the change, which loses everything written since. Leave it `False` when older versions can safely ignore the change, such as a new table or column they never read. Keep every released migration declared under the same name: a version that drops a `breaks_older` migration also refuses its own database.
-- Name the columns in every `SELECT` and `INSERT`, because a newer version of the Extension may add columns. Validate values that may grow, such as statuses, in code instead of with CHECK constraints.
-- A handle belongs to the current registration. Shutdown handlers can still use it; afterwards vBot closes it, including on reload and disable. Open it again in the next startup instead of keeping it across reloads, and do not close it yourself.
-- Deleting an Extension keeps its databases registered and in data snapshots. When the user no longer needs that data, release each one with `vbot data-store unregister ext.<extension-id>.<name> --yes` (see `data-store.md`).
+- From async code use `await database.write_async(fn)` and `await database.read_async(fn)`; `database.write(fn)` and `with database.read() as connection:` block the thread. `fn` receives a `sqlite3.Connection` whose rows support `row["column"]`. A write function runs in one transaction and is retried as a whole while the database is busy, so keep other side effects out of it. Read connections are read-only.
+- Change the schema only additively: new tables, indexes, or columns that are nullable or have a default go into `schema_sql`, and vBot adds them on the next open. Never rename, retype or drop columns or tables, and never change an existing table's constraints; vBot refuses to open a database whose objects differ from their declaration. To remove an index, delete it from `schema_sql` and list its name in `retired_indexes`. Fill new structures with `Migration(name, apply=fn)` from `core.extensions.databases`: `apply(connection)` runs once per database and must be idempotent; a new database records it without running it.
+- Set `breaks_older=True`, as in `Migration(name, breaks_older=True, apply=fn)` (`apply` can be omitted), when earlier versions of your Extension would misread the data afterwards, such as a new status value their code does not handle or a column whose meaning changed. An earlier version that lacks the migration then fails in `host.open_database` with `DatabaseError` and leaves the data unchanged; going back to it means restoring a data snapshot from before the change, losing everything written since. Leave it `False` when earlier versions can ignore the change, such as a new table or column they never read. Keep every released migration declared under its name: a version that drops a `breaks_older` migration refuses its own database.
+- Name the columns in every `SELECT` and `INSERT`, because a later version can add columns. Check values that can grow, such as statuses, in code instead of CHECK constraints.
+- A handle belongs to the current registration. Shutdown handlers can still use it; then vBot closes it, also on reload and disable. Open it again in the next startup, and never close it yourself.
+- A deleted Extension's databases stay registered and in data snapshots. When the user no longer needs that data, `vbot data-store unregister ext.<extension-id>.<name> --yes` releases each one (`data-store.md`).
 
 ## Tool result payloads
 
-API v8 Extension Tools can keep a large result with its Tool Result in Session history instead of in files. In a Tool handler, check `context.result_payloads_available`. When it is true, `payload_id = context.attach_result_payload(value)` stores the JSON-serializable `value` with this call's Tool Result and returns an opaque id; put that id in the result you return. It is false for calls outside a Session, such as management operations and the CLI; `attach_result_payload` then raises `RuntimeError`, so return the value inline instead. Attach only while the call runs. vBot stores the payload only if the handler returns a result: if the handler raises, returns an invalid result, or its Run is cancelled, nothing is stored.
+A Tool can keep a large result with its Tool Result in Session history instead of in files (API 8). When `context.result_payloads_available` is true, `payload_id = context.attach_result_payload(value)` stores the JSON-serializable `value` with this call's result and returns an id to put in the result you return; attach only while the call runs. Outside a Session, such as in management operations and the CLI, it is false and `attach_result_payload` raises `RuntimeError`; return the value inline then. vBot stores the payload only when the handler returns a valid result, not when it raises or its Run is cancelled.
 
-To read a payload later, a Tool call in the same Session passes its own `ToolContext` to `await host.load_result_payload(context, payload_id)`. It returns the value, or `None` when the id is unknown, belongs to another Extension, or its Tool Result is not in that Session's current history. Forks of the Session can read the payloads they inherited. Apply your own access checks after loading. Declare `"api_version": 8` in `extension.json`.
+A later Tool call in the same Session reads it with `await host.load_result_payload(context, payload_id)`, passing its own `ToolContext`. It returns `None` when the id is unknown, belongs to another Extension, or its Tool Result is not in that Session's current history. Forks read the payloads they inherited. Apply your own access checks after loading.
 
 ## Tool summary
 
-An Agent that loads Tools on demand sees most of its Tools only as one line, `name: summary`, until it loads a Tool's full definition. Pass `summary="..."` to `api.register_tool(...)` (or the same field in a live Tool catalog) when the first sentence of your description does not tell a reader what the Tool is for, or is longer than about 160 characters. Write one sentence of at most 200 characters for the Model. Without it, vBot uses the description's first sentence. Declare `"api_version": 13` when you pass it.
+An Agent that loads Tools on demand sees most Tools only as `name: summary` until it loads one. Pass `summary="..."` to `api.register_tool(...)`, or the same field in a live Tool catalog, when the description's first sentence does not say what the Tool is for or is longer than about 160 characters: one sentence of at most 200 characters for the Model. Without it, vBot uses the description's first sentence (API 13).
 
 ## Tool changes in a Session
 
-A Session keeps the Tool definitions it started with until it is compacted. When one of your Tools changes, for example because you publish a live Tool catalog again, Sessions that already know the Tool are told only if you pass `announce_changes` to `api.register_tool(...)` (or the same field in a live Tool catalog). List the parts whose change the Agent needs before its next call: `"description"`, `"parameters"`, or `"parameters.<name>"` for one parameter. vBot then sends those Sessions the new definition. Leave out changes your handler can explain when it is called, such as an option the current configuration no longer supports. Declare `"api_version": 14` when you pass it.
+A Session keeps the Tool definitions it started with until its next Compaction. When your Tool changes, for example in a newly published live catalog, Sessions that already know it learn of the change only for the parts you list in `announce_changes`: `"description"`, `"parameters"` or `"parameters.<name>"`; vBot then sends them the new definition (API 14). Leave out changes your handler can explain when it is called, such as an option the current configuration does not support.
 
 ## Explicit Tool permission
 
-Pass `requires_opt_in=True` to `api.register_tool(...)` (or the same field in a live Tool catalog) when a configurable Tool must require an explicit per-Agent grant. Declare `api_version: 5` in the Extension manifest. This metadata is accepted only for configurable, non-internal, non-Session-scoped Tools.
-
-The owning Agent policy stores these grants in `tool_access.granted`. All mode does not grant them, and selected mode requires both inclusion in `allowed` and an explicit grant. None and `denied` still take precedence. Missing Extensions do not erase stored grants. For Project Agents, the Project Tool Whitelist remains the outer ceiling and never implies a grant; configure grants through the Agent's vBot Tool override. The shared Tool editor performs these updates through its ordinary toggle and autosave flow.
-
-This is vBot Tool authorization. It does not sandbox an Agent's unrestricted shell access or make Extension Python code untrusted. MCP connections use this same per-Agent Tool opt-in; there is no additional connection-level Agent list.
+`requires_opt_in=True` on `api.register_tool(...)`, or in a live Tool catalog, makes a configurable Tool need an explicit grant per Agent (API 5); not for internal or Session-scoped Tools. Grants live in the Agent's `tool_access.granted`: All mode does not grant them, selected mode needs the Tool in `allowed` and granted, and None and `denied` still win. A Project's Tool ceiling never implies a grant; grant it to a Project Agent through its Tool override. This is Tool authorization in vBot; it does not sandbox an Agent's shell or the Extension's own code. MCP connections use the same opt-in.
