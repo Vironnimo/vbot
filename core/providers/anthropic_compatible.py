@@ -551,6 +551,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 self._model_context_window(model_id), self._config
             ),
             request_input=request_input,
+            input_limit=self.input_token_limit(model_id),
             minimum_output_tokens=self.minimum_output_tokens(
                 model_id, request_kwargs.get("thinking_effort"), explicit_limit=explicit
             ),

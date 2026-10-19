@@ -1,4 +1,4 @@
-"""Providers: context-window resolution and the per-request output limit."""
+"""Providers: context-window resolution, Context capacity and the per-request output limit."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from core.providers.providers import (
     LOCAL_CONTEXT_DEFAULT_CAP,
     ProviderConfig,
     RequestInput,
+    context_capacity,
     model_is_local,
     resolve_context_window,
     resolve_effective_context_window,
@@ -224,18 +225,22 @@ def test_output_allowance_shrinks_steadily_until_the_window_is_full(
 
 
 @pytest.mark.parametrize(
-    ("limits", "request_input"),
+    ("limits", "request_input", "input_limit"),
     [
         # An estimate that fills the window is no longer sent unclamped.
-        pytest.param((None, 8_192, None), RequestInput.estimate(10_000), id="window-full"),
-        pytest.param((None, None, None), RequestInput.measured(20_000), id="no-ceiling"),
+        pytest.param((None, 8_192, None), RequestInput.estimate(10_000), None, id="window-full"),
+        pytest.param((None, None, None), RequestInput.measured(20_000), None, id="no-ceiling"),
+        pytest.param(
+            (None, 8_192, None), RequestInput.measured(8_001), 8_000, id="above-input-limit"
+        ),
     ],
 )
 def test_request_input_that_does_not_fit_fails_locally(
     limits: tuple[int | None, int | None, int | None],
     request_input: RequestInput,
+    input_limit: int | None,
 ) -> None:
-    """Input that fills the window fails before I/O, asking for Compaction."""
+    """Input beyond the window or a reported input limit fails before I/O, asking for Compaction."""
 
     explicit_limit, model_output_limit, provider_default = limits
     with pytest.raises(ProviderError, match="compact the Context") as exc_info:
@@ -245,6 +250,33 @@ def test_request_input_that_does_not_fit_fails_locally(
             provider_default=provider_default,
             effective_context_window=10_000,
             request_input=request_input,
+            input_limit=input_limit,
         )
 
     assert exc_info.value.retryable is False
+
+
+def test_input_at_the_input_limit_still_fits() -> None:
+    assert (
+        resolve_request_output_limit(
+            explicit_limit=None,
+            model_output_limit=32_000,
+            provider_default=None,
+            effective_context_window=200_000,
+            request_input=RequestInput.measured(128_000),
+            input_limit=128_000,
+        )
+        == 32_000
+    )
+
+
+@pytest.mark.parametrize(
+    ("window", "input_limit", "expected"),
+    [
+        pytest.param(200_000, 128_000, 128_000, id="input-limit-below-window"),
+        pytest.param(200_000, None, 200_000, id="no-input-limit"),
+        pytest.param(100_000, 128_000, 100_000, id="input-limit-above-window"),
+    ],
+)
+def test_context_capacity(window: int, input_limit: int | None, expected: int) -> None:
+    assert context_capacity(window, input_limit) == expected

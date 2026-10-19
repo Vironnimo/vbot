@@ -27,6 +27,10 @@ class AdapterHookDefaults:
         del model_id, thinking_effort, explicit_limit
         return 0
 
+    def input_token_limit(self, model_id: str) -> int | None:
+        del model_id
+        return None
+
     def image_size_limit(self, model_id: str) -> int | None:
         del model_id
         return None

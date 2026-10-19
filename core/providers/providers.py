@@ -123,12 +123,14 @@ def resolve_request_output_limit(
     provider_default: Any,
     effective_context_window: int,
     request_input: RequestInput,
+    input_limit: int | None = None,
     minimum_output_tokens: int = 0,
 ) -> int | None:
     """Resolve and context-clamp one request's output-token allowance.
 
     Precedence remains explicit positive caller limit, positive Model ceiling,
-    then positive Provider default. The input must leave room in the effective
+    then positive Provider default. The input must fit the Provider's input
+    limit (``input_limit``, when it reports one) and leave room in the effective
     context window; otherwise the request fails before I/O with a
     non-retryable error asking for Compaction. That check runs whether or not
     an allowance exists: Models without a known ceiling get no ``max_tokens``
@@ -155,6 +157,12 @@ def resolve_request_output_limit(
         requested = int(requested)
 
     input_tokens = request_input.tokens
+    if input_limit is not None and input_tokens > input_limit:
+        raise ProviderError(
+            "Request input exceeds the Model's input limit; compact the Context before "
+            f"retrying (input_tokens={input_tokens}, input_limit={input_limit})",
+            retryable=False,
+        )
     remaining = effective_context_window - input_tokens
     if minimum_output_tokens > 0 and remaining < minimum_output_tokens:
         raise ProviderError(
@@ -442,6 +450,18 @@ def resolve_context_window(
         if provider_default is not None and provider_default > 0:
             return provider_default
     return GLOBAL_CONTEXT_WINDOW_FLOOR
+
+
+def context_capacity(context_window: int, input_limit: int | None) -> int:
+    """The input tokens one request may hold: the context window or a smaller input limit.
+
+    ``input_limit`` is the Provider-reported maximum input of one request
+    (``ProviderAdapter.input_token_limit``); ``None`` means none is reported.
+    """
+
+    if input_limit is None or input_limit <= 0:
+        return context_window
+    return min(context_window, input_limit)
 
 
 def model_is_local(model_metadata: Mapping[str, Any] | None) -> bool:

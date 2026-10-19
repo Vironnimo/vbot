@@ -72,12 +72,16 @@ def _probe_tools() -> ToolRegistry:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("reservation", "input_tokens", "window", "reason"),
+    ("reservation", "input_limit", "input_tokens", "window", "capacity", "reason"),
     [
-        pytest.param(0, 90, 100, "context_ratio", id="context-ratio"),
+        pytest.param(0, None, 90, 100, 100, "context_ratio", id="context-ratio"),
         # Measured input carries no estimation margin: the thinking budget's
         # room alone (200,000 - 32,769) decides.
-        pytest.param(32_769, 167_232, 200_000, "output_reservation", id="output-reservation"),
+        pytest.param(
+            32_769, None, 167_232, 200_000, 200_000, "output_reservation", id="output-reservation"
+        ),
+        # A Provider-reported input limit below the window is the Context capacity.
+        pytest.param(0, 128_000, 128_001, 200_000, 128_000, "input_limit", id="input-limit"),
     ],
 )
 async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_request(
@@ -85,14 +89,17 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     reservation: int,
+    input_limit: int | None,
     input_tokens: int,
     window: int,
+    capacity: int,
     reason: str,
 ) -> None:
     # Exact before/after assertions must not race the tokenizer's cold load.
     monkeypatch.setattr("core.utils.tokens._load_estimation_encoding", lambda: None)
     runtime = compaction_runtime(tmp_path, context_window=window)
     monkeypatch.setattr(runtime.adapter, "minimum_output_tokens", lambda *_args: reservation)
+    monkeypatch.setattr(runtime.adapter, "input_token_limit", lambda _model_id: input_limit)
     agent = runtime.agents.get("coder")
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     checkpoint = seed_tail(session)
@@ -149,10 +156,10 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
             "tokens": input_tokens,
             "estimated": False,
             "provider_input_tokens": input_tokens,
-            "context_window": window,
+            "context_window": capacity,
         },
     }
-    assert service.should_auto_calls == [(input_tokens, window, 0.8)]
+    assert service.should_auto_calls == [(input_tokens, capacity, 0.8)]
     assert lifecycle[1].payload["checkpoint"] == 1
     assert lifecycle[1].payload["checkpoint_id"] == checkpoint.id
     assert lifecycle[1].payload["context_tokens_before"] == input_tokens

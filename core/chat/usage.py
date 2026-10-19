@@ -258,9 +258,10 @@ class RequestContextUsage:
     ) -> JsonObject:
         """Project the request's Context in tokens.
 
-        ``context_window`` is the effective window of the Model the request goes
-        to; the projection carries it, so the Session's Context usage names the
-        window it fills.
+        ``context_window`` is the Context capacity of the Model the request goes
+        to: its effective window, or the Provider's smaller input limit. The
+        projection carries it, so the Session's Context usage names the window
+        it fills.
         """
         return self.project_prepared(
             self.prepare(messages, target=target, tools=tools, scope=scope),

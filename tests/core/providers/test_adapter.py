@@ -76,6 +76,7 @@ def test_optional_capabilities_degrade_safely_by_default() -> None:
     assert adapter.wire_media_support("any-model") == profile.media.types
     assert adapter.image_size_limit("any-model") is None
     assert adapter.request_body_limit("any-model") is None
+    assert adapter.input_token_limit("any-model") is None
     assert adapter.reasoning_replay_fidelity("any-model") == profile.replay.fidelity
     assert adapter.reasoning_replay_policy("any-model") == REASONING_REPLAY_FULL_HISTORY
     assert adapter.list_announced_tools("any-model") is False
@@ -226,15 +227,16 @@ async def test_matching_budget_replaces_wire_estimation_without_changing_the_req
 
 
 @pytest.mark.asyncio
-async def test_matching_budget_still_enforces_the_copilot_prompt_limit_before_io(
+async def test_matching_budget_still_enforces_the_reported_input_limit_before_io(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter, url = _budget_adapter("copilot-responses")
 
     def unexpected_estimate(*_args, **_kwargs):
-        raise AssertionError("Prompt-limit validation must use the matching Context budget")
+        raise AssertionError("Input-limit validation must use the matching Context budget")
 
     monkeypatch.setattr(adapter, "estimate_request_input_tokens", unexpected_estimate)
+    assert adapter.input_token_limit(_BUDGET_MODEL_ID) == 200_000
     try:
         with respx.mock:
             route = respx.post(url).mock(return_value=httpx.Response(200, json={"id": "reply"}))

@@ -464,6 +464,17 @@ class ProviderAdapter(ABC):
             return context_window
         return None
 
+    def input_token_limit(self, model_id: str) -> int | None:
+        """Provider-reported maximum input tokens of one request below the context window.
+
+        Some Providers accept less input than the Model's context window holds.
+        Chat sizes the Context against the smaller value (``context_capacity``)
+        and Compaction triggers against it; request builders refuse a larger
+        input before I/O. Unknown limits stay absent.
+        """
+        del model_id
+        return None
+
     def minimum_output_tokens(
         self, model_id: str, thinking_effort: str | None, *, explicit_limit: Any = None
     ) -> int:

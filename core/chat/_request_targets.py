@@ -23,7 +23,7 @@ from core.chat.model_resolution import (
 from core.chat.streaming import stream_stall_timeout
 from core.chat.usage import latest_session_context_usage
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
-from core.providers.providers import resolve_effective_context_window
+from core.providers.providers import context_capacity, resolve_effective_context_window
 from core.runs import Run
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -162,9 +162,21 @@ class RequestTargets:
             else (configured if configured is not None else limit)
         )
 
-    async def resolve_context_window_async(self, agent: Any, target: _ModelTarget) -> int | None:
-        """Read the live Settings-derived Context limit on the Chat workers."""
-        return await _CHAT_TRANSFORM_WORKERS.run(self.resolve_context_window, agent, target)
+    async def resolve_context_capacity_async(self, agent: Any, target: _ModelTarget) -> int | None:
+        """Read the live Settings-derived Context capacity on the Chat workers."""
+        return await _CHAT_TRANSFORM_WORKERS.run(self.resolve_context_capacity, agent, target)
+
+    def resolve_context_capacity(self, agent: Any, target: _ModelTarget) -> int | None:
+        """The input tokens one request to the target may hold.
+
+        The context window, or the Provider's smaller input limit for the Model
+        when it reports one (``ProviderAdapter.input_token_limit``). The
+        Session's Context usage is measured against this capacity.
+        """
+        context_window = self.resolve_context_window(agent, target)
+        if context_window is None:
+            return None
+        return context_capacity(context_window, target.adapter.input_token_limit(target.model_id))
 
     def resolve_context_window(self, agent: Any, target: _ModelTarget) -> int | None:
         """Resolve the usable context window for the current Model target.
@@ -229,38 +241,38 @@ class RequestTargets:
     def raise_if_measured_context_exhausted(
         session_messages: list[ChatMessage],
         run: Run,
-        context_window: int | None,
+        context_capacity: int | None,
         *,
         context_usage: JsonObject | None = None,
     ) -> None:
-        """Fail fast when the projected request already fills the Model window.
+        """Fail fast when the measured request already fills the Model's Context capacity.
 
         The same measured anchor plus request delta drives the indicator and
-        Compaction. Output-limit safety reserves belong to the Adapter and do
-        not inflate the displayed Context or override a measured anchor.
+        Compaction. The estimation margin belongs to the Adapter's output clamp
+        and does not inflate the displayed Context or override a measured anchor.
         """
 
-        if context_window is None:
+        if context_capacity is None:
             return
         projection = context_usage or latest_session_context_usage(session_messages)
         if projection is None or "provider_input_tokens" not in projection:
             return
         projected_tokens = int(projection["tokens"])
-        if projected_tokens < context_window:
+        if projected_tokens < context_capacity:
             return
         _LOGGER.error(
             "Run %s pre-send context guard tripped (agent=%s session=%s "
-            "projected_input_tokens=%d context_window=%d)",
+            "projected_input_tokens=%d context_capacity=%d)",
             run.id,
             run.agent_id,
             run.session_id,
             projected_tokens,
-            context_window,
+            context_capacity,
         )
         raise ProviderError(
-            "Context usage leaves no output capacity in the Model "
-            f"context window (projected_input_tokens={projected_tokens}, "
-            f"context_window={context_window})",
+            "Context usage fills the Model's Context capacity; compact the Context before "
+            f"retrying (projected_input_tokens={projected_tokens}, "
+            f"context_capacity={context_capacity})",
             retryable=False,
         )
 

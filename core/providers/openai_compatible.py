@@ -580,6 +580,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 self._model_context_window(model_id), self._config
             ),
             request_input=resolve_request_input_budget(model_id, estimate_input),
+            input_limit=self.input_token_limit(model_id),
             minimum_output_tokens=self.minimum_output_tokens(
                 model_id, request_kwargs.get("thinking_effort"), explicit_limit=explicit_limit
             ),
