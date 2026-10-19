@@ -366,10 +366,13 @@ class SessionChatHistorySnapshot:
 
 @dataclass(frozen=True)
 class SessionStatusSnapshot:
+    """Whole-Session status facts; ``context_messages`` are the Context projection inputs."""
+
     first_message_at: str | None
     user_message_count: int
     latest_assistant_usage: JsonObject | None
     session_usage: JsonObject
+    context_messages: tuple[ChatMessage, ...]
 
 
 @dataclass(frozen=True)

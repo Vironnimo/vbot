@@ -947,7 +947,8 @@ The Activity tab lists the Run's participants as the Board's chips, the inspecte
 one pressed; until one is chosen, and only once the participants are loaded, it
 asks to choose one. A chosen participant's header (avatar, name, the shared
 context ring with its figures, Resume participant when resumable, close) shows at
-once, with a loading banner until its History arrives, and sticks below the Run
+once (the ring's window is the one the participant's Context names, kept across
+live updates that name none, else the catalog window of its Model), with a loading banner until its History arrives, and sticks below the Run
 view's tab row while the timeline scrolls (`--swarm-run-sticky-top`, as the
 Board's newer-posts bar); in an Activity narrower than 520px Resume participant moves
 to a second row. A participant's Activity opens at its newest entries.

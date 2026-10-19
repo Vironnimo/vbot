@@ -702,7 +702,9 @@ class ExtensionHostFactory:
                         "id": f"{provider_id}/{model.model_id}",
                         "name": model.name,
                         "connections": connections,
-                        "context_window": model.context_window,
+                        # The window of the Connection a bare binding resolves
+                        # to: the first usable one the Model allows.
+                        "context_window": model.context_window_for(connections[0]),
                         "capabilities": {
                             "tools": model.capabilities.tools,
                             "reasoning": {

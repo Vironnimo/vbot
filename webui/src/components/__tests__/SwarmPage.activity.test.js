@@ -323,6 +323,9 @@ describe('Swarm participant Activity', () => {
       ['prt-a', 120],
       ...stopped.map(([id, , , count]) => [id, count]),
     ]);
+    // A Context that names its window fills that one (the window of the
+    // Connection that answered), not the catalog's window of the Model.
+    const windows = new Map([['prt-c', 272000]]);
     bridge.readHistory.mockImplementation((_swarm, participant) =>
       Promise.resolve({
         messages: [],
@@ -330,6 +333,9 @@ describe('Swarm participant Activity', () => {
         context_usage: {
           tokens: tokens.get(participant),
           estimated: participant !== 'prt-a',
+          ...(windows.has(participant)
+            ? { context_window: windows.get(participant) }
+            : {}),
         },
         session_usage: { input_tokens: 99000 },
       }),
@@ -337,8 +343,9 @@ describe('Swarm participant Activity', () => {
     await openSwarm(bridge);
     for (const [id, name, , count] of stopped) {
       button(name).click();
+      const window = windows.has(id) ? '272K' : '128K';
       await vi.waitFor(() =>
-        expect(contextFigures()).toMatch(new RegExp(`^${count} / 128K`)),
+        expect(contextFigures()).toMatch(new RegExp(`^${count} / ${window}`)),
       );
       button(RESUME_PARTICIPANT).click();
       await vi.waitFor(() =>

@@ -19,8 +19,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.messages import ChatMessage
-from core.chat.usage import aggregate_session_usage
-from core.providers.providers import resolve_effective_context_window
+from core.chat.usage import aggregate_session_usage, latest_session_context_usage
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
     REASONING_INTENT_DEFAULT,
@@ -37,6 +36,7 @@ if TYPE_CHECKING:
     from core.projects import ProjectStore, RuntimeAgent
     from core.providers.providers import ProviderRegistry
     from core.runs import ChatRunManager
+    from core.sessions import SessionStatusSnapshot
 else:
     ModelRegistry = Any
     ProjectStore = Any
@@ -142,6 +142,10 @@ class StatusWireProfile:
 # resolves to as chat resolves it, or ``None`` when it resolves to none.
 WireProfileDescriber = Callable[[RuntimeAgent], StatusWireProfile | None]
 
+# Runtime-wired seam: Agent -> the effective Context window of the route its
+# Model resolves to as chat resolves it, or ``None`` for an unknown Model.
+ContextWindowResolver = Callable[[RuntimeAgent], int | None]
+
 
 class _WireProfileOmitted(Enum):
     """Default of the status renderers' ``wire_profile``: the report has no wire lines."""
@@ -151,19 +155,24 @@ class _WireProfileOmitted(Enum):
 
 @dataclass(frozen=True)
 class StatusSessionFacts:
-    """Small persisted Session projection needed by the status renderer."""
+    """Small persisted Session projection needed by the status renderer.
+
+    ``context_usage`` is the Session's Context projection, the same value
+    ``chat.history`` and the Run events carry.
+    """
 
     first_message_at: str | None
     user_message_count: int
     latest_assistant_usage: dict[str, Any] | None
     session_usage: dict[str, Any]
+    context_usage: dict[str, Any] | None
 
 
 def resolve_status_model_details(
     agent: RuntimeAgent | None,
     models: ModelRegistry | None,
     providers: ProviderRegistry | None = None,
-    local_context_windows: Mapping[str, Any] | None = None,
+    context_window_resolver: ContextWindowResolver | None = None,
 ) -> StatusModelDetails:
     """Resolve model facts for status output from the model registry.
 
@@ -171,11 +180,11 @@ def resolve_status_model_details(
     ladder. A missing agent/registry/model yields empty details so status
     rendering degrades to placeholders instead of failing.
 
-    ``context_window`` is the *effective* window (user-set/capped for
-    flagged-local models, else the read-side default chain — see
-    :func:`resolve_effective_context_window`), so ``/status`` reports the budget
-    compaction actually uses rather than ``unknown`` for a window-less model.
-    It stays ``None`` only when no model could be resolved at all.
+    ``context_window`` is the effective window of the route the Agent's Model
+    resolves to (``context_window_resolver``): the Connection's own window
+    where the Model records one, the budget a Run on that route uses. It is
+    ``None`` when no model resolves or no resolver is wired. Reads credential
+    state, so callers run this off the Event Loop.
     """
     if agent is None or models is None:
         return StatusModelDetails(context_window=None, display_name=None)
@@ -204,13 +213,7 @@ def resolve_status_model_details(
 
     provider_config = _status_provider_config(providers, provider_id)
     return StatusModelDetails(
-        context_window=resolve_effective_context_window(
-            model.context_window,
-            provider_config,
-            model_metadata=model.metadata,
-            model_key=f"{provider_id}/{model_id}",
-            local_context_windows=local_context_windows,
-        ),
+        context_window=_status_context_window(agent, context_window_resolver),
         display_name=model.name,
         reasoning_levels=tuple(model.capabilities.reasoning.levels),
         reasoning_control=model.capabilities.reasoning.control,
@@ -220,6 +223,18 @@ def resolve_status_model_details(
         recommended_top_p=model.recommended_top_p,
         provider_default_top_p=_provider_default_number(provider_config, "top_p"),
     )
+
+
+def _status_context_window(
+    agent: RuntimeAgent, context_window_resolver: ContextWindowResolver | None
+) -> int | None:
+    if context_window_resolver is None:
+        return None
+    try:
+        return context_window_resolver(agent)
+    except Exception:
+        _LOGGER.warning("Failed to resolve the Context window for %s", agent.model, exc_info=True)
+        return None
 
 
 def _provider_default_number(provider_config: Any, key: str) -> float | None:
@@ -627,23 +642,19 @@ def _strip_pinned_connection_suffix(model_string: str) -> str:
 
 
 def _context_usage_text_from_facts(facts: StatusSessionFacts, context_window: int | None) -> str:
-    latest_usage = facts.latest_assistant_usage
-    if latest_usage is None:
+    projection = facts.context_usage
+    if projection is None:
         return STATUS_PLACEHOLDER
-    # Prefer the window of the Model that answered, recorded with its Context.
-    projection = latest_usage.get("context_usage")
-    recorded = (
-        _coerce_int(projection.get("context_window")) if isinstance(projection, dict) else None
-    )
+    tokens = _coerce_non_negative_int(projection.get("tokens"))
+    if tokens is None:
+        return STATUS_PLACEHOLDER
+    # Prefer the window the projection names: the one its Context fills.
+    recorded = _coerce_int(projection.get("context_window"))
     if recorded is not None and recorded > 0:
         context_window = recorded
     if context_window is None or context_window <= 0:
         return STATUS_PLACEHOLDER
-
-    input_tokens = _coerce_int(latest_usage.get("input_tokens"))
-    if input_tokens is None:
-        return STATUS_PLACEHOLDER
-    return f"{input_tokens} / {context_window}"
+    return f"{tokens} / {context_window}"
 
 
 def _turn_count_text_from_facts(facts: StatusSessionFacts) -> str:
@@ -660,6 +671,22 @@ def status_session_facts(messages: list[ChatMessage]) -> StatusSessionFacts:
         user_message_count=sum(1 for message in messages if message.role == "user"),
         latest_assistant_usage=None if latest_usage is None else dict(latest_usage),
         session_usage=aggregate_session_usage(messages),
+        context_usage=latest_session_context_usage(messages),
+    )
+
+
+def status_session_facts_from_snapshot(snapshot: SessionStatusSnapshot) -> StatusSessionFacts:
+    """Build the status read model from a persisted Session status snapshot.
+
+    Projecting the Context estimates the messages after its anchor, so callers
+    run this off the Event Loop.
+    """
+    return StatusSessionFacts(
+        first_message_at=snapshot.first_message_at,
+        user_message_count=snapshot.user_message_count,
+        latest_assistant_usage=snapshot.latest_assistant_usage,
+        session_usage=snapshot.session_usage,
+        context_usage=latest_session_context_usage(list(snapshot.context_messages)),
     )
 
 

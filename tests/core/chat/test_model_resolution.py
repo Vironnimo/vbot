@@ -18,7 +18,10 @@ from core.chat.model_resolution import (
     _resolve_fallback_chain,
     parse_bare_model,
     parse_model_with_connection,
+    resolve_agent_context_window,
 )
+from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, LOCAL_CONTEXT_DEFAULT_CAP
 from core.utils.errors import ConfigError
 from core.utils.log_conditions import LoggedConditions
 
@@ -255,3 +258,111 @@ def test_fallback_chain_keeps_only_resolvable_distinct_candidates_in_order() -> 
         ("openai/working::subscription", "openai", "openai:subscription"),
     ]
     assert _resolve_fallback_chain(runtime, _agent("openai/gpt-5.2")) == []
+
+
+def _window_runtime(model: Model, *, usable: set[str]) -> Any:
+    """A runtime whose ``openai`` Provider lists the api-key, then the subscription Connection."""
+    provider_config = SimpleNamespace(
+        connections=[SimpleNamespace(id="api-key"), SimpleNamespace(id="subscription")],
+        context_window=None,
+    )
+
+    def models_get(provider_id: str, model_id: str) -> Model:
+        if (provider_id, model_id) != ("openai", model.model_id):
+            raise KeyError(model_id)
+        return model
+
+    return cast(
+        Any,
+        SimpleNamespace(
+            providers=SimpleNamespace(get=lambda _provider_id: provider_config),
+            provider_credentials=SimpleNamespace(
+                is_usable=lambda _provider_id, connection_id: connection_id in usable
+            ),
+            models=SimpleNamespace(get=models_get),
+        ),
+    )
+
+
+def _window_model(
+    context_window: int | None = 500_000,
+    *,
+    connections: tuple[str, ...] = (),
+    metadata: dict[str, Any] | None = None,
+) -> Model:
+    return Model(
+        model_id="sol",
+        name="Sol",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+        ),
+        context_window=context_window,
+        max_output_tokens=None,
+        metadata=metadata or {},
+        connections=connections,
+        connection_context_windows={"subscription": 272_000},
+    )
+
+
+_LOCAL = {"ollama": {"local": True}}
+
+
+@pytest.mark.parametrize(
+    ("model", "binding", "usable", "local_windows", "expected"),
+    [
+        # The Connection a Run resolves to decides the window, not the Model-wide value.
+        (_window_model(connections=("subscription",)), "openai/sol", BOTH_USABLE, {}, 272_000),
+        (_window_model(), "openai/sol", BOTH_USABLE, {}, 500_000),
+        (_window_model(), "openai/sol", {"openai:subscription"}, {}, 272_000),
+        (_window_model(), "openai/sol::subscription:work", BOTH_USABLE, {}, 272_000),
+        # Without a usable Connection the Model-wide window stands in.
+        (_window_model(), "openai/sol", set(), {}, 500_000),
+        # A window-less Model resolves through the effective chain (here its floor).
+        (_window_model(None), "openai/sol::api-key", BOTH_USABLE, {}, GLOBAL_CONTEXT_WINDOW_FLOOR),
+        # A local Model budgets the user's setting, else the default cap.
+        (
+            _window_model(metadata=_LOCAL),
+            "openai/sol::api-key",
+            BOTH_USABLE,
+            {"openai/sol": 16_384},
+            16_384,
+        ),
+        (
+            _window_model(metadata=_LOCAL),
+            "openai/sol::api-key",
+            BOTH_USABLE,
+            {},
+            LOCAL_CONTEXT_DEFAULT_CAP,
+        ),
+        (_window_model(), "openai/unknown", BOTH_USABLE, {}, None),
+        (_window_model(), "not-a-binding", BOTH_USABLE, {}, None),
+    ],
+    ids=[
+        "connection-bound",
+        "first-usable-api-key",
+        "first-usable-subscription",
+        "pinned-with-account",
+        "no-usable-connection",
+        "global-floor",
+        "local-setting",
+        "local-cap",
+        "unknown-model",
+        "malformed-binding",
+    ],
+)
+def test_agent_context_window_is_the_window_of_the_route_a_run_resolves_to(
+    model: Model,
+    binding: str,
+    usable: set[str],
+    local_windows: dict[str, int],
+    expected: int | None,
+) -> None:
+    runtime = _window_runtime(model, usable=usable)
+
+    assert (
+        resolve_agent_context_window(runtime, _agent(binding), local_context_windows=local_windows)
+        == expected
+    )

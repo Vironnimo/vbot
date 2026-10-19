@@ -212,7 +212,11 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
                 provider_id, f"{provider_id}:{connection}"
             )
         reasoning = model.capabilities.reasoning
-        assert (entry["name"], entry["context_window"]) == (model.name, model.context_window)
+        # The window is the one of the Connection a bare binding runs on.
+        assert (entry["name"], entry["context_window"]) == (
+            model.name,
+            model.context_window_for(entry["connections"][0]),
+        )
         assert entry["capabilities"] == {
             "tools": model.capabilities.tools,
             "reasoning": {

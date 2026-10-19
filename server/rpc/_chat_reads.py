@@ -33,7 +33,7 @@ from server.rpc.errors import (
     RpcError,
 )
 from server.rpc.payloads import (
-    _resolve_context_window,
+    _agent_context_window,
     _run_response,
     history_message,
 )
@@ -66,9 +66,10 @@ class _ChatHistoryRead:
     """One `chat.history` read: the snapshot and the Session facts the response adds.
 
     An ``unchanged`` snapshot carries no policy or reflection Runs.
-    ``context_window`` is the window of the Agent's current Model, for a
-    Context usage that records none (the Session has not answered since vBot
-    started recording the window of the Model that answered).
+    ``context_window`` is the effective window of the route the Model of the
+    Agent as the Session runs it resolves to, for a Context usage that records
+    none (the Session has not answered since vBot started recording the window
+    of the Model that answered).
     """
 
     history: SessionChatHistorySnapshot
@@ -358,9 +359,7 @@ def _read_chat_history(
         history,
         _session_compaction_policy(state, address, agent) if agent is not None else None,
         None if active_reviews is None else _read_reflection_runs(state, session, active_reviews),
-        _resolve_context_window(state, str(getattr(agent, "model", "") or ""))
-        if agent is not None
-        else None,
+        _agent_context_window(state, agent) if agent is not None else None,
         subagent_sessions,
     )
 
@@ -382,14 +381,20 @@ def _subagent_sessions(state: Any, address: SessionAddress) -> dict[SessionAddre
 
 
 def _session_agent(state: Any, address: SessionAddress) -> Any | None:
-    """Return the Session's Agent, ``None`` when it no longer resolves.
+    """Return the Agent as the Session runs it, ``None`` when it no longer resolves.
 
-    A Session whose Agent no longer resolves through the ordinary addressing
-    (a removed Team member, a temporary Session) stays readable; the facts
-    that depend on its Agent are reported as unknown by omitting them.
+    The Session's Agent overrides apply, so its Model is the one its next Run
+    uses. A Session whose Agent no longer resolves through the ordinary
+    addressing (a removed Team member, a temporary Session) stays readable; the
+    facts that depend on its Agent are reported as unknown by omitting them.
     """
     try:
-        return state.runtime.agent_resolver.resolve_agent(address.project_id, address.agent_id)
+        return state.runtime.agent_resolver.resolve_agent(
+            address.project_id,
+            address.agent_id,
+            session_id=address.session_id,
+            require_model=False,
+        )
     except AgentResolutionError as exc:
         _LOGGER.debug(
             "Agent unavailable for history (agent=%s session=%s): %s",

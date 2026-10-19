@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime
 from functools import partial
@@ -21,6 +21,7 @@ from core.chat._extension_commands import ExtensionCommandRegistry, validate_ext
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.chat.messages import ReplySurface
 from core.chat.status_report import (
+    ContextWindowResolver,
     ReasoningRenderDescriber,
     WireProfileDescriber,
 )
@@ -282,7 +283,7 @@ class CommandDispatcher:
         providers: ProviderRegistry | None = None,
         projects: ProjectStore | None = None,
         agents: AgentStore | None = None,
-        local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
+        context_window_resolver: ContextWindowResolver | None = None,
         trigger_service: Any | None = None,
         reflection_service: Any | None = None,
         storage: Any | None = None,
@@ -362,7 +363,7 @@ class CommandDispatcher:
                 _command_status._execute_status,
                 agent_resolver=agent_resolver,
                 chat_runs=chat_runs,
-                local_context_windows_loader=local_context_windows_loader,
+                context_window_resolver=context_window_resolver,
                 models=models,
                 projects=projects,
                 providers=providers,
@@ -386,7 +387,7 @@ class CommandDispatcher:
             "status": partial(
                 _command_status._execute_status_without_session,
                 agent_resolver=agent_resolver,
-                local_context_windows_loader=local_context_windows_loader,
+                context_window_resolver=context_window_resolver,
                 models=models,
                 projects=projects,
                 providers=providers,

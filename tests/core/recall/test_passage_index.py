@@ -35,6 +35,7 @@ from core.recall._passage_catalog import (
     SessionPassages,
     text_hash,
 )
+from core.recall.passage_index import IndexSpent, SpentMeasure
 from core.recall.passages import PASSAGE_POLICY_VERSION, Passage
 from core.sessions import ChatSession, ChatSessionManager
 from tests.core.recall.recall_test_support import (
@@ -128,10 +129,11 @@ async def _embed_waiting(
     header: VectorHeader = HEADER,
     *,
     usage: EmbeddingUsage | None = None,
+    characters: int = 0,
 ) -> list[str]:
     batch = await index.pending_texts(limit=1000)
     assert await index.store_vectors(
-        header, {key: VECTORS[text] for key, text in batch}, usage=usage
+        header, {key: VECTORS[text] for key, text in batch}, usage=usage, characters=characters
     )
     return sorted(text for _key, text in batch)
 
@@ -400,21 +402,37 @@ async def test_index_refuses_invalid_spaces_and_vectors_of_a_space_it_left(
     index.close()
 
 
-async def test_spent_usage_accumulates_with_stored_vectors(tmp_path: Path) -> None:
+async def test_spent_usage_accumulates_with_stored_vectors_by_what_was_reported(
+    tmp_path: Path,
+) -> None:
     index = PassageIndex(tmp_path)
     await index.use_space(HEADER)
     await _apply(index, _change("one", [_passage("alpha")]), _change("two", [_passage("beta")]))
-    usage = EmbeddingUsage(
+    priced = EmbeddingUsage(
         requests=1, token_reports=1, input_tokens=7, total_tokens=7, cost_reports=1, cost=0.25
     )
-    assert (await index.spent()).usage == EmbeddingUsage()
+    # A provider that names only the total tokens.
+    tokens_only = EmbeddingUsage(requests=1, token_reports=1, total_tokens=3)
+    unreported = EmbeddingUsage(requests=1)
+    # Reports for only some of a call's requests cannot be matched to its texts.
+    partial = EmbeddingUsage(requests=2, cost_reports=1, cost=0.5)
+    assert await index.spent() == IndexSpent()
 
-    await _embed_waiting(index, usage=usage)
-    await _embed_waiting(index, usage=usage)
+    for usage, characters in ((priced, 20), (tokens_only, 9), (unreported, 11), (partial, 40)):
+        await _embed_waiting(index, usage=usage, characters=characters)
     await index.mark_completed(AT)
 
     spent = await index.spent()
-    assert spent.usage == usage.combined(usage)
+    assert spent.usage == priced.combined(tokens_only).combined(unreported).combined(partial)
+    assert spent.measure == SpentMeasure(
+        requests=3,
+        characters=29,
+        tokens=10,
+        priced_tokens=7,
+        priced_cost=0.25,
+        unpriced_tokens=3,
+        unpriced_characters=11,
+    )
     assert spent.last_completed_at == "2026-05-01T12:00:00.000000Z"
     counts = await index.counts()
     assert (counts.indexed, counts.waiting, counts.waiting_characters) == (2, 0, 0)

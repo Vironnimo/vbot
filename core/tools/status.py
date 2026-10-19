@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import UTC, datetime, tzinfo
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.chat.errors import ChatSessionError
 from core.chat.status_report import (
+    ContextWindowResolver,
     ReasoningRenderDescriber,
-    StatusSessionFacts,
     build_status_reply,
     resolve_reported_thinking_effort,
     resolve_status_activity,
     resolve_status_model_details,
     resolve_status_project_label,
     resolve_status_sampling,
+    status_session_facts_from_snapshot,
 )
 from core.models.models import ModelRegistry
 from core.projects import (
@@ -241,20 +242,11 @@ def make_status_handler(
     started_at: datetime | None,
     providers: ProviderRegistry | None = None,
     projects: ProjectStore | None = None,
-    local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
+    context_window_resolver: ContextWindowResolver | None = None,
     reasoning_render_describer: ReasoningRenderDescriber | None = None,
     timezone_name_loader: Callable[[], str] | None = None,
 ):
     """Create a status tool handler bound to runtime services."""
-
-    def _load_local_context_windows() -> Mapping[str, Any]:
-        if local_context_windows_loader is None:
-            return {}
-        try:
-            return local_context_windows_loader()
-        except Exception:
-            _LOGGER.warning("Failed to load local-model context windows", exc_info=True)
-            return {}
 
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         task_id = arguments.get(_TASK_ID_SENT)
@@ -322,18 +314,13 @@ def make_status_handler(
 
         activity = resolve_status_activity(chat_runs, agent_id, session_id, context.project_id)
         model_details = resolve_status_model_details(
-            agent, models, providers, local_context_windows=_load_local_context_windows()
+            agent, models, providers, context_window_resolver=context_window_resolver
         )
 
         try:
             text = build_status_reply(
                 agent,
-                StatusSessionFacts(
-                    first_message_at=snapshot.first_message_at,
-                    user_message_count=snapshot.user_message_count,
-                    latest_assistant_usage=snapshot.latest_assistant_usage,
-                    session_usage=snapshot.session_usage,
-                ),
+                status_session_facts_from_snapshot(snapshot),
                 model_details.context_window,
                 started_at,
                 model_details.display_name,
@@ -372,7 +359,7 @@ def register_status_tool(
     started_at: datetime | None,
     providers: ProviderRegistry | None = None,
     projects: ProjectStore | None = None,
-    local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
+    context_window_resolver: ContextWindowResolver | None = None,
     reasoning_render_describer: ReasoningRenderDescriber | None = None,
     timezone_name_loader: Callable[[], str] | None = None,
 ) -> None:
@@ -390,7 +377,7 @@ def register_status_tool(
                 started_at,
                 providers,
                 projects,
-                local_context_windows_loader,
+                context_window_resolver,
                 reasoning_render_describer,
                 timezone_name_loader,
             )

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.chat.errors import ChatError
+from core.providers.accounts import split_connection_id
+from core.providers.providers import resolve_effective_context_window
 from core.utils.errors import ConfigError
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
@@ -306,3 +309,76 @@ def resolve_model_target(
         dependencies, provider_id, _model_connection_allowlist(dependencies, provider_id, model_id)
     )
     return provider_id, model_id, connection_id
+
+
+def resolve_route_context_window(
+    dependencies: ModelResolutionDependencies,
+    provider_id: str,
+    connection_id: str | None,
+    model_id: str,
+    *,
+    local_context_windows: Mapping[str, Any] | None,
+) -> int | None:
+    """Return the effective Context window of one Model route.
+
+    The Connection's own window applies where the Model records one for it,
+    else the Model-wide window; both resolve through the effective chain
+    (:func:`resolve_effective_context_window`). ``None`` only when the Model
+    catalog has no entry for the route.
+    """
+    try:
+        model = dependencies.models.get(provider_id, model_id)
+    except AttributeError, KeyError:
+        return None
+    window = model.context_window
+    if connection_id:
+        try:
+            local_connection_id, _account_id = split_connection_id(provider_id, connection_id)
+        except ConfigError:
+            pass
+        else:
+            window = model.context_window_for(local_connection_id)
+    try:
+        provider_config = dependencies.providers.get(provider_id)
+    except AttributeError, KeyError:
+        provider_config = None
+    return resolve_effective_context_window(
+        window,
+        provider_config,
+        model_metadata=model.metadata,
+        model_key=f"{provider_id}/{model_id}",
+        local_context_windows=local_context_windows,
+    )
+
+
+def resolve_agent_context_window(
+    dependencies: ModelResolutionDependencies,
+    agent: Any,
+    *,
+    local_context_windows: Mapping[str, Any] | None,
+) -> int | None:
+    """Return the effective Context window of the route an Agent's Model resolves to.
+
+    The Connection resolves as a Run resolves it (a pinned ``::connection``,
+    else the first usable allowed one); a Model without a usable Connection
+    keeps its Model-wide window. Reads credential state, so callers run it off
+    the Event Loop.
+    """
+    try:
+        provider_id, model_id, _connection_suffix = parse_model_with_connection(
+            str(getattr(agent, "model", "") or "")
+        )
+    except ChatError:
+        return None
+    connection_id: str | None
+    try:
+        _provider_id, _model_id, connection_id = resolve_agent_model_target(dependencies, agent)
+    except AttributeError, ChatError, ConfigError, KeyError:
+        connection_id = None
+    return resolve_route_context_window(
+        dependencies,
+        provider_id,
+        connection_id,
+        model_id,
+        local_context_windows=local_context_windows,
+    )

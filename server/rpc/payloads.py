@@ -7,7 +7,8 @@ import re
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 
-from core.chat import ChatMessage, parse_bare_model
+from core.chat import ChatMessage
+from core.chat.model_resolution import resolve_agent_context_window
 from core.compaction import effective_compaction_policy
 from core.providers.providers import (
     model_is_local,
@@ -141,33 +142,17 @@ def history_message(message: ChatMessage, *, file_delivery: Any | None = None) -
     return _visible_message(message, file_delivery=file_delivery)
 
 
-def _resolve_context_window(state: Any, model: str) -> int | None:
-    """Resolve a model string (provider/model-id) to the usable context window.
+def _agent_context_window(state: Any, agent: Any) -> int | None:
+    """Return the effective Context window of the route the Agent's Model resolves to.
 
-    This is the *active agent's* window for the WebUI token badge, so it
-    resolves through the shared effective chain (user-set/capped for
-    flagged-local models, else model window → provider-config default → global
-    floor, see :func:`resolve_effective_context_window`): a model whose window
-    is unknown still yields a usable number instead of ``None``/NaN. Returns
-    ``None`` only when the model string is unusable or the model/provider
-    cannot be found in the registry.
+    The Connection resolves as a Run's does, so a Model whose window differs per
+    Connection reports the window of the Connection it runs on, through the
+    shared effective chain (:func:`resolve_agent_context_window`). ``None`` only
+    when the Model string is unusable or the Model is unknown. Blocking: reads
+    credential state.
     """
-    bare_model = parse_bare_model(model)
-    if "/" not in bare_model:
-        return None
-    provider_id, _, model_id = bare_model.partition("/")
-    if not provider_id or not model_id:
-        return None
-    try:
-        model_entry = state.runtime.models.get(provider_id, model_id)
-    except KeyError, AttributeError:
-        return None
-    return resolve_effective_context_window(
-        model_entry.context_window,
-        _provider_config(state, provider_id),
-        model_metadata=model_entry.metadata,
-        model_key=f"{provider_id}/{model_id}",
-        local_context_windows=_local_context_windows(state),
+    return resolve_agent_context_window(
+        state.runtime, agent, local_context_windows=_local_context_windows(state)
     )
 
 
@@ -239,7 +224,7 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "tool_loading": _tool_loading_payload(agent),
         # ``None`` while the Agent has no current Session (a new conversation).
         "current_session_id": agent.current_session_id or None,
-        "context_window": _resolve_context_window(state, agent.model),
+        "context_window": _agent_context_window(state, agent),
         # Raw own values (pre-default-bake), so the editor can distinguish an
         # explicit per-agent value from an inherited global default. Top-level keys
         # above keep today's baked semantics unchanged.

@@ -57,7 +57,8 @@ it absent; public address or Run-id reuse never proves historical ownership.
   `ESTIMATOR_VERSION` it was learned against (`estimator_version`, NULL before
   2026-10-19); rows of another version are ignored and the next sample starts
   that Model afresh, because a factor learned against a different estimate
-  would distort the new one.
+  would distort the new one. The `web_fetch` view
+  bound applies it too (`tools/web_fetch.md`).
 - `read_since(revision, *, page_size=1000)` streams the current versions of
   changed calls as `UsagePage(revision, records)` pages in revision order, each
   from its own short read transaction (never one read held open while the

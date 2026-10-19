@@ -45,14 +45,24 @@ class _HistoryAgents:
         self.current_session_id = "session-one"
         self.compaction_policy: dict[str, Any] | None = None
         self.model = ""
+        # Session Agent overrides: Session id -> Model.
+        self.session_models: dict[str, str] = {}
 
     def get(self, _agent_id: str) -> SimpleNamespace:
         return SimpleNamespace(current_session_id=self.current_session_id)
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> SimpleNamespace:
+    def resolve_agent(
+        self,
+        project_id: str | None,
+        agent_id: str,
+        *,
+        session_id: str | None = None,
+        require_model: bool = True,
+    ) -> SimpleNamespace:
         if project_id is not None:
             raise AgentResolutionError(f"agent '{agent_id}@{project_id}' not found")
-        return SimpleNamespace(compaction_policy=self.compaction_policy, model=self.model)
+        model = self.session_models.get(session_id or "", self.model)
+        return SimpleNamespace(compaction_policy=self.compaction_policy, model=model)
 
 
 class _Commands:
@@ -247,9 +257,11 @@ async def test_history_reports_usage_per_message_and_for_the_whole_session(
 ) -> None:
     windows = {"openai/gpt-5.2": 400_000}
     monkeypatch.setattr(
-        chat_reads, "_resolve_context_window", lambda _state, model: windows.get(model)
+        chat_reads, "_agent_context_window", lambda _state, agent: windows.get(agent.model)
     )
-    history.agents.model = "openai/gpt-5.2"
+    # The Agent as the Session runs it: its Session Model override applies.
+    history.agents.model = "anthropic/claude"
+    history.agents.session_models["session-one"] = "openai/gpt-5.2"
     session = history.session()
     session.append(ChatMessage.user(content="hello"))
     session.append(
@@ -307,7 +319,7 @@ async def test_history_reports_usage_per_message_and_for_the_whole_session(
             "cache_write_tokens": 300,
             "reasoning_tokens": 60,
         }
-        # A Context that records no window fills the one of the Agent's Model.
+        # A Context that records no window fills the one of the Session's Model.
         assert result["context_usage"] == {
             "tokens": 2100,
             "estimated": True,
@@ -331,6 +343,22 @@ async def test_history_reports_usage_per_message_and_for_the_whole_session(
     assert (await history.read())["context_usage"] == {
         "tokens": 2210,
         "estimated": False,
+        "context_window": 128_000,
+    }
+
+    # A newer Compaction anchors the Context, which still fills that window.
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="summary",
+            projection=[ChatMessage.user("tail")],
+            compacted_token_count=1_000,
+            context_tokens_before=2_210,
+            context_tokens_after=400,
+        )
+    )
+    assert (await history.read())["context_usage"] == {
+        "tokens": 400,
+        "estimated": True,
         "context_window": 128_000,
     }
 
