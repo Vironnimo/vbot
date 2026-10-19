@@ -93,13 +93,6 @@ All `verify_wire_profile.py` checks passed on `api-key`: send, stream, every eff
 
 Independent raw requests confirmed `low/high/max` producing `reasoning` and `none` producing none. Labeled 512x512 PNG, JPEG and WebP fixtures returned the correct color and digits; GIF returned HTTP 400 `invalid image input`. The exact id therefore joins the three-format media rule so the existing image resolver converts supported GIF inputs to PNG before sending. The existing fresh-Adapter replay and GIF-conversion tests cover both versions. Maximum limits, structured output, error variants and other endpoints were not audited; no full verification badge is added.
 
-### Tools announced outside `tools[]` (2026-09-28)
-
-Probes through the real `OllamaCloudAdapter` on `ollama-cloud:api-key` (`/v1/chat/completions`) used the same shape as the OpenCode Go probe (`providers/opencode-go.md` -> Tools announced outside `tools[]`): a `<system-reminder>` User message announcing a Tool that `tools[]` did not contain, plus history calling Tools missing from `tools[]`. Every such history was accepted.
-
-- `deepseek-v4.1-flash` and `glm-5.3-flash` both returned structured calls to the announced unlisted Tool in 6 of 6 streaming and 4 of 4 non-streaming runs. Repeated calls: DeepSeek 3 of 3, GLM 2 of 3 (one text answer). Removal announcements were honored 3 of 3 on both. Both keep the default `request.list_announced_tools: false`; GLM-5.3-Flash drops such calls only on the OpenCode Go route, which is why the decision is a per-Provider wire-file rule.
-- Cache: adding one Tool to an otherwise identical `tools[]` dropped cached reads from 10368 to 256 (DeepSeek) and from 4480 to 0 (GLM) against same-Tools controls.
-
 ## Catalog discovery
 
 - The 2026-10-18 refresh adds `beam`, `clef:27b`, `deepseek-v4.1-flash:1017`, and `muse-spark-open` to direct Cloud. Names are corrected in Overrides; capabilities and reasoning controls remain discovery facts; the dated DeepSeek entry has the scoped wire checks above, and the other new entries retain inferred wire behavior. In particular Clef reports images but no Tools or Reasoning, so it is not promoted to an agentic coding Model. No sibling's verified replay policy or output-limit correction is copied to the new dated DeepSeek id. The local service was unreachable; its previous catalog was retained.

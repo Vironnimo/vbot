@@ -43,7 +43,6 @@ def _profile(model: Model, *keys: str, wire: WireProfile | None = None) -> dict[
     }
     if wire is not None:
         facts["replay_scope"] = wire.replay.scope
-        facts["list_announced_tools"] = wire.request.list_announced_tools
     return {key: facts[key] for key in keys}
 
 
@@ -419,23 +418,10 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
         # showed persisted ``reasoning_content`` of GLM 5.2/5.3 is billed in a
         # Tool continuation. No ``reasoning_request_format`` field.
         pytest.param("glm-5.2", {"replay_scope": "full_history"}, id="glm-5.2"),
-        # Only GLM-5.3-Flash on this gateway silently dropped calls to Tools that a
-        # System Reminder announced outside ``tools[]`` (vBot probes 2026-09-28).
-        pytest.param(
-            "glm-5.3",
-            {
-                "replay_scope": "full_history",
-                "list_announced_tools": False,
-            },
-            id="glm-5.3",
-        ),
+        pytest.param("glm-5.3", {"replay_scope": "full_history"}, id="glm-5.3"),
         pytest.param(
             "glm-5.3-flash",
-            {
-                "context_window": 1_000_000,
-                "replay_scope": "full_history",
-                "list_announced_tools": True,
-            },
+            {"context_window": 1_000_000, "replay_scope": "full_history"},
             id="glm-5.3-flash",
         ),
     ],
