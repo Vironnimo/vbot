@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,7 +22,6 @@ from core.compaction._tail_types import (
 from core.compaction.errors import (
     CompactionError,
 )
-from core.providers.adapter import estimate_wire_request_input_tokens
 from core.utils.tokens import estimate_request_input_tokens
 
 
@@ -47,21 +46,6 @@ class _TailCandidate:
     start_index: int
     request_start: int | None
     tokens: int
-
-
-def _tail_estimator(
-    adapter: Any | None, model_id: str | None, factor: float
-) -> RequestTokenEstimator:
-    """Count a Tail candidate as the active route serializes it, corrected for its Model."""
-
-    def estimate(request: Sequence[Mapping[str, Any]]) -> int:
-        if adapter is None or model_id is None:
-            return round(estimate_request_input_tokens(request)[0] * factor)
-        return round(
-            estimate_wire_request_input_tokens(adapter, request, model_id=model_id) * factor
-        )
-
-    return estimate
 
 
 def _plan_working_tail(

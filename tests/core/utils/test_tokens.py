@@ -17,6 +17,7 @@ from core.utils.tokens import (
     TOKEN_ESTIMATE_ENCODING,
     estimate_json_tokens,
     estimate_message_tokens,
+    estimate_output_tokens,
     estimate_request_input_tokens,
     estimate_structured_tokens,
     estimate_tokens,
@@ -391,6 +392,40 @@ def test_estimate_message_tokens_deduplicates_responses_reasoning_meta_carriers(
     )
 
     assert complete_count == response_output_count
+
+
+@pytest.mark.parametrize("reported", [None, 900], ids=["estimated", "reported"])
+def test_output_estimate_counts_each_generated_part_once(reported: int | None):
+    """Replay copies in ``reasoning_meta`` add nothing; reported reasoning replaces its estimate."""
+
+    reasoning = "Consider the file first. " * 40
+    call = {"id": "call-1", "name": "read", "arguments": {"path": "notes.txt"}}
+    sealed = {"type": "reasoning", "id": "rs_1", "encrypted_content": "S" * 5_000}
+    message = {
+        "role": "assistant",
+        "content": "Reading the notes.",
+        "tool_calls": [call],
+        "reasoning": reasoning,
+        # The Responses output repeats the answer, the call and the reasoning summary.
+        "reasoning_meta": {
+            "response_output": [
+                {**sealed, "summary": [{"type": "summary_text", "text": reasoning}]},
+                {"type": "message", "content": [{"type": "output_text", "text": "Reading"}]},
+                {"type": "function_call", "call_id": "call-1", "name": "read", "arguments": "{}"},
+            ],
+            "reasoning_items": [sealed],
+            "encrypted_content": [sealed["encrypted_content"]],
+        },
+    }
+    visible, _ = estimate_message_tokens({"content": "Reading the notes.", "tool_calls": [call]})
+
+    estimated = estimate_output_tokens(message, reasoning_tokens=reported)
+
+    if reported is None:
+        expected = visible + estimate_tokens(reasoning)[0] + OPAQUE_REASONING_BLOB_TOKEN_RESERVE
+    else:
+        expected = visible + reported
+    assert estimated == expected
 
 
 def test_estimate_message_tokens_counts_visible_reasoning_text_as_prose():

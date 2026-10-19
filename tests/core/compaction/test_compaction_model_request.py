@@ -18,6 +18,7 @@ from core.chat.streaming import (
 from core.compaction import CompactionError, CompactionService, CompactionSettings
 from core.compaction._model_request import _send_streaming_model_request
 from core.compaction.compaction import COMPACTION_REFERENCE_PREFIX, COMPACTION_SUMMARY_END_MARKER
+from core.providers.adapter import resolve_request_input_budget
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import NetworkError
 from core.providers.ollama import OllamaAdapter
@@ -212,6 +213,71 @@ async def test_compaction_attempt_records_usage_before_checkpoint_acceptance(rej
         assert checkpoint.usage is not None
         assert set(checkpoint.usage) == {"compacted_token_count", "model_call"}
         assert checkpoint.usage["model_call"]["usage"]["usage_call_id"] == call["id"]
+
+
+class _BudgetAdapter(StubAdapter):
+    """Counts 10 tokens per request message and 5 per Tool on its wire."""
+
+    def __init__(self) -> None:
+        super().__init__("Summary")
+        self.budgets: list[int] = []
+
+    def estimate_request_input_tokens(
+        self, messages: list[dict[str, Any]], *, model_id: str, tools: Any = None
+    ) -> int:
+        return 10 * len(messages) + 5 * len(tools or [])
+
+    @override
+    async def stream(self, messages: list[dict], **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        self.budgets.append(resolve_request_input_budget(kwargs["model_id"], -1))
+        async for delta in super().stream(messages, **kwargs):
+            yield delta
+
+
+class _SummaryCalibration(RecordingUsageRecorder):
+    @override
+    def input_estimate_factor(self, model: str) -> float:
+        return 1.5 if model == "openai/summary" else 1.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("strategy", "context_tokens"),
+    [("summary_tail", None), ("continuation", None), ("continuation", 50_000)],
+    ids=["summary-model", "continuation-estimated", "continuation-measured"],
+)
+async def test_compaction_request_carries_its_corrected_input_budget(
+    strategy: str, context_tokens: int | None
+) -> None:
+    summary, active = _BudgetAdapter(), _BudgetAdapter()
+    messages = [user("u1", "old"), assistant("a1", "old answer"), user("u2", "now")]
+
+    await compact(
+        messages,
+        service=CompactionService(usage_recorder=cast(Any, _SummaryCalibration())),
+        summary_adapter=summary,
+        summary_model_id="summary",
+        summary_model_reference="openai/summary",
+        active_adapter=active,
+        active_model_id="active",
+        active_model_reference="openai/active",
+        active_tools=[{"type": "function", "function": {"name": "read", "parameters": {}}}],
+        settings=CompactionSettings(strategy=strategy, tail_tokens=1),
+        request_messages=provider_request(messages),
+        estimate_factor=2.0,
+        active_context_tokens=context_tokens,
+    )
+
+    [target] = [adapter for adapter in (summary, active) if adapter.requests]
+    sent = len(target.requests[0]["messages"])
+    if strategy == "summary_tail":
+        # The Summary Model's own correction applies to its whole request.
+        assert target.budgets == [round((10 * sent + 5) * 1.5)]
+    elif context_tokens is None:
+        assert target.budgets == [(10 * sent + 5) * 2]
+    else:
+        # Chat's Context of the active request plus the appended reminder.
+        assert target.budgets == [context_tokens + 10 * 2]
 
 
 @pytest.mark.asyncio

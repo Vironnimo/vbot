@@ -797,6 +797,39 @@ def notes_missing_from_request(
     return missing
 
 
+def history_request_messages(
+    history: Sequence[ChatMessage],
+    request_messages: Sequence[JsonObject] = (),
+) -> list[JsonObject]:
+    """Return the request messages that send *history*, to count its share of a request.
+
+    A message that the live *request_messages* sends counts as sent there, with
+    its replayed reasoning, resolved media and request-only Tool content. Other
+    messages and every note render as a request without replay renders them.
+    Every message appears once, but the result is not a sendable request.
+    """
+    live = {
+        message_id: message
+        for message in request_messages
+        if isinstance(message_id := message.get("id"), str)
+    }
+    rendered: list[JsonObject] = []
+    sent: set[str] = set()
+    for part in _history_request_parts(
+        history, replay_policy=DEFAULT_REASONING_REPLAY_POLICY, agent_model=None
+    ):
+        if isinstance(part, tuple):
+            rendered.extend(note_request_messages(list(part)))
+            continue
+        sent.add(part.id)
+        rendered.append(live.get(part.id) or _message_to_request_dict(part))
+    # A turn sent only for its replayed reasoning is no history part without replay.
+    rendered.extend(
+        live[message.id] for message in history if message.id in live and message.id not in sent
+    )
+    return rendered
+
+
 def _repair_dangling_tool_calls(request_messages: list[JsonObject]) -> list[JsonObject]:
     """Ensure every assistant tool_call_id is answered before the next non-tool message.
 
