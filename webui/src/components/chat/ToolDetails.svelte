@@ -11,6 +11,7 @@
   // Output and its Result.
   import { toolDetailBlocks, toolDetailMedia } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
+  import CollapseRail from './CollapseRail.svelte';
   import ToolDetailSection from './ToolDetailSection.svelte';
   import ToolDiff from './ToolDiff.svelte';
   import ToolMedia from './ToolMedia.svelte';
@@ -106,7 +107,8 @@
 {/snippet}
 
 {#if open || revealed}
-  <div class="tool-event-body tool-event-details">
+  <div class="tool-event-body tool-event-details collapse-host">
+    <CollapseRail />
     <ToolMedia items={media} />
     {#if blocks}
       {#each blocks as block, index (index)}

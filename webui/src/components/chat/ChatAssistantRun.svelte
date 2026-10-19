@@ -10,6 +10,7 @@
   import ChangeStats from './ChangeStats.svelte';
   import CopyableValueCard from './CopyableValueCard.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
+  import CollapseRail from './CollapseRail.svelte';
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
   import {
@@ -809,7 +810,8 @@
               <path d="M4 6l4 4 4-4" />
             </svg>
           </summary>
-          <div class="working-block__body">
+          <div class="working-block__body collapse-host">
+            <CollapseRail />
             {#each group.children as child (child.id)}
               {#if groupOpen || revealedWorkingGroups[group.id] || isTextToSpeechTool(child)}
                 <!-- Fresh speech starts even in a never-opened Working group.

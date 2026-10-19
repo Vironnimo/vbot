@@ -574,6 +574,32 @@ describe('ChatAssistantRun', () => {
       }
     });
 
+    it('closes each open nested block from its own side line', () => {
+      run.mount({
+        item: assistantRun({
+          items: [
+            reasoningItem('Inspect the repository.'),
+            readChild({ status: 'success' }),
+          ],
+        }),
+        chatWorkingMode: 'compact',
+      });
+      setDisclosureOpen('.working-block');
+      setDisclosureOpen('.working-block .tool-event');
+      const group = workingBlock();
+      const tool = group.querySelector('.tool-event');
+      const railOf = (details) =>
+        Array.from(details.querySelectorAll('.collapse-rail')).find(
+          (rail) => rail.closest('details') === details,
+        );
+
+      railOf(tool).click();
+      expect(tool.open).toBe(false);
+      expect(group.open).toBe(true);
+      railOf(group).click();
+      expect(group.open).toBe(false);
+    });
+
     it('ends a Working block at visible Assistant output and starts a new one', () => {
       run.mount({
         item: assistantRun({

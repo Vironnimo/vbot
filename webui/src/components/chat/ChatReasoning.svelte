@@ -3,6 +3,7 @@
   import { reasoningMarkdownSource } from '$lib/markdown.js';
   import { reasoningSummaryTitle } from '$lib/chatTimelinePresentation.js';
   import CopyButton from '../ui/CopyButton.svelte';
+  import CollapseRail from './CollapseRail.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
 
   let {
@@ -75,7 +76,8 @@
     </svg>
   </summary>
   {#if open}
-    <div class="reasoning-body">
+    <div class="reasoning-body collapse-host">
+      <CollapseRail />
       <div class="reasoning-body__actions">
         <CopyButton
           text={copyText}

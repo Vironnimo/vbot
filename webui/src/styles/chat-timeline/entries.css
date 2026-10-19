@@ -543,3 +543,103 @@
 .reasoning-block[open] .r-chevron {
   transform: rotate(180deg);
 }
+
+/* An open disclosure body whose side line closes it (chat/CollapseRail.svelte).
+   The rail is a 14px hit strip centered on the line, so nested bodies, whose
+   lines lie at least 16px apart, are closed independently. The knob shows only
+   for the innermost body under the pointer and follows the viewport along
+   the line until the body ends. */
+.collapse-host {
+  --collapse-rail-line: 1px;
+
+  position: relative;
+}
+
+.reasoning-body.collapse-host {
+  --collapse-rail-line: 2px;
+}
+
+/* A button centers its content vertically; the column keeps the knob at the
+   top of the line, from where it follows the viewport. */
+.collapse-rail {
+  display: flex;
+  position: absolute;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--collapse-rail-line) / -2 - 7px);
+  width: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.collapse-rail::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(7px - var(--collapse-rail-line) / 2);
+  width: var(--collapse-rail-line);
+  background: var(--text-lo);
+  content: '';
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    width 0.15s,
+    left 0.15s;
+}
+
+.collapse-rail:hover::before {
+  left: 6px;
+  width: 2px;
+  opacity: 1;
+}
+
+.collapse-rail__knob {
+  display: flex;
+  position: sticky;
+  top: 8px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-2);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-med);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+.collapse-rail__knob svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.collapse-host:hover:not(:has(.collapse-host:hover))
+  > .collapse-rail
+  .collapse-rail__knob {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.collapse-rail:hover .collapse-rail__knob {
+  border-color: var(--text-lo);
+  color: var(--text-hi);
+}
+
+@media (hover: none) {
+  .collapse-rail__knob {
+    display: none;
+  }
+}

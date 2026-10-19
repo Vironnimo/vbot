@@ -145,6 +145,7 @@ export default Object.freeze({
   'chat.reasoning.copySummary': 'Copy reasoning summary',
   'chat.reasoning.summaryCopied': 'Summary copied',
   'chat.working.active': 'Working…',
+  'chat.collapseBlock': 'Collapse',
   'chat.working.toolCallOne': '1 Tool call',
   'chat.working.toolCallCount': '{count} Tool calls',
   'chat.working.thoughtOne': '1 thought',
