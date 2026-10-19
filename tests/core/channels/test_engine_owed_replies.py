@@ -376,3 +376,51 @@ async def test_work_an_ended_engine_never_answered_gets_notices_and_usable_tap_r
         await drain(_next, -100)
         resumed_runs.started.clear()
     await _next.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failures", [1, 3], ids=["transient", "until-restart"])
+async def test_an_answer_waits_for_its_durable_send_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failures: int
+) -> None:
+    runs = _Runs()
+    engine, sessions, _trigger, transport = make_engine(tmp_path, trigger_run=runs.trigger)
+    state = channel_state(tmp_path)
+    run_async = state.run_async
+    retrying, release = asyncio.Event(), asyncio.Event()
+    attempts = 0
+
+    async def fail_claim(function: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal attempts
+        if function == state.claim_reply:
+            attempts += 1
+            if attempts <= failures:
+                raise OSError("claim storage unavailable")
+        return await run_async(function, *args, **kwargs)
+
+    async def retry(_attempt: int) -> None:
+        retrying.set()
+        await release.wait()
+
+    monkeypatch.setattr(state, "run_async", fail_claim)
+    monkeypatch.setattr(replies_module, "sleep_for_retry", retry)
+    await engine.handle_inbound_text(make_conversation(), "hello")
+    await runs.started.wait()
+    run = runs.runs[0]
+    sessions.get(_ADDRESS).start_run(run.id)
+    _record_history(sessions, run.id, "answer", "completed")
+    _answer(run, "answer")
+    try:
+        await retrying.wait()
+        assert transport.sent == []
+    finally:
+        release.set()
+    await drain(engine, 12345)
+    await engine.stop()
+    assert transport.sent == ([("12345", "answer")] if failures == 1 else [])
+
+    _next, _sessions, recovered = await _next_engine(tmp_path)
+    _later, _sessions, later = await _next_engine(tmp_path)
+    assert recovered.sent == ([] if failures == 1 else [("12345", "answer")])
+    assert later.sent == []
+    assert state.take_pending_replies("tg-assistant", "after") == ([], 0)
