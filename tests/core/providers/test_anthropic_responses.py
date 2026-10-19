@@ -22,6 +22,7 @@ from core.providers.errors import (
     ProviderError,
     ProviderRateLimitError,
     ProviderTimeoutError,
+    ProviderUsageLimitError,
 )
 
 from .anthropic_test_support import (
@@ -285,10 +286,21 @@ def test_normalize_response_keeps_only_usable_usage_counters(usage, expected) ->
 # ---------------------------------------------------------------------------
 
 
-def _anthropic_error(status: int, error_type: str, message: str) -> httpx.Response:
+def _anthropic_error(
+    status: int, error_type: str, message: str, **error: dict[str, str]
+) -> httpx.Response:
     return httpx.Response(
-        status, json={"type": "error", "error": {"type": error_type, "message": message}}
+        status,
+        json={"type": "error", "error": {"type": error_type, "message": message, **error}},
     )
+
+
+_SPEND_CAP = _anthropic_error(
+    429,
+    "rate_limit_error",
+    "You have reached your API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.",
+    details={"error_code": "enforced_spend_limit_reached"},
+)
 
 
 @pytest.mark.parametrize(
@@ -336,6 +348,7 @@ def _anthropic_error(status: int, error_type: str, message: str) -> httpx.Respon
             4,
             id="429",
         ),
+        pytest.param(_SPEND_CAP, ProviderUsageLimitError, False, 1, id="429-spend-cap"),
         pytest.param(httpx.Response(502, text="Bad Gateway"), ProviderError, True, 4, id="502"),
         pytest.param(
             _anthropic_error(529, "overloaded_error", "Overloaded"),
@@ -360,14 +373,33 @@ async def test_send_classifies_error_responses_and_retries_only_transient_ones(
     assert route.call_count == attempts
 
 
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        pytest.param(
+            _anthropic_error(400, "invalid_request_error", "max_tokens is required"),
+            "Provider error: 400 (invalid_request_error): max_tokens is required",
+            id="type",
+        ),
+        pytest.param(
+            _SPEND_CAP,
+            "Monthly spend cap reached: 429 (rate_limit_error, enforced_spend_limit_reached): "
+            "You have reached your API usage limits. "
+            "You will regain access on 2026-11-01 at 00:00 UTC.",
+            id="type-and-details-error-code",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_send_error_detail_carries_the_provider_error_message() -> None:
+async def test_send_error_detail_carries_the_provider_error_message(
+    response: httpx.Response, message: str
+) -> None:
     with respx.mock:
-        respx.post(ANTHROPIC_URL).mock(
-            return_value=_anthropic_error(400, "invalid_request_error", "max_tokens is required")
-        )
-        with pytest.raises(ProviderError, match="max_tokens is required"):
+        respx.post(ANTHROPIC_URL).mock(return_value=response)
+        with pytest.raises(ProviderError) as caught:
             await make_adapter().send(SAMPLE_MESSAGES, model_id=MODEL_ID)
+
+    assert str(caught.value) == message
 
 
 @pytest.mark.parametrize(
