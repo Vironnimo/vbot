@@ -264,18 +264,21 @@ def _drag_points(arguments: Mapping[str, Any]) -> dict[str, Any]:
     path = arguments.get("path")
     point, start = arguments.get("coordinate"), arguments.get("start_coordinate")
     if path is not None:
-        if point is not None or start is not None:
-            raise ActionError(
-                'left_click_drag takes either "path" or "start_coordinate" and "coordinate", '
-                'not both. Put every point into path, for example {"action":"left_click_drag",'
-                '"path":[[100, 200],[150, 240],[200, 200]]}.'
-            )
         if not isinstance(path, list) or not 2 <= len(path) <= MAX_PATH_POINTS:
             raise ActionError(
                 f'"path" must list 2 to {MAX_PATH_POINTS} points [x, y] in order, for example '
                 "[[100, 200],[150, 240],[200, 200]]."
             )
         points = [_point(item, "path") for item in path]
+        for field, value, expected, position in (
+            ("start_coordinate", start, points[0], "first"),
+            ("coordinate", point, points[-1], "last"),
+        ):
+            if value is not None and _point(value, field) != expected:
+                raise ActionError(
+                    f'"{field}" {value} conflicts with the {position} path point '
+                    f'{list(expected)}. Use matching points or omit "{field}" to use path.'
+                )
         return {
             "start": points[0],
             "via": tuple(points[1:-1]),

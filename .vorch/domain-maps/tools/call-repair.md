@@ -10,6 +10,8 @@ An unresolved name fails `tool_not_found` with `Unknown Tool: <name>. Call one o
 
 Coverage: `test_model_names.py`, `test_tools_execution.py`, `test_chat_loop_tool_definitions.py` (`test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_name`, listed and On-demand).
 
+`computer_action` is a fixed alias for an offered `computer`, never for its batch or app companions (observed retry with identical arguments, Sessions 2026-10-19). An actual registered Tool wins over aliases after namespace and `()` removal as well, so a prefixed call to a registered but unavailable Tool still reaches that Tool's dispatch refusal.
+
 ## Shared argument repair
 
 `ToolContract.normalize_arguments` (`contracts.py`, implemented in `_argument_repair.py`) normalizes copied schema-guided value encodings: numeric counts without rounding, boolean aliases, JSON containers, and scalar arrays. Accepted text and arbitrary object keys remain unchanged. Generic repair does not rename fields, rewrite enums, unwrap business objects, or omit explicit empty/null values. Conflicting duplicate encoded JSON keys and multiple valid conversion meanings fail rather than selecting a value by branch order. Shared normalization always leaves meaningful operation validation in place. Verify equivalent calls and plausible different calls against independently specified receiving arguments and effects, not an expectation derived from the same repair code.

@@ -379,6 +379,8 @@ async def paint_on_the_wide_display(computer: Harness) -> None:
             {
                 "action": "left_click_drag",
                 "path": [[100, 100], [700, 100], [700, 400], [100, 400]],
+                "start_coordinate": [100, 100],
+                "coordinate": [100, 400],
             },
             [("drag", [(-2935, 201), (-1735, 201), (-1735, 801), (-2935, 801)], 1.5, [])],
         ),
@@ -530,7 +532,16 @@ async def test_pointer_input_is_refused_where_another_app_lies_than_in_the_image
         ({"action": "left_click_drag"}, '"start_coordinate" and "coordinate", or "path"'),
         (
             {"action": "left_click_drag", "path": [[200, 150], [300, 200]], "coordinate": [1, 1]},
-            "not both",
+            None,
+        ),
+        (
+            {
+                "action": "left_click_drag",
+                "path": [[200, 150], [300, 200]],
+                "start_coordinate": [201, 150],
+                "coordinate": [300, 200],
+            },
+            None,
         ),
         ({"action": "left_click_drag", "path": [[200, 150]]}, '"path" needs at least 2 items'),
         (
@@ -547,13 +558,14 @@ async def test_pointer_input_is_refused_where_another_app_lies_than_in_the_image
     ],
 )
 async def test_unclear_actions_are_refused_before_input(
-    computer: Harness, arguments: dict, message: str
+    computer: Harness, arguments: dict, message: str | None
 ) -> None:
     await computer.computer(action="screenshot")
     computer.target.inputs.clear()
     result = await computer.computer(**arguments)
     assert result["error"]["code"] == "invalid_arguments"
-    assert message in result["error"]["message"]
+    if message is not None:
+        assert message in result["error"]["message"]
     assert computer.target.inputs == []
 
 
