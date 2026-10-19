@@ -11,6 +11,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from core.extensions.oauth_redirects import OAuthRedirects
+from core.tools.availability import activation_sources
 from core.tools.tools import Tool, ToolContext, ToolRegistry
 
 JsonObject = dict[str, Any]
@@ -176,6 +177,18 @@ class ExtensionOperations:
                 raise ValueError(f"Tool name is already owned: {name}")
             staged.register(**declaration, extension=self.name)
         candidates = staged.list_tools(include_internal=True)
+        next_tools = {name: tool for name, tool in existing.items() if name not in previous_by_name}
+        next_tools.update((tool.name, tool) for tool in candidates)
+        for tool in next_tools.values():
+            if tool.extension != self.name:
+                continue
+            for source in activation_sources(tool):
+                parent = next_tools.get(source)
+                if parent is None or parent.extension != self.name:
+                    raise ValueError(
+                        f"Extension Tool {tool.name!r} must follow a Tool owned by {self.name!r}: "
+                        f"{source!r}"
+                    )
         registry.replace_owned_tools(previous, candidates)
         self._catalogs[catalog] = tuple(candidates)
 

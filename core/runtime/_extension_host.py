@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, cast
@@ -207,7 +207,25 @@ class ExtensionHostFactory:
         state_dir.mkdir(parents=True, exist_ok=True)
         return replace(
             self._host,
-            for_owner=lambda _identity: self._extension_owner_host(identity),
+            sample=self._guard_host_async_call(identity, self._host.sample),
+            resolve_agent=self._guard_host_call(identity, self._host.resolve_agent),
+            resolve_tool_agent=self._guard_host_call(identity, self._host.resolve_tool_agent),
+            resolve_tool_agent_async=(
+                self._guard_host_async_call(identity, self._host.resolve_tool_agent_async)
+                if self._host.resolve_tool_agent_async is not None
+                else None
+            ),
+            store_attachment=self._guard_host_call(identity, self._host.store_attachment),
+            resolve_credential=self._guard_host_call(identity, self._host.resolve_credential),
+            set_credential=self._guard_host_call(identity, self._host.set_credential),
+            resolve_cwd=(
+                self._guard_host_call(identity, self._host.resolve_cwd)
+                if self._host.resolve_cwd is not None
+                else None
+            ),
+            for_owner=self._guard_host_call(
+                identity, lambda _identity: self._extension_owner_host(identity)
+            ),
             temporary_agents=groups,
             state_dir=state_dir,
             open_database=self.databases.opener(identity),
@@ -227,6 +245,25 @@ class ExtensionHostFactory:
                 identity, context, payload_id
             ),
         )
+
+    def _guard_host_call[**P, T](self, identity: Any, handler: Callable[P, T]) -> Callable[P, T]:
+        """Refuse new service calls from a cached host after its registration retires."""
+
+        def call(*args: P.args, **kwargs: P.kwargs) -> T:
+            self._require_registration(identity)
+            return handler(*args, **kwargs)
+
+        return call
+
+    def _guard_host_async_call[**P, T](
+        self, identity: Any, handler: Callable[P, Awaitable[T]]
+    ) -> Callable[P, Awaitable[T]]:
+        async def call(*args: P.args, **kwargs: P.kwargs) -> T:
+            # Check when awaited, not when an Extension constructs the coroutine.
+            self._require_registration(identity)
+            return await handler(*args, **kwargs)
+
+        return call
 
     async def _close_session_work(self, address: SessionAddress) -> None:
         await self._terminals.close_scope(
