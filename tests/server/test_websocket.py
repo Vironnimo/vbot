@@ -16,6 +16,7 @@ from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-
 from core.access.config import access_config
 from core.tools.terminal_manager import TerminalClosedError, TerminalNotFoundError
 from server._streams import _stream_websocket_events
+from server._terminal_socket import TERMINAL_SOCKET_QUEUE_LIMIT, serve_terminal_socket
 from server.app import create_app
 from server.events import APP_ERROR_EVENT, RUN_STARTED_SERVER_EVENT
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
@@ -442,6 +443,74 @@ def test_terminal_websocket_closes_cleanly_when_subscription_setup_fails(
         websocket.receive_json()
 
     assert exc_info.value.code == 1008
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", ["input", "replies", "protocol_replies"])
+async def test_terminal_socket_bounds_backlogs_and_settles_overloaded_connection(
+    blocked: str,
+) -> None:
+    sending = asyncio.Event()
+    applying = asyncio.Event()
+    stream_closed = asyncio.Event()
+    input_settled = asyncio.Event()
+    applied = 0
+    received = 0
+    close_codes: list[int] = []
+
+    class Manager:
+        async def watch_for_operator(self, _terminal_id: str) -> AsyncGenerator[dict[str, Any]]:
+            try:
+                yield {"type": "terminal_ready"}
+                await asyncio.Event().wait()
+            finally:
+                stream_closed.set()
+
+        async def send_operator_input(self, _terminal_id: str, _data: str) -> None:
+            nonlocal applied
+            applied += 1
+            applying.set()
+            try:
+                if blocked == "input":
+                    await asyncio.Event().wait()
+                raise TerminalClosedError("Terminal Session is no longer running")
+            finally:
+                input_settled.set()
+
+    class Socket:
+        async def receive(self) -> dict[str, Any]:
+            nonlocal received
+            await sending.wait()
+            if blocked == "input" and received == 1:
+                await applying.wait()
+            if received > 3 * TERMINAL_SOCKET_QUEUE_LIMIT:
+                # Without bounded queues the producer drains the entire flood
+                # and remains here while the operation/send cannot progress.
+                await asyncio.Event().wait()
+            received += 1
+            await asyncio.sleep(0)
+            return {
+                "type": "websocket.receive",
+                "text": "[]" if blocked == "protocol_replies" else '{"type":"input","data":"x"}',
+            }
+
+        async def send_json(self, _payload: Any) -> None:
+            sending.set()
+            await asyncio.Event().wait()
+
+        async def close(self, *, code: int, reason: str) -> None:
+            close_codes.append(code)
+
+    before = asyncio.all_tasks()
+    async with asyncio.timeout(1):
+        await serve_terminal_socket(cast(Any, Socket()), cast(Any, Manager()), "term-1")
+
+    assert close_codes == [1013]
+    assert received <= 2 * TERMINAL_SOCKET_QUEUE_LIMIT + 4
+    assert applied <= TERMINAL_SOCKET_QUEUE_LIMIT + 2
+    assert stream_closed.is_set()
+    assert input_settled.is_set() is (blocked != "protocol_replies")
+    assert not (asyncio.all_tasks() - before)
 
 
 def wait_for_event_bus_subscribers(
