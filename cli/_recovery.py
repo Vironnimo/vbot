@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from cli._server_target import CommandResult, is_loopback_target, is_url_target
+from cli._server_target import CommandResult, ServerInstance, is_loopback_target, is_url_target
 
 
 @dataclass(frozen=True)
@@ -294,19 +294,35 @@ def _inspection(args: argparse.Namespace) -> list[str] | None:
 
 
 def _target_options(args: argparse.Namespace, result: CommandResult | None, area: str) -> list[str]:
-    url = getattr(args, "url", None) if result is None else None
-    if result is not None and is_url_target(result.instance):
-        url = result.instance.url
+    if result is not None:
+        return list(
+            target_options(
+                result.instance,
+                include_data_dir=not is_url_target(result.instance)
+                or bool(getattr(args, "data_dir", None)),
+            )
+        )
+    url = getattr(args, "url", None)
     if url:
         # Only --url names this target; the local data directory matters only when given.
         data_dir = getattr(args, "data_dir", None)
         return ["--url", url, *(["--data-dir", data_dir] if data_dir else [])]
     options = []
     for field in ("host", "port", "data_dir"):
-        value = getattr(result.instance, field) if result else getattr(args, field, None)
+        value = getattr(args, field, None)
         if value is not None:
             options.extend(["--" + field.replace("_", "-"), str(value)])
     return options
+
+
+def target_options(instance: ServerInstance, *, include_data_dir: bool = True) -> tuple[str, ...]:
+    """Keep a resolved target in a follow-up command, including its local credential source."""
+    address = (
+        ("--url", instance.url)
+        if is_url_target(instance)
+        else ("--host", instance.host, "--port", str(instance.port))
+    )
+    return (*address, *(("--data-dir", str(instance.data_dir)) if include_data_dir else ()))
 
 
 def format_command(tokens: tuple[str, ...]) -> str:
