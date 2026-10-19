@@ -105,14 +105,15 @@ class DecisionService:
             state: Any, http_client: httpx.AsyncClient
         ) -> dict[str, Any] | DecisionError:
             try:
-                state = json_copy(state)
-                estimate = _input_estimate(state, questions)
                 factor = (
                     self._usage_recorder.input_estimate_factor(target)
                     if self._usage_recorder is not None
                     else 1.0
                 )
-                _check_input_size(estimate, factor)
+                # Copying and counting an item of up to 1 MB must not block the Event Loop.
+                state, estimate = await _DECISION_SETUP_WORKERS.run(
+                    _sized_state, state, questions, factor
+                )
                 async with slots:
                     result = await self._evaluate(
                         target,
@@ -189,6 +190,16 @@ def _input_estimate(state: Any, questions: list[dict[str, Any]]) -> _InputEstima
     state_tokens, _ = estimate_json_tokens({"state": state})
     largest = max(estimate_json_tokens(wire_questions([q]))[0] for q in questions)
     return _InputEstimate(request, state_tokens + largest)
+
+
+def _sized_state(
+    state: Any, questions: list[dict[str, Any]], factor: float
+) -> tuple[Any, _InputEstimate]:
+    """A private copy of ``state`` and its estimate; raises when it exceeds a limit."""
+    state = json_copy(state)
+    estimate = _input_estimate(state, questions)
+    _check_input_size(estimate, factor)
+    return state, estimate
 
 
 def _check_input_size(estimate: _InputEstimate, factor: float) -> None:
