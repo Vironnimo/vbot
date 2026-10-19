@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 from collections.abc import AsyncIterator, Iterator, MutableMapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,6 +20,7 @@ from starlette.websockets import WebSocketDisconnect
 
 import server.app as server_app
 from core.access.config import AccessConfig, access_config
+from core.access.devices import DeviceStore
 from server.access import (
     AccessError,
     AccessGuard,
@@ -573,6 +575,74 @@ def test_browsers_signed_in_by_ticket_go_with_the_device_that_issued_it(served: 
     # Signing out every other device keeps the calling one, also when one of them signed it in.
     assert sorted(others["result"]["revoked"]) == sorted([approved_id, second_id])
     assert current["id"] == second_window_id
+
+
+@pytest.mark.parametrize("cancel_revocation", [False, True])
+def test_ticket_redemption_in_progress_is_included_in_issuer_revocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_revocation: bool
+) -> None:
+    async def scenario() -> None:
+        service = AccessService(_authenticated(), local_token=None)
+        await service.start(tmp_path)
+        issuer_id, issuer_token = await _service_device(service)
+        facts = service.inspect(_internet_scope())
+        principal = service.authenticate(
+            [(b"authorization", f"Bearer {issuer_token}".encode())], facts
+        ).principal
+        assert principal is not None
+        ticket = service.issue_ticket(principal, "Ticket browser")["ticket"]
+        loop = asyncio.get_running_loop()
+        writing = asyncio.Event()
+        revoking = asyncio.Event()
+        release = threading.Event()
+        write = DeviceStore._write
+
+        def pause_ticket_write(store: DeviceStore, devices: Any) -> None:
+            if any(device.via == "ticket" for device in devices.values()):
+                loop.call_soon_threadsafe(writing.set)
+                assert release.wait(2), "ticket write was not released"
+            write(store, devices)
+
+        monkeypatch.setattr(DeviceStore, "_write", pause_ticket_write)
+        redemption = asyncio.create_task(service.redeem_ticket(ticket, facts))
+
+        async def revoke() -> list[Any]:
+            revoking.set()
+            return await service.revoke_devices([issuer_id], Principal("host"))
+
+        revocation = None
+        try:
+            await writing.wait()
+            revocation = asyncio.create_task(revoke())
+            await revoking.wait()
+            if cancel_revocation:
+                revocation.cancel()
+            release.set()
+            redeemed = await redemption
+            assert redeemed is not None and redeemed.token is not None
+            if cancel_revocation:
+                with pytest.raises(asyncio.CancelledError):
+                    await revocation
+            else:
+                removed = await revocation
+                assert len(removed) == 2 and removed[0].id == issuer_id
+            assert service.list_devices(Principal("host"))["devices"] == []
+            assert (
+                service.authenticate(
+                    [(b"authorization", f"Bearer {redeemed.token}".encode())], facts
+                ).principal
+                is None
+            )
+        finally:
+            release.set()
+            await asyncio.gather(
+                redemption,
+                *([revocation] if revocation is not None else []),
+                return_exceptions=True,
+            )
+            await service.close()
+
+    asyncio.run(scenario())
 
 
 def test_an_unavailable_device_store_answers_503_and_keeps_credentials(
