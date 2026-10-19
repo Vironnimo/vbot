@@ -42,6 +42,14 @@ class CronRunOutcome:
 class CronExecution:
     def __init__(self, owner: CronService) -> None:
         self._owner = owner
+        # Only in-flight admitted once Runs, so a failed scheduling edit can
+        # restore the consumed budget of the fire it rolls back to.
+        self._admitted_once_runs: dict[str, str] = {}
+
+    def _restore_once_budget(self, job: CronJob) -> None:
+        """After edit rollback, an admitted fire stays consumed."""
+        if job.schedule_type == "once" and job.run_at == self._admitted_once_runs.get(job.id):
+            job.remaining_runs = 0
 
     async def _trigger_job_run(
         self,
@@ -102,6 +110,7 @@ class CronExecution:
                 context = self._owner._scheduler._run_context(latest, late, event_due)
                 note: dict[str, Any] = {"context_note": context} if context else {}
                 run: Any | None = None
+                firing_once_at = latest.run_at if latest.schedule_type == "once" else None
                 try:
                     run = await self._owner._trigger_service.trigger_run(
                         latest.agent_id,
@@ -113,6 +122,8 @@ class CronExecution:
                         **note,
                     )
                     admitted = True
+                    if firing_once_at is not None:
+                        self._admitted_once_runs[job.id] = firing_once_at
                     latest = self._owner._jobs.get(job.id)
                     if latest is None:
                         wait_for_run = getattr(run, "wait", None)
@@ -122,7 +133,9 @@ class CronExecution:
                     latest.last_fired_at = _timing._utc_now_iso()
                     run_id = getattr(run, "id", None)
                     latest.last_run_id = run_id if isinstance(run_id, str) else None
-                    if latest.remaining_runs is not None:
+                    if latest.remaining_runs is not None and not _replacement_once_fire(
+                        latest, firing_once_at
+                    ):
                         latest.remaining_runs = max(latest.remaining_runs - 1, 0)
                     self._owner._jobs[latest.id] = latest
                     await self._persist_after_fire(latest.id)
@@ -139,7 +152,11 @@ class CronExecution:
                     else:
                         await self._record_trigger_failure(job.id, error)
                         latest = self._owner._jobs.get(job.id)
-                        if latest is not None and latest.schedule_type == "once":
+                        if (
+                            latest is not None
+                            and latest.schedule_type == "once"
+                            and not _replacement_once_fire(latest, firing_once_at)
+                        ):
                             latest.status = "failed"
                             await self._save_jobs_after_fire(latest.id)
                         if latest is not None:
@@ -189,6 +206,7 @@ class CronExecution:
                 await self._finalize_exhausted_job(latest.id)
                 return CronRunOutcome(succeeded=True, admitted=admitted)
         finally:
+            self._admitted_once_runs.pop(job.id, None)
             self._owner._executing_jobs.discard(job.id)
 
     async def _record_run_failure(self, job_id: str, error: BaseException) -> None:
@@ -305,6 +323,10 @@ class CronExecution:
 
         self._owner._notify_changed()
         return True
+
+
+def _replacement_once_fire(job: CronJob, firing_once_at: str | None) -> bool:
+    return job.schedule_type == "once" and job.run_at != firing_once_at
 
 
 _POST_FIRE_SAVE_MAX_ATTEMPTS = 3
