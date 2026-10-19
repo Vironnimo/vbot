@@ -355,6 +355,10 @@ export function createChannelsSettings(context) {
         loading: false,
         error: null,
       };
+      const editedChannel = channelPanelState.channels.find((channel) =>
+        isEditingChannel(channel),
+      );
+      if (editedChannel) rebaseChannelForm(editedChannel);
       // A Channel removed elsewhere takes its open edit form with it.
       if (
         channelFormVisible &&
@@ -412,7 +416,11 @@ export function createChannelsSettings(context) {
           variant: 'success',
         });
       } else {
-        await updateChannel(buildChannelUpdatePayload(channelFormValues));
+        const payload = buildChannelUpdatePayload(
+          channelFormValues,
+          JSON.parse(channelBaseline),
+        );
+        if (Object.keys(payload).length > 1) await updateChannel(payload);
       }
 
       if (creating) {

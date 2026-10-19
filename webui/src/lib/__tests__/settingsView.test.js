@@ -779,5 +779,24 @@ describe('channels', () => {
     expect(() =>
       buildChannelUpdatePayload({ id: 'tg-assistant', dm_scope: 'invalid' }),
     ).toThrow(/dm_scope must be one of/u);
+    const baseline = {
+      id: 'tg-assistant',
+      agent_id: 'assistant',
+      allowed_chat_ids: 'C123, self',
+      token_env_var: 'BOT_TOKEN',
+    };
+    expect(
+      buildChannelUpdatePayload(
+        {
+          ...baseline,
+          allowed_chat_ids: ['C123', 'self'],
+          token_env_var: ' NEW_TOKEN ',
+        },
+        baseline,
+      ),
+    ).toEqual({ id: 'tg-assistant', token_env_var: 'NEW_TOKEN' });
+    expect(buildChannelUpdatePayload(baseline, baseline)).toEqual({
+      id: 'tg-assistant',
+    });
   });
 });
