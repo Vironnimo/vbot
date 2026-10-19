@@ -158,7 +158,7 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
         values["point"] = _point(arguments["coordinate"], "coordinate")
     elif name == "mouse_move":
         raise ActionError(
-            'mouse_move needs "coordinate": [x, y] in a screenshot or zoom image, for example '
+            'mouse_move needs "coordinate": [x, y] in the latest screenshot, for example '
             '{"action":"mouse_move","coordinate":[640, 360]}.'
         )
     text = arguments.get("text")

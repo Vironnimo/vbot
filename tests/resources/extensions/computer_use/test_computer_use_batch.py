@@ -44,7 +44,7 @@ async def test_batch_runs_in_order_and_returns_images_in_order(computer: Harness
         ("keys", ["enter"], 1),
     ]
     # Screenshot, zoom, then the final screenshot because input was sent after the last one.
-    assert [image.size for image in images(context)] == [(1280, 720), (800, 400), (1280, 720)]
+    assert [image.size for image in images(context)] == [(1280, 720), (200, 100), (1280, 720)]
     step, settle = computer_use.STEP_SETTLE_SECONDS, computer_use.SETTLE_SECONDS
     assert computer.sleeps == [step, step, settle]
     text = model_text(result)
@@ -114,8 +114,7 @@ async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Har
     # Input was sent, so the failure shows the screen it left.
     shot = context.result_media[-1]["filename"].removesuffix(".png")
     assert message.endswith(
-        f'\nThe screen now: Screenshot of display 1 of 2 "Main": 1280x720 pixels, '
-        f'screenshot_id="{shot}". Use positions in this image as coordinates.'
+        f'\nThe screen now: Screenshot of display 1 of 2 "Main", screenshot_id="{shot}".'
     )
     assert len(images(context)) == 1
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]

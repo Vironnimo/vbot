@@ -1,7 +1,7 @@
 """Platform-neutral imaging: coordinate frames, display choice, masking and images.
 
-Each published image carries its own pixel space and physical rectangle.
-Coordinates measured in screenshots and zooms are mapped here,
+Each published screenshot carries its own pixel space and physical rectangle.
+Coordinates measured in screenshots are mapped here,
 without making the Agent reconstruct the scaling or the rectangle's origin.
 Masking hides every window whose application the Agent may not see.
 """
@@ -26,8 +26,6 @@ from .target import AppInfo, Display, WindowInfo
 MAX_LONG_EDGE = 1568
 MAX_AREA = 1_150_000
 MASK_FILL = (128, 128, 128)
-# A zoom of a small region is enlarged by a whole factor up to this, within ZOOM_EDGE.
-ZOOM_MAX_FACTOR, ZOOM_EDGE = 4, 1024
 # Temporary-file category of published images (``TEMPORARY_FILE_RETENTION``).
 IMAGE_CATEGORY = "computer_use"
 
@@ -40,18 +38,6 @@ def fit(width: int, height: int) -> tuple[int, int]:
     if factor >= 1.0:
         return width, height
     return max(1, math.floor(width * factor)), max(1, math.floor(height * factor))
-
-
-def zoom_fit(width: int, height: int) -> tuple[int, int]:
-    """Return the image size for a zoom of *width* x *height* screen pixels.
-
-    Small regions are enlarged so that small text and targets cover more image
-    pixels; larger ones are fitted like a screenshot.
-    """
-    factor = min(ZOOM_MAX_FACTOR, ZOOM_EDGE // max(width, height))
-    if factor < 2:
-        return fit(width, height)
-    return width * factor, height * factor
 
 
 @dataclass(frozen=True)
@@ -80,12 +66,6 @@ class Frame:
 
     def contains(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
-
-    @property
-    def screen_pixels(self) -> float:
-        """How many screen pixels one image pixel spans, on the coarser axis."""
-        left, top, right, bottom = self.area
-        return max((right - left) / self.width, (bottom - top) / self.height)
 
     def to_physical(self, x: int, y: int) -> tuple[int, int]:
         """The screen pixel under the centre of image pixel (x, y)."""
@@ -296,7 +276,6 @@ __all__ = [
     "display_of_window",
     "find_display",
     "fit",
-    "zoom_fit",
     "mask",
     "overlaps",
     "publish_image",

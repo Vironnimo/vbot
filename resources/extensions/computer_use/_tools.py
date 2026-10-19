@@ -49,10 +49,10 @@ COMPUTER_DESCRIPTION = (
     "screenshots, mouse and keyboard. Start with a screenshot; it shows the foreground "
     "window unless you choose a whole display with view. Coordinates are [x, y] pixels of "
     "the latest screenshot, counted from its top-left corner: use the position where you "
-    "see the target, and the Tool maps it to the screen. To click in an earlier screenshot "
-    "or in a zoom image, pass its screenshot_id. Input actions return a new screenshot "
-    "about half a second later. Zoom into a region to read small text or to place a click "
-    "exactly on a small target. If you have computer_batch, use it for predictable steps. "
+    "see the target, and the Tool maps it to the screen. Input actions return a new "
+    "screenshot about half a second later. zoom shows a region in more detail to read small "
+    "text or check a detail; it is for looking only, and coordinates always refer to the "
+    "screenshot. If you have computer_batch, use it for predictable steps. "
     "If you have computer_apps, use it to bring apps to the front and to release the "
     "computer when you are done. If the user requires approval per app, apps not approved "
     "yet appear as gray boxes and input into them is refused. This is the user's real "
@@ -66,8 +66,8 @@ COMPUTER_BATCH_DESCRIPTION = (
     "clicking a field, typing and pressing enter. Actions run in order; the batch stops "
     "at the first one that fails, and the result says which steps ran and, if input was "
     "sent, shows the screen in a fresh screenshot. Each action takes "
-    "the same fields as computer, except display. Coordinates refer to images you received "
-    "before this call: the latest screenshot, or the image named by screenshot_id. Screenshot and "
+    "the same fields as computer, except display. Coordinates refer to screenshots you "
+    "received before this call: the latest one, or the one named by screenshot_id. Screenshot and "
     "zoom actions return their images after the batch, in order, and a batch that sent "
     "input ends with a fresh screenshot."
 )
@@ -97,11 +97,11 @@ def _point_schema(description: str) -> dict[str, Any]:
 _ACTION_PROPERTIES: dict[str, Any] = {
     "action": {"type": "string", "enum": list(ACTIONS), "description": "The action to perform."},
     "coordinate": _point_schema(
-        "[x, y] in the selected image: where to click, move, scroll or end a drag. "
+        "[x, y] in the selected screenshot: where to click, move, scroll or end a drag. "
         "Omit on a click or scroll to use the pointer's position."
     ),
     "start_coordinate": _point_schema(
-        "[x, y] in the selected image where left_click_drag starts. "
+        "[x, y] in the selected screenshot where left_click_drag starts. "
         "Omit to start at the pointer's position."
     ),
     "path": {
@@ -111,7 +111,7 @@ _ACTION_PROPERTIES: dict[str, Any] = {
         "maxItems": MAX_PATH_POINTS,
         "description": (
             f"left_click_drag along a line through 2-{MAX_PATH_POINTS} points [x, y] of the "
-            "selected image, in place of start_coordinate and coordinate: the left button "
+            "selected screenshot, in place of start_coordinate and coordinate: the left button "
             "goes down at the first point, the pointer moves straight from point to point "
             "and the button comes up at the last. Use it to draw, select with a lasso or "
             "follow a curve; more points give a rounder curve."
@@ -120,9 +120,8 @@ _ACTION_PROPERTIES: dict[str, Any] = {
     "screenshot_id": {
         "type": "string",
         "description": (
-            "The screenshot_id of the image that coordinate, start_coordinate, path or "
-            "region refer to, as a result gave it. Omit to use the latest screenshot; a zoom image "
-            "is used only when named here."
+            "The screenshot_id of an earlier screenshot that coordinate, start_coordinate, "
+            "path or region refer to, as a result gave it. Omit to use the latest screenshot."
         ),
     },
     "view": {
@@ -174,9 +173,9 @@ _ACTION_PROPERTIES: dict[str, Any] = {
         "minItems": 4,
         "maxItems": 4,
         "description": (
-            "zoom: [x0, y0, x1, y1] in the selected image; x1 and y1 are excluded. The "
-            "zoom image shows the area fresh and enlarged, with its own screenshot_id; to "
-            "click in it, pass that screenshot_id with positions in the zoom image."
+            "zoom: [x0, y0, x1, y1] in the selected screenshot; x1 and y1 are excluded. The "
+            "zoom image shows the area fresh and in more detail, for looking only: coordinates "
+            "stay in the screenshot."
         ),
     },
 }

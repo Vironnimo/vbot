@@ -127,9 +127,9 @@ async def test_screenshot_coordinates_use_returned_pixels_and_keep_the_display(
 ) -> None:
     context = computer.context_for("computer")
     result = await computer.call("computer", {"action": "screenshot", "view": "display"}, context)
-    assert "1280x720 pixels" in model_text(result)
-    assert f'screenshot_id="{screenshot_id(context)}"' in model_text(result)
-    assert model_text(result).endswith("Use positions in this image as coordinates.")
+    assert model_text(result) == (
+        f'Screenshot of display 1 of 2 "Main", screenshot_id="{screenshot_id(context)}".'
+    )
     assert [image.size for image in images(context)] == [(1280, 720)]
     # Images are temporary files that the storage retention sweep removes.
     saved = Path(context.result_media[0]["path"])
@@ -138,9 +138,8 @@ async def test_screenshot_coordinates_use_returned_pixels_and_keep_the_display(
 
     context = computer.context_for("computer")
     result = await computer.call("computer", {"action": "screenshot", "display": "2"}, context)
-    assert model_text(result).startswith('Screenshot of display 2 of 2 "Wide": 1568x500 pixels')
-    reduced = "It is reduced: for a small target, zoom in and click in the zoom image."
-    assert reduced in model_text(result)
+    # A reduced image names no size, ratio or reduction: Agents converted with them.
+    assert "pixels" not in model_text(result) and "reduced" not in model_text(result)
     assert [image.size for image in images(context)] == [(1568, 500)]
     wide_id = screenshot_id(context)
     # One pixel of the 1568x500 image covers 2x2 physical pixels; input hits the centre.
@@ -177,56 +176,25 @@ async def test_screenshot_coordinates_use_returned_pixels_and_keep_the_display(
     assert '1. "Main" 1280x720 (primary, current)\n2. "Wide" 3136x1000' in model_text(result)
 
 
-async def test_zoom_coordinates_are_local_to_the_returned_crop_when_named(
-    computer: Harness,
-) -> None:
+async def test_zoom_is_for_looking_only(computer: Harness) -> None:
     await computer.computer(action="screenshot", display="Wide")
     context = computer.context_for("computer")
     result = await computer.call(
         "computer", {"action": "zoom", "region": [100, 100, 300, 200]}, context
     )
-    # The region spans 400x200 screen pixels; a zoom that small is enlarged twice.
-    assert "800x400 pixels" in model_text(result)
-    assert [image.size for image in images(context)] == [(800, 400)]
-    crop_id = screenshot_id(context)
-    assert model_text(result).endswith(
-        f'To click something you see here, pass screenshot_id="{crop_id}" with its position '
-        "in this image."
-    )
-    result = await computer.computer(
-        action="left_click_drag",
-        start_coordinate=[100, 100],
-        coordinate=[300, 200],
-        screenshot_id=crop_id,
-    )
-    assert result["ok"], result
-    assert computer.target.inputs[-1] == ("drag", [(-2886, 250), (-2786, 300)], 0.25, [])
-    # A zoom is a magnifier: without screenshot_id, coordinates stay on the screenshot.
-    await computer.computer(action="screenshot")
-    await computer.computer(action="zoom", region=[100, 100, 300, 200])
+    # The region spans 400x200 screen pixels and is shown at screen resolution, never enlarged.
+    assert [image.size for image in images(context)] == [(400, 200)]
+    assert model_text(result).endswith("Coordinates still refer to the latest screenshot.")
+    assert "pixels" not in model_text(result) and "screenshot_id" not in model_text(result)
+    zoom_file = screenshot_id(context)
+    # Coordinates stay on the screenshot, and the zoom never becomes a coordinate basis.
     result = await computer.computer(action="left_click", coordinate=[50, 50])
     assert result["ok"]
     assert computer.target.inputs[-1] == ("click", -3035, 101, "left", 1, [])
-    context = computer.context_for("computer")
-    result = await computer.call(
-        "computer",
-        {"action": "zoom", "screenshot_id": crop_id, "region": [100, 100, 300, 200], "scale": 0.5},
-        context,
-    )
-    assert result["ok"], result
-    assert images(context)[0].size == (400, 200)
-    nested_id = screenshot_id(context)
-    # The nested zoom shows physical [-2886, 250] onward, four image pixels per screen pixel.
     result = await computer.computer(
-        action="left_click", coordinate=[100, 40], screenshot_id=nested_id
-    )
-    assert result["ok"]
-    assert computer.target.inputs[-1] == ("click", -2861, 260, "left", 1, [])
-    result = await computer.computer(
-        action="zoom", screenshot_id=crop_id, region=[750, 0, 850, 100]
+        action="left_click", coordinate=[50, 50], screenshot_id=zoom_file
     )
     assert result["error"]["code"] == "invalid_arguments"
-    assert "800x400" in result["error"]["message"]
 
 
 async def test_window_view_includes_owned_popups_and_spans_displays(
@@ -564,8 +532,7 @@ async def test_target_failure_after_input_shows_the_screen(computer: Harness) ->
     shot = screenshot_id(context)
     assert result["error"]["message"] == (
         "The keyboard layout is missing. Input may have been sent.\nThe screen now: Screenshot "
-        f'of foreground window "Notepad": 500x400 pixels, screenshot_id="{shot}". Use '
-        "positions in this image as coordinates."
+        f'of foreground window "Notepad", screenshot_id="{shot}".'
     )
     assert len(images(context)) == 1
     computer.target.fail["move"] = computer_use.TargetError("The pointer is blocked.")

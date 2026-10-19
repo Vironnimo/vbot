@@ -29,7 +29,6 @@ from ._screens import (
     overlaps,
     publish_image,
     resized,
-    zoom_fit,
 )
 from .target import AppInfo, DesktopTarget, Display, WindowInfo
 
@@ -262,46 +261,43 @@ class Desktop:
         visible = self.access.window_visible
         windows = self.target.windows()
         covered, hidden = mask(capture, area, windows, visible)
-        size = zoom_fit(*covered.size) if zoom else fit(*covered.size)
+        # A zoom shows its region at screen resolution at most, like a screenshot.
+        size = fit(*covered.size)
         path = publish_image(self.context, resized(covered, size))
+        if zoom:
+            # For looking only: a zoom never becomes a coordinate basis, so Agents keep
+            # one coordinate system and never convert between images.
+            text = f"{label}. Coordinates still refer to the latest screenshot."
+            if hidden:
+                text += f" Hidden apps (gray, not approved): {', '.join(hidden)}."
+            return text
         foreground = self.target.foreground()
         front = foreground.app if foreground is not None and visible(foreground) else None
         # Which app the image shows at each point, for the check before pointer input.
         stack = tuple(item for item in windows if overlaps(item, area))
         frame = Frame(display, *size, area, path.stem, tuple(displays), window, front, stack)
         self.state.images[frame.screenshot_id] = frame
-        if not zoom:
-            # A zoom is a magnifier: coordinates without screenshot_id stay on the screenshot.
-            self.state.latest_image = frame.screenshot_id
+        self.state.latest_image = frame.screenshot_id
         self.state.shown = display
         # Keep references bounded without retaining image bytes in Session state.
         while len(self.state.images) > 64:
             del self.state.images[next(iter(self.state.images))]
-        shot = frame.screenshot_id
-        text = f'{label}: {size[0]}x{size[1]} pixels, screenshot_id="{shot}". '
-        if zoom:
-            text += (
-                f'To click something you see here, pass screenshot_id="{shot}" with its '
-                "position in this image."
-            )
-        else:
-            text += "Use positions in this image as coordinates."
-        # Name no ratio: Agents used it to convert coordinates instead of clicking what they saw.
-        if frame.screen_pixels >= 1.05:
-            text += " It is reduced: for a small target, zoom in and click in the zoom image."
+        # No size, ratio or reduction: Agents used each to convert coordinates by hand
+        # instead of using the position where they saw the target.
+        text = f'{label}, screenshot_id="{frame.screenshot_id}".'
         if hidden:
             text += f" Hidden apps (gray, not approved): {', '.join(hidden)}."
         return text
 
     def zoom(self, frame: Frame, action: Action) -> str:
-        """Publish a directly clickable fresh capture of a selected image's region."""
+        """Publish a fresh capture of a screenshot's region, for looking only."""
         assert action.region is not None
         self.validate_frame(frame)
         return self._publish(
             frame.region(*action.region),
             frame.displays,
             frame.display,
-            f"Zoom of {list(action.region)} in image {frame.screenshot_id}",
+            f'Zoom of {list(action.region)} in screenshot "{frame.screenshot_id}"',
             frame.window,
             zoom=True,
         )
