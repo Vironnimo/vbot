@@ -67,8 +67,7 @@ You research questions for the user and deliver answers they can act on: a short
 ## Write a new SOUL.md
 
 1. State the role in one sentence from the request: the purpose, the user it serves and the result it owes. Done when the sentence exists. If the request leaves the purpose itself open, ask the user for it; settle tone and style yourself by the rules above.
-2. Write the file `<workspace>/SOUL.md`, replacing the seeded default text completely. Done when every sentence fits "What a SOUL holds" and "How to write it".
-3. Read the file back. Done when it holds exactly the new text.
+2. Read the seeded `<workspace>/SOUL.md`, because `write` replaces an existing file only after you have read it. Then write your text over the default text completely. Done when every sentence fits "What a SOUL holds" and "How to write it".
 
 ## Revise a SOUL.md
 

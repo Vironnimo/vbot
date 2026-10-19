@@ -46,7 +46,7 @@ vbot channel admin grant tg-main --group -100123456789 --user 51
 
 ## Set up Telegram
 
-The user does the steps in Telegram; you run the vBot commands and guide them.
+The user does the steps in Telegram; you run the vBot commands and guide them. Each Agent the user wants to reach through Telegram needs its own Channel with its own bot: a bot token serves one Channel, because Telegram delivers a bot's messages to one receiver only.
 
 1. The user opens a chat with `@BotFather`, sends `/newbot`, chooses a display name and a username ending in `bot`, and receives the bot token (`123456789:AA...`). Done when the user has the token.
 2. Create the Channel with the token on stdin: `vbot channel add tg-main --platform telegram --agent <agent-id> --token-stdin`. When the user has not given you the token, give them that command to run in their terminal. Done when `vbot channel status tg-main` reports `running=yes`.
