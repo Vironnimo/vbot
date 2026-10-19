@@ -23,7 +23,7 @@ vbot skill install ./research.skill --scope own --replace --yes
 
 ## Inspect and maintain
 
-`skill list` shows the effective loadable catalog and invalid-Skill diagnostics. `skill inventory` shows every Skill from every source with its policy state — use it to plan disable/share changes and to spot stale entries. Mutation commands write only vBot-owned editable scopes: `global` (`<data-dir>/skills`) or `agent:<identity-agent-id>` (that Identity Agent's private Skill home). Project Skills remain repository-owned and bundled Skills remain read-only.
+`skill list` shows the effective loadable catalog and invalid-Skill diagnostics. `skill inventory` shows every Skill from every source with its policy state; use it to plan disable/share changes and to spot stale entries. Mutation commands write only vBot-owned editable scopes: `global` (`<data-dir>/skills`) or `agent:<identity-agent-id>` (that Identity Agent's private Skill home). Project Skills remain repository-owned and bundled Skills remain read-only.
 
 ```bash
 vbot skill list
@@ -76,4 +76,4 @@ vbot librarian run <agent-id>
 
 - `disable <name-or-inventory-id>` turns one Skill package off: it disappears from every Agent's catalog, triggers and Tool lists, including the owner's always-allowed copy. A Skill with the same name from another source is not affected and is used in its place. When several packages share the name, the command lists each package's inventory id and source and changes nothing; repeat it with the id of the package to turn off. `enable` turns a package on again the same way. Both print the resulting state; an unknown name fails with the server error and suggests known names.
 - `share <agent-id> <name> --to <receiver>...` exposes one agent's private Skill to specific receiver agents (they see it among their own Skills, subject to their allowlist); receivers must be existing Identity Agents other than the owner. `unshare <agent-id> <name>` revokes all receivers at once.
-- Inventory output lists stale shared-policy entries (owner or package gone) and policy diagnostics — report them instead of silently ignoring them.
+- Inventory output lists stale shared-policy entries (owner or package gone) and policy diagnostics; report them instead of silently ignoring them.

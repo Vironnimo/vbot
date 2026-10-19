@@ -7,7 +7,7 @@ This file covers writing the SOUL.md of a new Agent and revising an existing one
 - Only Identity Agents have a SOUL.md. It lives in the Agent's Workspace; `vbot agent show <agent-id>` reports the Workspace path, and your own Workspace path is in your System Prompt.
 - vBot places the whole file at the start of the System Prompt of every Session of that Agent, labeled as its SOUL. Every request pays for every word.
 - A change reaches new Sessions, and a running Session after its next Compaction. The Session in which you change the file keeps the old text until then.
-- The Agent's name is not part of SOUL.md. vBot tells the Agent its display name separately, so a name in SOUL.md either repeats it or contradicts it after a rename. To rename an Agent, change its display name as `references/agents-projects.md`, section "Names", describes.
+- The Agent's name is not part of SOUL.md. vBot tells the Agent its display name separately, so a name in SOUL.md either repeats it or contradicts it after a rename. To rename an Agent, change its display name as `references/agents.md`, section "Names", describes.
 
 ## What a SOUL holds
 

@@ -10,7 +10,7 @@ vbot provider history list [--since <iso>] [--until <iso>]
 vbot provider history clear --yes
 ```
 
-`provider list` (also `providers list`) groups Connections by Provider and shows a readable state alongside exact ids, Account names, and local endpoint reachability. Use `vbot provider list --details` for all enabled/usable fields and credential sources, or `provider status <provider-id>` for one Provider. Configured means enabled with credentials; this listing does not test upstream access. Use it when selecting a Connection or diagnosing missing Models.
+`provider list` groups Connections by Provider and shows a readable state alongside exact ids, Account names, and local endpoint reachability. Use `vbot provider list --details` for all enabled/usable fields and credential sources, or `provider status <provider-id>` for one Provider. Configured means enabled with credentials; this listing does not test upstream access. Use it when selecting a Connection or diagnosing missing Models.
 
 `provider usage` probes live upstream subscription limits for every supported usable Connection, or only the selected ones. It reports the plan, percentage used and remaining, reset timestamps, and a per-Provider error without hiding successful siblings. `provider history list [--since <iso>] [--until <iso>]` reads vBot's own recorded limit observations (durable samples, not live polls); `provider history clear --yes` deletes all of them. These are live Provider state; use `statistics usage` for persisted Session token totals.
 
@@ -18,13 +18,13 @@ vbot provider history clear --yes
 
 ```bash
 vbot provider custom list
-vbot provider custom save <provider-id> --name <display-name> --base-url <http(s)-url> [--adapter openai_compatible] [--auth api_key|none] [--api-key-stdin] [--models-endpoint /models] [--model <wire-id>]...
+vbot provider custom save <provider-id> --name <display-name> --base-url <http(s)-url> [--adapter openai_compatible] [--auth api_key|none] [--api-key-stdin] [--models-endpoint /models] [--model <model-id>]... [--wire-file <path> | --clear-wire]
 vbot provider custom delete <provider-id>
 ```
 
-- Custom Providers are secret-free Settings records with one implicit `default` Connection. The current Adapter is `openai_compatible`.
-- `custom save` replaces the complete record and reloads Provider/Model registries live. Repeated `--model` flags add conservative manual chat Models; use the WebUI when richer modality/task/capability facts are required.
-- `--api-key-stdin` reads the key from UTF-8 stdin and stores it in the data directory's Secret Store under the generated credential name. Never echo it. Omission preserves the stored key; changing the Provider record still replaces its complete non-secret configuration.
+- A Custom Provider speaks the OpenAI-compatible API through one Connection, `default`.
+- `custom save` creates the Provider or replaces its endpoint, authentication, discovery path and Model list, and applies at once. Each `--model` adds a chat Model with conservative capabilities; set richer modality and capability facts in the WebUI. An existing Provider keeps its sampling defaults, its request rules (`--wire-file <path>` replaces them with a JSON block, `--clear-wire` removes them) and the stored capabilities of every Model id that stays in the list.
+- `--api-key-stdin` reads the key from UTF-8 stdin into the Secret Store; without it, the stored key stays.
 - `custom delete` removes generated data-dir credentials but does not rewrite Agent/default/task Model references; tell the user those references become unavailable.
 
 ## Enable / disable a connection
@@ -35,9 +35,9 @@ vbot provider disable <provider-id> [--connection <provider:connection-id>]
 ```
 
 - A disabled connection is completely passive: never probed, offers no models, and chat against it fails with a clear "disabled" error.
-- Keyed connections start enabled; **keyless local connections (e.g. `ollama:local`) start disabled** — enable one when the user wants to use that local service.
+- Keyed connections start enabled; keyless local connections such as `ollama:local` start disabled: enable one when the user wants to use that local service.
 - `--connection` is required only when the provider has more than one connection (the error lists the candidates). A Connection id as `provider list` shows it can replace both: `vbot provider enable ollama:local`. `provider status`, `provider key` and the OAuth commands accept it the same way.
-- Enabling a local connection probes it immediately and reports the result. "Endpoint not reachable" is not a failure — the enable sticks, and the models appear automatically once the service runs (tell the user to start it, e.g. `ollama serve`).
+- Enabling a local connection probes it immediately and reports the result. "Endpoint not reachable" is not a failure: the enable sticks, and the models appear automatically once the service runs (tell the user to start it, e.g. `ollama serve`).
 
 ## API-key credentials
 
@@ -46,7 +46,7 @@ vbot provider key set <provider-id> --stdin [--connection <provider:connection-i
 vbot provider key unset <provider-id> [--connection <provider:connection-id>] [--account <account-id>]
 ```
 
-- Supply the key through UTF-8 stdin, never as the `<api-key>` argument. `key set` writes the key to the target server's Secret Store, reloads provider credentials live (no restart), and prints only the connection and credential name. Never echo the key back.
+- Pipe the key to `--stdin`, never as an argument. `key set` saves it in the server's Secret Store, applies it at once and prints only the Connection and credential name.
 - `--connection` is required only when the provider has more than one API-key connection.
 - Add `--refresh-models` to discover Models after saving the key. If discovery fails, the command exits nonzero and reports both the saved key and failed refresh. Correct the connection, then retry `model refresh`; do not resend the key just to retry discovery.
 - `key unset` removes only the stored key; a credential set in the server's process environment is out of its reach and stays usable.
@@ -65,9 +65,9 @@ vbot provider disconnect <provider-id> [--connection <provider:connection-id>] [
 
 `connect` prints a user code, a verification URL, and the expiry; the server polls in the background. Relay the code and URL to the user, then check `connection status` until it reports `connected=yes`. If the flow is no longer pending and is not connected, inspect the state and begin a new flow when sign-in is still wanted; do not poll indefinitely.
 
-## Accounts — multiple credentials per connection
+## Accounts: several credentials per Connection
 
-- A connection holds named credential slots; the default slot is `default`. Account ids are 1-32 characters of lowercase letters, digits, or underscores.
+- A connection holds named credential slots; the default slot is `default`. Account ids are 1-32 lowercase letters, digits or underscores and start with a letter or digit.
 - `--account <account-id>` works on all five credential commands. Named API-key accounts persist under the derived env key `<BASE>__<ACCOUNT>` (e.g. `OPENAI_API_KEY__WORK`).
 - A model pins an account with the suffix `<provider>/<model>::<connection>:<account>`.
 
@@ -82,11 +82,12 @@ vbot model refresh [<provider-id>]
 - `model list` returns only Models served by at least one usable Connection (enabled and authenticated when required). Rows include the exact id accepted by `agent create --model` / `agent update --model`, effective context window, useful capabilities/task types, and `reachable: no` when a local service is currently down. For an Agent's primary Model, use `vbot model list --task chat`; repeat filter flags to require every listed value.
 - `--query` finds the Model the user names: every word must occur in the Model id, name or family, ignoring case, across all Providers (`vbot model list --task chat --query claude --query opus`). Add `--provider` when the user names the Provider. Prefer it to an unfiltered list, which can hold hundreds of Models.
 - `model show` returns the complete public Model record, including modalities, task types, supported parameters and voices, typed task options, reasoning controls, context/output limits, connection restrictions, usable Connections, family, and metadata. Use it instead of web search when the question is about the Model data currently loaded by vBot.
-- `refresh` fetches Provider model catalogs using the selected Connections’ authentication; omitting the provider id refreshes all refreshable Providers. It publishes a complete Model DB, including its Override files, under the target data directory and never changes the Model DB bundled with vBot.
+- `refresh` fetches the Model lists of one Provider, or of every Provider without an id, through their usable Connections.
+- `vbot model forget-wire-facts <provider>[/<model-id>] [--connection <connection-id>]` forgets the parameters and limits vBot learned from a Provider's refusals; run it when such a refusal was a one-off or the Provider has fixed it. Learned facts otherwise expire after 30 days.
 
 ## Task models
 
-Bind a specialized task to a model target. Task types: `image_generation`, `image_understanding`, `music_generation`, `speech_to_text`, `text_embedding`, `text_to_speech`, `video_generation`.
+Bind a specialized task to a model target. Task types: `decision`, `image_generation`, `image_understanding`, `live_voice`, `music_generation`, `speech_to_text`, `text_embedding`, `text_to_speech`, `video_generation`.
 
 ```bash
 vbot task-model list
@@ -100,7 +101,7 @@ vbot task-model option unset <task-type> <name>
 vbot task-model clear <task-type>
 ```
 
-- Read target ids from `target list` (`<provider>/<model>::<connection>` or `local/<id>`) instead of constructing them by hand. `target list` lists connection-level ids — append a trailing `:<account-id>` yourself to pin a credential account.
+- Read target ids from `target list` (`<provider>/<model>::<connection>` or `local/<id>`) instead of constructing them by hand. `target list` lists Connection-level ids; append a trailing `:<account-id>` yourself to pin a credential account.
 - Run `option list <task-type> <target-id>` before the first binding. After a binding exists, omit the target to inspect its `fields`, `configured_options`, and default-merged `effective_options`.
 - Prefer repeated `--option <name> <value>` over `--options` for ordinary setup. Each value is read as the `type` its field has in `option list`: `select` and `text` fields keep the text as written (`--option duration 8` stores the choice `"8"`), `number` fields take a number, and `boolean` fields take `true` or `false`. Use `--options` only when replacing the complete option object is intentional. On shells that alter JSON quoting, pipe the object to `--options-stdin` instead.
 - Use `option set` and `option unset` for later changes. They preserve every sibling option and reject unknown names, invalid select values, wrong types, and out-of-range numbers before persistence. For object-valued options such as `extra_options`, pipe JSON to `option set ... --stdin` so shell quoting cannot corrupt it.

@@ -1,6 +1,6 @@
 # Server, Access, Paths, Update, Uninstall, Autostart, Desktop, Doctor
 
-These commands run locally. Management commands in other areas normally contact the server; data-store maintenance also has local operations described in `data-store.md`.
+`home`, `server`, `desktop`, `application`, `update`, `uninstall`, `autostart` and `doctor` run on the computer where you call them; run lifecycle commands on the server's computer. Every other area sends its commands to a running server; `data-store` also has local operations (`references/data-store.md`).
 
 ## Select the instance
 
@@ -8,12 +8,12 @@ These commands run locally. Management commands in other areas normally contact 
 - Host normally defaults to `127.0.0.1`. Port resolves from `--port`, then `VBOT_SERVER_PORT`, then the selected local Settings, then `22332`. Without target options, a user's shell follows `VBOT_SERVER_URL` when it is set; inside your Run the CLI ignores it and reaches the server that runs you.
 - The local data directory resolves from `--data-dir`, then `VBOT_DATA_DIR`, then an applicable checkout/worktree marker, then `~/.vbot`. Use `vbot home [--data-dir <path>]` to inspect it. `--data-dir` selects local configuration and lifecycle state; it is not sent to the server to redirect a management request.
 - An installation with its own server (shape `server` or `server-desktop` in `vbot application status`) replaces both resolution chains: omitted options select its recorded host, port and data directory. Its `server` and `autostart` commands always act on that recorded server and reject a `--host`, `--port` or `--data-dir` that names another target.
-- Keep local lifecycle commands on the machine that owns the server. For a remote server, management uses its `--url` or host/port; local paths still refer to the machine running the CLI. Do not treat `home`, `doctor`, or local snapshot results as remote filesystem observations.
+- Paths you pass with `--file` belong to the computer running the CLI; Project and Workspace paths belong to the server's computer. `home`, `doctor` and local snapshot results describe the computer you ran them on, never a remote server.
 - `home` and `doctor` accept only `--data-dir`; `desktop` accepts only host/port and has its own last-used-server default; `server` and `autostart` take no `--url`. `update` and `uninstall` take no target options: they act on the installation that runs the command, with its recorded server and data directory.
 
 ## Access and sign-in
 
-The access mode decides who may connect to a server: `local` (this computer only, the default), `lan` (the home network, without login) or `authenticated` (login from the internet through paired devices). It belongs to the server's computer: `vbot application access show` prints it, and `vbot application access set <mode> [options]` records a change that applies when the server starts next. Change it only when the user asks. `lan` admits every computer in the home network without login; make vBot reachable from the internet only with `authenticated`, which needs `--public-url` and HTTPS (`vbot application access set --help`).
+The access mode decides who can connect to a server: `local` (this computer only, the default), `lan` (the home network, without login) or `authenticated` (login from the internet through paired devices). It belongs to the server's computer: `vbot application access show` prints it, and `vbot application access set <mode> [options]` records a change that applies when the server starts next; it clears every option you leave out, so repeat the ones to keep. Change it only when the user asks. `lan` admits every computer in the home network without login; make vBot reachable from the internet only with `authenticated`, which needs `--public-url` and HTTPS (`vbot application access set --help`).
 
 On the server's computer, your shell included, the CLI needs no sign-in in any mode. A server in `authenticated` mode on another computer accepts this computer's CLI only after pairing:
 
@@ -35,7 +35,7 @@ vbot server restart
 vbot server status
 ```
 
-- `start` refuses to launch over a non-vBot process on the target port. Don't kill the occupant — report the conflict. Only a development checkout may instead target a different port/data-dir; an installation's server keeps its recorded target.
+- `start` refuses to launch over a non-vBot process on the target port. Report the conflict instead of stopping that process. Only a development checkout can instead target a different port/data-dir; an installation's server keeps its recorded target.
 - `status` can exit 0 when the server is stopped or a non-vBot process occupies the port. Read the reported state; exit 0 alone does not establish readiness.
 - On a Linux installation with Autostart, these commands control the systemd user unit `vbot.service`. Use them instead of `systemctl` or killing processes.
 
@@ -61,11 +61,9 @@ Every vBot installation updates from the signed packages of its update channel: 
 
 First inspect `vbot home`. Its `application_root` field identifies the installation; `vbot_root` is the readable active version, never edit it. Without `application_root`, this vBot runs from a development checkout: `update`, `uninstall`, `autostart` and `application` refuse there. A development checkout is updated with git; report that to the user instead of updating it yourself.
 
-Run `vbot update` directly. It returns a saved operation id before this Run's server stops and automatically arranges a continuation in the same Session. After acceptance, end this Run: once this Tool batch is saved, the updater stops the server, which cancels this Run. Do not create a Bootstrap for the update. The continuation must inspect `vbot update status <operation-id>` before reporting success; acceptance is not completion. When the channel publishes no newer version, the update reports that vBot is already up to date and the server keeps running.
+The updater stops the server at once, like `vbot server stop`: it cancels every active Run, including Runs in other Sessions, and discards queued messages. Run `vbot update` directly. It returns a saved operation id before the server stops and arranges a continuation in this Session by itself, so create no Bootstrap for it. After acceptance, end this Run; the server stop cancels it once this Tool batch is saved. Never repeat an accepted update. The continuation inspects `vbot update status <operation-id>` before it reports success, because acceptance is not completion. When the channel has no newer version, the update reports that vBot is up to date and the server keeps running.
 
-Normal output uses readable progress and one outcome summary. `--output plain` returns the structured update result without progress; `vbot update status <operation-id>` is a read-only structured inspection. Human terminal callers normally wait for the final outcome. `--detach` returns after acceptance. Closing the terminal or the originating shell command does not cancel the independent update. Tray updates use the same operation and do not create an Agent. The updater stops the server at once, like `vbot server stop`: it cancels every active Run, including Runs in other Sessions, and discards queued messages.
-
-`vbot update --no-restart` prepares a version without changing the active one. Activate it later with `vbot update activate <operation-id>`. `--package <path>` deliberately selects a local package; official downloads require the installation's trusted signing key. A Desktop Client update has no local server target. Open Desktop windows retain their current version until reopened.
+`--output plain` returns the structured result without progress, and `vbot update status <operation-id>` reads it later. `--detach` returns after acceptance; closing the terminal does not cancel the update. `vbot update --no-restart` prepares a version without activating it; `vbot update activate <operation-id>` activates it later. `--package <path>` installs a local package instead of the channel's. Open Desktop windows keep their version until reopened.
 
 Inspect the saved phase, message and error after a failure. `rolled_back` means the previous code was verified and retained; its message also states whether the updater restored the data from the snapshot it took before the update, found the data unchanged, or did not restore it and why. `needs_attention` means versions and data were preserved for inspection. If its message says a data restore did not complete, no version can start until the printed `vbot data-store snapshot restore <snapshot-id> --all --yes` completes; report this to the user and run it only when the user asks. Never restore a data snapshot on your own initiative.
 
@@ -82,7 +80,7 @@ vbot uninstall (--app-only|--data-only|--all) --yes
 
 With an interactive terminal, the bare command asks whether to remove only the application, only the data directory, or both. Data removal displays the exact resolved path and requires typing `DELETE`; it permanently removes settings, credentials, Agents, Sessions, and all other runtime state. A data-only reset preserves the prior server state: running restarts fresh, stopped remains stopped. Non-interactive callers must select one mode and pass `--yes`. A Desktop Client owns no server data.
 
-On Windows the installation's registered uninstaller removes the application; the CLI may report only that it was launched, so wait for removal before claiming completion. On Linux the command itself removes the systemd unit, the `vbot` command link and the installation directory; run it from a directory outside the installation. Both keep the data directory unless the selected mode removes it.
+On Windows the installation's registered uninstaller removes the application; the CLI can report only that it was launched, so wait for removal before claiming completion. On Linux the command itself removes the systemd unit, the `vbot` command link and the installation directory; run it from a directory outside the installation. Both keep the data directory unless the selected mode removes it.
 
 ## Autostart
 
@@ -96,13 +94,13 @@ vbot autostart enable|disable|status
 
 ## Desktop
 
-In a Windows installation, this launches the separate Desktop process and returns. A server-with-Desktop installation opens its recorded local server by default; a Desktop Client retains the last-used-server behavior. Explicit host/port options are forwarded. Closing Desktop leaves the server and tray running. Linux installations have no Desktop. The blocking behavior below applies to launches from a development checkout.
+In a Windows installation, this launches the separate Desktop process and returns. A server-with-Desktop installation opens its recorded local server by default; a Desktop Client retains the last-used-server behavior. Closing Desktop leaves the server and tray running. Linux installations have no Desktop.
 
 ```bash
 vbot desktop [--host <host>] [--port <port>]
 ```
 
-Opens the native desktop window (pywebview shell) pointed at a local or remote server. Purely a local GUI launch: it does not start or manage a server and takes no `--data-dir`. Without flags it auto-connects to the last-used server (or shows the connection screen on first run). The command blocks until the window is closed. Requires the `[desktop]` dependency group — otherwise it prints an install hint and exits non-zero.
+From a development checkout, it opens the Desktop window for a local or remote server and blocks until the window is closed; it starts no server and takes no `--data-dir`. Without flags it connects to the last-used server, or shows the connection screen on first run. Without the `[desktop]` dependency group it prints an install hint and exits nonzero.
 
 ## Doctor
 
@@ -111,7 +109,7 @@ vbot doctor settings [--data-dir <path>]
 vbot doctor config [--data-dir <path>]
 ```
 
-Local validation with file/path diagnostics; no server needed. Doctor takes only `--data-dir`, no `--host`/`--port`. Run `doctor config` after any manual JSON edit.
+Local validation of the data directory's files; no server needed. Run `doctor config` after any manual edit of a JSON file in the data directory.
 
 - `settings` checks `settings.json` only.
 - `config` checks every JSON document vBot keeps in the data directory: `settings.json`, Agent configs and the Agent order, Project files, Channel configs, Cron and Bootstrap jobs, Calendar events, the Skill policy, Terminal groups and launch history, System Prompt layouts, the Secret Store, MCP connections, and attachment and speech metadata, and it warns about plaintext credential files vBot ignores. It does not check the databases; `vbot data-store status` reports their health (`data-store.md`).

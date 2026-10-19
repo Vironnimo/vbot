@@ -1,0 +1,65 @@
+# Agents
+
+Address form: a bare id (`assistant`) targets an Identity Agent; `agent@project` (`orchestrator@vbot`) targets a Project Agent. `session`, `cron`, `bootstrap`, `chat --agent` and `prompt preview` accept both.
+
+When the user asks for an Agent for a purpose, follow "Create an Agent for a purpose" below. To rename an Agent, follow "Names".
+
+## Create an Agent for a purpose
+
+Build the Agent from the request alone. The new Agent keeps its files in its own Workspace, which `vbot agent create` creates. Leave the user's files and folders untouched: when the role needs the user's documents or a folder elsewhere, name that in your report, and the user points the Agent to it.
+
+1. State the new Agent's role in one sentence from the request: its purpose, the user it serves and the result it owes. Done when the sentence exists. If the request leaves the purpose itself open, ask the user for it; decide id, name, tone and configuration yourself.
+2. Create the Agent with `vbot agent create <agent-id> <display-name>`. Without further flags it gets the default Model, every Tool and every Skill; add a flag below only for a setting the request names. If the result warns that no effective Model is configured, pass `--model` with an id from `vbot model list --task chat`. Done when `vbot agent show <agent-id>` reports the Agent with its Workspace path.
+3. Write its SOUL.md: read `references/soul.md` with the `skill` Tool (`name` `vbot-docs`, `file_path` `references/soul.md`) and follow its section "Write a new SOUL.md". Done when those steps are done.
+4. If the request describes the method for a recurring kind of task, create a private Skill for the new Agent with it by the `skill-writing` Skill. Write no Skill whose steps the request does not give. Done when each described method is in a Skill, or the request describes none.
+5. Report the Agent's id and name, its role sentence, the Skills you created, and each configuration choice with its alternative. Start a test conversation with the new Agent only when the user asks for one.
+
+`vbot agent create` always creates an Identity Agent with its own Workspace, SOUL.md, Memory, private Skills and Sessions. To make it work in a Project, set its default Project with `agent update --project`. A Project Agent is a Config Agent that vBot reads from a Project's repository; it has no SOUL.md, Memory or Workspace. Create or edit a Project Agent file only when the user explicitly asks for a Project Team member or a repository-owned Agent profile.
+
+## Names
+
+An Agent's display name is how the user and other Agents refer to it; its id addresses it in commands and stays fixed when the name changes. An Identity Agent finds its own name and id in its System Prompt. The name is not part of SOUL.md.
+
+- When the user asks to rename an Agent, yourself included, change its display name: `vbot agent update <agent-id> --name "<new name>"`. The name is one line of at most 80 characters. vBot gives the new name to every later Session, so leave SOUL.md and Memory unchanged. Done when `vbot agent show <agent-id>` reports the new name.
+- Change the id with `vbot agent rename <current-agent-id> <new-agent-id>` only when the user asks for a new id. vBot refuses it while the Agent has an active Run, so you cannot change your own id: give the user that command to run outside your Runs, for example in a terminal.
+
+## Commands
+
+```bash
+vbot agent list
+vbot agent show <agent-id>
+vbot agent create <agent-id> <display-name> [flags]
+vbot agent update <agent-id> [flags]
+vbot agent rename <current-agent-id> <new-agent-id>
+vbot agent reorder <agent-id>...
+vbot agent delete <agent-id> [--permanent --yes]
+```
+
+`vbot agent create --help` and `vbot agent update --help` list every flag. On `update`, omitted flags leave their field unchanged. A setter and its `--clear-*` flag cannot be combined. `create`, `update` and `show` print the saved Agent: id, Workspace, default Project, effective Model, delegation targets, Agent Policy, effective Policy and where each value comes from. A no-effective-Model warning means the Agent cannot run yet.
+
+```bash
+vbot agent create coder Coder --model openai/gpt-5.2 --tool-access-mode all --allowed-skills '*'
+vbot agent update coder --temperature 0.4 --thinking-effort high
+vbot agent update researcher --project second-brain
+```
+
+## Settings
+
+- `--description` is one short line on what the Agent is for; other Agents see it when they choose a Sub-Agent. `""` clears it.
+- `--model` takes `<provider>/<model-id>`, optionally pinned to a Connection and Account as `::<connection>[:<account>]` (`openai/gpt-5.2::api-key:work`). When the user names a Model in their own words, take its exact id from `vbot model list --task chat --query <word>`, with `--provider <provider-id>` when they name the Provider. `--fallback-models` takes up to 5 distinct Models in priority order.
+- An Identity Agent can be created without `--model`, so setup can finish before a Provider is configured. When neither the Agent nor the global defaults supply a Model, the result warns that the Agent cannot run and prints the recovery commands: `vbot model list --task chat`, then `vbot agent update <agent-id> --model <model-id>`.
+- `--clear-model`, `--clear-fallback-models`, `--clear-temperature`, `--clear-top-p` and `--clear-thinking-effort` remove the Agent's own value so the global default applies. `--thinking-effort none` is the literal no-reasoning value, not a clear.
+- Tool access is replaced as a whole. Always pass `--tool-access-mode` together with `--tool-allow` or `--tool-deny`, and first read `agent show` to repeat every selection and denial to keep. `all` selects every normally available Tool; `selected --tool-allow <name>...` the named ones, and no `--tool-allow` none; `none` disables Tools. `--tool-deny` sets absolute denials, and leaving it out while replacing the policy clears them. Tool names are exact; `*` is invalid.
+- `--allowed-skills` replaces the whole Skill allowlist: no values allows no shared, global or bundled Skill, `'*'` (quoted) allows every available Skill. Private Skills and the active Project's Skills stay allowed regardless. `--excluded-skills` replaces the list of Skills turned off for this Agent, so `--allowed-skills '*' --excluded-skills <skill>...` allows every Skill except those, including Skills added later; it can turn off a private Skill too, never the active Project's Skills, and a Skill that depends on an excluded one is unavailable as well. No values clears the exclusions. The global disable policy wins over both lists.
+- `--subagent-allow` replaces the Agents this Agent can delegate to: bare Identity Agent ids or `agent@project`; the flag without values allows only self-delegation. To disable delegation, deny the `subagent` Tool.
+- `--compaction-policy` replaces the whole Agent Policy object, which needs `enabled`, `trigger` and `strategy`. Read the current Policy from `agent show`, keep its other fields, and pass the JSON as one argument. `--clear-compaction-policy` makes the Agent follow the global Compaction settings again.
+- `--tools-on-demand on` keeps only the always-loaded Tools in the Agent's Tool list; its System Prompt lists the other Tools by name and one-line summary, and the Agent loads their definitions with `load_tools` when it needs them. This changes no permissions. `--always-loaded <tool>...` (with `--tools-on-demand`) names the Tools that stay loaded, no values none; without it the default set applies: `read`, `write`, `edit`, `apply_patch`, `bash`, `search_files`, `skill`, `memory`, `subagent`, `project`. Naming one of `edit`, `write` and `apply_patch` keeps all three. Both flags replace the whole setting; `--tools-on-demand off` without `--always-loaded` removes it. A running Session keeps its Tool list until its next Compaction, so turning it on takes effect in new Sessions and after a Compaction; turning it off makes every Tool callable at once. Built-in Agents never load Tools on demand.
+- `--memory-prompt-mode` selects which Workspace Memory files the System Prompt shows; `--custom-system-prompt` switches the Agent's own editable prompt blocks on or off.
+- `--librarian false` stops Librarian passes over the agent's own Skills, both scheduled ones and `vbot librarian run`; `true` (the default) allows them again. `librarian.enabled` still switches scheduled passes off for every agent.
+- `--project` sets the Identity Agent's default Project: each new Session of the Agent works in that registered Project for its whole life, so its relative file and shell work uses the Project cwd, while Workspace, SOUL, Memory, private Skills and permissions remain the Agent's own. Existing Sessions keep the Project or Workspace they started in; to work in the new Project, start a new Session. Use this when the user wants an Agent to work in, point at or use a Project; do not move its Workspace to the repository for that. `--clear-project` removes the default Project: new Sessions then work in the Workspace.
+- `--workspace` moves only the Identity Agent's SOUL and Memory home; use it only when the user wants those files stored at another path. `--copy-workspace-files` copies SOUL.md, USER.md and MEMORY.md there; without it the Agent points at the destination and a missing SOUL.md is seeded. `--default-workspace` moves it back to its home in the data directory. Neither selects a Project.
+
+## Rename and delete
+
+- `rename` moves the whole Identity Agent and updates what still points to it: Channels, active Cron jobs, delegation entries and Sub-Agent parent links. It refuses an id in use, a busy old or new id, and a new id that references still name, often leftovers of a deleted Agent (`agent_in_use`); the error lists each one, such as `channel:<channel-id>` or `cron:<job-id>`, to change or remove first. An Agent's own Run keeps it busy, so only the user can rename you, outside your Runs. A display-name change (`agent update <agent-id> --name`) works from your own Run.
+- `delete` moves the Agent with its private Skills, Memory and Sessions into the archive as one archive entry and prints its id. A Workspace outside `<data-dir>/agents/<agent-id>/` stays where it is; the output names its path, and a restore re-attaches it if it still exists. The id leaves every other Agent's delegation list until a restore adds it back. It refuses the last Agent, an Agent with active or queued Runs (`agent_busy`) and one a Channel or Cron job still targets (`agent_in_use`, listing each). `--permanent --yes` deletes the Agent and its Sessions at once and cannot be undone; recorded usage stays in Statistics. Sessions deleted earlier keep their own archive entries; `vbot archive purge --all --kind session --agent <agent-id> --yes` deletes them.
