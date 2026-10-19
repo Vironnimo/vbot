@@ -5,10 +5,7 @@ description: "Operate desktop apps on the vBot server's Windows desktop with com
 
 # Computer Use
 
-computer moves the user's real mouse and keyboard on the desktop of the computer the vBot server runs on. It is slow and visible to the user, so use it only when nothing better fits:
-
-- Prefer a shell, files, an app's command line or an API when they can do the job.
-- For web pages, prefer the playwright-cli Skill if you have it; it is faster and more reliable than clicking through a browser.
+computer moves the user's real mouse and keyboard on the desktop of the computer the vBot server runs on. For web pages, prefer the playwright-cli Skill if you have it; it is faster and more reliable than clicking through a browser.
 
 ## Workflow
 

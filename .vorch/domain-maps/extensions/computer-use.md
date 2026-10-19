@@ -96,6 +96,7 @@ Extension Tools have one static description for every Agent: Extensions get no p
 | `view`: `...Later screenshots keep the choice. Omit to keep the current choice, initially window.` | Makes the persistent capture choice and the omit rule explicit. |
 | `region`: `...x1 and y1 are excluded...for looking only: coordinates stay in the screenshot.` | Exclusive edge, and that the zoom never becomes a coordinate basis. |
 | `display`: `...Setting display switches to display view. Omit to keep the current monitor.` | Explains the side effect on the view and the omit rule. |
+| Skill: `For web pages, prefer the playwright-cli Skill if you have it...` | Draws the boundary to the better tool for browsers. The Skill deliberately has no general "prefer a shell, an app's command line or an API" rule: it is read only after the Agent chose Computer Use, and that rule sent an Agent asked to paint in GIMP into typing Python into GIMP's console (Session 2073). |
 | Skill: `Never convert it to screen pixels, add a crop origin or calculate with image sizes: the Tool does that.` | Agents converted coordinates (Sessions 1679, 1681). |
 | Skill: `Pass screenshot_id to click in an earlier screenshot...` | Agents re-took screenshots instead of clicking in an existing image. |
 | Skill: `zoom shows region...Use it to read small text or check a detail. It is for looking only: click where you see the target in the screenshot.` | Agents zoomed to identify targets and then converted zoom positions by hand (Session 2063). |
