@@ -104,8 +104,15 @@ conversations (user decision 2026-10-15).
   idle it starts a visible `user` Run like a set, with `GOAL_RESUMED_TEXT` as
   the context note, otherwise it writes the row alone and the current Run
   continues the goal when it ends.
-- `/stop` always pauses an open goal with `stop`, also without an active Run,
-  so an automatic Run that has not started yet cannot continue it.
+- `/stop` always pauses an open goal with `stop`, also without an active Run.
+  Live goal transitions and automatic Run admission share a per-Session lock;
+  preparation outside it cannot start a Run after a pause or clear. A Stop
+  that races admission also cancels the automatic Run admitted before it acquired
+  the lock, identified by that admission; a queued user Run that takes over the
+  Session stays untouched. No automatic Run escapes the gap between Stop's first
+  lookup and its pause. History appends happen after releasing this lock because
+  an `update_goal` Tool already holds the Session append lock when it changes goal
+  metadata; the two locks must never be acquired in the reverse order.
 
 ## Chat and Compaction
 
