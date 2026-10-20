@@ -59,14 +59,17 @@ export function deliverySummary(job) {
   if (delivery?.kind !== CRON_DELIVERY_CHAT) {
     return t('cron.delivery.none');
   }
-  const values = {
+  if (delivery.thread_id) {
+    return t('cron.delivery.chatThread', {
+      chat: delivery.platform_target,
+      thread: delivery.thread_id,
+      channel: delivery.channel_id,
+    });
+  }
+  return t('cron.delivery.chat', {
     chat: delivery.platform_target,
-    thread: delivery.thread_id,
     channel: delivery.channel_id,
-  };
-  return delivery.thread_id
-    ? t('cron.delivery.chatThread', values)
-    : t('cron.delivery.chat', values);
+  });
 }
 
 export function intervalUnitOptions() {

@@ -1,8 +1,9 @@
 <script>
   // The Delivery section of a job's form: where each Run's final answer goes
   // and, for a chat, the Channel, chat and optional thread.
-  import { t, tOr } from '$lib/i18n.js';
+  import { t } from '$lib/i18n.js';
   import { CRON_DELIVERY_CHAT } from '$lib/cronView.js';
+  import { channelPlatformLabel } from '../settings/channels/controller.svelte.js';
   import { deliveryKindOptions } from './presentation.js';
   import TextField from '../ui/TextField.svelte';
   import Dropdown from '../Dropdown.svelte';
@@ -23,10 +24,7 @@
   let channelOptions = $derived.by(() => {
     const options = agentChannels.map((channel) => ({
       value: channel.id,
-      label: `${channel.id} · ${tOr(
-        `settings.channels.platform.${channel.platform}`,
-        channel.platform,
-      )}`,
+      label: `${channel.id} · ${channelPlatformLabel(channel.platform)}`,
     }));
     const stored = values.delivery_channel_id;
     if (stored && !options.some((option) => option.value === stored)) {
