@@ -196,8 +196,10 @@ class ToolContract:
         """Repair common unambiguous model encodings in a copied argument value.
 
         An empty value under a name that is not a parameter requests nothing,
-        and neither does ``commentary``, which some Models attach to calls as a
-        label of their output channel; both are dropped instead of rejected.
+        and neither does a label under ``commentary``, which some Models attach
+        to calls to name their output channel; both are dropped instead of
+        rejected. A ``commentary`` holding an object or text stays, so the call
+        is refused rather than run without what it carries.
         """
         copied_arguments = copy.deepcopy(arguments)
         normalized = normalize_schema_value(
@@ -212,7 +214,8 @@ class ToolContract:
         return {
             key: value
             for key, value in normalized.items()
-            if key in parameters or (value not in (None, "", [], {}) and key != _REMARK)
+            if key in parameters
+            or (value not in (None, "", [], {}) and not (key == _REMARK and _label_value(value)))
         }
 
     def read_name_value_pair(self, arguments: Any, *, unadvertised: Collection[str] = ()) -> Any:

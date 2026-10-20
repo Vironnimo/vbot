@@ -807,6 +807,13 @@ def test_normalization_drops_empty_unknown_arguments_but_keeps_meaningful_ones()
     assert '"flag" is not a parameter' in message
     assert '"label" must not be empty' in message
 
+    # A commentary that carries the call's fields is no label: refused, never run without them.
+    carried = contract.normalize_arguments({"count": 1, "commentary": {"label": "x"}})
+    kept, ignored = contract.drop_inert_fields(carried)
+    assert (kept, ignored) == ({"count": 1, "commentary": {"label": "x"}}, ())
+    with pytest.raises(ToolContractError, match='"commentary" is not a parameter'):
+        contract.validate_arguments(kept)
+
 
 def test_normalization_keeps_exact_empty_declared_string_properties() -> None:
     contract = compile_tool_contract(
