@@ -529,6 +529,23 @@ describe('UI primitive guard', () => {
     expect(violations).toEqual([]);
   });
 
+  it('bans native date and time inputs — use DateField or TimeField', () => {
+    // The browser's date and time controls ignore the app language and theme
+    // and differ per browser; DateField and TimeField replace them.
+    const NATIVE_DATE_TIME =
+      /\btype\s*=\s*["'](?:date|time|datetime-local|month|week)["']/g;
+    const violations = [];
+
+    for (const filePath of SVELTE_FILES) {
+      const source = readFileSync(filePath, 'utf8');
+      for (const match of source.matchAll(NATIVE_DATE_TIME)) {
+        violations.push(`${relative(SRC_DIR, filePath)}: ${match[0]}`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   it('bans native title tooltips — use the shared tooltip action or InfoHint', () => {
     // The quick tooltip (`use:tooltip` from lib/tooltip.js, or the Button
     // `tooltip` prop) replaced every native `title` attribute: styled,
