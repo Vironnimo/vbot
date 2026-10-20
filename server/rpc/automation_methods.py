@@ -19,7 +19,7 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
-CRON_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event"))
+CRON_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event", "webhook"))
 CRON_JOB_STATUSES = frozenset(("active", "paused"))
 BOOTSTRAP_MODES = frozenset(("once", "always"))
 
@@ -95,6 +95,11 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 "params.interval_seconds is required when params.schedule_type is 'interval'",
             )
         cron_expression = None
+        run_at = None
+    elif schedule_type == "webhook":
+        # Requests to the job's URL start its Runs; it keeps no time.
+        cron_expression = None
+        interval_seconds = None
         run_at = None
     else:
         if run_at is None:
@@ -238,6 +243,30 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
     return _cron_job_response(state.runtime.cron_service, job)
 
 
+async def _cron_webhook_secret(state: Any, params: JsonObject) -> JsonObject:
+    """The secret a webhook job's requests prove: ``{"secret": ...}``."""
+    _reject_unsupported(params, {"id"}, "cron.webhook_secret")
+
+    job_id = _required_string(params, "id")
+    try:
+        secret = await state.runtime.cron_service.webhook_secret(job_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"secret": secret}
+
+
+async def _cron_rotate_webhook_secret(state: Any, params: JsonObject) -> JsonObject:
+    """Replace a webhook job's secret; the old one stops working at once."""
+    _reject_unsupported(params, {"id"}, "cron.rotate_webhook_secret")
+
+    job_id = _required_string(params, "id")
+    try:
+        secret = await state.runtime.cron_service.rotate_webhook_secret(job_id, actor="rpc")
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"secret": secret}
+
+
 async def _cron_delete(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "cron.delete")
 
@@ -354,6 +383,27 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "consecutive_failures": job.consecutive_failures,
         "next_fire_at": cron_service.next_fire_at(job),
         "created_at": job.created_at,
+        # A webhook job's URL and requests; null for another schedule.
+        "webhook": _webhook_response(cron_service, job),
+    }
+
+
+def _webhook_response(cron_service: Any, job: Any) -> JsonObject | None:
+    """``url`` is null while the server address is unknown; ``reach`` names who can call it
+    (internet, network or computer); ``waiting`` requests wait for the next Run and
+    ``dropped`` ones were dropped unseen since the last Run started."""
+    if job.schedule_type != "webhook":
+        return None
+    status = cron_service.webhook_status(job)
+    if status is None:
+        return None
+    return {
+        "url": status.url,
+        "path": status.path,
+        "reach": status.reach,
+        "last_received_at": status.last_received_at,
+        "waiting": status.waiting,
+        "dropped": status.dropped,
     }
 
 
@@ -500,6 +550,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "cron.list": _cron_list,
         "cron.update": _cron_update,
         "cron.delete": _cron_delete,
+        "cron.webhook_secret": _cron_webhook_secret,
+        "cron.rotate_webhook_secret": _cron_rotate_webhook_secret,
         "cron.enable": _cron_enable,
         "cron.disable": _cron_disable,
     }

@@ -15,14 +15,14 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.automation import CronService
-from core.automation.cron import CronDelivery, CronResult, CronWatch
+from core.automation.cron import CronDelivery, CronResult, CronWatch, WebhookStatus
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
 from server.events import ServerEventBus
-from tests.core.automation.cron_test_support import make_service
+from tests.core.automation.cron_test_support import make_service, secret_store
 from tests.server.rpc_test_support import rpc_error, rpc_result
 
 JsonObject = dict[str, Any]
@@ -59,6 +59,14 @@ def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None)
         cron_service.format_schedule.side_effect = CronService.format_schedule
         cron_service.next_fire_at.return_value = None
         cron_service.bound_event.return_value = SimpleNamespace(title="Standup")
+        cron_service.webhook_status.return_value = WebhookStatus(
+            url="https://vbot.example.com/api/hooks/job-123",
+            path="/api/hooks/job-123",
+            reach="internet",
+            last_received_at=None,
+            waiting=0,
+            dropped=0,
+        )
         for edit in ("create_job", "update_job", "delete_job", "enable_job", "disable_job"):
             setattr(cron_service, edit, AsyncMock())
     return SimpleNamespace(
@@ -340,6 +348,29 @@ async def test_bootstrap_list_projects_each_job() -> None:
             },
             id="event",
         ),
+        # A webhook job keeps no time; its URL comes back with it.
+        pytest.param(
+            {
+                "agent_id": "main",
+                "prompt": "Triage the issue",
+                "schedule_type": "webhook",
+                "cron_expression": "*/5 * * * *",
+            },
+            _cron_job(name="Triage the issue", schedule_type="webhook", cron_expression=None),
+            {"agent_id": "main", "schedule_type": "webhook"},
+            {
+                "schedule": "webhook",
+                "webhook": {
+                    "url": "https://vbot.example.com/api/hooks/job-123",
+                    "path": "/api/hooks/job-123",
+                    "reach": "internet",
+                    "last_received_at": None,
+                    "waiting": 0,
+                    "dropped": 0,
+                },
+            },
+            id="webhook",
+        ),
     ],
 )
 async def test_cron_create_passes_the_normalized_job_to_the_service(
@@ -433,6 +464,7 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                 "consecutive_failures": 0,
                 "next_fire_at": "2026-05-14T10:05:00+00:00",
                 "created_at": "2026-05-14T09:00:00+00:00",
+                "webhook": None,
             }
         ],
         "system_timezone": "Europe/Berlin",
@@ -574,6 +606,8 @@ async def test_cron_job_actions_address_one_job(
         ("cron.delete", {}),
         ("cron.enable", {}),
         ("cron.disable", {}),
+        ("cron.webhook_secret", {}),
+        ("cron.rotate_webhook_secret", {"id": "job-1", "secret": "vbw_chosen"}),
         ("bootstrap.create", {"agent_id": "main", "prompt": "Check", "mode": "sometimes"}),
     ],
 )
@@ -670,3 +704,36 @@ async def test_cron_target_resolution_failure_maps_to_precise_code(
     assert error["code"] == expected_code
     resolver.resolve_agent.assert_called_once()
     assert cron_service.list_jobs() == []
+
+
+@pytest.mark.asyncio
+async def test_a_webhook_secret_is_revealed_and_rotated_by_job(tmp_path: Path) -> None:
+    cron_service, _trigger_service = make_service(tmp_path)
+    cron_service.set_webhook_secrets(secret_store(tmp_path))
+    cron_service.bind_webhook_url("http://127.0.0.1:8765", "computer")
+    state = _cron_state(cron_service)
+    created = await rpc_result(
+        state, "cron.create", agent_id="main", prompt="Triage", schedule_type="webhook"
+    )
+    timed = await rpc_result(state, "cron.create", **_CRON_PARAMS)
+
+    revealed = await rpc_result(state, "cron.webhook_secret", id=created["id"])
+    rotated = await rpc_result(state, "cron.rotate_webhook_secret", id=created["id"])
+    current = await rpc_result(state, "cron.webhook_secret", id=created["id"])
+    refused = await rpc_error(state, "cron.webhook_secret", id=timed["id"])
+    missing = await rpc_error(state, "cron.rotate_webhook_secret", id="cron_missing")
+
+    assert created["webhook"] == {
+        "url": f"http://127.0.0.1:8765/api/hooks/{created['id']}",
+        "path": f"/api/hooks/{created['id']}",
+        "reach": "computer",
+        "last_received_at": None,
+        "waiting": 0,
+        "dropped": 0,
+    }
+    assert revealed["secret"].startswith("vbw_")
+    assert rotated["secret"] != revealed["secret"]
+    assert current == rotated
+    assert refused["code"] == "domain_error"
+    assert "its schedule is not 'webhook'" in refused["message"]
+    assert missing["code"] == "domain_error"
