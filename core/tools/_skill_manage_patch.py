@@ -17,6 +17,7 @@ from core.skills.skills import (
     SKILL_FILENAME,
     find_skill_package_dir,
 )
+from core.tools._edit_locations import _new_text_line
 from core.tools._skill_manage_calls import _Call, _read_hint, _RefusalError
 from core.tools.copy_match import copy_warnings, replace_copied
 from core.tools.fuzzy_match import (
@@ -166,8 +167,9 @@ def _replace(current: str, call: _Call, file_path: str) -> tuple[FuzzyReplacemen
                     '(such as \\n or \\"); they were applied unescaped.'
                 )
     if found is None and not call.replace_all:
-        # Old text copied with errors; not when new text shows the edit already made.
-        present = new.strip() and new != old and _find(current, new, new, True) is not None
+        # Old text copied with errors; not when new text shows the edit already made,
+        # which only whole lines do (_new_text_line).
+        present = new.strip() and new != old and _new_text_line(current, new) is not None
         found = None if present else replace_copied(current, old, new)
         if isinstance(found, FuzzyReplacement):
             notes.extend(copy_warnings(found))

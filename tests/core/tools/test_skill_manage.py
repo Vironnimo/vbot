@@ -1557,9 +1557,20 @@ def test_patch_keeps_literal_escapes_that_match_the_file(tmp_path: Path) -> None
     assert _body(skill_file) == 'Run `printf "b\\n"` first.\n'
 
 
-def test_patch_applies_old_string_copied_with_a_misspelling_and_names_it(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "other",
+    [
+        "",
+        # The new text inside another line proves no earlier edit (Swarm run 2026-10-20).
+        "Planned: (Always run the full test suite and the linter before merging.)\n",
+    ],
+    ids=["alone", "new-text-inside-another-line"],
+)
+def test_patch_applies_old_string_copied_with_a_misspelling_and_names_it(
+    tmp_path: Path, other: str
+) -> None:
     harness, skill_file = _patch_harness(
-        tmp_path, body="Always run the full test suite before merging.\n"
+        tmp_path, body=f"Always run the full test suite before merging.\n{other}"
     )
 
     result = harness.run(
@@ -1571,7 +1582,9 @@ def test_patch_applies_old_string_copied_with_a_misspelling_and_names_it(tmp_pat
         }
     )
 
-    assert _body(skill_file) == "Always run the full test suite and the linter before merging.\n"
+    assert _body(skill_file) == (
+        f"Always run the full test suite and the linter before merging.\n{other}"
+    )
     content = result["data"]["content"]
     assert "\nNote: Line " in content
     assert (
