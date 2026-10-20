@@ -108,13 +108,13 @@ class CronWatcher:
         task.add_done_callback(done)
 
     async def wait_for_first_check(self, job_id: str, timeout: float) -> bool:
-        """Wait until the job's pending first check ended; False when none ended in time.
+        """Wait until no first check of the job is pending; False when one still runs.
 
         A caller that stops waiting leaves the check running.
         """
         task = self._first_checks.get(job_id)
         if task is None:
-            return False
+            return True
         await asyncio.wait({task}, timeout=timeout)
         return task.done()
 

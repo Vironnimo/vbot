@@ -587,17 +587,15 @@ class CronService:
         if self._started and job.status == "active" and job.watch is not None:
             self._watcher.start_first_check(job.id)
 
-    async def await_first_check(self, job_id: str) -> CronJob | None:
-        """Wait for the first check of a watch just set on the job; the job after it.
+    async def await_first_check(self, job_id: str) -> bool:
+        """Wait for the first check of a watch just set on the job to record its outcome.
 
-        None when no first check is pending for the job, or it still runs after
-        a while; it then goes on and records its result on the job. The wait
-        never stops the check.
+        True once no first check of the job is pending: it recorded
+        ``last_checked_at`` (and ``last_check_error`` when it failed), or none
+        ran because the job is paused. False when it still runs after
+        ``FIRST_CHECK_WAIT_SECONDS``; the wait never stops it.
         """
-        if not await self._watcher.wait_for_first_check(job_id, FIRST_CHECK_WAIT_SECONDS):
-            return None
-        job = self._jobs.get(job_id)
-        return None if job is None else self._clone_job(job)
+        return await self._watcher.wait_for_first_check(job_id, FIRST_CHECK_WAIT_SECONDS)
 
     def _stage_update(
         self, job_id: str, fields: dict[str, Any], *, validate_references: bool = True

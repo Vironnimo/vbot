@@ -166,17 +166,17 @@ async def test_a_new_watch_is_checked_at_once_and_its_failure_counts_toward_no_s
         job_id = await _watching_job(
             service, checks, watch=CronWatch.parse("url", "https://status.example/a")
         )
-        failed = await service.await_first_check(job_id)
-        assert failed is not None
+        assert await service.await_first_check(job_id)
+        failed = service.get_job(job_id)
         assert failed.last_check_error == "The watched URL answered HTTP 503"
         assert failed.consecutive_failures == 0
 
         fixed = CronWatch.parse("url", "https://status.example/b")
         await service.update_job(job_id, watch=fixed)
-        checked = await service.await_first_check(job_id)
-        assert checked is not None and checked.last_check_error is None
+        assert await service.await_first_check(job_id)
+        checked = service.get_job(job_id)
+        assert checked.last_checked_at is not None and checked.last_check_error is None
         assert _baseline(service, job_id)["watch"] == {"url": "https://status.example/b"}
-        assert await service.await_first_check(job_id) is None
         trigger_service.trigger_run.assert_not_awaited()
     finally:
         await service.aclose()

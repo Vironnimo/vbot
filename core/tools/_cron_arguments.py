@@ -7,13 +7,14 @@ schema (``agent_id``, ``schedule_type``, ``cron_expression``, ``run_at``,
 (``cron``, ``recurring``, ``durable``), Hermes ``cronjob`` (``job_id``,
 ``pause``/``resume``/``remove``, ``deliver``), OpenClaw ``cron`` (a ``job``
 with ``schedule`` and ``payload`` objects, ``jobId``), and scheduled-task Tools
-(``cronExpression``, ``fireAt``, ``description``). With an ``event_id``, the
+(``cronExpression``, ``fireAt``, ``description``), and Hermes monitor gates
+(``monitor_url``) as ``watch``. With an ``event_id``, the
 schedule is an event time, which Models also write as reminder offsets
 (``minutes_before: 30``, ``-PT30M``, ``30 minutes before``, ``before_start``).
 This owner maps them onto the canonical fields so a call whose intent is clear
 executes. What vBot cannot honor as written (delivering to another chat, firing
-on demand, several actions in one call, readings with different effects) fails
-before any side effect with the corrected call.
+on demand, a script before the run, several actions in one call, readings with
+different effects) fails before any side effect with the corrected call.
 """
 
 from __future__ import annotations
@@ -64,6 +65,8 @@ CURRENT_SESSION = "current"
 """The ``session`` that names the calling Session; the handler resolves it."""
 NEW_SESSION = "new"
 """The ``session`` that starts each run in a new Session."""
+NO_WATCH = "none"
+"""The ``watch`` that stops watching on update; on create it is the default."""
 DELIVER_PLATFORM_FIELD = "deliver_platform"
 """The platform a ``deliver`` value named; "here" holds only in a chat on it."""
 HERE = "here"
@@ -87,6 +90,7 @@ _CHANGE_FIELDS = (
     "repeat",
     "session",
     "deliver",
+    "watch",
     ENABLED_FIELD,
 )
 _LATE_START = (
@@ -250,6 +254,15 @@ _PLATFORM_WORDS = frozenset({"telegram", "discord", "slack", "mattermost", "what
 _DELIVERY_FORMS = (
     "A job delivers each run's answer to this conversation (here), to vBot (app) or nowhere (none):"
 )
+_WATCH_KEYS = frozenset({"watch", "monitor"})
+_WATCH_URL_KEYS = frozenset({"watchurl", "monitorurl", "checkurl"})
+_WATCH_COMMAND_KEYS = frozenset({"watchcommand", "monitorcommand", "checkcommand", "watchcmd"})
+_NO_WATCH_WORDS = frozenset({"none", "off", "nowatch", "false", "no"})
+# Hermes script gates and script-only jobs; an OpenClaw trigger object carries its script.
+_SCRIPT_KEYS = frozenset({"script", "monitorscript", "watchscript", "triggerscript", "noagent"})
+_SCRIPT_TRIGGER_KEYS = frozenset({"trigger"})
+WATCH_STAND_IN = "<command or URL to check>"
+_URL_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _DESCRIPTION_KEYS = frozenset({"description", "desc", "summary", "details"})
 # Accepted without effect: vBot jobs always persist, and list always shows every job.
 _IGNORED_KEYS = frozenset({"durable", "persist", "persistent", "includedisabled", "reason"})
@@ -282,6 +295,8 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
         return normalized
     if is_placeholder(normalized.get("event_id")):
         normalized.pop("event_id", None)
+    # Before the schedule: an OpenClaw trigger object is no event time.
+    _read_watch(normalized, problems)
     if "event_id" in normalized:
         _read_event_schedule(normalized, problems)
     elif normalized.get("action") == "update" and _names_event_offset(normalized):
@@ -583,6 +598,62 @@ def _refuse_delivery(item: str, problems: _Problems) -> None:
     )
 
 
+def _read_watch(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Read what a job checks before each run as one ``watch`` string; refuse script gates."""
+    for key in list(arguments):
+        word = spelling(key)
+        if word in _WATCH_KEYS | _WATCH_URL_KEYS | _WATCH_COMMAND_KEYS:
+            value = _watch_value(key, arguments.pop(key), problems, url=word in _WATCH_URL_KEYS)
+            if value is not None:
+                _set_field(arguments, "watch", value, problems)
+        elif word in _SCRIPT_KEYS or (
+            word in _SCRIPT_TRIGGER_KEYS
+            and "script" in map(spelling, _json_object(arguments[key]) or {})
+        ):
+            item = arguments.pop(key)
+            if is_placeholder(item) or (word == "noagent" and _boolean(item) is not True):
+                continue
+            problems.add(
+                f'"{key}" is not available: a job runs no script of its own and always runs its '
+                "prompt. watch checks a command or URL before each run, and the run starts only "
+                "when the output changed.",
+                watch=WATCH_STAND_IN,
+            )
+
+
+def _watch_value(key: str, item: Any, problems: _Problems, *, url: bool) -> str | None:
+    """The ``watch`` string a value asks for; None asks for nothing."""
+    request = _json_object(item)
+    if request is not None:
+        # The RPC and stored shape: {"command": ...} or {"url": ...}.
+        fields = {spelling(name): value for name, value in request.items()}
+        found = [(name, fields[name]) for name in ("command", "url") if name in fields]
+        if len(found) != 1 or not isinstance(found[0][1], str):
+            problems.add(
+                "watch takes one string: a command, or an http(s) URL.", watch=WATCH_STAND_IN
+            )
+            return None
+        url = found[0][0] == "url"
+        item = found[0][1]
+    if item is False or (isinstance(item, str) and spelling(item) in _NO_WATCH_WORDS):
+        return NO_WATCH
+    if is_placeholder(item):
+        return None
+    if not isinstance(item, str):
+        problems.add("watch takes one string: a command, or an http(s) URL.", watch=WATCH_STAND_IN)
+        return None
+    if _TEMPLATE.match(item):
+        # Dropped, the watch the call was meant to set would be lost; run, it would fail.
+        raise ToolContractError(
+            f'{REFUSAL_PREFIX}{key} "{item.strip()}" is a stand-in. Send the command or '
+            "http(s) URL to check in its place, or leave watch out."
+        )
+    text = item.strip()
+    if url and not _URL_SCHEME.match(text) and not any(char.isspace() for char in text):
+        text = "https://" + text
+    return text
+
+
 def _read_extras(arguments: dict[str, Any]) -> None:
     """Fold descriptive fields into name and drop fields that request nothing."""
     for key in list(arguments):
@@ -799,12 +870,14 @@ __all__ = [
     "EVENT_TIME_STAND_IN",
     "HERE",
     "NEW_SESSION",
+    "NO_WATCH",
     "SELF_TARGET",
     "CronCallRefusedError",
     "OMIT",
     "REFUSAL_PREFIX",
     "TIMEZONE_FIELD",
     "UNADVERTISED_PARAMETERS",
+    "WATCH_STAND_IN",
     "ambiguous_event_time",
     "event_time_readings",
     "normalize_cron_arguments",

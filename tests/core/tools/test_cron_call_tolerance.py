@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from core.automation.cron import CronWatch
 from core.tools.cron import CRON_TOOL_NAME
 from tests.core.tools.scheduling_tool_support import JOB_PROMPT, CronTool, cron_tool
 
@@ -277,6 +278,79 @@ def test_delivery_elsewhere_is_refused_with_the_targets_a_job_has(
 
     assert cause in message
     assert '"deliver":"here"}' in message and '"deliver":"app"}' in message
+
+
+_STATUS_URL = "https://status.example/health"
+
+
+@pytest.mark.parametrize(
+    ("fields", "watch"),
+    [
+        pytest.param(
+            {"monitor_url": "status.example/health"},
+            CronWatch("url", _STATUS_URL),
+            id="hermes-monitor-url",
+        ),
+        pytest.param({"watch": {"url": _STATUS_URL}}, CronWatch("url", _STATUS_URL), id="rpc"),
+        pytest.param(
+            {"watch": f"curl -s {_STATUS_URL}"},
+            CronWatch("command", f"curl -s {_STATUS_URL}"),
+            id="command-with-url",
+        ),
+        pytest.param(
+            {"watch_command": "git status --short"},
+            CronWatch("command", "git status --short"),
+            id="watch-command",
+        ),
+        pytest.param({"watch": "none"}, None, id="none"),
+        pytest.param({"watch": ""}, None, id="empty"),
+    ],
+)
+def test_watch_spellings_choose_what_the_job_checks(
+    tool: CronTool, fields: dict[str, Any], watch: CronWatch | None
+) -> None:
+    job, _text = tool.created(
+        {"action": "create", "prompt": JOB_PROMPT, "schedule": "every 2h", **fields}
+    )
+
+    assert job.watch == watch
+
+
+@pytest.mark.parametrize(
+    ("fields", "cause", "send"),
+    [
+        pytest.param(
+            {"monitor_script": "check_price.py"},
+            '"monitor_script" is not available: a job runs no script of its own',
+            True,
+            id="hermes-monitor-script",
+        ),
+        pytest.param(
+            {"script": "digest.py", "no_agent": True},
+            '"no_agent" is not available',
+            True,
+            id="hermes-script-job",
+        ),
+        pytest.param(
+            {"trigger": {"script": "return {fire: true}"}},
+            '"trigger" is not available',
+            True,
+            id="openclaw-trigger",
+        ),
+        pytest.param(
+            {"watch": "<command>"}, 'watch "<command>" is a stand-in', False, id="stand-in"
+        ),
+    ],
+)
+def test_a_check_vbot_cannot_run_is_refused_with_watch(
+    tool: CronTool, fields: dict[str, Any], cause: str, send: bool
+) -> None:
+    message = tool.refused(
+        {"action": "create", "prompt": JOB_PROMPT, "schedule": "every 2h", **fields}
+    )
+
+    assert cause in message
+    assert message.endswith('"watch":"<command or URL to check>"}') == send
 
 
 def test_refusal_names_other_fields_the_corrected_call_drops(tool: CronTool) -> None:

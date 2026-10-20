@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import cache
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from core.automation.cron import (
+    MAX_CONSECUTIVE_CRON_FAILURES,
     CronDelivery,
     CronJobInPastError,
     CronJobNotFoundError,
@@ -18,6 +20,7 @@ from core.automation.cron import (
     CronTargetError,
     CronTargetProjectNotFoundError,
     CronTargetUnavailableError,
+    CronWatch,
 )
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.tools._cron_arguments import (
@@ -28,10 +31,12 @@ from core.tools._cron_arguments import (
     EVENT_TIME_STAND_IN,
     HERE,
     NEW_SESSION,
+    NO_WATCH,
     OMIT,
     REFUSAL_PREFIX,
     SELF_TARGET,
     UNADVERTISED_PARAMETERS,
+    WATCH_STAND_IN,
     CronCallRefusedError,
     ambiguous_event_time,
     event_time_readings,
@@ -78,6 +83,7 @@ _UPDATE_FIELDS = (
     "repeat",
     "session",
     "deliver",
+    "watch",
     ENABLED_FIELD,
 )
 _SCHEDULE_FORMS = (
@@ -87,6 +93,8 @@ _SCHEDULE_FORMS = (
 # Values only the Agent can choose; a call that sends one back unchanged changes nothing.
 _SCHEDULE_STAND_IN = "<when>"
 _FUTURE_STAND_IN = "<future time>"
+_REPEATING_STAND_IN = "<repeating schedule>"
+_URL = re.compile(r"https?://\S+", re.IGNORECASE)
 _TARGET_ADDRESS_RECOMMENDATION = (
     'Set "target" to an existing Agent id, or to agent@project for a member of a Project Team'
 )
@@ -172,6 +180,15 @@ CRON_TOOL_PARAMETERS: JsonObject = {
                 "app (vBot, with a notification) or none. Omit on create for here."
             ),
         },
+        "watch": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Command or http(s) URL to check before each run; the job runs only when the "
+                "output changed, and the run gets the diff. A command's non-zero exit counts as "
+                "a failed run. Omit to run every time; on update, none stops watching."
+            ),
+        },
     },
     "required": ["action"],
 }
@@ -212,7 +229,12 @@ def register_cron_tool(
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if arguments.get("action") in _REFERENCE_ACTIONS:
             async with reference_lock:
-                return await _handle_cron_tool(cron_service, context, arguments)
+                before = _stored_watch(cron_service, arguments)
+                result = await _handle_cron_tool(cron_service, context, arguments)
+            # A check can take a minute; other Agent and Project changes need not wait for it.
+            if arguments.get("watch", NO_WATCH) != NO_WATCH:
+                return await _with_first_check(cron_service, result, before)
+            return result
         return await _handle_cron_tool(cron_service, context, arguments)
 
     registry.register(
@@ -348,6 +370,7 @@ async def _handle_create(
         _session_id(context, arguments, agent_id, project_id) if "session" in arguments else None
     )
     delivery, delivery_note = _delivery(context, arguments, agent_id, project_id)
+    watch = _watch(arguments)
     job = await cron_service.create_job(
         agent_id=agent_id,
         name=arguments.get("name"),
@@ -365,6 +388,7 @@ async def _handle_create(
         status="paused" if paused else "active",
         project_id=project_id,
         delivery=delivery.stored(),
+        watch=watch,
         actor="tool",
     )
     notes = [note] if note else []
@@ -398,7 +422,8 @@ async def _handle_update(
         raise CronCallRefusedError(
             refusal(
                 "update needs a field to change: name, prompt, schedule, event_id, repeat, "
-                "target, session or deliver. To pause or resume the job, use disable or enable.",
+                "target, session, deliver or watch. To pause or resume the job, use disable or "
+                "enable.",
                 arguments,
                 schedule=_SCHEDULE_STAND_IN,
             )
@@ -440,6 +465,8 @@ async def _handle_update(
         if "deliver" in arguments:
             delivery, _note = _delivery(context, arguments, agent_id, project_id)
             updates["delivery"] = delivery.stored()
+    if "watch" in arguments:
+        updates["watch"] = _watch(arguments)
     if ENABLED_FIELD in arguments:
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
     job = await cron_service.update_job(job_id, actor="tool", **updates)
@@ -530,6 +557,61 @@ def _delivery(
         ),
         None,
     )
+
+
+def _watch(arguments: JsonObject) -> CronWatch | None:
+    """What a call has the job check before each run: an http(s) URL, else a command."""
+    text = arguments.get("watch", NO_WATCH)
+    if text == NO_WATCH:
+        return None
+    kind = "url" if _URL.fullmatch(text) else "command"
+    try:
+        return CronWatch.parse(kind, text)
+    except CronJobValidationError as error:
+        problem = (
+            f'watch "{text}" is not a valid http or https URL.'
+            if kind == "url"
+            else f"watch is a command of {len(text)} characters, and a command can have at "
+            "most 4000. Save the check as a script file and watch the command that runs it."
+        )
+        raise CronCallRefusedError(refusal(problem, arguments, watch=WATCH_STAND_IN)) from error
+
+
+def _stored_watch(cron_service: CronService, arguments: JsonObject) -> CronWatch | None:
+    """The watch of the job an update names, before the update."""
+    if arguments.get("action") != "update" or not isinstance(arguments.get("id"), str):
+        return None
+    try:
+        return cron_service.get_job(arguments["id"]).watch
+    except CronJobNotFoundError:
+        return None
+
+
+async def _with_first_check(
+    cron_service: CronService, result: JsonObject, before: CronWatch | None
+) -> JsonObject:
+    """Wait for the first check of a watch the call set or changed, and show its outcome."""
+    data = result.get("data")
+    if not result.get("ok") or not isinstance(data, dict) or "watch" not in data:
+        return result
+    finished = await cron_service.await_first_check(data["id"])
+    try:
+        job = cron_service.get_job(data["id"])
+    except CronJobNotFoundError:
+        return result
+    if job.watch is None or job.watch == before:
+        return result
+    notes = [data["note"]] if data.get("note") else []
+    if not finished:
+        notes.append("The first check is still running; list shows its outcome as last_check.")
+    elif job.last_checked_at is not None and job.last_check_error is not None:
+        notes.append(
+            "The first check failed (last_check_error). Fix watch with update, or the job stops "
+            f"after {MAX_CONSECUTIVE_CRON_FAILURES} failed checks in a row."
+        )
+    elif job.last_checked_at is not None:
+        notes.append("The first check recorded the current output; runs start when it changes.")
+    return _job_success(cron_service, job, notes)
 
 
 async def _handle_delete(cron_service: CronService, arguments: JsonObject) -> JsonObject:
@@ -666,6 +748,14 @@ def _validation_message(
     if detail.startswith(("delivery", "a job of a Project Agent cannot deliver")):
         # The chat cannot take the job's answers; vBot always can.
         return refusal(f"{detail}.", arguments, deliver="app")
+    if detail.startswith("watch applies only"):
+        text = 'watch needs a repeating schedule (five cron fields or "every <duration>")'
+        alternatives: list[dict[str, Any]] = [{"schedule": _REPEATING_STAND_IN}]
+        if action == "create":
+            text += "; to keep this schedule, leave watch out"
+            alternatives.append({"watch": OMIT})
+        calls = " or ".join(render_call(arguments, **fields) for fields in alternatives)
+        return f"{REFUSAL_PREFIX}{text}: {calls}"
     if "Completed or missed jobs" in detail:
         return (
             f"cron was not run: {detail}. The job has finished; create a new job instead, or "
@@ -704,6 +794,8 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
     data["deliver"] = _delivery_text(job.delivery)
     if job.schedule_type != "once" and job.remaining_runs is not None:
         data["repeat"] = job.remaining_runs
+    if job.watch is not None:
+        data["watch"] = job.watch.target
     last_run = job.last_fired_at or job.last_attempt_at
     if last_run:
         data["last_run"] = _local_time(last_run, zone)
@@ -712,6 +804,10 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
         data["last_outcome"] = "success (answered [SILENT])" if silent else job.last_outcome
     if job.last_error:
         data["last_error"] = job.last_error
+    if job.watch is not None and job.last_checked_at:
+        data["last_check"] = _local_time(job.last_checked_at, zone)
+    if job.watch is not None and job.last_check_error:
+        data["last_check_error"] = job.last_check_error
     if job.consecutive_failures:
         data["failures_in_a_row"] = job.consecutive_failures
     return data
@@ -731,7 +827,8 @@ def _job_block(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> str:
     lines.append("prompt: " + "\n  ".join(prompt_lines))
     if job.status == "failed":
         lines.append(
-            f'note: stopped after failed runs; {{"action":"enable","id":"{job.id}"}} restarts it.'
+            f"note: stopped after {'failed checks or runs' if job.watch else 'failed runs'}; "
+            f'{{"action":"enable","id":"{job.id}"}} restarts it.'
         )
     return "\n".join(lines)
 

@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 
 import core.tools.cron as cron_tool_module
-from core.automation.cron import CronDelivery
+from core.automation.cron import CronDelivery, WatchCheckError
 from core.chat import ReplySurface
 from core.projects import (
     AgentResolutionError,
@@ -45,6 +45,7 @@ def test_schema_advertises_only_the_canonical_fields() -> None:
         "repeat",
         "session",
         "deliver",
+        "watch",
     ]
     assert properties["deliver"]["enum"] == ["here", "app", "none"]
     assert properties["action"]["enum"] == [
@@ -643,6 +644,78 @@ def test_a_chat_that_cannot_take_the_answers_is_refused_with_vbot_instead(
 
     assert cause in message
     assert message.endswith('"deliver":"app"}')
+
+
+@pytest.mark.asyncio
+async def test_a_watch_is_checked_at_once_and_none_stops_it(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    missing = WatchCheckError("The check command exited with code 1: status.txt not found")
+    tool.checks.answers.extend(["Status: up", missing])
+    tool.service.start()
+    try:
+        envelope, created = await tool.call_async(
+            {
+                "action": "create",
+                "prompt": PROMPT,
+                "schedule": "every 1h",
+                "watch": "https://status.example/",
+            }
+        )
+        job_id = envelope["data"]["id"]
+        _envelope, broken = await tool.call_async(
+            {"action": "update", "id": job_id, "watch": "Get-Content status.txt"}
+        )
+        # The same watch is not checked again.
+        _envelope, renamed = await tool.call_async(
+            {"action": "update", "id": job_id, "name": "Status", "watch": "Get-Content status.txt"}
+        )
+        _envelope, stopped = await tool.call_async(
+            {"action": "update", "id": job_id, "watch": "none"}
+        )
+    finally:
+        await tool.service.aclose()
+
+    assert "watch: https://status.example/" in created
+    assert re.search(rf"^last_check: {BERLIN_TIME}$", created, re.MULTILINE)
+    assert "last_check_error" not in created
+    assert "The first check recorded the current output" in created
+    assert "watch: Get-Content status.txt" in broken
+    assert "last_check_error: The check command exited with code 1: status.txt not found" in broken
+    assert "The first check failed" in broken
+    assert "first check" not in renamed
+    assert "watch" not in stopped and "last_check" not in stopped
+    assert tool.only_job().watch is None
+    assert tool.checks.calls == [
+        ("url", "https://status.example/"),
+        ("command", "Get-Content status.txt", "agent-one", ""),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("fields", "cause", "send"),
+    [
+        pytest.param(
+            {"schedule": "in 2h", "watch": "https://status.example/"},
+            'watch needs a repeating schedule (five cron fields or "every <duration>")',
+            '"schedule":"<repeating schedule>","watch":"https://status.example/"} or '
+            f'{{"action":"create","prompt":"{PROMPT}","schedule":"in 2h"}}',
+            id="one-time",
+        ),
+        pytest.param(
+            {"schedule": "every 1h", "watch": "x" * 4001},
+            "a command can have at most 4000",
+            '"watch":"<command or URL to check>"}',
+            id="long-command",
+        ),
+    ],
+)
+def test_a_watch_the_job_cannot_check_is_refused(
+    tmp_path: Path, fields: dict[str, Any], cause: str, send: str
+) -> None:
+    message = cron_tool(tmp_path).refused({"action": "create", "prompt": PROMPT, **fields})
+
+    assert cause in message
+    assert message.endswith(send)
 
 
 def test_session_current_continues_this_conversation_until_new(tmp_path: Path) -> None:

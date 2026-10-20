@@ -23,7 +23,7 @@ from core.providers.adapter import tool_result_text
 from core.tools.calendar import CALENDAR_TOOL_NAME, register_calendar_tool
 from core.tools.cron import CRON_TOOL_NAME, register_cron_tool
 from core.tools.tools import ToolContext, ToolRegistry
-from tests.core.automation.cron_test_support import FakeChats, make_service
+from tests.core.automation.cron_test_support import FakeChats, FakeChecks, make_service
 from tests.core.tools.tools_test_support import dispatch_as_executor
 
 SERVER_ZONE = "Europe/Berlin"
@@ -95,6 +95,8 @@ class CronTool(_DispatchedTool):
     calendar: CalendarService
     # The Channels jobs deliver to: tg-main belongs to agent-one, the calling Agent.
     chats: FakeChats
+    # Watch checks answer from a script; only a started service runs them.
+    checks: FakeChecks
 
     tool_name: ClassVar[str] = CRON_TOOL_NAME
 
@@ -168,6 +170,8 @@ def scheduling_tools(
     cron, trigger = make_service(tmp_path, agent_resolver=agent_resolver, tz=tz, calendar=calendar)
     chats = FakeChats()
     cron.set_chat_delivery(chats)
+    checks = FakeChecks()
+    cron.set_watch_checks(checks)
     registry = ToolRegistry()
     reference_lock = asyncio.Lock()
     register_cron_tool(registry, cron, reference_lock=reference_lock)
@@ -180,7 +184,9 @@ def scheduling_tools(
     }
     return (
         CalendarTool(**shared, service=calendar, cron=cron),
-        CronTool(**shared, service=cron, trigger=trigger, calendar=calendar, chats=chats),
+        CronTool(
+            **shared, service=cron, trigger=trigger, calendar=calendar, chats=chats, checks=checks
+        ),
     )
 
 
