@@ -266,6 +266,46 @@ async def test_a_regex_without_matches_names_the_multiline_search_when_it_spans_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("arguments", "suggested", "occurrences"),
+    [
+        # Swarm run 2026-10-20: a phrase searched to confirm it was gone had wrapped in HTML.
+        ({"pattern": "and the feed-in"}, r"and\s+the\s+feed-in", 1),
+        # Matches within lines stay; the note counts the ones a line break hides.
+        ({"pattern": "feed-in tariff"}, r"feed-in\s+tariff", 3),
+        ({"pattern": "feed-in tariff|meter", "output": "files"}, r"feed-in\s+tariff|meter", 4),
+        ({"pattern": "a (b) c", "args": ["-F"], "output": "count"}, r"a\s+\(b\)\s+c", 1),
+        # No line break inside any occurrence, or a search that cannot span lines.
+        ({"pattern": "meter reading"}, None, 0),
+        ({"pattern": "feed-in tariff", "args": ["-v"], "glob": "*.html"}, None, 0),
+        ({"pattern": "feed-in tariff", "args": ["-x"]}, None, 0),
+    ],
+)
+async def test_a_phrase_search_counts_the_matches_a_line_break_hides(
+    project: Path, arguments: dict, suggested: str | None, occurrences: int
+):
+    (project / "wrapped.html").write_text(
+        "<p>The meter reading and the\n   feed-in tariff differ.</p>\n"
+        "<p>Each feed-in\ntariff applies once.</p>\n"
+        "<p>One feed-in tariff is shown.</p>\n"
+        "<p>Keep a (b)\nc here.</p>\n"
+    )
+    result = await dispatch(project, arguments)
+    assert result["ok"], result
+    if suggested is None:
+        assert "note" not in result["data"]
+        return
+    assert f'"{suggested}"' in result["data"]["note"]
+    # The call the note names finds every occurrence, those within lines included.
+    args = [arg for arg in arguments.get("args", []) if arg != "-F"]
+    spanning = await dispatch(
+        project, {"pattern": suggested, "args": [*args, "-U"], "output": "count"}
+    )
+    assert spanning["data"]["content"] == f"wrapped.html:{occurrences}"
+    assert "note" not in spanning["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("arguments", "noted"),
     [
         # Swarm run 2026-10-12: one counted line held the text three times.

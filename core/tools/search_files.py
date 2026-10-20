@@ -58,6 +58,8 @@ from core.tools._search_hints import (
     repaired_glob_note,
     spanning_note,
     unnamed_files_note,
+    wrapped_phrase_note,
+    wrapped_phrases,
 )
 from core.tools._search_query import (
     LIST_MODES,
@@ -506,6 +508,58 @@ def _recount(
     return found
 
 
+def _note_wrapped_phrases(
+    execution: SearchExecution,
+    query: SearchQuery,
+    scopes: list[Scope],
+    patterns: list[str],
+    *,
+    matched: bool,
+) -> bool:
+    """Count the matches a line break between two words of a phrase hid from the search.
+
+    Returns whether a note now says how many there are and which call finds
+    them; ``matched`` when the search found others within lines. One more
+    counting pass runs, and only for fixed text with a space in it. It gets half
+    the remaining time, and running out of it leaves the note out without
+    making the search's own result partial.
+    """
+    if (
+        patterns is not query.patterns
+        or query.mode not in {"content", "files_with_matches", "count"}
+        or "--invert-match" in query.rg_args
+        or "--line-regexp" in query.rg_args
+    ):
+        return False
+    phrases = wrapped_phrases(patterns, literal=query.literal)
+    if phrases is None:
+        return False
+    spanning, pattern = phrases
+    variant = replace(
+        query, rg_args=[*query.rg_args, "--no-fixed-strings", "--multiline"], literal=False
+    )
+    budget = SearchBudget(
+        execution.context, timeout_seconds=execution.budget.remaining_seconds() / 2
+    )
+    spare = SearchExecution(execution.binary, execution.context, budget, execution.cwd)
+    found = _recount(spare, variant, scopes, spanning)
+    matches = sum(entry.count for entry in found.entries) if found is not None else 0
+    if found is None or not matches:
+        return False
+    files = sum(1 for entry in found.entries if entry.count)
+    query.notes.append(
+        wrapped_phrase_note(
+            pattern,
+            matches,
+            files,
+            matched=matched,
+            literal=query.literal,
+            multiline=query.multiline,
+        )
+    )
+    return True
+
+
 def _note_no_match(
     execution: SearchExecution,
     query: SearchQuery,
@@ -649,21 +703,22 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -
             found.entries = named
             _restart_past_the_end(query, len(named))
             return _Outcome(entry_page(named, query), found, len(named), len(named))
-        _note_no_match(execution, query, scopes, patterns, listed, repair_note)
+        if not _note_wrapped_phrases(execution, query, scopes, patterns, matched=False):
+            _note_no_match(execution, query, scopes, patterns, listed, repair_note)
     elif not found.entries:
         # Only a result without entries names the paths ignore files excluded.
         for scope in scopes:
             found.ignored.extend(execution.ignored_scan(query, scope))
+    _restart_past_the_end(query, lines_total if query.mode == "content" else len(found.entries))
+    if lines_total and not query.offset and found.complete and not execution.budget.stopped:
+        if query.mode == "files_with_matches":
+            _note_named_files(execution, query, scopes)
+        elif query.mode == "count":
+            _note_match_count(execution, query, scopes, patterns, lines_total)
+        _note_wrapped_phrases(execution, query, scopes, patterns, matched=True)
     if query.mode != "content":
-        _restart_past_the_end(query, len(found.entries))
-        if lines_total and not query.offset and found.complete and not execution.budget.stopped:
-            if query.mode == "files_with_matches":
-                _note_named_files(execution, query, scopes)
-            elif query.mode == "count":
-                _note_match_count(execution, query, scopes, patterns, lines_total)
         page = entry_page(found.entries, query)
         return _Outcome(page, found, len(found.entries), lines_total)
-    _restart_past_the_end(query, lines_total)
     window = content_window(found.entries, query.offset, query.limit)
     events: dict[tuple[int, bytes], list[dict[str, Any]]] = {}
     for index, scope in enumerate(scopes):
