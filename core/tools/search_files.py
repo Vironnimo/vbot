@@ -182,6 +182,10 @@ def _entry(scope_index: int, scope: Scope, native: bytes, count: int, cwd: Path)
     return Entry(path, path_label(path, cwd), scope_index, native, count)
 
 
+# Paths named in the warnings about files ripgrep could not read, before "N more".
+_UNREADABLE_SHOWN = 5
+
+
 @dataclass
 class _Found:
     """Everything the counting or listing passes found, over all scopes."""
@@ -192,6 +196,9 @@ class _Found:
     complete: bool = True
     # Paths that ignore files excluded from the walk.
     ignored: list[Path] = field(default_factory=list)
+    # Paths ripgrep could not read, as warnings, and how many more it did not name.
+    unreadable: list[str] = field(default_factory=list)
+    unreadable_unnamed: int = 0
 
     def take(self, index: int, scope: Scope, result: ScanResult, cwd: Path) -> None:
         self.entries.extend(
@@ -199,6 +206,10 @@ class _Found:
         )
         self.warnings.extend(result.warnings)
         self.ignored.extend(result.ignored)
+        self.unreadable.extend(result.unreadable)
+        self.unreadable_unnamed += result.unreadable_unnamed
+        if result.unreadable or result.unreadable_unnamed:
+            self.complete = False
         if result.stopped_by is not None:
             reason = ""
             if result.stopped_by == "output":
@@ -211,6 +222,20 @@ class _Found:
             self.complete = False
         if result.files_searched is not None:
             self.files_searched = (self.files_searched or 0) + result.files_searched
+
+    def read_failures(self) -> list[str]:
+        """Name the first paths ripgrep could not read and count the others.
+
+        A root full of locked files, such as a browser profile, otherwise filled
+        every warning slot with them.
+        """
+        named = sorted(set(self.unreadable))
+        shown = named[:_UNREADABLE_SHOWN]
+        rest = len(named) - len(shown) + self.unreadable_unnamed
+        if rest:
+            more = " more" if shown else ""
+            shown.append(f"Could not read {rest}{more} {'path' if rest == 1 else 'paths'}.")
+        return shown
 
     def finish(self, query: SearchQuery) -> None:
         seen: set[str] = set()
@@ -250,6 +275,7 @@ def _list_directories(
         files.take(index, scope, result, execution.cwd)
         skipped.update(os.path.normcase(path) for path in result.skipped)
     found.warnings, found.complete, found.ignored = files.warnings, files.complete, files.ignored
+    found.unreadable, found.unreadable_unnamed = files.unreadable, files.unreadable_unnamed
     holding: set[str] | None = None
     if any(argument.startswith(("--type=", "--type-not=")) for argument in query.rg_args):
         holding = set()
@@ -644,14 +670,14 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -
         selected = [(entry, skip) for entry, skip in window if entry.scope == index]
         if not selected:
             continue
-        scope_events, warnings = execution.line_events(
+        scope_events, problems = execution.line_events(
             query,
             patterns,
             scope,
             [entry.native for entry, _ in selected],
             max(skip for _, skip in selected) + query.limit,
         )
-        found.warnings.extend(warnings)
+        found.take(index, scope, problems, execution.cwd)
         events.update(((index, path), value) for path, value in scope_events.items())
     page = content_page(window, events, query)
     return _Outcome(page, found, lines_total, lines_total)
@@ -699,7 +725,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     if budget.cancelled_by_user or context.was_cancelled_by_user():
         return tool_failure("cancelled_by_user", "Search aborted by the user")
     page, found = outcome.page, outcome.found
-    warnings = [*missing, *found.warnings]
+    warnings = [*missing, *found.read_failures(), *found.warnings]
     if budget.timed_out:
         warnings.append(
             "The search stopped at its 30-second limit, so results are partial. Narrow path "

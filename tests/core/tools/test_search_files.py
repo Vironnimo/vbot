@@ -682,27 +682,62 @@ def test_link_loops_become_warnings_and_the_rest_is_searched(tmp_path: Path) -> 
     assert data["summary"].endswith("The search is incomplete; see warnings.")
 
 
-def test_a_file_deleted_during_the_search_is_no_read_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def _read_errors(*named: tuple[str, int]) -> str:
+    return "\n".join(
+        f"rg: {name}: IO error for operation on {name}: failed (os error {code})"
+        for name, code in named
+    )
+
+
+_LOCKED = [f"locked_{index}.txt" for index in range(8)]
+
+
+@pytest.mark.parametrize(
+    ("diagnostics", "dropped", "warned", "unread"),
+    [
+        # ripgrep's walk listed a SQLite journal that was gone when it read it; any other
+        # read error, or a not-found error for a file that exists, still warns.
+        (
+            _read_errors(("gone.sqlite-journal", 2), ("locked_0.txt", 5), ("a.txt", 2)),
+            0,
+            ["locked_0.txt", "a.txt"],
+            0,
+        ),
+        # Swarm run 2026-10-20: a root full of locked files. The first five are named,
+        # the others and the messages past the native bound are counted.
+        (_read_errors(*((name, 32) for name in _LOCKED)), 40, _LOCKED[:5], 43),
+        # A message that names no path does not fail a search that ran.
+        ("rg: something unexpected", 0, ["something unexpected"], 0),
+    ],
+)
+def test_files_ripgrep_could_not_read_are_warnings_beside_the_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    diagnostics: str,
+    dropped: int,
+    warned: list[str],
+    unread: int,
 ) -> None:
-    # ripgrep's walk listed a SQLite journal that was gone when it read it; any other
-    # read error, or a not-found error for a file that exists, still warns.
-    _write(tmp_path, {"a.txt": "needle\n", "locked.txt": "x\n"})
+    _write(tmp_path, {"a.txt": "needle\n", **dict.fromkeys(_LOCKED, "x\n")})
     native_lines = execution.native_lines
 
     def with_read_errors(*args: Any, outcome: Any = None, **kwargs: Any) -> Iterator[bytes]:
         yield from native_lines(*args, outcome=outcome, **kwargs)
-        if outcome is not None:
-            outcome.diagnostics = "\n".join(
-                f"rg: {name}: IO error for operation on {name}: failed (os error {code})"
-                for name, code in (("gone.sqlite-journal", 2), ("locked.txt", 5), ("a.txt", 2))
-            )
+        # The counting pass reads every file; ripgrep fails after any such diagnostic.
+        if outcome is not None and "--json" not in args[1]:
+            outcome.returncode = 2
+            outcome.diagnostics, outcome.dropped = diagnostics, dropped
 
     monkeypatch.setattr(execution, "native_lines", with_read_errors)
     data = search(tmp_path, pattern="needle")
     assert data["content"] == "a.txt\n1:needle"
-    warned = " ".join(data["warnings"])
-    assert "locked.txt" in warned and "a.txt" in warned and "gone" not in warned
+    assert data["summary"].endswith("The search is incomplete; see warnings.")
+    warnings = data["warnings"]
+    assert all(any(text in warning for warning in warnings) for text in warned)
+    assert "gone" not in " ".join(warnings)
+    assert len(warnings) == len(warned) + bool(unread)
+    if unread:
+        assert str(unread) in warnings[-1]
 
 
 def test_junctions_are_followed_only_on_request_or_as_explicit_roots(tmp_path: Path) -> None:

@@ -1019,6 +1019,12 @@ _PATHS = "path must name a file or directory"
         ({"args": ["--foo", "needle"]}, "search_error", 'ripgrep has no flag "--foo"'),
         ({"args": ["-t", "nosuchtype", "needle"]}, "search_error", "--type-list"),
         ({"args": ["-g", "{a", "needle"]}, "search_error", 'The glob "{a" is invalid'),
+        # Another refusal keeps ripgrep's message and points to the flag reference.
+        (
+            {"pattern": r"needle\w+", "args": ["--regex-size-limit=10"]},
+            "search_error",
+            "exceeds size limit",
+        ),
         ({"args": ["-F", "needle", ""]}, "invalid_arguments", _PATHS),
         ({"args": ["needle", "-"]}, "invalid_arguments", _PATHS),
         ({"args": ["--files", "missing"]}, "path_not_found", "Nothing was searched."),
