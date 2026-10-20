@@ -358,8 +358,10 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         "--auto-load",
         nargs="*",
         metavar="<file>",
-        help="Repo files auto-loaded into project agent prompts",
+        help="Additional repository files loaded into the Project's prompts after the main "
+        "instruction file",
     )
+    _add_project_instruction_arguments(add_parser, default="on")
     _add_project_capability_arguments(add_parser)
 
     _add_command_parser(project_subparsers, "list", PROJECT_HELP["list"], example="project list")
@@ -444,8 +446,10 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         "--auto-load",
         nargs="*",
         metavar="<file>",
-        help="Replace the full auto-load file list",
+        help="Replace the list of additional files loaded after the main instruction file; "
+        "without values it clears the list",
     )
+    _add_project_instruction_arguments(set_parser, default=None)
     _add_project_capability_arguments(set_parser)
 
     set_override_parser = _add_command_parser(
@@ -524,6 +528,25 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         nargs="?",
         metavar="<path>",
         help="Directory on the server; omission inspects the server working directory",
+    )
+
+
+def _add_project_instruction_arguments(
+    parser: argparse.ArgumentParser, *, default: str | None
+) -> None:
+    omitted = "Omit for on." if default == "on" else "Omit to keep the current setting."
+    parser.add_argument(
+        "--auto-instructions",
+        choices=("on", "off"),
+        help="Load the repository's main instruction file on its own: AGENTS.md, else the "
+        "first of CLAUDE.md, .claude/CLAUDE.md, GEMINI.md, .github/copilot-instructions.md. "
+        + omitted,
+    )
+    parser.add_argument(
+        "--folder-instructions",
+        choices=("on", "off"),
+        help="Give Agents the AGENTS.md, CLAUDE.md or GEMINI.md of a subfolder once they "
+        "work in it. " + omitted,
     )
 
 

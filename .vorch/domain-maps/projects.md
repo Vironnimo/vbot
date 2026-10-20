@@ -12,7 +12,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 
 ### Project Anchor
 
-**Definition:** The vBot-owned directory `<data-dir>/projects/<project-id>/` containing `project.json`, the seeded `AGENTS.md`, and Project-local workspace anchors. It is the durable filesystem identity of a Project; Project-scoped Sessions are relationally addressed in the canonical Session database.
+**Definition:** The vBot-owned directory `<data-dir>/projects/<project-id>/` containing `project.json` and Project-local workspace anchors. It is the durable filesystem identity of a Project; Project-scoped Sessions are relationally addressed in the canonical Session database.
 
 **Not:** The repository at the Project's `cwd`; changing `cwd` does not move or replace the Project Anchor.
 
@@ -44,7 +44,7 @@ The format-neutral repository definition supplied by a Source adapter: Agent id,
 
 ### Project Context
 
-**Definition:** The current instructions, absolute Project path, and available Project Skills that tell an Agent how to work in a registered Project. Supplied automatically when that Project is the Agent's working Project, or loaded explicitly by an Identity Agent through the `project` Tool (`tools/project.md`). Auto-load files enter under the Prompt files cap (`prompts/prompt-files.md`).
+**Definition:** The current instructions, absolute Project path, and available Project Skills that tell an Agent how to work in a registered Project. Supplied automatically when that Project is the Agent's working Project, or loaded explicitly by an Identity Agent through the `project` Tool (`tools/project.md`). Its instructions are the repository's main instruction file (`AGENTS.md`, else the first of `CLAUDE.md`, `.claude/CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, chosen live by `core/projects/instructions.py` while `auto_instructions` is on) followed by the additional `auto_load` files; `Project.instruction_files` is the one resolver. They enter under the Prompt files cap (`prompts/prompt-files.md`). Folder instructions of subfolders reach the Agent later, as notes (`chat/request-building.md` -> Folder instructions).
 
 **Not:** An Agent type, Project membership, a Working Project or default Project, or a current-working-directory change; an explicit load changes none of those, and every one-shot `bash` call must set `workdir` again.
 
@@ -54,7 +54,7 @@ The format-neutral repository definition supplied by a Source adapter: Agent id,
 
 - `project_id` is stable and names the Project Anchor; `cwd` is a mutable pointer to the repository. Repository equality and working-directory equality never establish Project identity.
 - Project-owned state lives under the data directory. The repository and every Skill folder Source are read-only configuration sources: adapters may read their Agent and Skill files, but removal archives only the Project Anchor and never deletes or modifies their content.
-- A Project combines ordered, switchable Sources for Agents, Skills and instructions. Earlier active names win; shadowed definitions and unreadable inputs remain visible. New Sources activate on detection unless an active Agent/Skill name collides; an instruction Source activates only while no instruction file loads yet.
+- A Project combines ordered, switchable Sources for Agents and Skills. Earlier active names win; shadowed definitions and unreadable inputs remain visible. New Sources activate on detection unless an active Agent/Skill name collides. Instruction files are no Sources: a stored selection with an old `*.instructions` id stays inert.
 - `project.json` owns Project defaults, capability ceilings, Skill selections, and per-Agent overrides. Runtime resolution combines those values with freshly read repository Agent configuration and global defaults; it does not copy repository Agent files into the Project Anchor.
 - Project Agent Sessions use `(project_id, agent_id, session_id)` addresses in `<data-dir>/sessions.db`; the Project Anchor no longer contains canonical Session files. Agent and Project identifiers still pass shared validation before entering either database addresses or filesystem anchors.
 - Without a vBot Tool override, Tool access starts from the Project Tool Whitelist; Profile allowlists, rules and denials narrow it to the Agent's own Tools; followers and the Session's grants (`message_parent` for a delegated Run) still activate. A present `overrides.<agent_id>.tool_access` completely replaces that repository Tool policy and may intentionally re-enable a repo-denied Tool, while still remaining inside the Project Tool Whitelist; mode `none` can remove everything and `selected` can narrow the Project Agent to one Tool. Skill access follows `(project skills + enabled bundled skills + enabled global skills) - disabled project skills - {"*"}`; neither repository configuration nor an Agent override may exceed Project ceilings.

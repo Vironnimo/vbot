@@ -4,7 +4,7 @@ The anchor is the runtime home of a project in the **data-dir** — never in the
 repo (see add-projects.md → Speicherort & Datenmodell). Layout::
 
     <data_dir>/projects/<project-id>/
-        project.json                 ← cwd, default agent/model, auto_load
+        project.json                 ← cwd, default agent/model, instruction settings
 
 The anchor holds **no run config** — only Project configuration; config comes live
 from the scan/repo. This module owns creation, read, list, cwd-mutation, and
@@ -49,7 +49,6 @@ from core.projects.projects import (
     load_validated_project_json,
     project_format,
     project_from_dict,
-    seed_default_auto_load,
     validate_project_data,
 )
 from core.settings import (
@@ -161,6 +160,8 @@ class ProjectStore:
         model_mappings: dict[str, str] | None = None,
         auto_load: list[str] | None = None,
         default_top_p: float | None = None,
+        auto_instructions: bool = True,
+        folder_instructions: bool = True,
     ) -> Project:
         """Create and persist a project anchor.
 
@@ -169,9 +170,6 @@ class ProjectStore:
         have to exist yet — a bare/missing repo is detected at open time, not
         here — but it is normalized (symlinks, ``.``/``..``) before storage.
         """
-        # A new project starts with AGENTS.md seeded as its first auto-load entry
-        # (the project-instruction convention). Seeded here, in create only — never
-        # in build_project, which update shares — so removing it later sticks.
         with self._change():
             project = build_project(
                 project_id,
@@ -184,7 +182,9 @@ class ProjectStore:
                 default_top_p=default_top_p,
                 sources=sources,
                 model_mappings=model_mappings,
-                auto_load=seed_default_auto_load(auto_load),
+                auto_load=auto_load,
+                auto_instructions=auto_instructions,
+                folder_instructions=folder_instructions,
             )
             _reject_reserved_project_id(project.project_id)
 
@@ -222,7 +222,6 @@ class ProjectStore:
                 project.sources,
                 detect_sources(root, skill_scan=skill_scan, selections=project.sources),
                 root=root,
-                instructions_loaded=any((root / name).is_file() for name in project.auto_load),
             )
             if sources == project.sources:
                 raw = load_validated_json_file(
@@ -319,6 +318,8 @@ class ProjectStore:
                 "sources",
                 "model_mappings",
                 "auto_load",
+                "auto_instructions",
+                "folder_instructions",
                 "allowed_tools",
                 "skills_bundled_enabled",
                 "skills_global_enabled",
@@ -344,6 +345,8 @@ class ProjectStore:
                 sources=changes.get("sources", [item.to_dict() for item in project.sources]),
                 model_mappings=changes.get("model_mappings", project.model_mappings),
                 auto_load=changes.get("auto_load", list(project.auto_load)),
+                auto_instructions=changes.get("auto_instructions", project.auto_instructions),
+                folder_instructions=changes.get("folder_instructions", project.folder_instructions),
                 allowed_tools=changes.get("allowed_tools", list(project.allowed_tools)),
                 skills_bundled_enabled=changes.get(
                     "skills_bundled_enabled", list(project.skills_bundled_enabled)
@@ -432,6 +435,8 @@ class ProjectStore:
             sources=[item.to_dict() for item in project.sources],
             model_mappings=project.model_mappings,
             auto_load=list(project.auto_load),
+            auto_instructions=project.auto_instructions,
+            folder_instructions=project.folder_instructions,
             allowed_tools=list(project.allowed_tools),
             skills_bundled_enabled=list(project.skills_bundled_enabled),
             skills_global_enabled=list(project.skills_global_enabled),

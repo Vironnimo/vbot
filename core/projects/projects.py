@@ -3,11 +3,12 @@
 This is the public/main file of the ``core/projects`` deep module. A Project is
 a first-class entity (see GLOSSARY → Project): a stable ``project_id`` slug, a
 changeable ``display_name``, the repo ``cwd`` that tools resolve relative paths
-against, optional project-default agent/model pointers, and an ordered
-``auto_load`` file list. The minimal valid Project is just a cwd — team and
-auto-load files are optional. ``AGENTS.md`` (the tool-neutral project-instruction
-convention) is seeded as the first ``auto_load`` entry at creation, then a normal
-removable entry — vBot does not special-case it at render time.
+against, optional project-default agent/model pointers, and its instruction settings:
+whether the repository's main instruction file loads on its own
+(``auto_instructions``), an ordered list of additional files (``auto_load``),
+and whether folder instructions reach Agents working in subfolders
+(``folder_instructions``). The minimal valid Project is just a cwd; which file is
+the main instruction file is decided by ``core/projects/instructions.py``.
 
 This module owns the persisted schema and enforces it once at load time before
 constructing the entity. The on-disk anchor lifecycle and CRUD live in
@@ -51,6 +52,7 @@ from core.json_documents import (
     validate_format_version,
     warn_unknown_fields,
 )
+from core.projects.instructions import FolderInstructions, resolve_instruction_files
 from core.projects.paths import normalize_cwd
 from core.projects.sources.catalog import detect_sources, initial_sources, normalize_sources
 from core.projects.sources.profile import SourceSelection
@@ -135,6 +137,7 @@ OVERRIDE_FIELDS: frozenset[str] = frozenset(
 _PROJECT_CONFIG_FIELDS = frozenset(
     {
         "allowed_tools",
+        "auto_instructions",
         "auto_load",
         "created_at",
         "cwd",
@@ -144,6 +147,7 @@ _PROJECT_CONFIG_FIELDS = frozenset(
         "default_thinking_effort",
         "default_top_p",
         "display_name",
+        "folder_instructions",
         "overrides",
         "project_id",
         "skills_bundled_enabled",
@@ -187,30 +191,6 @@ def project_shape() -> JsonShape:
             ),
         },
     )
-
-
-# The tool-neutral project-instruction convention (the agents.md standard). Seeded
-# as the first ``auto_load`` entry when a project is created
-# (:func:`seed_default_auto_load`, used by ``ProjectStore.create``), then treated
-# like any other list entry — removable, reorderable, rendered only through the
-# list. CLAUDE.md and other tool-specific files are instruction Sources instead
-# (``core/projects/sources/catalog.py``), active only when no other file loads.
-PROJECT_AGENTS_FILE = "AGENTS.md"
-
-
-def seed_default_auto_load(auto_load: list[str] | None) -> list[str]:
-    """Return the ``auto_load`` list a brand-new project starts with.
-
-    Seeds :data:`PROJECT_AGENTS_FILE` as the first entry unless the caller already
-    named it (case-insensitive — the file may live on a case-insensitive
-    filesystem). **Creation-only:** editing a project must never re-seed, so a user
-    who removes AGENTS.md keeps it removed; only ``ProjectStore.create`` calls this.
-    """
-    existing = list(auto_load or [])
-    target = PROJECT_AGENTS_FILE.casefold()
-    if any(entry.strip().casefold() == target for entry in existing):
-        return existing
-    return [PROJECT_AGENTS_FILE, *existing]
 
 
 class ProjectError(ValueError):
@@ -302,6 +282,9 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     except ProjectError as error:
         add_error(diagnostics, "$.model_mappings", str(error))
     _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
+    for switch in ("auto_instructions", "folder_instructions"):
+        if switch in data and not isinstance(data[switch], bool):
+            add_error(diagnostics, f"$.{switch}", "must be true or false")
     validate_required_fields(diagnostics, "$", data, frozenset({"allowed_tools"}))
     validate_optional_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
     if isinstance(data.get("allowed_tools"), list):
@@ -471,7 +454,12 @@ class Project:
     default_top_p: float | None
     sources: list[SourceSelection]
     model_mappings: dict[str, str]
+    # The repository's main instruction file loads on its own while true
+    # (``core/projects/instructions.py``); ``auto_load`` holds additional files.
+    auto_instructions: bool
     auto_load: list[str]
+    # Agents working in a subfolder receive its folder instructions while true.
+    folder_instructions: bool
     # The Project Tool Whitelist — the hard ceiling for this project's config
     # agents (GLOSSARY → Project Tool Whitelist). ``build_project`` defaults it to
     # the base list; an explicit empty list is a real value (every tool off).
@@ -502,11 +490,19 @@ class Project:
 
     @property
     def instruction_files(self) -> list[str]:
-        from core.projects.sources.catalog import instruction_files
-
-        return list(
-            dict.fromkeys([*self.auto_load, *instruction_files(Path(self.cwd), self.sources)])
+        """The files this Project's instructions load from, in order. Blocking."""
+        return resolve_instruction_files(
+            Path(self.cwd), automatic=self.auto_instructions, additional=self.auto_load
         )
+
+    def folder_instructions_finder(self) -> FolderInstructions | None:
+        """The finder for this Project's folder instructions, or ``None`` when off.
+
+        Blocking: resolves the instruction files the System Prompt carries.
+        """
+        if not self.folder_instructions:
+            return None
+        return FolderInstructions.for_project(Path(self.cwd), self.instruction_files)
 
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-serializable mapping persisted to ``project.json``.
@@ -537,6 +533,13 @@ class Project:
         }
         if self.default_top_p is not None:
             data["default_top_p"] = self.default_top_p
+        # The switches are written only when off, like ``default_top_p`` above.
+        for switch, enabled in (
+            ("auto_instructions", self.auto_instructions),
+            ("folder_instructions", self.folder_instructions),
+        ):
+            if not enabled:
+                data[switch] = False
         return data
 
 
@@ -553,6 +556,8 @@ def build_project(
     sources: list[dict[str, Any]] | None = None,
     model_mappings: dict[str, str] | None = None,
     auto_load: list[str] | None = None,
+    auto_instructions: bool = True,
+    folder_instructions: bool = True,
     allowed_tools: list[str] | None = None,
     skills_bundled_enabled: list[str] | None = None,
     skills_global_enabled: list[str] | None = None,
@@ -583,15 +588,7 @@ def build_project(
         validated_sources = normalize_sources(
             sources
             if sources is not None
-            else [
-                item.to_dict()
-                for item in initial_sources(
-                    detect_sources(Path(validated_cwd)),
-                    instructions_loaded=any(
-                        (Path(validated_cwd) / name).is_file() for name in validated_auto_load
-                    ),
-                )
-            ]
+            else [item.to_dict() for item in initial_sources(detect_sources(Path(validated_cwd)))]
         )
     except ValueError as error:
         raise ProjectError(str(error)) from error
@@ -618,7 +615,9 @@ def build_project(
         default_top_p=validated_default_top_p,
         sources=validated_sources,
         model_mappings=validated_mappings,
+        auto_instructions=_validate_switch("auto_instructions", auto_instructions),
         auto_load=validated_auto_load,
+        folder_instructions=_validate_switch("folder_instructions", folder_instructions),
         allowed_tools=validated_allowed_tools,
         skills_bundled_enabled=validated_skills_bundled,
         skills_global_enabled=validated_skills_global,
@@ -651,7 +650,9 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         default_top_p=data.get("default_top_p", DEFAULT_DEFAULT_TOP_P),
         sources=normalize_sources(data.get("sources", [])),
         model_mappings=dict(data.get("model_mappings", {})),
+        auto_instructions=data.get("auto_instructions", True),
         auto_load=list(cast("list[str]", data.get("auto_load") or [])),
+        folder_instructions=data.get("folder_instructions", True),
         allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
         skills_global_enabled=list(cast("list[str]", data.get("skills_global_enabled") or [])),
@@ -747,6 +748,12 @@ def _validate_model_mappings(value: Any) -> dict[str, str]:
     ):
         raise ProjectError("model_mappings must map non-empty Model wishes to vBot Model ids")
     return dict(value)
+
+
+def _validate_switch(name: str, value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise ProjectError(f"{name} must be true or false")
+    return value
 
 
 def _validate_auto_load(auto_load: list[str] | None) -> list[str]:

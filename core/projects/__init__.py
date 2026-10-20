@@ -10,6 +10,7 @@ from core.projects.address import (
     format_agent_address,
     parse_agent_address,
 )
+from core.projects.instructions import FolderInstructions, main_instruction_file
 from core.projects.paths import (
     cwd_exists,
     cwd_identity_key,
@@ -59,6 +60,7 @@ __all__ = [
     "AgentResolver",
     "ArchivedProjectPayload",
     "ConfigAgent",
+    "FolderInstructions",
     "InvalidAgentAddressError",
     "InvalidProjectIdError",
     "ModelConfigurationError",
@@ -78,6 +80,7 @@ __all__ = [
     "cwd_identity_key",
     "effective_project_allowed_skills",
     "format_agent_address",
+    "main_instruction_file",
     "load_validated_project_json",
     "normalize_cwd",
     "parse_agent_address",

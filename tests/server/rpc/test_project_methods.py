@@ -69,6 +69,7 @@ async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
 ) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")
+    (repo / "CLAUDE.md").write_text("Instructions", encoding="utf-8")
 
     result = await rpc_result(
         state,
@@ -82,9 +83,10 @@ async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
     project = result["project"]
     assert project["project_id"] == "vbot"
     assert project["cwd_exists"] is True
-    # AGENTS.md is the first auto-load entry, so the convention file loads with
-    # no extra configuration.
-    assert project["auto_load"] == ["AGENTS.md"]
+    # The repository's instruction file loads with no configuration.
+    assert (project["auto_instructions"], project["folder_instructions"]) == (True, True)
+    assert project["auto_load"] == []
+    assert project["instruction_status"] == {"main_file": "CLAUDE.md", "missing": []}
     assert project["allowed_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
     assert project["skills_bundled_enabled"] == []
     assert project["skills_global_enabled"] == []
@@ -94,6 +96,20 @@ async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
     assert _team(result) == ["builder"]
     assert result["scan"]["report"]["clean"] is True
     assert state.runtime.projects.exists("vbot")
+
+    changed = await rpc_result(
+        state,
+        "project.set",
+        project_id="vbot",
+        auto_instructions=False,
+        folder_instructions=False,
+        auto_load=["NOTES.md"],
+    )
+    project = changed["project"]
+    assert (project["auto_instructions"], project["folder_instructions"]) == (False, False)
+    # The main file is still reported while off; an additional file that does
+    # not exist is listed as missing.
+    assert project["instruction_status"] == {"main_file": "CLAUDE.md", "missing": ["NOTES.md"]}
 
 
 @pytest.mark.asyncio
@@ -123,21 +139,15 @@ async def test_add_report_flags_unconfigured_model(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
-async def test_add_detects_mixed_sources_and_detect_lists_instruction_sources(
-    tmp_path: Path,
-) -> None:
+async def test_add_detects_mixed_sources(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "repo")
     _write_agent(repo, "builder.md")
     _write_claude_agent(repo, "reviewer.md", "reviewer")
+    # An instruction file is no Source: the main instruction file loads on its own.
     (repo / "CLAUDE.md").write_text("Instructions", encoding="utf-8")
     detected = await rpc_result(state, "project.detect", cwd=str(repo))
-    assert {item["id"] for item in detected["sources"]} == {
-        "opencode.agents",
-        "claude.agents",
-        "claude.instructions",
-    }
+    assert {item["id"] for item in detected["sources"]} == {"opencode.agents", "claude.agents"}
     result = await rpc_result(state, "project.add", cwd=str(repo))
     assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder", "reviewer"]
     assert await rpc_result(state, "project.detect", cwd=str(tmp_path / "missing")) == {

@@ -14,7 +14,7 @@ from core.utils.file_status import is_link_status
 if TYPE_CHECKING:
     from core.skills.skills import SkillScan
 
-type SourceKind = Literal["agents", "skills", "instructions"]
+type SourceKind = Literal["agents", "skills"]
 
 
 class AgentAdapter(Protocol):
@@ -59,13 +59,6 @@ SOURCE_DEFINITIONS = (
     SourceDefinition("cursor.skills", "cursor", "skills", (".cursor/skills",)),
     SourceDefinition("gemini.agents", "gemini", "agents", (".gemini/agents",)),
     SourceDefinition("gemini.skills", "gemini", "skills", (".gemini/skills",)),
-    SourceDefinition(
-        "claude.instructions", "claude", "instructions", ("CLAUDE.md", ".claude/CLAUDE.md")
-    ),
-    SourceDefinition("gemini.instructions", "gemini", "instructions", ("GEMINI.md",)),
-    SourceDefinition(
-        "copilot.instructions", "copilot", "instructions", (".github/copilot-instructions.md",)
-    ),
 )
 SOURCE_CATALOG = {source.id: source for source in SOURCE_DEFINITIONS}
 
@@ -186,14 +179,8 @@ def refresh_sources(
     detected: list[DetectedSource],
     *,
     root: Path | None = None,
-    instructions_loaded: bool = False,
 ) -> list[SourceSelection]:
-    """Append new sources without replacing any existing name's definition.
-
-    Instruction files usually repeat each other (``CLAUDE.md`` often restates or
-    imports ``AGENTS.md``), so a new instruction source starts active only while no
-    instruction file loads yet; ``instructions_loaded`` reports the Project's own.
-    """
+    """Append new sources without replacing any existing name's definition."""
     existing = {item.id for item in selections}
     active = {item.id for item in selections if item.enabled}
     by_id = {selection.id: selection for selection in selections}
@@ -208,19 +195,12 @@ def refresh_sources(
     skill_names = {
         name for item in detected if item.definition.id in active for name in item.skill_names
     }
-    instructions = instructions_loaded or any(
-        item.definition.kind == "instructions" and item.definition.id in active for item in detected
-    )
     result = list(selections)
     for item in detected:
         if item.definition.id in existing:
             continue
         incoming = {agent.agent_id for agent in item.agents if agent.agent_id}
-        if item.definition.kind == "instructions":
-            enabled = not instructions
-            instructions |= enabled
-        else:
-            enabled = not (incoming & agent_names or item.skill_names & skill_names)
+        enabled = not (incoming & agent_names or item.skill_names & skill_names)
         result.append(SourceSelection(item.definition.id, enabled))
         if enabled:
             agent_names |= incoming
@@ -228,23 +208,9 @@ def refresh_sources(
     return result
 
 
-def initial_sources(
-    detected: list[DetectedSource], *, instructions_loaded: bool
-) -> list[SourceSelection]:
-    """Select every detected source for a new Project, with one instruction file at most."""
-    selections = refresh_sources(
-        [],
-        [item for item in detected if item.definition.kind == "instructions"],
-        instructions_loaded=instructions_loaded,
-    )
-    chosen = {item.id for item in selections if item.enabled}
-    return [
-        SourceSelection(
-            item.definition.id,
-            item.definition.kind != "instructions" or item.definition.id in chosen,
-        )
-        for item in detected
-    ]
+def initial_sources(detected: list[DetectedSource]) -> list[SourceSelection]:
+    """Select every detected source for a new Project."""
+    return [SourceSelection(item.definition.id, True) for item in detected]
 
 
 def skill_roots(root: Path, selections: list[SourceSelection]) -> list[Path]:
@@ -273,18 +239,6 @@ def _links_to_other(root: Path, relative: str, folders: list[str]) -> bool:
     except OSError:
         return False
     return any(other != relative and (root / other).resolve() == target for other in folders)
-
-
-def instruction_files(root: Path, selections: list[SourceSelection]) -> list[str]:
-    return [
-        path
-        for selection in selections
-        if selection.enabled
-        if (definition := source_definition(selection.id)) is not None
-        and definition.kind == "instructions"
-        for path in definition.paths
-        if is_file_strict(root / path)
-    ]
 
 
 def normalize_sources(value: Any) -> list[SourceSelection]:

@@ -47,6 +47,8 @@ PROJECT_SET_FLAGS = (
     "--sources",
     "--model-mappings",
     "--auto-load",
+    "--auto-instructions",
+    "--folder-instructions",
     "--allowed-tools",
     "--enabled-bundled-skills",
     "--enabled-global-skills",
@@ -298,6 +300,18 @@ def _format_project_operation(action: str, data: Mapping[str, Any], fallback_id:
     return "\n".join(lines)
 
 
+def _switch_text(value: object) -> str:
+    return "off" if value is False else "on"
+
+
+def _auto_instructions_text(project: dict[str, Any]) -> str:
+    """``on (AGENTS.md)``: the switch, then the file it loads or would load."""
+    status = project.get("instruction_status")
+    main_file = status.get("main_file") if isinstance(status, dict) else None
+    found = main_file if isinstance(main_file, str) else "no instruction file found"
+    return f"{_switch_text(project.get('auto_instructions'))} ({found})"
+
+
 def _project_config_lines(project: object) -> list[str]:
     if not isinstance(project, dict):
         return ["  config: invalid project entry"]
@@ -314,8 +328,14 @@ def _project_config_lines(project: object) -> list[str]:
         f"  default_top_p: {top_p}",
         f"  default_thinking_effort: {thinking_effort}",
         f"  sources: {len(project.get('sources', []))}",
+        f"  auto_instructions: {_auto_instructions_text(project)}",
         f"  auto_load: {_format_string_list(project.get('auto_load'))}",
+        f"  folder_instructions: {_switch_text(project.get('folder_instructions'))}",
     ]
+    status = project.get("instruction_status")
+    missing = status.get("missing") if isinstance(status, dict) else None
+    if missing:
+        lines.append(f"  auto_load_missing: {_format_string_list(missing)}")
     optional_fields = (
         ("allowed_tools", "allowed_tools"),
         ("skills_bundled_enabled", "enabled_bundled_skills"),

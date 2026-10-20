@@ -90,7 +90,8 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
     data_dir = tmp_path / "data"
     repo = tmp_path / "repo"
     repo.mkdir()
-    # CLAUDE.md is the only instruction file at creation, so its Source is active.
+    # CLAUDE.md is the only instruction file at creation; the AGENTS.md added
+    # later replaces it as the main instruction file.
     (repo / "CLAUDE.md").write_text("Claude rules.", encoding="utf-8")
     skill_path = repo / ".opencode" / "skills" / "review" / "SKILL.md"
     projects = ProjectStore(data_dir)
@@ -116,7 +117,7 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
         "content": data["content"],
     }
     assert data["content"].count("Follow the Project rules.") == 1
-    assert data["content"].count("Claude rules.") == 1
+    assert "Claude rules." not in data["content"]
     assert data["content"].count("- review: Review changes.") == 1
     assert model_path(skill_path) not in data["content"]
     assert file_state.check_stale("session-one", agents_file.resolve()) is None
