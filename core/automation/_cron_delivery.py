@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from zoneinfo import ZoneInfo
@@ -61,6 +62,22 @@ class ChatDelivery(Protocol):
         thread_id: str | None = None,
         skip_session_id: str | None = None,
     ) -> bool: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CronFailureAlert:
+    """A failure alert for a job that delivers to vBot, raised where no Run reports it.
+
+    A failed Run of such a job reports itself; failed checks and Runs that could
+    not start have no Run, so vBot's accessors get this alert instead.
+    ``message`` is the fixed alert text a chat delivery gets.
+    """
+
+    job_id: str
+    name: str
+    agent_id: str
+    project_id: str | None
+    message: str
 
 
 def delivery_kind(job: CronJob) -> str:

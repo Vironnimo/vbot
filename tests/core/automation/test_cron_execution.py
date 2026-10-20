@@ -21,6 +21,7 @@ from core.automation import _cron_scheduler as cron_scheduler
 from core.automation import _cron_timing as cron_timing
 from core.automation.cron import (
     CronDelivery,
+    CronFailureAlert,
     CronJobInPastError,
     CronStorageError,
 )
@@ -332,6 +333,8 @@ async def test_what_reaches_the_user_follows_the_jobs_delivery(
     service, trigger_service = make_service(tmp_path)
     chats = FakeChats()
     service.set_chat_delivery(chats)
+    in_app: list[CronFailureAlert] = []
+    service.add_failure_alert_callback(in_app.append)
     job = await service.create_job(
         agent_id="agent-one",
         prompt="Check the build",
@@ -351,9 +354,11 @@ async def test_what_reaches_the_user_follows_the_jobs_delivery(
         await service._execution._trigger_job_run(job)
 
     assert service.get_job(job.id).status == "failed"
-    # vBot reports the answer, the second failure of the streak and the stop.
+    # vBot reports the answer, the second failure of the streak and the stop,
+    # each through its Run.
     reported = [True, False, False, True, False, False, True]
     assert decisions == (reported if delivery == "app" else [False] * len(reported))
+    assert in_app == []
     if delivery == "chat":
         assert [run.id for run, *_ in chats.relayed] == ["run-1"]
         alerts = [message for _, message, *_ in chats.sent]
@@ -369,19 +374,24 @@ async def test_what_reaches_the_user_follows_the_jobs_delivery(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["run-fails", "fire-abandoned"])
-async def test_a_chat_learns_when_a_once_job_fails_for_good(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
+@pytest.mark.parametrize(
+    ("path", "delivery"),
+    [("run-fails", "chat"), ("fire-abandoned", "chat"), ("fire-abandoned", "app")],
+)
+async def test_the_user_learns_when_a_once_job_fails_for_good(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str, delivery: str
 ) -> None:
     service, trigger_service = make_service(tmp_path)
     chats = FakeChats()
     service.set_chat_delivery(chats)
+    in_app: list[CronFailureAlert] = []
+    service.add_failure_alert_callback(in_app.append)
     job = await service.create_job(
         agent_id="agent-one",
         prompt="Remind me",
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
-        delivery=_CHAT,
+        delivery=_CHAT if delivery == "chat" else CronDelivery(kind="app"),
     )
     if path == "run-fails":
         scripted_runs(trigger_service, (RunStatus.FAILED, ""))
@@ -393,9 +403,22 @@ async def test_a_chat_learns_when_a_once_job_fails_for_good(
         await service._scheduler._run_once_job(job)
 
     assert service.get_job(job.id).status == "failed"
-    [(channel_id, alert, platform_target, thread_id)] = chats.sent
+    if delivery == "app":
+        # No Run started, so none reports the failure in vBot; the alert does.
+        [alert] = in_app
+        assert (alert.job_id, alert.name, alert.agent_id, alert.project_id) == (
+            job.id,
+            job.name,
+            "agent-one",
+            None,
+        )
+        assert "will not run again" in alert.message
+        assert chats.sent == []
+        return
+    [(channel_id, message, platform_target, thread_id)] = chats.sent
     assert (channel_id, platform_target, thread_id) == ("tg-main", "chat-42", "7")
-    assert "will not run again" in alert
+    assert "will not run again" in message
+    assert in_app == []
 
 
 @pytest.mark.asyncio

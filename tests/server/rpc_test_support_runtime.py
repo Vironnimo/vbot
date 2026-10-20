@@ -384,6 +384,9 @@ class StubJobService:
     def add_changed_callback(self, _callback: Callable[[], None]) -> Callable[[], None]:
         return _unsubscribe
 
+    def add_failure_alert_callback(self, _callback: Callable[[Any], None]) -> Callable[[], None]:
+        return _unsubscribe
+
     def bind_webhook_url(self, _base_url: str, _reach: str) -> None:
         """Cron's webhook address; the stub has no webhook jobs."""
 

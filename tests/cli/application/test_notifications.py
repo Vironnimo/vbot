@@ -193,6 +193,33 @@ def test_run_toast_respects_its_setting_and_the_read_acknowledgement(
 
 
 @pytest.mark.parametrize(
+    ("settings", "message", "body"),
+    [
+        pytest.param({}, "Job failed twice.", "Job failed twice.", id="alerted"),
+        pytest.param({}, "x" * 300, "x" * 254 + "…", id="cut-to-fit"),
+        pytest.param({"automation_failed": False}, "Job failed twice.", None, id="switched-off"),
+    ],
+)
+def test_a_cron_jobs_failure_alert_toasts_without_a_session(
+    settings: dict[str, bool], message: str, body: str | None
+):
+    sink = _Sink()
+    alert = {"job_id": "cron_1", "name": "Watch", "agent_id": "coder", "message": message}
+
+    async def scenario() -> None:
+        notifier = _notifier(sink, settings=settings)
+        notifier.event_received({"type": "cron_failure_alert", "payload": alert})
+        await _settle()
+
+    asyncio.run(scenario())
+
+    expected = Toast(
+        "cron:cron_1", "automation_failed", "Cron job failed · Coder", body or "", True
+    )
+    assert sink.shown == ([expected] if body is not None else [])
+
+
+@pytest.mark.parametrize(
     ("close_code", "setup", "toasted"),
     [
         pytest.param(1006, {}, True, id="server-vanished"),

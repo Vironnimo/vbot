@@ -16,7 +16,7 @@ from core.automation import _cron_events as _events
 from core.automation import _cron_schedule as _schedule
 from core.automation import _cron_timing as _timing
 from core.automation._cron_binding import CronEventBinding
-from core.automation._cron_delivery import ChatDelivery, check_chat_delivery
+from core.automation._cron_delivery import ChatDelivery, CronFailureAlert, check_chat_delivery
 from core.automation._cron_execution import CronExecution, _missing_session_text
 from core.automation._cron_jobs import (
     _MUTABLE_FIELDS,
@@ -102,6 +102,7 @@ __all__ = [
     "CRON_EXPRESSION_FIELD_COUNT",
     "ChatDelivery",
     "CronDelivery",
+    "CronFailureAlert",
     "CronJob",
     "CronJobInPastError",
     "CronJobNotFoundError",
@@ -223,6 +224,7 @@ class CronService:
         self._pending_restarts: set[str] = set()
         self._run_slots = asyncio.Semaphore(MAX_CONCURRENT_CRON_RUNS)
         self._changed_callbacks: set[Callable[[], None]] = set()
+        self._failure_alert_callbacks: set[Callable[[CronFailureAlert], None]] = set()
         self._timezone = _resolve_timezone(tz)
         self._timezone_changed = asyncio.Event()
         # Replaced and set on every calendar change: event jobs recompute their occurrences.
@@ -329,6 +331,22 @@ class CronService:
 
         def unsubscribe() -> None:
             self._changed_callbacks.discard(callback)
+
+        return unsubscribe
+
+    def add_failure_alert_callback(
+        self, callback: Callable[[CronFailureAlert], None]
+    ) -> Callable[[], None]:
+        """Subscribe to failure alerts for vBot itself and return an unsubscribe function.
+
+        A job that delivers to vBot raises one at the second failure of a streak
+        and when it stops, for failures no failed Run reports: failed checks and
+        Runs that could not start. The callback runs on the Event Loop.
+        """
+        self._failure_alert_callbacks.add(callback)
+
+        def unsubscribe() -> None:
+            self._failure_alert_callbacks.discard(callback)
 
         return unsubscribe
 
@@ -984,6 +1002,17 @@ class CronService:
             except Exception as error:
                 _LOGGER.error(
                     "Cron change callback failed: %s",
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+    def _raise_failure_alert(self, alert: CronFailureAlert) -> None:
+        for callback in tuple(self._failure_alert_callbacks):
+            try:
+                callback(alert)
+            except Exception as error:
+                _LOGGER.error(
+                    "Cron failure alert callback failed: %s",
                     error,
                     exc_info=(type(error), error, error.__traceback__),
                 )

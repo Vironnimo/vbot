@@ -220,7 +220,7 @@ class CronExecution:
                                 job.id,
                                 latest.status,
                             )
-                    await self._alert_failure(job.id, baseline)
+                    await self._alert_failure(job.id, baseline, run_reports=run is not None)
                     return CronRunOutcome(succeeded=False, admitted=admitted)
                 except Exception as error:
                     if run is None and await self._record_unavailable_target(job.id, error):
@@ -247,7 +247,7 @@ class CronExecution:
                         error,
                         exc_info=(type(error), error, error.__traceback__),
                     )
-                    await self._alert_failure(job.id, baseline)
+                    await self._alert_failure(job.id, baseline, run_reports=True)
                     return CronRunOutcome(succeeded=False, admitted=admitted)
 
                 latest = self._owner._jobs.get(job.id)
@@ -381,21 +381,43 @@ class CronExecution:
         return saved
 
     async def _alert_failure(
-        self, job_id: str, baseline: FailureBaseline | None, *, check: bool = False
+        self,
+        job_id: str,
+        baseline: FailureBaseline | None,
+        *,
+        check: bool = False,
+        run_reports: bool = False,
     ) -> None:
-        """Send the fixed failure alert to a chat delivery once a failure is recorded.
+        """Send the fixed failure alert to the job's delivery once a failure is recorded.
 
         It goes out at the second failure of a streak and when the job stops;
-        ``check`` says the failure was a watch check's. A job delivering to vBot
-        reports a failed Run through that Run instead, and a failed check not at all.
+        ``check`` says the failure was a watch check's. A chat gets the alert as
+        a message. A job delivering to vBot reports a failed Run through that Run
+        (``run_reports``); any other failure, such as a failed check or a Run
+        that could not start, reaches vBot's accessors as a
+        :class:`CronFailureAlert`. ``none`` gets nothing.
         """
         job = self._owner._jobs.get(job_id)
-        if job is None or baseline is None or _delivery.delivery_kind(job) != "chat":
+        if job is None or baseline is None:
+            return
+        kind = _delivery.delivery_kind(job)
+        if kind == "none" or (kind == "app" and run_reports):
             return
         text = _delivery.failure_alert(
             job, was_failed=baseline.was_failed, failures_before=baseline.failures, check=check
         )
         if text is None:
+            return
+        if kind == "app":
+            self._owner._raise_failure_alert(
+                _delivery.CronFailureAlert(
+                    job_id=job.id,
+                    name=job.name,
+                    agent_id=job.agent_id,
+                    project_id=job.project_id,
+                    message=text,
+                )
+            )
             return
         chats = self._owner._chats
         delivery = job.delivery

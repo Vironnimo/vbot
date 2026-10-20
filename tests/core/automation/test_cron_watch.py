@@ -14,6 +14,7 @@ from core.automation import _cron_timing as cron_timing
 from core.automation._cron_watch import WATCH_STATE_DIR_NAME, baseline_path
 from core.automation.cron import (
     CronDelivery,
+    CronFailureAlert,
     CronJobValidationError,
     CronService,
     CronWatch,
@@ -121,15 +122,20 @@ async def test_a_watching_job_runs_only_when_its_check_output_changed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", ["chat", "app"])
 async def test_failed_checks_count_toward_the_streak_and_alert_without_touching_run_outcomes(
-    tmp_path: Path,
+    tmp_path: Path, delivery: str
 ) -> None:
     service, trigger_service = make_service(tmp_path)
     chats = FakeChats()
     service.set_chat_delivery(chats)
+    in_app: list[CronFailureAlert] = []
+    service.add_failure_alert_callback(in_app.append)
     failure = WatchCheckError("The check command exited with code 1: boom")
     checks = FakeChecks(["ok", failure, failure, "ok", *[failure] * 5])
-    job_id = await _watching_job(service, checks, delivery=_CHAT)
+    job_id = await _watching_job(
+        service, checks, delivery=_CHAT if delivery == "chat" else CronDelivery(kind="app")
+    )
 
     for _ in range(4):
         await service._watcher.fire(service.get_job(job_id))
@@ -144,7 +150,10 @@ async def test_failed_checks_count_toward_the_streak_and_alert_without_touching_
     assert stopped.last_check_error == "The check command exited with code 1: boom"
     assert (stopped.last_outcome, stopped.last_error) == (None, None)
     trigger_service.trigger_run.assert_not_awaited()
-    alerts = [message for _, message, *_ in chats.sent]
+    # A chat gets the alerts as messages; vBot, without a failed Run to mark, gets
+    # them as alerts for its accessors.
+    alerts = [message for _, message, *_ in chats.sent] + [alert.message for alert in in_app]
+    assert {(alert.job_id, alert.agent_id) for alert in in_app} <= {(job_id, "agent-one")}
     assert len(alerts) == 3
     assert alerts[0] == alerts[1]
     assert alerts[0] == (
