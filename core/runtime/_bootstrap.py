@@ -766,6 +766,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._channel_service.relay_completion_run
         )
         runtime._goal_service.set_run_relay(runtime._channel_service.relay_completion_run)
+        runtime._cron_service.set_chat_delivery(runtime._channel_service)
         runtime._channel_service._notify_tool_registration_changed_hook = (
             runtime._reload_channel_tool_if_started
         )

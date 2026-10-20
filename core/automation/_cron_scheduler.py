@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from core.automation import _cron_claims as _claims
+from core.automation import _cron_delivery as _delivery
 from core.automation import _cron_events as _events
 from core.automation import _cron_schedule as _schedule
 from core.automation import _cron_timing as _timing
@@ -81,6 +82,7 @@ class CronScheduler:
                     job.last_fired_at = claimed_at
                     job.last_outcome = "unknown"
                     job.last_error = "vBot restarted after this once job was claimed"
+                    job.last_run_silent = False
                     needs_save = True
                     once_claims_to_remove.append(job.id)
                     continue
@@ -89,6 +91,7 @@ class CronScheduler:
                 if job.last_outcome is None:
                     job.last_outcome = "unknown"
                     job.last_error = "vBot restarted after the final Run was admitted"
+                    job.last_run_silent = False
                 needs_save = True
                 continue
 
@@ -395,21 +398,29 @@ class CronScheduler:
             attempts,
             job_id,
         )
+        baseline = self._owner._execution._failure_baseline(job_id)
         job.status = "failed"
         self._owner._jobs[job_id] = job
-        await self._owner._execution._save_jobs_after_fire(job_id)
+        await self._owner._execution._save_and_alert(job_id, baseline)
         await self._remove_claim(job_id)
 
     def _run_context(
         self, job: CronJob, late: _LateFire | None, event_due: _events.EventDue | None
-    ) -> str | None:
-        """The note before the Run's input: the event the job is due for, and lateness."""
+    ) -> str:
+        """The note before the Run's input.
+
+        It names the event the job is due for and any lateness, says where the
+        final answer goes, and carries the previous answer as data.
+        """
         parts = []
         if event_due is not None:
             parts.append(_events.context_note(job, event_due))
         if late is not None:
             parts.append(late.notice(job.id, _timing._utc_now()))
-        return "\n\n".join(parts) or None
+        parts.append(_delivery.delivery_note(job.delivery))
+        if job.last_result is not None:
+            parts.append(_delivery.previous_result_note(job.last_result, self._owner._timezone))
+        return "\n\n".join(parts)
 
     def _late_fire(self, owed: _schedule.OwedFire) -> _LateFire | None:
         """Describe a fire that starts after it was due; ``None`` when it is on time."""
@@ -538,13 +549,14 @@ class CronScheduler:
         if not owns_job_slot:
             return
 
+        baseline = self._owner._execution._failure_baseline(job_id)
         job = self._owner._jobs.get(job_id)
         if job is not None and job.status == "active" and job.schedule_type == "once":
             job.status = "failed"
             self._owner._jobs[job_id] = job
         if self._owner._execution._note_run_failure(job_id, error):
             # A crashed job task leaves only this callback, which must not wait for the file.
-            self._track_crash_save(self._owner._execution._save_jobs_after_fire(job_id))
+            self._track_crash_save(self._owner._execution._save_and_alert(job_id, baseline))
 
         job = self._owner._jobs.get(job_id)
         if self._owner._started and job is not None and job.status == "active":

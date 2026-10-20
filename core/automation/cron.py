@@ -16,6 +16,7 @@ from core.automation import _cron_events as _events
 from core.automation import _cron_schedule as _schedule
 from core.automation import _cron_timing as _timing
 from core.automation._cron_binding import CronEventBinding
+from core.automation._cron_delivery import ChatDelivery, check_chat_delivery
 from core.automation._cron_execution import CronExecution, _missing_session_text
 from core.automation._cron_jobs import (
     _MUTABLE_FIELDS,
@@ -23,6 +24,7 @@ from core.automation._cron_jobs import (
     _SCHEDULE_FIELDS,
     CRON_EXPRESSION_FIELD_COUNT,
     CRON_JOBS_FORMAT,
+    LAST_RESULT_MAX_CHARS,
     MAX_ACTIVE_CRON_JOBS,
     MAX_CONCURRENT_CRON_RUNS,
     MAX_CONSECUTIVE_CRON_FAILURES,
@@ -30,12 +32,14 @@ from core.automation._cron_jobs import (
     MAX_STORED_CRON_JOBS,
     MIN_INTERVAL_SECONDS,
     TERMINAL_CRON_JOB_STATUSES,
+    CronDelivery,
     CronJob,
     CronJobInPastError,
     CronJobNotFoundError,
     CronJobStatus,
     CronJobValidationError,
     CronOccurrence,
+    CronResult,
     CronRunOutcome,
     CronServiceError,
     CronStorageError,
@@ -43,6 +47,7 @@ from core.automation._cron_jobs import (
     CronTargetError,
     CronTargetProjectNotFoundError,
     CronTargetUnavailableError,
+    DeliveryKind,
     EventEdge,
     ParsedSchedule,
     ScheduleType,
@@ -83,12 +88,15 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CRON_EXPRESSION_FIELD_COUNT",
+    "ChatDelivery",
+    "CronDelivery",
     "CronJob",
     "CronJobInPastError",
     "CronJobNotFoundError",
     "CronJobStatus",
     "CronJobValidationError",
     "CronOccurrence",
+    "CronResult",
     "CronRunOutcome",
     "CronServiceError",
     "CronStorageError",
@@ -96,7 +104,9 @@ __all__ = [
     "CronTargetError",
     "CronTargetProjectNotFoundError",
     "CronTargetUnavailableError",
+    "DeliveryKind",
     "EventCalendar",
+    "LAST_RESULT_MAX_CHARS",
     "MAX_ACTIVE_CRON_JOBS",
     "MAX_CONCURRENT_CRON_RUNS",
     "MAX_CONSECUTIVE_CRON_FAILURES",
@@ -165,6 +175,8 @@ class CronService:
         self._agent_resolver = agent_resolver
         self._sessions = sessions
         self._calendar = calendar
+        # Delivers Run answers and failure alerts to Channel chats once wired.
+        self._chats: ChatDelivery | None = None
         self._data_root = Path(data_root).expanduser()
         self._cron_dir = self._data_root / "cron"
         self._jobs_path = self._cron_dir / "jobs.json"
@@ -190,6 +202,14 @@ class CronService:
         self._event_binding: CronEventBinding = CronEventBinding(self)
         if calendar is not None:
             calendar.add_changed_callback(self._event_binding._on_calendar_changed)
+
+    def set_chat_delivery(self, chats: ChatDelivery | None) -> None:
+        """Wire the Channels that deliver jobs' answers and alerts to chats.
+
+        Without it, a job cannot be set to deliver to a chat, and a stored chat
+        delivery logs a warning instead of sending.
+        """
+        self._chats = chats
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to persisted Cron changes and return an unsubscribe function."""
@@ -218,6 +238,7 @@ class CronService:
         session_id: str | None = None,
         status: CronJobStatus = "active",
         project_id: str | None = None,
+        delivery: CronDelivery | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CronJob:
         """Create and persist a new cron job.
@@ -225,7 +246,8 @@ class CronService:
         ``project_id=None`` is a global/identity target (unchanged); a set value
         scopes the fired Session/Run to that project's anchor. An ``event`` job
         names an existing calendar event; occurrences due before it was created
-        are not owed.
+        are not owed. ``delivery`` says where each Run's final answer goes; a
+        chat must belong to a Channel of the job's Identity Agent.
         """
         if schedule_type != "event" and (
             event_id is not None or event_edge is not None or event_offset_minutes is not None
@@ -258,10 +280,11 @@ class CronService:
                 last_fired_at=None,
                 created_at=_timing._utc_now_iso(),
                 project_id=project_id,
+                delivery=delivery,
             )
             self._validate_job(job, validate_references=False)
             self._event_binding._check_event_binding(job)
-            await self._validate_references_async(job)
+            await self._validate_references_async(job, check_delivery=True)
             self._reject_past_once_run(job)
             self._validate_capacity(job)
             self._jobs[job.id] = job
@@ -495,7 +518,12 @@ class CronService:
                 job_id, fields, validate_references=False
             )
             if changed_fields:
-                await self._validate_references_async(candidate)
+                # A chat is checked when it or the job's Agent changes, so an
+                # unrelated edit (pausing, say) works while its Channel is gone.
+                await self._validate_references_async(
+                    candidate,
+                    check_delivery=bool({"delivery", "agent_id"} & set(changed_fields)),
+                )
                 # A fire may have changed the job while its references were checked.
                 job, candidate, changed_fields, restart_task = self._stage_update(
                     job_id, fields, validate_references=False
@@ -848,12 +876,20 @@ class CronService:
             self._validate_references(job)
         _schedule.normalize_job_schedule(self._timezone, _timing._utc_now(), job)
 
-    async def _validate_references_async(self, job: CronJob) -> None:
-        """Event-Loop-safe :meth:`_validate_references`: its reads use the Session pool."""
+    async def _validate_references_async(
+        self, job: CronJob, *, check_delivery: bool = False
+    ) -> None:
+        """Event-Loop-safe :meth:`_validate_references`: its reads use the Session pool.
+
+        With ``check_delivery``, a chat delivery's Channel must exist and belong
+        to the job's Agent.
+        """
         if self._sessions is None:
             self._validate_references(job)
-            return
-        await self._sessions.run_async(self._validate_references, job)
+        else:
+            await self._sessions.run_async(self._validate_references, job)
+        if check_delivery:
+            await check_chat_delivery(job, self._chats)
 
     def _validate_references(self, job: CronJob) -> None:
         """Refuse a job whose target Agent or selected Session is unavailable. Blocking."""

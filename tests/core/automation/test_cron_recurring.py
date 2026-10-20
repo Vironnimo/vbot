@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -36,6 +36,7 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
         project_id: str | None = None,
         run_kind: RunKind,
         contributes_to_agent_activity: bool,
+        **_delivery: object,
     ) -> None:
         assert run_kind is RunKind.CRON
         assert contributes_to_agent_activity is False
@@ -61,6 +62,8 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
         project_id=None,
         run_kind=RunKind.CRON,
         contributes_to_agent_activity=False,
+        context_note=ANY,
+        completion_activity=ANY,
     )
     updated = service.get_job(job.id)
     assert updated.status == "paused"

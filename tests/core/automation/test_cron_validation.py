@@ -45,6 +45,39 @@ def test_validate_cron_jobs_data_accepts_missing_defaulted_metadata() -> None:
     assert diagnostics == []
 
 
+def test_validate_cron_jobs_data_checks_delivery_and_last_answer() -> None:
+    base = {
+        "id": "job-1",
+        "agent_id": "main",
+        "name": "Daily",
+        "prompt": "do it",
+        "schedule_type": "cron",
+        "cron_expression": "0 9 * * *",
+    }
+    diagnostics = _diagnostics(
+        {
+            "format_version": 1,
+            "jobs": [
+                {**base, "delivery": {"kind": "chat", "channel_id": "tg-main"}},
+                {**base, "id": "job-2", "delivery": {"kind": "app", "sound": True}},
+                {**base, "id": "job-3", "last_result": {"text": "x" * 2001, "at": "now"}},
+                {**base, "id": "job-4", "last_run_silent": "yes"},
+            ],
+        }
+    )
+
+    assert diagnostics == [
+        ("error", "$.jobs[0].delivery", "delivery.platform_target must be a non-empty string"),
+        ("warning", "$.jobs[1].delivery.sound", "unknown delivery field: sound"),
+        (
+            "error",
+            "$.jobs[2].last_result",
+            "last_result.text must be a non-empty string of at most 2000 characters",
+        ),
+        ("error", "$.jobs[3].last_run_silent", "must be a boolean"),
+    ]
+
+
 def test_validate_cron_jobs_data_requires_the_versioned_document() -> None:
     assert [path for _, path, _ in _diagnostics([])] == ["$"]
     assert _diagnostics({"jobs": []})[0][1] == "$.format_version"
