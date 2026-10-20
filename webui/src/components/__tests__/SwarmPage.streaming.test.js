@@ -379,7 +379,7 @@ describe('Swarm Run subscriptions across refreshes', () => {
         'swr-a',
         'run-second',
         0,
-        { timeline: true },
+        { timeline: true, childLimit: 100 },
       ),
     );
     expect(bridge.unsubscribeRun).toHaveBeenCalledWith('run-first');
@@ -453,7 +453,7 @@ describe('Swarm Run subscriptions across refreshes', () => {
         'swr-a',
         'run-second',
         0,
-        { timeline: true },
+        { timeline: true, childLimit: 100 },
       ),
     );
     expect(bridge.readHistory).toHaveBeenCalledTimes(3);

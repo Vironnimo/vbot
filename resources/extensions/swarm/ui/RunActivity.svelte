@@ -85,6 +85,57 @@
     }
   }
 
+  // The ancestor that scrolls `element`, whether or not it overflows yet.
+  function scrollContainer(element) {
+    for (let node = element.parentElement; node; node = node.parentElement) {
+      if (/auto|scroll/.test(getComputedStyle(node).overflowY)) return node;
+    }
+    return null;
+  }
+
+  // A Run shows its latest steps; the history gap above them (rendered by
+  // ChatAssistantRun) loads the earlier ones once it comes within a viewport
+  // height of the visible area, as in the Chat. The browser keeps the reading
+  // position while they grow above it.
+  function loadRunGaps(node) {
+    if (typeof IntersectionObserver !== 'function') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          void activity.loadRunHistory({
+            runId: entry.target.dataset.historyGap,
+            before: entry.target.dataset.historyGapBefore,
+          });
+        }
+      },
+      { root: scrollContainer(node), rootMargin: '100% 0px' },
+    );
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- bookkeeping, never rendered
+    const observed = new Set();
+    const observeGaps = () => {
+      for (const gap of observed) {
+        if (gap.isConnected) continue;
+        observer.unobserve(gap);
+        observed.delete(gap);
+      }
+      for (const gap of node.querySelectorAll('[data-history-gap]')) {
+        if (observed.has(gap)) continue;
+        observed.add(gap);
+        observer.observe(gap);
+      }
+    };
+    const changes = new MutationObserver(observeGaps);
+    changes.observe(node, { childList: true, subtree: true });
+    observeGaps();
+    return {
+      destroy() {
+        changes.disconnect();
+        observer.disconnect();
+      },
+    };
+  }
+
   // A participant's activity opens at its newest entries.
   $effect(() => {
     const id = activity.history?.participant.id;
@@ -159,7 +210,7 @@
             {t('swarm.loadOlderMessages')}
           </Button>
         {/if}
-        <div class="history" use:model.board.contentLinks>
+        <div class="history" use:model.board.contentLinks use:loadRunGaps>
           {#each activity.activityTimeline as item (item.id)}
             {#if item.type === 'assistant_run'}<ChatAssistantRun
                 {item}

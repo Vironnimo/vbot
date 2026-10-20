@@ -61,7 +61,7 @@ describe('Swarm participant Activity', () => {
       'swr-a',
       'run-live-test',
       0,
-      { timeline: true },
+      { timeline: true, childLimit: 100 },
     );
     bridge.emitRun('subscription-live-test', {
       type: 'timeline_snapshot',
@@ -574,6 +574,97 @@ describe('Swarm participant Activity', () => {
 });
 
 describe('Swarm participant History pages', () => {
+  it("loads a long Run's earlier steps once its history gap comes into reach", async () => {
+    const observers = [];
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback) {
+          this.callback = callback;
+          this.targets = [];
+          observers.push(this);
+        }
+        observe(target) {
+          this.targets.push(target);
+        }
+        unobserve(target) {
+          this.targets = this.targets.filter((item) => item !== target);
+        }
+        disconnect() {
+          this.targets = [];
+        }
+      },
+    );
+    const reach = (isIntersecting) => {
+      const observer = observers.at(-1);
+      observer.callback(
+        observer.targets.map((target) => ({ target, isIntersecting })),
+      );
+    };
+    const { bridge } = createBridge(profile, swarm);
+    bridge.readHistory.mockResolvedValue({
+      history_generation: 'generation',
+      messages: [],
+      items: [
+        assistantRun(
+          'run-long',
+          [
+            {
+              id: 'assistant-run-run-long-history-gap',
+              type: 'history_gap',
+              run_id: 'run-long',
+              before: 'step-2',
+              remaining: 2,
+              position: -1,
+            },
+            outputItem('test-owned latest step', { id: 'step-2', position: 2 }),
+          ],
+          { source: 'history', status: 'completed', window_start: 2 },
+        ),
+      ],
+    });
+    bridge.readRunChildren.mockResolvedValue({
+      run_id: 'run-long',
+      history_generation: 'generation',
+      before: 'step-2',
+      has_more: false,
+      items: [
+        outputItem('test-owned first step', { id: 'step-0', position: 0 }),
+        outputItem('test-owned second step', { id: 'step-1', position: 1 }),
+      ],
+    });
+    try {
+      await openParticipant(bridge);
+      await vi.waitFor(() =>
+        expect(historyText()).toContain('test-owned latest step'),
+      );
+      reach(false);
+      expect(bridge.readRunChildren).not.toHaveBeenCalled();
+      reach(true);
+      reach(true);
+      await vi.waitFor(() =>
+        expect(historyText()).toContain('test-owned first step'),
+      );
+      expect(bridge.readRunChildren).toHaveBeenCalledExactlyOnceWith(
+        'swr-a',
+        'prt-a',
+        {
+          runId: 'run-long',
+          before: 'step-2',
+          historyGeneration: 'generation',
+          limit: 100,
+        },
+      );
+      const text = historyText();
+      const order = ['first', 'second', 'latest'].map((step) =>
+        text.indexOf(`test-owned ${step} step`),
+      );
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('retains older Session pages during invalidation and reconciles them on completion', async () => {
     const { bridge } = createBridge(profile, swarmWithRun('run-paged'));
     bridge.subscribeRun.mockResolvedValue({
@@ -632,10 +723,12 @@ describe('Swarm participant History pages', () => {
     expect(button(LOAD_OLDER)).toBeUndefined();
     expect(bridge.readHistory).toHaveBeenNthCalledWith(2, 'swr-a', 'prt-a', {
       limit: 100,
+      child_limit: 100,
       before: 'middle',
     });
     expect(bridge.readHistory).toHaveBeenNthCalledWith(3, 'swr-a', 'prt-a', {
       limit: 100,
+      child_limit: 100,
       before: 'oldest',
     });
     bridge.invalidate();
@@ -652,6 +745,7 @@ describe('Swarm participant History pages', () => {
     await vi.waitFor(() => expect(bridge.readHistory).toHaveBeenCalledTimes(4));
     expect(bridge.readHistory).toHaveBeenLastCalledWith('swr-a', 'prt-a', {
       limit: 100,
+      child_limit: 100,
       after: 'after-six',
     });
     await tick();
