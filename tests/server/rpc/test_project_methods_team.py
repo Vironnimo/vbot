@@ -130,16 +130,26 @@ async def test_tool_access_override_replaces_the_repository_policy_until_cleared
 
 
 @pytest.mark.asyncio
-async def test_tool_loading_override_is_stored_as_given_until_cleared(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param({"on_demand": False, "always_loaded": ["read"]}, id="complete"),
+        pytest.param({"on_demand": False}, id="inherit-list"),
+        pytest.param({"always_loaded": ["read"]}, id="inherit-switch"),
+    ],
+)
+async def test_tool_loading_override_is_stored_as_given_until_cleared(
+    tmp_path: Path, value: JsonObject
+) -> None:
     state = await _vbot_state(tmp_path)
     override = {"project_id": "vbot", "agent_id": "builder", "field": "tool_loading"}
-    # Switched off, the chosen always-loaded Tools stay for later.
-    value = {"on_demand": False, "always_loaded": ["read"]}
 
     overridden = _member(await rpc_result(state, "project.set_override", **override, value=value))
+    stored = state.runtime.projects.get("vbot").overrides
     cleared = _member(await rpc_result(state, "project.clear_override", **override))
 
     assert overridden["overrides"] == {"tool_loading": value}
+    assert stored == {"builder": {"tool_loading": value}}
     assert state.runtime.projects.get("vbot").overrides == {}
     assert cleared["overrides"] is None
 
@@ -208,9 +218,9 @@ _OVERRIDE = {"project_id": "vbot", "agent_id": "builder"}
         ),
         (
             "project.set_override",
-            {**_OVERRIDE, "field": "tool_loading", "value": {"always_loaded": ["read"]}},
+            {**_OVERRIDE, "field": "tool_loading", "value": {"on_demand": "yes"}},
             "invalid_request",
-            "tool_loading.on_demand is required",
+            "",
         ),
         ("project.clear_override", {**_OVERRIDE, "field": "nope"}, "invalid_request", ""),
         (
