@@ -21,6 +21,7 @@ import pytest_asyncio
 
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
+from core.chat.messages import SubAgentMessage
 from core.database import write_bootstrap_marker
 from core.projects import (
     AgentOverrides,
@@ -56,6 +57,7 @@ class Notice:
     body: str
     wake: bool
     execution_owner: Any | None
+    subagent_message: SubAgentMessage | None = None
 
 
 class RecordingTriggerService:
@@ -74,6 +76,7 @@ class RecordingTriggerService:
         body: str,
         execution_owner: Any | None = None,
         wake: bool = True,
+        subagent_message: SubAgentMessage | None = None,
     ) -> asyncio.Future[None]:
         self.notices.append(
             Notice(
@@ -83,6 +86,7 @@ class RecordingTriggerService:
                 body,
                 wake,
                 execution_owner,
+                subagent_message,
             )
         )
         self._submitted.set()

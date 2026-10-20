@@ -247,6 +247,25 @@ def insert_entry(
             )
         case "compaction_checkpoint":
             _insert_checkpoint(connection, entry_key, message)
+    if message.role == "note" and message.subagent_messages:
+        connection.executemany(
+            "INSERT INTO note_subagent_messages (entry_key, ordinal, subagent_id, title, content, "
+            "delivery_id, agent_id, session_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    entry_key,
+                    ordinal,
+                    item.subagent_id,
+                    item.title,
+                    item.content,
+                    item.delivery_id,
+                    item.agent_id,
+                    item.session_id,
+                    item.project_id,
+                )
+                for ordinal, item in enumerate(message.subagent_messages)
+            ],
+        )
     _store_attachments.record(connection, entry_key, message.to_dict())
     return entry_key
 
@@ -475,6 +494,7 @@ class EntryBatch:
     edits: dict[int, sqlite3.Row] = field(default_factory=dict)
     model_fallbacks: dict[int, sqlite3.Row] = field(default_factory=dict)
     goal_events: dict[int, sqlite3.Row] = field(default_factory=dict)
+    subagent_messages: dict[int, list[sqlite3.Row]] = field(default_factory=dict)
     checkpoints: dict[int, sqlite3.Row] = field(default_factory=dict)
     run_ids: dict[int, str] = field(default_factory=dict)
     run_summaries: dict[int, sqlite3.Row] = field(default_factory=dict)
@@ -557,6 +577,16 @@ class EntryBatch:
                     self._decode_checkpoint(key, data)
                 case "run_summary":
                     self._decode_run_summary(key, data)
+            subagent_messages = self.subagent_messages.get(key)
+            if subagent_messages:
+                data["subagent_messages"] = [
+                    {
+                        field_name: row[field_name]
+                        for field_name in _SUBAGENT_MESSAGE_FIELDS
+                        if row[field_name] is not None
+                    }
+                    for row in subagent_messages
+                ]
             return ChatMessage.from_dict(data)
         except (json.JSONDecodeError, IndexError, KeyError, TypeError, ValueError) as exc:
             raise SessionStoreCorruptError(f"invalid stored Session entry: {key}") from exc
@@ -745,6 +775,15 @@ def _grouped_rows(
 
 
 _KEYS = "IN (SELECT value FROM json_each(?))"
+_SUBAGENT_MESSAGE_FIELDS = (
+    "subagent_id",
+    "title",
+    "content",
+    "delivery_id",
+    "agent_id",
+    "session_id",
+    "project_id",
+)
 _ASSISTANT_COLUMNS = (
     "entry_key, phase, reasoning_scope, has_tool_calls, interrupted, interruption_cause, "
     "usage_present, "
@@ -840,6 +879,12 @@ def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) ->
         connection,
         "SELECT entry_key, event, reason, objective, turn, max_turns FROM note_goal_events "
         f"WHERE entry_key {_KEYS}",
+        by_role.get("note", []),
+    )
+    batch.subagent_messages = _grouped_rows(
+        connection,
+        f"SELECT entry_key, {', '.join(_SUBAGENT_MESSAGE_FIELDS)} FROM note_subagent_messages "
+        f"WHERE entry_key {_KEYS} ORDER BY entry_key, ordinal",
         by_role.get("note", []),
     )
     batch.checkpoints = _rows_by_key(

@@ -35,7 +35,7 @@ from core.skills.policy import SkillPackageRef
 from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
-    from core.chat.messages import ChatMessage, GoalEvent, ModelFallback
+    from core.chat.messages import ChatMessage, GoalEvent, ModelFallback, SubAgentMessage
 
 
 @dataclass
@@ -311,11 +311,17 @@ class ChatSession:
         *,
         model_fallback: ModelFallback | None = None,
         goal_event: GoalEvent | None = None,
+        subagent_messages: Sequence[SubAgentMessage] | None = None,
     ) -> None:
         from core.chat.messages import ChatMessage
 
         self.add_note_message(
-            ChatMessage.note(content, model_fallback=model_fallback, goal_event=goal_event)
+            ChatMessage.note(
+                content,
+                model_fallback=model_fallback,
+                goal_event=goal_event,
+                subagent_messages=subagent_messages,
+            )
         )
 
     def add_note_message(self, note: ChatMessage) -> None:
@@ -336,9 +342,15 @@ class ChatSession:
         *,
         model_fallback: ModelFallback | None = None,
         goal_event: GoalEvent | None = None,
+        subagent_messages: Sequence[SubAgentMessage] | None = None,
     ) -> None:
         await self._store.run_async(
-            lambda: self.add_note(content, model_fallback=model_fallback, goal_event=goal_event)
+            lambda: self.add_note(
+                content,
+                model_fallback=model_fallback,
+                goal_event=goal_event,
+                subagent_messages=subagent_messages,
+            )
         )
 
     def drain_pending_notes(self) -> list[ChatMessage]:

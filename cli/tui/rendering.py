@@ -164,10 +164,28 @@ def goal_text(item: JsonObject) -> str:
     return _GOAL_EVENTS.get(str(event), "Goal updated")
 
 
+def subagent_messages(item: JsonObject) -> list[JsonObject]:
+    """The ``message_parent`` messages of a Run child or a History row."""
+    message = item.get("message")
+    source: JsonObject = message if isinstance(message, dict) else item
+    entries = source.get("messages")
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
 def item_text(item: JsonObject) -> str:
     kind = item.get("type")
     if kind == "goal_event":
         return goal_text(item)
+    if kind == "subagent_message":
+        entries = subagent_messages(item)
+        if len(entries) == 1:
+            return terminal_text(str(entries[0].get("content") or ""))
+        return "\n\n".join(
+            terminal_text(f"{entry.get('title') or 'Sub-Agent'}: {entry.get('content') or ''}")
+            for entry in entries
+        )
     if kind == "message":
         return content_text((item.get("message") or {}).get("content"))
     if kind == "user_message":
@@ -221,6 +239,11 @@ def item_heading(item: JsonObject) -> str | None:
         return None if role in {"user", "assistant"} else role.capitalize()
     if kind == "user_message":
         return "User Steer · delivered"
+    if kind == "subagent_message":
+        entries = subagent_messages(item)
+        if len(entries) == 1:
+            return terminal_text(f"Message from Sub-Agent {entries[0].get('title') or ''}".strip())
+        return "Messages from Sub-Agents"
     if kind == "takeover_separator":
         return "Agent takeover"
     if kind == "compaction_separator":

@@ -46,6 +46,7 @@ _ENTRY_SIDE_TABLES = (
     "history_edit_entries",
     "note_model_fallbacks",
     "note_goal_events",
+    "note_subagent_messages",
     "checkpoint_entries",
     "checkpoint_projections",
 )

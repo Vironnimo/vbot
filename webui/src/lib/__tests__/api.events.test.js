@@ -34,6 +34,7 @@ describe('subscribeRunEvents()', () => {
         RUN_EVENT_PROVIDER_HEARTBEAT,
         'model_fallback_activated',
         'goal_event_recorded',
+        'subagent_message_recorded',
         'error_message_persisted',
         'compaction_started',
         'compaction_aborted',

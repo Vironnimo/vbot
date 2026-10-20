@@ -6,7 +6,7 @@ import {
   setupChatTimelineSuite,
   timelineSession,
 } from './ChatTimeline.support.js';
-import { assistantRun, toolItem } from './timelineItems.support.js';
+import { assistantRun, outputItem, toolItem } from './timelineItems.support.js';
 import { t } from '../../lib/i18n.js';
 
 const RUN_ARGUMENTS = {
@@ -367,5 +367,60 @@ describe('ChatTimeline sub-agent rows', () => {
         '.subagent-tool-event, .subagent-link, .streaming-tool-event',
       ),
     ).toBeNull();
+  });
+
+  it('shows a message from a Sub-Agent inside a Run and between Runs, and opens its Session', () => {
+    const onNavigateToSubAgent = vi.fn();
+    const entry = (title, content, sessionId) => ({
+      subagent_id: `sub_${title}`,
+      title,
+      content,
+      delivery_id: `delivery-${title}`,
+      agent_id: 'beta',
+      project_id: 'proj',
+      session_id: sessionId,
+    });
+    const sessionState = timelineSession();
+    sessionState.timelineItems = [
+      assistantRun('run-parent', [
+        {
+          id: 'subagent-message-n1',
+          type: 'subagent_message',
+          messages: [entry('Worker', 'Found the cause', 'sub-session-1')],
+        },
+        outputItem('Thanks, continuing'),
+      ]),
+      {
+        id: 'subagent-message-n2',
+        type: 'subagent_message',
+        timestamp: '2026-10-20T10:00:00Z',
+        message: {
+          id: 'n2',
+          role: 'subagent_message',
+          messages: [entry('Fixer', 'Fixed it', 'sub-session-2')],
+        },
+      },
+    ];
+    timeline.render(sessionState, { onNavigateToSubAgent });
+
+    const rows = [...document.querySelectorAll('.subagent-message')];
+    expect(
+      rows.map((row) => row.querySelector('.subagent-line').textContent),
+    ).toEqual([
+      expect.stringContaining(t('chat.subagent.messageFromLabel')),
+      expect.stringContaining(t('chat.subagent.messageFromLabel')),
+    ]);
+    expect(rows[0].textContent).toContain('Worker');
+    expect(rows[0].textContent).toContain('Found the cause');
+    expect(rows[0].closest('.assistant-run')).not.toBeNull();
+    expect(rows[1].textContent).toContain('Fixed it');
+    expect(rows[1].closest('.assistant-run')).toBeNull();
+
+    rows[1].querySelector('.subagent-link').click();
+    flushSync();
+    expect(onNavigateToSubAgent).toHaveBeenCalledWith({
+      agentId: 'beta@proj',
+      sessionId: 'sub-session-2',
+    });
   });
 });

@@ -650,6 +650,8 @@
         onReasoningOpenChange={setReasoningOpen}
         {messageEditingDisabledReason}
         {onEditMessage}
+        {onNavigateToSubAgent}
+        onSubAgentContextMenu={otherArea ? openSubAgentMenu : null}
       />
     {/if}
     {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}
