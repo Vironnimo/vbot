@@ -40,6 +40,7 @@ _INSPECTIONS = {
     "performance": ("performance", "status"),
     "statistics": ("log", "list"),
     "data-store": ("data-store", "status"),
+    "agent-secrets": ("agent-secrets", "list"),
     "server": ("server", "status"),
     "update": ("server", "status"),
     "autostart": ("autostart", "status"),
