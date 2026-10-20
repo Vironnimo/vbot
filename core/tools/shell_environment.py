@@ -31,7 +31,8 @@ A command's environment comes in two parts (``CommandEnvironment``): layers 1
 to 4 are its shell's start environment, the same for every call until the login
 environment or the instance changes, so a shell started before the call can
 serve it; layers 5 to 7 are the call's own, applied by the shell before the
-command runs.
+command runs. A command vBot runs outside a Run, such as a Cron watch check,
+gets layers 1 to 4 only (``unattended_command_environment``).
 
 The environment is built fresh for every start; building it costs about a
 millisecond, so no cache can go stale.
@@ -178,14 +179,7 @@ def command_environment(
     scratch: ScratchFolder | None = None,
 ) -> CommandEnvironment:
     """Environment of one shell command run by an Agent."""
-    base = _instance_environment()
-    _apply(base, {"TERM": _COMMAND_TERM})
-    _apply(base, _UNATTENDED_DEFAULTS)
-    _apply(
-        base,
-        {name: value for name, value in _UNATTENDED_FALLBACKS.items() if _get(base, name) is None},
-    )
-    _remove(base, (RUN_PROJECT_ID_ENV, UPDATE_HANDOFF_ENV))
+    base = _command_base()
     environment = dict(base)
     _apply(environment, variables or {})
     _apply(environment, credentials or {})
@@ -203,6 +197,27 @@ def command_environment(
     }
     changes.update({name: None for name in base if name not in environment})
     return CommandEnvironment(base, changes)
+
+
+def unattended_command_environment() -> CommandEnvironment:
+    """Environment of a command vBot runs outside a Run, such as a Cron watch check.
+
+    Layers 1 to 4: no Run identity, Session scratch, variables or credentials.
+    """
+    return CommandEnvironment(_command_base(), {})
+
+
+def _command_base() -> dict[str, str]:
+    """A command shell's start environment (layers 1 to 4)."""
+    base = _instance_environment()
+    _apply(base, {"TERM": _COMMAND_TERM})
+    _apply(base, _UNATTENDED_DEFAULTS)
+    _apply(
+        base,
+        {name: value for name, value in _UNATTENDED_FALLBACKS.items() if _get(base, name) is None},
+    )
+    _remove(base, (RUN_PROJECT_ID_ENV, UPDATE_HANDOFF_ENV))
+    return base
 
 
 def _instance_environment() -> dict[str, str]:
