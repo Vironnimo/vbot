@@ -824,8 +824,10 @@
 
 {#if deleteConfirmModel}
   <ConfirmDialog
-    title={t('settings.voice.deleteConfirmTitle')}
-    body={t('settings.voice.deleteConfirm', { name: deleteConfirmModel.label })}
+    title={t('settings.voice.deleteConfirmTitle', {
+      name: deleteConfirmModel.label,
+    })}
+    body={t('settings.voice.deleteConfirm')}
     confirmLabel={t('common.delete')}
     onConfirm={confirmDeleteWakewordModel}
     onCancel={() => (deleteConfirmModel = null)}

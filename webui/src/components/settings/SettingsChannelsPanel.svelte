@@ -329,10 +329,10 @@
 
 {#if channels.deleteConfirmChannel}
   <ConfirmDialog
-    title={t('settings.channels.delete_confirm_title')}
-    body={t('settings.channels.delete_confirm', {
+    title={t('settings.channels.delete_confirm_title', {
       id: channels.deleteConfirmChannel.id,
     })}
+    body={t('settings.channels.delete_confirm')}
     confirmLabel={t('common.delete')}
     onConfirm={channels.confirmDeleteChannel}
     onCancel={channels.cancelDeleteChannel}

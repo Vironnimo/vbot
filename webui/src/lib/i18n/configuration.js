@@ -485,7 +485,7 @@ export default Object.freeze({
   'settings.recall.rebuild': 'Rebuild',
   'settings.recall.rebuildTitle': 'Rebuild the search index?',
   'settings.recall.rebuildBody':
-    'Indexes every conversation again from scratch. This is only needed when search by meaning finds poor results; after a model change vBot rebuilds the index on its own. A cloud embedding model bills its Provider again for all conversation text.',
+    'Every conversation is indexed again from scratch, which is only needed when search by meaning finds poor results. A cloud embedding model bills its Provider again for all conversation text.',
   'settings.recall.rebuildConfirm': 'Rebuild index',
   'settings.recall.rebuildError': 'The search index could not be rebuilt.',
   'settings.recall.modelOptions': 'Model options',
@@ -652,7 +652,7 @@ export default Object.freeze({
   'settings.credentials.replaceAria': 'Replace {name}',
   'settings.credentials.removeAria': 'Remove {name}',
   'settings.credentials.addTitle': 'Add credential',
-  'settings.credentials.replaceTitle': 'Replace {name}',
+  'settings.credentials.replaceTitle': 'Replace credential “{name}”',
   'settings.credentials.name': 'Name',
   'settings.credentials.nameHelp':
     'Letters, digits and underscores, not starting with a digit, like an environment variable.',
@@ -671,7 +671,7 @@ export default Object.freeze({
   'settings.credentials.saved': '{name} saved.',
   'settings.credentials.savedShadowed':
     '{name} saved, but the server environment also sets it and takes precedence.',
-  'settings.credentials.removeTitle': 'Remove {name}?',
+  'settings.credentials.removeTitle': 'Remove credential “{name}”?',
   'settings.credentials.removeBody':
     'vBot deletes the saved value. Skills, Channels, Providers and connections that read {name} lose it until it is saved again.',
   'settings.credentials.removeError': 'The credential could not be removed.',
@@ -1170,9 +1170,9 @@ export default Object.freeze({
   'settings.providers.custom.deleted': 'Custom Provider deleted.',
   'settings.providers.custom.deleteError':
     'Custom Provider could not be deleted.',
-  'settings.providers.custom.deleteTitle': 'Delete Custom Provider?',
+  'settings.providers.custom.deleteTitle': 'Delete custom provider “{name}”?',
   'settings.providers.custom.deleteBody':
-    'The Provider and its stored data-directory API keys are removed. Existing Model references are kept and become unavailable.',
+    'Its stored API keys are removed too. Model references to it stay but become unavailable.',
   'settings.channels.title': 'Channels',
   'settings.providers.connectedCount': '{count} connected',
   'settings.channels.add': 'Add channel',
@@ -1217,9 +1217,9 @@ export default Object.freeze({
   'settings.channels.empty': 'No Channels yet',
   'settings.channels.emptyHint':
     'Talk to your Agents from Telegram, Discord, Slack, Mattermost or WhatsApp.',
-  'settings.channels.delete_confirm_title': 'Delete channel',
+  'settings.channels.delete_confirm_title': 'Delete channel “{id}”?',
   'settings.channels.delete_confirm':
-    'Delete channel "{id}" permanently? vBot stops listening on it and its configuration is removed.',
+    'vBot stops listening on it and removes its configuration.',
   'settings.channels.createSuccess': 'Channel created.',
   'settings.channels.enableSuccess': 'Channel enabled.',
   'settings.channels.disableSuccess': 'Channel disabled.',
@@ -1426,9 +1426,9 @@ export default Object.freeze({
   'settings.voice.importTooLargeTitle': 'Wakeword model is too large.',
   'settings.voice.importTooLargeMessage':
     'Choose a TFLite model no larger than 20 MiB.',
-  'settings.voice.deleteConfirmTitle': 'Remove wakeword model',
+  'settings.voice.deleteConfirmTitle': 'Delete wakeword model “{name}”?',
   'settings.voice.deleteConfirm':
-    'Remove “{name}” permanently from this Desktop? The TFLite file stored by vBot will be deleted.',
+    'vBot deletes its stored TFLite file from this Desktop.',
   'settings.voice.deleteSuccess': 'Wakeword model removed.',
   'settings.voice.sensitivity': 'Sensitivity',
   'settings.voice.modelAction': 'When heard',

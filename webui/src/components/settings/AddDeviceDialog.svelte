@@ -74,6 +74,9 @@
 
 <Modal
   title={t('settings.access.add.title')}
+  description={pending
+    ? t('settings.access.add.confirmIntro')
+    : t('settings.access.add.intro')}
   labelledById="add-device-title"
   closeDisabled={busy !== ''}
   {onClose}
@@ -82,7 +85,6 @@
     {#if !pending}
       <form id="add-device-form" onsubmit={lookUp}>
         <div class="modal-body">
-          <p>{t('settings.access.add.intro')}</p>
           <FormField
             controlId="add-device-code"
             label={t('settings.access.add.codeLabel')}
@@ -114,7 +116,6 @@
       </form>
     {:else}
       <div class="modal-body">
-        <p>{t('settings.access.add.confirmIntro')}</p>
         <dl class="add-device__facts">
           <dt>{t('settings.access.add.name')}</dt>
           <dd>{pending.name}</dd>
@@ -151,11 +152,13 @@
         {t('settings.access.add.continue')}
       </Button>
     {:else}
-      <Button variant="secondary" disabled={busy !== ''} onClick={back}>
-        {t('common.back')}
-      </Button>
+      <div class="modal-footer__start">
+        <Button variant="tertiary" disabled={busy !== ''} onClick={back}>
+          {t('common.back')}
+        </Button>
+      </div>
       <Button
-        variant="danger"
+        variant="secondary"
         disabled={busy !== '' && busy !== 'deny'}
         loading={busy === 'deny'}
         onClick={() => decide(false)}
