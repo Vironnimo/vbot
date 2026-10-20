@@ -233,6 +233,49 @@ class ChannelService:
         """Relay a background completion Run to its Session's latest Channel target."""
         await _delivery.relay_completion_run(self, run, reply_surface)
 
+    async def relay_run_to_chat(
+        self,
+        run: Run,
+        channel_id: str,
+        platform_target: str,
+        *,
+        thread_id: str | None = None,
+    ) -> None:
+        """Relay one Run's answer to a chat of its Agent's Channel, owed durably first.
+
+        Returns once the Run ended and its answer is owed; the answer reaches the
+        chat once the Channel is connected. Raises ``ChannelNotFoundError`` for a
+        Channel that is missing or not started and ``ChannelConfigError`` for a
+        Channel of another Agent, an invalid target, or a Project Session's Run.
+        """
+        await _delivery.relay_run_to_chat(
+            self, run, channel_id, platform_target, thread_id=thread_id
+        )
+
+    async def record_outbound_note(
+        self,
+        channel_id: str,
+        platform_target: str,
+        note: str,
+        *,
+        thread_id: str | None = None,
+        skip_session_id: str | None = None,
+    ) -> bool:
+        """Add a Note about a message sent to one chat to the Session mirroring that chat.
+
+        The Session is created when missing; the Channel's adapter must be
+        running. Returns False without writing when that Session is
+        ``skip_session_id``, the Session the message came from.
+        """
+        return await _delivery.record_outbound_note(
+            self,
+            channel_id,
+            platform_target,
+            note,
+            thread_id=thread_id,
+            skip_session_id=skip_session_id,
+        )
+
     async def ensure_outbound_session(
         self, channel_id: str, platform_target: str, *, thread_id: str | None = None
     ) -> RouteFacts:

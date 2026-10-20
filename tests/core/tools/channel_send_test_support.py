@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
-from core.channels.adapter import RouteFacts
 from core.providers.adapter import tool_result_text
 from core.tools.channel import CHANNEL_SEND_TOOL_NAME, register_channel_send_tool
 from core.tools.tools import (
@@ -27,7 +26,6 @@ from core.tools.tools import (
 from tests.core.tools.tools_test_support import dispatch_as_executor
 
 MAX_ATTACHMENT_BYTES = 1000
-OUTBOUND_SESSION = RouteFacts(agent_id="agent-1", session_id="ch-tg-main-111")
 
 
 class _NullAsyncContext:
@@ -119,6 +117,11 @@ class ChannelSend:
     def call(self, arguments: Any, **context: Any) -> dict[str, Any]:
         return asyncio.run(self.dispatch(arguments, **context))
 
+    def note(self) -> str:
+        """The note recorded in the chat's Session for the only send."""
+        self.service.record_outbound_note.assert_awaited_once()
+        return str(self.service.record_outbound_note.await_args.args[2])
+
     def sent(self) -> list[tuple[Any, ...]]:
         """Each ``ChannelService.send`` as (channel, message, chat, keyword arguments)."""
         return [
@@ -138,14 +141,14 @@ def channel_send(
     """Register channel_send for ``configs`` (default: tg-main allowing chat 111).
 
     ``reply_target`` is the calling Session's last Reply Target. The default Channel
-    service records sends and resolves every outbound note to ``OUTBOUND_SESSION``.
+    service records sends and outbound notes.
     """
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
     if service is None:
         service = Mock()
         service.send = AsyncMock()
-        service.ensure_outbound_session = AsyncMock(return_value=OUTBOUND_SESSION)
+        service.record_outbound_note = AsyncMock(return_value=True)
         service.list_channels.return_value = list(configs) or [
             make_channel_config(allowed_chat_ids=[111])
         ]
