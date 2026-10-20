@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.automation.cron import CronDelivery, CronJobValidationError, CronService
+from core.automation.cron import CronDelivery, CronJobValidationError, CronService, CronWatch
 from core.projects import format_agent_address
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -38,6 +38,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         "repeat",
         "session_id",
         "delivery",
+        "watch",
     }
     _reject_unsupported(params, supported_fields, "cron.create")
 
@@ -62,6 +63,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
     session_id = _optional_string(params, "session_id")
     # Omitted, a job delivers nowhere; the WebUI form chooses app for new jobs.
     delivery = _optional_delivery(params)
+    watch = _optional_watch(params)
     event_fields: JsonObject = {}
 
     if schedule_type == "event":
@@ -122,6 +124,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 session_id=session_id,
                 project_id=project_id,
                 delivery=delivery,
+                watch=watch,
                 actor="rpc",
                 **event_fields,
             )
@@ -160,6 +163,7 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         "repeat",
         "session_id",
         "delivery",
+        "watch",
         "status",
     }
     _reject_unsupported(params, supported_fields, "cron.update")
@@ -214,6 +218,8 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         updates["session_id"] = _optional_string(params, "session_id")
     if "delivery" in params:
         updates["delivery"] = _optional_delivery(params)
+    if "watch" in params:
+        updates["watch"] = _optional_watch(params)
     if "status" in params:
         status = _required_string(params, "status")
         if status not in CRON_JOB_STATUSES:
@@ -281,6 +287,19 @@ def _optional_delivery(params: JsonObject) -> CronDelivery | None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{error}") from error
 
 
+def _optional_watch(params: JsonObject) -> CronWatch | None:
+    """``params.watch`` as a job keeps it: ``{"command": ...}`` or ``{"url": ...}``; null: none."""
+    value = params.get("watch")
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        _reject_unsupported(value, {"command", "url"}, "params.watch")
+    try:
+        return CronWatch.from_dict(value)
+    except CronJobValidationError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{error}") from error
+
+
 def _event_time_fields(event_time: str) -> JsonObject:
     """The job fields of an event time such as ``start - 30m``."""
     try:
@@ -326,6 +345,12 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         # The latest answer that was not [SILENT]: text (at most 2,000 characters), at, run_id.
         "last_result": None if job.last_result is None else job.last_result.to_dict(),
         "last_error": job.last_error,
+        # What the job checks before each run, {"command": ...} or {"url": ...}; null for none.
+        "watch": None if job.watch is None else job.watch.to_dict(),
+        # The latest check, the latest change whose Run succeeded, and why the latest check failed.
+        "last_checked_at": job.last_checked_at,
+        "last_changed_at": job.last_changed_at,
+        "last_check_error": job.last_check_error,
         "consecutive_failures": job.consecutive_failures,
         "next_fire_at": cron_service.next_fire_at(job),
         "created_at": job.created_at,

@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.automation import CronService
-from core.automation.cron import CronDelivery, CronResult
+from core.automation.cron import CronDelivery, CronResult, CronWatch
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -42,6 +42,7 @@ _CREATE_DEFAULTS: JsonObject = {
     "session_id": None,
     "project_id": None,
     "delivery": None,
+    "watch": None,
     "actor": "rpc",
 }
 _CHAT: JsonObject = {"kind": "chat", "channel_id": "tg-main", "platform_target": "chat-42"}
@@ -96,6 +97,10 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
         "delivery": None,
         "last_result": None,
         "last_run_silent": False,
+        "watch": None,
+        "last_checked_at": None,
+        "last_changed_at": None,
+        "last_check_error": None,
     }
     fields.update(changes)
     return SimpleNamespace(**fields)
@@ -248,6 +253,19 @@ async def test_bootstrap_list_projects_each_job() -> None:
             id="delivery-chat",
         ),
         pytest.param(
+            {**_CRON_PARAMS, "watch": {"url": " https://status.example/ "}},
+            _cron_job(watch=CronWatch("url", "https://status.example/")),
+            {
+                "agent_id": "main",
+                "name": "Status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+                "watch": CronWatch("url", "https://status.example/"),
+            },
+            {"watch": {"url": "https://status.example/"}, "last_checked_at": None},
+            id="watch",
+        ),
+        pytest.param(
             {
                 "agent_id": "main",
                 "prompt": "Check status",
@@ -359,6 +377,10 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
             last_result=CronResult(
                 text="Two new posts.", at="2026-05-14T08:56:00+00:00", run_id="run-0"
             ),
+            watch=CronWatch("command", "git log -1 --oneline"),
+            last_checked_at="2026-05-14T10:00:00+00:00",
+            last_changed_at="2026-05-14T09:55:00+00:00",
+            last_check_error="The check command exited with code 128: not a git repository",
         )
     ]
     cron_service.system_timezone_name.return_value = "Europe/Berlin"
@@ -402,6 +424,12 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                     "run_id": "run-0",
                 },
                 "last_error": None,
+                "watch": {"command": "git log -1 --oneline"},
+                "last_checked_at": "2026-05-14T10:00:00+00:00",
+                "last_changed_at": "2026-05-14T09:55:00+00:00",
+                "last_check_error": (
+                    "The check command exited with code 128: not a git repository"
+                ),
                 "consecutive_failures": 0,
                 "next_fire_at": "2026-05-14T10:05:00+00:00",
                 "created_at": "2026-05-14T09:00:00+00:00",
@@ -446,6 +474,12 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
         # null and kind none both stop delivering.
         pytest.param({"delivery": None}, {"delivery": None}, id="no-delivery"),
         pytest.param({"delivery": {"kind": "none"}}, {"delivery": None}, id="delivery-none"),
+        pytest.param(
+            {"watch": {"command": "git status --short"}},
+            {"watch": CronWatch("command", "git status --short")},
+            id="watch",
+        ),
+        pytest.param({"watch": None}, {"watch": None}, id="no-watch"),
     ],
 )
 async def test_cron_update_passes_only_the_given_fields(
@@ -531,6 +565,9 @@ async def test_cron_job_actions_address_one_job(
         ("cron.create", {**_CRON_PARAMS, "delivery": {"kind": "chat", "channel_id": "tg-main"}}),
         ("cron.update", {"id": "job-1", "delivery": {"kind": "app", "channel_id": "tg-main"}}),
         ("cron.update", {"id": "job-1", "delivery": {"kind": "app", "sound": True}}),
+        ("cron.create", {**_CRON_PARAMS, "watch": "https://status.example/"}),
+        ("cron.update", {"id": "job-1", "watch": {"command": "ls", "url": "https://a.example"}}),
+        ("cron.update", {"id": "job-1", "watch": {"url": "ftp://files.example/status"}}),
         ("cron.list", {"extra": True}),
         ("bootstrap.list", {"extra": True}),
         ("cron.update", {"prompt": "missing id"}),
