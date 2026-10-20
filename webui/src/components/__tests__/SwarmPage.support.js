@@ -309,6 +309,7 @@ function createBridge(initialProfile = profile, detail = swarm) {
           ],
         }),
       ),
+      readRunChildren: vi.fn(),
       cancelToolCall: vi.fn().mockResolvedValue({ ok: true }),
       listDirectory: vi.fn(({ path }) =>
         Promise.resolve({

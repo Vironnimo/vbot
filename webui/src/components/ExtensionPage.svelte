@@ -15,6 +15,7 @@
     openExtensionPageRun,
     cancelExtensionPageToolCall,
     readExtensionPageHistory,
+    readExtensionPageTimelineChildren,
     listServerDirectory,
     subscribeRunEvents,
   } from '$lib/api.js';
@@ -26,6 +27,7 @@
   const METHODS = new Set([
     'operation',
     'history.read',
+    'history.children',
     'link.open',
     'media.open',
     'route.push',
@@ -337,8 +339,57 @@
       params.run_id.length > 0 &&
       (params.timeline === undefined || typeof params.timeline === 'boolean') &&
       (params.after_sequence === undefined ||
-        (Number.isInteger(params.after_sequence) && params.after_sequence >= 0))
+        (Number.isInteger(params.after_sequence) &&
+          params.after_sequence >= 0)) &&
+      (params.child_limit === undefined ||
+        (params.timeline === true && validStepCount(params.child_limit)))
     );
+  }
+
+  function validStepCount(value) {
+    return Number.isInteger(value) && value >= 1 && value <= 200;
+  }
+
+  function validChildrenRead(params) {
+    return (
+      [
+        'group_id',
+        'participant_id',
+        'run_id',
+        'before',
+        'history_generation',
+      ].every(
+        (key) => typeof params[key] === 'string' && params[key].length > 0,
+      ) &&
+      (params.limit === undefined || validStepCount(params.limit))
+    );
+  }
+
+  // Server-verified file links of a History reply join the grants of the
+  // participant it was read for; a reply for another participant clears them.
+  function grantHistoryFiles(context, scope, result) {
+    if (context.historyScope === scope)
+      context.allowedUrls = [
+        ...new Set([...context.allowedUrls, ...projectedFileUrls(result)]),
+      ];
+  }
+
+  function enterHistoryScope(context, groupId, participantId) {
+    const scope = JSON.stringify([groupId, participantId]);
+    if (context.historyScope !== scope) {
+      context.historyScope = scope;
+      context.allowedUrls = [];
+    }
+    return scope;
+  }
+
+  function runOptions(params) {
+    return {
+      timeline: params.timeline === true,
+      ...(params.child_limit === undefined
+        ? {}
+        : { childLimit: params.child_limit }),
+    };
   }
 
   async function onMessage(event) {
@@ -415,14 +466,11 @@
         data.params.participant_id &&
         (data.params.query === undefined || isPlainObject(data.params.query))
       ) {
-        const historyScope = JSON.stringify([
+        const historyScope = enterHistoryScope(
+          context,
           data.params.group_id,
           data.params.participant_id,
-        ]);
-        if (context.historyScope !== historyScope) {
-          context.historyScope = historyScope;
-          context.allowedUrls = [];
-        }
+        );
         result = await readExtensionPageHistory(
           context.descriptor.owner,
           { id: context.descriptor.page, epoch: context.descriptor.epoch },
@@ -431,10 +479,32 @@
           data.params.query ?? {},
         );
         if (frameContext !== context) return;
-        if (context.historyScope === historyScope)
-          context.allowedUrls = [
-            ...new Set([...context.allowedUrls, ...projectedFileUrls(result)]),
-          ];
+        grantHistoryFiles(context, historyScope, result);
+      } else if (
+        data.method === 'history.children' &&
+        validChildrenRead(data.params)
+      ) {
+        const historyScope = enterHistoryScope(
+          context,
+          data.params.group_id,
+          data.params.participant_id,
+        );
+        result = await readExtensionPageTimelineChildren(
+          context.descriptor.owner,
+          { id: context.descriptor.page, epoch: context.descriptor.epoch },
+          data.params.group_id,
+          data.params.participant_id,
+          {
+            runId: data.params.run_id,
+            before: data.params.before,
+            historyGeneration: data.params.history_generation,
+            ...(data.params.limit === undefined
+              ? {}
+              : { limit: data.params.limit }),
+          },
+        );
+        if (frameContext !== context) return;
+        grantHistoryFiles(context, historyScope, result);
       } else if (
         (data.method === 'link.open' || data.method === 'media.open') &&
         typeof data.params.url === 'string'
@@ -451,7 +521,7 @@
           data.params.group_id,
           data.params.run_id,
           data.params.after_sequence ?? 0,
-          { timeline: data.params.timeline === true },
+          runOptions(data.params),
         );
         if (frameContext !== context) return;
         const url = opened?.stream?.url;
@@ -474,7 +544,7 @@
                 data.params.group_id,
                 data.params.run_id,
                 afterSequence,
-                { timeline: data.params.timeline === true },
+                runOptions(data.params),
               ),
             onResync: () => {
               noteExtensionPageInvalidation('run_stream_recovered');

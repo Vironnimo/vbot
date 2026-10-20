@@ -238,9 +238,20 @@ async def timeline_snapshot(state: Any, run: Run, *, child_limit: int = 0) -> Js
 
 
 async def timeline_children(
-    state: Any, address: SessionAddress, run_id: str, before: str, limit: int, generation: str
+    state: Any,
+    address: SessionAddress,
+    run_id: str,
+    before: str,
+    limit: int,
+    generation: str,
+    *,
+    include_file_urls: bool = False,
 ) -> JsonObject:
-    """Read an earlier child page of exactly one addressed Run, including live work."""
+    """Read an earlier child page of exactly one addressed Run, including live work.
+
+    ``include_file_urls`` lists the page's verified file links for a host that
+    grants them per page, such as an Extension page.
+    """
     session = await state.runtime.chat_sessions.get_async(address)
     if session.generation_id != generation:
         raise ValueError("The Session changed; reload its history.")
@@ -285,7 +296,7 @@ async def timeline_children(
             "before": before,
             "has_more": start > 0,
         },
-        include_file_urls=False,
+        include_file_urls=include_file_urls,
     )
 
 

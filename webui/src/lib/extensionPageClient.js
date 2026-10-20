@@ -334,11 +334,29 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     },
     operation: (operation, arguments_ = {}) =>
       call('operation', { operation, arguments: arguments_ }),
+    // `query.child_limit` (1-200) delivers only each Run's latest steps; a
+    // Run with earlier steps starts with a `history_gap` child, whose steps
+    // `readRunChildren` reads.
     readHistory: (groupId, participantId, query = {}) =>
       call('history.read', {
         group_id: groupId,
         participant_id: participantId,
         query,
+      }),
+    // The steps before a `history_gap` of a participant's Run, with the
+    // History generation they were read in; `mergeRunChildPage` adds them.
+    readRunChildren: (
+      groupId,
+      participantId,
+      { runId, before, historyGeneration, limit },
+    ) =>
+      call('history.children', {
+        group_id: groupId,
+        participant_id: participantId,
+        run_id: runId,
+        before,
+        history_generation: historyGeneration,
+        ...(limit === undefined ? {} : { limit }),
       }),
     openLink: (url) => call('link.open', { url }),
     openMedia: (url) => call('media.open', { url }),
@@ -371,13 +389,14 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       groupId,
       runId,
       afterSequence = 0,
-      { timeline = false } = {},
+      { timeline = false, childLimit } = {},
     ) =>
       call('run.subscribe', {
         group_id: groupId,
         run_id: runId,
         after_sequence: afterSequence,
         ...(timeline ? { timeline: true } : {}),
+        ...(timeline && childLimit ? { child_limit: childLimit } : {}),
       }),
     unsubscribeRun: (id) => call('run.unsubscribe', { id }),
     cancelToolCall: (groupId, runId, toolCallId) =>

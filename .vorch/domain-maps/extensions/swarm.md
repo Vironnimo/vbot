@@ -939,6 +939,13 @@ Terminal Run events reload canonical history so non-streamed final output appear
 without reopening Activity. Refresh and reconnect also reload the open History
 and reattach an active Run when its id is unchanged. Activity loads older canonical
 History pages through `next_before`, retaining the loaded page depth on refresh.
+Its reads and the followed Run's stream deliver each Run's latest 100 steps
+(`RUN_STEPS`, `webui/extension-pages.md` -> Run streams and history); a Run's
+history gap loads the earlier steps once it comes within a viewport height of the
+visible area (`loadRunGaps` in `RunActivity.svelte`), and a failed load runs again
+when the gap comes into reach again. Whole Runs broke Activity: in a Swarm running
+for hours, the newest History page of 5 of 18 participants measured 8.7-14.6 MB,
+beyond the bridge's 8 MB reply cap, and at most 3.4 MB windowed (Sessions, 2026-10).
 Discussion, audit and Usage replies commit only for the current selection
 and request; delayed reads cannot overwrite newer navigation. Board replies commit
 only for the selected Swarm and discussion and while no newer full load started

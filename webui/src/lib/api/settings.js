@@ -54,6 +54,9 @@ export function openExtensionPageRun(
       run_id: runId,
       after_sequence: afterSequence,
       ...(options.timeline === true ? { timeline: true } : {}),
+      ...(options.timeline === true && options.childLimit
+        ? { child_limit: options.childLimit }
+        : {}),
     },
     options,
   );
@@ -91,6 +94,32 @@ export function readExtensionPageHistory(
       group_id: groupId,
       participant_id: participantId,
       query,
+    },
+    options,
+  );
+}
+
+// The steps before a history gap of one participant's Run
+// (`chat.timeline_children` for an Extension page).
+export function readExtensionPageTimelineChildren(
+  name,
+  page,
+  groupId,
+  participantId,
+  { runId, before, historyGeneration, limit = 100 },
+  options = {},
+) {
+  return rpc(
+    'extensions.page_timeline_children',
+    {
+      name,
+      page,
+      group_id: groupId,
+      participant_id: participantId,
+      run_id: runId,
+      before,
+      history_generation: historyGeneration,
+      limit,
     },
     options,
   );

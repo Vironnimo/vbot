@@ -239,6 +239,45 @@ describe('extension page client', () => {
     expect(failures.map(listingErrorReason)).toEqual(['unreadable', 'invalid']);
   });
 
+  it("asks the host for a Run's step window and for the steps before its gap", () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    initialize(target);
+    const lastCall = () => target.postMessage.mock.calls.at(-1)[0];
+
+    void client.subscribeRun('group', 'run', 3, {
+      timeline: true,
+      childLimit: 100,
+    });
+    expect(lastCall()).toMatchObject({
+      method: 'run.subscribe',
+      params: {
+        group_id: 'group',
+        run_id: 'run',
+        after_sequence: 3,
+        timeline: true,
+        child_limit: 100,
+      },
+    });
+    void client.readRunChildren('group', 'participant', {
+      runId: 'run',
+      before: 'step-3',
+      historyGeneration: 'generation',
+      limit: 100,
+    });
+    expect(lastCall()).toMatchObject({
+      method: 'history.children',
+      params: {
+        group_id: 'group',
+        participant_id: 'participant',
+        run_id: 'run',
+        before: 'step-3',
+        history_generation: 'generation',
+        limit: 100,
+      },
+    });
+  });
+
   it('reports whether layers are open and closes the topmost one when the host asks', () => {
     const target = parent();
     client = createExtensionPageClient({ target });

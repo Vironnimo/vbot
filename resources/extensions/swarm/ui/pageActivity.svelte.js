@@ -2,6 +2,7 @@ import {
   visibleTimelineItemsForRender,
   applyTimelineEvent,
   mergeTimelineItems,
+  mergeRunChildPage,
 } from '../../../../webui/src/lib/chatTimeline.js';
 import {
   createChatState,
@@ -12,6 +13,12 @@ import {
 import { nextContextUsage } from '../../../../webui/src/lib/chatState/sessionState.js';
 import { untrack } from 'svelte';
 import { failureText } from './failureText.js';
+
+// How many of a Run's latest steps a read delivers, as in the Chat; earlier
+// steps load when the user scrolls near the Run's history gap. A long-lived
+// participant's Run would otherwise arrive whole, beyond what the page bridge
+// carries.
+const RUN_STEPS = 100;
 
 // Why an interrupted Run stopped, as its summary's completion reason names
 // it; another reason counts as a plain interruption.
@@ -47,6 +54,10 @@ export function createSwarmPageActivity(host) {
   // catalog or its Run's subscription), so a refresh inspects it again
   // instead of keeping what Activity shows.
   let stale = false;
+  // Each history gap's load in flight or done, by Run and cursor. A failed
+  // load is forgotten, so the gap loads again when it comes into reach again.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- bookkeeping, never rendered
+  const runGapLoads = new Map();
 
   function flushEvents() {
     clearTimeout(flushTimer);
@@ -87,6 +98,7 @@ export function createSwarmPageActivity(host) {
 
   function clearProjection() {
     clearLiveRun();
+    runGapLoads.clear();
     projection.messages = [];
     projection.timelineItems = [];
     projection.timelineSequences = {};
@@ -265,6 +277,7 @@ export function createSwarmPageActivity(host) {
     try {
       let data = await host.model.client.readHistory(swarmId, participant.id, {
         limit: 100,
+        child_limit: RUN_STEPS,
         ...(history?.participant.id === participant.id &&
         projection.historyAfter
           ? { after: projection.historyAfter }
@@ -286,6 +299,7 @@ export function createSwarmPageActivity(host) {
         pages.push(
           await host.model.client.readHistory(swarmId, participant.id, {
             limit: 100,
+            child_limit: RUN_STEPS,
             before: pages.at(-1).next_before,
           }),
         );
@@ -302,6 +316,7 @@ export function createSwarmPageActivity(host) {
           participant.id,
           {
             limit: 100,
+            child_limit: RUN_STEPS,
             after: data.next_after,
           },
         );
@@ -392,6 +407,7 @@ export function createSwarmPageActivity(host) {
         selected.participant.id,
         {
           limit: 100,
+          child_limit: RUN_STEPS,
           before: selected.data.next_before,
         },
       );
@@ -450,6 +466,39 @@ export function createSwarmPageActivity(host) {
       )
         historyLoading = false;
     }
+  }
+
+  // Loads the steps before one Run's history gap into the shown History.
+  // The page started it on its own, so a failure is a refresh failure.
+  function loadRunHistory({ runId, before }) {
+    const key = `${runId}\n${before}`;
+    if (!history || !runId || !before || runGapLoads.has(key))
+      return runGapLoads.get(key) ?? Promise.resolve(false);
+    const request = activityRequest;
+    const selected = history;
+    const load = host.model.client
+      .readRunChildren(host.model.selectedSwarm.id, selected.participant.id, {
+        runId,
+        before,
+        historyGeneration: projection.historyGeneration,
+        limit: RUN_STEPS,
+      })
+      .then((page) => {
+        if (host.model.disposed || request !== activityRequest) return false;
+        // A newer read may have replaced the Run meanwhile; the page then
+        // no longer continues its gap and the next gap loads instead.
+        if (!mergeRunChildPage(projection, page)) return false;
+        if (history === selected) history.data.items = projection.timelineItems;
+        return true;
+      })
+      .catch((cause) => {
+        if (runGapLoads.get(key) === load) runGapLoads.delete(key);
+        if (!host.model.disposed && request === activityRequest)
+          host.model.refreshFailed(cause);
+        return false;
+      });
+    runGapLoads.set(key, load);
+    return load;
   }
 
   // `preserve` keeps the shown History and the followed Run while the
@@ -617,7 +666,7 @@ export function createSwarmPageActivity(host) {
         swarmId,
         participant.lifecycle_run_id,
         0,
-        { timeline: true },
+        { timeline: true, childLimit: RUN_STEPS },
       );
       if (!subscription.subscription_id) {
         off();
@@ -689,6 +738,7 @@ export function createSwarmPageActivity(host) {
       return stopReason;
     },
     loadEarlierActivity,
+    loadRunHistory,
     inspectParticipant,
   };
 }

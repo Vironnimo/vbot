@@ -361,7 +361,7 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
     """Open a parent-owned SSE capability for one live, owner-scoped Run."""
     _reject_unsupported(
         params,
-        {"name", "page", "group_id", "run_id", "after_sequence", "timeline"},
+        {"name", "page", "group_id", "run_id", "after_sequence", "timeline", "child_limit"},
         "extensions.page_run",
     )
     name = _required_string(params, "name")
@@ -370,6 +370,11 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
     timeline = params.get("timeline", False)
     if not isinstance(timeline, bool):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.page_run timeline must be a boolean")
+    child_limit = _child_limit(params, "child_limit", "extensions.page_run child_limit")
+    if child_limit and not timeline:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "extensions.page_run child_limit requires timeline"
+        )
     after_sequence = params.get("after_sequence", 0)
     if (
         not isinstance(after_sequence, int)
@@ -410,6 +415,7 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
                 run_id=run_id,
                 after_sequence=after_sequence,
                 timeline=timeline,
+                child_limit=child_limit,
             ),
         }
     except ValueError as error:
@@ -467,6 +473,10 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
     query = params.get("query", {})
     if not isinstance(query, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.page_history query must be an object")
+    # `child_limit` bounds the delivered steps of each Run, as in `chat.timeline`;
+    # the page still reads complete Runs, so it is not part of the History query.
+    child_limit = _child_limit(query, "child_limit", "extensions.page_history query.child_limit")
+    query = {key: value for key, value in query.items() if key != "child_limit"}
     registry = state.runtime.extensions
     if registry is None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extension page is unavailable; refresh the page")
@@ -509,7 +519,11 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
         )
         active_snapshot = capture_run_timeline(active_run) if active_run is not None else None
         projection = await _HISTORY_WORKERS.run(
-            _temporary_history_projection, snapshot, state.file_delivery, active_snapshot
+            _temporary_history_projection,
+            snapshot,
+            state.file_delivery,
+            active_snapshot,
+            child_limit,
         )
         _validate_page_context(state.runtime, registry, name, page)
         return projection
@@ -519,8 +533,71 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(error) from error
 
 
+async def _extension_page_timeline_children(state: Any, params: JsonObject) -> JsonObject:
+    """Read the steps before a history gap of one participant's owned Run."""
+    from server.timeline import timeline_children
+
+    _reject_unsupported(
+        params,
+        {
+            "name",
+            "page",
+            "group_id",
+            "participant_id",
+            "run_id",
+            "before",
+            "history_generation",
+            "limit",
+        },
+        "extensions.page_timeline_children",
+    )
+    name = _required_string(params, "name")
+    group_id = _required_string(params, "group_id")
+    participant_id = _required_string(params, "participant_id")
+    run_id = _required_string(params, "run_id")
+    before = _required_string(params, "before")
+    generation = _required_string(params, "history_generation")
+    limit = _child_limit(params, "limit", "extensions.page_timeline_children limit") or 100
+    registry = state.runtime.extensions
+    if registry is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extension page is unavailable; refresh the page")
+    try:
+        _validate_page_context(state.runtime, registry, name, params.get("page"))
+        page = params["page"]
+        identity = ExtensionRegistrationIdentity(name, page["epoch"])
+        temporary_agents = registry.host_for(identity).temporary_agents
+        if temporary_agents is None:
+            raise ValueError("Extension page is unavailable; refresh the page")
+        # Ownership names the participant's Session; the read stays inside it.
+        record = (await temporary_agents.owned_run(group_id, run_id)).record
+        if record.owner.participant_id != participant_id:
+            raise ValueError("The history position is unavailable; reload the conversation.")
+        result = await timeline_children(
+            state, record.address, run_id, before, limit, generation, include_file_urls=True
+        )
+        _validate_page_context(state.runtime, registry, name, page)
+        return result
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+    except Exception as error:
+        raise _map_expected_error(error) from error
+
+
+def _child_limit(params: JsonObject, key: str, label: str) -> int:
+    """A number of Run steps from 1 to 200 under ``key``, or 0 when absent."""
+    value = params.get(key)
+    if value is None:
+        return 0
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 200:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be an integer from 1 to 200")
+    return value
+
+
 def _temporary_history_projection(
-    snapshot: Any, delivery: Any, active_snapshot: JsonObject | None = None
+    snapshot: Any,
+    delivery: Any,
+    active_snapshot: JsonObject | None = None,
+    child_limit: int = 0,
 ) -> JsonObject:
     """Use the ordinary client projection while withholding internal Session records."""
     from server.timeline import project_timeline_history
@@ -558,9 +635,11 @@ def _temporary_history_projection(
             "status": active["state"]["status"],
             "started_at": active["state"]["started_at"],
         }
-    projection = project_timeline_history(response, active)
+    projection = project_timeline_history(response, active, child_limit)
+    # Grant only the files of what the page receives; steps outside a Run's
+    # window are granted with the page that loads them.
     projection["file_urls"] = projected_file_urls(
-        {"messages": messages, "items": projection["items"]}, delivery
+        {"messages": projection["messages"], "items": projection["items"]}, delivery
     )
     return projection
 
@@ -636,6 +715,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "extensions.operation": _extension_operation,
         "extensions.page_history": _extension_page_history,
         "extensions.page_run": _extension_page_run,
+        "extensions.page_timeline_children": _extension_page_timeline_children,
         "extensions.page_cancel_tool": _extension_page_cancel_tool,
         "extensions.pages": _extension_pages,
         "extensions.requests": _extension_requests,

@@ -891,10 +891,12 @@ def test_extension_run_capability_is_short_lived_and_identity_bound(monkeypatch,
         run_id="run-a",
         after_sequence=4,
         timeline=timeline,
+        child_limit=100 if timeline else 0,
     )
     token = capability["url"].split("/")[3]
 
-    assert capability["url"].endswith("/timeline" if timeline else "/events")
+    # A windowed timeline names its step window outside the signed token.
+    assert capability["url"].endswith("/timeline?child_limit=100" if timeline else "/events")
     assert capability.get("timeline_version") == (1 if timeline else None)
     assert delivery.extension_run_claims(token) == {
         "extension": "swarm",

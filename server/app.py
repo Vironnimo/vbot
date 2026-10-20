@@ -541,8 +541,12 @@ def create_app(
 
     @app.get("/api/extension-runs/{token}/events")
     @app.get("/api/extension-runs/{token}/timeline")
-    async def extension_run_events(request: Request, token: str) -> StreamingResponse:
+    async def extension_run_events(
+        request: Request, token: str, child_limit: int = 0
+    ) -> StreamingResponse:
         """Stream only a Run still owned by the page identity in its capability."""
+        if not 0 <= child_limit <= 200:
+            raise HTTPException(status_code=400, detail="child_limit must be between 0 and 200")
         delivery = request.app.state.file_delivery
         try:
             claims = delivery.extension_run_claims(token)
@@ -583,6 +587,7 @@ def create_app(
                         inspection.run,
                         shutdown_event=request.app.state.shutdown_event,
                         include_file_urls=True,
+                        child_limit=child_limit,
                         file_actor=_file_actor(request.scope),
                         file_expires_at=request.scope.get("vbot.capability_expires_at"),
                     )
