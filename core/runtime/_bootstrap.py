@@ -775,6 +775,7 @@ def bootstrap(runtime: Runtime) -> None:
                 data_root=runtime._storage.data_dir,
             )
         )
+        runtime._cron_service.set_webhook_secrets(runtime._storage.secrets)
         runtime._channel_service._notify_tool_registration_changed_hook = (
             runtime._reload_channel_tool_if_started
         )

@@ -1,8 +1,8 @@
 """The context note before a Cron Run's input, read by the Agent as a System Reminder.
 
 It says why the Run starts when that is not simply its due time (an event, a
-late start, a change of what the job watches), where the final answer goes, and
-carries the job's previous answer as data.
+late start, a change of what the job watches, requests to its webhook), where
+the final answer goes, and carries the job's previous answer as data.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from core.automation import _cron_events as _events
 from core.automation import _cron_schedule as _schedule
 from core.automation import _cron_timing as _timing
 from core.automation import _cron_watch as _watch
+from core.automation import _cron_webhook_events as _webhook_events
 from core.automation._cron_jobs import CronJob
 
 # A fire that starts at most this late counts as on time and gets no late notice.
@@ -30,12 +31,13 @@ def run_context(
     late: LateFire | None = None,
     event_due: _events.EventDue | None = None,
     change: _watch.WatchChange | None = None,
+    webhook: _webhook_events.WebhookBatch | None = None,
 ) -> str:
     """The note before the Run's input.
 
-    It names the event the job is due for, any lateness or the change that
-    started the Run, says where the final answer goes, and carries the previous
-    answer as data.
+    It names the event the job is due for, any lateness, the change or the
+    webhook requests that started the Run, says where the final answer goes,
+    and carries the previous answer as data.
     """
     parts = []
     if event_due is not None:
@@ -44,6 +46,8 @@ def run_context(
         parts.append(late.notice(job.id, _timing._utc_now()))
     if change is not None:
         parts.append(_watch.change_note(change, timezone))
+    if webhook is not None:
+        parts.append(_webhook_events.webhook_note(webhook, timezone))
     parts.append(_delivery.delivery_note(job.delivery))
     if job.last_result is not None:
         parts.append(_delivery.previous_result_note(job.last_result, timezone))

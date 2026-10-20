@@ -30,9 +30,11 @@ from core.projects import (
 from core.runs import RunCancelledError, RunKind
 from core.sessions import SessionNotFoundError
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.automation._cron_watch import WatchChange
+    from core.automation._cron_webhook_events import WebhookBatch
     from core.automation.cron import CronService
 
 
@@ -63,13 +65,18 @@ class CronExecution:
         owed: _schedule.OwedFire | None = None,
         event_due: _events.EventDue | None = None,
         change: WatchChange | None = None,
+        webhook: bool = False,
     ) -> CronRunOutcome:
         """Start the job's Run and record its outcome.
 
         ``owed`` is the due time a late Run is told about; ``change`` is the
-        watched output change that started the Run, which replaces any late notice.
+        watched output change that started the Run, which replaces any late
+        notice. With ``webhook`` the Run takes the requests waiting for the job
+        once it holds a Run slot and starts only when some wait; they are
+        forgotten once it is admitted and wait for the next attempt otherwise.
         """
         admitted = False
+        batch: WebhookBatch | None = None
         self._owner._executing_jobs.add(job.id)
         try:
             async with self._owner._run_slots:
@@ -108,8 +115,18 @@ class CronExecution:
                     if owed is not None and change is None
                     else None
                 )
+                if webhook:
+                    batch = await self._owner._webhooks.take(job.id)
+                    latest = self._owner._jobs.get(job.id)
+                    if (
+                        batch is None
+                        or latest is None
+                        or latest.status != "active"
+                        or job.id in self._owner._pending_restarts
+                    ):
+                        return CronRunOutcome(succeeded=False, admitted=admitted)
                 _LOGGER.info(
-                    "Cron job fired (job=%s agent=%s session=%s%s%s%s)",
+                    "Cron job fired (job=%s agent=%s session=%s%s%s%s%s)",
                     latest.id,
                     latest.agent_id,
                     latest.session_id,
@@ -121,9 +138,19 @@ class CronExecution:
                         else ""
                     ),
                     " watched_output_changed=true" if change is not None else "",
+                    (
+                        f" webhook_requests={len(batch.requests)} webhook_dropped={batch.dropped}"
+                        if batch is not None
+                        else ""
+                    ),
                 )
                 context = _context.run_context(
-                    latest, self._owner._timezone, late=late, event_due=event_due, change=change
+                    latest,
+                    self._owner._timezone,
+                    late=late,
+                    event_due=event_due,
+                    change=change,
+                    webhook=batch,
                 )
                 run: Any | None = None
                 result: Any = None
@@ -145,6 +172,8 @@ class CronExecution:
                         ),
                     )
                     admitted = True
+                    if batch is not None:
+                        await settle_before_cancelling(self._owner._webhooks.consume(job.id, batch))
                     if firing_once_at is not None:
                         self._admitted_once_runs[job.id] = firing_once_at
                     latest = self._owner._jobs.get(job.id)
@@ -244,6 +273,8 @@ class CronExecution:
                     await self._deliver_answer(latest, run, answer)
                 return CronRunOutcome(succeeded=True, admitted=admitted)
         finally:
+            if batch is not None and not admitted:
+                self._owner._webhooks.release(job.id, batch)
             self._admitted_once_runs.pop(job.id, None)
             self._owner._executing_jobs.discard(job.id)
 

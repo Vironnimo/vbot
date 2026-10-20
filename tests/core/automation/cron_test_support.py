@@ -15,6 +15,17 @@ from core.automation.cron import (
 from core.calendar import CalendarService
 from core.channels import ChannelNotFoundError
 from core.runs import RunStatus
+from core.secrets import KeyFileProtection, SecretStore
+
+
+def secret_store(tmp_path: Path) -> SecretStore:
+    """A Secret Store in ``tmp_path`` protected by a key file beside it; each call opens it anew."""
+    data_dir = tmp_path / "secrets"
+    data_dir.mkdir(exist_ok=True)
+    return SecretStore(
+        data_dir,
+        protections=(KeyFileProtection(directories=(tmp_path / "keys",)),),
+    )
 
 
 def make_service(

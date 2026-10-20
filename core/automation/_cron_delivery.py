@@ -210,6 +210,11 @@ def failure_alert(
     ):
         if job.schedule_type == "once":
             follow_up = "vBot tries it again."
+        elif job.schedule_type == "webhook":
+            follow_up = (
+                "It keeps running when its webhook receives a request and stops after "
+                f"{MAX_CONSECUTIVE_CRON_FAILURES} failures in a row."
+            )
         else:
             follow_up = (
                 f"It keeps {'checking' if job.watch is not None else 'running'} on schedule and "

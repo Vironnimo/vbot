@@ -105,6 +105,9 @@ class CronScheduler:
                     _claims.remove(self._owner._once_fire_claims_dir, job_id)
             self._owner._notify_changed()
 
+        self._owner._webhooks.load_states(
+            [job.id for job in self._owner._jobs.values() if job.schedule_type == "webhook"]
+        )
         for job in self._owner._jobs.values():
             if job.status == "active" and job.id not in held_job_ids:
                 self._start_job_task(job)
@@ -143,6 +146,10 @@ class CronScheduler:
             task = asyncio.create_task(self._run_once_job(job), name=f"cron-job:{job.id}:once")
         elif job.schedule_type == "event":
             task = asyncio.create_task(self._run_event_job(job), name=f"cron-job:{job.id}:event")
+        elif job.schedule_type == "webhook":
+            task = asyncio.create_task(
+                self._run_webhook_job(job), name=f"cron-job:{job.id}:webhook"
+            )
         else:
             task = asyncio.create_task(
                 self._run_recurring_job(job, job.schedule_type),
@@ -269,6 +276,34 @@ class CronScheduler:
             )
             if not reached:
                 settled = None
+
+    async def _run_webhook_job(self, job: CronJob) -> None:
+        """Start a Run whenever requests to the job's webhook wait, one Run at a time.
+
+        Requests that arrive while a Run is active wait and start one follow-up
+        Run together. A Run that could not start leaves its requests waiting and
+        is tried again after the once-job backoff; a target that stays missing
+        counts toward the failure stop.
+        """
+        webhooks = self._owner._webhooks
+        failed_attempts = 0
+        while True:
+            current = self._owner._jobs.get(job.id)
+            if current is None or current.status != "active" or current.schedule_type != "webhook":
+                return
+            wake = webhooks.wake(job.id)
+            wake.clear()
+            if not await webhooks.waiting(job.id):
+                await wake.wait()
+                continue
+            outcome = await self._owner._execution._trigger_job_run(current, webhook=True)
+            if job.id in self._owner._pending_restarts:
+                return
+            if outcome.admitted or not await webhooks.waiting(job.id):
+                failed_attempts = 0
+                continue
+            failed_attempts += 1
+            await _timing._sleep(_timing._once_retry_delay(failed_attempts))
 
     async def _run_once_job(self, job: CronJob) -> None:
         """Sleep until run_at, fire once, then mark completed.

@@ -42,7 +42,7 @@ from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
-ScheduleType = Literal["cron", "interval", "once", "event"]
+ScheduleType = Literal["cron", "interval", "once", "event", "webhook"]
 
 EventEdge = Literal["start", "end"]
 
@@ -54,7 +54,7 @@ DeliveryKind = Literal["none", "chat", "app"]
 
 WatchKind = Literal["command", "url"]
 
-_ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event"))
+_ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event", "webhook"))
 
 # The schedule types a watch applies to: a check needs a time to repeat at.
 WATCH_SCHEDULE_TYPES = frozenset(("cron", "interval"))
@@ -957,7 +957,9 @@ def normalize_job_fields(job: CronJob) -> None:
     job.prompt = job.prompt.strip()
 
     if job.schedule_type not in _ALLOWED_SCHEDULE_TYPES:
-        raise CronJobValidationError("schedule_type must be 'cron', 'interval', 'once' or 'event'")
+        raise CronJobValidationError(
+            "schedule_type must be 'cron', 'interval', 'once', 'event' or 'webhook'"
+        )
 
     if job.status not in _ALLOWED_STATUSES:
         raise CronJobValidationError("status must be active, paused, completed, failed, or missed")
@@ -1033,7 +1035,7 @@ def normalize_job_fields(job: CronJob) -> None:
         if job.schedule_type not in WATCH_SCHEDULE_TYPES:
             raise CronJobValidationError(
                 "watch applies only to a repeating schedule (a cron expression or an "
-                "interval), not to a one-time or event schedule"
+                "interval), not to a one-time, event or webhook schedule"
             )
 
 

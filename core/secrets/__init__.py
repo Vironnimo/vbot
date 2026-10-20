@@ -1,4 +1,4 @@
-"""The Secret Store: credentials and OAuth tokens encrypted at rest.
+"""The Secret Store: credentials, OAuth tokens and webhook secrets encrypted at rest.
 
 Owns ``<data-dir>/secrets.json``, the protection of its data key, and the
 conversion of the plaintext credential files it replaced (``.env`` and
@@ -41,6 +41,7 @@ from core.secrets.store import (
     OAUTH_TOKENS,
     SECRET_STORE_FILE_NAME,
     SECRET_STORE_FORMAT,
+    WEBHOOK_SECRETS,
     SecretEntryUnavailableError,
     SecretStore,
     SecretStoreError,
@@ -68,6 +69,7 @@ __all__ = [
     "PLAINTEXT_CREDENTIAL_PATTERNS",
     "SECRET_STORE_FILE_NAME",
     "SECRET_STORE_FORMAT",
+    "WEBHOOK_SECRETS",
     "CreatedKey",
     "DpapiKeyProtection",
     "KeyFileProtection",

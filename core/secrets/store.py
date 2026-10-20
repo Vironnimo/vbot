@@ -95,6 +95,9 @@ from core.secrets._document import (
     SECTIONS as SECTIONS,
 )
 from core.secrets._document import (
+    WEBHOOK_SECRETS as WEBHOOK_SECRETS,
+)
+from core.secrets._document import (
     Section as Section,
 )
 from core.secrets._document import (
