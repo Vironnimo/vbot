@@ -107,7 +107,6 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 - Key-file-backed stores re-read the external key before each access, including writes: removal or replacement makes the store unavailable immediately, and restoring the original key restores access without restarting. Document-backed protections can cache a view until `secrets.json` changes (Runtime still snapshots credentials at start).
 - Key lookup depends on the process: its account (DPAPI, `HOME`) and `VBOT_SECRET_KEY_FILE`. A CLI started with another account or variable can fail to open a store the server opens; `secrets reset` therefore defers to the running server, and the store is never destroyed.
 - Because restores keep the live store, a future store format change needs its own rollback story. Restoring a named copy from before a `reset` brings back a document whose key may be gone.
-- The Agent Secret masker also masks the data-directory credentials, as `{{secret:<ENV_NAME>}}`, though no Agent can use such a reference; values under 8 characters are never masked.
 
 ## Agent-facing text
 
