@@ -1,4 +1,4 @@
-import { listProjects, listAgents } from '$lib/api.js';
+import { listProjects, listAgents, reorderProjects } from '$lib/api.js';
 
 export function createAppSelection() {
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
@@ -79,6 +79,8 @@ export function createAppSelection() {
   let projectsLoaded = $state(false);
 
   let projectsLoadRequestId = 0;
+  // The revision of the Project order in `projects`, which a reorder names.
+  let projectOrderRevision = 0;
 
   let selectedProjectId = $state(initialSelectedProjectId);
 
@@ -182,6 +184,9 @@ export function createAppSelection() {
         return false;
       }
       projects = Array.isArray(result?.projects) ? result.projects : [];
+      projectOrderRevision = Number.isInteger(result?.order_revision)
+        ? result.order_revision
+        : 0;
       projectsLoaded = true;
       // Drop a stale persisted selection if its project no longer exists. The
       // remembered project agent goes with it — it only means anything within a
@@ -204,6 +209,31 @@ export function createAppSelection() {
       // Keep the last valid catalog during a transient RPC failure. A newer
       // request also owns any visible state change, so stale failures are inert.
       return false;
+    }
+  };
+
+  // Store the user's Project order (every Project id, in the new order).
+  // `projects` shows it at once; a refused order restores the previous list,
+  // reloads it and rethrows for the caller to report.
+  const saveProjectOrder = async (projectIds) => {
+    const previous = projects;
+    projects = [
+      ...projectIds
+        .map((id) => previous.find((project) => project.project_id === id))
+        .filter(Boolean),
+      ...previous.filter((project) => !projectIds.includes(project.project_id)),
+    ];
+    // A read in flight still carries the previous order.
+    projectsLoadRequestId += 1;
+    try {
+      const result = await reorderProjects(projectIds, projectOrderRevision);
+      if (Number.isInteger(result?.order_revision)) {
+        projectOrderRevision = result.order_revision;
+      }
+    } catch (error) {
+      projects = previous;
+      void loadProjects();
+      throw error;
     }
   };
 
@@ -354,6 +384,9 @@ export function createAppSelection() {
     },
     get loadProjects() {
       return loadProjects;
+    },
+    get saveProjectOrder() {
+      return saveProjectOrder;
     },
     get currentNavigationSelection() {
       return currentNavigationSelection;

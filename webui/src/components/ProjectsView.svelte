@@ -6,6 +6,8 @@
   import ContextMenu from './ui/ContextMenu.svelte';
   import { contextMenuAnchor, isContextMenuKey } from './ui/contextMenu.js';
   import EmptyState from './ui/EmptyState.svelte';
+  import SortableList from './ui/SortableList.svelte';
+  import { moveItem } from './ui/sortable.js';
   import {
     needsRePoint,
     createProjectsController,
@@ -275,7 +277,10 @@
     };
   }
 
+  // A touch hold that already started a reorder drag prevents the
+  // `contextmenu` that follows it, so the drag keeps the gesture.
   function openMenu(project, event) {
+    if (event.defaultPrevented) return;
     event.preventDefault();
     menu = { ...contextMenuAnchor(event), ...projectMenu(project) };
   }
@@ -331,7 +336,9 @@
           </p>
         {/if}
 
-        {#if projectsState.loadingProjects}
+        <!-- Only the first load replaces the list: a reload (after every
+             reorder) keeps the rows, their focus and a running drag. -->
+        {#if projectsState.loadingProjects && !projectsState.projectsLoaded}
           <p class="project-list-state" role="status">
             {t('projects.loading')}
           </p>
@@ -342,35 +349,52 @@
             description={t('projects.emptySubtitle')}
           />
         {:else}
-          {#each projectsState.projects as project (project.project_id)}
-            <button
-              type="button"
-              class="project-item secondary-list__item"
-              class:active={project.project_id ===
-                projectsState.selectedProjectId}
-              data-testid={`project-toggle-${project.project_id}`}
-              use:tooltip={() => projectRowDetails(project)}
-              onclick={() => navigation.navigate([project.project_id])}
-              oncontextmenu={(event) => openMenu(project, event)}
-              onkeydown={(event) => {
-                if (isContextMenuKey(event)) openMenu(project, event);
-              }}
-            >
-              <span class="project-item-inner">
-                <span class="project-item-head">
-                  <span class="project-item-name">
-                    {project.display_name || project.project_id}
+          <SortableList
+            class="project-list"
+            itemClass="project-list-row"
+            items={projectsState.projects}
+            getKey={(project) => project.project_id}
+            getLabel={(project) => project.display_name || project.project_id}
+            disabled={projectsState.reorderingProjects}
+            aria-label={t('projects.title')}
+            onReorder={(from, to) =>
+              projectsController.reorderProjects(
+                moveItem(projectsState.projects, from, to).map(
+                  (project) => project.project_id,
+                ),
+              )}
+            onDragActiveChange={projectsController.setReorderDragActive}
+          >
+            {#snippet item(project)}
+              <button
+                type="button"
+                class="project-item secondary-list__item"
+                class:active={project.project_id ===
+                  projectsState.selectedProjectId}
+                data-testid={`project-toggle-${project.project_id}`}
+                use:tooltip={() => projectRowDetails(project)}
+                onclick={() => navigation.navigate([project.project_id])}
+                oncontextmenu={(event) => openMenu(project, event)}
+                onkeydown={(event) => {
+                  if (isContextMenuKey(event)) openMenu(project, event);
+                }}
+              >
+                <span class="project-item-inner">
+                  <span class="project-item-head">
+                    <span class="project-item-name">
+                      {project.display_name || project.project_id}
+                    </span>
+                    {#if needsRePoint(project)}
+                      <StatusChip variant="error">
+                        {t('projects.rePoint.title')}
+                      </StatusChip>
+                    {/if}
                   </span>
-                  {#if needsRePoint(project)}
-                    <StatusChip variant="error">
-                      {t('projects.rePoint.title')}
-                    </StatusChip>
-                  {/if}
+                  <span class="project-item-cwd">{project.cwd}</span>
                 </span>
-                <span class="project-item-cwd">{project.cwd}</span>
-              </span>
-            </button>
-          {/each}
+              </button>
+            {/snippet}
+          </SortableList>
         {/if}
       </div>
     </aside>

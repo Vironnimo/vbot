@@ -27,10 +27,12 @@ from core.model_tasks import TaskModelError, TaskModelValidationError
 from core.performance import RecordingActiveError, RecordingInactiveError
 from core.projects import (
     AgentResolutionError,
+    InvalidProjectOrderError,
     ModelConfigurationError,
     ProjectAlreadyExistsError,
     ProjectError,
     ProjectNotFoundError,
+    ProjectOrderConflictError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
@@ -70,6 +72,7 @@ from server.rpc.errors import (
     RPC_ERROR_PERFORMANCE_RECORDING_INACTIVE,
     RPC_ERROR_PROJECT_ALREADY_EXISTS,
     RPC_ERROR_PROJECT_NOT_FOUND,
+    RPC_ERROR_PROJECT_ORDER_CONFLICT,
     RPC_ERROR_RUN_NOT_FOUND,
     RPC_ERROR_SESSION_CAPABILITY_EXPIRED,
     RPC_ERROR_SETTINGS_CONFLICT,
@@ -169,6 +172,10 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_PROJECT_NOT_FOUND, str(error))
     if isinstance(error, ProjectAlreadyExistsError):
         return RpcError(RPC_ERROR_PROJECT_ALREADY_EXISTS, str(error))
+    if isinstance(error, ProjectOrderConflictError):
+        return RpcError(RPC_ERROR_PROJECT_ORDER_CONFLICT, str(error))
+    if isinstance(error, InvalidProjectOrderError):
+        return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, ModelConfigurationError):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, TaskModelValidationError):

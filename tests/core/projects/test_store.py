@@ -14,6 +14,7 @@ from threading import Event
 import pytest
 
 from core.database import write_bootstrap_marker
+from core.projects._order import ProjectOrderConflictError
 from core.projects.paths import cwd_exists
 from core.projects.projects import (
     PROJECT_DEFAULT_ALLOWED_TOOLS,
@@ -777,17 +778,81 @@ def test_case_variant_of_a_stored_project_id_is_not_found(data_dir: Path, repo: 
     assert [project.project_id for project in store.list()] == ["vbot"]
 
 
-def test_list_returns_valid_projects_sorted_by_id(data_dir: Path, tmp_path: Path) -> None:
-    store = ProjectStore(data_dir)
-    for name in ["zeta", "alpha", "mid"]:
+def _create_projects(store: ProjectStore, tmp_path: Path, *names: str) -> None:
+    for name in names:
         repo_dir = tmp_path / "repos" / name
         repo_dir.mkdir(parents=True)
         store.create(name, name.title(), repo_dir)
+
+
+def _ids(store: ProjectStore) -> list[str]:
+    return [project.project_id for project in store.list()]
+
+
+def test_list_returns_valid_projects_sorted_by_id(data_dir: Path, tmp_path: Path) -> None:
+    store = ProjectStore(data_dir)
+    _create_projects(store, tmp_path, "zeta", "alpha", "mid")
     bad_dir = data_dir / "projects" / "broken"
     bad_dir.mkdir(parents=True)
     (bad_dir / "project.json").write_text("{ not json", encoding="utf-8")
 
-    assert [project.project_id for project in store.list()] == ["alpha", "mid", "zeta"]
+    assert _ids(store) == ["alpha", "mid", "zeta"]
+    assert store.list_with_order().order_revision == 0
+
+
+def test_reorder_keeps_the_users_order_for_every_later_listing(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    store = ProjectStore(data_dir)
+    _create_projects(store, tmp_path, "alpha", "mid", "zeta")
+
+    result = store.reorder(["zeta", "alpha", "mid"], expected_revision=0)
+    _create_projects(store, tmp_path, "beta", "new")
+    with store.archive_files("alpha", _payload(data_dir)):
+        pass
+
+    assert (result.order_revision, result.order_changed) == (1, True)
+    # New Projects follow in id order; an archived one leaves its place.
+    assert _ids(store) == ["zeta", "mid", "beta", "new"]
+    assert store.list_with_order().order_revision == 1
+    # The next order stores exactly the current Projects.
+    store.reorder(["new", "zeta", "mid", "beta"], expected_revision=1)
+    stored = json.loads((data_dir / "projects" / "order.json").read_text(encoding="utf-8"))
+    assert stored["project_ids"] == ["new", "zeta", "mid", "beta"]
+
+
+@pytest.mark.parametrize(
+    ("project_ids", "expected_revision"),
+    [
+        pytest.param(["mid", "alpha"], 1, id="stale-revision"),
+        pytest.param(["alpha", "mid", "gone"], 2, id="changed-list"),
+    ],
+)
+def test_reorder_refuses_a_stale_view_and_keeps_the_stored_order(
+    data_dir: Path, tmp_path: Path, project_ids: list[str], expected_revision: int
+) -> None:
+    store = ProjectStore(data_dir)
+    _create_projects(store, tmp_path, "alpha", "mid")
+    store.reorder(["mid", "alpha"], expected_revision=0)
+    store.reorder(["alpha", "mid"], expected_revision=1)
+
+    with pytest.raises(ProjectOrderConflictError) as refused:
+        store.reorder(project_ids, expected_revision=expected_revision)
+
+    assert refused.value.current_revision == 2
+    assert _ids(store) == ["alpha", "mid"]
+    # Repeating the current order needs no current revision.
+    assert store.reorder(["alpha", "mid"], expected_revision=0).order_changed is False
+
+
+def test_an_invalid_order_document_falls_back_to_id_order(data_dir: Path, tmp_path: Path) -> None:
+    store = ProjectStore(data_dir)
+    _create_projects(store, tmp_path, "alpha", "mid")
+    (data_dir / "projects" / "order.json").write_text("{ not json", encoding="utf-8")
+
+    assert _ids(store) == ["alpha", "mid"]
+    with pytest.raises(ProjectError):
+        store.reorder(["mid", "alpha"], expected_revision=0)
 
 
 @pytest.mark.parametrize(

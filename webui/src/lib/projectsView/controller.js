@@ -8,6 +8,7 @@ import {
   listProjects,
   listTools,
   removeProject as requestRemoveProject,
+  reorderProjects as requestReorderProjects,
   setOverride as requestSetOverride,
   setProject as requestSetProject,
   showProject,
@@ -52,6 +53,7 @@ function defaultProjectOperations() {
     listProjects,
     listTools,
     removeProject: requestRemoveProject,
+    reorderProjects: requestReorderProjects,
     setOverride: requestSetOverride,
     setProject: requestSetProject,
     showProject,
@@ -84,6 +86,10 @@ export function createProjectsController({
   let toolAccessOverrideAutoSaveTimer = null;
 
   let pendingProjectList = null;
+  // The order revision of the latest loaded list, applied with that list.
+  let latestOrderRevision = 0;
+  // A drag of the Project list is under way; list reloads wait for its end.
+  let reorderDragActive = false;
   const {
     clearDetect,
     openAdd,
@@ -247,6 +253,8 @@ export function createProjectsController({
         hasManageChanges(pendingChanges()) ||
         overrideDraftsHaveChanges(),
       savePending:
+        reorderDragActive ||
+        state.reorderingProjects ||
         autoSaveTimer !== null ||
         toolAccessOverrideAutoSaveTimer !== null ||
         state.addingProject ||
@@ -260,6 +268,7 @@ export function createProjectsController({
   function applyProjectList(projects) {
     pendingProjectList = null;
     state.projects = projects;
+    state.orderRevision = latestOrderRevision;
     state.projectsLoaded = true;
     const listed = (projectId) =>
       state.projects.find((project) => project.project_id === projectId);
@@ -295,6 +304,9 @@ export function createProjectsController({
         return false;
       }
       const projects = normalizeProjects(result?.projects);
+      latestOrderRevision = Number.isInteger(result?.order_revision)
+        ? result.order_revision
+        : 0;
       if (reload && !projectReloadCanApply()) {
         pendingProjectList = projects;
       } else {
@@ -459,6 +471,56 @@ export function createProjectsController({
     return null;
   }
 
+  // Store the user's Project order. The list shows it at once; a refused
+  // order (another window changed the list or order) reloads the list.
+  async function reorderProjects(projectIds) {
+    const byId = new Map(
+      state.projects.map((project) => [project.project_id, project]),
+    );
+    if (
+      state.reorderingProjects ||
+      projectIds.length !== state.projects.length ||
+      projectIds.some((projectId) => !byId.has(projectId))
+    ) {
+      return;
+    }
+    const previous = state.projects;
+    state.projects = projectIds.map((projectId) => byId.get(projectId));
+    state.reorderingProjects = true;
+    try {
+      const result = await operations.reorderProjects(
+        projectIds,
+        state.orderRevision,
+      );
+      if (!active) return;
+      if (Number.isInteger(result?.order_revision)) {
+        state.orderRevision = result.order_revision;
+        latestOrderRevision = result.order_revision;
+      }
+    } catch (error) {
+      if (!active) return;
+      state.projects = previous;
+      onToast({
+        title: `${t('projects.order.saveError')} ${errorText(error)}`,
+        variant: 'error',
+      });
+      pendingProjectList = null;
+      void loadProjects({ reload: true });
+    } finally {
+      if (active) {
+        state.reorderingProjects = false;
+        flushPendingProjects();
+      }
+    }
+  }
+
+  function setReorderDragActive(dragActive) {
+    reorderDragActive = dragActive;
+    if (!dragActive) {
+      flushPendingProjects();
+    }
+  }
+
   async function initialize(preferredProjectId = '') {
     state.selectedProjectId = preferredProjectId;
     await Promise.all([loadCatalogs(), loadGlobalDefaults(), loadProjects()]);
@@ -604,6 +666,7 @@ export function createProjectsController({
       const savedProject = normalizeProject(result?.project);
       if (pendingProjectList) {
         state.projects = pendingProjectList;
+        state.orderRevision = latestOrderRevision;
         pendingProjectList = null;
       } else if (savedProject.project_id) {
         state.projects = state.projects.map((candidate) =>
@@ -949,6 +1012,7 @@ export function createProjectsController({
     requestOverrideReset,
     flushPendingProjects,
     refreshScan,
+    reorderProjects,
     replaceListField,
     scheduleAutoSave,
     scheduleToolAccessOverrideAutoSave,
@@ -957,6 +1021,7 @@ export function createProjectsController({
     selectProject,
     selectedProject,
     setMemberOverride,
+    setReorderDragActive,
     state,
     submitAdd,
     submitRePoint,

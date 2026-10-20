@@ -5,6 +5,7 @@ repo (see add-projects.md → Speicherort & Datenmodell). Layout::
 
     <data_dir>/projects/<project-id>/
         project.json                 ← cwd, default agent/model, instruction settings
+    <data_dir>/projects/order.json   ← the user's Project order (``_order.py``)
 
 The anchor holds **no run config** — only Project configuration; config comes live
 from the scan/repo. This module owns creation, read, list, cwd-mutation, and
@@ -36,6 +37,16 @@ from core.json_documents import (
     document_change,
     document_version_state,
     write_json_document,
+)
+from core.projects._order import (
+    PROJECT_ORDER_FILENAME,
+    ProjectListResult,
+    ProjectOrder,
+    ProjectOrderConflictError,
+    apply_project_order,
+    load_project_order,
+    validated_reorder_request,
+    write_project_order,
 )
 from core.projects.paths import cwd_identity_key
 from core.projects.projects import (
@@ -133,6 +144,8 @@ class ProjectStore:
         self._snapshot_barrier = (
             snapshot_barrier if snapshot_barrier is not None else SnapshotBarrier()
         )
+        # The last invalid-order message, so a broken ``order.json`` warns once.
+        self._reported_order_error: str | None = None
 
     def close(self) -> None:
         with self._write_lock:
@@ -245,12 +258,67 @@ class ProjectStore:
             return True
 
     def list(self) -> list[Project]:
-        """Return all persisted projects sorted by id.
+        """Return all persisted projects in the user's order (:meth:`list_with_order`)."""
+        return builtins.list(self.list_with_order().projects)
 
-        A single corrupt ``project.json`` is skipped with a logged warning
-        rather than aborting the whole listing. Storage failures propagate so
-        callers can distinguish an unavailable catalog from an empty one.
+    def list_with_order(self) -> ProjectListResult:
+        """Return all persisted projects in the user's order, with that order's revision.
+
+        Projects the stored order does not name follow in id order; without an
+        order, or with an invalid one (reported by ``doctor config``), the whole
+        list is in id order. A single corrupt ``project.json`` is skipped with a
+        logged warning rather than aborting the whole listing. Storage failures
+        propagate so callers can distinguish an unavailable catalog from an
+        empty one.
         """
+        with self._write_lock:
+            order = self._load_order()
+            return ProjectListResult(
+                projects=apply_project_order(self._list_by_id(), order),
+                order_revision=order.revision if order is not None else 0,
+            )
+
+    def reorder(
+        self, project_ids: builtins.list[str], *, expected_revision: int
+    ) -> ProjectListResult:
+        """Store a new complete Project order when list and revision are current.
+
+        ``project_ids`` must name exactly the registered Projects. Repeating the
+        current order changes nothing and needs no current revision.
+        """
+        project_ids = validated_reorder_request(project_ids, expected_revision)
+        with self._change():
+            current = self.list_with_order()
+            current_ids = [project.project_id for project in current.projects]
+            if sorted(project_ids) != sorted(current_ids):
+                raise ProjectOrderConflictError(
+                    "The Project list changed; reload it before reordering",
+                    current_revision=current.order_revision,
+                )
+            if project_ids == current_ids:
+                return current
+            if expected_revision != current.order_revision:
+                raise ProjectOrderConflictError(
+                    "The Project order changed; reload it before reordering",
+                    current_revision=current.order_revision,
+                )
+            order = ProjectOrder(
+                project_ids=tuple(project_ids), revision=current.order_revision + 1
+            )
+            try:
+                write_project_order(self._order_path(), order)
+            except JsonDocumentWriteError as error:
+                raise ProjectError(str(error)) from error
+            self._reported_order_error = None
+            by_id = {project.project_id: project for project in current.projects}
+            return ProjectListResult(
+                projects=tuple(by_id[project_id] for project_id in project_ids),
+                order_revision=order.revision,
+                order_changed=True,
+            )
+
+    def _list_by_id(self) -> builtins.list[Project]:
+        """Every readable Project sorted by id."""
         with self._write_lock:
             projects_dir = self._data_dir / _PROJECTS_DIRNAME
             if not is_dir_strict(projects_dir):
@@ -623,6 +691,22 @@ class ProjectStore:
 
     def _project_dir(self, project_id: str) -> Path:
         return self._data_dir / _PROJECTS_DIRNAME / _validate_project_id(project_id)
+
+    def _order_path(self) -> Path:
+        return self._data_dir / _PROJECTS_DIRNAME / PROJECT_ORDER_FILENAME
+
+    def _load_order(self) -> ProjectOrder | None:
+        """Return the stored order; an invalid or unreadable one counts as none and warns once."""
+        try:
+            order = load_project_order(self._order_path())
+        except JsonConfigValidationError as error:
+            message = str(error)
+            if message != self._reported_order_error:
+                _LOGGER.warning("Ignoring invalid Project order: %s", message)
+                self._reported_order_error = message
+            return None
+        self._reported_order_error = None
+        return order
 
     def _config_path(self, project_id: str) -> Path:
         return self._project_dir(project_id) / _PROJECT_CONFIG_FILENAME

@@ -489,8 +489,11 @@ async def test_session_project_groups_list_every_agent_by_working_project(
         # A built-in Agent's Session belongs to no group.
         sessions.create("librarian", session_id="pass", working_project_id="vbot")
 
+        runtime.projects.reorder(["vbot", "idle"], expected_revision=0)
+
         result = await rpc_result(state, "session.project_groups", limit=1)
 
+        # The groups follow the user's Project order; the Sessions in no Project come last.
         assert [group["project_id"] for group in result["groups"]] == ["vbot", "idle", None]
         vbot, idle, other = result["groups"]
         [row] = vbot["sessions"]

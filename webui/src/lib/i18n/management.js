@@ -692,6 +692,7 @@ export default Object.freeze({
   'projects.title': 'Projects',
   'projects.loading': 'Loading projects…',
   'projects.loadError': 'Projects could not be loaded.',
+  'projects.order.saveError': 'Project order could not be saved.',
   'projects.emptyTitle': 'No projects yet',
   'projects.emptySubtitle':
     'Choose Add project (+) to connect your first repository.',

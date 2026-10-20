@@ -3,11 +3,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSelectionHarness } from './selection.support.svelte.js';
 
-const { listAgents, listProjects } = vi.hoisted(() => ({
+const { listAgents, listProjects, reorderProjects } = vi.hoisted(() => ({
   listAgents: vi.fn(),
   listProjects: vi.fn(),
+  reorderProjects: vi.fn(),
 }));
-vi.mock('$lib/api.js', () => ({ listAgents, listProjects }));
+vi.mock('$lib/api.js', () => ({ listAgents, listProjects, reorderProjects }));
 
 function deferred() {
   let resolve;
@@ -24,6 +25,7 @@ describe('App selection', () => {
     localStorage.clear();
     listAgents.mockReset();
     listProjects.mockReset();
+    reorderProjects.mockReset();
     ({ selection, dispose } = createSelectionHarness());
   });
   afterEach(() => {
@@ -140,5 +142,33 @@ describe('App selection', () => {
 
     await expect(selection.loadProjects()).resolves.toBe(false);
     expect(projectIds()).toEqual(['newest-project']);
+  });
+
+  it('saves a Project order against the listed revision and reloads a refused one', async () => {
+    let stored = { ids: ['alpha', 'beta'], revision: 3 };
+    listProjects.mockImplementation(async () => ({
+      projects: stored.ids.map((projectId) => ({ project_id: projectId })),
+      order_revision: stored.revision,
+    }));
+    reorderProjects
+      .mockImplementationOnce(async (ids) => {
+        stored = { ids, revision: 4 };
+        return { order_revision: 4 };
+      })
+      .mockRejectedValueOnce(new Error('order changed'));
+    const projectIds = () =>
+      selection.projects.map((project) => project.project_id);
+    await selection.loadProjects();
+
+    const saving = selection.saveProjectOrder(['beta', 'alpha']);
+    expect(projectIds()).toEqual(['beta', 'alpha']);
+    await saving;
+    expect(reorderProjects).toHaveBeenLastCalledWith(['beta', 'alpha'], 3);
+
+    await expect(selection.saveProjectOrder(['alpha', 'beta'])).rejects.toThrow(
+      'order changed',
+    );
+    expect(reorderProjects).toHaveBeenLastCalledWith(['alpha', 'beta'], 4);
+    await vi.waitFor(() => expect(projectIds()).toEqual(['beta', 'alpha']));
   });
 });

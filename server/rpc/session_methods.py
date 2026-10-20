@@ -501,12 +501,11 @@ async def _list_project_sessions(
 async def _list_session_project_groups(state: Any, params: JsonObject) -> JsonObject:
     """The newest Sessions of every Agent, grouped by the Project they work in.
 
-    One group per registered Project, also without Sessions, and a last group
-    with ``project_id`` null for the Sessions that work in no registered
-    Project (the Workspace, or a Project no longer registered). Groups with
-    Sessions come first, newest activity first; empty ones follow in Project
-    order. Global-scope Sessions of the built-in Agents are left out. Each
-    group is a ``session.list`` page that ``session.list`` with
+    One group per registered Project in the user's Project order (``project.list``),
+    also without Sessions, and a last group with ``project_id`` null for the
+    Sessions that work in no registered Project (the Workspace, or a Project no
+    longer registered). Global-scope Sessions of the built-in Agents are left
+    out. Each group is a ``session.list`` page that ``session.list`` with
     ``working_project_id`` and its ``next_cursor`` continues.
     """
     _reject_unsupported(params, {"limit", *_SESSION_LIST_FILTER_PARAMS}, "session.project_groups")
@@ -522,17 +521,13 @@ async def _list_session_project_groups(state: Any, params: JsonObject) -> JsonOb
             grouping, limit=limit, filters=filters
         )
         agent_policy = _listed_agent_policies(state)
-        project_pages = [(project_id, pages[project_id]) for project_id in grouping.project_ids]
-        active = sorted(
-            (entry for entry in project_pages if entry[1].sessions),
-            key=lambda entry: str(entry[1].sessions[0].get("last_active_at") or ""),
-            reverse=True,
-        )
-        empty = [entry for entry in project_pages if not entry[1].sessions]
         return {
             "groups": [
-                {"project_id": project_id, **_session_list_page_payload(state, page, agent_policy)}
-                for project_id, page in (*active, *empty, (None, pages[None]))
+                {
+                    "project_id": project_id,
+                    **_session_list_page_payload(state, pages[project_id], agent_policy),
+                }
+                for project_id in (*grouping.project_ids, None)
             ]
         }
 

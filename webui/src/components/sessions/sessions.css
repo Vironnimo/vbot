@@ -215,8 +215,20 @@
   overflow: auto;
 }
 
-.session-group + .session-group {
+/* The registered Projects' groups move by their header; the group of
+   Sessions in no Project follows them. */
+.session-drawer__project-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-drawer__project-groups + .session-group {
   margin-top: 4px;
+}
+
+.session-drawer__project-groups .session-group__header {
+  cursor: grab;
 }
 
 .session-group__header {

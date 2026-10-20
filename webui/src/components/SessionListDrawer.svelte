@@ -25,6 +25,8 @@
   } from '$lib/sessionListView.js';
   import ContextMenu from './ui/ContextMenu.svelte';
   import { contextMenuAnchor, isContextMenuKey } from './ui/contextMenu.js';
+  import SortableList from './ui/SortableList.svelte';
+  import { moveItem } from './ui/sortable.js';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import ArchiveDeleteOption from './archive/ArchiveDeleteOption.svelte';
   import Modal from './ui/Modal.svelte';
@@ -78,9 +80,12 @@
     // Called with (agentAddress, sessionId, effectivePolicy) after a Session
     // Compaction Policy is saved, so Chat applies it without another read.
     onCompactionPolicyChange = () => {},
-    // Registered Projects ({ project_id, display_name }) that name the groups
-    // of the by-Project view.
+    // Registered Projects ({ project_id, display_name }) in the user's
+    // order: they name and order the groups of the by-Project view.
     projects = [],
+    // Stores a new Project order (every Project id, in order); moving a
+    // group calls it. Returns a promise that settles once it is saved.
+    onReorderProjects = async () => {},
     // Every Project's Team ({ projectId, members: [{ agent_id, display_name }] })
     // for the Agent names of Team rows and the "+" Agent choice.
     projectTeams = [],
@@ -224,6 +229,45 @@
       };
     }),
   );
+
+  // The registered Projects' groups in the user's Project order, then the
+  // group of the Sessions in no registered Project.
+  let projectGroups = $derived.by(() => {
+    const position = Object.fromEntries(
+      (Array.isArray(projects) ? projects : []).map((project, index) => [
+        project.project_id,
+        index,
+      ]),
+    );
+    const unknown = Number.MAX_SAFE_INTEGER;
+    return displayedGroups
+      .filter((group) => group.projectId !== null)
+      .map((group, index) => ({ group, index }))
+      .sort(
+        (a, b) =>
+          (position[a.group.projectId] ?? unknown) -
+            (position[b.group.projectId] ?? unknown) || a.index - b.index,
+      )
+      .map(({ group }) => group);
+  });
+  let otherGroup = $derived(
+    displayedGroups.find((group) => group.projectId === null) ?? null,
+  );
+
+  // Moving a group reorders every registered Project; Projects without a
+  // group yet keep their order after the moved ones.
+  const reorderProjectGroups = (from, to) => {
+    const registered = (Array.isArray(projects) ? projects : []).map(
+      (project) => project.project_id,
+    );
+    const moved = moveItem(projectGroups, from, to)
+      .map((group) => group.projectId)
+      .filter((projectId) => registered.includes(projectId));
+    return onReorderProjects([
+      ...moved,
+      ...registered.filter((projectId) => !moved.includes(projectId)),
+    ]);
+  };
 
   const groupCollapsed = (key) => filters.collapsedProjects.includes(key);
 
@@ -613,94 +657,23 @@
       </p>
     {:else}
       <div class="session-drawer__groups">
-        {#each displayedGroups as group (group.key)}
-          {@const collapsed = groupCollapsed(group.key)}
-          {@const direct = directNewSessionAgent(group.projectId)}
-          <section
-            class="session-group"
-            aria-labelledby={`${uid}-group-${group.key || '~other'}`}
-          >
-            <div class="session-group__header">
-              <button
-                type="button"
-                class="session-group__toggle"
-                aria-expanded={!collapsed}
-                onclick={() => toggleGroup(group.key)}
-              >
-                <svg
-                  class="session-group__chevron"
-                  viewBox="0 0 16 16"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="m6 4 4 4-4 4"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-                <span
-                  class="session-group__name"
-                  id={`${uid}-group-${group.key || '~other'}`}
-                >
-                  {group.name}
-                </span>
-              </button>
-              <button
-                type="button"
-                class="session-drawer__icon-button session-group__new"
-                aria-label={t('sessions.projects.newSession', {
-                  project: group.name,
-                })}
-                aria-haspopup={direct ? undefined : 'menu'}
-                use:tooltip={t('sessions.projects.newSession', {
-                  project: group.name,
-                })}
-                onclick={(event) => startNewSessionInGroup(group, event)}
-              >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path
-                    d="M8 3.5v9M3.5 8h9"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                  />
-                </svg>
-              </button>
-            </div>
-            {#if !collapsed}
-              {#if group.sessions.length > 0}
-                <ul class="session-drawer__list session-group__list">
-                  {#each group.sessions as session (sessionRowKey(session))}
-                    {@render sessionRow(session, group.sessions)}
-                  {/each}
-                </ul>
-              {:else}
-                <p class="session-group__empty">
-                  {t('sessions.projects.empty')}
-                </p>
-              {/if}
-              {#if group.nextCursor !== null}
-                <button
-                  type="button"
-                  class="session-group__more"
-                  disabled={list.loadingMoreGroupKey !== null}
-                  onclick={() => list.loadMoreInGroup(group)}
-                >
-                  {t('sessions.projects.showMore', {
-                    count: Math.max(
-                      group.totalCount - group.sessions.length,
-                      0,
-                    ),
-                  })}
-                </button>
-              {/if}
-            {/if}
-          </section>
-        {/each}
+        <SortableList
+          tag="div"
+          itemTag="div"
+          class="session-drawer__project-groups"
+          items={projectGroups}
+          getKey={(group) => group.key}
+          getLabel={(group) => group.name}
+          aria-label={t('sessions.projects.title')}
+          onReorder={reorderProjectGroups}
+        >
+          {#snippet item(group)}
+            {@render projectGroup(group)}
+          {/snippet}
+        </SortableList>
+        {#if otherGroup}
+          {@render projectGroup(otherGroup)}
+        {/if}
       </div>
     {/if}
   {:else if list.sessionState.error}
@@ -749,6 +722,96 @@
     {/if}
   {/if}
 </aside>
+
+{#snippet projectGroup(group)}
+  {@const collapsed = groupCollapsed(group.key)}
+  {@const direct = directNewSessionAgent(group.projectId)}
+  <section
+    class="session-group"
+    aria-labelledby={`${uid}-group-${group.key || '~other'}`}
+  >
+    <div class="session-group__header">
+      <button
+        type="button"
+        class="session-group__toggle"
+        aria-expanded={!collapsed}
+        onclick={() => toggleGroup(group.key)}
+      >
+        <svg
+          class="session-group__chevron"
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+        >
+          <path
+            d="m6 4 4 4-4 4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <span
+          class="session-group__name"
+          id={`${uid}-group-${group.key || '~other'}`}
+        >
+          {group.name}
+        </span>
+      </button>
+      <button
+        type="button"
+        class="session-drawer__icon-button session-group__new"
+        aria-label={t('sessions.projects.newSession', {
+          project: group.name,
+        })}
+        aria-haspopup={direct ? undefined : 'menu'}
+        use:tooltip={t('sessions.projects.newSession', {
+          project: group.name,
+        })}
+        onclick={(event) => startNewSessionInGroup(group, event)}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path
+            d="M8 3.5v9M3.5 8h9"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
+    </div>
+    {#if !collapsed}
+      <!-- Only the header moves the group; the Sessions keep their own
+             pointer and keyboard behavior. -->
+      <div class="session-group__body" data-sortable-ignore>
+        {#if group.sessions.length > 0}
+          <ul class="session-drawer__list session-group__list">
+            {#each group.sessions as session (sessionRowKey(session))}
+              {@render sessionRow(session, group.sessions)}
+            {/each}
+          </ul>
+        {:else}
+          <p class="session-group__empty">
+            {t('sessions.projects.empty')}
+          </p>
+        {/if}
+        {#if group.nextCursor !== null}
+          <button
+            type="button"
+            class="session-group__more"
+            disabled={list.loadingMoreGroupKey !== null}
+            onclick={() => list.loadMoreInGroup(group)}
+          >
+            {t('sessions.projects.showMore', {
+              count: Math.max(group.totalCount - group.sessions.length, 0),
+            })}
+          </button>
+        {/if}
+      </div>
+    {/if}
+  </section>
+{/snippet}
 
 {#snippet sessionRow(session, rowSessions = list.sessionsWithLiveActivity)}
   {@const marker = sessionMarker(session)}

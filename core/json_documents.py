@@ -71,6 +71,7 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "prompt_layout": "prompts/layout.json",
         "channel": "channels/*/channel.json",
         "project": "projects/*/project.json",
+        "project_order": "projects/order.json",
         "cron_jobs": "cron/jobs.json",
         "bootstrap_jobs": "bootstrap/jobs.json",
         "calendar_events": "calendar/events.json",

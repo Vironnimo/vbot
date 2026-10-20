@@ -602,6 +602,30 @@ async def test_list_returns_projects(tmp_path: Path) -> None:
 
     assert [project["project_id"] for project in result["projects"]] == ["alpha", "beta"]
     assert all("scan" not in project for project in result["projects"])
+    assert result["order_revision"] == 0
+
+
+@pytest.mark.asyncio
+async def test_reorder_stores_the_order_that_project_list_returns(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    for name in ("alpha", "beta"):
+        await rpc_result(state, "project.add", cwd=str(_make_repo(tmp_path, name)))
+    changes_before = len(resource_changes(state))
+
+    reordered = await rpc_result(
+        state, "project.reorder", project_ids=["beta", "alpha"], expected_revision=0
+    )
+    stale = await rpc_error(
+        state, "project.reorder", project_ids=["alpha", "beta"], expected_revision=0
+    )
+    listed = await rpc_result(state, "project.list")
+
+    assert [project["project_id"] for project in reordered["projects"]] == ["beta", "alpha"]
+    assert reordered["order_revision"] == 1
+    assert [change["kind"] for change in resource_changes(state)[changes_before:]] == ["projects"]
+    assert stale["code"] == "project_order_conflict"
+    assert [project["project_id"] for project in listed["projects"]] == ["beta", "alpha"]
+    assert listed["order_revision"] == 1
 
 
 @pytest.mark.asyncio

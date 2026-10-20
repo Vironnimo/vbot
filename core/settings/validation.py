@@ -230,7 +230,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     from core.channels import validate_channel_file
     from core.extensions.config_validation import validate_extension_documents
     from core.model_tasks.artifacts import validate_task_artifact_metadata_file
-    from core.projects import validate_project_file
+    from core.projects import validate_project_file, validate_project_order_file
     from core.secrets import credential_file_reports, validate_secret_store_file
     from core.skills import validate_skill_policy_file
     from core.storage.prompt_blocks import validate_prompt_layout_file
@@ -251,6 +251,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         "prompt_layout": validate_prompt_layout_file,
         "channel": validate_channel_file,
         "project": validate_project_file,
+        "project_order": validate_project_order_file,
         "cron_jobs": validate_cron_jobs_file,
         "bootstrap_jobs": validate_bootstrap_jobs_file,
         "calendar_events": validate_calendar_events_file,

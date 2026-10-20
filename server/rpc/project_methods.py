@@ -1,4 +1,4 @@
-"""Project RPC handlers: ``project.add/list/show/set/rm`` plus the scan preview.
+"""Project RPC handlers: ``project.add/list/show/set/rm/reorder`` plus the scan preview.
 
 A Project is a first-class backend entity (see GLOSSARY → Project): a stable
 ``project_id`` slug, a changeable display name, a repo ``cwd``, optional
@@ -84,6 +84,7 @@ from server.rpc.validation import (
     _optional_string,
     _reject_unsupported,
     _required_string,
+    _validate_string_list,
 )
 
 JsonObject = dict[str, Any]
@@ -254,17 +255,53 @@ async def _list_projects(state: Any, params: JsonObject) -> JsonObject:
 
 def _project_list_response(state: Any, include_scan: bool) -> JsonObject:
     try:
-        projects = _projects(state).list()
+        listing = _projects(state).list_with_order()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    if not include_scan:
-        return {"projects": [_project_response(project) for project in projects]}
-    return {
-        "projects": [
+    return _ordered_projects_payload(state, listing, include_scan)
+
+
+def _ordered_projects_payload(state: Any, listing: Any, include_scan: bool) -> JsonObject:
+    """The Projects in the user's order plus the revision a reorder must name."""
+    if include_scan:
+        projects = [
             {**_project_response(project), "scan": _cached_scan_preview(state, project)}
-            for project in projects
+            for project in listing.projects
         ]
-    }
+    else:
+        projects = [_project_response(project) for project in listing.projects]
+    return {"projects": projects, "order_revision": listing.order_revision}
+
+
+async def _reorder_projects(state: Any, params: JsonObject) -> JsonObject:
+    """Store the user's Project order: every registered Project id, in the new order.
+
+    ``expected_revision`` is the ``order_revision`` the caller last read; a
+    changed list or order refuses with ``project_order_conflict``. Answers like
+    ``project.list`` without scans.
+    """
+    _reject_unsupported(params, {"project_ids", "expected_revision"}, "project.reorder")
+    project_ids = _validate_string_list("project_ids", params.get("project_ids"))
+    expected_revision = params.get("expected_revision")
+    if (
+        isinstance(expected_revision, bool)
+        or not isinstance(expected_revision, int)
+        or expected_revision < 0
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.expected_revision must be a non-negative integer",
+        )
+    try:
+        listing = await _PROJECT_WORKERS.run(
+            _projects(state).reorder, project_ids, expected_revision=expected_revision
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    if listing.order_changed:
+        publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
+        _LOGGER.debug("Project order updated (projects=%s)", ",".join(project_ids))
+    return _ordered_projects_payload(state, listing, include_scan=False)
 
 
 def _cached_scan_preview(state: Any, project: Project) -> JsonObject | None:
@@ -1025,5 +1062,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "project.set_override": _serialized(_set_override),
         "project.clear_override": _serialized(_clear_override),
         "project.rm": _remove_project,
+        "project.reorder": _serialized(_reorder_projects),
         "project.detect": _detect_project,
     }

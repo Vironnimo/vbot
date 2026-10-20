@@ -16,6 +16,8 @@ const setProjectMock = vi.fn();
 
 const removeProjectMock = vi.fn();
 
+const reorderProjectsMock = vi.fn();
+
 const setOverrideMock = vi.fn();
 
 const clearOverrideMock = vi.fn();
@@ -33,6 +35,7 @@ vi.mock('$lib/api.js', () =>
     showProject: (...args) => showProjectMock(...args),
     setProject: (...args) => setProjectMock(...args),
     removeProject: (...args) => removeProjectMock(...args),
+    reorderProjects: (...args) => reorderProjectsMock(...args),
     setOverride: (...args) => setOverrideMock(...args),
     clearOverride: (...args) => clearOverrideMock(...args),
   }),
@@ -272,6 +275,7 @@ function setupProjectsViewSuite() {
     showProjectMock.mockReset();
     setProjectMock.mockReset();
     removeProjectMock.mockReset();
+    reorderProjectsMock.mockReset();
     setOverrideMock.mockReset();
     clearOverrideMock.mockReset();
     rpcMock.mockReset();
@@ -323,6 +327,7 @@ export {
   showProjectMock,
   setProjectMock,
   removeProjectMock,
+  reorderProjectsMock,
   setOverrideMock,
   clearOverrideMock,
   rpcMock,

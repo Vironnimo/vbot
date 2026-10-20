@@ -434,6 +434,33 @@ export function listProjects({ includeScan = false } = {}, options = {}) {
   );
 }
 
+// Store the user's Project order: every registered Project id, in the new
+// order, against the `order_revision` last read from `listProjects`.
+export function reorderProjects(projectIds, expectedRevision, options = {}) {
+  if (
+    !Array.isArray(projectIds) ||
+    projectIds.some((projectId) => typeof projectId !== 'string' || !projectId)
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project order must be a list of non-empty ids',
+      { method: 'project.reorder' },
+    );
+  }
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Project order revision must be a non-negative integer',
+      { method: 'project.reorder' },
+    );
+  }
+  return rpc(
+    'project.reorder',
+    { project_ids: projectIds, expected_revision: expectedRevision },
+    options,
+  );
+}
+
 // Probe a cwd for detected Agent, Skill and instruction Sources. Called by
 // the add dialog while the user types a path; a nonexistent cwd is a success
 // with `cwd_exists: false`, never an error.

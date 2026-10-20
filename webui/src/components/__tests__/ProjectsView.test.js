@@ -11,6 +11,7 @@ import {
   showProjectMock,
   setProjectMock,
   removeProjectMock,
+  reorderProjectsMock,
   rpcMock,
   AUTO_SAVE_WAIT_MS,
   project,
@@ -158,6 +159,75 @@ describe('ProjectsView list and selection', () => {
         .querySelector('.project-list-scroll')
         .classList.contains('secondary-list'),
     ).toBe(true);
+  });
+
+  it('reorders Projects with Alt+Arrow against the listed order revision and reloads a refused order', async () => {
+    const onToast = vi.fn();
+    let stored = { ids: ['alpha', 'beta', 'gamma'], revision: 4 };
+    listProjectsMock.mockImplementation(async () => ({
+      projects: stored.ids.map((projectId) =>
+        project({ project_id: projectId, display_name: projectId }),
+      ),
+      order_revision: stored.revision,
+    }));
+    showProjectMock.mockImplementation((projectId) =>
+      Promise.resolve({
+        project: project({ project_id: projectId }),
+        scan: cleanScan(),
+      }),
+    );
+    reorderProjectsMock
+      .mockImplementationOnce(async (projectIds) => {
+        stored = { ids: projectIds, revision: 5 };
+        return { order_revision: 5 };
+      })
+      .mockRejectedValueOnce(new Error('Order changed in another window'));
+    const listedIds = () =>
+      [...document.querySelectorAll('[data-testid^="project-toggle-"]')]
+        .map((button) => button.dataset.testid.replace('project-toggle-', ''))
+        .join(',');
+    const moveUp = (projectId) => {
+      const button = buttonByTestId(`project-toggle-${projectId}`);
+      button.focus();
+      button.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'ArrowUp',
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      flushSync();
+    };
+
+    const props = reactiveProps({ onToast, projectsRefreshToken: 0 });
+    view.mount(props);
+    await waitForCondition(() => listedIds() === 'alpha,beta,gamma');
+
+    moveUp('gamma');
+    expect(listedIds()).toBe('alpha,gamma,beta');
+    await waitForCondition(() => reorderProjectsMock.mock.calls.length === 1);
+    // The reload after a stored order keeps the rows and the moved row's focus.
+    props.projectsRefreshToken = 1;
+    flushSync();
+    await waitForCondition(() => listProjectsMock.mock.calls.length === 2);
+    expect(document.activeElement).toBe(buttonByTestId('project-toggle-gamma'));
+    expect(reorderProjectsMock).toHaveBeenLastCalledWith(
+      ['alpha', 'gamma', 'beta'],
+      4,
+    );
+
+    // The next move names the stored revision; a refused one shows the
+    // stored order again.
+    await wait(0);
+    moveUp('gamma');
+    await waitForCondition(() => onToast.mock.calls.length === 1);
+    expect(reorderProjectsMock).toHaveBeenLastCalledWith(
+      ['gamma', 'alpha', 'beta'],
+      5,
+    );
+    expect(onToast.mock.calls[0][0]).toMatchObject({ variant: 'error' });
+    await waitForCondition(() => listedIds() === 'alpha,gamma,beta');
   });
 
   it('adds a project from the modal and reviews its team and report', async () => {

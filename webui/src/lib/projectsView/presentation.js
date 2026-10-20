@@ -48,6 +48,9 @@ export function createProjectEditForm(project = null) {
 export function createProjectsState({ selectedProjectId = '' } = {}) {
   return {
     projects: [],
+    // The revision of the shown Project order, which a reorder names.
+    orderRevision: 0,
+    reorderingProjects: false,
     // The first Project list has been applied.
     projectsLoaded: false,
     loadingProjects: false,

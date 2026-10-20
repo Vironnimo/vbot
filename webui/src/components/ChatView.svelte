@@ -87,6 +87,8 @@
     sharedSelectedProjectAgentId = null,
     onProjectAgentSelected = () => {},
     onNavigateToProjects = () => {},
+    // Stores the user's Project order: (projectIds) => Promise.
+    onReorderProjects = async () => {},
     agentsRefreshToken = 0,
     onAgentsChanged,
     onAgentSelected,
@@ -725,6 +727,7 @@
           onSessionDeleteStarted={navigation.beginSessionDeletion}
           onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
           {projects}
+          {onReorderProjects}
           projectTeams={target.projectGroups}
           onNewSessionInProject={startSessionInProject}
         />

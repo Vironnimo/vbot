@@ -747,6 +747,58 @@ describe('SessionListDrawer by Project', () => {
     });
   });
 
+  it('orders the groups by the Project order and moves a Project group by its header', async () => {
+    serveGroups();
+    const onReorderProjects = vi.fn(async () => {});
+    const props = drawer.mount({
+      agents: roster,
+      projects: [projects[1], projects[0]],
+      projectTeams,
+      initialFilters: { byProject: true },
+      onReorderProjects,
+    });
+    await waitForCondition(() => groupNames().length === 3);
+    const pressMoveUp = (target) => {
+      target.focus();
+      target.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'ArrowUp',
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      flushSync();
+    };
+
+    // The Project order wins over the server's group order.
+    expect(groupNames()).toEqual([
+      'Idle',
+      'vBot',
+      t('sessions.projects.other'),
+    ]);
+
+    // A Session row and the group of Sessions in no Project move nothing.
+    pressMoveUp(sessionRowButton('Build'));
+    pressMoveUp(
+      group(t('sessions.projects.other')).querySelector(
+        '.session-group__toggle',
+      ),
+    );
+    expect(onReorderProjects).not.toHaveBeenCalled();
+
+    pressMoveUp(group('vBot').querySelector('.session-group__toggle'));
+    await waitForCondition(() => onReorderProjects.mock.calls.length === 1);
+    expect(onReorderProjects).toHaveBeenCalledWith(['vbot', 'idle']);
+    props.projects = projects;
+    flushSync();
+    expect(groupNames()).toEqual([
+      'vBot',
+      'Idle',
+      t('sessions.projects.other'),
+    ]);
+  });
+
   it('starts a group’s new Session with the displayed Agent where it can work, else with a chosen one', async () => {
     serveGroups();
     const onNewSessionInProject = vi.fn();

@@ -163,6 +163,7 @@ export {
   previewPrompt,
   addProject,
   listProjects,
+  reorderProjects,
   detectProject,
   showProject,
   setProject,

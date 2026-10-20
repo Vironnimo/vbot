@@ -30,6 +30,18 @@
   gap: 6px;
 }
 
+.projects-view .project-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.projects-view .project-list-row {
+  min-width: 0;
+}
+
 .projects-view .project-item {
   display: flex;
   align-items: stretch;

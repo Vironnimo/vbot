@@ -416,6 +416,14 @@
     navigator.navigate('agents', [selection.selectedAgentId]);
 
   const navigateToProjects = () => openView('projects');
+  const saveProjectOrder = (projectIds) =>
+    selection.saveProjectOrder(projectIds).catch((error) => {
+      desktop.showToast({
+        title: t('projects.order.saveError'),
+        message: error?.message,
+        variant: 'error',
+      });
+    });
 
   const openCronJobFromCalendar = (jobId) =>
     navigator.navigate('cron', typeof jobId === 'string' ? [jobId] : []);
@@ -702,6 +710,7 @@
         sharedSelectedProjectAgentId={selection.selectedProjectAgentId}
         onProjectAgentSelected={selection.selectProjectAgent}
         onNavigateToProjects={navigateToProjects}
+        onReorderProjects={saveProjectOrder}
         agentsRefreshToken={selection.agentsRefreshToken}
         onAgentsChanged={selection.syncAgents}
         onAgentSelected={selection.selectAgent}

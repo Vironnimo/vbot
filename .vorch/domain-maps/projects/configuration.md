@@ -1,6 +1,6 @@
 # Project Configuration & Persistence
 
-Read this reference when changing the persisted Project shape, Project Anchor lifecycle, Project mutation RPCs, per-Agent overrides, or path and archive behavior.
+Read this reference when changing the persisted Project shape, the Project order, Project Anchor lifecycle, Project mutation RPCs, per-Agent overrides, or path and archive behavior.
 
 ## Persisted Project
 
@@ -32,8 +32,10 @@ The named additive `project_sources_v1` backfill keeps Generation 1. An existing
 `core/projects/paths.py` owns all data-dir paths:
 
 ```text
-<data-dir>/projects/<project-id>/
-  project.json
+<data-dir>/projects/
+  order.json              the user's Project order (below)
+  <project-id>/
+    project.json
 ```
 
 Older anchors may still hold an empty, unused `agents/` directory. Project-scoped Sessions are addressed by `(project_id, agent_id, session_id)` in the canonical `<data-dir>/sessions.db`; the Project Anchor contains no Session files. Keep path construction behind Store helpers rather than joining untrusted identifiers at call sites.
@@ -48,16 +50,21 @@ The repository at `cwd` remains outside the anchor and is never mutated. Changin
 - `configuration_guard()` holds that same admission and lock for a synchronous dependent write. Skill merges use it between the Agent lifecycle and Skill authoring guards so a Project Context grant or source selection cannot change between the successor-access check and deletion; no guard spans an await.
 - Creation rejects duplicate Project ids and duplicate normalized cwd identity keys, builds the Project through the Projects-owned validator, and writes `project.json` atomically. It seeds no `auto_load` entry: the main instruction file loads through `auto_instructions`. A failed write removes the newly created anchor so creation can be retried.
 - Updates preserve `project_id` and `created_at`, reject a cwd already owned by another Project, rebuild the complete value, and write atomically.
-- Listing is deterministic and skips corrupt Project files with a warning instead of failing the entire collection. `get` and `list` use strict filesystem status: access and I/O failures propagate, including the read-error cause of a wrapped configuration failure, rather than becoming missing Projects or an empty catalog. `exists(project_id)` is validity-aware and returns false for an unreadable or invalid config rather than reporting directory presence as a usable Project.
+- Listing follows the user's Project order and skips corrupt Project files with a warning instead of failing the entire collection. `get` and `list` use strict filesystem status: access and I/O failures propagate, including the read-error cause of a wrapped configuration failure, rather than becoming missing Projects or an empty catalog. `exists(project_id)` is validity-aware and returns false for an unreadable or invalid config rather than reporting directory presence as a usable Project.
 - `set_override()` and `clear_override()` atomically rewrite one supported field. Clearing the last field removes the Agent's override object unless it still holds unknown fields, which stay on disk; clearing an absent value is a no-op. Both return the Project as persisted.
 - `archive_files(project_id, tree)` moves the Project Anchor into an archive payload around the archive service's Session commit and yields the Project (`None` when its config cannot be read; the Anchor is archived all the same); repository content is never touched. The Session commit refuses while a live owner-managed (Extension) Session is in the Project, with an error naming its owner (`sessions/owned-execution.md` -> Authority); it leaves when its owner deletes or archives its group, or when core archives it after the owner was removed (`extensions/host.md` -> Owner-managed Session lifetime). Archived ones never block (`tests/core/sessions/test_archive_ledger.py`). The anchor moves through the all-or-nothing `move_tree` (`core/utils/tree_move.py`, see `agent.md`), so a failed move leaves the anchor untouched, and a failing commit moves it back; if that fails too, the error names where the Project files remain. `restore_files(source, target_id)` refuses a taken id and a repository another Project claims before anything changes, moves the Anchor back and rewrites its `project.json` to the target id (unknown fields stay); a failure writes the archived `project.json` bytes back before the Anchor returns, so the payload stays unchanged; `complete_restore_files(target_id, source_id=...)` replays an interrupted configuration rewrite after the Anchor moved, accepting only the source or target id and rechecking repository ownership; `inspect_archived` and `restore_target_problem` report what blocks a restore. These are persistence primitives, not the user-facing removal or restore workflow (`archive.md`).
+
+## Project order
+
+`<data-dir>/projects/order.json` (`core/projects/_order.py`, Generation 1, `doctor config` kind `project_order`) holds `{revision, project_ids}`: the one order every accessor shows Projects in, the Projects tab and Chat's by-Project Session list alike (user requirement 2026-10-20). `list()` / `list_with_order()` return Projects in it; Projects it does not name follow in id order, ids of Projects no longer registered are skipped, and a missing, unreadable or invalid document means id order with `order_revision` 0 (invalid: warned once, reported by `doctor config`, never overwritten). Reads, create, archive and restore never write it, so an archived Project restored under its id returns to its old place until a reorder drops the id. `reorder(project_ids, expected_revision)` stores exactly the registered Projects: a different id set or a stale revision raises `ProjectOrderConflictError` (RPC `project_order_conflict`), repeating the current order is a no-op, and every stored order raises the revision by one (`test_store.py`).
 
 `normalize_cwd()` resolves an absolute real path, strips trailing separators, and preserves case. `cwd_identity_key()` additionally case-folds on Windows and is the duplicate-detection key. The Store intentionally permits a cwd that does not currently exist; the `project.add` RPC is the boundary that requires an existing directory.
 
 ## Mutation RPCs
 
-`server/rpc/project_methods.py` exposes `project.add`, `project.list`, `project.show`, `project.set`, `project.set_override`, `project.clear_override`, `project.rm`, and `project.detect`.
+`server/rpc/project_methods.py` exposes `project.add`, `project.list`, `project.show`, `project.set`, `project.set_override`, `project.clear_override`, `project.rm`, `project.reorder`, and `project.detect`.
 
+- `project.list` answers the Projects in the user's order plus `order_revision`; `project.reorder {project_ids, expected_revision}` stores a new complete order (Project order above), answers like `project.list` without scans and publishes a `projects` invalidation when the order changed (`test_project_methods.py`).
 - `project.add` validates that `cwd` exists, detects all supported Sources when no Source list is supplied, persists the Project, and returns the Project with its scan result.
 - `project.list` with `include_scan: true` adds each Project's `scan` (Team with `effective` values plus the report including unavailable-Tool findings, no Skills) from the resolver's cached scan, scanning only a Project not yet cached; a Project whose scan fails with `OSError` lists `scan: null`. Chat's Agent picker uses it to list every Team without a `project.show` per Project (`test_project_methods.py`).
 - `project.show` reloads Skills, invalidates relevant caches, rescans the repository, and returns current Project plus scan information. Pickers issue one show per Project, so `project.list` and `project.show` read Anchors, reload Skills (`reload_skills_async`), and scan on worker threads (`project` pool), never on the Event Loop; only cache invalidation runs on the loop.

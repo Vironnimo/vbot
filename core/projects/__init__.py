@@ -5,6 +5,12 @@ errors, the :class:`ProjectStore` anchor CRUD, and the cwd-normalization helpers
 that the rest of the system uses for duplicate detection and re-point.
 """
 
+from core.projects._order import (
+    InvalidProjectOrderError,
+    ProjectListResult,
+    ProjectOrderConflictError,
+    validate_project_order_file,
+)
 from core.projects.address import (
     InvalidAgentAddressError,
     format_agent_address,
@@ -63,12 +69,15 @@ __all__ = [
     "FolderInstructions",
     "InvalidAgentAddressError",
     "InvalidProjectIdError",
+    "InvalidProjectOrderError",
     "ModelConfigurationError",
     "ModelConfigurationChecker",
     "Project",
     "ProjectAlreadyExistsError",
     "ProjectError",
+    "ProjectListResult",
     "ProjectNotFoundError",
+    "ProjectOrderConflictError",
     "ProjectStore",
     "ResolutionAgentNotFoundError",
     "ResolutionProjectNotFoundError",
@@ -93,4 +102,5 @@ __all__ = [
     "slugify_project_id",
     "validate_project_data",
     "validate_project_file",
+    "validate_project_order_file",
 ]
