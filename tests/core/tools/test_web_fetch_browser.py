@@ -74,8 +74,13 @@ def _options(fake: FakeBrowser, **settings: Any) -> dict[str, Any]:
             "<p>Ihr Browser wird geprüft, bevor Sie auf example.com zugreifen können…</p>",
             url=URL,
         ),
+        # A client error at a challenge address the request was sent to.
+        make_result(
+            status_code=400,
+            url="https://example.com/.enodia/challenge?redirect=%2Farticle",
+        ),
     ],
-    ids=["bot-check", "javascript-shell", "redirect-loop", "localized-captcha"],
+    ids=["bot-check", "javascript-shell", "redirect-loop", "localized-captcha", "challenge"],
 )
 async def test_browser_reads_what_direct_reading_could_not_before_any_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, direct: PublicResponse

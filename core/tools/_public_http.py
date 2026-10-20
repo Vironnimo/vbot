@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import codecs
+import html
 import ipaddress
 import re
 import socket
@@ -55,6 +56,22 @@ _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 # firewall block this machine for about 10 minutes (Swarm run 2026-10-20: about 40
 # within 10 s); browsers open at most 6 connections per host.
 HOST_CONCURRENCY = 4
+# Titles of check pages that solve themselves in a real browser. The local browser
+# waits while one shows, and a client error showing one is a bot check, which the
+# browser can pass, rather than a refusal of the address.
+SELF_SOLVING_CHECK_TITLES = frozenset(
+    {
+        "just a moment...",
+        "checking your browser...",
+        "checking your browser before accessing",
+        "please wait...",
+        "one moment, please...",
+        "ddos-guard",
+        "attention required! | cloudflare",
+        "enodia verification",
+    }
+)
+_PAGE_TITLE = re.compile(r"<title[^>]*>([^<]*)</title", re.I)
 
 IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
@@ -702,9 +719,22 @@ def _url_error(error: ValueError) -> PublicFetchError:
     return PublicFetchError(code, str(error))
 
 
-def _status_error(url: str, status: int, what: str) -> PublicFetchError:
+def _shows_bot_check(url: str, result: PublicResponse) -> bool:
+    """Whether an error answer is a browser check: a challenge address it redirected
+    to (``/.enodia/challenge``), or the title of a self-solving check page."""
+    final_path = urlparse(result.url).path.lower()
+    if "challenge" in final_path and "challenge" not in urlparse(url).path.lower():
+        return True
+    title = _PAGE_TITLE.search(result.text[:8192])
+    return title is not None and html.unescape(title[1]).strip().lower() in (
+        SELF_SOLVING_CHECK_TITLES
+    )
+
+
+def _status_error(url: str, result: PublicResponse, what: str) -> PublicFetchError:
     """Describe an HTTP error status and whether another fetcher may still help."""
     host = urlparse(url).hostname or url
+    status = result.status_code
     retryable = is_retryable_status(status, idempotent=True)
     attempts = MAX_RETRIES + 1 if retryable else None
     if status in {404, 410}:
@@ -737,6 +767,13 @@ def _status_error(url: str, status: int, what: str) -> PublicFetchError:
         message = (
             f"HTTP 406: {host} offers {url} in none of the formats requested, also not to "
             "an ordinary browser request. Try another source."
+        )
+    elif 400 <= status < 500 and _shows_bot_check(url, result):
+        # The local browser can pass such a check (Enodia answers HTTP 400).
+        code = "access_denied"
+        message = (
+            f"HTTP {status}: {host} answered the request for {url} with a bot check instead "
+            f"of the {what}, so repeating the request will not help. Try another source."
         )
     elif 400 <= status < 500:
         code = "request_rejected"
@@ -895,13 +932,14 @@ async def fetch_public(
         raise _transport_error(url, error, 1) from error
 
     if not 200 <= result.status_code < 300:
-        raise _status_error(url, result.status_code, what)
+        raise _status_error(url, result, what)
     return result
 
 
 __all__ = [
     "HOST_CONCURRENCY",
     "MAX_RESPONSE_BYTES",
+    "SELF_SOLVING_CHECK_TITLES",
     "HostSlots",
     "PublicFetchError",
     "PublicResponse",

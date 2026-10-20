@@ -265,22 +265,31 @@ async def test_a_redirect_back_after_a_login_service_set_cookies_reaches_the_pag
             False,
             "HTTP 422: example.com rejected the request for https://example.com/page.",
         ),
+        (
+            (400, "<html><head><title>Enodia Verification</title></head></html>"),
+            "access_denied",
+            False,
+            "HTTP 400: example.com answered the request for https://example.com/page with a "
+            "bot check instead of the page, so repeating the request will not help. Try "
+            "another source.",
+        ),
     ],
 )
 async def test_each_http_failure_is_named_with_its_next_step(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     retry_sleeps: list[float | None],
-    status: int,
+    status: int | tuple[int, str],
     code: str,
     retryable: bool,
     message: str,
 ) -> None:
     requested: list[str] = []
+    status, page = status if isinstance(status, tuple) else (status, "no")
 
     def responder(url: str) -> PublicResponse:
         requested.append(url)
-        return make_result(status_code=status, text="no")
+        return make_result(status_code=status, text=page)
 
     install_http_get(monkeypatch, responder)
 
