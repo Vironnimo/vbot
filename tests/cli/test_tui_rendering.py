@@ -67,6 +67,10 @@ def test_tool_row_shows_what_ran_and_names_only_the_calls_that_went_wrong() -> N
 
     assert tool_title(item) == "session_search · telegram"
     assert tool_title(item | {"status": "failed"}) == "session_search · telegram · failed"
+    # The Secrets vBot put into a call count as a fact; their names wait in the detail.
+    used = {"secrets_used": ["GITHUB.password (terminal)", "NPM.value (environment)"]}
+    secret_call = item | {"display": item["display"] | used}
+    assert tool_title(secret_call) == "session_search · telegram · 2 secrets"
 
     # Structured values read as the WebUI shows them: a path keeps its last
     # segments, a long command its start, and the facts follow.
@@ -103,8 +107,11 @@ def test_tool_row_shows_what_ran_and_names_only_the_calls_that_went_wrong() -> N
 
 
 def test_tool_detail_reads_its_blocks_and_keeps_hidden_arguments_out() -> None:
-    detail = tool_detail(_search_tool_call())
+    item = _search_tool_call()
+    item["display"]["secrets_used"] = ["GITHUB.password (terminal)"]
+    detail = tool_detail(item)
 
+    assert "Secrets used\n  GITHUB.password (terminal)" in detail
     assert "limit: 20" in detail
     assert "query: telegram" in detail
     assert "Telegram photos · Assistant · 2026-06-06T10:00:00Z" in detail

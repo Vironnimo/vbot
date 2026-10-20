@@ -300,7 +300,7 @@ async def help(app: ConversationApp) -> None:
                         ("F4", "Model and thinking effort"),
                         ("F5", "activity, Sub-Agents and background commands"),
                         ("F6", "Queue: edit, remove and Steer"),
-                        ("F7", "Extension requests"),
+                        ("F7", "Secret and Extension requests"),
                         ("Ctrl+X", "stop the current Run"),
                         ("F10", "stop all background work"),
                     ],
@@ -347,6 +347,9 @@ async def help(app: ConversationApp) -> None:
                 "@file paths are server paths; local files are uploaded through F8. Drafts "
                 "are saved locally per server. After a lost send response the draft stays "
                 "marked uncertain, and nothing is resent on its own.",
+                "/secret alone opens a masked form that gives the Agent a password or key. "
+                "A /secret command with its value is sent as it is and never kept: no saved "
+                "draft, no input history.",
             ],
         )
     )

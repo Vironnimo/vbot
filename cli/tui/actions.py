@@ -7,7 +7,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from cli.tui.dialogs import Picker, TextDialog
-from cli.tui.drafts import draft_record
+from cli.tui.drafts import draft_record, holds_secret
 from cli.tui.rendering import flatten, pretty
 from cli.tui.state import Conversation, JsonObject
 from cli.tui.transport import ClientError
@@ -250,6 +250,10 @@ async def _edit(
         )
     )
     if edited is None:
+        return
+    if holds_secret(edited):
+        # A saved edit would keep the value; the composer sends the command alone.
+        app._notice("A /secret command cannot replace a message. Send it from the composer.")
         return
     request = {
         **origin.params(),

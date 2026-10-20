@@ -277,7 +277,17 @@ def tool_summary(item: JsonObject) -> str:
     if not primary and (summary := terminal_text(str(display.get("summary") or "")).strip()):
         primary = [_shortened(summary, "end", _TOOL_PRIMARY_WIDTH)]
     facts = [text for fact in display.get("facts") or [] if (text := _fact_text(fact))]
+    if used := _secrets_used(display):
+        facts.append(f"{len(used)} secret" if len(used) == 1 else f"{len(used)} secrets")
     return " · ".join([*primary, *facts])
+
+
+def _secrets_used(display: JsonObject) -> list[str]:
+    """The Secrets vBot put into the call, as `GITHUB.password (terminal)`."""
+    used = display.get("secrets_used")
+    if not isinstance(used, list):
+        return []
+    return [terminal_text(entry) for entry in used if isinstance(entry, str) and entry]
 
 
 def _primary_text(part: JsonObject) -> str:
@@ -382,6 +392,8 @@ def tool_detail(item: JsonObject) -> str:
     # Each section's lines sit indented under its label.
     if args:
         parts.append(f"Arguments\n{_indent(structured(args))}")
+    if used := _secrets_used(display):
+        parts.append("Secrets used\n" + "\n".join(f"  {entry}" for entry in used))
     if item.get("output"):
         parts.append(f"Output\n{_indent(content_text(item['output']))}")
     if item.get("result") is not None:
