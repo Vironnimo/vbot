@@ -520,6 +520,7 @@ class SessionTitleService:
                     call_id,
                     reported or None,
                     status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                    failure=exc,
                 )
             raise
         if recorder is not None and call_id is not None:

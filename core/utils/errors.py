@@ -3,11 +3,37 @@
 Base classes for all vBot-specific errors.
 """
 
+from typing import ClassVar, Literal
+
+# Why a Model attempt failed, as the Usage ledger persists it (``usage.md`` ->
+# Failures). A stable Generation 1 vocabulary: add values, never rename them.
+type FailureClass = Literal[
+    "rate_limit",
+    "usage_limit",
+    "auth",
+    "timeout",
+    "limit",
+    "network",
+    "server",
+    "rejected",
+    "refused",
+    "incomplete",
+    "outcome_unknown",
+    "provider",
+    "internal",
+]
+
 
 class VBotError(Exception):
-    """Base exception for vBot errors, including shared retry-attempt metadata."""
+    """Base exception for vBot errors, including shared retry-attempt metadata.
+
+    ``failure_class`` names the failure an error stands for when it ends a
+    Model attempt; ``None`` leaves the classification to its cause or HTTP
+    status.
+    """
 
     attempts_made: int | None = None
+    failure_class: ClassVar[FailureClass | None] = None
 
 
 class ConfigError(VBotError):

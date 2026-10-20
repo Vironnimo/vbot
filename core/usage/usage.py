@@ -14,6 +14,7 @@ import json
 import math
 import sqlite3
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,14 +24,18 @@ from core.database import Database, open_database
 from core.models.pricing import TokenPricing, nonnegative_amount, price_usage, project_cost
 from core.sessions import SessionAddress
 from core.usage._calibration import InputEstimateCalibration
+from core.usage._failures import classify_failure
 from core.usage._schema import usage_database_spec
+from core.utils.errors import FailureClass
 from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
 
 _COLUMNS = (
     "id,revision,timestamp,model,kind,status,usage_json,agent_id,project_id,"
-    "session_id,run_id,connection_id,session_title,owner_name,group_id,session_generation_id"
+    "session_id,run_id,connection_id,session_title,owner_name,group_id,session_generation_id,"
+    "duration_ms,failure_class,http_status"
 )
+_PLACEHOLDERS = ",".join("?" for _ in _COLUMNS.split(","))
 _COUNTERS = (
     "input_tokens",
     "output_tokens",
@@ -82,6 +87,17 @@ class UsageRecord:
     owner_name: str | None = None
     group_id: str | None = None
     session_generation_id: str | None = None
+    duration_ms: int | None = None
+    failure_class: str | None = None
+    http_status: int | None = None
+
+
+class _Settlement(NamedTuple):
+    """What a settling ``finish`` measured besides Usage."""
+
+    duration_ms: int | None
+    failure_class: FailureClass | None
+    http_status: int | None
 
 
 class UsagePage(NamedTuple):
@@ -227,10 +243,15 @@ class UsageRecorder:
         *,
         pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
         session_source: UsageSessionSource | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.database = open_database(usage_database_spec(path))
         self._pricing_lookup = pricing_lookup
         self._session_source = session_source
+        # Monotonic dispatch instants of unsettled calls: only a call this
+        # process started has a duration.
+        self._clock = clock
+        self._dispatched: dict[str, float] = {}
         self._import_lock = threading.Lock()
         try:
             self.database.write(self._interrupt_unfinished)
@@ -292,10 +313,11 @@ class UsageRecorder:
                 generation_id = version[0]
         identifier = new_id("use")
         stamp = utc_now_timestamp()
+        dispatched = self._clock()
 
         def operation(connection: sqlite3.Connection) -> str:
             connection.execute(
-                f"INSERT INTO usage_calls ({_COLUMNS}) VALUES ({','.join('?' for _ in range(16))})",
+                f"INSERT INTO usage_calls ({_COLUMNS}) VALUES ({_PLACEHOLDERS})",
                 (
                     identifier,
                     _revision(connection),
@@ -313,6 +335,9 @@ class UsageRecorder:
                     owner_name,
                     group_id,
                     generation_id,
+                    None,
+                    None,
+                    None,
                 ),
             )
             return identifier
@@ -322,18 +347,39 @@ class UsageRecorder:
         identifier, cancelled = await _settled(
             asyncio.create_task(self.database.write_async(operation))
         )
+        self._dispatched[identifier] = dispatched
         if cancelled is not None:
-            await self._settle_save(identifier, None, "cancelled")
+            await self.finish(identifier, status="cancelled")
             raise cancelled
         return identifier
 
     async def finish(
-        self, call_id: str, usage: Mapping[str, Any] | None = None, *, status: str = "completed"
+        self,
+        call_id: str,
+        usage: Mapping[str, Any] | None = None,
+        *,
+        status: str = "completed",
+        failure: BaseException | FailureClass | None = None,
     ) -> dict[str, Any]:
-        return await self._settle_save(call_id, usage, status)
+        """Settle a call with its outcome; a ``failed`` one with what failed it.
+
+        ``failure`` is the error that ended the attempt, or its class where no
+        error exists; only its class and HTTP status are kept. The first
+        settlement also records the duration since ``start``.
+        """
+        dispatched = self._dispatched.pop(call_id, None)
+        duration_ms = (
+            max(0, round((self._clock() - dispatched) * 1000)) if dispatched is not None else None
+        )
+        failure_class, http_status = (
+            classify_failure(failure) if status == "failed" else (None, None)
+        )
+        return await self._settle_save(
+            call_id, usage, status, _Settlement(duration_ms, failure_class, http_status)
+        )
 
     async def update(self, call_id: str, usage: Mapping[str, Any] | None) -> dict[str, Any]:
-        return await self._settle_save(call_id, usage, None)
+        return await self._settle_save(call_id, usage, None, None)
 
     def input_estimate_factor(self, model: str) -> float:
         """Correction for local input estimates of ``model``; 1.0 without evidence.
@@ -353,25 +399,37 @@ class UsageRecorder:
         self._calibration.record(model, measured, estimated)
 
     async def _settle_save(
-        self, call_id: str, usage: Mapping[str, Any] | None, status: str | None
+        self,
+        call_id: str,
+        usage: Mapping[str, Any] | None,
+        status: str | None,
+        settlement: _Settlement | None,
     ) -> dict[str, Any]:
         # Once a response has supplied Usage, cancellation must not discard it
         # while its persistence is waiting for worker admission.
         result, cancelled = await _settled(
-            asyncio.create_task(self.database.run_async(self._save, call_id, usage, status))
+            asyncio.create_task(
+                self.database.run_async(self._save, call_id, usage, status, settlement)
+            )
         )
         if cancelled is not None:
             raise cancelled
         return result
 
     def _save(
-        self, call_id: str, usage: Mapping[str, Any] | None, status: str | None
+        self,
+        call_id: str,
+        usage: Mapping[str, Any] | None,
+        status: str | None,
+        settlement: _Settlement | None,
     ) -> dict[str, Any]:
         incoming = _usage_fields(usage)
 
         def operation(connection: sqlite3.Connection) -> dict[str, Any]:
             row = connection.execute(
-                "SELECT model,status,usage_json FROM usage_calls WHERE id=?", (call_id,)
+                "SELECT model,status,usage_json,duration_ms,failure_class,http_status "
+                "FROM usage_calls WHERE id=?",
+                (call_id,),
             ).fetchone()
             if row is None:
                 raise ValueError(f"Unknown Usage call: {call_id}")
@@ -392,10 +450,21 @@ class UsageRecorder:
                 merged["cost"] = price_usage(merged, pricing)
             encoded = json.dumps(merged, ensure_ascii=False, allow_nan=False)
             new_status = status or row["status"]
-            if encoded != row["usage_json"] or new_status != row["status"]:
+            stored = (row["duration_ms"], row["failure_class"], row["http_status"])
+            outcome = stored
+            if settlement is not None:
+                # A repeated settlement keeps the first duration; the latest
+                # outcome decides the failure fields.
+                outcome = (
+                    stored[0] if stored[0] is not None else settlement.duration_ms,
+                    settlement.failure_class,
+                    settlement.http_status,
+                )
+            if encoded != row["usage_json"] or new_status != row["status"] or outcome != stored:
                 connection.execute(
-                    "UPDATE usage_calls SET revision=?,status=?,usage_json=? WHERE id=?",
-                    (_revision(connection), new_status, encoded, call_id),
+                    "UPDATE usage_calls SET revision=?,status=?,usage_json=?,"
+                    "duration_ms=?,failure_class=?,http_status=? WHERE id=?",
+                    (_revision(connection), new_status, encoded, *outcome, call_id),
                 )
             # The producer still owns its full Usage contract (for example
             # Chat's context_usage). Return its metadata unchanged without
@@ -524,8 +593,7 @@ class UsageRecorder:
                             )
                         continue
                     connection.execute(
-                        f"INSERT INTO usage_calls ({_COLUMNS}) VALUES "
-                        f"({','.join('?' for _ in range(16))})",
+                        f"INSERT INTO usage_calls ({_COLUMNS}) VALUES ({_PLACEHOLDERS})",
                         (
                             identifier,
                             _revision(connection),
@@ -543,6 +611,9 @@ class UsageRecorder:
                             record["owner_name"],
                             record["group_id"],
                             record["generation_id"],
+                            None,
+                            None,
+                            None,
                         ),
                     )
                 _import_cursor(connection, source_id, source_restore_id, batch[-1]["entry_key"])

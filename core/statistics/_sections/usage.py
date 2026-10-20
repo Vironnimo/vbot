@@ -215,7 +215,8 @@ def _recent_calls(context: ReportContext, units: str) -> list[JsonObject]:
         SELECT r.timestamp, c.model_key, c.purpose, r.status, {USAGE_ORIGIN_SQL}, ru.actor,
             ru.address, c.input_tokens, c.output_tokens, c.cache_read_tokens,
             c.input_estimated OR c.output_estimated,
-            c.retrospective = 1 AND c.cost_source = 2, c.cost_json
+            c.retrospective = 1 AND c.cost_source = 2, c.cost_json,
+            r.duration_ms, r.failure_class, r.http_status
         FROM stat_usage_records r
         CROSS JOIN stat_usage_calls c ON c.session_key = r.session_key AND c.seq = r.seq
         CROSS JOIN stat_usage_units u ON u.session_key = r.session_key
@@ -243,6 +244,9 @@ def _recent_calls(context: ReportContext, units: str) -> list[JsonObject]:
         estimated,
         retrospective,
         cost,
+        duration_ms,
+        failure_class,
+        http_status,
     ) in rows:
         session_id, title = (None, None) if address is None else context.addresses[address][1:]
         calls.append(
@@ -261,6 +265,9 @@ def _recent_calls(context: ReportContext, units: str) -> list[JsonObject]:
                 "estimated_tokens": bool(estimated),
                 "retrospective": bool(retrospective),
                 "cost": json.loads(cost) if cost else dict(UNKNOWN_COST),
+                "duration_ms": duration_ms,
+                "failure_class": failure_class,
+                "http_status": http_status,
             }
         )
     return calls

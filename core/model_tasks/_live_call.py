@@ -688,6 +688,7 @@ class LiveCallSession:
                     self._usage_call_id,
                     usage=usage,
                     status="failed" if failed else "completed",
+                    failure="timeout" if reason == "start_timeout" else "network",
                 )
         except Exception:
             _LOGGER.error(

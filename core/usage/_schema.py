@@ -34,8 +34,16 @@ CREATE TABLE usage_calls (
     session_title TEXT,
     owner_name TEXT,
     group_id TEXT,
-    session_generation_id TEXT
+    session_generation_id TEXT,
+    duration_ms INTEGER,
+    failure_class TEXT,
+    http_status INTEGER
 ) STRICT;
+
+-- duration_ms: dispatch to settlement, measured by the recorder; NULL when
+-- unknown, such as a call interrupted by a restart or recorded before
+-- 2026-10-20. failure_class (core.utils.errors.FailureClass) and http_status:
+-- why a failed call failed; NULL for every other outcome or when unknown.
 
 -- Statistics reconciles changed calls, including updates to cumulative Usage.
 CREATE UNIQUE INDEX usage_calls_by_revision ON usage_calls (revision);

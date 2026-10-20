@@ -39,6 +39,8 @@ _wall_clock = time.time
 class IncompleteResponseError(ProviderError):
     """The Model finished without completing a usable answer or Tool step."""
 
+    failure_class = "incomplete"
+
     def __init__(self, message: str = "The Model response was incomplete") -> None:
         super().__init__(message, retryable=True)
 

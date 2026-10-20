@@ -455,6 +455,8 @@ USAGE_MEASURES = (
         for basis in SPEED_BASES
         for measure in ("calls", "estimated_calls", "tokens", "window_ms")
     ),
+    "duration_calls",
+    "duration_ms",
 )
 # Each measure's sum over calls ``c`` of requests ``r``. Output speed stays
 # additive: the calls with a measured window, their tokens and window
@@ -505,9 +507,15 @@ _MEASURE_SQL = {
             ("window_ms", "COALESCE(c.speed_window_ms, 0)"),
         )
     },
+    # Request durations, which only the ledger measures.
+    "duration_calls": "SUM(r.duration_ms IS NOT NULL)",
+    "duration_ms": "SUM(COALESCE(r.duration_ms, 0))",
 }
+# Measures of ledger requests only: saved Session usage keeps no request record.
+_REQUEST_MEASURES = ("failed_calls", "duration_calls", "duration_ms")
 _USAGE_CUBE_MEASURES = tuple(name for name in USAGE_MEASURES if name != "failed_calls")
-_USAGE_KEYS = "hour, unit_key, origin, model_key, kind, status"
+# A request that did not fail has failure class '' and HTTP status 0.
+_USAGE_KEYS = "hour, unit_key, origin, model_key, kind, status, failure_class, http_status"
 _USAGE_COLUMNS = f"{_USAGE_KEYS}, {', '.join(_USAGE_CUBE_MEASURES)}"
 _FIRST_TOKEN_KEYS = f"{_USAGE_KEYS}, first_token_ms"
 _FIRST_TOKEN_COLUMNS = f"{_FIRST_TOKEN_KEYS}, calls"
@@ -516,9 +524,9 @@ _FIRST_TOKEN_COLUMNS = f"{_FIRST_TOKEN_KEYS}, calls"
 _MODEL_KEY, _HAS_MODEL, _PURPOSE, _FIRST_USE, _MEASURES = 2, 3, 4, 5, 6
 _MEASURE = {name: _MEASURES + position for position, name in enumerate(USAGE_MEASURES)}
 _RUN_MODEL_SQL = ", ".join(_MEASURE_SQL[name] for name in USAGE_MEASURES)
-# Saved usage has no request status, so it records no failed attempts.
+# Saved usage has no request record, so it records no failed attempts or durations.
 _SAVED_RUN_MODEL_SQL = ", ".join(
-    "0" if name == "failed_calls" else _MEASURE_SQL[name] for name in USAGE_MEASURES
+    "0" if name in _REQUEST_MEASURES else _MEASURE_SQL[name] for name in USAGE_MEASURES
 )
 # The request measures ``agg_runs`` keeps, in its column order.
 _RUN_MEASURES = (
@@ -861,6 +869,8 @@ def _usage_select(
         SELECT {"r.seq, " if sequence else ""}{_HOUR} AS hour, r.session_key,
             {USAGE_ORIGIN_SQL} AS origin,
             c.model_key, c.purpose, r.status,
+            COALESCE(r.failure_class, '') AS failure_class,
+            COALESCE(r.http_status, 0) AS http_status,
             {measures}
         FROM {source}
         CROSS JOIN stat_usage_units u ON u.session_key = r.session_key
@@ -871,7 +881,8 @@ def _usage_select(
         WHERE {where}
             {"AND c.first_token_ms IS NOT NULL" if first_token else ""}
         GROUP BY {"r.seq, " if sequence else ""}hour, r.session_key, origin,
-            c.model_key, c.purpose, r.status{", c.first_token_ms" if first_token else ""}
+            c.model_key, c.purpose, r.status, failure_class, http_status
+            {", c.first_token_ms" if first_token else ""}
     """
 
 

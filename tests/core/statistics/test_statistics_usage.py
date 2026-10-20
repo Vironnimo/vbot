@@ -202,6 +202,9 @@ async def test_breakdowns_rank_every_dimension_by_cost_with_runs_and_sessions(
         "estimated_tokens": False,
         "retrospective": False,
         "cost": {"amount_usd": 0.1, "source": "provider"},
+        "duration_ms": 0,
+        "failure_class": None,
+        "http_status": None,
     }
     assert usage["recent_calls"][1]["session_title"] in {"Title p1", "Title r1"}
 

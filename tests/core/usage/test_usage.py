@@ -12,9 +12,12 @@ import pytest
 
 from core.chat.messages import ChatMessage
 from core.database import create_data_snapshot, restore_data_snapshot, write_bootstrap_marker
+from core.model_tasks.image import ImageExecutionError
 from core.models.pricing import TokenPricing, TokenRates
+from core.providers.errors import NetworkError, ProviderRateLimitError, ProviderUsageLimitError
 from core.sessions import ChatSessionManager
 from core.usage import UsagePage, UsageRecorder
+from core.utils.errors import ProviderError
 from tests.core.sessions.history_fixtures import seed_history
 from tests.core.usage.usage_test_support import read_ledger
 
@@ -107,6 +110,76 @@ async def test_accounting_returns_but_never_stores_producer_usage_metadata(recor
 
 
 @pytest.mark.asyncio
+async def test_settlement_records_duration_and_only_a_failure_keeps_its_class(tmp_path):
+    write_bootstrap_marker(tmp_path)
+    now = [100.0]
+    owner = UsageRecorder(tmp_path / "model-usage.db", clock=lambda: now[0])
+    try:
+        failed = await owner.start(model="p/m", kind="chat")
+        cancelled = await owner.start(model="p/m", kind="chat")
+        completed = await owner.start(model="p/m", kind="chat")
+        now[0] += 2.5
+        await owner.update(failed, {"input_tokens": 3})
+        now[0] += 0.25
+        error = ProviderError("Provider error: 529", retryable=True)
+        error.status_code = 529
+        await owner.finish(failed, status="failed", failure=error)
+        await owner.finish(cancelled, status="cancelled", failure=error)
+        await owner.finish(completed, failure=error)
+        now[0] += 60
+        # A repeated settlement keeps the first duration.
+        await owner.finish(completed)
+        outcomes = {
+            record.id: (record.duration_ms, record.failure_class, record.http_status)
+            for record in read_ledger(owner)[1]
+        }
+        assert outcomes == {
+            failed: (2750, "server", 529),
+            cancelled: (2750, None, None),
+            completed: (2750, None, None),
+        }
+    finally:
+        owner.close()
+
+
+def _wrapped(error: BaseException, wrapper: BaseException) -> BaseException:
+    try:
+        raise wrapper from error
+    except BaseException as raised:
+        return raised
+
+
+def _status_error(status: int) -> ProviderError:
+    error = ProviderError(f"Provider error: {status}", retryable=False)
+    error.status_code = status
+    return error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (ProviderRateLimitError("Rate limited"), ("rate_limit", None)),
+        (ProviderUsageLimitError("Quota exhausted"), ("usage_limit", None)),
+        (_status_error(404), ("rejected", 404)),
+        (_status_error(504), ("timeout", 504)),
+        # A wrapper without a class of its own defers to its cause and its status.
+        (_wrapped(_status_error(503), ImageExecutionError("failed")), ("server", 503)),
+        (_wrapped(NetworkError("reset"), ImageExecutionError("failed")), ("network", None)),
+        # An in-band Provider error has neither a subclass nor a status.
+        (ProviderError("overloaded", retryable=True), ("provider", None)),
+        (ValueError("bug"), ("internal", None)),
+        ("incomplete", ("incomplete", None)),
+    ],
+)
+async def test_a_failure_is_kept_as_its_class_and_http_status(recorder, failure, expected):
+    identifier = await recorder.start(model="p/m", kind="image_generation")
+    await recorder.finish(identifier, status="failed", failure=failure)
+    record = read_ledger(recorder)[1][0]
+    assert (record.failure_class, record.http_status) == expected
+
+
+@pytest.mark.asyncio
 async def test_restart_marks_unfinished_call_interrupted_and_snapshots_cover_it(recorder):
     identifier = await recorder.start(model="p/m", kind="music_generation")
     path = recorder.database.path
@@ -119,6 +192,7 @@ async def test_restart_marks_unfinished_call_interrupted_and_snapshots_cover_it(
         assert record.id == identifier
         assert record.status == "interrupted"
         assert record.usage == {}
+        assert (record.duration_ms, record.failure_class, record.http_status) == (None,) * 3
     finally:
         reopened.close()
 

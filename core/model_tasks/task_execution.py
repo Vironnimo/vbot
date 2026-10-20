@@ -24,7 +24,7 @@ from core.model_tasks.model_tasks import (
     parse_task_model_target_id,
 )
 from core.usage import UsageRecorder
-from core.utils.errors import TaskError
+from core.utils.errors import FailureClass, TaskError
 from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
@@ -122,6 +122,7 @@ class TaskUsage:
         usage: Mapping[str, Any] | None = None,
         result: Any = None,
         status: Literal["completed", "failed", "cancelled"] = "completed",
+        failure: BaseException | FailureClass | None = None,
     ) -> None:
         if self._recorder is None or not call_id:
             return
@@ -136,7 +137,7 @@ class TaskUsage:
         normalized.update(task_usage(result_usage))
         if self._kind == "text_embedding" and "input_tokens" in normalized:
             normalized["output_tokens"] = 0
-        await self._recorder.finish(call_id, normalized or None, status=status)
+        await self._recorder.finish(call_id, normalized or None, status=status, failure=failure)
 
     async def update(self, call_id: str, usage: Mapping[str, Any] | None) -> None:
         if self._recorder is not None and call_id:
@@ -168,16 +169,18 @@ class TaskUsage:
         """
         call_id = await self.start()
         status: Literal["completed", "failed", "cancelled"] = "completed"
+        failure: BaseException | None = None
         try:
             yield call_id
         except asyncio.CancelledError:
             status = "cancelled"
             raise
-        except BaseException:
+        except BaseException as exc:
             status = "failed"
+            failure = exc
             raise
         finally:
-            await self.finish(call_id, usage=reported, status=status)
+            await self.finish(call_id, usage=reported, status=status, failure=failure)
 
 
 def task_usage(usage: Any) -> JsonObject:

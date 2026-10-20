@@ -403,12 +403,24 @@ async def test_paged_revisions_and_new_run_origins_equal_a_full_rebuild(
     alpha.for_run("future").append(ChatMessage.note("admitted", timestamp=_at(1)))
     manager.set_metadata(beta.address, {"is_subagent_session": True})
     fresh = replace(old, id="fresh", run_id=None, revision=revision + 1)
-    middle = replace(old, session_id="beta", run_id=None, revision=revision + 2)
+    middle = replace(
+        old,
+        session_id="beta",
+        run_id=None,
+        status="failed",
+        failure_class="server",
+        http_status=503,
+        revision=revision + 2,
+    )
+    # A changed failure class and duration move the call between cube rows.
     final_old = replace(
         old,
         model="chat/changed",
         kind="session_title",
         status="failed",
+        failure_class="rate_limit",
+        http_status=429,
+        duration_ms=1500,
         timestamp=format_canonical_timestamp(_at(3601)),
         usage={"input_tokens": 3, "reported_cost_usd": 1.6e-9},
         revision=revision + 4,
@@ -439,6 +451,10 @@ async def test_paged_revisions_and_new_run_origins_equal_a_full_rebuild(
         rebuilt.close()
     assert {row["origin"] for row in incremental["agg_usage"]} == {"automation", "subagent"}
     assert sum(row["calls"] for row in incremental["agg_usage"]) == 2
+    assert {
+        (row["failure_class"], row["http_status"], row["duration_ms"])
+        for row in incremental["agg_usage"]
+    } == {("rate_limit", 429, 1500), ("", 0, 0)}
     assert all(row["calls"] > 0 for row in incremental["agg_usage"])
     assert _rollups(index, manager, ledger, prices) == incremental
 

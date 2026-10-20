@@ -58,13 +58,19 @@ class StreamingError(VBotError):
 class StreamingDeltaError(StreamingError):
     """Raised when an adapter yields an invalid normalized streaming delta."""
 
+    failure_class = "provider"
+
 
 class StreamingChunkTimeoutError(StreamingError):
     """Raised when a provider stream stalls between chunks."""
 
+    failure_class = "timeout"
+
 
 class StreamingProgressTimeoutError(StreamingError):
     """Raised when heartbeats continue but the Model produces no delta."""
+
+    failure_class = "timeout"
 
 
 class StreamBrokenAfterToolCallsError(StreamingError):

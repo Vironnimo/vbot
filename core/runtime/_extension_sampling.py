@@ -39,6 +39,7 @@ async def sample_extension(
     usage = None
     reported: dict[str, Any] = {}
     outcome = "failed"
+    failure: BaseException | None = None
     try:
         provider_id, model_id, connection_id = await _RUNTIME_WORKERS.run(prepare)
         assert adapter is not None
@@ -75,11 +76,17 @@ async def sample_extension(
     except asyncio.CancelledError:
         outcome = "cancelled"
         raise
+    except BaseException as exc:
+        failure = exc
+        raise
     finally:
         try:
             if call_id is not None:
                 await recorder.finish(
-                    call_id, usage if usage is not None else reported or None, status=outcome
+                    call_id,
+                    usage if usage is not None else reported or None,
+                    status=outcome,
+                    failure=failure,
                 )
         finally:
             if adapter is not None:

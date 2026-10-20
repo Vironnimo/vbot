@@ -15,5 +15,17 @@ class CompactionError(VBotError):
         self.model = model
 
 
+class CompactionLimitError(CompactionError):
+    """Raised when Compaction's own time or summary-size limit stops its Model request."""
+
+    failure_class = "limit"
+
+
+class CompactionIncompleteError(CompactionError):
+    """Raised when the summary stream ends without a completed summary."""
+
+    failure_class = "incomplete"
+
+
 class CompactionInsufficientReclaimError(CompactionError):
     """Raised when an automatic checkpoint would not reclaim enough Context."""

@@ -735,12 +735,21 @@ async def test_stream_delivers_before_completion_and_closes_every_outcome_withou
         else "completed"
     )
     observer.start.assert_awaited_once()
-    observer.finish.assert_awaited_once_with(
-        "call",
-        usage=None,
-        result=b"".join(chunks) if expected_status == "completed" else None,
-        status=expected_status,
-    )
+    observer.finish.assert_awaited_once()
+    finish = observer.finish.await_args
+    assert finish.args == ("call",)
+    assert finish.kwargs == {
+        "usage": None,
+        "result": b"".join(chunks) if expected_status == "completed" else None,
+        "status": expected_status,
+        "failure": finish.kwargs["failure"],
+    }
+    # The ledger classifies the raised error; a cancel or success carries none.
+    failure = finish.kwargs["failure"]
+    if expected_status == "failed":
+        assert isinstance(failure, ProviderOutcomeUnknownError)
+    else:
+        assert failure is None
     await drain_debug_traces()
     recorded = traces.get_traces()
     assert len(recorded) == 1
@@ -799,12 +808,22 @@ async def test_stream_records_usage_read_by_its_consumer_even_when_the_result_is
         with pytest.raises(ProviderOutcomeUnknownError if status_code == 200 else ProviderError):
             await invoke()
     assert route.call_count == 1
-    observer.finish.assert_awaited_once_with(
-        "call",
-        usage={"input_tokens": 4},
-        result="parsed" if accepted else None,
-        status="completed" if accepted else "failed",
-    )
+    observer.finish.assert_awaited_once()
+    finish = observer.finish.await_args
+    assert finish.args == ("call",)
+    assert finish.kwargs == {
+        "usage": {"input_tokens": 4},
+        "result": "parsed" if accepted else None,
+        "status": "completed" if accepted else "failed",
+        "failure": finish.kwargs["failure"],
+    }
+    failure = finish.kwargs["failure"]
+    if accepted:
+        assert failure is None
+    else:
+        assert isinstance(
+            failure, ProviderOutcomeUnknownError if status_code == 200 else ProviderError
+        )
 
 
 # ---------------------------------------------------------------------------

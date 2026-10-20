@@ -14,14 +14,19 @@ from core.statistics._sections.common import (
     RUN_COST_ORDER,
     JsonObject,
     ReportContext,
+    count_entries,
     failed_calls_sql,
+    failure_key_sql,
     percentile,
+    provider_sql,
     usd,
 )
 from core.statistics._sections.overview import RUNAWAY_ITERATIONS
 from core.statistics._sections.window import hour_timestamp, instant_timestamp
 
 TOP_FAILED_HOURS = 10
+# Providers, Models and HTTP statuses listed per failure class.
+TOP_FAILURE_KEYS = 5
 # A Session needs two cache-reporting turns before its hit rate means anything.
 MIN_CACHE_SESSION_TURNS = 2
 TOP_CACHE_SESSIONS = 20
@@ -206,10 +211,12 @@ def _failed_attempts(context: ReportContext) -> JsonObject:
     selected = ", ".join(str(row[0]) for row in hours)
     models: dict[int, list[JsonObject]] = {}
     agents: dict[int, list[JsonObject]] = {}
+    classes: dict[int, list[JsonObject]] = {}
     if hours:
         for target, key_sql, joins in (
             (models, "a.model_key", ""),
             (agents, "u.actor", f"JOIN {context.units_table} u ON u.unit_key = a.unit_key"),
+            (classes, failure_key_sql(), ""),
         ):
             for hour, key, count in context.query(
                 f"""
@@ -229,10 +236,56 @@ def _failed_attempts(context: ReportContext) -> JsonObject:
                 "failed": failed_count,
                 "models": models.get(hour, []),
                 "agents": agents.get(hour, []),
+                "classes": classes.get(hour, []),
             }
             for hour, calls, failed_count in hours
         ],
+        "by_class": _failure_classes(context),
     }
+
+
+def _failure_classes(context: ReportContext) -> list[JsonObject]:
+    """Failed attempts per failure class: time to failure and where they failed."""
+    key = failure_key_sql()
+    window = context.hour_condition("a")
+    failed = "a.status NOT IN ('completed', 'started')"
+    rows = context.query(
+        f"""
+        SELECT {key} AS key, SUM(a.calls) AS calls, SUM(a.duration_calls), SUM(a.duration_ms)
+        FROM agg_usage a WHERE {window} AND {failed}
+        GROUP BY key ORDER BY calls DESC, key
+        """
+    )
+    details: dict[str, dict[str, dict[str, int]]] = {
+        row[0]: {"providers": {}, "models": {}, "http_statuses": {}} for row in rows
+    }
+    for field, detail_sql in (
+        ("providers", provider_sql("a.model_key")),
+        ("models", "a.model_key"),
+        ("http_statuses", "CAST(a.http_status AS TEXT)"),
+    ):
+        status_filter = " AND a.http_status > 0" if field == "http_statuses" else ""
+        for failure, detail, count in context.query(
+            f"""
+            SELECT {key} AS key, {detail_sql} AS detail, SUM(a.calls) FROM agg_usage a
+            WHERE {window} AND {failed}{status_filter}
+            GROUP BY key, detail
+            """
+        ):
+            details[failure][field][detail] = count
+    return [
+        {
+            "key": failure,
+            "count": calls,
+            "duration_calls": duration_calls,
+            "avg_duration_ms": round(duration_ms / duration_calls) if duration_calls else None,
+            **{
+                field: count_entries(counts)[:TOP_FAILURE_KEYS]
+                for field, counts in details[failure].items()
+            },
+        }
+        for failure, calls, duration_calls, duration_ms in rows
+    ]
 
 
 def _runaway_runs(context: ReportContext) -> list[JsonObject]:

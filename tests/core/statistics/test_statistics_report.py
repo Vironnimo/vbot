@@ -22,6 +22,7 @@ from core.sessions import ChatSessionManager, SessionAddress
 from core.statistics import REPORT_SECTIONS
 from core.tools import tool_failure, tool_success
 from core.usage import UsageRecorder
+from core.utils.errors import ProviderError
 from tests.core.sessions.history_fixtures import seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
@@ -752,27 +753,62 @@ async def test_diagnostics_list_data_quality_failed_hours_runaway_and_open_runs(
     await _call(ledger, {"reported_cost_usd": 0.2}, address=address, run_id="loop")
     _admit(manager, address, "open")
     await _call(ledger, {"input_tokens": 9, "input_tokens_estimated": True}, model="partial/m")
-    for _ in range(2):
-        await _call(ledger, None, model="flaky/m", status="failed")
+    overloaded = ProviderError("Provider error: 529", retryable=True)
+    overloaded.status_code = 529
+    for duration_ms in (1000, 3000):
+        await _call(
+            ledger,
+            None,
+            model="flaky/m",
+            status="failed",
+            failure=overloaded,
+            duration_ms=duration_ms,
+        )
+    await _call(ledger, None, model="other/m", status="cancelled", duration_ms=500)
     service = statistics(usage_recorder=ledger, clock=_clock)
 
-    diagnostics = service.report(sections=["diagnostics"])["diagnostics"]
+    report = service.report(sections=["usage", "diagnostics"])
+    diagnostics = report["diagnostics"]
 
+    # Every request this process recorded has a duration, failed ones included.
+    totals = report["usage"]["totals"]
+    assert (totals["duration_calls"], totals["avg_duration_ms"]) == (8, round(4500 / 8))
     assert diagnostics["open_runs"] == 1
     assert [row["run_id"] for row in diagnostics["runaway_runs"]] == ["loop"]
     quality = {row["model"]: row for row in diagnostics["data_quality"]}
     assert quality["partial/m"]["unreported_calls"] == 1
     assert quality["partial/m"]["unpriced_calls"] == 1
     assert diagnostics["failed_attempts"] == {
-        "total": 2,
+        "total": 3,
         "hours": [
             {
                 "hour_start": "2026-06-01T12:00:00.000000Z",
-                "calls": 7,
-                "failed": 2,
-                "models": [{"key": "flaky/m", "count": 2}],
-                "agents": [{"key": "", "count": 2}],
+                "calls": 8,
+                "failed": 3,
+                "models": [{"key": "flaky/m", "count": 2}, {"key": "other/m", "count": 1}],
+                "agents": [{"key": "", "count": 3}],
+                "classes": [{"key": "server", "count": 2}, {"key": "cancelled", "count": 1}],
             }
+        ],
+        "by_class": [
+            {
+                "key": "server",
+                "count": 2,
+                "duration_calls": 2,
+                "avg_duration_ms": 2000,
+                "providers": [{"key": "flaky", "count": 2}],
+                "models": [{"key": "flaky/m", "count": 2}],
+                "http_statuses": [{"key": "529", "count": 2}],
+            },
+            {
+                "key": "cancelled",
+                "count": 1,
+                "duration_calls": 1,
+                "avg_duration_ms": 500,
+                "providers": [{"key": "other", "count": 1}],
+                "models": [{"key": "other/m", "count": 1}],
+                "http_statuses": [],
+            },
         ],
     }
 

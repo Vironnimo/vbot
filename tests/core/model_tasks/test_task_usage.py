@@ -228,22 +228,28 @@ async def test_retry_and_rejected_result_keep_separate_usage_records(
     client = ProviderTaskClient.from_runtime(_runtime(), target, usage_observer=observer)
     route = respx.post(BASE + "/task").mock(
         side_effect=[
+            httpx.Response(503),
             httpx.Response(200, json={"usage": {"input_tokens": 4}}),
             httpx.Response(200, json={"usage": {"input_tokens": 6}}),
         ]
     )
 
     def parse(response: httpx.Response) -> dict[str, Any]:
-        if len(route.calls) == 1:
+        if len(route.calls) == 2:
             raise ProviderError("retryable unusable result", retryable=True)
         return dict(response.json())
 
     await client.post_and_parse("/task", timeout=1, parse=parse, json={})
     _, records = read_ledger(recorder)
-    assert [(record.status, record.usage["input_tokens"]) for record in records] == [
-        ("failed", 4),
-        ("completed", 6),
+    assert [
+        (record.status, record.usage.get("input_tokens"), record.failure_class, record.http_status)
+        for record in records
+    ] == [
+        ("failed", None, "server", 503),
+        ("failed", 4, "provider", None),
+        ("completed", 6, None, None),
     ]
+    assert all(record.duration_ms is not None for record in records)
 
 
 @pytest.mark.asyncio
