@@ -71,7 +71,8 @@ class ProgramExit:
 
     name: str
     exit_code: int
-    # Best-effort Python module/script selector, without code or program arguments.
+    # Best-effort Python or Node selector (module, script, npm script or npx
+    # package), without code or program arguments.
     invocation: str = ""
 
     def describe(self) -> str:
@@ -541,7 +542,7 @@ class _WindowsJobTree:
             self._k.CloseHandle(handle)
             return
         name = _image_name(self._k, handle) or f"process {pid}"
-        invocation = _python_invocation(pid, name)
+        invocation = _invocation(pid, name)
         with self._lock:
             if self._closed:
                 self._k.CloseHandle(handle)
@@ -677,21 +678,86 @@ def _image_name(kernel32: Any, handle: Any) -> str:
     return PurePath(buffer.value).name
 
 
-def _python_invocation(pid: int, name: str) -> str:
-    """Read a Python child's selector once at its start, never code or arguments.
+_PYTHON_IMAGE = re.compile(r"pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?", re.IGNORECASE)
+_NODE_IMAGE = re.compile(r"node(?:\.exe)?", re.IGNORECASE)
+# Node options that take the next argument as their value.
+_NODE_VALUE_OPTIONS = frozenset(
+    {
+        "-r",
+        "--require",
+        "--import",
+        "--loader",
+        "--experimental-loader",
+        "--input-type",
+        "-C",
+        "--conditions",
+        "--env-file",
+        "--title",
+        "--watch-path",
+    }
+)
+# Node options without a value that do not select what runs.
+_NODE_FLAGS = frozenset(
+    {
+        "--watch",
+        "--trace-warnings",
+        "--no-warnings",
+        "--enable-source-maps",
+        "--experimental-vm-modules",
+        "--experimental-strip-types",
+        "--experimental-transform-types",
+        "--inspect",
+        "--inspect-brk",
+        "--expose-gc",
+        "--no-deprecation",
+        "--trace-deprecation",
+        "--throw-deprecation",
+        "--pending-deprecation",
+        "--preserve-symlinks",
+        "--abort-on-uncaught-exception",
+        "--trace-uncaught",
+    }
+)
+_NPM_COMMAND = re.compile(r"[a-z][a-z-]{0,30}")
+_NPM_RUN = frozenset({"run", "run-script", "rum", "urn"})
+_NPM_TEST = frozenset({"test", "t", "tst"})
+# package.json script names; no "/" or "@", which could start a URL.
+_NPM_SCRIPT = re.compile(r"[\w:.-]{1,100}")
+# A registry package with an optional version, never a URL or a path.
+_NPM_PACKAGE = re.compile(r"(?:@[\w.-]{1,50}/)?[\w.-]{1,60}(?:@[\w.^~-]{1,30})?")
+
+
+def _invocation(pid: int, name: str) -> str:
+    """Read a Python or Node child's selector once at its start, never code or arguments.
 
     The command line can already be unavailable for a short-lived child. Its
     retained process handle still lets the exit code be recorded without it.
     Unknown interpreter options leave the selector unknown rather than risk
     mistaking an option's value for the script.
     """
-    if not re.fullmatch(r"pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?", name, re.IGNORECASE):
+    if _PYTHON_IMAGE.fullmatch(name):
+        selector = _python_selector
+    elif _NODE_IMAGE.fullmatch(name):
+        selector = _node_selector
+    else:
         return ""
     try:
         arguments = psutil.Process(pid).cmdline()
     except psutil.Error, OSError:
         return ""
-    index = 1
+    return selector(arguments[1:])
+
+
+def _script(argument: str) -> str:
+    """A script path as its identity; everything after it belongs to the script
+    and can contain credentials. Long or control-bearing paths are rejected."""
+    if not argument or len(argument) > 200 or not argument.isprintable():
+        return ""
+    return PureWindowsPath(argument).as_posix()
+
+
+def _python_selector(arguments: list[str]) -> str:
+    index = 0
     while index < len(arguments):
         argument = arguments[index]
         index += 1
@@ -715,12 +781,67 @@ def _python_invocation(pid: int, name: str) -> str:
             if argument[1:] and all(flag in "bBdEiIOPqsSuvx" for flag in argument[1:]):
                 continue
             return ""
-        # A script path is identity; everything after it belongs to the script
-        # and can contain credentials. Reject long or control-bearing paths.
-        if not argument or len(argument) > 200 or not argument.isprintable():
-            return ""
-        return PureWindowsPath(argument).as_posix()
+        return _script(argument)
     return ""
+
+
+def _node_selector(arguments: list[str]) -> str:
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        index += 1
+        if argument in ("-e", "--eval") or argument.startswith("--eval="):
+            return "-e"
+        if argument in ("-p", "--print") or argument.startswith("--print="):
+            return "-p"
+        if argument in ("-pe", "-ep"):
+            return "-p"
+        if argument in ("-", "--test"):
+            return argument
+        if argument in _NODE_VALUE_OPTIONS:
+            index += 1
+            continue
+        if argument in _NODE_FLAGS or (argument.startswith("--") and "=" in argument):
+            continue
+        if argument == "--":
+            argument = arguments[index] if index < len(arguments) else ""
+            index += 1
+        elif argument.startswith("-"):
+            return ""
+        script = _script(argument)
+        # npm and npx run as Node scripts; their command and script or package
+        # name what ran, their other arguments are not read.
+        tool = script.rsplit("/", 1)[-1].lower()
+        if tool == "npm-cli.js":
+            return _npm_selector(arguments[index:])
+        if tool == "npx-cli.js":
+            return _npx_selector(arguments[index:])
+        return script
+    return ""
+
+
+def _npm_selector(arguments: list[str]) -> str:
+    command = arguments[0] if arguments else ""
+    if not _NPM_COMMAND.fullmatch(command):
+        return "npm"
+    if command in _NPM_TEST:
+        return "npm test"
+    if command not in _NPM_RUN:
+        return f"npm {command}"
+    script = arguments[1] if len(arguments) > 1 else ""
+    if script.startswith("-") or not _NPM_SCRIPT.fullmatch(script):
+        return "npm run"
+    return f"npm run {script}"
+
+
+def _npx_selector(arguments: list[str]) -> str:
+    for argument in arguments:
+        if argument in ("-y", "--yes", "--no"):
+            continue
+        if _NPM_PACKAGE.fullmatch(argument) and not argument.startswith(("-", ".")):
+            return f"npx {argument}"
+        break
+    return "npx"
 
 
 __all__ = [

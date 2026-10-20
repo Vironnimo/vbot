@@ -397,7 +397,7 @@ def failure_hint(report: CommandReport, output: str, names: ToolNames) -> str | 
             "finished, so the stop lost that output; to see output as it arrives, run the "
             "command without that pipe."
         )
-    return annotate_failure(
+    hint = annotate_failure(
         report.command,
         report.exit_code,
         output,
@@ -406,6 +406,14 @@ def failure_hint(report: CommandReport, output: str, names: ToolNames) -> str | 
         failed_programs=report.failed_programs,
         output_lines=report.transcript.total_lines,
     )
+    if hint is None and report.exit_code == 0 and report.failed_programs:
+        # Agents read exit code 0 as success although a test script before
+        # the last statement had failed.
+        hint = (
+            "Exit code 0 comes from the last statement only: the failed programs exited with "
+            "an error before it, and the command went on after them."
+        )
+    return hint
 
 
 # Output

@@ -299,6 +299,12 @@ def note(content: str) -> Any:
             128,
             ["git.exe exited with code 128", "python.exe exited with code 128"],
         ),
+        # A program that failed before the last statement: the exit code is not its.
+        (
+            (ProgramExit("node.exe", 1, "tests/check.js"),),
+            0,
+            ["node.exe exited with code 1 (tests/check.js)"],
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -320,6 +326,8 @@ async def test_ended_command_reports_output_exit_code_failed_programs_and_enviro
         expected["exit_code_hex"] = "0xC0000005"
     if failed_programs is not None:
         expected["failed_programs"] = failed_programs
+    if exit_code == 0 and failed_programs:
+        assert "last statement" in result.pop("hint")
     assert result == expected
     if exit_code == 0xC0000005:
         shown = shell_detail_blocks({"command": "build --all"}, tool_success(result))
