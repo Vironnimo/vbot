@@ -43,7 +43,12 @@ from core.tools._web_fetch_pages import (
     similar_refs,
 )
 from core.tools._web_fetch_services import FetchServiceError, clean_service_text, fetch_service
-from core.tools._web_fetch_walls import WALL_GUIDANCE, bot_wall, is_script_shell
+from core.tools._web_fetch_walls import (
+    WALL_GUIDANCE,
+    bot_wall,
+    firewall_block,
+    is_script_shell,
+)
 from core.tools.contracts import compile_tool_contract
 from core.tools.read_extract import (
     ExtractionError,
@@ -334,6 +339,9 @@ def _shape_success(
         final_url,
         include_links=output_mode == "markdown",
     )
+    block = firewall_block(final_url, metadata, main)
+    if block is not None:
+        return tool_failure("rate_limited", block, retryable=False)
     wall = bot_wall(final_url, metadata, main)
     if wall is not None:
         return tool_failure("access_denied", wall, retryable=False)
@@ -368,13 +376,19 @@ def _accept(output_mode: WebFetchOutput) -> str:
 async def _direct_fetch(
     url: str, output_mode: WebFetchOutput, attachment_store: Any
 ) -> tuple[JsonObject, bool]:
-    """Return the result and whether an optional service may recover it."""
+    """Return the result and whether an optional service may recover it.
+
+    A firewall block is recoverable by a service, which fetches from its own
+    address, but not by the local browser, which shares this machine's.
+    """
     try:
         result = await fetch_public(url, accept=_accept(output_mode))
     except PublicFetchError as error:
         return error.failure(), error.recoverable
     shaped = await run_tool_worker(_shape_success_for_mode, attachment_store, result, output_mode)
-    return shaped, not shaped["ok"] and shaped["error"]["code"] in _BROWSER_CODES
+    return shaped, not shaped["ok"] and (
+        shaped["error"]["code"] in _BROWSER_CODES or shaped["error"]["code"] == "rate_limited"
+    )
 
 
 def _shape_success_for_mode(

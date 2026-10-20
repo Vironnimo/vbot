@@ -548,6 +548,18 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
             "Blocked by a bot check at https://example.com/guarded; no readable content.",
         ),
         (
+            "https://example.com/data",
+            "<html><head><title>Request Rejected</title></head><body>The requested URL was "
+            "rejected. Please consult with your administrator.<br><br>Your support ID is: "
+            "1234567890<br><br><a href='javascript:history.back();'>[Go Back]</a></body></html>",
+            "rate_limited",
+            "example.com's firewall rejected the request for https://example.com/data and "
+            'answered with its "Request Rejected" page. This usually follows too many requests '
+            "in a short time; the firewall then rejects every request from this machine for a "
+            "while, whichever tool sends it. Wait several minutes before fetching from "
+            "example.com again, then fetch one page at a time, or try another source.",
+        ),
+        (
             "https://example.com/app",
             "<div id='root'></div><script>runApp()</script>",
             "no_content",
@@ -589,6 +601,7 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
         "challenge-title",
         "access-check",
         "localized-captcha",
+        "firewall-block",
         "script-only",
         "bom",
         "js-wall",
@@ -596,7 +609,7 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
         "titled-js-wall",
     ],
 )
-async def test_bot_checks_and_script_only_pages_are_not_retryable_failures(
+async def test_pages_standing_in_for_the_requested_one_are_not_retryable_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, html: str, code: str, message: str
 ) -> None:
     # No content type: the markup alone identifies these as HTML.
@@ -604,7 +617,8 @@ async def test_bot_checks_and_script_only_pages_are_not_retryable_failures(
 
     error = assert_failure_envelope(await fetch(tmp_path, {"url": url}), code)
 
-    assert error["message"] == f"{message} {_WALL_GUIDANCE}"
+    expected = message if code == "rate_limited" else f"{message} {_WALL_GUIDANCE}"
+    assert error["message"] == expected
     assert error["retryable"] is False
 
 

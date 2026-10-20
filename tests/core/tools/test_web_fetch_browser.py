@@ -25,6 +25,10 @@ from tests.core.tools.web_fetch_test_support import stub_http_session as stub_ht
 URL = "https://example.com/article"
 TAVILY = "https://api.tavily.com/extract"
 _ARTICLE = "<html><head><title>Rendered</title></head><body><main><p>{}</p></main></body></html>"
+_FIREWALL_BLOCK = (
+    "<html><head><title>Request Rejected</title></head><body>The requested URL was rejected. "
+    "Please consult with your administrator.<br><br>Your support ID is: 1234567890</body></html>"
+)
 
 
 class FakeBrowser:
@@ -122,26 +126,28 @@ async def test_failed_browser_keeps_the_direct_failure_and_the_service_still_rec
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("url", "status", "arguments", "settings", "installed"),
+    ("url", "answer", "arguments", "settings", "installed"),
     [
-        (URL, 403, {}, {"browser": False}, True),
-        (URL, 403, {}, {}, False),
-        (URL, 403, {"output": "raw"}, {}, True),
-        (URL, 404, {}, {}, True),
-        ("http://127.0.0.1/", 200, {}, {}, True),
+        (URL, {"status_code": 403}, {}, {"browser": False}, True),
+        (URL, {"status_code": 403}, {}, {}, False),
+        (URL, {"status_code": 403}, {"output": "raw"}, {}, True),
+        (URL, {"status_code": 404}, {}, {}, True),
+        ("http://127.0.0.1/", {}, {}, {}, True),
+        # The browser shares this machine's address, which the firewall blocks.
+        (URL, {"headers": {"content-type": "text/html"}, "text": _FIREWALL_BLOCK}, {}, {}, True),
     ],
-    ids=["turned-off", "not-installed", "raw", "missing-page", "private-address"],
+    ids=["turned-off", "not-installed", "raw", "missing-page", "private-address", "firewall"],
 )
 async def test_browser_stays_out_where_it_cannot_help_or_is_not_wanted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     url: str,
-    status: int,
+    answer: dict[str, Any],
     arguments: dict[str, Any],
     settings: dict[str, Any],
     installed: bool,
 ) -> None:
-    install_http_get(monkeypatch, lambda target: make_result(status_code=status, url=target))
+    install_http_get(monkeypatch, lambda target: make_result(**answer, url=target))
     browser = FakeBrowser(_ARTICLE.format("Rendered"), installed=installed)
 
     result = await fetch(tmp_path, {"url": url, **arguments}, **_options(browser, **settings))

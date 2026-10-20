@@ -206,17 +206,38 @@ async def test_service_page_is_saved_and_followups_never_bill_again(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key", [None, "  "], ids=["missing", "blank"])
+@pytest.mark.parametrize(
+    ("key", "answer", "code"),
+    [
+        (None, {"status_code": 403}, "access_denied"),
+        ("  ", {"status_code": 403}, "access_denied"),
+        # A service fetches from its own address, which a firewall block does not cover.
+        (
+            None,
+            {
+                "headers": {"content-type": "text/html"},
+                "text": "<title>Request Rejected</title><p>The requested URL was rejected. "
+                "Your support ID is: 1234567890</p>",
+            },
+            "rate_limited",
+        ),
+    ],
+    ids=["missing", "blank", "firewall"],
+)
 async def test_failed_recovery_keeps_the_direct_failure_and_adds_the_service_reason(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    key: str | None,
+    answer: dict[str, Any],
+    code: str,
 ) -> None:
-    install_http_get(monkeypatch, lambda url: make_result(status_code=403, url=url))
+    install_http_get(monkeypatch, lambda url: make_result(**answer, url=url))
 
     result = await fetch(tmp_path, {"url": URL}, **_service("firecrawl", "fallback", key=key))
 
-    assert result["error"]["code"] == "access_denied"
+    assert result["error"]["code"] == code
     assert result["error"]["message"].endswith(
-        "Try another source. The firecrawl fetch service also failed: The firecrawl fetch "
+        "source. The firecrawl fetch service also failed: The firecrawl fetch "
         "service is selected in Settings, but its API key (FIRECRAWL_API_KEY) is not set. "
         "Tell the user: they can enter the key in Settings under Web page reading, or set "
         "the service back to Direct there."

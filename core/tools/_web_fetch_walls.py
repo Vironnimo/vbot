@@ -1,5 +1,5 @@
-"""Pages that stand in for the requested page: bot checks, login walls and
-script-only shells.
+"""Pages that stand in for the requested page: bot checks, login walls, firewall
+blocks and script-only shells.
 
 Some hosts answer HTTP 200 with a challenge or login page instead of content
 (Reddit's DataDome check, Reddit's login redirect, Cloudflare's interstitial).
@@ -89,6 +89,32 @@ def bot_wall(url: str, metadata: dict[str, str], text: str) -> str | None:
     return None
 
 
+def firewall_block(url: str, metadata: dict[str, str], text: str) -> str | None:
+    """Return a failure message when a web application firewall rejected the request.
+
+    F5's default block page ("Request Rejected" with a support ID) answers HTTP 200.
+    A firewall usually blocks a machine after a burst of requests and then rejects
+    everything it sends for minutes, so neither the local browser nor an immediate
+    retry can help.
+    """
+    title = metadata.get("title", "").strip().lower()
+    lowered = text.lower()
+    if (
+        title != "request rejected"
+        or len(text) >= 1000
+        or ("the requested url was rejected" not in lowered and "support id" not in lowered)
+    ):
+        return None
+    host = urlparse(url).hostname or url
+    return (
+        f"{host}'s firewall rejected the request for {url} and answered with its "
+        '"Request Rejected" page. This usually follows too many requests in a short time; '
+        "the firewall then rejects every request from this machine for a while, whichever "
+        f"tool sends it. Wait several minutes before fetching from {host} again, then fetch "
+        "one page at a time, or try another source."
+    )
+
+
 def is_script_shell(main: str) -> bool:
     """Whether a page's main view is empty, a JavaScript demand or a browser check."""
     return not main.strip() or (
@@ -104,4 +130,4 @@ def is_script_shell(main: str) -> bool:
     )
 
 
-__all__ = ["WALL_GUIDANCE", "bot_wall", "is_script_shell"]
+__all__ = ["WALL_GUIDANCE", "bot_wall", "firewall_block", "is_script_shell"]
