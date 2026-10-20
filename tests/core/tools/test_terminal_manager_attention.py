@@ -571,6 +571,34 @@ async def test_repaint_after_resizing_a_quiet_terminal_does_not_wake_agent(
 
 
 @pytest.mark.asyncio
+async def test_a_pointer_passing_over_the_terminal_is_no_work(
+    clocked_manager: Clocked, tmp_path: Path
+) -> None:
+    """A program tracking every mouse event receives the motion of a pointer
+    that merely passes over its tile. That keeps the terminal ready and the
+    screen revision, and the program's hover redraw wakes nobody; a click is
+    input."""
+    manager, factory, trigger, clock = clocked_manager
+    delivered = await _baseline(clocked_manager, tmp_path)
+    terminal_id = delivered.terminal_id
+    motion = "\x1b[<35;4;1M\x1b[<35;5;1M"
+
+    await manager.send_operator_input(terminal_id, motion)
+    await eventually(lambda: motion in factory.adapters[0].writes)
+    assert terminal_info(manager, terminal_id).screen_revision == delivered.screen_revision
+    factory.adapters[0].emit("\x1b[2J\x1b[H\x1b[7mMENU>\x1b[0m ")
+    await eventually(lambda: clock.sleeping)
+    await clock.advance(TEST_ACTIVITY_QUIET_SECONDS)
+    await _turns()
+    hovered = terminal_info(manager, terminal_id)
+    assert (hovered.state, hovered.attention_revision) == ("ready", delivered.attention_revision)
+    assert len(trigger.submissions) == 1
+
+    await manager.send_operator_input(terminal_id, "\x1b[<0;4;1M")
+    assert terminal_info(manager, terminal_id).state == "working"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("end", ["declared", "fallback"])
 async def test_work_the_program_resumed_on_its_own_wakes_at_a_declared_end_or_the_fallback(
     clocked_manager: Clocked, tmp_path: Path, end: str

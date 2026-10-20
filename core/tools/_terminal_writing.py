@@ -21,7 +21,7 @@ from ._terminal_activity import (
     TerminalActivity,
 )
 from ._terminal_attention import TerminalNotices
-from ._terminal_input import input_chunks
+from ._terminal_input import input_chunks, is_pointer_motion
 from ._terminal_output import TerminalOutput
 from ._terminal_state import (
     TerminalClosedError,
@@ -350,11 +350,18 @@ class TerminalWriting:
                         "the input was not written"
                     )
                 self._check_revision(expected_screen_revision)
-                self._output.revision += 1
-                running = await self._before_input()
-                writing = self._queue_input(
-                    data, running, notify=self._info().attachment is not None
-                )
+                if is_pointer_motion(data):
+                    # A pointer passing over the terminal is no work: like a
+                    # focus change, a quiet program's redraw for it shows
+                    # nothing new.
+                    self._activity.expect_redraw(self._services.monotonic())
+                    writing = self.queue_protocol(data)
+                else:
+                    self._output.revision += 1
+                    running = await self._before_input()
+                    writing = self._queue_input(
+                        data, running, notify=self._info().attachment is not None
+                    )
             write_error = await asyncio.shield(writing)
             if write_error is None:
                 return

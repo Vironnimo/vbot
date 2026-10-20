@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from ._terminal_state import (
     TERMINAL_BRACKETED_PASTE_END,
     TERMINAL_BRACKETED_PASTE_START,
@@ -19,6 +21,32 @@ _APPLICATION_CURSOR_KEYS = {
     "home": "\x1bOH",
     "end": "\x1bOF",
 }
+
+# SGR mouse reports (modes 1006 and 1016), the encodings xterm.js delivers as text.
+_SGR_MOUSE_REPORT = re.compile(r"\x1b\[<(\d+);\d+;\d+[Mm]")
+_MOUSE_MOTION = 32
+_MOUSE_NO_BUTTON = 3
+_MOUSE_WHEEL = 64
+
+
+def is_pointer_motion(data: str) -> bool:
+    """Whether *data* only reports the mouse moving with no button held.
+
+    A program that tracks every mouse event receives these while a user's
+    pointer merely passes over its terminal.
+    """
+    end = 0
+    for report in _SGR_MOUSE_REPORT.finditer(data):
+        button = int(report.group(1))
+        if (
+            report.start() != end
+            or not button & _MOUSE_MOTION
+            or button & _MOUSE_WHEEL
+            or button & 3 != _MOUSE_NO_BUTTON
+        ):
+            return False
+        end = report.end()
+    return end > 0 and end == len(data)
 
 
 def input_chunks(
