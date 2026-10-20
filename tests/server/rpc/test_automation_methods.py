@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.automation import CronService
+from core.automation.cron import CronDelivery, CronResult
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -40,8 +41,10 @@ _CREATE_DEFAULTS: JsonObject = {
     "remaining_runs": None,
     "session_id": None,
     "project_id": None,
+    "delivery": None,
     "actor": "rpc",
 }
+_CHAT: JsonObject = {"kind": "chat", "channel_id": "tg-main", "platform_target": "chat-42"}
 
 
 def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None) -> SimpleNamespace:
@@ -90,6 +93,9 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
         "last_error": None,
         "consecutive_failures": 0,
         "created_at": "2026-05-14T09:00:00+00:00",
+        "delivery": None,
+        "last_result": None,
+        "last_run_silent": False,
     }
     fields.update(changes)
     return SimpleNamespace(**fields)
@@ -215,6 +221,32 @@ async def test_bootstrap_list_projects_each_job() -> None:
             {"target": "builder@vbot", "project_id": "vbot"},
             id="project-target",
         ),
+        # Kind none is stored as no delivery; a chat is passed on whole.
+        pytest.param(
+            {**_CRON_PARAMS, "delivery": {"kind": "none"}},
+            _cron_job(),
+            {
+                "agent_id": "main",
+                "name": "Status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+            },
+            {"delivery": {"kind": "none"}},
+            id="delivery-none",
+        ),
+        pytest.param(
+            {**_CRON_PARAMS, "delivery": {**_CHAT, "thread_id": " 7 "}},
+            _cron_job(delivery=CronDelivery.from_dict({**_CHAT, "thread_id": "7"})),
+            {
+                "agent_id": "main",
+                "name": "Status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+                "delivery": CronDelivery.from_dict({**_CHAT, "thread_id": "7"}),
+            },
+            {"delivery": {**_CHAT, "thread_id": "7"}},
+            id="delivery-chat",
+        ),
         pytest.param(
             {
                 "agent_id": "main",
@@ -322,6 +354,11 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
             last_completed_at="2026-05-14T09:56:00+00:00",
             last_run_id="run-1",
             last_outcome="success",
+            delivery=CronDelivery(kind="app"),
+            last_run_silent=True,
+            last_result=CronResult(
+                text="Two new posts.", at="2026-05-14T08:56:00+00:00", run_id="run-0"
+            ),
         )
     ]
     cron_service.system_timezone_name.return_value = "Europe/Berlin"
@@ -351,12 +388,19 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                 "event_title": None,
                 "remaining_runs": None,
                 "session_id": "session-1",
+                "delivery": {"kind": "app"},
                 "status": "active",
                 "last_fired_at": "2026-05-14T09:55:00+00:00",
                 "last_attempt_at": "2026-05-14T09:55:00+00:00",
                 "last_completed_at": "2026-05-14T09:56:00+00:00",
                 "last_run_id": "run-1",
                 "last_outcome": "success",
+                "last_run_silent": True,
+                "last_result": {
+                    "text": "Two new posts.",
+                    "at": "2026-05-14T08:56:00+00:00",
+                    "run_id": "run-0",
+                },
                 "last_error": None,
                 "consecutive_failures": 0,
                 "next_fire_at": "2026-05-14T10:05:00+00:00",
@@ -396,6 +440,12 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
         ),
         # Re-targeting re-parses the address, so a bare target clears the Project.
         pytest.param({"agent_id": "main"}, {"agent_id": "main", "project_id": None}, id="retarget"),
+        pytest.param(
+            {"delivery": _CHAT}, {"delivery": CronDelivery.from_dict(_CHAT)}, id="delivery"
+        ),
+        # null and kind none both stop delivering.
+        pytest.param({"delivery": None}, {"delivery": None}, id="no-delivery"),
+        pytest.param({"delivery": {"kind": "none"}}, {"delivery": None}, id="delivery-none"),
     ],
 )
 async def test_cron_update_passes_only_the_given_fields(
@@ -477,6 +527,10 @@ async def test_cron_job_actions_address_one_job(
             },
         ),
         ("cron.update", {"id": "job-1", "event_time": "start - 32d"}),
+        ("cron.create", {**_CRON_PARAMS, "delivery": "app"}),
+        ("cron.create", {**_CRON_PARAMS, "delivery": {"kind": "chat", "channel_id": "tg-main"}}),
+        ("cron.update", {"id": "job-1", "delivery": {"kind": "app", "channel_id": "tg-main"}}),
+        ("cron.update", {"id": "job-1", "delivery": {"kind": "app", "sound": True}}),
         ("cron.list", {"extra": True}),
         ("bootstrap.list", {"extra": True}),
         ("cron.update", {"prompt": "missing id"}),

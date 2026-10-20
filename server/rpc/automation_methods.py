@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.automation.cron import CronJobValidationError, CronService
+from core.automation.cron import CronDelivery, CronJobValidationError, CronService
 from core.projects import format_agent_address
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -37,6 +37,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         "event_time",
         "repeat",
         "session_id",
+        "delivery",
     }
     _reject_unsupported(params, supported_fields, "cron.create")
 
@@ -59,6 +60,8 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
     run_at = _optional_string(params, "run_at")
     repeat = _optional_positive_integer(params, "repeat")
     session_id = _optional_string(params, "session_id")
+    # Omitted, a job delivers nowhere; the WebUI form chooses app for new jobs.
+    delivery = _optional_delivery(params)
     event_fields: JsonObject = {}
 
     if schedule_type == "event":
@@ -118,6 +121,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 remaining_runs=repeat,
                 session_id=session_id,
                 project_id=project_id,
+                delivery=delivery,
                 actor="rpc",
                 **event_fields,
             )
@@ -155,6 +159,7 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         "event_time",
         "repeat",
         "session_id",
+        "delivery",
         "status",
     }
     _reject_unsupported(params, supported_fields, "cron.update")
@@ -207,6 +212,8 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         updates["remaining_runs"] = repeat
     if "session_id" in params:
         updates["session_id"] = _optional_string(params, "session_id")
+    if "delivery" in params:
+        updates["delivery"] = _optional_delivery(params)
     if "status" in params:
         status = _required_string(params, "status")
         if status not in CRON_JOB_STATUSES:
@@ -258,6 +265,22 @@ async def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
     return _cron_job_response(state.runtime.cron_service, job)
 
 
+_DELIVERY_FIELDS = frozenset(("kind", "channel_id", "platform_target", "thread_id"))
+
+
+def _optional_delivery(params: JsonObject) -> CronDelivery | None:
+    """``params.delivery`` as a job keeps it: null and kind none deliver nowhere."""
+    value = params.get("delivery")
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        _reject_unsupported(value, set(_DELIVERY_FIELDS), "params.delivery")
+    try:
+        return CronDelivery.from_dict(value).stored()
+    except CronJobValidationError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{error}") from error
+
+
 def _event_time_fields(event_time: str) -> JsonObject:
     """The job fields of an event time such as ``start - 30m``."""
     try:
@@ -291,12 +314,17 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "event_title": None if event is None else event.title,
         "remaining_runs": job.remaining_runs,
         "session_id": job.session_id,
+        "delivery": (job.delivery or CronDelivery(kind="none")).to_dict(),
         "status": job.status,
         "last_fired_at": job.last_fired_at,
         "last_attempt_at": job.last_attempt_at,
         "last_completed_at": job.last_completed_at,
         "last_run_id": job.last_run_id,
         "last_outcome": job.last_outcome,
+        # Whether the latest Run succeeded with a [SILENT] answer and delivered nothing.
+        "last_run_silent": job.last_run_silent,
+        # The latest answer that was not [SILENT]: text (at most 2,000 characters), at, run_id.
+        "last_result": None if job.last_result is None else job.last_result.to_dict(),
         "last_error": job.last_error,
         "consecutive_failures": job.consecutive_failures,
         "next_fire_at": cron_service.next_fire_at(job),
