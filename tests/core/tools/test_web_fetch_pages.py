@@ -354,18 +354,26 @@ def mistyped(ref):
 
 
 @pytest.mark.parametrize(
-    ("requested", "final", "other_page"),
+    ("requested", "final", "redirect"),
     [
-        ("https://www.example.org/table/element/26/iron", "https://table.example.org/", True),
-        ("https://example.com/docs/page?id=26", "https://example.com/docs/page", True),
-        ("http://example.com/Docs/A%20B/", "https://www.example.com/docs/a b", False),
-        ("https://example.com/docs/", "https://example.com/docs/index.html", False),
-        ("https://example.com/r/x/", "https://example.com/r/x/?rdt=5&utm_source=feed", False),
+        ("https://www.example.org/table/element/26/iron", "https://table.example.org/", "other"),
+        ("https://example.com/docs/page?id=26", "https://example.com/docs/page", "other"),
+        ("https://example.com/manual/chapter-3", "https://example.com/tools/overview", "other"),
+        ("https://example.com/docs/guide/install", "https://example.com/docs/guide", "other"),
+        (
+            "https://example.eu/en/getting-started/api-service_en",
+            "https://example.eu/en/using-the-tool/api-service_en",
+            "moved",
+        ),
+        ("https://shop.example/p/old-name/1283/", "https://shop.example/p/new-name/1283/", "moved"),
+        ("http://example.com/Docs/A%20B/", "https://www.example.com/docs/a b", None),
+        ("https://example.com/docs/", "https://example.com/docs/index.html", None),
+        ("https://example.com/r/x/", "https://example.com/r/x/?rdt=5&utm_source=feed", None),
     ],
 )
 @pytest.mark.asyncio
 async def test_a_redirect_to_another_page_is_named_with_the_requested_url(
-    tmp_path, monkeypatch, requested, final, other_page
+    tmp_path, monkeypatch, requested, final, redirect
 ):
     install_http_get(monkeypatch, lambda url: make_result(text="Landing page", url=final))
     tool, context = web_fetch_registry(), make_context(tmp_path)
@@ -373,9 +381,14 @@ async def test_a_redirect_to_another_page_is_named_with_the_requested_url(
     fetched = await tool.dispatch(context, {"url": requested})
     saved = await tool.dispatch(context, {"url": requested, "ref": fetched["data"]["ref"]})
 
+    note = {
+        "other": f"This is not the requested page: {requested} redirected here.",
+        "moved": f"The page moved here from {requested}.",
+        None: None,
+    }[redirect]
     for data in (fetched["data"], saved["data"]):
         assert data["url"] == final
-        assert (requested in data.get("note", "")) is other_page
+        assert data.get("note") == note
 
 
 @pytest.mark.asyncio
@@ -433,9 +446,18 @@ async def test_an_unusable_ref_beside_url_fetches_the_url_and_says_why(tmp_path,
 async def test_saved_limit_is_reported_without_claiming_completeness(tmp_path, monkeypatch):
     monkeypatch.setattr(pages, "MAX_SAVED_CHARS", 1500)
     install_http_get(monkeypatch, lambda url: make_result(text="Text " * 1000, url=url))
-    result = await fetch(tmp_path, {"url": "https://example.com/"})
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+    result = await tool.dispatch(context, {"url": "https://example.com/"})
     assert len(result["data"]["content"]) == 1500 and "more" not in result["data"]
     assert "Saved content is partial" in result["data"]["note"]
+    # A search covers only the saved part and says so.
+    ref = result["data"]["ref"]
+    missing = await tool.dispatch(context, {"ref": ref, "find": "Absent"})
+    assert missing["data"]["content"].startswith(
+        'No word-for-word match for "Absent" in the saved part of the page (1500 characters)'
+    )
+    found = await tool.dispatch(context, {"ref": ref, "find": "Text"})
+    assert found["data"]["shown"].endswith('matching "Text" in the saved part of the page')
 
 
 @pytest.mark.asyncio

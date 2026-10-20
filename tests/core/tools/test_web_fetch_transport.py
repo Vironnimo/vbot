@@ -3,11 +3,14 @@ failures, and the pinned browser-impersonating request."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import urlparse
 
 import curl_cffi.requests
 import pytest
@@ -32,7 +35,9 @@ from tests.core.tools.web_fetch_test_support import (
     assert_success_envelope,
     fetch,
     install_http_get,
+    make_context,
     make_result,
+    web_fetch_registry,
 )
 from tests.core.tools.web_fetch_test_support import retry_sleeps as retry_sleeps
 from tests.core.tools.web_fetch_test_support import stub_dns_resolution as stub_dns_resolution
@@ -260,22 +265,31 @@ async def test_a_redirect_back_after_a_login_service_set_cookies_reaches_the_pag
             False,
             "HTTP 422: example.com rejected the request for https://example.com/page.",
         ),
+        (
+            (400, "<html><head><title>Enodia Verification</title></head></html>"),
+            "access_denied",
+            False,
+            "HTTP 400: example.com answered the request for https://example.com/page with a "
+            "bot check instead of the page, so repeating the request will not help. Try "
+            "another source.",
+        ),
     ],
 )
 async def test_each_http_failure_is_named_with_its_next_step(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     retry_sleeps: list[float | None],
-    status: int,
+    status: int | tuple[int, str],
     code: str,
     retryable: bool,
     message: str,
 ) -> None:
     requested: list[str] = []
+    status, page = status if isinstance(status, tuple) else (status, "no")
 
     def responder(url: str) -> PublicResponse:
         requested.append(url)
-        return make_result(status_code=status, text="no")
+        return make_result(status_code=status, text=page)
 
     install_http_get(monkeypatch, responder)
 
@@ -535,6 +549,36 @@ async def test_request_is_a_pinned_browser_like_get_with_a_streamed_body(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content_type", "body", "text"),
+    [
+        ("text/plain; charset=iso-8859-1", b"Gr\xfc\xdfe \x80 5", "Grüße € 5"),
+        ("text/plain; charset=iso-8859-1", b"\xef\xbb\xbfGr\xc3\xbc\xc3\x9fe", "Grüße"),
+        (
+            "text/html",
+            b'<html><head><meta http-equiv="Content-Type" content="text/html; '
+            b'charset=iso-8859-1" /><title>Gru\xdf</title></head>'
+            b"<body><main><p>Gr\xfc\xdfe aus K\xf6ln</p></main></body></html>",
+            "Grüße aus Köln",
+        ),
+        ("text/html", b"<p>Gr\xc3\xbc\xc3\x9fe aus K\xc3\xb6ln</p>", "Grüße aus Köln"),
+        ("text/plain", b"Gr\xfc\xdfe \x93aus\x94 K\xf6ln", "Grüße \u201caus\u201d Köln"),
+    ],
+    ids=["header-charset", "byte-order-mark", "meta-charset", "undeclared-utf-8", "undeclared"],
+)
+async def test_bodies_are_decoded_as_a_browser_decodes_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content_type: str, body: bytes, text: str
+) -> None:
+    response = StreamingResponse([body], headers={"Content-Type": content_type})
+    monkeypatch.setattr(curl_cffi.requests, "AsyncSession", lambda **_: StreamingSession(response))
+
+    result = await fetch(tmp_path, {"url": "https://example.com/stream"})
+
+    content = assert_success_envelope(result)["content"]
+    assert text in content and "\ufffd" not in content
+
+
+@pytest.mark.asyncio
 async def test_redirect_hosts_use_the_same_canonical_url_and_dns_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -557,6 +601,48 @@ async def test_redirect_hosts_use_the_same_canonical_url_and_dns_pin(
         ("https://xn--bcher-kva.example:8443/page", [first, second]),
         (f"https://[{IPV6_ADDRESS}]/page", [first, second]),
     ]
+
+
+@pytest.mark.asyncio
+async def test_calls_share_a_bounded_number_of_requests_per_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    active: Counter[str] = Counter()
+    peak: Counter[str] = Counter()
+    release = asyncio.Event()
+
+    async def get(session: Any, url: str, max_bytes: int) -> PublicResponse:
+        host = urlparse(url).hostname or ""
+        active[host] += 1
+        peak[host] = max(peak[host], active[host])
+        try:
+            if host == "example.com":
+                await release.wait()
+            return make_result(text="Page", headers={"Content-Type": "text/plain"}, url=url)
+        finally:
+            active[host] -= 1
+
+    async def settle() -> None:
+        for _ in range(200):
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(public_http, "_http_get", get)
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+    pages = [f"https://example.com/{index}" for index in range(6)]
+    calls = asyncio.gather(
+        tool.dispatch(context, {"urls": pages[:3]}),
+        tool.dispatch(context, {"urls": pages[3:]}),
+        tool.dispatch(context, {"url": "https://other.example/"}),
+    )
+    await settle()
+
+    # Two calls hold the host's slots together; another host is not kept waiting.
+    assert active["example.com"] == public_http.HOST_CONCURRENCY
+    assert peak["other.example"] == 1 and active["other.example"] == 0
+    release.set()
+    results = await asyncio.wait_for(calls, timeout=5)
+    assert all(result["ok"] for result in results)
+    assert peak["example.com"] == public_http.HOST_CONCURRENCY
 
 
 @pytest.mark.asyncio

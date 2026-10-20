@@ -14,9 +14,14 @@ every process that imports the Tools would otherwise pay.
 from __future__ import annotations
 
 import asyncio
+import codecs
+import html
 import ipaddress
 import re
 import socket
+from collections import Counter
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urljoin, urlparse
@@ -47,6 +52,26 @@ _TOTAL_TIMEOUT_SECONDS = 30.0
 _REQUEST_TIMEOUT = (_CONNECT_TIMEOUT_SECONDS, _TOTAL_TIMEOUT_SECONDS)
 _MAX_REDIRECTS = 10
 _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+# Requests to one host at once. A burst of parallel fetches to one host made its
+# firewall block this machine for about 10 minutes (Swarm run 2026-10-20: about 40
+# within 10 s); browsers open at most 6 connections per host.
+HOST_CONCURRENCY = 4
+# Titles of check pages that solve themselves in a real browser. The local browser
+# waits while one shows, and a client error showing one is a bot check, which the
+# browser can pass, rather than a refusal of the address.
+SELF_SOLVING_CHECK_TITLES = frozenset(
+    {
+        "just a moment...",
+        "checking your browser...",
+        "checking your browser before accessing",
+        "please wait...",
+        "one moment, please...",
+        "ddos-guard",
+        "attention required! | cloudflare",
+        "enodia verification",
+    }
+)
+_PAGE_TITLE = re.compile(r"<title[^>]*>([^<]*)</title", re.I)
 
 IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
@@ -65,6 +90,37 @@ class PublicResponse:
     text: str
     url: str
     content: bytes = b""
+
+
+class HostSlots:
+    """Bound how many requests run at once against each host.
+
+    The owner shares one instance across all its fetches; web_fetch's handler,
+    registered once per Runtime, owns the one that bounds its Agents together.
+    ``fetch_public`` holds a slot for each request hop, retries and their backoff
+    included. A host's entry lives only while a request holds or awaits it, so the
+    map stays small and no semaphore outlives the event loop that used it.
+    """
+
+    def __init__(self, per_host: int = HOST_CONCURRENCY) -> None:
+        self._per_host = per_host
+        self._semaphores: dict[str, asyncio.Semaphore] = {}
+        self._users: Counter[str] = Counter()
+
+    @asynccontextmanager
+    async def hold(self, host: str) -> AsyncIterator[None]:
+        """Wait for a free slot of ``host`` and keep it for the block."""
+        semaphore = self._semaphores.get(host)
+        if semaphore is None:
+            semaphore = self._semaphores[host] = asyncio.Semaphore(self._per_host)
+        self._users[host] += 1
+        try:
+            async with semaphore:
+                yield
+        finally:
+            self._users[host] -= 1
+            if not self._users[host]:
+                del self._users[host], self._semaphores[host]
 
 
 class PublicFetchError(Exception):
@@ -199,16 +255,67 @@ async def _http_get(session: AsyncSession, url: str, max_bytes: int) -> PublicRe
             body.extend(chunk)
 
         content = bytes(body)
-        # curl_cffi decodes ``.text`` from this field using the response charset,
-        # so keep its established decoding behavior after streaming the body.
-        response.content = content
         return PublicResponse(
             status_code=response.status_code,
             headers=headers,
-            text=response.text,
+            text=_decoded(content, headers.get("content-type", "")),
             url=str(response.url),
             content=content,
         )
+
+
+_BYTE_ORDER_MARKS = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+_HEADER_CHARSET = re.compile(r"""charset\s*=\s*["']?([^"';\s]+)""", re.I)
+_XML_ENCODING = re.compile(rb"""<\?xml[^>]*?encoding\s*=\s*["']([\w.:-]+)""")
+_META_CHARSET = re.compile(rb"""<meta[^>]+?charset\s*=\s*["']?\s*([\w.:-]+)""", re.I)
+
+
+def _decoded(content: bytes, content_type: str) -> str:
+    """Decode a response body the way a browser would.
+
+    A byte order mark wins, then the charset of the Content-Type header, then for
+    markup a charset declared in its first 4 KB (XML declaration, ``<meta>``),
+    then UTF-8 if the bytes are valid UTF-8, else Windows-1252. Pages without a
+    header charset that declare Latin-1 in a ``<meta>`` (German law portals, for
+    example) otherwise lose every umlaut to U+FFFD.
+    """
+    for mark, marked in _BYTE_ORDER_MARKS:
+        if content.startswith(mark):
+            return content.decode(marked, errors="replace")
+    declared = _HEADER_CHARSET.search(content_type)
+    codec = _codec(declared[1], in_body=False) if declared else None
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    head = content[:4096].lstrip()
+    if codec is None and ("html" in media_type or "xml" in media_type or head[:1] == b"<"):
+        found = _XML_ENCODING.match(head) or _META_CHARSET.search(head)
+        codec = _codec(found[1].decode("ascii"), in_body=True) if found else None
+    if codec is not None:
+        return content.decode(codec, errors="replace")
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content.decode("cp1252", errors="replace")
+
+
+def _codec(label: str, *, in_body: bool) -> str | None:
+    """Return the Python codec for a charset label, as browsers read the label."""
+    try:
+        name = codecs.lookup(label).name
+        b"".decode(name)  # refuses codecs that do not decode text, such as base64
+    except LookupError, ValueError:
+        return None
+    if name in {"iso8859-1", "ascii"}:
+        # Browsers decode both labels as Windows-1252, which pages labelled
+        # Latin-1 use for characters such as the euro sign and typographic quotes.
+        return "cp1252"
+    if in_body and name.startswith(("utf-16", "utf-32")):
+        # A page that could declare this in readable ASCII is not UTF-16 or UTF-32.
+        return "utf-8"
+    return name
 
 
 def _declared_response_size(headers: dict[str, str]) -> int | None:
@@ -498,6 +605,7 @@ async def _fetch_with_retry(
     resolve_map: dict[tuple[str, int], str],
     max_bytes: int = MAX_RESPONSE_BYTES,
     what: str = "page",
+    hosts: HostSlots | None = None,
 ) -> PublicResponse:
     """Fetch a URL, validating each redirect hop against SSRF rules.
 
@@ -562,7 +670,12 @@ async def _fetch_with_retry(
             for (host, host_port), ip in resolve_map.items()
         ]
 
-        result = await _request_with_retry(session, current_url, max_bytes)
+        # One slot per hop: a redirect to the same host never waits for itself.
+        slot: AbstractAsyncContextManager[None] = (
+            nullcontext() if hosts is None else hosts.hold(normalized_host)
+        )
+        async with slot:
+            result = await _request_with_retry(session, current_url, max_bytes)
         if result.status_code not in _REDIRECT_STATUS_CODES:
             return result
 
@@ -606,9 +719,22 @@ def _url_error(error: ValueError) -> PublicFetchError:
     return PublicFetchError(code, str(error))
 
 
-def _status_error(url: str, status: int, what: str) -> PublicFetchError:
+def _shows_bot_check(url: str, result: PublicResponse) -> bool:
+    """Whether an error answer is a browser check: a challenge address it redirected
+    to (``/.enodia/challenge``), or the title of a self-solving check page."""
+    final_path = urlparse(result.url).path.lower()
+    if "challenge" in final_path and "challenge" not in urlparse(url).path.lower():
+        return True
+    title = _PAGE_TITLE.search(result.text[:8192])
+    return title is not None and html.unescape(title[1]).strip().lower() in (
+        SELF_SOLVING_CHECK_TITLES
+    )
+
+
+def _status_error(url: str, result: PublicResponse, what: str) -> PublicFetchError:
     """Describe an HTTP error status and whether another fetcher may still help."""
     host = urlparse(url).hostname or url
+    status = result.status_code
     retryable = is_retryable_status(status, idempotent=True)
     attempts = MAX_RETRIES + 1 if retryable else None
     if status in {404, 410}:
@@ -641,6 +767,13 @@ def _status_error(url: str, status: int, what: str) -> PublicFetchError:
         message = (
             f"HTTP 406: {host} offers {url} in none of the formats requested, also not to "
             "an ordinary browser request. Try another source."
+        )
+    elif 400 <= status < 500 and _shows_bot_check(url, result):
+        # The local browser can pass such a check (Enodia answers HTTP 400).
+        code = "access_denied"
+        message = (
+            f"HTTP {status}: {host} answered the request for {url} with a bot check instead "
+            f"of the {what}, so repeating the request will not help. Try another source."
         )
     elif 400 <= status < 500:
         code = "request_rejected"
@@ -760,22 +893,25 @@ async def fetch_public(
     accept: str,
     max_bytes: int = MAX_RESPONSE_BYTES,
     what: str = "page",
+    hosts: HostSlots | None = None,
 ) -> PublicResponse:
     """GET a public address and return its successful response.
 
     ``what`` names the expected content in failure messages ("page", "image").
+    ``hosts`` bounds the requests running at once against each host, shared with
+    the caller's other fetches; ``None`` leaves them unbounded.
     Every failure, including an HTTP error status, raises ``PublicFetchError``.
     """
     from curl_cffi.requests.exceptions import RequestException
 
     try:
         async with _make_session(accept) as session:
-            result = await _fetch_with_retry(session, url, {}, max_bytes, what)
+            result = await _fetch_with_retry(session, url, {}, max_bytes, what, hosts)
         if result.status_code == 406:
             # The site serves none of the formats asked for; a browser's own
             # request is what sites answer most (a page refused text/markdown).
             async with _make_session(None) as session:
-                result = await _fetch_with_retry(session, url, {}, max_bytes, what)
+                result = await _fetch_with_retry(session, url, {}, max_bytes, what, hosts)
     except _RedirectTargetBlockedError as error:
         raise PublicFetchError("blocked_url", str(error)) from error
     except _RedirectTargetUnreachableError as error:
@@ -796,12 +932,15 @@ async def fetch_public(
         raise _transport_error(url, error, 1) from error
 
     if not 200 <= result.status_code < 300:
-        raise _status_error(url, result.status_code, what)
+        raise _status_error(url, result, what)
     return result
 
 
 __all__ = [
+    "HOST_CONCURRENCY",
     "MAX_RESPONSE_BYTES",
+    "SELF_SOLVING_CHECK_TITLES",
+    "HostSlots",
     "PublicFetchError",
     "PublicResponse",
     "check_public_url",

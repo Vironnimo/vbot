@@ -77,11 +77,6 @@ class StreamingResponse:
         self.headers = headers or {}
         self.status_code = 200
         self.url = "https://example.com/stream"
-        self.content = b""
-
-    @property
-    def text(self) -> str:
-        return self.content.decode("utf-8", errors="replace")
 
     async def aiter_content(self) -> AsyncIterator[bytes]:
         for chunk in self._chunks:

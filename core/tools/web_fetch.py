@@ -15,6 +15,7 @@ from core.attachments import AttachmentError, sniff_media_type
 from core.fetch_config import DEFAULT_WEB_FETCH_SETTINGS, WEB_FETCH_CREDENTIALS
 from core.storage.temp_files import TemporaryFileManager
 from core.tools._public_http import (
+    HostSlots,
     PublicFetchError,
     PublicResponse,
     check_public_url,
@@ -43,6 +44,12 @@ from core.tools._web_fetch_pages import (
     similar_refs,
 )
 from core.tools._web_fetch_services import FetchServiceError, clean_service_text, fetch_service
+from core.tools._web_fetch_walls import (
+    WALL_GUIDANCE,
+    bot_wall,
+    firewall_block,
+    is_script_shell,
+)
 from core.tools.contracts import compile_tool_contract
 from core.tools.read_extract import (
     ExtractionError,
@@ -71,37 +78,11 @@ from core.tools.tools import (
 # guard so a fetched executable/archive returns a notice, not decoded garbage.
 _BINARY_DETECTION_BYTES = 8192
 
-# Bot-wall signatures. Some hosts answer HTTP 200 with a challenge or login
-# page instead of content (Reddit's DataDome check, Reddit's login redirect,
-# Cloudflare's interstitial). Reporting those as success would hand the agent
-# useless boilerplate disguised as page text, so they map to request_error.
-# Rules stay narrow and host-scoped on purpose: a generic heuristic would flag
-# real pages that merely link to a login (X profiles and tweets do exactly
-# that while carrying readable content).
-_CHALLENGE_TITLE_MARKERS: frozenset[str] = frozenset(
-    {
-        "just a moment...",
-        "access denied",
-        "verify you are human",
-        "attention required! | cloudflare",
-    }
-)
-_REDDIT_HOST_SUFFIX = "reddit.com"
-_REDDIT_CHALLENGE_MARKER = "prove your humanity"
-_REDDIT_LOGIN_PATH_PREFIX = "/login"
-# A line demanding JavaScript, as script-only apps show without it: "You need to
-# enable JavaScript to run this app." A page explaining how to enable it does not
-# start a line that way.
-_SCRIPT_DEMAND = re.compile(
-    r"^[#>*\s]*(?:(?:you (?:need|have) to|please,?) )?(?:enable|turn on) javascript"
-    r"|^[#>*\s]*(?:this (?:app|site|page|website) )?(?:requires|needs) javascript"
-    r"|^[#>*\s]*javascript (?:is required|must be enabled)",
-    re.I | re.M,
-)
-_WALL_GUIDANCE = "Try another source."
 # Direct failures a real browser can still read: bot checks, JavaScript pages and
 # redirect loops that wait for something only a browser does.
 _BROWSER_CODES = frozenset({"access_denied", "no_content", "redirect_loop"})
+# A tag, comment or doctype: what a body labelled HTML must show to be read as HTML.
+_MARKUP = re.compile(r"<(?:!doctype|!--|/?[a-z][a-z0-9-]*(?:\s[^<>]*)?/?>)", re.I)
 # Several URLs in one call share roughly two single-page results of Context.
 _MULTI_PAGE_BUDGET = 2 * DEFAULT_MAX_CHARS
 _MULTI_PAGE_MIN_CHARS = 2_000
@@ -289,57 +270,6 @@ def _fetch_document_result(url: str, sniffed: str, data: bytes) -> JsonObject | 
     return tool_success({"content": output, "url": url, "source": "document"})
 
 
-def _detect_bot_wall(url: str, metadata: dict[str, str], text: str) -> str | None:
-    """Return a failure message when the page is a bot check or login wall.
-
-    ``None`` means the page carries real content (or claims to). Matching is
-    deliberately narrow — a host-scoped challenge marker, a host-scoped login
-    path, one exact well-known challenge title — so pages that merely link to
-    a login form are never flagged.
-    """
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    path = parsed.path or ""
-    title = metadata.get("title", "").strip().lower()
-
-    generic_wall = title in {"access denied", "verify you are human"}
-    wall_text = re.sub(r"^[#>*\s]+", "", text).strip().lower()
-    wall_evidence = wall_text == title or bool(
-        re.search(
-            r"verify (?:that )?you are (?:a )?human|you (?:have been|are) blocked"
-            r"|you (?:do not|don't) have permission|request (?:was )?blocked",
-            wall_text,
-        )
-    )
-    if (
-        title in _CHALLENGE_TITLE_MARKERS
-        and len(text) < 4000
-        and (not generic_wall or (len(text) < 600 and wall_evidence))
-    ):
-        return f"Blocked by a bot check at {url}; no readable content. {_WALL_GUIDANCE}"
-
-    # A localized reCAPTCHA interstitial can answer HTTP 200. Require its title
-    # and opening access-check sentence about this host, not a mere CAPTCHA
-    # mention or an embedded widget on a page with useful content.
-    if (
-        len(text) < 4000
-        and re.fullmatch(r"ihr browser wird geprüft\s*[-–—]\s*recaptcha", title)
-        and re.match(
-            rf"ihr browser wird geprüft,\s+bevor sie auf {re.escape(host)} zugreifen können",
-            re.sub(r"^[#>*\s]+", "", wall_text.removeprefix(title)),
-        )
-    ):
-        return f"Blocked by a bot check at {url}; no readable content. {_WALL_GUIDANCE}"
-
-    if host == _REDDIT_HOST_SUFFIX or host.endswith("." + _REDDIT_HOST_SUFFIX):
-        if path.startswith(_REDDIT_LOGIN_PATH_PREFIX):
-            return f"Blocked by a login wall at {url}; no readable content. {_WALL_GUIDANCE}"
-        if _REDDIT_CHALLENGE_MARKER in text.lower():
-            return f"Blocked by a bot check at {url}; no readable content. {_WALL_GUIDANCE}"
-
-    return None
-
-
 def _shape_success(
     attachment_store: Any,
     result: PublicResponse,
@@ -372,7 +302,9 @@ def _shape_success(
         return _binary_notice(final_url, sniffed, len(result.content))
 
     raw_body = result.text
-    is_html = "html" in media_type or (
+    # A server can label data such as CSV text/html; without any markup near the
+    # start it reads as plain text, which keeps its tabs and line breaks.
+    is_html = ("html" in media_type and bool(_MARKUP.search(raw_body[:4096]))) or (
         media_type in {"", "text/plain", "application/octet-stream"}
         and re.match(
             r"(?:(?:<!--[\s\S]*?-->|<\?xml[^>]*\?>)\s*)*"
@@ -412,25 +344,18 @@ def _shape_success(
         final_url,
         include_links=output_mode == "markdown",
     )
-    wall = _detect_bot_wall(final_url, metadata, main)
+    block = firewall_block(final_url, metadata, main)
+    if block is not None:
+        return tool_failure("rate_limited", block, retryable=False)
+    wall = bot_wall(final_url, metadata, main)
     if wall is not None:
         return tool_failure("access_denied", wall, retryable=False)
-    if not main.strip() or (
-        len(main) < 600
-        and (
-            _SCRIPT_DEMAND.search(main)
-            or re.match(
-                "checking your browser|verify (?:that )?you are (?:a )?human",
-                re.sub(r"^[#>*\s]+", "", main),
-                re.I,
-            )
-        )
-    ):
+    if is_script_shell(main):
         return tool_failure(
             "no_content",
             (
                 f"{final_url} has no readable content without JavaScript, or shows an "
-                f"access check instead. {_WALL_GUIDANCE}"
+                f"access check instead. {WALL_GUIDANCE}"
             ),
             retryable=False,
         )
@@ -454,15 +379,21 @@ def _accept(output_mode: WebFetchOutput) -> str:
 
 
 async def _direct_fetch(
-    url: str, output_mode: WebFetchOutput, attachment_store: Any
+    url: str, output_mode: WebFetchOutput, attachment_store: Any, hosts: HostSlots
 ) -> tuple[JsonObject, bool]:
-    """Return the result and whether an optional service may recover it."""
+    """Return the result and whether an optional service may recover it.
+
+    A firewall block is recoverable by a service, which fetches from its own
+    address, but not by the local browser, which shares this machine's.
+    """
     try:
-        result = await fetch_public(url, accept=_accept(output_mode))
+        result = await fetch_public(url, accept=_accept(output_mode), hosts=hosts)
     except PublicFetchError as error:
         return error.failure(), error.recoverable
     shaped = await run_tool_worker(_shape_success_for_mode, attachment_store, result, output_mode)
-    return shaped, not shaped["ok"] and shaped["error"]["code"] in _BROWSER_CODES
+    return shaped, not shaped["ok"] and (
+        shaped["error"]["code"] in _BROWSER_CODES or shaped["error"]["code"] == "rate_limited"
+    )
 
 
 def _shape_success_for_mode(
@@ -563,11 +494,24 @@ def _page_address(url: str) -> tuple[str, set[tuple[str, str]]]:
 
 
 def _redirect_note(requested: str, final: str) -> str:
-    """Say so when a redirect led to another page than the requested one."""
+    """Say when a redirect led to another page, or to the requested page's new address.
+
+    A page whose section moved keeps its last path segment (its name or id); a
+    redirect to the site root, to a parent path or to a page with another last
+    segment means the requested page was not served.
+    """
     requested_path, requested_query = _page_address(requested)
     final_path, final_query = _page_address(final)
-    if requested_path == final_path and requested_query <= final_query:
-        return ""
+    if requested_query <= final_query:
+        if requested_path == final_path:
+            return ""
+        name = requested_path.rsplit("/", 1)[-1]
+        if (
+            name
+            and final_path.rsplit("/", 1)[-1] == name
+            and not requested_path.startswith(final_path + "/")
+        ):
+            return f"The page moved here from {requested}."
     return f"This is not the requested page: {requested} redirected here."
 
 
@@ -670,6 +614,9 @@ def make_web_fetch_handler(
     # page's owner) read last, the site a root-relative url belongs to. Kept in
     # memory: after a restart a path fails until a page is read again.
     last_pages: OrderedDict[tuple[str, str], str] = OrderedDict()
+    # One bound per host across all calls and Agents: the Runtime registers this
+    # handler once, so it is the process's bound without a module global.
+    hosts = HostSlots()
 
     def estimate_factor(context: ToolContext) -> float:
         if input_estimate_factor is None or not context.agent_model:
@@ -706,7 +653,7 @@ def make_web_fetch_handler(
         url: str, output: WebFetchOutput, settings: Mapping[str, Any]
     ) -> tuple[JsonObject, bool]:
         """Read directly; the local browser retries a bot check or JavaScript page."""
-        result, recoverable = await _direct_fetch(url, output, attachment_store)
+        result, recoverable = await _direct_fetch(url, output, attachment_store, hosts)
         if (
             result["ok"]
             or result["error"]["code"] not in _BROWSER_CODES
@@ -740,7 +687,7 @@ def make_web_fetch_handler(
             if final.username or final.password:
                 raise ValueError("Service returned a URL containing credentials.")
             await check_public_url(data["url"])
-            wall = _detect_bot_wall(data["url"], {"title": data.get("title", "")}, data["content"])
+            wall = bot_wall(data["url"], {"title": data.get("title", "")}, data["content"])
             if wall:
                 raise FetchServiceError(wall)
             return tool_success(data)

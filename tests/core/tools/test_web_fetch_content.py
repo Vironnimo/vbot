@@ -154,7 +154,11 @@ async def test_page_facts_survive_main_content_selection(
     <table><caption>Prices in EUR per month</caption><tr><th>Plan</th><th>Price</th></tr>
     <tr><td rowspan="2">Basic</td><td>12</td></tr><tr><td>15</td></tr></table>
     <a href="install">Install guide</a> <a href="https://other.example/source">Source</a>
-    <img data-src="chart.png">
+    <img data-src="chart.png" alt="Chart">
+    <img src="gallery-1.jpg"><figure><img src="diagram.png"><figcaption>Flow</figcaption></figure>
+    <img src="/cdn/item.jpg?v=17&amp;width=400" alt="Item" title="Zoom">
+    <img src="/cdn/item.jpg?v=17&amp;width=800" alt="Item">
+    <img src="/uploads/pump-300x200.jpg" alt="Pump"><img src="/uploads/pump.jpg" alt="Pump, side">
     <img alt="Trend" src="data:image/png;base64,AAAA">
     <a href="/files/photo">
     <img src="photo.jpg?utm_source=site&amp;w=2&amp;utm_campaign=x" alt="Photo"></a>
@@ -192,7 +196,13 @@ async def test_page_facts_survive_main_content_selection(
         # keep their site.
         "[Install guide](/docs/install)",
         "[Source](https://other.example/source)",
-        "![Image](/docs/chart.png)",
+        "![Chart](/docs/chart.png)",
+        # An image without alt text shows only inside a figure; another size of an
+        # image shows once, or only its new alt text.
+        "![Image](/docs/diagram.png)",
+        "![Item](/cdn/item.jpg?v=17&width=400)",
+        "![Pump](/uploads/pump-300x200.jpg)",
+        "Pump, side",
         "Trend",
         # A linked image keeps only its own address, without tracking parameters.
         "![Photo](/docs/photo.jpg?w=2)",
@@ -200,7 +210,18 @@ async def test_page_facts_survive_main_content_selection(
         "Good article badge",
     ):
         assert expected in main["content"]
-    for noise in ("/files/photo", "utm_", "badge.png", "spacer.gif", "Hydrogen", "| |"):
+    for noise in (
+        "/files/photo",
+        "utm_",
+        "badge.png",
+        "spacer.gif",
+        "gallery-1.jpg",
+        "width=800",
+        "Zoom",
+        "pump.jpg",
+        "Hydrogen",
+        "| |",
+    ):
         assert noise not in main["content"]
     assert "3." in main["content"] and "Then **start** it." in main["content"]
     assert main["title"] == "Reference"
@@ -370,8 +391,25 @@ async def test_html_becomes_readable_text(
             ['{"recipe": "cake", "tasty": true}'],
             ["Binary content"],
         ),
+        # Data labelled HTML without any markup keeps its tabs and line breaks.
+        (
+            "https://example.com/api/series?format=csv",
+            "text/html; charset=utf-8",
+            b"Latitude:\t52.5\nyear\tmonth\tirradiation\n2020\t1\t21.3\n2020\t2\t40.7\n",
+            ["Latitude:\t52.5\nyear\tmonth\tirradiation\n2020\t1\t21.3\n"],
+            [],
+        ),
     ],
-    ids=["pdf", "docx-without-extension", "scanned-pdf", "malformed-pdf", "exe", "nul", "json"],
+    ids=[
+        "pdf",
+        "docx-without-extension",
+        "scanned-pdf",
+        "malformed-pdf",
+        "exe",
+        "nul",
+        "json",
+        "csv-labelled-html",
+    ],
 )
 async def test_non_html_responses_become_text_or_a_binary_notice(
     tmp_path: Path,
@@ -548,6 +586,18 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
             "Blocked by a bot check at https://example.com/guarded; no readable content.",
         ),
         (
+            "https://example.com/data",
+            "<html><head><title>Request Rejected</title></head><body>The requested URL was "
+            "rejected. Please consult with your administrator.<br><br>Your support ID is: "
+            "1234567890<br><br><a href='javascript:history.back();'>[Go Back]</a></body></html>",
+            "rate_limited",
+            "example.com's firewall rejected the request for https://example.com/data and "
+            'answered with its "Request Rejected" page. This usually follows too many requests '
+            "in a short time; the firewall then rejects every request from this machine for a "
+            "while, whichever tool sends it. Wait several minutes before fetching from "
+            "example.com again, then fetch one page at a time, or try another source.",
+        ),
+        (
             "https://example.com/app",
             "<div id='root'></div><script>runApp()</script>",
             "no_content",
@@ -589,6 +639,7 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
         "challenge-title",
         "access-check",
         "localized-captcha",
+        "firewall-block",
         "script-only",
         "bom",
         "js-wall",
@@ -596,7 +647,7 @@ async def test_image_without_an_attachment_store_says_it_could_not_be_loaded(
         "titled-js-wall",
     ],
 )
-async def test_bot_checks_and_script_only_pages_are_not_retryable_failures(
+async def test_pages_standing_in_for_the_requested_one_are_not_retryable_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, html: str, code: str, message: str
 ) -> None:
     # No content type: the markup alone identifies these as HTML.
@@ -604,7 +655,8 @@ async def test_bot_checks_and_script_only_pages_are_not_retryable_failures(
 
     error = assert_failure_envelope(await fetch(tmp_path, {"url": url}), code)
 
-    assert error["message"] == f"{message} {_WALL_GUIDANCE}"
+    expected = message if code == "rate_limited" else f"{message} {_WALL_GUIDANCE}"
+    assert error["message"] == expected
     assert error["retryable"] is False
 
 

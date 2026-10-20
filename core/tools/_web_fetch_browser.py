@@ -32,7 +32,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from core.tools._public_http import PublicFetchError, PublicResponse, resolve_public_address
+from core.tools._public_http import (
+    SELF_SOLVING_CHECK_TITLES,
+    PublicFetchError,
+    PublicResponse,
+    resolve_public_address,
+)
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.processes import (
@@ -61,19 +66,6 @@ _PROXY_HEAD_SECONDS = 30.0
 _PROXY_CONNECT_SECONDS = 10.0
 _BLOCK_MEMORY = 256
 
-# Interstitial pages that solve themselves in a real browser; while one shows,
-# the fetch keeps waiting instead of settling on it.
-_INTERSTITIAL_TITLES = frozenset(
-    {
-        "just a moment...",
-        "checking your browser...",
-        "checking your browser before accessing",
-        "please wait...",
-        "one moment, please...",
-        "ddos-guard",
-        "attention required! | cloudflare",
-    }
-)
 _PAGE_TYPES = frozenset({"text/html", "application/xhtml+xml", "text/plain"})
 
 _STATE_SCRIPT = (
@@ -638,7 +630,8 @@ async def _settle(
         if now >= next_check:
             next_check = now + _POLL_SECONDS
             state = await _evaluate(devtools, session, _STATE_SCRIPT)
-            if str(state.get("title", "")).strip().lower() in _INTERSTITIAL_TITLES:
+            # A self-solving check page: keep waiting instead of settling on it.
+            if str(state.get("title", "")).strip().lower() in SELF_SOLVING_CHECK_TITLES:
                 stable, length = 0, -1
                 continue
             current = state.get("length", 0)
