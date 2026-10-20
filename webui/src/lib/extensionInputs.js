@@ -9,12 +9,11 @@ import { t } from './i18n.js';
 // `core/extensions/operations.py`); any owner may publish it.
 export const PENDING_INPUTS_RESOURCE = 'pending_inputs';
 
-// The text control for each string `format` a form may ask for.
+// The text control for each string `format` a form may ask for; `date` and
+// `date-time` render the shared date and time fields instead.
 const TEXT_TYPES = {
   email: 'email',
   uri: 'url',
-  date: 'date',
-  'date-time': 'datetime-local',
 };
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;

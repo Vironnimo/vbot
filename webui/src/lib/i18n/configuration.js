@@ -14,6 +14,7 @@ export default Object.freeze({
   'extensions.cancelHelp': 'End the request without an answer.',
   'extensions.noChoice': 'No choice',
   'extensions.inputTimeZone': 'Time in {zone}.',
+  'extensions.inputTimeOfDay': '{field}: time',
   'extensions.inputExpires':
     'Answer by {time} ({distance}); then the request ends unanswered.',
   'extensions.inputRequired': 'Enter a value.',

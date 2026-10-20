@@ -15,9 +15,11 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import Checkbox from './ui/Checkbox.svelte';
+  import DateField from './ui/DateField.svelte';
   import FormField from './ui/FormField.svelte';
   import Modal from './ui/Modal.svelte';
   import TextField from './ui/TextField.svelte';
+  import TimeField from './ui/TimeField.svelte';
   import Dropdown from './Dropdown.svelte';
   import RequestedUrl from './RequestedUrl.svelte';
 
@@ -88,6 +90,18 @@
     drafts = initialInputDrafts(request, { timeZone: dateTimePrefs.timeZone });
     errors = {};
     error = '';
+  }
+
+  // A date-time answer is edited as a date and a time of day and kept as the
+  // wall time `YYYY-MM-DDTHH:MM` that validation and the response expect; a
+  // half-filled pair stays incomplete so validation names the missing part.
+  function wallTimeParts(text) {
+    const [date = '', time = ''] = (text ?? '').split('T');
+    return { date, time: time.slice(0, 5) };
+  }
+
+  function setWallTime(key, { date, time }) {
+    setDraft(key, date || time ? `${date}T${time}` : '');
   }
 
   function setDraft(key, value) {
@@ -307,6 +321,40 @@
                         onInput={(value) => setDraft(input.key, value)}
                         disabled={busy}
                       />
+                    {:else if input.kind === 'text' && input.format === 'date'}
+                      <DateField
+                        id={field.controlId}
+                        aria-describedby={field.describedBy}
+                        required={input.required}
+                        invalid={field.invalid}
+                        value={drafts[input.key] ?? ''}
+                        onChange={(value) => setDraft(input.key, value)}
+                        disabled={busy}
+                      />
+                    {:else if input.kind === 'text' && input.format === 'date-time'}
+                      {@const parts = wallTimeParts(drafts[input.key])}
+                      <div class="extension-input__date-time">
+                        <DateField
+                          id={field.controlId}
+                          aria-describedby={field.describedBy}
+                          invalid={field.invalid}
+                          value={parts.date}
+                          onChange={(date) =>
+                            setWallTime(input.key, { ...parts, date })}
+                          disabled={busy}
+                        />
+                        <TimeField
+                          ariaLabel={t('extensions.inputTimeOfDay', {
+                            field: input.label,
+                          })}
+                          aria-describedby={field.describedBy}
+                          invalid={field.invalid}
+                          value={parts.time}
+                          onChange={(time) =>
+                            setWallTime(input.key, { ...parts, time })}
+                          disabled={busy}
+                        />
+                      </div>
                     {:else}
                       <TextField
                         id={field.controlId}
@@ -360,6 +408,11 @@
   .extension-input__message {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  .extension-input__date-time {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 8.5rem;
+    gap: 8px;
   }
   .extension-input__hint {
     color: var(--text-lo);
