@@ -67,7 +67,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 | subagents.md | `core/subagents/` | Sub-Agent tree, answer forwarding, tree control, reply targets |
 | tools.md | `core/tools/` | Tool contracts and policy; index to per-tool maps |
 | storage.md | `core/storage/` | Data-directory layout, temp-file lifecycle, persistence |
-| secrets.md | `core/secrets/` | Secret Store, key protection, plaintext conversion |
+| secrets.md | `core/secrets/` | Secret Store, key protection, plaintext conversion, Agent Secrets |
 | skills.md | `core/skills/` | Skill loading/validation, scopes, authoring, history and archive, Prompt-Epoch Catalog |
 | automation.md | `core/automation/` | Cron/Bootstrap triggering, queue semantics, Reflection, Librarian passes |
 | calendar.md | `core/calendar/` | Local events, recurrence, occurrence changes, Cron projection, calendar Tool |

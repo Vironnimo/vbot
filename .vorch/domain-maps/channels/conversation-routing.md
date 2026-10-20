@@ -26,6 +26,8 @@ A removed queued Run admission ends only that inbound turn with the cancellation
 
 Slash Commands execute the shared live Chat-owned set through `prepare`/`execute` - neither transport has a command-name switch. `/new` creates no Session and returns `new_session` navigation; the engine repoints the conversation at a fresh `ses_` id (`sessions/lists-and-metadata.md` -> Creation and lookup, `new_session_id()`), not an id derived from the anchor, and replies that a new Session started. `/handoff` and Extension follow-up Runs relay generically without changing `ChannelConfig.agent_id` or the source anchor. Every `/agent` form is refused before execution with `The /agent command is not available through <Platform>.` - permanent wording, never implying future implementation.
 
+A Command whose spec sets `secret_argument` (`/secret`) and carries an argument has the user's message removed through `ConversationTransport.delete_message` before it executes or is refused, and the reply says whether the value may still be readable; the platform matrix and reply texts are in `secrets/agent-secrets.md` -> Channels. `/secret` is refused in group chats (`group_conversations=False`).
+
 ## Platform chat-id migration
 
 Telegram group->supergroup upgrades: the new chat id's conversation gets a one-hop pointer at the old active Session (no Session is created for the new anchor), that Session's Channel metadata moves to the new id, a session note informs the model, and the allowlist swap plus the merge of the group's admins and participants into the new access scope persist without restarting the adapter; idempotent when the old id is gone. How migrations interact with config changes: `channels/config-lifecycle.md` -> Supervision and health.

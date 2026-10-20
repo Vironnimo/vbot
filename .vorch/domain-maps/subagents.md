@@ -39,7 +39,7 @@ The recipient of a Sub-Agent's final answers: Parent or user. User input selects
 
 ## Interfaces
 
-- `SubAgentCoordinator(runtime, trigger_service)`; `install(run_manager)` registers forwarding as a Run-started callback. Bootstrap (`core/runtime/_bootstrap.py`) passes `runtime._chat_run_manager` because the started-service accessors raise before the Runtime has started.
+- `SubAgentCoordinator(runtime, trigger_service, *, secrets=None)` (`secrets`: `Runtime.agent_secrets`); `install(run_manager)` registers forwarding as a Run-started callback. Bootstrap (`core/runtime/_bootstrap.py`) passes `runtime._chat_run_manager` because the started-service accessors raise before the Runtime has started.
 - `spawn(context, arguments)` handles `subagent` `run` and `send` (the Tool runs its former `list` and `cancel` words as `background_tasks`, `tools/subagent.md`); `message_parent(context, arguments)` is the `message_parent` handler.
 - `background_tasks` reads the tree through `subagents(caller)` (all descendants, breadth first, as frozen `SubAgentState`), `running_work(subagent)` and `stop_subagent(context, subagent) -> SubAgentStopOutcome` (`stopped` or `idle`). These form `SubAgentTree`, implemented by `SubAgentCoordinator`; `background_tasks` and `terminal` receive it from Runtime and import it for annotations only. The Tools own ids, texts and row layout.
 - `stop_tree(address) -> int` is "Stop all" (`/stop all`, `chat.stop_all`, WebUI); returns how many Runs, queued items, commands and terminals it stopped across the complete subtree.
@@ -54,6 +54,7 @@ The recipient of a Sub-Agent's final answers: Parent or user. User input selects
 
 ## Conventions
 
+- **Secrets:** a Sub-Agent Session uses only the Agent Secrets bound to or passed into it, also when it runs its Parent's own Agent (user decision, 2026-10-21). `run` takes `secrets` (names), checked with `AgentSecrets.passable` before any Session work; the new Session is then added to each Secret, and the note `SUBAGENT_SECRETS_NOTE_TEMPLATE` lists them there (`secrets/agent-secrets.md` -> Lifetimes and grants).
 - **Settings capture:** a new Sub-Agent captures its Model and thinking effort in its Session metadata at start (self-delegation: the running Parent's actual settings); later Parent or default changes never alter it (`subagents/delegation.md` -> Model and settings capture).
 - **`run` and `send`:** `run` always starts a new Sub-Agent in the background and returns at once, with every check before any Session work; `send` reaches only a direct child and refuses a stale generation instead of recreating or redirecting (`subagents/delegation.md`).
 - **Targets:** the coordinator is the security boundary for which Agents and Projects a caller may start; Provider-schema narrowing and the prompt block are guidance (`subagents/delegation.md` -> Targets).
@@ -71,7 +72,7 @@ The recipient of a Sub-Agent's final answers: Parent or user. User input selects
 
 ## Agent-facing text
 
-This domain owns the Sub-Agent role block (`resources/prompts/subagent_role.md`, a Storage-allowlisted prompt fragment, `storage/prompt-files.md`), the reminders in `core/chat/messages.py`, and in `_constants.py` the delegation Tool start and send results, activity receipts, forwarded sections, and the target, depth and limit refusals. Before you change, add or delete a sentence of them, read `subagents/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add.
+This domain owns the Sub-Agent role block (`resources/prompts/subagent_role.md`, a Storage-allowlisted prompt fragment, `storage/prompt-files.md`), the reminders in `core/chat/messages.py`, and in `_constants.py` the delegation Tool start and send results, activity receipts, forwarded sections, the Secret pass-through note, and the target, depth and limit refusals (with the `secrets` refusals in `subagents.py`). Before you change, add or delete a sentence of them, read `subagents/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add.
 
 ## References
 
