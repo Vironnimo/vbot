@@ -992,15 +992,16 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
         [SHELL_TOOL_NAME],
     )
 
+    # The working directory's path, so a path relative to it can be passed.
     assert missing["error"]["message"] == (
         f"{SHELL_MODEL_NAME} was not run: workdir {model_path(tmp_path / 'nope')} is not "
         "an existing directory. Pass an existing directory, or omit workdir to use the working "
-        "directory."
+        f"directory {model_path(tmp_path)}."
     )
     assert a_file["error"]["message"] == (
         f"{SHELL_MODEL_NAME} was not run: workdir {model_path(tmp_path / 'notes.txt')} is "
         "a file, not a directory. Pass the directory it is in, or omit workdir to use the "
-        "working directory."
+        f"working directory {model_path(tmp_path)}."
     )
     # Omitting workdir cannot help when the working directory itself is missing.
     assert missing_cwd["error"]["message"] == (
