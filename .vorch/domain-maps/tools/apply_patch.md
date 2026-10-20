@@ -326,13 +326,14 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 - Match errors show bounded candidate excerpts with `read`-style gutters
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
-  line N: the file has '...' where the patch has '...'` (`where old_string
+  line N, character C: the file has '...' where the patch has '...'` (`where old_string
   has` for `old_string` edits). Quoted text in these reports, in the `line_join`
   refusal and in notes holds the characters as the file or the call has them
   (`_patch_syntax.quoted`, not `repr`): a backslash or quote stays single, and
   only a character that shows nothing and is not whitespace is written as an
-  escape (`​`); text in `'` uses `"` when it holds `'` but not `"`
-  (`edit.md` -> Agent-facing text). An `old_string` of several lines may start
+  escape (`​`); text in `'` uses `"` when it holds `'` but not `"`, and the
+  two texts of a first difference share one quote character, chosen that way
+  for both (`edit.md` -> Agent-facing text). An `old_string` of several lines may start
   inside its first file line and end inside its last: those lines differ only
   when the file line does not end, or start, with them (`first_difference`
   without `whole_lines`; patch lines are whole lines, and one that is only part
@@ -366,9 +367,13 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   the longest lines were often added text copied without `+`, so 43 of 133 failed
   hunks in one Swarm said `No similar text` although most copied lines were in
   the file, and 10 of 76 checkable first differences named a line one to seven
-  lines too early (Sessions, 2026-09). Long differing lines show <=240-character windows
-  centered on the first substantive mismatch, with 1-based file/copied-line
-  character coordinates and explicit truncation. Truncated candidate excerpts
+  lines too early (Sessions, 2026-09). The first difference always names the
+  file line's 1-based character. A differing line of more than 80 characters
+  shows an 80-character window from 30 characters before the first substantive
+  mismatch (`_first_difference_window`), with 1-based file/copied-line character
+  coordinates and explicit truncation (Swarm run 2026-10-20: two whole
+  120-character lines hid that only their last quote differed; `edit.md` ->
+  Agent-facing text). `line_differences` keeps 240-character windows. Truncated candidate excerpts
   name a callable `read(path=..., offset="line:character", limit=...)` continuation;
   positions count Unicode characters and preserve LF/CRLF/CR line semantics.
   Overlapping excerpts merge before continuations are named: a continuation

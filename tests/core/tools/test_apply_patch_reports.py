@@ -214,8 +214,8 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(tmp_p
     assert result["error"]["message"] == (
         "No file was changed.\n"
         "a.py: old_string was not found.\nThe closest text in the file, lines 1-2:\n"
-        "1| def f():\n2|     return 1\nFirst difference, line 2: the file has '    return 1' "
-        "where old_string has '    return 2'."
+        "1| def f():\n2|     return 1\nFirst difference, line 2, character 12: the file has "
+        "'    return 1' where old_string has '    return 2'."
     )
     done = await call(tmp_path, {"file_path": "b.py", "old_string": "x = 1", "new_string": "x = 3"})
     assert "The new text already occurs at line 1" in text(done)
@@ -304,8 +304,8 @@ def test_closest_candidates_are_raw_reusable_and_never_applied(tmp_path):
         "Failed: file.txt: the lines to replace were not found.\n"
         "The closest text in the file, lines 2-4:\n"
         "2| def deploy():\n3|     timeout = 30\n4|     retries = 5\n"
-        "First difference, line 3: the file has '    timeout = 30' where the patch has "
-        "'    completely unrelated declaration'."
+        "First difference, line 3, character 5: the file has '    timeout = 30' where the patch "
+        "has '    completely unrelated declaration'."
     )
     assert path.read_text(encoding="utf-8") == before
     assert (tmp_path / "other.txt").read_bytes() == b"done\n"
@@ -383,7 +383,7 @@ def test_context_block_that_is_not_found_shows_its_first_difference(tmp_path):
         "found together. That block has no - or + line, so it only locates the lines to replace. "
         "Copy its lines exactly from the file, or leave that block out.\n"
         "The closest text in the file, lines 4-5:\n4| second\n5| marker\n"
-        "First difference, line 5: the file has 'marker' where the patch has 'markr'."
+        "First difference, line 5, character 5: the file has 'marker' where the patch has 'markr'."
     )
     assert path.read_bytes() == before
 
@@ -438,7 +438,8 @@ def test_context_failure_returns_candidates_without_substituting_target(
         (
             "start = 0\nA, B, C = 0, 1, 2\n",
             "@@\n start = 0\n-1,\n+3,",
-            "First difference, line 2: the file has 'A, B, C = 0, 1, 2' where the patch has '1,'.",
+            "First difference, line 2, character 1: the file has 'A, B, C = 0, 1, 2' where the "
+            "patch has '1,'.",
         ),
     ],
 )
@@ -452,6 +453,9 @@ def test_patch_line_inside_longer_lines_names_those_lines(tmp_path, before, body
 
 
 WRAPPED_CALL = "def f(a, b):\n    result = compute(a,\n                     b)\n    return result\n"
+LOGGED = (
+    '    log(\'Total " + str(total) + " is more than the configured limit allows; check the rows.")'
+)
 FIRST_DIFFERENCE_CASES = {
     # An unprefixed line between additions that the file lacks there names the prefix.
     "unprefixed": (
@@ -460,8 +464,8 @@ FIRST_DIFFERENCE_CASES = {
         "@@\n     result = 0\n+    if not values:\n+        raise ValueError(\n"
         '            "values must not be empty")\n+    checked = True\n'
         "     for value in values:\n         result += value\n     return result_value",
-        "First difference, line 3: the file has '    for value in values:' where the patch "
-        "has '           \"values must not be empty\")'.\n"
+        "First difference, line 3, character 5: the file has '    for value in values:' where "
+        "the patch has '           \"values must not be empty\")'.\n"
         "That patch line has no + prefix, so it must already be in the file there; "
         "if it is new, start it with +.\n",
     ),
@@ -470,7 +474,8 @@ FIRST_DIFFERENCE_CASES = {
     "leading": (
         "def f():\n    return 1\n\n\ndef g():\n    pass\n",
         "@@\n def f():\n     return 1\n \n# first note line\n+# second note line\n \n def g():",
-        "First difference, line 4: the file has '' where the patch has '# first note line'.\n"
+        "First difference, line 4, character 1: the file has '' where the patch has "
+        "'# first note line'.\n"
         "That patch line has no + prefix, so it must already be in the file there; "
         "if it is new, start it with +.\n",
     ),
@@ -483,8 +488,9 @@ FIRST_DIFFERENCE_CASES = {
         "     # and its continuation line that the Agent forgot to mark as added text\n"
         "+    'c': 3,\n     'b': 2,\n }\n \n \n-def check(rows):\n+def check(rowz):\n"
         "     return rowz",
-        "First difference, line 15: the file has \"    'b': 2,\" where the patch has "
-        "'    # and its continuation line that the Agent forgot to mark as added text'.\n"
+        # Both lines share the quotes, so a ' in one is not read as a difference.
+        "First difference, line 15, character 5: the file has \"    'b': 2,\" where the patch "
+        'has "    # and its continuation line that the Agent forgot to mark as added text".\n'
         "That patch line has no + prefix",
     ),
     # Reworded lines are compared with their counterpart, not a quote line.
@@ -497,9 +503,9 @@ FIRST_DIFFERENCE_CASES = {
         "@@ def describe():\n"
         "     Each record names its owner and the time of the last review.\n"
         '     Records that have no owner are left out.\n     """\n+    rows = load()',
-        "First difference, line 26: the file has '    Each row lists the owner and the date "
-        "it was last checked.' where the patch has '    Each record names its owner and the "
-        "time of the last review.'.\n",
+        "First difference, line 26, character 11: the file has '    Each row lists the owner "
+        "and the date it was last checked.' where the patch has '    Each record names its "
+        "owner and the time of the last review.'.\n",
     ),
     # Joined lines are compared from the first of them.
     "joined": (
@@ -512,7 +518,7 @@ FIRST_DIFFERENCE_CASES = {
         "     query = select(table.c.title, from_=table, limit=100)\n"
         "     rows = execute(query)\n-    return [row.title for row in rows]\n"
         "+    return sorted(row.title for row in rows)",
-        "First difference, line 24: the file has '    query = select(",
+        "First difference, line 24, character 28: the file has '    query = select(",
     ),
     # Long new lines without a prefix do not hide the copied ones.
     "hidden": (
@@ -534,8 +540,8 @@ FIRST_DIFFERENCE_CASES = {
     "starts-inside": (
         WRAPPED_CALL,
         {"old_string": "compute(a,\nb)\n    return result", "new_string": "x"},
-        "First difference, line 3: the file has '                     b)' where old_string has "
-        "'b)'; only the whitespace at the start of the line differs.\n",
+        "First difference, line 3, character 1: the file has '                     b)' where "
+        "old_string has 'b)'; only the whitespace at the start of the line differs.\n",
     ),
     "ends-inside": (
         WRAPPED_CALL,
@@ -543,21 +549,30 @@ FIRST_DIFFERENCE_CASES = {
             "old_string": "    result = compute(a,\n                     b)\nretur",
             "new_string": "x",
         },
-        "First difference, line 4: the file has '    return result' where old_string has "
-        "'retur'; only the whitespace at the start of the line differs.\n",
+        "First difference, line 4, character 1: the file has '    return result' where "
+        "old_string has 'retur'; only the whitespace at the start of the line differs.\n",
     ),
     "starts-inside-and-differs": (
         WRAPPED_CALL,
         {"old_string": "compute(a,\n                     c)\n    return result", "new_string": "x"},
-        "First difference, line 3: the file has '                     b)' where old_string has "
-        "'                     c)'.\n",
+        "First difference, line 3, character 22: the file has '                     b)' where "
+        "old_string has '                     c)'.\n",
     ),
     # Whole lines match with other indentation: the line that really differs is named.
     "whole-lines": (
         WRAPPED_CALL,
         {"old_string": "    result = compute(a,\nb)\n    return total", "new_string": "x"},
-        "First difference, line 4: the file has '    return result' where old_string has "
-        "'    return total'.\n",
+        "First difference, line 4, character 12: the file has '    return result' where "
+        "old_string has '    return total'.\n",
+    ),
+    # Swarm run 2026-10-20: a whole 120-character line hid that only its last quote
+    # differed. A long line shows from shortly before its difference on.
+    "long-line": (
+        f"def check(total):\n{LOGGED}\n    return total\n",
+        {"old_string": f"{LOGGED[:-2]}')\n    return totals_by_owner", "new_string": "x"},
+        "First difference, file line 2, character 92; copied line 1, character 92 "
+        "(excerpts truncated):\nFile characters 62-93: ' limit allows; check the rows.\")'\n"
+        "old_string characters 62-93: ' limit allows; check the rows.')'\n",
     ),
 }
 
@@ -583,8 +598,9 @@ def test_first_difference_is_aligned_with_the_copied_lines(tmp_path, case):
     if case == "hidden":
         assert "No similar text" not in text(result)
         assert (
-            "First difference, line 44: the file has '    rest = tokens[1:]' where the patch "
-            "has '    # An empty stream has no head, so it is rejected here with a clear message'."
+            "First difference, line 44, character 5: the file has '    rest = tokens[1:]' where "
+            "the patch has '    # An empty stream has no head, so it is rejected here with a "
+            "clear message'."
         ) in text(result)
 
 
