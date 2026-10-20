@@ -728,11 +728,11 @@ export default Object.freeze({
   'projects.manage.providerThinkingEffortDefault': '— (provider default)',
   'projects.manage.modelSearchPlaceholder': 'Filter models…',
   'projects.manage.modelSearchEmpty': 'No models match',
-  'projects.manage.autoLoad': 'Auto-load files',
+  'projects.manage.autoLoad': 'Additional file',
   'projects.manage.autoLoadPlaceholder': 'Add a file path…',
   'projects.manage.autoLoadAdd': 'Add',
   'projects.manage.autoLoadRemove': 'Remove {file}',
-  'projects.manage.autoLoadEmpty': 'No auto-load files',
+  'projects.manage.autoLoadEmpty': 'No additional files',
   'projects.manage.allowedToolsHelp':
     'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
   'projects.manage.resetDefaults': 'Reset to defaults',
@@ -771,10 +771,19 @@ export default Object.freeze({
     'This project has an active or queued run and cannot be removed right now.',
   'projects.remove.inUse':
     'A schedule or Bootstrap job uses one of this project’s agents, so it cannot be removed. Remove or retarget it first.',
-  'projects.detail.sectionAutoLoad': 'Auto-load files',
   'projects.detail.sectionInstructions': 'Instructions',
   'projects.detail.autoLoadInfo':
-    'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
+    'The main instruction file and the additional files are embedded into the system prompt of every session in this project — the agent always sees their full content, and they are never dropped or summarized by context compaction. The main instruction file is AGENTS.md, or else the first of CLAUDE.md, .claude/CLAUDE.md, GEMINI.md and .github/copilot-instructions.md; vBot chooses it again whenever a session starts or is compacted.\n\nFolder instructions are the AGENTS.md, CLAUDE.md or GEMINI.md files in subfolders. An agent receives one the first time it reads, edits or runs a command in that folder or below; after a compaction it receives it again the next time it works there.\n\nAdditional files are relative to the project folder (absolute paths also work) and load in list order after the main file; missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
+  'projects.instructions.main': 'Load the main instruction file',
+  'projects.instructions.mainLoaded': 'Loads {file} from the repository.',
+  'projects.instructions.mainFound': '{file} is not loaded while this is off.',
+  'projects.instructions.mainNone':
+    'The repository has no AGENTS.md, CLAUDE.md, GEMINI.md or Copilot instructions.',
+  'projects.instructions.folders': 'Load folder instructions',
+  'projects.instructions.foldersHelp':
+    'An agent working in a subfolder receives its AGENTS.md, CLAUDE.md or GEMINI.md.',
+  'projects.instructions.additional': 'Additional files',
+  'projects.instructions.missing': 'Not found',
   'projects.detail.sectionTeam': 'Team',
   'projects.detail.teamInfo':
     'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
@@ -817,9 +826,6 @@ export default Object.freeze({
     'Where the Team comes from. Switch sources on or off and drag them into priority order; the first active definition of each Agent name wins.',
   'projects.sources.agentsEmpty':
     'No Agent definitions detected in this repository.',
-  'projects.sources.instructionsTitle': 'Instruction files of other tools',
-  'projects.sources.instructionsHelp':
-    'Load after the auto-load files while switched on. They often repeat AGENTS.md, so only one starts on.',
   'projects.sources.skillsTitle': 'Skill folders',
   'projects.sources.skillsHelp':
     'Folders whose Skills this Project offers, inside or outside the repository. Drag them into priority order; the first active Skill of each name wins.',
@@ -842,7 +848,6 @@ export default Object.freeze({
   'projects.sources.shared': 'Shared conventions',
   'projects.sources.agents': 'Agents',
   'projects.sources.skills': 'Skills',
-  'projects.sources.instructions': 'Instructions',
   'projects.sources.scope': 'Agent files: {paths}',
   'projects.sources.expand': 'Include all detected definitions',
   'projects.report.group.source_scope': 'Outside selected Agent paths',

@@ -35,7 +35,9 @@ export function createProjectEditForm(project = null) {
       project?.default_thinking_effort === undefined
         ? PROJECT_THINKING_EFFORT_NO_DEFAULT
         : project.default_thinking_effort,
+    auto_instructions: project?.auto_instructions !== false,
     auto_load: [...(project?.auto_load ?? [])],
+    folder_instructions: project?.folder_instructions !== false,
     allowed_tools: [...(project?.allowed_tools ?? [])],
     skills_bundled_enabled: [...(project?.skills_bundled_enabled ?? [])],
     skills_global_enabled: [...(project?.skills_global_enabled ?? [])],
@@ -264,6 +266,14 @@ export function buildManageProjectPayload(formValues, project) {
   const currentAutoLoad = normalizeAutoLoad(project?.auto_load);
   if (!sameStringList(nextAutoLoad, currentAutoLoad)) {
     changes.auto_load = nextAutoLoad;
+  }
+
+  // The instruction switches are on unless the Project stores them off.
+  for (const field of ['auto_instructions', 'folder_instructions']) {
+    const next = formValues?.[field] !== false;
+    if (next !== (project?.[field] !== false)) {
+      changes[field] = next;
+    }
   }
 
   // The Tool/Skill Whitelist lists are membership sets: send a field only when its
@@ -513,7 +523,7 @@ export function folderSourcePath(id) {
 export function sourceKind(source, scanSources = []) {
   if (folderSourcePath(source?.id) !== null) return 'skills';
   const kind = scanSources.find((row) => row.id === source?.id)?.kind;
-  return ['agents', 'skills', 'instructions'].includes(kind) ? kind : null;
+  return ['agents', 'skills'].includes(kind) ? kind : null;
 }
 
 // Moves one Source among those of its kind; the others keep their places in
@@ -567,7 +577,15 @@ export function normalizeProject(project) {
     model_mappings: isPlainObject(project?.model_mappings)
       ? { ...project.model_mappings }
       : {},
+    auto_instructions: project?.auto_instructions !== false,
     auto_load: normalizeAutoLoad(project?.auto_load),
+    folder_instructions: project?.folder_instructions !== false,
+    // Which file is the main instruction file and which additional files are
+    // missing, as the server found them.
+    instruction_status: {
+      main_file: optionalText(project?.instruction_status?.main_file),
+      missing: normalizeStringList(project?.instruction_status?.missing),
+    },
     allowed_tools: normalizeStringList(project?.allowed_tools),
     skills_bundled_enabled: normalizeStringList(
       project?.skills_bundled_enabled,

@@ -191,6 +191,12 @@
   white-space: nowrap;
 }
 
+.projects-view .projects-file-missing {
+  flex-shrink: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+}
+
 /* A file row has no click action of its own, so it shows that it can be
    picked up; the row takes keyboard focus for Alt+Arrow moves. */
 .projects-view .projects-file-row.sortable-item--draggable {
@@ -618,7 +624,6 @@
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-.projects-view .projects-source-paths,
 .projects-view .projects-source-folder {
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);

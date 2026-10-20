@@ -1,5 +1,5 @@
 <script>
-  // The Sources of one kind (Agents, Skills or instructions), shown in the
+  // The Sources of one kind (Agents or Skills), shown in the
   // section that uses them. The Project stores one ordered list; dragging
   // reorders a kind among its own rows only, because names compete only
   // within a kind. Skill folders the user added carry a Remove action.
@@ -110,11 +110,7 @@
         <span class="s-row-label" class:projects-source-folder={folder}
           >{sourceLabel(source)}</span
         >
-        <div
-          class="s-row-desc"
-          class:projects-source-paths={kind === 'instructions' &&
-            info?.detected}
-        >
+        <div class="s-row-desc">
           {sourceSummary(source, info)}
         </div>
         {#if info?.problem}
@@ -156,7 +152,7 @@
       </div>
     {/snippet}
   </SortableList>
-{:else if kind !== 'instructions'}
+{:else}
   <div class="s-group">
     <div class="s-group__block s-group__note">
       {kind === 'agents'
