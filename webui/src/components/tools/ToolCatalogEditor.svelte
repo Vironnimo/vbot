@@ -9,12 +9,17 @@
   // Presentation only: each owner supplies its policy projection and mutations.
   // `rowAction(tool)` renders one compact control at the end of each Tool row,
   // outside the row's hover card; without it the rows have no action column.
+  // An owner whose checkboxes mean something other than access names the
+  // count with `summaryLabel` and leaves out the access fact of each card.
   let {
     items = [],
     disabled = false,
     onToggle,
     onToggleGroup,
     toggleLabel = (tool) => tool.name,
+    summaryLabel = (enabled, total) =>
+      t('toolAccess.selectionCount', { enabled, total }),
+    showAccessFact = true,
     toolbar,
     details,
     rowAction,
@@ -148,10 +153,12 @@
             {/if}
           </dd>
         </div>
-        <div>
-          <dt>{t('toolAccess.facts.access')}</dt>
-          <dd>{toolAccessFact(tool)}</dd>
-        </div>
+        {#if showAccessFact}
+          <div>
+            <dt>{t('toolAccess.facts.access')}</dt>
+            <dd>{toolAccessFact(tool)}</dd>
+          </div>
+        {/if}
       </dl>
       {#each tool.notes ?? [] as note, index (`${tool.name}-${index}`)}<p>
           {note}
@@ -171,10 +178,7 @@
   <div class="tool-catalog-toolbar">
     <div class="tool-catalog-actions">{@render toolbar?.()}</div>
     <span class="tool-catalog-summary">
-      {t('toolAccess.selectionCount', {
-        enabled: enabledCount,
-        total: items.length,
-      })}
+      {summaryLabel(enabledCount, items.length)}
     </span>
     <label class="tool-catalog-search">
       <input

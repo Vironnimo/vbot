@@ -220,8 +220,11 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "effective_compaction_policy": effective_compaction_policy(
             None, agent_policy, _global_compaction_policy_loader(state)
         ),
-        # On-demand Tools: ``None`` while they are off.
+        # On-demand Tools the Agent runs with, its own parts filled in from the shared
+        # default (``config.tool_loading`` holds its own); ``None`` while neither sets one.
         "tool_loading": _tool_loading_payload(agent),
+        # What the Agent inherits for each part it does not set, both parts complete.
+        "tool_loading_default": state.runtime.agent_resolver.inherited_tool_loading(),
         # ``None`` while the Agent has no current Session (a new conversation).
         "current_session_id": agent.current_session_id or None,
         "context_window": _agent_context_window(state, agent),
@@ -255,6 +258,7 @@ def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:
         "top_p": raw.top_p,
         "thinking_effort": raw.thinking_effort,
         "compaction_policy": dict(raw_policy) if raw_policy is not None else None,
+        "tool_loading": _tool_loading_payload(raw),
     }
 
 

@@ -25,6 +25,8 @@
     // Built-in Agents never load Tools on demand, so their editor has no
     // switch for it.
     toolLoadingEditable = true,
+    // What the Agent inherits for each On-demand Tools part it does not set.
+    toolLoadingDefault = null,
     navigateToExtensions,
     onToast = () => {},
     // Reloads `skillCatalog` after a Skill write.
@@ -249,6 +251,7 @@
         memoryPromptMode={formValues.memory_prompt_mode}
         {toolLoadingEditable}
         toolLoading={formValues.tool_loading}
+        {toolLoadingDefault}
         onChange={(next) => (formValues.tool_access = next)}
         onToolLoadingChange={(next) => (formValues.tool_loading = next)}
         onOpenExtensions={navigateToExtensions}

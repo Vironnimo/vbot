@@ -89,7 +89,7 @@ from core.tools.availability import (
     normalize_tool_access,
 )
 from core.tools.live import LIVE_TOOL_NAMES
-from core.tools.on_demand import TOOL_LOADING_FIELDS, normalize_tool_loading
+from core.tools.tool_loading import TOOL_LOADING_FIELDS, normalize_tool_loading
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.timestamps import utc_now_timestamp
 
@@ -453,7 +453,8 @@ def _validate_tool_loading(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
     try:
-        return normalize_tool_loading(value)
+        # A setting that sets neither part inherits both, the same as none.
+        return normalize_tool_loading(value) or None
     except ValueError as error:
         raise AgentError(str(error)) from error
 
@@ -866,8 +867,12 @@ def _apply_defaults(agent: Agent, defaults: AgentDefaults) -> Agent:
         temperature=agent.temperature,
         top_p=agent.top_p,
         thinking_effort=agent.thinking_effort,
+        tool_loading=agent.tool_loading,
         defaults=defaults,
     )
+    if agent.builtin is not None:
+        # Built-in Agents never load Tools on demand.
+        changes.pop("tool_loading", None)
     if not changes:
         return agent
     return replace(agent, **changes)

@@ -786,7 +786,8 @@ describe('Projects controller Team overrides', () => {
       { on_demand: false, always_loaded: ['read'] },
       { on_demand: false, always_loaded: ['read'] },
     ],
-    ['tool_loading', { on_demand: false }, null],
+    ['tool_loading', { on_demand: false }, { on_demand: false }],
+    ['tool_loading', {}, null],
   ])('sets the %s override typed as %j to %j', async (field, draft, sent) => {
     const setOverride = vi.fn().mockResolvedValue({ scan });
     const { controller } = await loadedController({}, { setOverride });
@@ -803,11 +804,11 @@ describe('Projects controller Team overrides', () => {
     }
   });
 
-  // An emptied sampling box and On-demand Tools switched off without an
-  // Always loaded list mean no override.
+  // An emptied sampling box and On-demand Tools that set neither part mean
+  // no override.
   it.each([
     ['temperature', ''],
-    ['tool_loading', { on_demand: false }],
+    ['tool_loading', {}],
   ])('clears the %s override saved as %j', async (field, draft) => {
     const setOverride = vi.fn().mockResolvedValue({ scan });
     const clearOverride = vi.fn().mockResolvedValue({ scan });

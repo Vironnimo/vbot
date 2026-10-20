@@ -206,6 +206,7 @@ def _resolver(
     global_temperature: float | None = None,
     global_thinking_effort: str | None = None,
     global_top_p: float | None = None,
+    global_tool_loading: dict[str, Any] | None = None,
     project_skill_names: dict[str, frozenset[str]] | None = None,
 ) -> AgentResolver:
     """Build a resolver whose global tier is a ``defaults.agent`` dict provider.
@@ -225,6 +226,8 @@ def _resolver(
         defaults["thinking_effort"] = global_thinking_effort
     if global_top_p is not None:
         defaults["top_p"] = global_top_p
+    if global_tool_loading is not None:
+        defaults["tool_loading"] = global_tool_loading
     skill_names = project_skill_names or {}
     return AgentResolver(
         agents,

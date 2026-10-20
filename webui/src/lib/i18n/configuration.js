@@ -383,6 +383,17 @@ export default Object.freeze({
   'settings.notifications.serverStopped': 'Server stopped',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.summaryModelPlaceholder': 'Active agent model',
+  'settings.toolLoading.description':
+    'Only Tools marked Always loaded are sent with every request. Agents load the others when they need them, which saves context.',
+  'settings.toolLoading.help':
+    'Agents see the other allowed Tools by name with a one-line summary and load their full definitions with the load_tools Tool before they first call one. What an Agent may use does not change.\n\nOpenAI Models can only call Tools sent with the request, so with them every Tool is sent. Every Agent and Project Agent that does not choose for itself follows this setting and this list; an Agent that changes its list replaces the whole list. Built-in Agents are not affected.',
+  'settings.toolLoading.builtInList':
+    'The built-in list of always-loaded Tools applies. Select Tools below to choose your own list.',
+  'settings.toolLoading.ownList':
+    'Agents that do not choose their own list always load the Tools selected below.',
+  'settings.toolLoading.resetHint':
+    'Use the built-in list of always-loaded Tools again',
+  'settings.toolLoading.count': '{enabled} of {total} always loaded',
   'settings.recall.method': 'Search method',
   'settings.recall.methodHelp':
     'Agents look through earlier conversations with the session_search Tool.\n\nKeywords finds the words searched for, using a fast local index. Keywords and meaning also finds passages that say the same thing in other words, so a search for “vehicles” also finds “cars”. Meaning only ranks by meaning alone; it can miss exact names and numbers that keyword search finds.\n\nSearching by meaning needs an embedding model. vBot builds its search index in the background shortly after conversations and keeps it up to date. Until the index has caught up, searches return every keyword match plus the meaning matches among the passages indexed so far.\n\nExtensions can add search methods of their own.',

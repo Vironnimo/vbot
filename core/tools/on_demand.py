@@ -13,63 +13,14 @@ from collections.abc import Collection, Iterable, Mapping
 from typing import Any
 
 from core.tools._tool_definitions import first_sentence_summary, tool_summary
-from core.tools.availability import (
-    TOOL_ACCESS_MODE_NONE,
-    ToolAccess,
-    normalize_tool_name_list,
-)
+from core.tools.availability import TOOL_ACCESS_MODE_NONE, ToolAccess
 from core.tools.edit import edit_tool_siblings
 from core.tools.model_names import model_tool_name
+from core.tools.tool_loading import DEFAULT_ALWAYS_LOADED_TOOLS
 
 LOAD_TOOLS_TOOL_NAME = "load_tools"
 # The System Prompt producer that lists the On-demand Tools by name and summary.
 ON_DEMAND_TOOL_LIST_PRODUCER = "on_demand_tool_list"
-
-TOOL_LOADING_FIELDS = frozenset({"on_demand", "always_loaded"})
-
-# The Tools an Agent keeps in its Tool list while ``always_loaded`` is not set.
-DEFAULT_ALWAYS_LOADED_TOOLS: tuple[str, ...] = (
-    "read",
-    "write",
-    "edit",
-    "apply_patch",
-    "bash",
-    "search_files",
-    "skill",
-    "memory",
-    "subagent",
-    "project",
-)
-
-
-def normalize_tool_loading(value: Any) -> dict[str, Any]:
-    """Validate one ``tool_loading`` object and return its canonical copy.
-
-    ``on_demand`` is required. ``always_loaded`` stays absent when the object
-    leaves it out (the default set applies); a given list, also an empty one,
-    is kept as given. Names of Tools that are not registered are kept, like
-    Extension Tool names in a Tool policy. Raises ``ValueError``.
-    """
-
-    if not isinstance(value, Mapping):
-        raise ValueError("tool_loading must be an object")
-    unsupported = sorted(str(key) for key in set(value) - TOOL_LOADING_FIELDS)
-    if unsupported:
-        raise ValueError(f"unsupported tool_loading fields: {', '.join(unsupported)}")
-    if "on_demand" not in value:
-        raise ValueError("tool_loading.on_demand is required")
-    on_demand = value["on_demand"]
-    if not isinstance(on_demand, bool):
-        raise ValueError("tool_loading.on_demand must be a boolean")
-    normalized: dict[str, Any] = {"on_demand": on_demand}
-    if "always_loaded" in value:
-        always_loaded = value["always_loaded"]
-        if isinstance(always_loaded, list) and "*" in always_loaded:
-            raise ValueError("tool_loading.always_loaded cannot contain '*'; name each Tool")
-        normalized["always_loaded"] = list(
-            normalize_tool_name_list(always_loaded, "tool_loading.always_loaded")
-        )
-    return normalized
 
 
 def loads_tools_on_demand(agent: Any) -> bool:
@@ -96,7 +47,7 @@ def loads_tools_on_demand(agent: Any) -> bool:
 def always_loaded_tools(tool_loading: Mapping[str, Any] | None) -> frozenset[str]:
     """Return the Tools *tool_loading* keeps in the Tool list.
 
-    The default set applies while ``always_loaded`` is absent. The file edit
+    The built-in set applies while ``always_loaded`` is absent. The file edit
     Tools count as one: naming one of them keeps all of them.
     """
 
@@ -171,13 +122,10 @@ def on_demand_tool_entries(
 
 
 __all__ = [
-    "DEFAULT_ALWAYS_LOADED_TOOLS",
     "LOAD_TOOLS_TOOL_NAME",
     "ON_DEMAND_TOOL_LIST_PRODUCER",
-    "TOOL_LOADING_FIELDS",
     "always_loaded_tools",
     "loads_tools_on_demand",
-    "normalize_tool_loading",
     "on_demand_tool_entries",
     "on_demand_tools",
 ]

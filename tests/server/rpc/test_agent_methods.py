@@ -21,6 +21,7 @@ from core.prompts import LayoutEntry, load_bundled_default_layout
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
 from core.sessions import ChatSessionManager
 from core.storage import StorageManager
+from core.tools.tool_loading import DEFAULT_ALWAYS_LOADED_TOOLS
 from tests.server.rpc_test_support import (
     JsonObject,
     StubAdapter,
@@ -218,12 +219,20 @@ def _real_agent_state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
     )
 
 
+_SHARED_TOOL_LOADING = {"on_demand": True, "always_loaded": ["read"]}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("defaults", "own_model", "source"),
     [
         pytest.param({}, "openai/gpt-5.2", "agent", id="own-value"),
-        pytest.param({"model": "openai/gpt-5.2"}, None, "global_default", id="global-default"),
+        pytest.param(
+            {"model": "openai/gpt-5.2", "tool_loading": _SHARED_TOOL_LOADING},
+            None,
+            "global_default",
+            id="global-default",
+        ),
     ],
 )
 async def test_agent_get_reports_raw_config_and_the_effective_source(
@@ -233,7 +242,9 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
     if own_model is None:
         state.runtime.agents.create("orchestrator", "Orchestrator")
     else:
-        state.runtime.agents.create("orchestrator", "Orchestrator", model=own_model)
+        state.runtime.agents.create(
+            "orchestrator", "Orchestrator", model=own_model, tool_loading={"on_demand": False}
+        )
 
     result = await rpc_result(state, "agent.get", id="orchestrator")
 
@@ -244,6 +255,7 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
         "top_p",
         "thinking_effort",
         "compaction_policy",
+        "tool_loading",
     }
     # ``config`` is the Agent's own value; the top-level value is the resolved one.
     assert result["config"]["model"] == (own_model or "")
@@ -252,6 +264,16 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
     assert result["effective"]["model"] == {"value": "openai/gpt-5.2", "source": source}
     assert result["effective"]["temperature"] == {"value": None, "source": None}
     assert result["effective"]["top_p"] == {"value": None, "source": None}
+    # ``tool_loading_default`` is what the Agent inherits, both parts complete.
+    if own_model is None:
+        assert result["config"]["tool_loading"] is None
+        assert result["tool_loading"] == result["tool_loading_default"] == _SHARED_TOOL_LOADING
+    else:
+        assert result["config"]["tool_loading"] == result["tool_loading"] == {"on_demand": False}
+        assert result["tool_loading_default"] == {
+            "on_demand": False,
+            "always_loaded": list(DEFAULT_ALWAYS_LOADED_TOOLS),
+        }
 
 
 @pytest.mark.asyncio

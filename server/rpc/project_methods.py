@@ -61,7 +61,7 @@ from core.settings import (
     validate_top_p,
 )
 from core.tools.availability import normalize_tool_access
-from core.tools.on_demand import normalize_tool_loading
+from core.tools.tool_loading import normalize_tool_loading
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -955,6 +955,9 @@ def _team_member_response(resolver: Any, member: AgentProfile, project: Project)
         # The agent's override object (vBot-owned, the top tier of each chain), or
         # null when this agent has none — the Projects tab renders/clears it per row.
         "overrides": project.overrides.get(member.agent_id) or None,
+        # The On-demand Tools setting the agent inherits for each part its
+        # ``tool_loading`` override does not set, both parts complete.
+        "tool_loading_default": resolver.inherited_tool_loading(),
         # Per run field, the effective value + winning tier (override / agent /
         # project_default / global_default / null), computed from the already-scanned
         # member so the team listing never re-scans per member.

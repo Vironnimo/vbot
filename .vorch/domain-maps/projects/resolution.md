@@ -56,7 +56,7 @@ per-Agent override -> repository Agent -> Project default -> global default -> P
 
 `effective_config()` exposes the chosen value and provenance (`override`, `agent`, `project_default`, `global_default`, or `null`) for model, temperature, top_p, and thinking effort. Preserve those labels as an API/UI contract when changing fallback behavior.
 
-Compaction policy and `tool_loading` (On-demand Tools) are supported per-Agent Project overrides passed into the synthesized `ConfigAgent` (`test_resolver_config_agent.py`), but they are not among the fields in the current effective-config provenance result. Do not imply provenance coverage until that contract is deliberately extended end to end.
+Compaction policy and `tool_loading` (On-demand Tools) are supported per-Agent Project overrides passed into the synthesized `ConfigAgent` (`test_resolver_config_agent.py`; `tool_loading` with each missing part filled from `defaults.agent.tool_loading`, `inherit_tool_loading`), but they are not among the fields in the current effective-config provenance result. Do not imply provenance coverage until that contract is deliberately extended end to end.
 
 ## Effective Capabilities
 

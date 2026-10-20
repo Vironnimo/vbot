@@ -645,6 +645,7 @@
       {availableAgentTargets}
       {agentTargetCatalogError}
       toolLoadingEditable={!agent?.builtin}
+      toolLoadingDefault={agent?.tool_loading_default ?? null}
       bind:formValues
       {navigateToExtensions}
       {onToast}

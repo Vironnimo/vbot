@@ -32,7 +32,7 @@ from core.tools.availability import (
     normalize_env_keys,
     normalize_tool_access,
 )
-from core.tools.on_demand import normalize_tool_loading
+from core.tools.tool_loading import normalize_tool_loading
 from core.utils.logging import get_logger
 from server.events import (
     RESOURCE_KIND_AGENTS,

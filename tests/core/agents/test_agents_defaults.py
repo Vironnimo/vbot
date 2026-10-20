@@ -66,6 +66,38 @@ def test_reads_resolve_live_defaults_while_files_and_raw_reads_keep_own_values(
     assert persisted(store, "inherits")["model"] == ""
 
 
+def test_tool_loading_inherits_each_part_the_agent_does_not_set(
+    tmp_path: Path, template_dir: Path
+) -> None:
+    defaults: dict[str, Any] = {"tool_loading": {"on_demand": True, "always_loaded": ["read"]}}
+    store = AgentStore(
+        tmp_path / "data", template_dir=template_dir, defaults_provider=lambda: defaults
+    )
+    own: dict[str, dict[str, Any] | None] = {
+        "inherits": None,
+        "switched_off": {"on_demand": False},
+        "own_list": {"always_loaded": []},
+        "own_both": {"on_demand": False, "always_loaded": ["bash"]},
+    }
+    for agent_id, tool_loading in own.items():
+        store.create(agent_id, agent_id, tool_loading=tool_loading)
+
+    assert {agent_id: store.get(agent_id).tool_loading for agent_id in own} == {
+        "inherits": {"on_demand": True, "always_loaded": ["read"]},
+        "switched_off": {"on_demand": False, "always_loaded": ["read"]},
+        "own_list": {"on_demand": True, "always_loaded": []},
+        "own_both": {"on_demand": False, "always_loaded": ["bash"]},
+    }
+    # The Agent files and raw reads keep only the Agents' own parts.
+    assert {agent_id: store.get_raw(agent_id).tool_loading for agent_id in own} == own
+    assert "tool_loading" not in persisted(store, "inherits")
+
+    # A default without a list leaves the built-in always-loaded Tools in place.
+    defaults["tool_loading"] = {"on_demand": True}
+    assert store.get("inherits").tool_loading == {"on_demand": True}
+    assert store.get("switched_off").tool_loading == {"on_demand": False}
+
+
 def test_missing_session_pointer_stays_empty_and_missing_workspace_is_repaired_on_load(
     store: AgentStore,
 ) -> None:

@@ -286,9 +286,9 @@ def test_explicit_empty_tool_whitelist_is_kept(tmp_path: Path) -> None:
         pytest.param(
             "vbot",
             None,
-            {"overrides": {"coder": {"tool_loading": {"always_loaded": ["read"]}}}},
+            {"overrides": {"coder": {"tool_loading": {"on_demand": "yes"}}}},
             ProjectError,
-            "overrides['coder'].tool_loading.on_demand is required",
+            "overrides['coder'].tool_loading.on_demand must be a boolean",
             id="override-tool-loading",
         ),
     ],

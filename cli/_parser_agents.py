@@ -202,10 +202,11 @@ def _add_agent_change_arguments(
     )
     parser.add_argument(
         "--tools-on-demand",
-        choices=("on", "off"),
+        choices=("on", "off", "default"),
         help=(
-            "Replace the On-demand Tools setting: on keeps only the always-loaded Tools in "
-            "the Tool list and lets the agent load the others when it needs them"
+            "Replace the agent's own On-demand Tools setting: on keeps only the always-loaded "
+            "Tools in the Tool list and lets the agent load the others when it needs them; "
+            "default follows the shared default (defaults.agent.tool_loading)"
         ),
     )
     parser.add_argument(
@@ -214,7 +215,7 @@ def _add_agent_change_arguments(
         metavar="<tool>",
         help=(
             "Requires --tools-on-demand; the Tools that stay in the Tool list (empty for "
-            "none); omitted keeps the default set"
+            "none); omitted follows the shared default"
         ),
     )
     parser.add_argument(

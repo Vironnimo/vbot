@@ -438,18 +438,26 @@ def test_tool_access_round_trips_and_updates_keep_tool_settings(
 def test_tool_loading_persists_as_given_and_clears(store: AgentStore) -> None:
     store.create("coder", "Coder", tool_loading={"on_demand": True})
 
-    # Without always_loaded the default set applies; nothing else is written.
+    # A part the setting leaves out is inherited; nothing else is written.
     assert store.get("coder").tool_loading == {"on_demand": True}
     assert persisted(store, "coder")["tool_loading"] == {"on_demand": True}
 
-    # An explicit list, also an empty one, and unregistered Tool names stay as given.
-    for always_loaded in ([], ["read", "mcp_future_tool"]):
-        value = {"on_demand": True, "always_loaded": always_loaded}
+    # An explicit list, also an empty one, and unregistered Tool names stay as given,
+    # with or without the switch.
+    for value in (
+        {"on_demand": True, "always_loaded": []},
+        {"on_demand": True, "always_loaded": ["read", "mcp_future_tool"]},
+        {"always_loaded": ["read"]},
+    ):
         assert store.update("coder", tool_loading=value).tool_loading == value
         assert persisted(store, "coder")["tool_loading"] == value
 
-    assert store.update("coder", tool_loading=None).tool_loading is None
-    assert "tool_loading" not in persisted(store, "coder")
+    # A setting with neither part inherits both, the same as none.
+    cleared_values: tuple[dict[str, Any] | None, ...] = ({}, None)
+    for cleared in cleared_values:
+        store.update("coder", tool_loading={"on_demand": False})
+        assert store.update("coder", tool_loading=cleared).tool_loading is None
+        assert "tool_loading" not in persisted(store, "coder")
 
 
 def test_description_persists_as_one_trimmed_line_and_clears(store: AgentStore) -> None:
@@ -529,7 +537,6 @@ def test_workspace_inside_data_dir_persists_relative_and_follows_a_moved_data_di
             "yes",
             "custom_system_prompt_enabled must be a boolean",
         ),
-        ("tool_loading", {"always_loaded": []}, "tool_loading.on_demand is required"),
         ("tool_loading", {"on_demand": "yes"}, "tool_loading.on_demand must be a boolean"),
         (
             "tool_loading",

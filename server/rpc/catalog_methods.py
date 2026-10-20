@@ -76,7 +76,7 @@ def _project_annotated_tool_response(tool: Any) -> JsonObject:
     response["project_configurable"] = reason is None
     response["project_configurability_reason"] = reason
     # Whether an Agent with On-demand Tools keeps this Tool in its Tool list
-    # while it has not chosen its always-loaded Tools.
+    # while neither it nor the shared default chooses its always-loaded Tools.
     response["loaded_by_default"] = tool.name in _DEFAULT_ALWAYS_LOADED
     return response
 
