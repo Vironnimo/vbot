@@ -30,6 +30,7 @@ _TOTAL_COUNTS = [
     "speed_tokens",
     "speed_window_ms",
     "first_token_calls",
+    "duration_calls",
 ]
 _TOTAL_AMOUNTS = (
     "cost_usd",
@@ -40,6 +41,7 @@ _TOTAL_AMOUNTS = (
     "avg_first_token_ms",
     "first_token_p50_ms",
     "first_token_p95_ms",
+    "avg_duration_ms",
 )
 
 
@@ -298,7 +300,14 @@ def test_statistics_usage_prints_totals_breakdowns_and_costliest_work(
     rpc: FakeRpc, run_cli: RunCli
 ) -> None:
     usage = {
-        "totals": _totals(calls=2, cost_usd=0.5, reported_cost_usd=0.5, reported_calls=2),
+        "totals": _totals(
+            calls=2,
+            cost_usd=0.5,
+            reported_cost_usd=0.5,
+            reported_calls=2,
+            duration_calls=2,
+            avg_duration_ms=4200,
+        ),
         "breakdowns": {
             "model": [
                 {
@@ -351,6 +360,7 @@ def test_statistics_usage_prints_totals_breakdowns_and_costliest_work(
     assert rpc.calls == [("statistics.report", {"sections": ["usage"]})]
     for text in (
         "model calls: 2 (failed=0, without usage=0)",
+        "request duration: avg=4.2s over 2 timed calls",
         "tokens: input=0 output=0 reasoning=0 (of which estimated: input=0 output=0)",
         "  openai/gpt-5: calls=2 failed=0 runs=1 sessions=1 input=0 output=0 cache_hit=- "
         "cost=$0.5000 first_token_median=500ms first_token_p95=1.2s "
@@ -470,12 +480,65 @@ def test_statistics_errors_reads_the_runs_section(rpc: FakeRpc, run_cli: RunCli)
     assert rpc.calls == [("statistics.report", {"sections": ["runs"]})]
     for text in (
         "total errors: 2",
-        "failed model requests: 5",
+        "failed model requests: 5 (by failure class: vbot statistics failures)",
         "by kind:\n  rate_limit: 2",
         "by model:\n  no errors recorded",
         "by local hour (Europe/Berlin):\n  09: 2\n",
     ):
         assert text in out + "\n"
+
+
+def test_statistics_failures_reads_the_diagnostics_section(rpc: FakeRpc, run_cli: RunCli) -> None:
+    failed_attempts = {
+        "total": 3,
+        "hours": [
+            {
+                "hour_start": "2026-06-01T12:00:00.000000Z",
+                "calls": 8,
+                "failed": 3,
+                "models": [{"key": "anthropic/claude-sonnet-4", "count": 3}],
+                "agents": [{"key": "main", "count": 3}],
+                "classes": [{"key": "server", "count": 2}, {"key": "cancelled", "count": 1}],
+            }
+        ],
+        "by_class": [
+            {
+                "key": "server",
+                "count": 2,
+                "duration_calls": 2,
+                "avg_duration_ms": 2000,
+                "providers": [{"key": "anthropic", "count": 2}],
+                "models": [{"key": "anthropic/claude-sonnet-4", "count": 2}],
+                "http_statuses": [{"key": "529", "count": 2}],
+            },
+            {
+                "key": "unknown",
+                "count": 1,
+                "duration_calls": 0,
+                "avg_duration_ms": None,
+                "providers": [],
+                "models": [],
+                "http_statuses": [],
+            },
+        ],
+    }
+    rpc.reply(
+        "statistics.report",
+        {"window": ALL_TIME, "diagnostics": {"failed_attempts": failed_attempts}},
+    )
+
+    code, out, _err = run_cli("statistics", "failures")
+
+    assert code == 0
+    assert rpc.calls == [("statistics.report", {"sections": ["diagnostics"]})]
+    for text in (
+        "failed model requests: 3",
+        "  server: 2 avg_time_to_failure=2.0s (timed=2) http=529:2 providers=anthropic:2 "
+        "models=anthropic/claude-sonnet-4:2",
+        "  unknown: 1 avg_time_to_failure=- (timed=0) http=- providers=- models=-",
+        "  2026-06-01T12:00:00.000000Z: failed=3 of calls=8 classes=server:2,cancelled:1",
+    ):
+        assert text in out
 
 
 def test_statistics_tools_prints_outcomes_latency_and_rejection_codes(

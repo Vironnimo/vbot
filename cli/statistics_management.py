@@ -2,8 +2,9 @@
 
 Every subcommand issues one ``statistics.report`` call that requests only the
 report section it renders, and formats that section as deterministic,
-agent-facing plain text. ``compactions`` reads ``diagnostics.compactions`` and
-``errors`` reads ``runs.errors``. The report shape is the section contract
+agent-facing plain text. ``compactions`` reads ``diagnostics.compactions``,
+``failures`` reads ``diagnostics.failed_attempts`` and ``errors`` reads
+``runs.errors``. The report shape is the section contract
 documented in ``.vorch/domain-maps/statistics.md``; the CLI reads its
 JSON-native fields and never re-derives anything server-side.
 """
@@ -309,7 +310,7 @@ def _speed(value: object) -> str:
 
 
 def _totals_lines(totals: Mapping[str, Any]) -> list[str]:
-    """The shared ``Totals`` figures: cost and its coverage, calls, tokens, cache."""
+    """The shared ``Totals`` figures: cost and its coverage, calls, duration, tokens, cache."""
 
     return [
         f"cost: {_usd(totals.get('cost_usd'))} "
@@ -321,6 +322,8 @@ def _totals_lines(totals: Mapping[str, Any]) -> list[str]:
         f"model calls: {_int(totals.get('calls'))} "
         f"(failed={_int(totals.get('failed_calls'))}, "
         f"without usage={_int(totals.get('unreported_calls'))})",
+        f"request duration: avg={_duration(totals.get('avg_duration_ms'))} "
+        f"over {_int(totals.get('duration_calls'))} timed calls",
         f"tokens: {_token_pair(totals)} reasoning={_int(totals.get('reasoning_tokens'))} "
         f"(of which estimated: input={_int(totals.get('estimated_input_tokens'))} "
         f"output={_int(totals.get('estimated_output_tokens'))})",
@@ -490,7 +493,10 @@ def _format_compactions(section: Section, window: object) -> str:
 def _format_errors(section: Section, window: object) -> str:
     lines = ["errors:", *_window_lines(window)]
     lines.append(f"total errors: {_int(section.get('total'))}")
-    lines.append(f"failed model requests: {_int(section.get('failed_attempts'))}")
+    lines.append(
+        f"failed model requests: {_int(section.get('failed_attempts'))} "
+        "(by failure class: vbot statistics failures)"
+    )
     lines.append(
         "attribution: persisted Run errors; provider/model use the last preceding "
         "Assistant Model step (proxy); failed model requests are failed attempts in "
@@ -519,6 +525,56 @@ def _format_errors(section: Section, window: object) -> str:
         )
     )
     return "\n".join(lines)
+
+
+def _format_failures(section: Section, window: object) -> str:
+    lines = ["failures:", *_window_lines(window)]
+    lines.append(f"failed model requests: {_int(section.get('total'))}")
+    lines.append(
+        "attribution: failed, cancelled and interrupted attempts in the usage ledger, "
+        "retried ones included; a failed attempt counts under its failure class "
+        "(unknown: recorded without one); time to failure runs from dispatch to the "
+        "outcome (timed: attempts with a measured duration)"
+    )
+    lines.append("")
+    lines.append("by class:")
+    lines.extend(
+        _rows(
+            section.get("by_class"),
+            lambda row: (
+                f"  {_text(row.get('key'))}: {_int(row.get('count'))} "
+                f"avg_time_to_failure={_duration(row.get('avg_duration_ms'))} "
+                f"(timed={_int(row.get('duration_calls'))}) "
+                f"http={_key_counts(row.get('http_statuses'))} "
+                f"providers={_key_counts(row.get('providers'))} "
+                f"models={_key_counts(row.get('models'))}"
+            ),
+            "  no failed model requests",
+        )
+    )
+    lines.append("")
+    lines.append("worst hours (UTC):")
+    lines.extend(
+        _rows(
+            section.get("hours"),
+            lambda row: (
+                f"  {_text(row.get('hour_start'))}: failed={_int(row.get('failed'))} "
+                f"of calls={_int(row.get('calls'))} "
+                f"classes={_key_counts(row.get('classes'))} "
+                f"models={_key_counts(row.get('models'))} "
+                f"agents={_key_counts(row.get('agents'))}"
+            ),
+            "  no failed model requests",
+        )
+    )
+    return "\n".join(lines)
+
+
+def _key_counts(entries: object) -> str:
+    """``key:count`` pairs of a ranked ``{key, count}`` list; ``-`` when empty."""
+
+    parts = [f"{_text(row.get('key'))}:{_int(row.get('count'))}" for row in _dict_rows(entries)]
+    return ",".join(parts) if parts else _MISSING
 
 
 def _count_lines(entries: object) -> list[str]:
@@ -788,6 +844,7 @@ _SECTIONS: dict[str, tuple[tuple[str, ...], Formatter]] = {
     "runs": (("runs",), _format_runs),
     "compactions": (("diagnostics", "compactions"), _format_compactions),
     "errors": (("runs", "errors"), _format_errors),
+    "failures": (("diagnostics", "failed_attempts"), _format_failures),
     "tools": (("tools",), _format_tools),
     "skills": (("skills",), _format_skills),
 }

@@ -83,6 +83,7 @@ STATISTICS_SECTIONS = (
     "runs",
     "compactions",
     "errors",
+    "failures",
     "tools",
     "skills",
 )
@@ -361,6 +362,10 @@ STATISTICS_HELP = {
     "runs": "Show Run outcomes, duration and cost percentiles, and notable Runs",
     "compactions": "Show checkpoint counts, reclaimed context, Strategies, and top Sessions",
     "errors": "Show Run errors and failed Model requests by kind, Provider, Model, and Agent",
+    "failures": (
+        "Show failed Model requests by failure class with time to failure, HTTP status, "
+        "Provider, and Model, and the hours with the most failures"
+    ),
     "tools": "Show Tool calls, rejections, latency, and rejection codes",
     "skills": "Show Skill offers, activations, and evidence-backed offer conversion",
 }
