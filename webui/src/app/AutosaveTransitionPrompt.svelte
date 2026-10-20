@@ -10,6 +10,7 @@
   <Modal
     title={t('autosave.stillSavingTitle')}
     labelledById="autosave-transition-slow-title"
+    size="sm"
     onClose={transition.keepWaiting}
   >
     {#snippet body()}
@@ -20,11 +21,11 @@
       </div>
     {/snippet}
     {#snippet footer()}
-      <Button variant="primary" onClick={transition.keepWaiting}>
-        {t('autosave.keepWaiting')}
-      </Button>
       <Button variant="secondary" onClick={transition.leave}>
         {t('autosave.leaveAnyway')}
+      </Button>
+      <Button variant="primary" onClick={transition.keepWaiting}>
+        {t('autosave.keepWaiting')}
       </Button>
     {/snippet}
   </Modal>
@@ -34,6 +35,7 @@
   <Modal
     title={t('autosave.transitionFailureTitle')}
     labelledById="autosave-transition-failure-title"
+    size="sm"
     onClose={transition.stay}
   >
     {#snippet body()}
@@ -44,15 +46,15 @@
       </div>
     {/snippet}
     {#snippet footer()}
+      <Button variant="secondary" onClick={transition.leave}>
+        {t('autosave.discardAndContinue')}
+      </Button>
       <Button
         variant="primary"
         disabled={transition.saving}
         onClick={transition.retry}
       >
         {transition.saving ? t('common.saving') : t('common.retry')}
-      </Button>
-      <Button variant="danger" onClick={transition.leave}>
-        {t('autosave.discardAndContinue')}
       </Button>
     {/snippet}
   </Modal>
