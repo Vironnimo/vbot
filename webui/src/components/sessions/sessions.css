@@ -24,35 +24,6 @@
   }
 }
 
-.session-policy-modal__body {
-  display: grid;
-  gap: 18px;
-  min-width: min(620px, 78vw);
-}
-
-.session-policy-modal__inheritance {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-}
-
-.session-policy-modal__label {
-  color: var(--text-hi);
-  font: 500 13px var(--font-ui);
-}
-
-.session-policy-modal__inheritance p,
-.session-policy-modal__error {
-  margin: 3px 0 0;
-  color: var(--text-med);
-  font: 12px/1.45 var(--font-ui);
-}
-
-.session-policy-modal__error {
-  color: var(--danger);
-}
-
 .session-drawer__header {
   display: flex;
   align-items: center;
