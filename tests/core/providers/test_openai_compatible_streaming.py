@@ -606,14 +606,19 @@ async def test_repeated_name_is_deduplicated_but_argument_bytes_are_kept() -> No
             {
                 "choices": [],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 5},
-                "timings": {"predicted_n": 5, "predicted_per_second": 61.5},
+                "timings": {
+                    "predicted_n": 5,
+                    "predicted_per_second": 40.0,
+                    "predicted_ms": 100.0,
+                },
             },
             [
                 {
                     "type": "usage",
                     "input_tokens": 9,
                     "output_tokens": 5,
-                    "reported_output_tokens_per_second": 61.5,
+                    "reported_output_tokens_per_second": 40.0,
+                    "reported_output_duration_ms": 100.0,
                 }
             ],
             id="llama-cpp-decode-speed",

@@ -38,6 +38,12 @@ function historyLoadOptions(history) {
     ...(isRecord(history) && Object.hasOwn(history, 'last_usage')
       ? { lastUsage: history.last_usage }
       : {}),
+    ...(isRecord(history) && Object.hasOwn(history, 'output_speed')
+      ? { output_speed: history.output_speed }
+      : {}),
+    ...(isRecord(history) && Object.hasOwn(history, 'output_latency')
+      ? { output_latency: history.output_latency }
+      : {}),
     ...(isRecord(history) && Object.hasOwn(history, 'context_usage')
       ? { contextUsage: history.context_usage }
       : {}),
@@ -123,6 +129,8 @@ export function createChatHistory({
     const snapshotVersion = sessionState.historySnapshotVersion;
     const compactionPolicy = sessionState.compactionPolicy;
     const usage = sessionState.usage;
+    const outputSpeed = sessionState.outputSpeed;
+    const outputLatency = sessionState.outputLatency;
     return {
       snapshotVersion,
       loadOptions(history) {
@@ -134,6 +142,10 @@ export function createChatHistory({
         }
         // Output from the live Run may have advanced since the read began.
         if (sessionState.usage !== usage) options.preserveUsage = true;
+        if (sessionState.outputSpeed !== outputSpeed)
+          options.preserveOutputSpeed = true;
+        if (sessionState.outputLatency !== outputLatency)
+          options.preserveOutputLatency = true;
         return options;
       },
       isLatest: () => historyLoadVersions.get(sessionState.key) === version,
@@ -186,6 +198,15 @@ export function createChatHistory({
             : Object.hasOwn(result, 'last_usage')
               ? { last_usage: result.last_usage }
               : {}),
+          ...Object.fromEntries(
+            ['output_speed', 'output_latency'].flatMap((key) =>
+              Object.hasOwn(page, key)
+                ? [[key, page[key]]]
+                : Object.hasOwn(result, key)
+                  ? [[key, result[key]]]
+                  : [],
+            ),
+          ),
         };
       after = page.next_after;
     } while (result?.has_newer);

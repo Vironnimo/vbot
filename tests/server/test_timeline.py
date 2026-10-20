@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import aclosing
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -62,6 +63,10 @@ async def test_windowed_run_stream_and_child_pages_preserve_positions_and_genera
 ) -> None:
     active = run()
     messages = [ChatMessage.assistant(model="test/model", content=f"step {i}") for i in range(30)]
+    speed = {"output_tokens_per_second": 50, "first_token_ms": 900, "basis": "output"}
+    latency = {"first_token_ms": 20, "duration_ms": 25}
+    messages[0] = replace(messages[0], usage={"speed": speed})
+    messages[-1] = replace(messages[-1], usage={"speed": latency})
     for message in messages:
         active.emit("assistant_output", {"message": message.to_dict()})
 
@@ -87,6 +92,16 @@ async def test_windowed_run_stream_and_child_pages_preserve_positions_and_genera
         sse_timeline(state, active, child_limit=3, batch_interval_seconds=0)
     ) as stream:
         initial = data(await anext(stream))
+        assert initial["state"]["output_speed"] == {
+            **speed,
+            "model": "test/model",
+            "message_id": messages[0].id,
+        }
+        assert initial["state"]["output_latency"] == {
+            **latency,
+            "model": "test/model",
+            "message_id": messages[-1].id,
+        }
         children = initial["items"][0]["items"]
         gap = children[0]
         assert gap["type"] == "history_gap"

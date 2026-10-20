@@ -515,8 +515,9 @@ export default Object.freeze({
   'chat.sessionSettings.saveError': 'The Session setting could not be saved.',
   'chat.sessionSettings.speed': 'Output speed',
   'chat.sessionSettings.speedValue': '{rate} tok/s',
+  'chat.sessionSettings.approximateSpeed': '≈{value}',
   'chat.sessionSettings.speedHint':
-    'How fast the latest measured Model response was written. Waiting for the Model counts toward the time to first token, not toward the speed.',
+    'The latest step with a measurable output rate. A newer response may have no rate; its latency is shown separately.',
   'chat.sessionSettings.speedRate': 'Tokens per second',
   'chat.sessionSettings.firstToken': 'Time to first token',
   'chat.sessionSettings.firstAnswer': 'Time to first answer',
@@ -524,8 +525,15 @@ export default Object.freeze({
   'chat.sessionSettings.speedMeasuredValue': '{tokens} tokens in {duration}',
   'chat.sessionSettings.speedEstimatedValue': '~{tokens} tokens in {duration}',
   'chat.sessionSettings.speedAnswerOnly':
-    'The answer only: the Provider did not stream its Reasoning.',
-  'chat.sessionSettings.speedReported': 'Measured by the Provider.',
+    'Approximate answer streaming rate observed by vBot, excluding hidden Reasoning. Network buffering can affect it.',
+  'chat.sessionSettings.speedStreamedOutput':
+    'Approximate streaming rate observed by vBot, including streamed Reasoning and Tool-call output. Network buffering can affect it.',
+  'chat.sessionSettings.speedReported':
+    'Provider-reported decode rate, measured during generation rather than from output arriving at vBot.',
+  'chat.sessionSettings.latency': 'Latest response latency',
+  'chat.sessionSettings.latencyValue': 'TTFT {duration}',
+  'chat.sessionSettings.latencyHint':
+    'Time from sending the latest measured request until its first text, Reasoning or Tool-call output arrived. Provider queueing and prompt processing are included. This is measured even when the response is too short for an output rate.',
   'chat.activity.parentSession': 'Parent Session',
   'chat.activity.openParentSession': 'Open parent Session · {session}',
   'sessions.title': 'Sessions',

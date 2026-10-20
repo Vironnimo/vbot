@@ -205,6 +205,14 @@ _INSIGHTS: dict[str, Callable[[Mapping[str, Any]], str]] = {
 def _format_usage(section: Section, window: object) -> str:
     lines = ["usage:", *_window_lines(window)]
     lines.extend(_totals_lines(_mapping(section.get("totals"))))
+    lines.append(
+        "timing: completed Chat requests only; first token includes Reasoning or Tool output; "
+        "earlier failed attempts are excluded"
+    )
+    lines.append(
+        "speed: separate answer, full output and Provider decode measurements; "
+        "~ marks approximate stream rates; Provider rows reflect their mix of Models and work"
+    )
     breakdowns = _mapping(section.get("breakdowns"))
     for dimension, title in (
         ("model", "by model"),
@@ -241,8 +249,8 @@ def _format_usage(section: Section, window: object) -> str:
     return "\n".join(lines)
 
 
-# Output speed is a property of the Model that answered, so only Model and
-# Provider rows show it; the others mix Models.
+# Model and Provider breakdowns expose timing. Provider rows describe the
+# actual workload mix, not an isolated Provider benchmark.
 _SPEED_DIMENSIONS = frozenset({"model", "provider"})
 
 
@@ -256,11 +264,39 @@ def _breakdown_line(row: Mapping[str, Any], dimension: str) -> str:
     )
     if dimension not in _SPEED_DIMENSIONS:
         return line
-    return (
-        f"{line} speed={_speed(row.get('output_tokens_per_second'))} "
-        f"speed_calls={_int(row.get('speed_calls'))} "
+    latency = (
+        f"{line} first_token_median={_duration(row.get('first_token_p50_ms'))} "
+        f"first_token_p95={_duration(row.get('first_token_p95_ms'))} "
         f"avg_first_token={_duration(row.get('avg_first_token_ms'))} "
         f"first_token_calls={_int(row.get('first_token_calls'))}"
+    )
+    speeds = _dict_rows(row.get("speed_by_basis"))
+    return (
+        "\n".join([latency, *(_speed_line(value) for value in speeds)])
+        if speeds
+        else (f"{latency}\n    speed=- speed_calls=0")
+    )
+
+
+def _speed_line(measurement: Mapping[str, Any]) -> str:
+    basis = measurement.get("basis")
+    if basis == "answer":
+        label, prefix = "answer_speed", "~"
+    elif basis == "output":
+        label, prefix = "full_output_speed", "~"
+    elif basis == "provider":
+        label, prefix = "provider_decode_speed", ""
+    else:
+        label, prefix = "unknown_basis_speed", ""
+    value = (
+        _speed(measurement.get("output_tokens_per_second"))
+        if basis in ("answer", "output", "provider")
+        else _MISSING
+    )
+    return (
+        f"    {label}={prefix if value != _MISSING else ''}{value} "
+        f"speed_calls={_int(measurement.get('calls'))} "
+        f"estimated_token_calls={_int(measurement.get('estimated_calls'))}"
     )
 
 

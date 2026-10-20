@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
@@ -53,6 +54,42 @@ def _can_append(state: sqlite3.Row, after: tuple[str, int] | None) -> bool:
         and 0 <= sequence <= int(state["next_seq"])
         and sequence >= int(state["cursor_floor_seq"])
     )
+
+
+def _output_measurement_rows(
+    connection: sqlite3.Connection, ranges: Sequence[ViewRange]
+) -> dict[str, sqlite3.Row]:
+    """Read the latest speed and latency independently from the full current view.
+
+    Select only identity and Usage extras, never Assistant bodies or Tool
+    payloads. The JSON predicates narrow candidates; Chat owns their public
+    measurement projection.
+    """
+    result = {}
+    for name, field, comparison in (
+        ("output_speed", "output_tokens_per_second", ">"),
+        ("output_latency", "first_token_ms", ">="),
+    ):
+        value = f"json_extract(a.usage_extra_json, '$.speed.{field}')"
+        rows = _store_lineage.ordered_rows(
+            connection,
+            ranges,
+            columns=(
+                "e.model, e.entry_id, (SELECT a.usage_extra_json FROM assistant_entries AS a "
+                "WHERE a.entry_key = e.entry_key) AS usage_extra_json"
+            ),
+            where=(
+                "e.role = 'assistant' AND EXISTS (SELECT 1 FROM assistant_entries AS a "
+                "WHERE a.entry_key = e.entry_key AND a.usage_present = 1 "
+                f"AND json_type(a.usage_extra_json, '$.speed.{field}') IN ('integer', 'real') "
+                f"AND {value} {comparison} 0 AND abs({value}) < 1e999)"
+            ),
+            descending=True,
+            limit=1,
+        )
+        if rows:
+            result[name] = rows[0]
+    return result
 
 
 def _editable(batch: _store_codec.EntryBatch, row: sqlite3.Row, takeover_seq: int) -> bool:
@@ -353,6 +390,7 @@ def chat_history_snapshot(
             )
     usage = _store_history.session_usage(connection, state)
     context = _store_history.context_batch(connection, ranges)
+    output_rows = _output_measurement_rows(connection, ranges)
     background = _background_records(
         connection,
         ranges,
@@ -365,6 +403,16 @@ def chat_history_snapshot(
     runs = _page_runs(connection, ranges, batch, through=through, incremental=incremental)
 
     def decode() -> SessionChatHistorySnapshot:
+        from core.chat import output_measurements
+
+        output = {
+            name: output_measurements(
+                json.loads(row["usage_extra_json"]),
+                model=row["model"],
+                message_id=row["entry_id"],
+            ).get(name)
+            for name, row in output_rows.items()
+        }
         return SessionChatHistorySnapshot(
             page=SessionMessagePage(
                 messages=tuple(batch.messages()),
@@ -389,6 +437,8 @@ def chat_history_snapshot(
             incremental=incremental,
             has_newer=has_newer,
             runs=runs,
+            output_speed=output.get("output_speed"),
+            output_latency=output.get("output_latency"),
         )
 
     return decode

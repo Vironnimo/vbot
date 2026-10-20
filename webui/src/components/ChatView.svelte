@@ -947,6 +947,7 @@
                     <ComposerSessionSettings
                       view={sessionSettings.view}
                       outputSpeed={target.activeSessionState?.outputSpeed}
+                      outputLatency={target.activeSessionState?.outputLatency}
                       {projects}
                       {projectsLoaded}
                       onSelectProject={sessionSettings.selectProject}

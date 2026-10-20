@@ -45,7 +45,10 @@ def build(context: ReportContext) -> JsonObject:
     units = context.units_table
     runs, session_runs = _run_counts(context)
     return {
-        "totals": usage_totals(context).json(),
+        "totals": {
+            **usage_totals(context).json(),
+            **_first_token_percentiles(context, "''").get("", _empty_percentiles()),
+        },
         "breakdowns": {
             name: _breakdown(context, key_sql, runs[name]) for name, key_sql in _DIMENSIONS.items()
         },
@@ -97,6 +100,7 @@ def _run_counts(context: ReportContext) -> tuple[dict[str, Counter[str]], Counte
 
 
 def _breakdown(context: ReportContext, key_sql: str, runs: Counter[str]) -> list[JsonObject]:
+    percentiles = _first_token_percentiles(context, key_sql)
     usage: dict[str, tuple[int, Totals]] = {
         row[0]: (row[1], Totals(row[2:]))
         for row in context.query(
@@ -111,9 +115,51 @@ def _breakdown(context: ReportContext, key_sql: str, runs: Counter[str]) -> list
     rows = []
     for key in {*usage, *runs}:
         sessions, totals = usage.get(key, (0, Totals()))
-        rows.append({"key": key, **totals.json(), "runs": runs[key], "sessions": sessions})
+        rows.append(
+            {
+                "key": key,
+                **totals.json(),
+                **percentiles.get(key, _empty_percentiles()),
+                "runs": runs[key],
+                "sessions": sessions,
+            }
+        )
     rows.sort(key=lambda row: cost_order(row["cost_usd"], row["calls"], row["key"]))
     return rows
+
+
+def _empty_percentiles() -> JsonObject:
+    return {"first_token_p50_ms": None, "first_token_p95_ms": None}
+
+
+def _first_token_percentiles(context: ReportContext, key_sql: str) -> dict[str, JsonObject]:
+    """Exact nearest-rank latency percentiles over aggregated millisecond frequencies.
+
+    SQL folds the histogram and selects each rank, so reports never transfer
+    individual requests or an unbounded histogram into Python.
+    """
+    return {
+        row[0]: {"first_token_p50_ms": row[1], "first_token_p95_ms": row[2]}
+        for row in context.query(
+            f"""
+            WITH frequencies AS (
+                SELECT {key_sql} AS key, a.first_token_ms, SUM(a.calls) AS calls
+                FROM agg_first_token a JOIN {context.units_table} u ON u.unit_key = a.unit_key
+                WHERE {context.hour_condition("a")}
+                GROUP BY key, a.first_token_ms
+            ), ranked AS (
+                SELECT key, first_token_ms,
+                    SUM(calls) OVER (PARTITION BY key ORDER BY first_token_ms) AS cumulative,
+                    SUM(calls) OVER (PARTITION BY key) AS total
+                FROM frequencies
+            )
+            SELECT key,
+                MIN(CASE WHEN cumulative >= (total + 1) / 2 THEN first_token_ms END),
+                MIN(CASE WHEN cumulative >= (total * 95 + 99) / 100 THEN first_token_ms END)
+            FROM ranked GROUP BY key
+            """
+        )
+    }
 
 
 def _series(context: ReportContext) -> list[JsonObject]:

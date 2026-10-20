@@ -248,6 +248,30 @@ async def test_history_hides_notes(history: _History) -> None:
     assert "content" not in fallback
     assert "Internal reminder" not in str(result["messages"])
     assert "Sub-agent batch" not in str(result["messages"])
+
+
+@pytest.mark.asyncio
+async def test_windowed_timeline_carries_independent_whole_session_output_measurements(
+    history: _History,
+) -> None:
+    session = history.session()
+    speed = {"output_tokens_per_second": 50, "first_token_ms": 900, "basis": "output"}
+    measured = ChatMessage.assistant(
+        content="long answer", model="provider/first", usage={"speed": speed}
+    )
+    latency = {"first_token_ms": 20, "duration_ms": 25}
+    short = ChatMessage.assistant(content="yes", model="provider/second", usage={"speed": latency})
+    session.append_many([measured, short, ChatMessage.user("latest")])
+    result = await history.read(method="chat.timeline", limit=1, child_limit=1)
+    assert [message["role"] for message in result["messages"]] == ["user"]
+    assert result["output_speed"] == {**speed, "model": measured.model, "message_id": measured.id}
+    assert result["output_latency"] == {**latency, "model": short.model, "message_id": short.id}
+    unchanged = await history.read(
+        method="chat.timeline", after=result["next_after"], child_limit=1
+    )
+    assert "output_speed" not in unchanged and "output_latency" not in unchanged
+    older = await history.read(method="chat.timeline", before=result["next_before"], child_limit=1)
+    assert "output_speed" not in older and "output_latency" not in older
     assert "Model switch note" not in str(result["messages"])
 
 

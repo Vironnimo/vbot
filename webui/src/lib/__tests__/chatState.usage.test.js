@@ -9,7 +9,7 @@ import {
   startRun,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
-import { setupController } from './chatState.support.js';
+import { deferred, setupController } from './chatState.support.js';
 
 describe('turn usage from Run events', () => {
   const measuredSessionUsage = {
@@ -168,6 +168,7 @@ describe('output speed', () => {
         payload: {
           usage: { input_tokens: 10, output_tokens: 5, speed },
           model: 'openai/gpt-5',
+          message_id: `step-${sequence}`,
         },
       });
 
@@ -178,6 +179,12 @@ describe('output speed', () => {
     expect(sessionState.outputSpeed).toEqual({
       ...measured,
       model: 'openai/gpt-5',
+      message_id: 'step-2',
+    });
+    expect(sessionState.outputLatency).toEqual({
+      ...latencyOnly,
+      model: 'openai/gpt-5',
+      message_id: 'step-3',
     });
   });
 
@@ -210,32 +217,92 @@ describe('output speed', () => {
     expect(sessionState.outputSpeed.model).toBe('openai/gpt-5');
   });
 
-  it('takes the newest measured step from History', () => {
+  it('restores independent authoritative measurements without raw Assistant records', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
       'session-one',
     );
-    const assistant = (id, speed) => ({
-      id,
-      role: 'assistant',
-      content: 'Answer',
-      model: `openai/${id}`,
-      timestamp: '2026-10-19T10:00:00.000000Z',
-      usage: { input_tokens: 10, output_tokens: 5, speed },
-    });
-
+    const speed = { ...measured, model: 'openai/m1', message_id: 'm1' };
+    const latency = { ...latencyOnly, model: 'openai/m2', message_id: 'm2' };
     loadHistory(
       sessionState,
-      [assistant('m1', measured), assistant('m2', latencyOnly)],
-      { lastUsage: { input_tokens: 10, output_tokens: 5, speed: latencyOnly } },
+      [{ id: 'user', role: 'user', content: 'New question' }],
+      {
+        lastUsage: { input_tokens: 10, output_tokens: 5, speed: latencyOnly },
+        output_speed: speed,
+        output_latency: latency,
+        generation: 'first-generation',
+      },
     );
 
-    expect(sessionState.outputSpeed).toEqual({
-      ...measured,
-      model: 'openai/m1',
+    expect(sessionState.outputSpeed).toEqual(speed);
+    expect(sessionState.outputLatency).toEqual(latency);
+    loadHistory(sessionState, [], { incremental: true });
+    expect(sessionState.outputSpeed).toEqual(speed);
+    expect(sessionState.outputLatency).toEqual(latency);
+    loadHistory(sessionState, [], {
+      output_speed: null,
+      output_latency: null,
+      preserveUsage: true,
+      preserveOutputSpeed: true,
+      preserveOutputLatency: true,
     });
+    expect(sessionState.outputLatency).toEqual(latency);
+    loadHistory(sessionState, [], {
+      reset: true,
+      output_speed: null,
+      output_latency: null,
+      generation: 'new-generation',
+      preserveUsage: true,
+      preserveOutputSpeed: true,
+      preserveOutputLatency: true,
+    });
+    expect(sessionState.outputSpeed).toBeNull();
+    expect(sessionState.outputLatency).toBeNull();
   });
+
+  it.each(['outputSpeed', 'outputLatency'])(
+    'preserves a newer live %s while accepting the other measurement from in-flight History',
+    async (liveField) => {
+      const pending = deferred();
+      const { chatState, controller } = setupController({
+        operationOverrides: { loadChatHistory: vi.fn(() => pending.promise) },
+      });
+      const session = ensureSessionState(chatState, 'alpha', 'session-one');
+      const speed = {
+        ...measured,
+        model: 'provider/prior',
+        message_id: 'prior',
+      };
+      const latency = {
+        ...latencyOnly,
+        model: 'provider/prior',
+        message_id: 'prior',
+      };
+      const loading = controller.loadHistoryForSession('alpha', 'session-one');
+      const live = {
+        ...(liveField === 'outputSpeed' ? speed : latency),
+        model: 'provider/live',
+        message_id: 'live',
+      };
+      session[liveField] = live;
+      pending.resolve({
+        messages: [],
+        has_more: false,
+        output_speed: speed,
+        output_latency: latency,
+      });
+      expect(await loading).toBe(true);
+      expect(session.outputSpeed).toEqual(
+        liveField === 'outputSpeed' ? live : speed,
+      );
+      expect(session.outputLatency).toEqual(
+        liveField === 'outputLatency' ? live : latency,
+      );
+      controller.destroy();
+    },
+  );
 });
 
 describe('usage from History', () => {

@@ -146,7 +146,7 @@ def test_a_corrupt_kernel_projection_is_discarded_and_rebuilt_once(
     expected_identity = {
         "application_id": APPLICATION_IDS["statistics"],
         "database_name": "statistics",
-        "projection_version": "9",
+        "projection_version": "10",
     }
     assert _index_identity(tmp_path).items() >= expected_identity.items()
     # Corrupt at rest: under WAL an open connection keeps reading its own pages.
@@ -577,7 +577,10 @@ def test_report_recovery_discards_partial_aggregation(
 @pytest.mark.parametrize(
     "stale_shape",
     [
-        ["UPDATE kernel_meta SET value = '0' WHERE key = 'projection_version'"],
+        [
+            "UPDATE kernel_meta SET value = '9' WHERE key = 'projection_version'",
+            "DROP TABLE agg_first_token",
+        ],
         # The shape before stored timestamps became strictly canonical, at the
         # same version: nullable instants and an untimed-record counter.
         [
@@ -607,7 +610,7 @@ def test_an_index_of_another_shape_is_discarded_and_rebuilt(
     report = statistics().report()
 
     assert _run_input_tokens(report) == 10
-    assert _index_identity(tmp_path)["projection_version"] == "9"
+    assert _index_identity(tmp_path)["projection_version"] == "10"
     with closing(sqlite3.connect(_index_path(tmp_path))) as connection:
         error_columns = {
             row[1]: row[3] for row in connection.execute("PRAGMA table_info(stat_errors)")

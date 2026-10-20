@@ -233,6 +233,7 @@ def _extract_ollama_usage(response: Mapping[str, Any]) -> dict[str, Any] | None:
             and eval_duration > 0
         ):
             usage["reported_output_tokens_per_second"] = output_tokens * 1e9 / eval_duration
+            usage["reported_output_duration_ms"] = eval_duration / 1e6
     return usage or None
 
 

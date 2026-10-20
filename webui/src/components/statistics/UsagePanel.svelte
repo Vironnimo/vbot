@@ -22,13 +22,14 @@
     formatCostExact,
     formatDurationMs,
     formatInteger,
-    formatOutputSpeed,
+    formatMeasuredOutputSpeed,
     formatPercent,
     formatShare,
     formatTokens,
     modelCallKindLabel,
     modelCallStatusLabel,
     originLabel,
+    outputSpeedBasisLabel,
     outputSpeedTooltip,
     shareOf,
     tokenTooltip,
@@ -63,6 +64,19 @@
     USAGE_DIMENSIONS.includes(dimension) ? dimension : 'agent',
   );
   const breakdownRows = $derived(section.breakdowns?.[activeDimension] ?? []);
+  // Sorting a mixture of answer, complete output and server decode rates
+  // would imply a comparison the measurements cannot support.
+  const speedMeasurements = $derived(
+    breakdownRows.flatMap((row) => row.speed_by_basis ?? []),
+  );
+  const speedSortable = $derived(
+    speedMeasurements.length > 0 &&
+      speedMeasurements.every(
+        (measurement) =>
+          measurement.basis !== 'unknown' &&
+          measurement.basis === speedMeasurements[0].basis,
+      ),
+  );
   const dimensionTabs = $derived(
     USAGE_DIMENSIONS.map((id) => ({
       id,
@@ -165,7 +179,7 @@
       sortValue: costPerMillionTokens,
       format: (row) => formatCost(costPerMillionTokens(row), locale),
     },
-    // Output speed belongs to the Model that answered; other dimensions mix Models.
+    // Provider rows describe their actual mix of Models and work.
     ...(SPEED_DIMENSIONS.has(activeDimension)
       ? [
           {
@@ -173,10 +187,11 @@
             label: t('statistics.col.speed'),
             align: 'end',
             hint: t('statistics.usage.speedHint'),
+            sortable: speedSortable,
             cell: speedCell,
           },
           {
-            id: 'avg_first_token_ms',
+            id: 'first_token_p50_ms',
             label: t('statistics.col.firstToken'),
             align: 'end',
             hint: t('statistics.usage.firstTokenHint'),
@@ -343,25 +358,42 @@
 {/snippet}
 
 {#snippet speedCell(row)}
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the measured calls here.) -->
-  <span
-    class="stats-number"
-    class:stats-muted={row.output_tokens_per_second == null}
-    tabindex="0"
-    use:tooltip={() => outputSpeedTooltip(row, locale)}
-    >{formatOutputSpeed(row.output_tokens_per_second, locale)}</span
-  >
+  <span class="stats-stack">
+    {#each row.speed_by_basis ?? [] as measurement (measurement.basis)}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the measurement basis and calls here.) -->
+      <span
+        class="stats-number stats-stack"
+        tabindex="0"
+        use:tooltip={() => outputSpeedTooltip(measurement, locale)}
+      >
+        <span>{formatMeasuredOutputSpeed(measurement, locale)}</span>
+        <span class="stats-stack__secondary"
+          >{outputSpeedBasisLabel(measurement.basis)}</span
+        >
+      </span>
+    {:else}
+      <span class="stats-muted">{formatMeasuredOutputSpeed(null, locale)}</span>
+    {/each}
+  </span>
 {/snippet}
 
 {#snippet firstTokenCell(row)}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the measured calls here.) -->
   <span
-    class="stats-number"
-    class:stats-muted={row.avg_first_token_ms == null}
+    class="stats-number stats-stack"
+    class:stats-muted={row.first_token_p50_ms == null}
     tabindex="0"
     use:tooltip={() => firstTokenTooltip(row, locale)}
-    >{formatDurationMs(row.avg_first_token_ms)}</span
   >
+    <span>{formatDurationMs(row.first_token_p50_ms)}</span>
+    {#if row.first_token_p95_ms != null}
+      <span class="stats-stack__secondary"
+        >{t('statistics.usage.firstTokenP95Value', {
+          value: formatDurationMs(row.first_token_p95_ms),
+        })}</span
+      >
+    {/if}
+  </span>
 {/snippet}
 
 {#snippet sessionCell(row)}
@@ -427,6 +459,9 @@
       role="tabpanel"
       aria-labelledby={`statistics-usage-dimension-tab-${activeDimension}`}
     >
+      {#if activeDimension === 'provider'}
+        <p class="stats-note">{t('statistics.usage.providerComparisonHint')}</p>
+      {/if}
       {#key activeDimension}
         <DataTable
           columns={breakdownColumns}

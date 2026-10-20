@@ -11,7 +11,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal
 
-from core.chat._output_speed import REPORTED_SPEED_FIELD, OutputTimer, reported_speed
+from core.chat._output_speed import (
+    REPORTED_DURATION_FIELD,
+    REPORTED_SPEED_FIELD,
+    OutputTimer,
+    reported_speed,
+)
 from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
@@ -515,6 +520,7 @@ class StreamingAccumulator:
         self._finish_reason: TerminalOutcome | None = None
         self._usage: JsonObject | None = None
         self._output_timer = OutputTimer()
+        self._answer_content_span: tuple[int, int] | None = None
 
     @property
     def finish_reason(self) -> TerminalOutcome | None:
@@ -567,7 +573,7 @@ class StreamingAccumulator:
     @property
     def output_timing(self) -> JsonObject | None:
         """Return when and how much output arrived since ``request_sent``, or None."""
-        return self._output_timer.marks()
+        return self._output_timer.marks(answer_content_span=self._answer_content_span)
 
     @property
     def has_partial_tool_call(self) -> bool:
@@ -631,9 +637,7 @@ class StreamingAccumulator:
         for slot, fragments in self._tool_calls.items():
             taken = self._taken_tool_calls.get(slot)
             tool_calls.extend(taken if taken is not None else fragments.to_tool_calls())
-        content, reasoning = split_inline_reasoning(
-            _joined_or_none(self._content_parts), _joined_or_none(self._reasoning_parts)
-        )
+        content, reasoning = self._finalize_text()
         return StreamingAssistantFields(
             content=content,
             reasoning=reasoning,
@@ -654,9 +658,7 @@ class StreamingAccumulator:
         Assistant turn the next request can continue.
         """
         taken = [call for calls in self._taken_tool_calls.values() for call in calls]
-        content, reasoning = split_inline_reasoning(
-            _joined_or_none(self._content_parts), _joined_or_none(self._reasoning_parts)
-        )
+        content, reasoning = self._finalize_text()
         return StreamingAssistantFields(
             content=content,
             reasoning=reasoning,
@@ -668,13 +670,27 @@ class StreamingAccumulator:
             reasoning_summary=list(self._reasoning_summary) or None,
         )
 
+    def _finalize_text(self) -> tuple[str | None, str | None]:
+        raw_content = _joined_or_none(self._content_parts)
+        content, reasoning = split_inline_reasoning(
+            raw_content, _joined_or_none(self._reasoning_parts)
+        )
+        # The shared parser only removes leading Reasoning/history and trims
+        # the remaining suffix. Keep its boundary, including a mid-delta one,
+        # for answer latency and rate; native Reasoning and literal tags stay.
+        self._answer_content_span = None
+        if raw_content != content:
+            start = raw_content.rfind(content) if raw_content and content else 0
+            self._answer_content_span = (start, start + len(content or ""))
+        return content, reasoning
+
     def _add_content_delta(self, delta: JsonObject) -> StreamingVisibleDelta | None:
         text = _optional_delta_string(delta, "text")
         if not text:
             return None
         self._open_tool_slot = None
         self._last_text_delta_type = "content_delta"
-        self._output_timer.output(len(text), answer=True)
+        self._output_timer.output(len(text), answer=True, content=True)
         self._content_parts.append(text)
         return StreamingVisibleDelta(
             event_type=ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -791,9 +807,10 @@ class StreamingAccumulator:
         reported_cost = nonnegative_amount(delta.get("reported_cost_usd"))
         if reported_cost is not None:
             usage["reported_cost_usd"] = reported_cost
-        speed = reported_speed(delta.get(REPORTED_SPEED_FIELD))
-        if speed is not None:
-            usage[REPORTED_SPEED_FIELD] = speed
+        for measurement in (REPORTED_SPEED_FIELD, REPORTED_DURATION_FIELD):
+            value = reported_speed(delta.get(measurement))
+            if value is not None:
+                usage[measurement] = value
         self._usage = usage
 
     def _add_finish(self, delta: JsonObject) -> None:

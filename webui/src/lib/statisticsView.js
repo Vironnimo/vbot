@@ -9,7 +9,6 @@ import {
   numberFormat,
   formatPercent,
   formatInteger,
-  formatDecimal,
   formatTokensExact,
   formatCost,
   formatCostExact,
@@ -392,20 +391,35 @@ export function formatOutputSpeed(rate, locale = 'en') {
   });
 }
 
-/**
- * The evidence behind a row's token-weighted output speed: the tokens and
- * writing time it divides, the calls measured and those with estimated
- * tokens.
- */
-export function outputSpeedTooltip(row, locale = 'en') {
-  const calls = toFiniteNumber(row?.speed_calls);
-  if (calls <= 0 || finite(row?.output_tokens_per_second) === null) return '';
+export function outputSpeedBasisLabel(basis) {
+  if (basis === 'answer') return t('statistics.usage.speedAnswer');
+  if (basis === 'output') return t('statistics.usage.speedOutput');
+  if (basis === 'provider') return t('statistics.usage.speedProvider');
+  return t('statistics.usage.speedUnknown');
+}
+
+export function formatMeasuredOutputSpeed(measurement, locale = 'en') {
+  if (
+    !['answer', 'output', 'provider'].includes(measurement?.basis) ||
+    finite(measurement?.output_tokens_per_second) === null
+  )
+    return EM_DASH;
+  const value = formatOutputSpeed(measurement.output_tokens_per_second, locale);
+  return measurement.basis === 'provider'
+    ? value
+    : t('statistics.usage.approximateSpeed', { value });
+}
+
+/** The evidence for one measurement basis, never a mixture of rates. */
+export function outputSpeedTooltip(measurement, locale = 'en') {
+  const calls = toFiniteNumber(measurement?.calls);
+  if (calls <= 0) return '';
   const rows = [
     {
       label: t('statistics.usage.speedMeasured'),
       value: t('statistics.usage.speedMeasuredValue', {
-        tokens: formatInteger(row.speed_tokens, locale),
-        duration: formatDurationMs(row.speed_window_ms),
+        tokens: formatInteger(measurement.tokens, locale),
+        duration: formatDurationMs(measurement.window_ms),
       }),
     },
     {
@@ -413,26 +427,44 @@ export function outputSpeedTooltip(row, locale = 'en') {
       value: formatInteger(calls, locale),
     },
   ];
-  if (toFiniteNumber(row.estimated_speed_calls) > 0) {
+  if (toFiniteNumber(measurement.estimated_calls) > 0) {
     rows.push({
       label: t('statistics.usage.estimatedSpeedCalls'),
-      value: formatInteger(row.estimated_speed_calls, locale),
+      value: formatInteger(measurement.estimated_calls, locale),
     });
   }
   return {
-    title: t('statistics.usage.speedValue', {
-      rate: formatDecimal(row.output_tokens_per_second, locale),
-    }),
+    title: outputSpeedBasisLabel(measurement.basis),
+    text:
+      measurement.basis === 'provider'
+        ? t('statistics.usage.providerSpeedHint')
+        : measurement.basis === 'answer'
+          ? t('statistics.usage.answerSpeedHint')
+          : measurement.basis === 'output'
+            ? t('statistics.usage.outputSpeedHint')
+            : t('statistics.usage.unknownSpeedHint'),
     rows,
   };
 }
 
-/** How many calls a row's average time to first token covers. */
+/** Distribution and coverage of observed first-output latency. */
 export function firstTokenTooltip(row, locale = 'en') {
   const calls = toFiniteNumber(row?.first_token_calls);
   if (calls <= 0) return '';
   return {
     rows: [
+      {
+        label: t('statistics.usage.firstTokenMedian'),
+        value: formatDurationMs(row.first_token_p50_ms),
+      },
+      {
+        label: t('statistics.usage.firstTokenP95'),
+        value: formatDurationMs(row.first_token_p95_ms),
+      },
+      {
+        label: t('statistics.usage.firstTokenAverage'),
+        value: formatDurationMs(row.avg_first_token_ms),
+      },
       {
         label: t('statistics.usage.measuredCalls'),
         value: formatInteger(calls, locale),

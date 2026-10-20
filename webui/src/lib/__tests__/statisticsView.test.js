@@ -17,6 +17,7 @@ import {
   firstTokenTooltip,
   formatCost,
   formatDurationMs,
+  formatMeasuredOutputSpeed,
   formatOutputSpeed,
   formatPercent,
   formatSeriesDate,
@@ -364,27 +365,56 @@ describe('statisticsView labels and tooltips', () => {
     expect(Object.keys(byLabel(cost))).toHaveLength(3);
     expect(costTooltip({ cost_usd: 0 })).toBe('');
 
-    // A token-weighted speed names what it divides and how many calls back it.
+    // Each basis has its own evidence; stream rates remain approximate.
     const speed = outputSpeedTooltip(
       {
+        basis: 'answer',
         output_tokens_per_second: 266.66,
-        speed_calls: 2,
-        estimated_speed_calls: 1,
-        speed_tokens: 400,
-        speed_window_ms: 1500,
+        calls: 2,
+        estimated_calls: 1,
+        tokens: 400,
+        window_ms: 1500,
       },
       'en',
     );
-    expect(speed.title).toBe('266.7 tok/s');
+    expect(speed.title).toBe('Answer');
     expect(byLabel(speed)['Measured over'].value).toBe('400 tokens in 1.5 s');
     expect(byLabel(speed)['Measured calls'].value).toBe('2');
     expect(byLabel(speed)['With estimated tokens'].value).toBe('1');
+    expect(outputSpeedTooltip({ calls: 0 })).toBe('');
     expect(
-      outputSpeedTooltip({ output_tokens_per_second: null, speed_calls: 0 }),
-    ).toBe('');
-    expect(byLabel(firstTokenTooltip({ first_token_calls: 14 }, 'en'))).toEqual(
-      { 'Measured calls': { label: 'Measured calls', value: '14' } },
+      formatMeasuredOutputSpeed({
+        basis: 'answer',
+        output_tokens_per_second: 266.66,
+      }),
+    ).toBe('≈267 tok/s');
+    expect(
+      formatMeasuredOutputSpeed({
+        basis: 'provider',
+        output_tokens_per_second: 266.66,
+      }),
+    ).toBe('267 tok/s');
+    expect(
+      formatMeasuredOutputSpeed({
+        basis: 'unknown',
+        output_tokens_per_second: 266.66,
+      }),
+    ).toBe('—');
+    const latency = byLabel(
+      firstTokenTooltip(
+        {
+          first_token_calls: 14,
+          first_token_p50_ms: 500,
+          first_token_p95_ms: 1800,
+          avg_first_token_ms: 850,
+        },
+        'en',
+      ),
     );
+    expect(latency['Measured calls'].value).toBe('14');
+    expect(latency.Median.value).toBe('500 ms');
+    expect(latency['95th percentile'].value).toBe('1.8 s');
+    expect(latency.Average.value).toBe('850 ms');
     expect(firstTokenTooltip({ first_token_calls: 0 })).toBe('');
 
     const catalog = callCostTooltip(

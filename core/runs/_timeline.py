@@ -95,6 +95,17 @@ class RunTimeline:
         for key in ("context_usage", "session_usage", "usage", "iteration_count", "controls"):
             if key in payload:
                 self.state[key] = copy.deepcopy(payload[key])
+        if kind in {"model_step_usage", "assistant_output"}:
+            from core.chat import output_measurements
+
+            source = message if kind == "assistant_output" else payload
+            self.state.update(
+                output_measurements(
+                    source.get("usage"),
+                    model=source.get("model"),
+                    message_id=source.get("id" if message else "message_id"),
+                )
+            )
         if "controls" in payload:
             self.state["controls_sequence"] = self.sequence
         if "iteration_count" in payload:

@@ -19,6 +19,8 @@ The server side of the chat RPCs: `server/rpc/chat_methods.py` owns submission, 
 
 Its `last_usage` preserves the newest public Assistant Usage before child windowing drops raw Assistant records. Replacement reads without Usage return null; incremental reads without new Assistant Usage omit the field so accessors keep the preceding turn's value.
 
+`output_speed` and `output_latency` are independent whole-current-view Session facts from the same read snapshot, not from the delivered page (`sessions/history-api.md`). Changed reads without `before` carry both, null when absent; unchanged and older-page reads omit them. Each measurement includes the answering Model and Assistant message id. A captured active Run overlays any newer measurement before child windowing; semantic Run snapshots/patches and settled reconnects preserve the same identities (`chat/timeline.md`).
+
 ## Queue and work
 
 `chat.queue_update` accepts an optional `reply_surface` when an accessor edits queued input. Omission preserves the original surface; an explicit terminal/WebUI surface replaces it with the edited input. Listing or selecting a Steer does not change the captured surface.
