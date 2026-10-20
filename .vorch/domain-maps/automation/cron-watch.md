@@ -6,10 +6,10 @@ User decision 2026-10-20 (`.vorch/plans/cron-proactive-automation.md`, decision 
 
 ## The watch field
 
-- `watch` is `{"command": <text>}` or `{"url": <text>}` (`CronWatch`, `_cron_jobs.py`): optional, written only when set, a restart field of `jobs.json` (additive to Generation 1). Only `cron` and `interval` schedules take it (`WATCH_SCHEDULE_TYPES`); `once` and `event` refuse it ("watch applies only to a repeating schedule ..."), and so must every later schedule type. A command has at most 4,000 characters, a URL is an absolute http(s) URL without whitespace of at most 2,048; surrounding whitespace is dropped.
+- `watch` is `{"command": <text>}` or `{"url": <text>}` (`CronWatch`, `_cron_jobs.py`): optional, written only when set, a restart field of `jobs.json` (additive to Generation 1). Only `cron` and `interval` schedules take it (`WATCH_SCHEDULE_TYPES`); `once`, `event` and `webhook` refuse it ("watch applies only to a repeating schedule ..."), and so must every later schedule type. A command has at most 4,000 characters, a URL is an absolute http(s) URL without whitespace of at most 2,048; surrounding whitespace is dropped.
 - Optional job fields kept with it: `last_checked_at` (the latest check, failed ones included), `last_changed_at` (when a changed output became the baseline after its Run succeeded) and `last_check_error` (why the latest check failed, truncated like `last_error`). They are no Run outcome: a check never touches `last_outcome`, `last_error`, `last_attempt_at` or `last_result`. A saved watch change clears all three and sets `covered_until` to now.
 - Setting a watch needs the process to run checks: Runtime wires `WatchCheckRunner` with `CronService.set_watch_checks` (`core/runtime/_bootstrap.py`); without it create and update refuse with "watch is unavailable: this vBot process runs no watch checks", and a stored watch fails its checks ("vBot cannot run watch checks in this process").
-- RPC `cron.create`/`cron.update` take `watch` (`{"command": ...}`, `{"url": ...}`, null for none; other keys are refused), and every cron RPC job carries `watch` (null when unset), `last_checked_at`, `last_changed_at` and `last_check_error` (`server/rpc/automation_methods.py`). The CLI has no watch flag: `cron create` sets none, `cron update` keeps it, `cron show` prints the fields (`../cli/agent-commands.md`). WebUI: `../webui/source-map.md` (Scheduled Runs).
+- RPC `cron.create`/`cron.update` take `watch` (`{"command": ...}`, `{"url": ...}`, null for none; other keys are refused), and every cron RPC job carries `watch` (null when unset), `last_checked_at`, `last_changed_at` and `last_check_error` (`server/rpc/automation_methods.py`). The CLI sets it with `--watch <command-or-url>` (an http(s) address is a URL, anything else a command) and removes it with `cron update --clear-watch`; `cron show` prints the fields (`../cli/agent-commands.md`). WebUI: `../webui/source-map.md` (Scheduled Runs).
 
 ## A due time of a watching job
 
@@ -35,7 +35,7 @@ User decision 2026-10-20 (`.vorch/plans/cron-proactive-automation.md`, decision 
 ## Check failures
 
 - A `WatchCheckError` (its message names what failed, without a final period) or an unexpected error ("The check could not run: ...", logged ERROR with traceback) fails the check: `last_checked_at` and `last_check_error` are recorded, and `consecutive_failures` counts it like a failed Run, with the same five-failure stop (`cron.md` -> Execution health). WARNING `Cron watch check failed (job=... failures=... first=...)`.
-- Alerts follow the Run failure alerts (`cron.md` -> Delivery) with `check=True`: the alert's error is `last_check_error`, the stop text says `failures in a row`, and the second-failure text says the job keeps checking on schedule. A `chat` job gets them; an `app` job has no failed Run to mark, so its failed checks show only under Schedules; `none` sends nothing.
+- Alerts follow the Run failure alerts (`cron.md` -> Delivery) with `check=True`: the alert's error is `last_check_error`, the stop text says `failures in a row`, and the second-failure text says the job keeps checking on schedule. A `chat` job gets them; an `app` job has no failed Run to mark, so its alerts reach the tray as `cron_failure_alert` (`cron.md` -> Delivery); `none` sends nothing.
 
 ## Check runner (`core/tools/watch_checks.py`)
 
@@ -51,6 +51,4 @@ User decision 2026-10-20 (`.vorch/plans/cron-proactive-automation.md`, decision 
 
 ## Open points
 
-- A webhook schedule type (phase 3 of the plan) must refuse `watch`; `WATCH_SCHEDULE_TYPES` lists only `cron` and `interval`, so it does unless it is added there.
-- Failed checks of an `app` job notify no one.
 - A command whose output stays empty never changes, so its job never runs.

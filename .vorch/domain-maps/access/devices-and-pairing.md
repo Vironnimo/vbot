@@ -18,7 +18,7 @@ The server-side lifecycle of Devices, pairing requests and login tickets: the de
 
 ## Rate limits and memory bounds
 
-- Rate limits count per effective client, an IPv6 client per /64; all direct-loopback addresses share one local client budget. The limits are in `access/accessor-contracts.md` -> Endpoints. Local pairing starts and polls stay outside the shared remote budget and have their own bounded table, so a flood from elsewhere cannot lock the host out of pairing.
+- Rate limits count per effective client, an IPv6 client per /64; all direct-loopback addresses share one local client budget. The limits are in `access/accessor-contracts.md` -> Endpoints; Cron webhook requests have windows of their own (`automation/cron-webhooks.md`). Local pairing starts and polls stay outside the shared remote budget and have their own bounded table, so a flood from elsewhere cannot lock the host out of pairing.
 - Memory stays bounded: a rate-limit window keeps at most its limit of events per key and 4096 keys (least recently used forgotten first), a refusal summary names at most 10 clients, and there are at most 256 remote pairing requests, 32 local pairing requests, and 256 login tickets. Both pairing tables make room by the same crowding-client rule.
 
 ## Revocation and ticket browsers

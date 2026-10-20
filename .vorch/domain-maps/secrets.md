@@ -1,6 +1,6 @@
 # Secrets
 
-The Secret Store: credentials and OAuth tokens of a data directory, encrypted at rest in `<data-dir>/secrets.json`, plus the conversion of the plaintext credential files it replaced.
+The Secret Store: credentials, OAuth tokens and Cron webhook secrets of a data directory, encrypted at rest in `<data-dir>/secrets.json`, plus the conversion of the plaintext credential files it replaced.
 
 ## Overview
 
@@ -9,9 +9,9 @@ The Secret Store: credentials and OAuth tokens of a data directory, encrypted at
 `store.py` owns store state, key opening, transactions and process locking; `_document.py` owns the document schema, structural validation and decoding. Public store exports remain in `store.py`.
 
 - Owns: `secrets.json` (format, reads, writes, reset), `secrets.lock`, key creation and lookup, entry encryption, credential-name folding, plaintext import/retirement, the health projection.
-- Does not own: which names a domain stores (environment-variable names chosen by Providers, Extensions, Channels, web Tools; token ids chosen by `core/providers/token_store.py`), process-environment precedence (`runtime.md` -> Service properties, `provider_credentials`), the `secrets.*` RPC handlers (`server/rpc/secret_methods.py`, contract below), the operator command grammar (`cli/data-store.md`), or the WebUI.
+- Does not own: which names a domain stores (environment-variable names chosen by Providers, Extensions, Channels, web Tools; token ids chosen by `core/providers/token_store.py`, webhook entries named by Cron), process-environment precedence (`runtime.md` -> Service properties, `provider_credentials`), the `secrets.*` RPC handlers (`server/rpc/secret_methods.py`, contract below), the operator command grammar (`cli/data-store.md`), or the WebUI.
 
-Consumers: `StorageManager.secrets` is the one store instance per data directory and process; `load_data_dir_credentials`/`set_data_dir_credential`/`remove_data_dir_credential` use the `credentials` section (`storage.md`), and `TokenStore(storage.secrets)` uses `oauth_tokens` (`providers/connections.md`). Runtime credential resolution, `ProviderCredentialResolver`, Skill `env` requirements, Extension `set_secret`, MCP credential writes and the `secrets.*` RPCs all reach the store through those Storage functions. Process environment still wins over a stored value, and names stay environment-variable names.
+Consumers: `StorageManager.secrets` is the one store instance per data directory and process; `load_data_dir_credentials`/`set_data_dir_credential`/`remove_data_dir_credential` use the `credentials` section (`storage.md`), and `TokenStore(storage.secrets)` uses `oauth_tokens` (`providers/connections.md`); `CronService` uses `webhook_secrets` directly, wired by Runtime with `set_webhook_secrets(storage.secrets)` (`automation/cron-webhooks.md`). Runtime credential resolution, `ProviderCredentialResolver`, Skill `env` requirements, Extension `set_secret`, MCP credential writes and the `secrets.*` RPCs all reach the store through those Storage functions. Process environment still wins over a stored value, and names stay environment-variable names.
 
 ## Terms
 
@@ -35,6 +35,7 @@ The `plaintext_import` field: which plaintext files a conversion imported and th
 - `key`: `{id, protection, check, wrapped?}`. `protection` is `dpapi` or `key_file`; `check` is a sealed constant that proves a key belongs to this store; `wrapped` is the DPAPI-wrapped data key (DPAPI only).
 - `credentials`: environment-variable name -> sealed value.
 - `oauth_tokens`: token id (`<provider>-<connection>[--<account>]`) -> sealed token document text (the OAuth token JSON format stays owned by `token_store.py`).
+- `webhook_secrets`: Cron job id (`sha256-<hex digest>` for an id outside `ENTRY_NAME_PATTERN`) -> that webhook job's secret. A job's secret follows the job (`automation/cron-webhooks.md` -> Secrets); because restores keep the live store, a restored `jobs.json` whose webhook job has no entry refuses its requests until the secret is rotated.
 - `plaintext_import`: the Import record, only while a conversion is unfinished.
 
 A sealed entry is `base64(nonce || ciphertext || tag)`, AES-256-GCM with a fresh 96-bit nonce per write; the associated data is `vbot-secret-store/1`, store id, key id, section and name, so a ciphertext copied to another name, section, store or key does not open (`_crypto.py`). Entry names match `ENTRY_NAME_PATTERN`. Values are UTF-8 strings.
@@ -53,7 +54,7 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 
 ## Interfaces
 
-- `SecretStore(data_dir, protections=None)` with sections `CREDENTIALS` and `OAUTH_TOKENS`: `update(change)` makes one write for a `SecretTransaction`; `entry_names(section)` needs no key; `reset()` is the only replacement of a store (States). `status()` returns a `SecretStoreStatus` naming the key location found, every location this process searches (`key_locations`) and where it would create a new key (`new_key_location`); never a value.
+- `SecretStore(data_dir, protections=None)` with sections `CREDENTIALS`, `OAUTH_TOKENS` and `WEBHOOK_SECRETS`: `update(change)` makes one write for a `SecretTransaction`; `entry_names(section)` needs no key; `reset()` is the only replacement of a store (States). `status()` returns a `SecretStoreStatus` naming the key location found, every location this process searches (`key_locations`) and where it would create a new key (`new_key_location`); never a value.
 - Credential names (`store.py`): `CREDENTIAL_NAME_PATTERN` (an environment-variable name of at most 200 characters; Storage's `ENV_KEY_PATTERN`, the RPCs, the CLI and the import accept only such names, while `ENTRY_NAME_PATTERN` also admits OAuth token ids), `CREDENTIAL_NAMES_IGNORE_CASE` (Windows), `credential_name_key(name)` (uppercase on Windows, the name elsewhere), `fold_credential_names(entries)` (one entry per credential: the all-uppercase spelling wins, otherwise the first spelling in sorted order). Storage, the Runtime fallback and the import use this one rule.
 - Errors: `SecretStoreError` (a `StorageError`; nothing changed), `SecretStoreUnavailableError`, `SecretEntryUnavailableError`.
 - Health: `secret_store_health` (`plaintext.py`) is the status projection; `data-store.status` carries it as `secrets`, and its `degraded_reason` degrades the data store (`database/snapshots-and-recovery.md` -> Status).

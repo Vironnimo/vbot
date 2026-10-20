@@ -1,0 +1,56 @@
+# Cron webhook jobs
+
+Read when changing Cron jobs of schedule type `webhook`: the route `POST /api/hooks/<job id>` and how a request proves the job's secret, the secrets in the Secret Store, the URL vBot hands out, the requests waiting for a Run and how they coalesce, the webhook part of the Run's context note, and the surfaces that create such jobs. User decision 2026-10-20 (`.vorch/plans/cron-proactive-automation.md`, phase 3). Rules every Cron job shares (execution health, delivery, failure alerts): `cron.md`.
+
+## Modules
+
+- `core/automation/_cron_webhooks.py`: `CronWebhooks` (the service's `_webhooks`) owns secrets, request acceptance, the waiting requests in memory and on disk, and the batch each Run takes; it exports `WebhookStatus`, `WebhookReach` (`internet`, `network`, `computer`) and `WebhookReceipt` (`accepted`, `refused`, `unavailable`).
+- `core/automation/_cron_webhook_events.py`: the secret format, `verify`, header selection, body rendering, the state file and the webhook note. Pure apart from the state file reads and writes.
+- `_cron_scheduler._run_webhook_job` is the job task; `_cron_execution._trigger_job_run(webhook=True)` takes and consumes the batch.
+- `server/_cron_webhooks.py`: the route and `webhook_base_url`. The access guard exempts the route from credentials and `AccessService` rate-limits it (`server/access/`).
+- `CronService` interface: `set_webhook_secrets(store)` (Runtime wires `storage.secrets` in `core/runtime/_bootstrap.py`), `bind_webhook_url(base_url, reach)` (the server, at lifespan start), `webhook_status(job)` (None for other schedules), `webhook_secret(id)`, `rotate_webhook_secret(id, actor=)`, `receive_webhook(id, headers, body)`.
+
+## Route and authentication
+
+- `POST /api/hooks/<job id>` (`WEBHOOK_PATH_PREFIX`; `_rules.is_webhook_route`) is an exempt route. The guard applies the Access Mode's peer, transport and Host rules, then passes the request on with no principal and without `authenticate`: its `Authorization` header carries the job's secret, never a vBot credential, so it is neither read nor counted as one. In `local` mode only this computer reaches the route.
+- Before the body is read, `AccessService.admit_webhook` counts the request per effective client: 60 per client and 600 overall per 60 s (a direct-loopback client only its own 60), and a client with 20 refused requests in 10 minutes waits; over a limit the answer is 429 `rate_limited` with `Retry-After`. A body over 256 KB (`WEBHOOK_BODY_MAX_BYTES`, by `Content-Length` or while streaming) is 413 `too_large` without reading the rest.
+- A request proves the secret with exactly one `Authorization: Bearer <secret>` or exactly one `X-Hub-Signature-256: sha256=<hex HMAC-SHA256 of the raw body>` (GitHub's webhook secret); a header sent twice proves nothing; both comparisons are constant-time. The check and the body rendering run on the `cron-webhooks` pool.
+- Answers (RPC error envelope, `Cache-Control: no-store`): 202 `{"ok": true}` once the request is stored; 404 `not_found` for an unknown, paused, finished or non-webhook job and for a wrong or missing secret alike (a request for a job without a readable secret is checked against a decoy secret, so the cases also take alike time); 503 `unavailable` with `Retry-After: 30` when a request proved the secret but could not be stored. Each refusal logs through the access refusal log with reason `webhook_refused`, `webhook_rate_limited` or `webhook_too_large` (`../access/request-pipeline.md` -> Refusal reasons); `webhook_refused` also counts toward the client's refusal limit. Nothing of a request's headers or body is logged.
+
+## URL and reach
+
+`webhook_base_url(access, server_bind)` decides the address URLs start with and who reaches it: the public URL when one is configured (`internet`); otherwise the listen address, `network` in `lan` mode and `computer` in the others. A wildcard bind names this computer's host name in `lan` mode (the access guard answers to it), else loopback; the scheme is `https` with direct TLS. Without a bound server (no server, tests) the URL is None and surfaces show the path on vBot's server address. Services on the internet, such as GitHub, reach a URL only through a public URL (`../access/server-setup.md`); the surfaces say so for `network` and `computer`.
+
+## Secrets
+
+- Section `webhook_secrets` of the Secret Store (`../secrets.md` -> Data Model), entry name the job id (an id outside the entry pattern is stored as `sha256-<hex digest>`). A secret is `vbw_` plus 43 URL-safe characters (256 random bits). It never enters `jobs.json`, `cron.list`, a Run or a log; the service caches it in memory per job.
+- A job gets its secret when it is created as a webhook job, or when an update gives it the webhook schedule (issued before the save; a failed save removes it again, and the job's earlier waiting requests are discarded). Leaving the webhook schedule or deleting the job removes the secret and the waiting requests after the save. `rotate_webhook_secret` replaces it, logged INFO `Cron webhook secret rotated (job=... actor=...)`; requests with the old secret are refused at once.
+- Without a Secret Store (a process without Storage), creating a webhook job or switching to it is refused: `webhook is unavailable: this vBot process has no Secret Store`. A secret that cannot be read refuses the job's requests (WARNING once while it lasts, INFO when it reads again). A job without a stored secret, such as one whose `jobs.json` came back from a restore without its entry, refuses requests with WARNING `the job has no secret; rotate it`, and `webhook_secret` fails with `has no webhook secret stored; rotate it to create a new one`.
+- RPC `cron.webhook_secret {id}` and `cron.rotate_webhook_secret {id}` return `{secret, webhook}`; a job of another schedule or an unknown id is `domain_error`. Every job payload carries `webhook` (`url`, `path`, `reach`, `last_received_at`, `waiting`, `dropped`; null for other schedules) and never the secret.
+
+## Waiting requests
+
+- An accepted request is stored before the 202, through the `cron` `OrderedWorker`, in `cron/webhook-events/<sha256 of job id>.json`: `{job_id, next_seq, last_received_at, dropped, requests: [{seq, received_at, headers, body?, cut?}]}`, written atomically. It is runtime state outside the JSON document contract (`../json-documents.md` -> Outside the contract): unreadable or invalid, it is logged WARNING and counts as empty, so its waiting requests are lost. The scheduler reads every webhook job's state when it starts.
+- Kept headers: `content-type`, `user-agent` and `x-` headers ending in an event, delivery or hook id suffix (`X-GitHub-Event`, `X-GitHub-Delivery`, `X-Gitlab-Event`...), never one whose name contains a credential word; the first value of each, at most 8 headers, values cut at 200 characters.
+- Body: JSON stays a JSON value; a form whose only field `payload` holds JSON (GitHub's form content type) becomes that JSON, another form an object of its fields; anything else is UTF-8 text. A body whose pretty-printed form exceeds 16,000 characters (`WEBHOOK_BODY_MAX_CHARS`) becomes that text, cut at a nearby line break and marked `cut`. An empty body is none.
+- At most 10 requests and 16,000 characters wait (`WEBHOOK_WAITING_MAX_*`): the oldest are dropped first and counted in `dropped`; the newest request is always kept, and requests a starting Run already took never count.
+- `_run_webhook_job` waits for a request, then fires while requests wait, one Run at a time. The fire takes all waiting requests once it holds one of the four Cron Run slots and forgets them once the Run is admitted (memory at once, the file at the next successful write), so requests that arrive during a Run start one follow-up Run together. A Run that was not admitted gives its requests back; the task retries with the once-job backoff. A process that stops after admission but before that write runs those requests again after the restart.
+- A paused job refuses new requests and keeps those already waiting, which run once it is enabled. `remaining_runs` counts Runs, and a finite job completes like any other. Failures count toward the streak and the five-failure stop; the second-failure alert says the job keeps running when its webhook receives a request (`cron.md` -> Delivery).
+
+## The Run
+
+- `_cron_context.run_context` puts the webhook note after any event, late or change part and before the delivery note: which requests started the Run, how many earlier ones were dropped unseen, which bodies are cut, then one JSON record per request (`received_at` in local time, `headers`, `body`), oldest first, pretty-printed with `<` and `>` escaped and labeled as data from whoever called the webhook. Wording and reasons: `../tools/cron.md` -> Agent-facing text.
+- A webhook Run gets no late notice; a webhook job has no `next_fire_at`, no calendar projection and refuses `watch` (`WATCH_SCHEDULE_TYPES`). The INFO `Cron job fired` line ends in `webhook_requests=<n> webhook_dropped=<n>`.
+- The request's content reaches the Run only as labeled data, but it steers what an Agent with all its Tools reads; jobs run with no sandbox (user decision 2026-10-06), so the prompt decides what to do with a request.
+
+## Logging
+
+No log line carries a secret, a header value or a body. INFO `Cron webhook secret rotated (job=... actor=...)` and `Cron webhook secret readable again`; WARNING once per condition `Cron webhook requests refused: the secret cannot be read` or `...: the job has no secret; rotate it`, `Cron webhook requests unreadable|invalid; the waiting requests are dropped`, `Cron webhook secret not removed`, `Cannot remove Cron webhook requests`; ERROR `Cron webhook request not stored; the sender was told to retry` (the 503) and `Cron webhook requests of a started Run not removed; they run again after a restart`; DEBUG for each accepted request (bytes, waiting, dropped) and each refused secret of an active job. Refusals at the route go through the access refusal log (Route and authentication).
+
+## Surfaces
+
+The `cron` Tool takes `schedule: "webhook"` and shows the secret only in the result of the call that made it (`../tools/cron.md`); the CLI takes `--webhook` and has `vbot cron secret <id> [--rotate]` (`../cli/agent-commands.md`); the WebUI offers the frequency "On each webhook request" with a Webhook section (`../webui/source-map.md`).
+
+## Coverage
+
+`tests/core/automation/test_cron_webhooks.py` (Run with escaped payload, refusals alike, follow-up Run and caps, requests across a failed admission and a restart, body rendering and cuts, the secret's lifecycle), `tests/server/test_access.py` (exempt route without a vBot credential, size and rate limits, URL and reach), `tests/server/rpc/test_automation_methods.py` (reveal and rotate), the Tool tests (`test_cron.py`, `test_cron_call_tolerance.py`), `tests/cli/test_cli_cron.py`, and WebUI `cronView.test.js`, `CronView.test.js`.
