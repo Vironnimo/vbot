@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup, Comment, Tag
 from markdownify import MarkdownConverter
@@ -28,6 +28,32 @@ _HIDDEN = re.compile(
 # Images this small are icons (badges, protection locks, bullets): their address
 # costs more than the image tells. They keep their alt text.
 _ICON_PIXELS = 32
+# Address parts that only pick an image's rendered size, format or cache version
+# (Shopify's width and v, WordPress's -300x200 suffix, image CDNs' w, q and dpr):
+# the same image in another size is shown once per view.
+_IMAGE_SIZE_PARAMETERS = frozenset(
+    {
+        "w",
+        "h",
+        "width",
+        "height",
+        "size",
+        "format",
+        "fm",
+        "q",
+        "quality",
+        "v",
+        "ver",
+        "version",
+        "crop",
+        "fit",
+        "dpr",
+        "auto",
+        "resize",
+        "scale",
+    }
+)
+_IMAGE_SIZE_SUFFIX = re.compile(r"-[0-9]+x[0-9]+(?=\.\w+$)")
 # Superscript and subscript forms of the characters Unicode has them for.
 _SUPERSCRIPT = str.maketrans("0123456789+-−–=()", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁻⁼⁽⁾")
 _SUBSCRIPT = str.maketrans("0123456789+-−–=()", "₀₁₂₃₄₅₆₇₈₉₊₋₋₋₌₍₎")
@@ -72,6 +98,18 @@ def _is_icon(node: Tag) -> bool:
     return all(size.isdigit() and int(size) <= _ICON_PIXELS for size in sizes)
 
 
+def _image_key(src: str) -> str:
+    """Return what names an image apart from its rendered size and cache version."""
+    parts = urlsplit(src)
+    query = sorted(
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() not in _IMAGE_SIZE_PARAMETERS
+    )
+    path = _IMAGE_SIZE_SUFFIX.sub("", parts.path)
+    return f"{parts.netloc.lower()}{path}?{urlencode(query)}"
+
+
 def _script(node: Tag, text: str, translation: dict[int, str], mark: str) -> str:
     """Render a superscript or subscript so ``10<sup>5</sup>`` does not read as 105.
 
@@ -105,6 +143,13 @@ class _Converter(MarkdownConverter):
     def __init__(self, *, include_links: bool = True, **options: Any) -> None:
         super().__init__(**options)
         self.include_links = include_links
+        # The alt texts shown for each image of the view being converted.
+        self._images: dict[str, set[str]] = {}
+
+    def convert_view(self, nodes: list[Tag]) -> str:
+        """Convert ``nodes`` as one view, which shows each image's address once."""
+        self._images = {}
+        return "\n\n".join(str(self.convert_soup(node)).strip() for node in nodes).strip()
 
     def convert_pre(self, el, text, parent_tags):
         code = text.strip("\n")
@@ -142,9 +187,23 @@ class _Converter(MarkdownConverter):
         return super().convert_a(el, text, parent_tags)
 
     def convert_img(self, el, text, parent_tags):
+        alt = _attr(el, "alt")
         if not self.include_links or _is_icon(el):
-            return _attr(el, "alt")
-        return super().convert_img(el, text, parent_tags)
+            return alt
+        # Shop pages repeat each product image in several sizes (Swarm run
+        # 2026-10-20: 53 images, 26 different ones); a repeat shows only an alt
+        # text not shown with it yet.
+        key = _image_key(_attr(el, "src"))
+        shown = self._images.get(key)
+        if shown is not None:
+            if alt in shown:
+                return ""
+            shown.add(alt)
+            return alt
+        rendered = super().convert_img(el, text, parent_tags)
+        if rendered.startswith("!["):
+            self._images[key] = {alt}
+        return rendered
 
     def convert_sup(self, el, text, parent_tags):
         if "_noformat" in parent_tags:
@@ -218,8 +277,14 @@ def _clean(soup: BeautifulSoup, base: str, page_url: str) -> None:
                 f"{': ' + href if href else ''}] "
             )
         elif node.name == "img":
-            if _is_icon(node) and not _attr(node, "alt").strip():
-                node.decompose()  # a spacer or unlabeled icon
+            described = _attr(node, "alt").strip()
+            if not described and (
+                _is_icon(node) or not (_attr(node, "title").strip() or node.find_parent("figure"))
+            ):
+                # A spacer, an unlabeled icon, or an undescribed image outside a
+                # figure: on shop and gallery pages these are dozens of product
+                # shots whose addresses cost more than they tell.
+                node.decompose()
                 continue
             src = _attr(node, "src")
             if not src or src.lower().startswith("data:"):
@@ -234,6 +299,7 @@ def _clean(soup: BeautifulSoup, base: str, page_url: str) -> None:
             src = _safe_url(src, base)
             node["src"] = src and _site_path(src, page_url)
             node["alt"] = (_attr(node, "alt") or _attr(node, "title") or "Image")[:500]
+            node.attrs.pop("title", None)
             if not node["src"]:
                 node.replace_with(f" [Image: {node['alt']}; embedded image omitted] ")
         elif node.name == "a":
@@ -328,7 +394,7 @@ def extract_views(
         escape_underscores=False,
         include_links=include_links,
     )
-    page = str(converter.convert_soup(body)).strip()
+    page = converter.convert_view([body])
     candidates = body.select("main, [role=main]")
     if not candidates:
         candidates = body.select("article")
@@ -343,10 +409,10 @@ def extract_views(
     # searchable there.
     for node in selected:
         _drop_navigation(node, _NAVIGATION)
-    main = "\n\n".join(str(converter.convert_soup(node)).strip() for node in selected).strip()
+    main = converter.convert_view(selected)
     if not main:
         _drop_navigation(body, _PAGE_FURNITURE)
-        main = str(converter.convert_soup(body)).strip() or page
+        main = converter.convert_view([body]) or page
     if "[Embedded " in page:
         warnings.append(
             "Embedded or interactive content is represented by labels/links, not rendered."

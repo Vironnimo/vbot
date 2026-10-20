@@ -154,7 +154,11 @@ async def test_page_facts_survive_main_content_selection(
     <table><caption>Prices in EUR per month</caption><tr><th>Plan</th><th>Price</th></tr>
     <tr><td rowspan="2">Basic</td><td>12</td></tr><tr><td>15</td></tr></table>
     <a href="install">Install guide</a> <a href="https://other.example/source">Source</a>
-    <img data-src="chart.png">
+    <img data-src="chart.png" alt="Chart">
+    <img src="gallery-1.jpg"><figure><img src="diagram.png"><figcaption>Flow</figcaption></figure>
+    <img src="/cdn/item.jpg?v=17&amp;width=400" alt="Item" title="Zoom">
+    <img src="/cdn/item.jpg?v=17&amp;width=800" alt="Item">
+    <img src="/uploads/pump-300x200.jpg" alt="Pump"><img src="/uploads/pump.jpg" alt="Pump, side">
     <img alt="Trend" src="data:image/png;base64,AAAA">
     <a href="/files/photo">
     <img src="photo.jpg?utm_source=site&amp;w=2&amp;utm_campaign=x" alt="Photo"></a>
@@ -192,7 +196,13 @@ async def test_page_facts_survive_main_content_selection(
         # keep their site.
         "[Install guide](/docs/install)",
         "[Source](https://other.example/source)",
-        "![Image](/docs/chart.png)",
+        "![Chart](/docs/chart.png)",
+        # An image without alt text shows only inside a figure; another size of an
+        # image shows once, or only its new alt text.
+        "![Image](/docs/diagram.png)",
+        "![Item](/cdn/item.jpg?v=17&width=400)",
+        "![Pump](/uploads/pump-300x200.jpg)",
+        "Pump, side",
         "Trend",
         # A linked image keeps only its own address, without tracking parameters.
         "![Photo](/docs/photo.jpg?w=2)",
@@ -200,7 +210,18 @@ async def test_page_facts_survive_main_content_selection(
         "Good article badge",
     ):
         assert expected in main["content"]
-    for noise in ("/files/photo", "utm_", "badge.png", "spacer.gif", "Hydrogen", "| |"):
+    for noise in (
+        "/files/photo",
+        "utm_",
+        "badge.png",
+        "spacer.gif",
+        "gallery-1.jpg",
+        "width=800",
+        "Zoom",
+        "pump.jpg",
+        "Hydrogen",
+        "| |",
+    ):
         assert noise not in main["content"]
     assert "3." in main["content"] and "Then **start** it." in main["content"]
     assert main["title"] == "Reference"
