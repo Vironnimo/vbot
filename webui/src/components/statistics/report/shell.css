@@ -286,6 +286,10 @@
   height: 220px;
 }
 
+.stats-view .stats-skeleton__fill--activity {
+  height: 290px;
+}
+
 .stats-view .stats-skeleton__fill--table {
   height: 260px;
 }

@@ -88,6 +88,26 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The tile's trend over the range, drawn under its value. */
+.stats-view .stats-tile__spark {
+  display: block;
+  width: 100%;
+  height: 24px;
+  overflow: visible;
+}
+
+.stats-view .stats-tile__spark-area {
+  fill: color-mix(in srgb, var(--stats-reported) 14%, transparent);
+}
+
+.stats-view .stats-tile__spark-line {
+  fill: none;
+  stroke: var(--stats-reported);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
 /* A value or detail with more behind it on hover or focus. */
 .stats-view .stats-tile__value--more,
 .stats-view .stats-tile__detail--more {

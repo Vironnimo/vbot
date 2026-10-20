@@ -1,0 +1,307 @@
+/* The Overview's activity hero (ActivityPanel.svelte, ActivityHeatmap.svelte):
+   the year calendar, streaks and highlights. Days shade in the accent color,
+   the one place of the page that uses it as a fill, so the hero stands out
+   from the blue series of the charts below. */
+
+.stats-view .stats-activity {
+  --stats-heat-0: var(--surface-3);
+  --stats-heat-1: color-mix(in srgb, var(--accent) 28%, var(--surface-3));
+  --stats-heat-2: color-mix(in srgb, var(--accent) 52%, var(--surface-3));
+  --stats-heat-3: color-mix(in srgb, var(--accent) 76%, var(--surface-3));
+  --stats-heat-4: var(--accent);
+
+  gap: var(--space-md);
+  background:
+    radial-gradient(
+      120% 140% at 100% 0%,
+      color-mix(in srgb, var(--accent) 7%, transparent),
+      transparent 55%
+    ),
+    var(--surface);
+}
+
+.stats-view .stats-activity__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-md);
+}
+
+.stats-view .stats-activity__intro {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stats-view .stats-activity__title {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: var(--fs-heading-sm);
+  font-weight: 600;
+}
+
+.stats-view .stats-activity__subtitle {
+  margin: 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+
+.stats-view .stats-activity__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 220px);
+  gap: var(--space-lg);
+  align-items: start;
+}
+
+/* ---- Calendar --------------------------------------------------------- */
+
+.stats-view .stats-heatmap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.stats-view .stats-heatmap__frame {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 4px 6px;
+}
+
+.stats-view .stats-heatmap__months,
+.stats-view .stats-heatmap__grid {
+  display: grid;
+  grid-template-columns: repeat(var(--stats-heat-weeks, 53), minmax(0, 1fr));
+  column-gap: 3px;
+}
+
+.stats-view .stats-heatmap__months {
+  grid-column: 2;
+  color: var(--text-lo);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.stats-view .stats-heatmap__months > span {
+  grid-row: 1;
+  white-space: nowrap;
+}
+
+.stats-view .stats-heatmap__weekdays {
+  display: grid;
+  grid-template-rows: repeat(7, minmax(0, 1fr));
+  row-gap: 3px;
+  color: var(--text-lo);
+  font-size: 11px;
+}
+
+.stats-view .stats-heatmap__weekdays > span {
+  display: flex;
+  align-items: center;
+  line-height: 1;
+}
+
+.stats-view .stats-heatmap__grid {
+  grid-template-rows: repeat(7, auto);
+  row-gap: 3px;
+}
+
+.stats-view .stats-heatmap__cell {
+  display: block;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: var(--stats-heat-0);
+  cursor: default;
+}
+
+.stats-view .stats-heatmap__cell--1 {
+  background: var(--stats-heat-1);
+}
+
+.stats-view .stats-heatmap__cell--2 {
+  background: var(--stats-heat-2);
+}
+
+.stats-view .stats-heatmap__cell--3 {
+  background: var(--stats-heat-3);
+}
+
+.stats-view .stats-heatmap__cell--4 {
+  background: var(--stats-heat-4);
+}
+
+.stats-view button.stats-heatmap__cell:hover {
+  outline: 1px solid var(--text-med);
+  outline-offset: 1px;
+}
+
+.stats-view button.stats-heatmap__cell:focus-visible {
+  outline: 2px solid var(--text-hi);
+  outline-offset: 1px;
+}
+
+.stats-view .stats-heatmap__legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  color: var(--text-lo);
+  font-size: 11px;
+}
+
+.stats-view .stats-heatmap__legend > .stats-heatmap__cell {
+  width: 11px;
+}
+
+.stats-view .stats-heatmap__legend > span:first-child {
+  margin-right: 3px;
+}
+
+.stats-view .stats-heatmap__legend > span:last-child {
+  margin-left: 3px;
+}
+
+/* ---- Streaks ---------------------------------------------------------- */
+
+.stats-view .stats-activity__streaks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md) var(--space-sm);
+  margin: 0;
+}
+
+.stats-view .stats-activity__streak {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stats-view .stats-activity__streak dt {
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+}
+
+.stats-view .stats-activity__streak dd {
+  margin: 0;
+}
+
+.stats-view .stats-activity__streak-value {
+  color: var(--text-hi);
+  font-size: var(--fs-heading-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stats-view .stats-activity__streak--accent .stats-activity__streak-value {
+  color: var(--accent);
+}
+
+.stats-view .stats-activity__streak-detail {
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+}
+
+/* ---- Highlights ------------------------------------------------------- */
+
+.stats-view .stats-highlights {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: var(--space-md) 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.stats-view .stats-highlight {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.stats-view .stats-highlight__label {
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+}
+
+.stats-view .stats-highlight__value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-hi);
+  font-size: var(--fs-body-lg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-view .stats-highlight__value .stats-agent,
+.stats-view .stats-highlight__value .stats-id {
+  max-width: 100%;
+}
+
+.stats-view .stats-highlight__detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+  min-width: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+}
+
+.stats-view .stats-highlight__detail .stats-agent__name {
+  color: var(--text-lo);
+  font-weight: 400;
+}
+
+/* Runs by hour of the day, as a tiny column strip under the peak time. */
+.stats-view .stats-highlight__hours {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  align-items: end;
+  gap: 1px;
+  height: 22px;
+}
+
+.stats-view .stats-highlight__hours > span {
+  border-radius: 1px;
+  background: var(--stats-heat-2);
+}
+
+.stats-view .stats-highlight__hours > .stats-highlight__hour--peak {
+  background: var(--accent);
+}
+
+@container stats-view (max-width: 1080px) {
+  .stats-view .stats-highlights {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: var(--space-md);
+  }
+}
+
+@container stats-view (max-width: 860px) {
+  .stats-view .stats-activity__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stats-view .stats-activity__streaks {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container stats-view (max-width: 560px) {
+  .stats-view .stats-activity__streaks,
+  .stats-view .stats-highlights {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

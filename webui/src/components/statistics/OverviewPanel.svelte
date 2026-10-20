@@ -14,7 +14,6 @@
     costTooltip,
     findInsight,
     formatCost,
-    formatDurationMs,
     formatInteger,
     formatPercent,
     formatShare,
@@ -50,8 +49,7 @@
   const previous = $derived(section.previous ?? null);
   const runs = $derived(section.runs ?? {});
   const previousRuns = $derived(section.previous_runs ?? null);
-  const userRuns = $derived(section.user_runs ?? {});
-  const previousUserRuns = $derived(section.previous_user_runs ?? null);
+  const series = $derived(section.series ?? []);
   const insights = $derived(insightLines(section.insights, locale));
   const uncachedInsight = $derived(
     findInsight(section.insights, 'uncached_value'),
@@ -65,9 +63,12 @@
     return tileChange(current, before, format, { ...options, locale });
   }
 
+  // Tiles keep the order of what people look for first: what it cost, how
+  // much was used, how much got done, and how well the cache saved money.
   const tiles = $derived([
     {
       label: t('statistics.overview.cost'),
+      spark: series.map((point) => point.cost_usd),
       hint: t('statistics.overview.costHint'),
       value: formatCost(totals.cost_usd, locale),
       valueTooltip: costTooltip(totals, locale),
@@ -88,6 +89,7 @@
     },
     {
       label: t('statistics.overview.tokens'),
+      spark: series.map(totalTokens),
       value: formatTokens(totalTokens(totals), locale),
       valueTooltip: tokenTooltip(totalTokens(totals), locale),
       change: previous
@@ -101,23 +103,8 @@
       }),
     },
     {
-      label: t('statistics.usage.cacheHitRate'),
-      hint: t('statistics.usage.cacheHitHint'),
-      value: formatPercent(cacheHitRate(totals), locale),
-      change: previous
-        ? change(
-            cacheHitRate(totals),
-            cacheHitRate(previous),
-            (value) => formatPercent(value, locale),
-            { kind: 'points' },
-          )
-        : null,
-      detail: t('statistics.overview.cacheDetail', {
-        tokens: formatTokens(totals.cache_read_tokens, locale),
-      }),
-    },
-    {
       label: t('statistics.overview.runs'),
+      spark: series.map((point) => point.runs),
       value: formatInteger(runs.total, locale),
       change: previousRuns
         ? change(runs.total, previousRuns.total, (value) =>
@@ -143,33 +130,20 @@
           : null,
     },
     {
-      label: t('statistics.overview.typicalRun'),
-      hint: t('statistics.overview.typicalRunHint'),
-      value: formatDurationMs(userRuns.duration_p50_ms),
-      change: previousUserRuns
+      label: t('statistics.usage.cacheHitRate'),
+      spark: series.map((point) => cacheHitRate(point)),
+      hint: t('statistics.usage.cacheHitHint'),
+      value: formatPercent(cacheHitRate(totals), locale),
+      change: previous
         ? change(
-            userRuns.duration_p50_ms,
-            previousUserRuns.duration_p50_ms,
-            formatDurationMs,
+            cacheHitRate(totals),
+            cacheHitRate(previous),
+            (value) => formatPercent(value, locale),
+            { kind: 'points' },
           )
         : null,
-      detail: t('statistics.overview.p90Duration', {
-        duration: formatDurationMs(userRuns.duration_p90_ms),
-      }),
-    },
-    {
-      label: t('statistics.overview.costPerRun'),
-      hint: t('statistics.overview.costPerRunHint'),
-      value: formatCost(userRuns.cost_p50_usd, locale),
-      change: previousUserRuns
-        ? change(
-            userRuns.cost_p50_usd,
-            previousUserRuns.cost_p50_usd,
-            (value) => formatCost(value, locale),
-          )
-        : null,
-      detail: t('statistics.overview.p90Cost', {
-        cost: formatCost(userRuns.cost_p90_usd, locale),
+      detail: t('statistics.overview.cacheDetail', {
+        tokens: formatTokens(totals.cache_read_tokens, locale),
       }),
     },
   ]);
@@ -287,13 +261,41 @@
 {/snippet}
 
 <div class="stats-panel">
-  <div class="stats-tiles stats-tiles--6">
+  <div class="stats-tiles">
     {#each tiles as tile (tile.label)}
       <KpiTile {tile} />
     {/each}
   </div>
   {#if !previous && !previousRuns}
     <p class="stats-note">{t('statistics.change.noComparison')}</p>
+  {/if}
+
+  {#if insights.length > 0}
+    <section class="stats-block stats-insights">
+      <h3 class="stats-block__title">{t('statistics.overview.insights')}</h3>
+      <ul class="stats-insights__list">
+        {#each insights as insight (insight.id)}
+          <li
+            class={[
+              'stats-insights__item',
+              `stats-insights__item--${insight.severity}`,
+            ]}
+          >
+            <span class="stats-insights__marker" aria-hidden="true"></span>
+            <span class="stats-insights__text">{insight.text}</span>
+            <Button
+              variant="tertiary"
+              class="stats-insights__link"
+              onClick={() => onNavigate(insight.tab)}
+            >
+              {t('statistics.overview.insightLink', {
+                tab: statisticsTabLabel(insight.tab),
+              })}
+            </Button>
+          </li>
+        {/each}
+      </ul>
+    </section>
   {/if}
 
   <TrendChart
@@ -360,32 +362,4 @@
       />
     </section>
   </div>
-
-  {#if insights.length > 0}
-    <section class="stats-block stats-insights">
-      <h3 class="stats-block__title">{t('statistics.overview.insights')}</h3>
-      <ul class="stats-insights__list">
-        {#each insights as insight (insight.id)}
-          <li
-            class={[
-              'stats-insights__item',
-              `stats-insights__item--${insight.severity}`,
-            ]}
-          >
-            <span class="stats-insights__marker" aria-hidden="true"></span>
-            <span class="stats-insights__text">{insight.text}</span>
-            <Button
-              variant="tertiary"
-              class="stats-insights__link"
-              onClick={() => onNavigate(insight.tab)}
-            >
-              {t('statistics.overview.insightLink', {
-                tab: statisticsTabLabel(insight.tab),
-              })}
-            </Button>
-          </li>
-        {/each}
-      </ul>
-    </section>
-  {/if}
 </div>

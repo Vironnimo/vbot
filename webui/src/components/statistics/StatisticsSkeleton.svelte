@@ -7,7 +7,8 @@
   let { tab = 'overview' } = $props();
 
   const SHAPES = {
-    overview: { tiles: 6, blocks: ['chart', 'row'] },
+    overview: { tiles: 4, blocks: ['chart', 'row'] },
+    activity: { tiles: 0, blocks: ['activity'] },
     usage: { tiles: 6, blocks: ['table', 'chart'] },
     runs: { tiles: 5, blocks: ['table', 'chart'] },
     tools: { tiles: 4, blocks: ['table', 'table'] },
