@@ -19,6 +19,7 @@ import pytest
 import core.automation.cron as cron_module
 from core.automation import _cron_timing as cron_timing
 from core.automation.cron import (
+    CronDelivery,
     CronJobNotFoundError,
     CronJobStatus,
     CronJobValidationError,
@@ -34,6 +35,7 @@ from core.projects import (
 )
 from core.sessions import SessionAddress
 from tests.core.automation.cron_test_support import (
+    FakeChats,
     make_service,
 )
 
@@ -808,6 +810,111 @@ async def test_project_id_defaults_to_none_and_round_trips(tmp_path: Path) -> No
     reloaded_service, _ = make_service(tmp_path)
     reloaded = {job.id: job.project_id for job in reloaded_service.list_jobs()}
     assert reloaded == {bare.id: None, blank.id: None, scoped.id: "vbot"}
+
+
+_CHAT = CronDelivery(kind="chat", channel_id="tg-main", platform_target="chat-42")
+
+
+@pytest.mark.asyncio
+async def test_delivery_and_last_answer_round_trip_and_stay_absent_when_unset(
+    tmp_path: Path,
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    service.set_chat_delivery(FakeChats())
+    fields: dict[str, Any] = {
+        "agent_id": "agent-one",
+        "prompt": "Prompt",
+        "schedule_type": "cron",
+        "cron_expression": "0 9 * * *",
+    }
+    bare = await service.create_job(**fields, delivery=CronDelivery(kind="none"))
+    app = await service.create_job(**fields, delivery=CronDelivery(kind="app"))
+    chat = await service.create_job(**fields, delivery=_CHAT)
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    document = json.loads(jobs_path.read_text(encoding="utf-8"))
+    answer = {"text": "Two new posts.", "at": "2030-01-10T08:00:00+00:00", "run_id": "run-1"}
+    document["jobs"][2].update(last_result=answer, last_run_silent=True)
+    jobs_path.write_text(json.dumps(document), encoding="utf-8")
+
+    reloaded = {job.id: job for job in make_service(tmp_path)[0].list_jobs()}
+
+    # A job without delivery or answer keeps the format earlier versions wrote.
+    assert {"delivery", "last_result", "last_run_silent"}.isdisjoint(document["jobs"][0])
+    assert [reloaded[job.id].delivery for job in (bare, app, chat)] == [
+        None,
+        CronDelivery(kind="app"),
+        _CHAT,
+    ]
+    last_result = reloaded[chat.id].last_result
+    assert last_result is not None and last_result.to_dict() == answer
+    assert reloaded[chat.id].last_run_silent is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("chats", "fields", "reason"),
+    [
+        pytest.param(None, {}, "Channels are not running", id="channels-not-running"),
+        pytest.param(
+            FakeChats(owners={}), {}, "delivery Channel tg-main is not available", id="no-channel"
+        ),
+        pytest.param(
+            FakeChats(owners={"tg-main": "agent-two"}),
+            {},
+            "belongs to Agent agent-two",
+            id="another-agents-channel",
+        ),
+        pytest.param(FakeChats(), {"project_id": "vbot"}, "Project Agent", id="project-agent"),
+    ],
+)
+async def test_a_chat_delivery_needs_a_channel_of_the_jobs_identity_agent(
+    tmp_path: Path, chats: FakeChats | None, fields: dict[str, Any], reason: str
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    service.set_chat_delivery(chats)
+
+    with pytest.raises(CronJobValidationError, match=reason):
+        await service.create_job(
+            agent_id="agent-one",
+            prompt="Prompt",
+            schedule_type="cron",
+            cron_expression="0 9 * * *",
+            delivery=_CHAT,
+            **fields,
+        )
+
+    assert service.list_jobs() == []
+
+
+@pytest.mark.asyncio
+async def test_only_edits_of_the_delivery_or_agent_check_the_chat_again(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    chats = FakeChats()
+    service.set_chat_delivery(chats)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Prompt",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+        delivery=_CHAT,
+    )
+    chats.owners.clear()
+
+    # The Channel was deleted; pausing the job still works.
+    paused = await service.update_job(job.id, status="paused")
+    with pytest.raises(CronJobValidationError, match="not available"):
+        await service.update_job(job.id, agent_id="agent-two")
+    with pytest.raises(CronJobValidationError, match="not available"):
+        await service.update_job(
+            job.id,
+            delivery=CronDelivery(
+                kind="chat", channel_id="tg-main", platform_target="chat-42", thread_id="7"
+            ),
+        )
+    moved = await service.update_job(job.id, delivery=CronDelivery(kind="app"))
+
+    assert paused.status == "paused"
+    assert moved.delivery == CronDelivery(kind="app")
 
 
 @pytest.mark.asyncio

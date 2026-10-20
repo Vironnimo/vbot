@@ -52,6 +52,22 @@ def _session_address(project_id: str | None, agent_id: str, session_id: str) -> 
     return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
+def _decide_completion_activity(run: Run, status: RunStatus, result: object) -> None:
+    """Let the admission's decision set whether the finished Run counts as activity.
+
+    It runs before the completion is recorded and its terminal event is emitted,
+    so the Session completion, the event and its observers agree. A failing
+    decision keeps the flag the Run was admitted with.
+    """
+    decide = run.completion_activity
+    if decide is None:
+        return
+    try:
+        run.contributes_to_agent_activity = bool(decide(status, result))
+    except Exception:
+        _LOGGER.warning("Completion activity decision failed for Run %s", run.id, exc_info=True)
+
+
 class RunPersistence(Protocol):
     async def start_run(self, run: Run) -> None: ...
 
@@ -804,6 +820,7 @@ class ChatRunManager:
             except BaseException as exc:
                 status, abort = RunStatus.CANCELLED, exc
             run._completion_started = True  # noqa: SLF001 - freeze outcome before the commit.
+            _decide_completion_activity(run, status, result)
             try:
                 notification_errors = await run.finalize_completion(status)
             except BaseException as exc:
@@ -949,6 +966,7 @@ class ChatRunManager:
             execution_input_id=admission.input_id,
             source_session_id=admission.source_session_id,
             expected_session_generation_id=admission.expected_session_generation_id,
+            completion_activity=admission.completion_activity,
             event_retention_limit=self._run_event_retention_limit,
         )
         run._started_from_queue_item_id = queue_item_id  # noqa: SLF001 - run carries its own start origin.

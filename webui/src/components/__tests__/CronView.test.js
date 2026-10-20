@@ -215,6 +215,9 @@ describe('CronView', () => {
     expect(cardRows[t('cron.card.session')].textContent).toBe(
       t('cron.detail.newSessionEachRun'),
     );
+    expect(cardRows[t('cron.card.delivery')].textContent).toBe(
+      t('cron.delivery.none'),
+    );
     expect(card.dataset.floatingSide).toBe('right');
   });
 
@@ -244,7 +247,7 @@ describe('CronView', () => {
     expect(document.querySelectorAll('.cron-summary-item')).toHaveLength(4);
     expect(
       document.querySelectorAll('.cron-detail-scroll .s-section'),
-    ).toHaveLength(3);
+    ).toHaveLength(5);
     expect(document.querySelector('.cron-technical-details')).toBeTruthy();
     // The Enabled switch states active or paused; no duplicate chip.
     expect(document.querySelector('.detail-btns .chip')).toBeNull();
@@ -254,7 +257,7 @@ describe('CronView', () => {
       document.querySelectorAll(
         '.cron-detail-scroll .s-group label.s-row-label',
       ).length,
-    ).toBe(7);
+    ).toBe(9);
   });
 
   it('shows the job named by the place and records job and new-job steps in it', async () => {
@@ -472,6 +475,7 @@ describe('CronView', () => {
       prompt: 'Prepare morning digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
+      delivery: { kind: 'app' },
     });
     await waitForCondition(() => listCronJobsMock.mock.calls.length === 2);
     await waitForCondition(() =>
@@ -497,6 +501,8 @@ describe('CronView', () => {
       cron_expression: '0 6 * * *',
       repeat: null,
       session_id: null,
+      delivery: { kind: 'none' },
+      watch: null,
     });
   });
 
@@ -607,6 +613,8 @@ describe('CronView', () => {
     await waitForCondition(() => document.getElementById('cron-job-run-at'));
     const runAtInput = inputById('cron-job-run-at');
     expect(runAtInput.value.length).toBeGreaterThan(0);
+    // Only a repeating schedule can check before each Run.
+    expect(document.getElementById('cron-job-watch')).toBeNull();
 
     inputById('cron-job-prompt').value = 'Updated once prompt';
     inputById('cron-job-prompt').dispatchEvent(
@@ -625,6 +633,8 @@ describe('CronView', () => {
       run_at: storedRunAt,
       repeat: 1,
       session_id: 'session-preserve',
+      delivery: { kind: 'none' },
+      watch: null,
     });
   });
 
@@ -676,7 +686,267 @@ describe('CronView', () => {
       event_id: 'evt-1',
       event_time: 'start - 45m',
       session_id: null,
+      delivery: { kind: 'none' },
+      watch: null,
     });
+  });
+
+  it('shows a silent Run and the last answer and delivers to a chat of the Agent', async () => {
+    rpcMock.mockImplementation(
+      createAgentListRpcMock(defaultAgents(), [
+        {
+          id: 'tg-alpha',
+          platform: 'telegram',
+          agent_id: 'agent-alpha',
+          allowed_chat_ids: ['42'],
+        },
+        { id: 'tg-beta', platform: 'telegram', agent_id: 'agent-beta' },
+      ]),
+    );
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-app',
+          delivery: { kind: 'app' },
+          last_run_silent: true,
+          last_result: {
+            text: 'Two new mails.',
+            at: '2026-05-14T09:35:00+00:00',
+            run_id: 'run-earlier',
+          },
+        }),
+      ],
+    });
+    mountView();
+    await waitForCondition(() => document.getElementById('cron-job-delivery'));
+
+    // The latest Run had nothing to report; the answer before it stays.
+    expect(document.querySelector('.cron-summary').textContent).toContain(
+      t('cron.outcome.silent'),
+    );
+    expect(
+      document.querySelector('.cron-last-answer__text').textContent.trim(),
+    ).toBe('Two new mails.');
+    expect(document.getElementById('cron-job-delivery').textContent).toContain(
+      t('cron.deliveryKind.app'),
+    );
+
+    // A chat offers only the Agent's own Channel and preselects it.
+    chooseOption('cron-job-delivery', t('cron.deliveryKind.chat'));
+    document.getElementById('cron-job-delivery-channel').click();
+    flushSync();
+    const channelOptions = [
+      ...document.querySelectorAll('.dropdown-option'),
+    ].map((option) => option.textContent.trim());
+    expect(channelOptions).toEqual(['tg-alpha · Telegram']);
+    document.getElementById('cron-job-delivery-channel').click();
+    flushSync();
+
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() =>
+      document.body.textContent.includes(t('cron.errors.chatDelivery')),
+    );
+    expect(updateCronJobMock).not.toHaveBeenCalled();
+
+    expect(
+      [...document.querySelectorAll('#cron-job-delivery-chats option')].map(
+        (option) => option.value,
+      ),
+    ).toEqual(['42']);
+    inputById('cron-job-delivery-chat').value = '42';
+    inputById('cron-job-delivery-chat').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
+    expect(updateCronJobMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'job-app',
+        delivery: {
+          kind: 'chat',
+          channel_id: 'tg-alpha',
+          platform_target: '42',
+        },
+      }),
+    );
+  });
+
+  it('checks a web page before each Run and shows its last check and change', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-watch',
+          last_outcome: null,
+          last_completed_at: null,
+          last_run_id: null,
+          last_checked_at: '2026-05-14T10:00:00+00:00',
+          last_changed_at: '2026-05-14T09:00:00+00:00',
+          last_check_error: 'The watched URL answered HTTP 503',
+        }),
+      ],
+    });
+    mountView();
+    await waitForCondition(() => document.getElementById('cron-job-watch'));
+
+    // Without a watch, failed checks say nothing about the job.
+    expect(
+      document.querySelector('[data-testid="cron-check-error"]'),
+    ).toBeNull();
+    expect(document.getElementById('cron-job-watch-target')).toBeNull();
+
+    chooseOption('cron-job-watch', t('cron.watchKind.url'));
+    inputById('cron-job-watch-target').value = 'example.com/status';
+    inputById('cron-job-watch-target').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() =>
+      document.body.textContent.includes(t('cron.errors.watch')),
+    );
+    expect(updateCronJobMock).not.toHaveBeenCalled();
+
+    inputById('cron-job-watch-target').value = 'https://example.com/status';
+    inputById('cron-job-watch-target').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-watch',
+          last_outcome: null,
+          last_completed_at: null,
+          last_run_id: null,
+          watch: { url: 'https://example.com/status' },
+          last_checked_at: '2026-05-14T10:00:00+00:00',
+          last_changed_at: '2026-05-14T09:00:00+00:00',
+          last_check_error: 'The watched URL answered HTTP 503',
+        }),
+      ],
+    });
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
+    expect(updateCronJobMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'job-watch',
+        watch: { url: 'https://example.com/status' },
+      }),
+    );
+
+    await waitForCondition(() => listCronJobsMock.mock.calls.length === 2);
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-check-error"]'),
+    );
+    expect(
+      document.querySelector('[data-testid="cron-check-error"]').textContent,
+    ).toContain('The watched URL answered HTTP 503');
+    const details = document.querySelector('.cron-execution-grid').textContent;
+    expect(details).toContain(t('cron.detail.lastCheck'));
+    expect(details).toContain(t('cron.detail.lastChange'));
+    expect(document.querySelector('.cron-summary').textContent).toContain(
+      t('cron.detail.waitingForChange'),
+    );
+
+    // The row's details card names the check and how the last one went.
+    document.querySelector('[data-testid="cron-item-job-watch"]').focus();
+    flushSync();
+    const cardRows = Object.fromEntries(
+      [...document.getElementById('app-tooltip').querySelectorAll('dt')].map(
+        (term) => [term.textContent, term.nextElementSibling],
+      ),
+    );
+    expect(cardRows[t('cron.card.watch')].textContent).toBe(
+      'https://example.com/status',
+    );
+    expect(cardRows[t('cron.detail.lastCheck')].textContent).toContain(
+      t('cron.card.checkFailed'),
+    );
+    expect(cardRows[t('cron.detail.lastCheck')].classList).toContain(
+      'app-tooltip__value--danger',
+    );
+  });
+
+  it("shows a webhook job's URL and reveals and replaces its secret", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-05-14T12:00:00Z'));
+    const hookJob = cronJob({
+      id: 'job-hook',
+      name: 'Triage issues',
+      schedule_type: 'webhook',
+      cron_expression: null,
+      next_fire_at: null,
+      last_outcome: null,
+      last_completed_at: null,
+      last_run_id: null,
+      webhook: {
+        url: 'http://127.0.0.1:8765/api/hooks/job-hook',
+        path: '/api/hooks/job-hook',
+        reach: 'computer',
+        last_received_at: '2026-05-14T10:00:00+00:00',
+        waiting: 2,
+        dropped: 0,
+      },
+    });
+    listCronJobsMock.mockResolvedValue({
+      jobs: [hookJob],
+      system_timezone: 'UTC',
+    });
+    const secrets = ['vbw_first', 'vbw_second'];
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'cron.webhook_secret') {
+        expect(params).toEqual({ id: 'job-hook' });
+        return { secret: secrets[0], webhook: hookJob.webhook };
+      }
+      if (method === 'cron.rotate_webhook_secret') {
+        secrets.shift();
+        return { secret: secrets[0], webhook: hookJob.webhook };
+      }
+      return createAgentListRpcMock()(method);
+    });
+    mountView();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-webhook-url"]'),
+    );
+
+    // A webhook job keeps no time and checks nothing; its request starts it.
+    expect(document.getElementById('cron-job-frequency').textContent).toContain(
+      t('cron.frequency.webhook'),
+    );
+    expect(document.getElementById('cron-job-watch')).toBeNull();
+    expect(document.querySelector('.cron-summary').textContent).toContain(
+      t('cron.detail.nextRequest'),
+    );
+    expect(
+      document.querySelector('[data-testid="cron-webhook-url"]').textContent,
+    ).toBe('http://127.0.0.1:8765/api/hooks/job-hook');
+    expect(
+      document.querySelector('[data-testid="cron-webhook-reach"]').textContent,
+    ).toContain(t('cron.webhook.reach.computer'));
+    expect(
+      document.querySelector('[data-testid="cron-webhook-requests"]')
+        .textContent,
+    ).toContain(t('cron.webhook.waitingMany', { count: 2 }));
+
+    // The secret stays hidden until the user asks for it.
+    const secretText = () =>
+      document.querySelector('[data-testid="cron-webhook-secret"]').textContent;
+    expect(secretText()).not.toContain('vbw_');
+    buttonByText(t('cron.webhook.showSecret')).click();
+    await waitForCondition(() => secretText() === 'vbw_first');
+
+    buttonByText(t('cron.webhook.rotate')).click();
+    flushSync();
+    confirmDialog(t('cron.webhook.rotateConfirmLabel'));
+    await waitForCondition(() => secretText() === 'vbw_second');
+    expect(rpcMock).toHaveBeenCalledWith('cron.rotate_webhook_secret', {
+      id: 'job-hook',
+    });
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: t('cron.webhook.rotated') }),
+    );
+    expect(updateCronJobMock).not.toHaveBeenCalled();
   });
 
   it('keeps unsaved edits on reselecting the row and saves them before switching jobs', async () => {
@@ -849,14 +1119,29 @@ function confirmDialog(label) {
   button.click();
 }
 
-function createAgentListRpcMock(agents = defaultAgents()) {
+function createAgentListRpcMock(agents = defaultAgents(), channels = []) {
   return async (method) => {
     if (method === 'agent.list') {
       return { agents };
     }
+    if (method === 'channel.list') {
+      return { channels };
+    }
 
     throw new Error(`Unexpected RPC method: ${method}`);
   };
+}
+
+// Opens the dropdown with this id and picks the option with this label.
+function chooseOption(id, label) {
+  document.getElementById(id).click();
+  flushSync();
+  const option = [...document.querySelectorAll('.dropdown-option')].find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(option, `option not found: ${label}`).toBeTruthy();
+  option.click();
+  flushSync();
 }
 
 function defaultAgents() {

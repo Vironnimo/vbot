@@ -121,6 +121,80 @@ async def test_completion_run_relays_to_persisted_channel_target(
     assert adapter.replies == [("12345", "77", "Done.")]
 
 
+@pytest.mark.parametrize(
+    ("agent_id", "project_id", "refusal"),
+    [
+        ("assistant", None, None),
+        ("writer", None, "belongs to Agent assistant, not writer"),
+        ("assistant", "alpha", "Identity Agent"),
+    ],
+    ids=["own-chat", "another-agents-channel", "project-session"],
+)
+@pytest.mark.asyncio
+async def test_a_run_relays_to_a_chat_of_its_agents_channel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent_id: str,
+    project_id: str | None,
+    refusal: str | None,
+) -> None:
+    adapter = BlockingAdapter()
+    service = await start_with_adapter(tmp_path, monkeypatch, adapter)
+    engine = service._connections.active_engine("tg-assistant")
+    connect(engine, adapter)
+    run = Run(run_id="cron-run", agent_id=agent_id, session_id="cron", project_id=project_id)
+    run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": "Report."}})
+    run.mark_completed("Report.")
+    try:
+        if refusal is None:
+            await service.relay_run_to_chat(run, "tg-assistant", "555", thread_id="9")
+        else:
+            with pytest.raises(ChannelConfigError, match=refusal):
+                await service.relay_run_to_chat(run, "tg-assistant", "555")
+        await settle_replies(engine)
+    finally:
+        await service.aclose()
+        service.close()
+
+    assert adapter.replies == ([("555", "9", "Report.")] if refusal is None else [])
+
+
+@pytest.mark.asyncio
+async def test_an_outbound_note_lands_in_the_chats_session_unless_it_sent_the_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    threads: list[str] = []
+    get_or_create = sessions.get_or_create
+
+    def recorded_get_or_create(address: SessionAddress) -> object:
+        threads.append(threading.current_thread().name)
+        return get_or_create(address)
+
+    monkeypatch.setattr(sessions, "get_or_create", recorded_get_or_create)
+    adapter = BlockingAdapter()
+    service = await start_with_adapter(tmp_path, monkeypatch, adapter, chat_sessions=sessions)
+    chat = SessionAddress(project_id=None, agent_id="assistant", session_id="ch-blocking-555")
+    try:
+        assert await service.record_outbound_note("tg-assistant", "555", "Sent: report") is True
+        assert (
+            await service.record_outbound_note(
+                "tg-assistant", "555", "Sent again", skip_session_id=chat.session_id
+            )
+            is False
+        )
+    finally:
+        await service.aclose()
+        service.close()
+
+    assert [(entry.role, entry.content) for entry in sessions.get(chat).load()] == [
+        ("note", "Sent: report")
+    ]
+    # The note is written on the Session database's pool, off the Event Loop.
+    assert len(threads) == 1 and threads[0].startswith("vbot-db-sessions")
+    sessions.close()
+
+
 @pytest.mark.asyncio
 async def test_channel_service_persists_and_rewrites_origin_bound_run_buttons(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

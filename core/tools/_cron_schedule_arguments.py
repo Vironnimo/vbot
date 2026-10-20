@@ -55,12 +55,16 @@ _IN_KEYS = frozenset(
     {"in", "delay", "delayms", "delayseconds", "delayminutes", "inseconds", "inminutes", "after"}
 )
 _TYPE_KEYS = frozenset({"scheduletype", "schedulekind", "kind", "type"})
+WEBHOOK_SCHEDULE = "webhook"
+"""The ``schedule`` of a job that runs when a request reaches its webhook URL."""
+_WEBHOOK_WORDS = frozenset({"webhook", "webhooks", "hook", "hooks", "onwebhook"})
 _TYPE_WORDS = {
     "cron": frozenset({"cron", "crontab", "cronexpression", "expression", "expr"}),
     "once": frozenset(
         {"once", "onetime", "oneshot", "single", "at", "date", "datetime", "runat", "fireat"}
     ),
     "interval": frozenset({"interval", "every", "recurring", "repeating", "periodic"}),
+    WEBHOOK_SCHEDULE: _WEBHOOK_WORDS,
 }
 _UNIT_BY_KEY_SUFFIX = (("ms", 0.001), ("seconds", 1), ("minutes", 60), ("hours", 3600))
 
@@ -113,8 +117,10 @@ _EVENT_PHRASE = re.compile(
 
 
 def schedule_kind(schedule: str) -> str:
-    """Classify a canonical schedule string: ``once``, ``interval`` or ``cron``."""
+    """Classify a canonical schedule string: ``once``, ``interval``, ``cron`` or ``webhook``."""
     text = schedule.strip()
+    if text == WEBHOOK_SCHEDULE:
+        return WEBHOOK_SCHEDULE
     if text.startswith("every "):
         return "interval"
     if text.startswith("in "):
@@ -146,6 +152,9 @@ def _read_schedule(arguments: dict[str, Any], problems: _Problems) -> None:
                 candidates.append((key, text))
     texts = list(dict.fromkeys(text for _key, text in candidates if text))
     if not texts:
+        if type_hint == WEBHOOK_SCHEDULE:
+            # A webhook job keeps no time: its type alone is its schedule.
+            arguments["schedule"] = WEBHOOK_SCHEDULE
         return
     if len(texts) > 1 and type_hint is not None:
         typed = list(dict.fromkeys(text for text in texts if schedule_kind(text) == type_hint))
@@ -255,6 +264,8 @@ def _schedule_text(value: Any, hint: str | None, key: str, problems: _Problems) 
     """Return the canonical schedule string for one supplied schedule value."""
     text = " ".join(str(value).split())
     lowered = text.casefold()
+    if spelling(text) in _WEBHOOK_WORDS:
+        return WEBHOOK_SCHEDULE
     if lowered in _CRON_MACROS:
         return _CRON_MACROS[lowered]
     if lowered.startswith("at "):

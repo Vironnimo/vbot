@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 from collections.abc import Awaitable
 from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 from core.automation import _cron_claims as _claims
 from core.automation import _cron_events as _events
@@ -81,6 +79,7 @@ class CronScheduler:
                     job.last_fired_at = claimed_at
                     job.last_outcome = "unknown"
                     job.last_error = "vBot restarted after this once job was claimed"
+                    job.last_run_silent = False
                     needs_save = True
                     once_claims_to_remove.append(job.id)
                     continue
@@ -89,6 +88,7 @@ class CronScheduler:
                 if job.last_outcome is None:
                     job.last_outcome = "unknown"
                     job.last_error = "vBot restarted after the final Run was admitted"
+                    job.last_run_silent = False
                 needs_save = True
                 continue
 
@@ -105,6 +105,9 @@ class CronScheduler:
                     _claims.remove(self._owner._once_fire_claims_dir, job_id)
             self._owner._notify_changed()
 
+        self._owner._webhooks.load_states(
+            [job.id for job in self._owner._jobs.values() if job.schedule_type == "webhook"]
+        )
         for job in self._owner._jobs.values():
             if job.status == "active" and job.id not in held_job_ids:
                 self._start_job_task(job)
@@ -127,6 +130,7 @@ class CronScheduler:
         pending_tasks = [task for task in tasks if not task.done()]
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
+        await self._owner._watcher.aclose()
         if self._owner._crash_saves:
             await asyncio.gather(*self._owner._crash_saves, return_exceptions=True)
 
@@ -142,6 +146,10 @@ class CronScheduler:
             task = asyncio.create_task(self._run_once_job(job), name=f"cron-job:{job.id}:once")
         elif job.schedule_type == "event":
             task = asyncio.create_task(self._run_event_job(job), name=f"cron-job:{job.id}:event")
+        elif job.schedule_type == "webhook":
+            task = asyncio.create_task(
+                self._run_webhook_job(job), name=f"cron-job:{job.id}:webhook"
+            )
         else:
             task = asyncio.create_task(
                 self._run_recurring_job(job, job.schedule_type),
@@ -169,7 +177,8 @@ class CronScheduler:
 
         A fire that came due while vBot did not run the job (offline, asleep)
         starts once, late, for the most recent due instant. Due instants that
-        pass while the job's own Run is still running are skipped.
+        pass while the job's own Run is still running are skipped. A watching
+        job checks first and starts its Run only when the output changed.
         """
         while True:
             current = self._owner._jobs.get(job.id)
@@ -211,7 +220,10 @@ class CronScheduler:
                     self._owner._timezone, _timing._utc_now(), current
                 ) or _schedule.OwedFire(due_at=due_at)
 
-            await self._owner._execution._trigger_job_run(current, owed=owed)
+            if current.watch is not None:
+                await self._owner._watcher.fire(current)
+            else:
+                await self._owner._execution._trigger_job_run(current, owed=owed)
             if job.id in self._owner._pending_restarts:
                 return
 
@@ -264,6 +276,34 @@ class CronScheduler:
             )
             if not reached:
                 settled = None
+
+    async def _run_webhook_job(self, job: CronJob) -> None:
+        """Start a Run whenever requests to the job's webhook wait, one Run at a time.
+
+        Requests that arrive while a Run is active wait and start one follow-up
+        Run together. A Run that could not start leaves its requests waiting and
+        is tried again after the once-job backoff; a target that stays missing
+        counts toward the failure stop.
+        """
+        webhooks = self._owner._webhooks
+        failed_attempts = 0
+        while True:
+            current = self._owner._jobs.get(job.id)
+            if current is None or current.status != "active" or current.schedule_type != "webhook":
+                return
+            wake = webhooks.wake(job.id)
+            wake.clear()
+            if not await webhooks.waiting(job.id):
+                await wake.wait()
+                continue
+            outcome = await self._owner._execution._trigger_job_run(current, webhook=True)
+            if job.id in self._owner._pending_restarts:
+                return
+            if outcome.admitted or not await webhooks.waiting(job.id):
+                failed_attempts = 0
+                continue
+            failed_attempts += 1
+            await _timing._sleep(_timing._once_retry_delay(failed_attempts))
 
     async def _run_once_job(self, job: CronJob) -> None:
         """Sleep until run_at, fire once, then mark completed.
@@ -395,28 +435,11 @@ class CronScheduler:
             attempts,
             job_id,
         )
+        baseline = self._owner._execution._failure_baseline(job_id)
         job.status = "failed"
         self._owner._jobs[job_id] = job
-        await self._owner._execution._save_jobs_after_fire(job_id)
+        await self._owner._execution._save_and_alert(job_id, baseline)
         await self._remove_claim(job_id)
-
-    def _run_context(
-        self, job: CronJob, late: _LateFire | None, event_due: _events.EventDue | None
-    ) -> str | None:
-        """The note before the Run's input: the event the job is due for, and lateness."""
-        parts = []
-        if event_due is not None:
-            parts.append(_events.context_note(job, event_due))
-        if late is not None:
-            parts.append(late.notice(job.id, _timing._utc_now()))
-        return "\n\n".join(parts) or None
-
-    def _late_fire(self, owed: _schedule.OwedFire) -> _LateFire | None:
-        """Describe a fire that starts after it was due; ``None`` when it is on time."""
-        now = _timing._utc_now()
-        if (now - owed.due_at).total_seconds() <= _ON_TIME_SECONDS and not owed.earlier_missed:
-            return None
-        return _LateFire(owed=owed, noticed_at=now, timezone=self._owner._timezone)
 
     def _owed_event_now(self, job: CronJob) -> _events.EventDue | None:
         """Re-read an event job's next owed occurrence at the current wall clock."""
@@ -538,13 +561,14 @@ class CronScheduler:
         if not owns_job_slot:
             return
 
+        baseline = self._owner._execution._failure_baseline(job_id)
         job = self._owner._jobs.get(job_id)
         if job is not None and job.status == "active" and job.schedule_type == "once":
             job.status = "failed"
             self._owner._jobs[job_id] = job
         if self._owner._execution._note_run_failure(job_id, error):
             # A crashed job task leaves only this callback, which must not wait for the file.
-            self._track_crash_save(self._owner._execution._save_jobs_after_fire(job_id))
+            self._track_crash_save(self._owner._execution._save_and_alert(job_id, baseline))
 
         job = self._owner._jobs.get(job_id)
         if self._owner._started and job is not None and job.status == "active":
@@ -554,67 +578,8 @@ class CronScheduler:
 _ONCE_MAX_FIRE_ATTEMPTS = 5
 
 
-# A fire that starts at most this late counts as on time and gets no late notice.
-# Wall-clock waits recheck every minute.
-_ON_TIME_SECONDS = 60
-
-
 # An event job with no occurrence ahead waits for a calendar change.
 _NO_DUE = datetime.max.replace(tzinfo=UTC)
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class _LateFire:
-    """A fire that starts after its due instant, or after earlier fires were missed."""
-
-    owed: _schedule.OwedFire
-    noticed_at: datetime
-    timezone: ZoneInfo
-
-    @property
-    def late_by_seconds(self) -> int:
-        return max(int((self.noticed_at - self.owed.due_at).total_seconds()), 0)
-
-    def notice(self, job_id: str, starting_at: datetime) -> str:
-        """The note before the Run's input that tells the Agent which fires it replaces."""
-        due = self._local(self.owed.due_at)
-        if self.late_by_seconds > _ON_TIME_SECONDS:
-            sentences = [
-                f"Cron job {job_id} was due at {due} and is starting late, at "
-                f"{self._local(starting_at)}."
-            ]
-        else:
-            sentences = [f"Cron job {job_id} is starting at its due time, {due}."]
-        earlier = self.owed.earlier_missed
-        first = self.owed.first_due_at
-        if earlier == 1 and first is not None:
-            sentences.append(
-                f"The earlier due time {self._local(first)} was missed and will not run separately."
-            )
-        elif earlier and first is not None:
-            count = (
-                f"At least {earlier}" if earlier >= _schedule.MAX_COUNTED_MISSED_FIRES else earlier
-            )
-            sentences.append(
-                f"{count} earlier due times, the first at {self._local(first)}, were missed and "
-                "will not run separately."
-            )
-        sentences.append(
-            f"vBot did not run the job at {'those times' if earlier else 'the due time'}, for "
-            "example because the server was off or the computer was asleep."
-        )
-        sentences.append(
-            "Carry out the instruction that follows now, and adapt any part of it that depends "
-            "on when it runs, such as a greeting, a deadline that has passed, or the period it "
-            "covers."
-        )
-        sentences.append(
-            "If the instruction no longer makes sense this late, say so instead of carrying it out."
-        )
-        return " ".join(sentences)
-
-    def _local(self, instant: datetime) -> str:
-        return instant.astimezone(self.timezone).replace(microsecond=0).isoformat()
 
 
 _LOGGER = get_logger("automation.cron")

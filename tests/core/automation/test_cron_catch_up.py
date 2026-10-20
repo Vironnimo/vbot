@@ -138,7 +138,7 @@ async def test_a_fire_up_to_a_minute_late_starts_without_a_notice(
     await _run(service, job)
 
     trigger_service.trigger_run.assert_awaited_once()
-    assert "context_note" not in trigger_service.trigger_run.await_args.kwargs
+    assert "late" not in trigger_service.trigger_run.await_args.kwargs["context_note"]
 
 
 @pytest.mark.asyncio

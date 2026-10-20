@@ -29,6 +29,24 @@ import {
   mergeChannelStatuses,
 } from '$lib/settingsView.js';
 
+// A Channel platform's display name; an unknown platform shows its id.
+export function channelPlatformLabel(platformId) {
+  switch (platformId) {
+    case 'telegram':
+      return t('settings.channels.platform.telegram');
+    case 'discord':
+      return t('settings.channels.platform.discord');
+    case 'slack':
+      return t('settings.channels.platform.slack');
+    case 'mattermost':
+      return t('settings.channels.platform.mattermost');
+    case 'whatsapp':
+      return t('settings.channels.platform.whatsapp');
+    default:
+      return platformId;
+  }
+}
+
 export function createChannelsSettings(context) {
   let channelPanelState = $state(createChannelPanelState());
   let channelAgents = $state([]);
@@ -235,23 +253,6 @@ export function createChannelsSettings(context) {
       case 'per_conversation':
       default:
         return t('settings.channels.dm_scope.per_conversation');
-    }
-  }
-
-  function channelPlatformLabel(platformId) {
-    switch (platformId) {
-      case 'telegram':
-        return t('settings.channels.platform.telegram');
-      case 'discord':
-        return t('settings.channels.platform.discord');
-      case 'slack':
-        return t('settings.channels.platform.slack');
-      case 'mattermost':
-        return t('settings.channels.platform.mattermost');
-      case 'whatsapp':
-        return t('settings.channels.platform.whatsapp');
-      default:
-        return platformId;
     }
   }
 

@@ -1,18 +1,26 @@
 import { activeLocaleTag, t } from '$lib/i18n.js';
 import {
+  CRON_DELIVERY_APP,
+  CRON_DELIVERY_CHAT,
+  CRON_DELIVERY_NONE,
   CRON_FREQUENCY_CUSTOM,
   CRON_FREQUENCY_DAILY,
   CRON_FREQUENCY_HOURLY,
   CRON_FREQUENCY_INTERVAL,
   CRON_FREQUENCY_MONTHLY,
   CRON_FREQUENCY_ONCE,
+  CRON_FREQUENCY_WEBHOOK,
   CRON_FREQUENCY_WEEKLY,
   CRON_STATUS_ACTIVE,
   CRON_SCHEDULE_TYPE_EVENT,
   CRON_SCHEDULE_TYPE_INTERVAL,
   CRON_SCHEDULE_TYPE_ONCE,
+  CRON_SCHEDULE_TYPE_WEBHOOK,
   CRON_STATUS_COMPLETED,
   CRON_STATUS_MISSED,
+  CRON_WATCH_COMMAND,
+  CRON_WATCH_NONE,
+  CRON_WATCH_URL,
   CRON_WEEKDAYS,
   cronScheduleFields,
   describeCronExpression,
@@ -34,6 +42,78 @@ export function frequencyOptions() {
     { value: CRON_FREQUENCY_WEEKLY, label: t('cron.frequency.weekly') },
     { value: CRON_FREQUENCY_MONTHLY, label: t('cron.frequency.monthly') },
     { value: CRON_FREQUENCY_CUSTOM, label: t('cron.frequency.custom') },
+    { value: CRON_FREQUENCY_WEBHOOK, label: t('cron.frequency.webhook') },
+  ];
+}
+
+// Who can send requests to a webhook job's URL, as a sentence.
+export function webhookReachText(reach) {
+  if (reach === 'internet') return t('cron.webhook.reach.internet');
+  if (reach === 'network') return t('cron.webhook.reach.network');
+  if (reach === 'computer') return t('cron.webhook.reach.computer');
+  return '';
+}
+
+// A webhook job's latest request and the requests it holds for its next
+// Run, such as "Today 10:00 · 2 requests wait for the next Run".
+export function webhookRequestsText(job, timezone, now = new Date()) {
+  const webhook = job?.webhook;
+  if (!webhook?.last_received_at) {
+    return t('cron.webhook.noRequest');
+  }
+  const parts = [compactTimestamp(webhook.last_received_at, timezone, now)];
+  if (webhook.waiting === 1) {
+    parts.push(t('cron.webhook.waitingOne'));
+  } else if (webhook.waiting > 1) {
+    parts.push(t('cron.webhook.waitingMany', { count: webhook.waiting }));
+  }
+  if (webhook.dropped === 1) {
+    parts.push(t('cron.webhook.droppedOne'));
+  } else if (webhook.dropped > 1) {
+    parts.push(t('cron.webhook.droppedMany', { count: webhook.dropped }));
+  }
+  return parts.filter(Boolean).join(' · ');
+}
+
+// Where a job's answers go, vBot first as the form's default.
+export function deliveryKindOptions() {
+  return [
+    { value: CRON_DELIVERY_APP, label: t('cron.deliveryKind.app') },
+    { value: CRON_DELIVERY_CHAT, label: t('cron.deliveryKind.chat') },
+    { value: CRON_DELIVERY_NONE, label: t('cron.deliveryKind.none') },
+  ];
+}
+
+// Where a saved job's answers go, in words: "vBot", "Not delivered" or the
+// chat with its thread and Channel.
+export function deliverySummary(job) {
+  const delivery = job?.delivery;
+  if (delivery?.kind === CRON_DELIVERY_APP) {
+    return t('cron.delivery.app');
+  }
+  if (delivery?.kind !== CRON_DELIVERY_CHAT) {
+    return t('cron.delivery.none');
+  }
+  if (delivery.thread_id) {
+    return t('cron.delivery.chatThread', {
+      chat: delivery.platform_target,
+      thread: delivery.thread_id,
+      channel: delivery.channel_id,
+    });
+  }
+  return t('cron.delivery.chat', {
+    chat: delivery.platform_target,
+    channel: delivery.channel_id,
+  });
+}
+
+// What a repeating job checks before each Run; running every time first as
+// the form's default.
+export function watchKindOptions() {
+  return [
+    { value: CRON_WATCH_NONE, label: t('cron.watchKind.none') },
+    { value: CRON_WATCH_COMMAND, label: t('cron.watchKind.command') },
+    { value: CRON_WATCH_URL, label: t('cron.watchKind.url') },
   ];
 }
 
@@ -174,6 +254,9 @@ export function scheduleSummary(job) {
   if (job.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL) {
     return displayValue(describeInterval(job.interval_seconds));
   }
+  if (job.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK) {
+    return t('cron.schedule.webhook');
+  }
   if (job.schedule_type === CRON_SCHEDULE_TYPE_EVENT) {
     // A gone or unreadable event is named by its id.
     return t('cron.schedule.event', {
@@ -193,7 +276,8 @@ export function scheduleTechnicalValue(job) {
   }
   if (
     job?.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL ||
-    job?.schedule_type === CRON_SCHEDULE_TYPE_EVENT
+    job?.schedule_type === CRON_SCHEDULE_TYPE_EVENT ||
+    job?.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK
   ) {
     return '';
   }
@@ -345,10 +429,33 @@ export function sessionSummary(job) {
 
 export function lastResultSupport(job) {
   if (!job?.last_completed_at_display) {
-    return t('cron.detail.waitingForFirstRun');
+    return waitingText(job);
   }
 
   return job.last_completed_at_display;
+}
+
+// What a job without a Run waits for: its first due time, for a watching
+// job the first change its check finds, for a webhook job its first request.
+function waitingText(job) {
+  if (job?.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK) {
+    return t('cron.detail.waitingForRequest');
+  }
+  return job?.watch
+    ? t('cron.detail.waitingForChange')
+    : t('cron.detail.waitingForFirstRun');
+}
+
+// When a job runs next: its next due time, or for an active webhook job the
+// next request.
+export function nextRunText(job) {
+  if (
+    job?.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK &&
+    job.status === CRON_STATUS_ACTIVE
+  ) {
+    return t('cron.detail.nextRequest');
+  }
+  return displayValue(job?.next_fire_at_display);
 }
 
 export function remainingRunsLabel(job) {
@@ -401,9 +508,10 @@ export function statusChipVariant(job) {
   return 'neutral';
 }
 
-export function outcomeLabel(outcome) {
+// `silent`: the successful Run had nothing to report and delivered nothing.
+export function outcomeLabel(outcome, silent = false) {
   if (outcome === 'success') {
-    return t('cron.outcome.success');
+    return silent ? t('cron.outcome.silent') : t('cron.outcome.success');
   }
   if (outcome === 'failed') {
     return t('cron.outcome.failed');
@@ -438,7 +546,9 @@ const OUTCOME_TONES = {
 // Details card beside a Schedule row: the name, the last error as lead text,
 // then what the status dot means, the readable cadence with its exact
 // expression, the next and last Run as absolute and relative moments in the
-// schedule timezone, and where the Run goes. `agentLabel` names the target.
+// schedule timezone, what a watching job checks and its last check, where the
+// Run goes and where its answer goes.
+// `agentLabel` names the target.
 export function scheduleRowDetails(
   job,
   { agentLabel = (target) => target, nowMs = Date.now() } = {},
@@ -473,7 +583,7 @@ export function scheduleRowDetails(
         label: t('cron.detail.lastResult'),
         value: job.last_outcome
           ? [
-              outcomeLabel(job.last_outcome),
+              outcomeLabel(job.last_outcome, job.last_run_silent),
               momentText(
                 job.last_completed_at_display,
                 job.last_completed_at,
@@ -482,8 +592,39 @@ export function scheduleRowDetails(
             ]
               .filter(Boolean)
               .join(' · ')
-          : t('cron.detail.waitingForFirstRun'),
+          : waitingText(job),
         tone: OUTCOME_TONES[job.last_outcome],
+      },
+      {
+        label: t('cron.webhook.lastRequest'),
+        value: job.webhook?.last_received_at
+          ? momentText(
+              job.webhook.last_received_at_display,
+              job.webhook.last_received_at,
+              nowMs,
+            )
+          : '',
+      },
+      {
+        label: t('cron.card.watch'),
+        value: job.watch?.target ?? '',
+        mono: true,
+      },
+      {
+        label: t('cron.detail.lastCheck'),
+        value: job.watch
+          ? [
+              momentText(
+                job.last_checked_at_display,
+                job.last_checked_at,
+                nowMs,
+              ),
+              job.last_check_error ? t('cron.card.checkFailed') : '',
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : '',
+        tone: job.last_check_error ? 'danger' : undefined,
       },
       { label: t('cron.detail.target'), value: agentLabel(job.agent_id) },
       {
@@ -491,6 +632,7 @@ export function scheduleRowDetails(
         value: job.session_id || t('cron.detail.newSessionEachRun'),
         mono: Boolean(job.session_id),
       },
+      { label: t('cron.card.delivery'), value: deliverySummary(job) },
     ],
     placement: 'right',
   };

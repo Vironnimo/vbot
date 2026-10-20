@@ -19,7 +19,6 @@ from core.channels import (
 )
 from core.channels.adapter import FileData, RouteFacts
 from core.extensions import InteractionButton
-from core.sessions import SessionAddress
 from core.tools._channel_send_arguments import (
     ACTION_FIELD,
     CHANNEL_FIELD,
@@ -380,7 +379,6 @@ async def _handle_channel_send_tool(
         context,
         _record_outbound_message_note(
             channel_service,
-            chat_sessions,
             prepared.channel_id,
             platform_target,
             thread_id=thread_id,
@@ -536,7 +534,6 @@ def _contains_run_button(buttons: list[list[InteractionButton]] | None) -> bool:
 
 async def _record_outbound_message_note(
     channel_service: ChannelService,
-    chat_sessions: ChatSessionManager,
     channel_id: str,
     platform_target: str,
     *,
@@ -547,18 +544,10 @@ async def _record_outbound_message_note(
     checklist: list[ChecklistItem] | None = None,
 ) -> None:
     try:
-        route = await channel_service.ensure_outbound_session(
-            channel_id, platform_target, thread_id=thread_id
-        )
-        # Serialize the outbound-context note against an open tool cycle on the
-        # target session. The lock is task-reentrant, so this is safe even when
-        # the sending Run targets its own session.
-        target = SessionAddress(
-            project_id=None, agent_id=route.agent_id, session_id=route.session_id
-        )
         note = _outbound_message_note(sender_agent_id, message, files, checklist)
-        async with chat_sessions.write_lock(target):
-            await chat_sessions.run_async(_append_session_note, chat_sessions, target, note)
+        await channel_service.record_outbound_note(
+            channel_id, platform_target, note, thread_id=thread_id
+        )
     except Exception as error:
         # The outbound message already went out; failing to record context into the target
         # Session must not turn a successful send into a tool failure.
@@ -569,12 +558,6 @@ async def _record_outbound_message_note(
             error,
             exc_info=(type(error), error, error.__traceback__),
         )
-
-
-def _append_session_note(
-    chat_sessions: ChatSessionManager, target: SessionAddress, note: str
-) -> None:
-    chat_sessions.get_or_create(target).add_note(note)
 
 
 def _outbound_message_note(

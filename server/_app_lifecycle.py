@@ -19,6 +19,7 @@ from server.activity import ActivityMonitor
 from server.clients import ClientRegistry
 from server.events import (
     ACTIVITY_STATUS_EVENT,
+    CRON_FAILURE_ALERT_EVENT,
     RESOURCE_KIND_ARCHIVE,
     RESOURCE_KIND_CALENDAR,
     RESOURCE_KIND_CRON,
@@ -220,9 +221,33 @@ def _unregister_session_completion_read_bridge(state: Any) -> None:
 
 
 def _register_cron_change_bridge(state: Any) -> Any:
-    return state.runtime.cron_service.add_changed_callback(
-        lambda: publish_resource_changed(state, RESOURCE_KIND_CRON)
-    )
+    """Publish Cron changes, and the failure alerts of jobs that deliver to vBot."""
+    cron_service = state.runtime.cron_service
+
+    def publish_failure_alert(alert: Any) -> None:
+        state.event_bus.publish(
+            CRON_FAILURE_ALERT_EVENT,
+            {
+                "job_id": alert.job_id,
+                "name": alert.name,
+                "agent_id": alert.agent_id,
+                "project_id": alert.project_id,
+                "message": alert.message,
+            },
+        )
+
+    unsubscribers = [
+        cron_service.add_changed_callback(
+            lambda: publish_resource_changed(state, RESOURCE_KIND_CRON)
+        ),
+        cron_service.add_failure_alert_callback(publish_failure_alert),
+    ]
+
+    def unsubscribe() -> None:
+        for remove in unsubscribers:
+            remove()
+
+    return unsubscribe
 
 
 def _unregister_cron_change_bridge(state: Any) -> None:

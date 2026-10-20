@@ -35,7 +35,7 @@ Split an oversized source file into focused internal units behind the owning mod
 
 **Extensions:** API 16 (`core/extensions/_declarations.API_VERSION`; what each version added: `extensions/management.md` -> API versions). Canonical Sessions own binding, receipt and Run identity; Extension databases own domain state. The app provides a generic page bridge; Extensions own domain UI (`extensions.md`).
 
-**Configuration:** Data directory `~/.vbot` owns `settings.json` and `secrets.json`, the encrypted Secret Store for data-directory credentials and OAuth tokens (`secrets.md`). Process environment takes precedence; vBot never rewrites `os.environ`. Owning domains validate every user-editable JSON file before runtime use; public accessors configure Settings only through cataloged paths (`settings.md`, `storage.md`; Custom Provider credentials: `providers/connections.md`).
+**Configuration:** Data directory `~/.vbot` owns `settings.json` and `secrets.json`, the encrypted Secret Store for data-directory credentials, OAuth tokens and Cron webhook secrets (`secrets.md`). Process environment takes precedence; vBot never rewrites `os.environ`. Owning domains validate every user-editable JSON file before runtime use; public accessors configure Settings only through cataloged paths (`settings.md`, `storage.md`; Custom Provider credentials: `providers/connections.md`).
 
 ## Domain Maps
 

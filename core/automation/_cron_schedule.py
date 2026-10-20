@@ -40,6 +40,8 @@ def parse_schedule(
         raise CronJobValidationError("schedule must be a non-empty string")
 
     normalized = " ".join(schedule.split())
+    if normalized.casefold() == "webhook":
+        return ParsedSchedule(schedule_type="webhook")
     reference_utc = _as_utc(reference_time or now)
 
     relative_prefix, separator, duration_text = normalized.partition(" ")
@@ -68,7 +70,7 @@ def parse_schedule(
     if "T" not in normalized and " " not in normalized:
         raise CronJobValidationError(
             "schedule must be an ISO 8601 timestamp, 'in <duration>', "
-            "'every <duration>', or a five-field cron expression"
+            "'every <duration>', a five-field cron expression, or 'webhook'"
         )
     try:
         parsed = _parse_iso_datetime(
@@ -79,7 +81,7 @@ def parse_schedule(
     except CronJobValidationError as error:
         raise CronJobValidationError(
             "schedule must be an ISO 8601 timestamp, 'in <duration>', "
-            "'every <duration>', or a five-field cron expression"
+            "'every <duration>', a five-field cron expression, or 'webhook'"
         ) from error
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone)
@@ -88,6 +90,9 @@ def parse_schedule(
 
 # Earlier missed fires are counted up to this many; a count at the cap means "at least".
 MAX_COUNTED_MISSED_FIRES = 100
+
+# Schedule types whose fires no clock decides: calendar events and webhook requests.
+_UNTIMED_SCHEDULE_TYPES = frozenset(("event", "webhook"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,9 +113,14 @@ def owed_fire(timezone: ZoneInfo, now: datetime, job: CronJob) -> OwedFire | Non
     Fires due at or before :func:`covered_until` are not owed: the job was
     created, activated, rescheduled, attempted or completed after them, or they
     were skipped. Several owed fires collapse into the most recent one. An event
-    job's occurrences come from the calendar (``_cron_events``).
+    job's occurrences come from the calendar (``_cron_events``); a webhook job
+    has no due times.
     """
-    if job.status != "active" or job.remaining_runs == 0 or job.schedule_type == "event":
+    if (
+        job.status != "active"
+        or job.remaining_runs == 0
+        or job.schedule_type in _UNTIMED_SCHEDULE_TYPES
+    ):
         return None
     now_utc = _as_utc(now)
     if job.schedule_type == "once":
@@ -125,7 +135,10 @@ def owed_fire(timezone: ZoneInfo, now: datetime, job: CronJob) -> OwedFire | Non
 
 
 def covered_until(job: CronJob) -> datetime:
-    """The latest instant through which a recurring job owes no fire."""
+    """The latest instant through which a recurring job owes no fire.
+
+    A watching job's check covers its due time even when it starts no Run.
+    """
     instants = [
         _parse_utc_timestamp(value, field_name=field_name)
         for field_name, value in (
@@ -133,6 +146,7 @@ def covered_until(job: CronJob) -> datetime:
             ("covered_until", job.covered_until),
             ("last_attempt_at", job.last_attempt_at),
             ("last_completed_at", job.last_completed_at),
+            ("last_checked_at", job.last_checked_at),
         )
         if value is not None
     ]
@@ -221,6 +235,8 @@ def format_schedule(job: CronJob) -> str:
         )
     if job.schedule_type == "event":
         return format_event_time(job.event_edge, job.event_offset_minutes)
+    if job.schedule_type == "webhook":
+        return "webhook"
     return job.run_at or ""
 
 
@@ -229,9 +245,14 @@ def next_fire_at(
 ) -> str | None:
     """Project the next UTC fire instant from the canonical schedule rules.
 
-    An event job's next fire comes from the calendar (``_cron_events``).
+    An event job's next fire comes from the calendar (``_cron_events``); a
+    webhook job has none.
     """
-    if job.status != "active" or job.remaining_runs == 0 or job.schedule_type == "event":
+    if (
+        job.status != "active"
+        or job.remaining_runs == 0
+        or job.schedule_type in _UNTIMED_SCHEDULE_TYPES
+    ):
         return None
     if job.schedule_type == "once":
         return _parse_run_at_utc(timezone, job).isoformat()
@@ -332,7 +353,9 @@ def _job_schedule_ticks(
         return []
     if job.schedule_type == "interval":
         return _project_interval_ticks(timezone, job, window_start, window_end, cap)
-    return _project_cron_ticks(timezone, job, window_start, window_end, cap)
+    if job.schedule_type == "cron":
+        return _project_cron_ticks(timezone, job, window_start, window_end, cap)
+    return []
 
 
 def _project_interval_ticks(
@@ -423,6 +446,12 @@ def normalize_job_schedule(timezone: ZoneInfo, now: datetime, job: CronJob) -> N
     job.event_id = None
     job.event_edge = None
     job.event_offset_minutes = None
+    if job.schedule_type == "webhook":
+        job.cron_expression = None
+        job.interval_seconds = None
+        job.interval_anchor_at = None
+        job.run_at = None
+        return
     if job.schedule_type == "cron":
         if not isinstance(job.cron_expression, str) or not job.cron_expression.strip():
             raise CronJobValidationError("cron_expression is required for cron jobs")

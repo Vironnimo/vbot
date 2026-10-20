@@ -12,7 +12,7 @@ from typing import Any, cast, override
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.automation.cron import CronService
+from core.automation.cron import CronFailureAlert, CronService
 from core.recall import IndexStatus
 from core.sessions import SessionAddress
 from core.tools.command_manager import CommandNotFoundError
@@ -128,6 +128,8 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
                 cron_expression="0 9 * * *",
             )
         )
+        alert = CronFailureAlert("cron_1", "Watch", "coder", None, "Job failed twice.")
+        alert_events = publishes(lambda: cron_service._raise_failure_alert(alert))
 
         terminal_events = publishes(lambda: terminal_manager.changed_callbacks[0]("term_one"))
 
@@ -170,6 +172,19 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     read_scope = {**session_scope, "read_run_id": run_id}
     assert read_events == [("resource_changed", {"kind": "sessions", "scope": read_scope})]
     assert cron_events == [("resource_changed", {"kind": "cron"})]
+    # A job delivering to vBot alerts its accessors to a failure no Run reports.
+    assert alert_events == [
+        (
+            "cron_failure_alert",
+            {
+                "job_id": "cron_1",
+                "name": "Watch",
+                "agent_id": "coder",
+                "project_id": None,
+                "message": "Job failed twice.",
+            },
+        )
+    ]
 
     assert terminal_events == [
         ("resource_changed", {"kind": "terminals", "scope": {"terminal_id": "term_one"}})
@@ -203,3 +218,4 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
     assert runtime.skill_changed_callbacks == []
     assert runtime.model_catalog_changed_callbacks == []
     assert runtime.recall.listeners == []
+    assert cron_service._failure_alert_callbacks == set()

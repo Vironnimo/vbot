@@ -19,6 +19,7 @@ from core.access.config import (
     normalize_host_name,
     parse_ip,
 )
+from core.automation.cron import WEBHOOK_PATH_PREFIX
 from core.extensions.oauth_redirects import CALLBACK_PATH as OAUTH_CALLBACK_PATH
 from core.utils.server_control import CONTROL_SHUTDOWN_PATH
 from server.file_delivery import (
@@ -76,6 +77,9 @@ _CAPABILITY_ROUTES = re.compile(
     ),
     re.DOTALL,
 )
+#: Cron webhooks: ``POST <prefix><job id>``. The route checks the job's own
+#: secret, which its ``Authorization`` header may carry.
+_WEBHOOK_ROUTE = re.compile(rf"{re.escape(WEBHOOK_PATH_PREFIX)}[^/]+")
 #: Server namespaces; everything else a GET reaches is the static WebUI shell.
 _SERVER_NAMESPACES = ("/api", "/ws", "/_vbot", "/auth", "/health")
 
@@ -250,11 +254,16 @@ def is_capability_route(method: str, path: str) -> bool:
     return method in {"GET", "HEAD"} and _CAPABILITY_ROUTES.fullmatch(path) is not None
 
 
+def is_webhook_route(method: str, path: str) -> bool:
+    """Whether this request shape is a Cron webhook request."""
+    return method == "POST" and _WEBHOOK_ROUTE.fullmatch(path) is not None
+
+
 def classify_route(scope_type: str, method: str, path: str) -> RouteClass:
     """Whether a route needs a principal in ``authenticated`` mode. Fails closed."""
     if scope_type != "http":
         return "protected"
-    if (method, path) in _EXEMPT_ROUTES:
+    if (method, path) in _EXEMPT_ROUTES or is_webhook_route(method, path):
         return "exempt"
     if method in {"GET", "HEAD"}:
         ticket = path.removeprefix(TICKET_PATH_PREFIX)

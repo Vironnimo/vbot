@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import cache
@@ -9,24 +10,35 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from core.automation.cron import (
+    MAX_CONSECUTIVE_CRON_FAILURES,
+    CronDelivery,
     CronJobInPastError,
     CronJobNotFoundError,
     CronJobValidationError,
     CronServiceError,
+    CronStorageError,
     CronTargetAgentNotFoundError,
     CronTargetError,
     CronTargetProjectNotFoundError,
     CronTargetUnavailableError,
+    CronWatch,
 )
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.tools._cron_arguments import (
+    CURRENT_SESSION,
+    DELIVER_PLATFORM_FIELD,
     ENABLED_FIELD,
     EVENT_REPEAT_REFUSAL,
     EVENT_TIME_STAND_IN,
+    HERE,
+    NEW_SESSION,
+    NO_WATCH,
     OMIT,
     REFUSAL_PREFIX,
     SELF_TARGET,
     UNADVERTISED_PARAMETERS,
+    WATCH_STAND_IN,
+    WEBHOOK_SECRET_FIELD,
     CronCallRefusedError,
     ambiguous_event_time,
     event_time_readings,
@@ -36,6 +48,7 @@ from core.tools._cron_arguments import (
 )
 from core.tools._cron_timezone import zoned_schedule
 from core.tools._durations import LATE_LIMITS_FIELD, with_late_limits_note
+from core.tools.call_syntax import spelling
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
@@ -56,14 +69,25 @@ if TYPE_CHECKING:
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
-    "Schedule jobs that run an instruction later: once, repeatedly, or before, at or after a "
-    "calendar event."
+    "Schedule jobs that run an instruction later: once, repeatedly, before, at or after a "
+    "calendar event, or when the job's webhook URL receives a request."
 )
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
 
 _ID_ACTIONS = frozenset({"update", "delete", "enable", "disable"})
-_UPDATE_FIELDS = ("target", "name", "prompt", "schedule", "event_id", "repeat", ENABLED_FIELD)
+_UPDATE_FIELDS = (
+    "target",
+    "name",
+    "prompt",
+    "schedule",
+    "event_id",
+    "repeat",
+    "session",
+    "deliver",
+    "watch",
+    ENABLED_FIELD,
+)
 _SCHEDULE_FORMS = (
     'Use five cron fields in server time such as "0 9 * * 1-5" (weekdays at 09:00), '
     '"every 2h", "in 30m", or a local time such as "2030-01-01T09:00".'
@@ -71,12 +95,20 @@ _SCHEDULE_FORMS = (
 # Values only the Agent can choose; a call that sends one back unchanged changes nothing.
 _SCHEDULE_STAND_IN = "<when>"
 _FUTURE_STAND_IN = "<future time>"
+_REPEATING_STAND_IN = "<repeating schedule>"
+_URL = re.compile(r"https?://\S+", re.IGNORECASE)
 _TARGET_ADDRESS_RECOMMENDATION = (
     'Set "target" to an existing Agent id, or to agent@project for a member of a Project Team'
 )
 _TARGET_UNAVAILABLE_RECOMMENDATION = (
     'Choose another "target", or tell the user that the target Agent cannot run and why'
 )
+# Who can send requests to a webhook job's URL, by the reach Cron reports.
+_WEBHOOK_REACH = {
+    "internet": "the internet",
+    "network": "this computer and the home network",
+    "computer": "this computer only",
+}
 
 CRON_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -120,7 +152,9 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "When to run, in local time: five cron fields (minute hour day month "
                 "weekday), e.g. '0 9 * * 1-5' for weekdays at 09:00; 'every 30m', 'every 2h' "
-                "or 'every 1d'; or once with 'in 45m' or '2030-08-07T09:00'. Required on create."
+                "or 'every 1d'; or once with 'in 45m' or '2030-08-07T09:00'; or 'webhook' to "
+                "run whenever a request reaches the job's URL, and each run gets the request's "
+                "headers and body. Required on create."
             ),
         },
         "event_id": {
@@ -137,6 +171,32 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "Number of runs before the job ends. Omit for no limit; null on update removes "
                 "a limit."
+            ),
+        },
+        "session": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Session each run continues: current for this conversation, or a Session id. "
+                "Omit to start each run in a new Session without this conversation; on update, "
+                "new does that again."
+            ),
+        },
+        "deliver": {
+            "type": "string",
+            "enum": ["here", "app", "none"],
+            "description": (
+                "Where each run's final answer goes: here (this chat, or vBot outside a chat), "
+                "app (vBot, with a notification) or none. Omit on create for here."
+            ),
+        },
+        "watch": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Command or http(s) URL to check before each run; the job runs only when the "
+                "output changed, and the run gets the diff. A command's non-zero exit counts as "
+                "a failed run. Omit to run every time; on update, none stops watching."
             ),
         },
     },
@@ -179,7 +239,12 @@ def register_cron_tool(
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if arguments.get("action") in _REFERENCE_ACTIONS:
             async with reference_lock:
-                return await _handle_cron_tool(cron_service, context, arguments)
+                before = _stored_watch(cron_service, arguments)
+                result = await _handle_cron_tool(cron_service, context, arguments)
+            # A check can take a minute; other Agent and Project changes need not wait for it.
+            if arguments.get("watch", NO_WATCH) != NO_WATCH:
+                return await _with_first_check(cron_service, result, before)
+            return result
         return await _handle_cron_tool(cron_service, context, arguments)
 
     registry.register(
@@ -187,7 +252,10 @@ def register_cron_tool(
         CRON_TOOL_DESCRIPTION,
         CRON_TOOL_PARAMETERS,
         handler,
-        summary="Schedule an instruction to run later or around a calendar event.",
+        summary=(
+            "Schedule an instruction to run later, around a calendar event, or on a webhook "
+            "request."
+        ),
         open_input_schema=True,
         argument_normalizer=_normalize_cron_arguments,
         unadvertised_parameters=UNADVERTISED_PARAMETERS,
@@ -298,6 +366,7 @@ async def _handle_create(
                 arguments, _note = _server_time(cron_service, arguments)
         raise CronCallRefusedError(_missing_create_fields(missing, arguments))
     arguments, note = _server_time(cron_service, arguments)
+    secret_name = arguments.pop(WEBHOOK_SECRET_FIELD, None)
     agent_id, project_id = _target_agent(context, arguments.get("target", SELF_TARGET))
     parsed = _parse_schedule(cron_service, arguments)
     repeat = arguments.get("repeat")
@@ -311,6 +380,11 @@ async def _handle_create(
             )
         )
     paused = arguments.get(ENABLED_FIELD) is False
+    session_id = (
+        _session_id(context, arguments, agent_id, project_id) if "session" in arguments else None
+    )
+    delivery, delivery_note = _delivery(context, arguments, agent_id, project_id)
+    watch = _watch(arguments)
     job = await cron_service.create_job(
         agent_id=agent_id,
         name=arguments.get("name"),
@@ -324,15 +398,22 @@ async def _handle_create(
         event_edge=parsed.event_edge,
         event_offset_minutes=parsed.event_offset_minutes,
         remaining_runs=repeat,
-        session_id=None,
+        session_id=session_id,
         status="paused" if paused else "active",
         project_id=project_id,
+        delivery=delivery.stored(),
+        watch=watch,
         actor="tool",
     )
     notes = [note] if note else []
+    if delivery_note:
+        notes.append(delivery_note)
     if paused:
         notes.append(f'The job is paused; {{"action":"enable","id":"{job.id}"}} starts it.')
-    return _job_success(cron_service, job, notes)
+    secret = await _new_webhook_secret(cron_service, job, notes)
+    if secret_name:
+        notes.append(_sent_secret_note(secret_name, shown=secret is not None))
+    return _job_success(cron_service, job, notes, secret=secret)
 
 
 def _handle_list(cron_service: CronService, arguments: JsonObject) -> JsonObject:
@@ -357,12 +438,15 @@ async def _handle_update(
     if not any(name in arguments for name in _UPDATE_FIELDS):
         raise CronCallRefusedError(
             refusal(
-                "update needs a field to change: name, prompt, schedule, event_id, repeat, or "
-                "target. To pause or resume the job, use disable or enable.",
+                "update needs a field to change: name, prompt, schedule, event_id, repeat, "
+                "target, session, deliver or watch. To pause or resume the job, use disable or "
+                "enable.",
                 arguments,
                 schedule=_SCHEDULE_STAND_IN,
             )
         )
+    secret_name = arguments.pop(WEBHOOK_SECRET_FIELD, None)
+    was_webhook = cron_service.get_job(job_id).schedule_type == "webhook"
     updates: dict[str, Any] = {}
     if "target" in arguments:
         updates["agent_id"], updates["project_id"] = _target_agent(context, arguments["target"])
@@ -387,10 +471,52 @@ async def _handle_update(
             updates["remaining_runs"] = 1
     if "repeat" in arguments:
         updates["remaining_runs"] = arguments["repeat"]
+    if "session" in arguments or "deliver" in arguments:
+        # Both are read against the Agent that runs the job after this update.
+        current = cron_service.get_job(job_id)
+        agent_id, project_id = (
+            (updates["agent_id"], updates["project_id"])
+            if "agent_id" in updates
+            else (current.agent_id, current.project_id)
+        )
+        if "session" in arguments:
+            updates["session_id"] = _session_id(context, arguments, agent_id, project_id)
+        if "deliver" in arguments:
+            delivery, _note = _delivery(context, arguments, agent_id, project_id)
+            updates["delivery"] = delivery.stored()
+    if "watch" in arguments:
+        updates["watch"] = _watch(arguments)
     if ENABLED_FIELD in arguments:
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
     job = await cron_service.update_job(job_id, actor="tool", **updates)
-    return _job_success(cron_service, job, [note] if note else [])
+    notes = [note] if note else []
+    # A job that just became a webhook job got its secret with this call.
+    secret = None if was_webhook else await _new_webhook_secret(cron_service, job, notes)
+    if secret_name:
+        notes.append(_sent_secret_note(secret_name, shown=secret is not None))
+    return _job_success(cron_service, job, notes, secret=secret)
+
+
+async def _new_webhook_secret(
+    cron_service: CronService, job: CronJob, notes: list[str]
+) -> str | None:
+    """The secret of a webhook job this call made; None for any other job."""
+    if job.schedule_type != "webhook":
+        return None
+    try:
+        return await cron_service.webhook_secret(job.id)
+    except CronStorageError as error:
+        notes.append(
+            f"The job's secret could not be read ({str(error).rstrip('. ')}); the user can "
+            "show it in vBot's Schedules."
+        )
+        return None
+
+
+def _sent_secret_note(name: str, *, shown: bool) -> str:
+    if shown:
+        return f'"{name}" had no effect: vBot made the job\'s secret, shown as secret.'
+    return f'"{name}" had no effect: vBot makes a webhook job\'s secret itself.'
 
 
 def _target_agent(context: ToolContext, target: str) -> tuple[str, str | None]:
@@ -398,6 +524,140 @@ def _target_agent(context: ToolContext, target: str) -> tuple[str, str | None]:
     if target == SELF_TARGET:
         return context.agent_id, context.project_id
     return parse_agent_address(target)
+
+
+def _session_id(
+    context: ToolContext, arguments: JsonObject, agent_id: str, project_id: str | None
+) -> str | None:
+    """The Session a call pins the job to; None starts each run in a new Session."""
+    session: str = arguments["session"]
+    if session == NEW_SESSION:
+        return None
+    if session != CURRENT_SESSION:
+        return session
+    if (agent_id, project_id) != (context.agent_id, context.project_id):
+        raise CronCallRefusedError(
+            refusal(
+                'session "current" is your conversation, so a job of '
+                f"{format_agent_address(agent_id, project_id)} cannot continue it.",
+                arguments,
+                session=OMIT,
+            )
+        )
+    return context.session_id
+
+
+def _delivery(
+    context: ToolContext, arguments: JsonObject, agent_id: str, project_id: str | None
+) -> tuple[CronDelivery, str | None]:
+    """Where a call sends the job's answers, with a note when here is not this chat.
+
+    here is the chat this Run answers, when the job runs as the Agent whose Channel
+    it is; outside a chat it is vBot.
+    """
+    choice = arguments.get("deliver", HERE)
+    if choice != HERE:
+        return CronDelivery(kind=choice), None
+    surface = context.reply_surface
+    chat = (
+        surface
+        if surface is not None
+        and surface.kind == "channel"
+        and surface.channel_id
+        and surface.platform_target
+        else None
+    )
+    platform = arguments.get(DELIVER_PLATFORM_FIELD)
+    if platform is not None and (chat is None or spelling(chat.platform or "") != platform):
+        raise CronCallRefusedError(
+            refusal(
+                f"this conversation is not a {platform} chat, and a job delivers each run's "
+                "answer only to this conversation (here), to vBot (app) or nowhere (none).",
+                arguments,
+                deliver="app",
+            )
+        )
+    if chat is None:
+        return CronDelivery(kind="app"), None
+    assert chat.channel_id is not None and chat.platform_target is not None
+    if (agent_id, project_id) != (context.agent_id, None):
+        target = format_agent_address(agent_id, project_id)
+        if "deliver" in arguments:
+            raise CronCallRefusedError(
+                refusal(
+                    f"this chat belongs to your Channel, so a job of {target} cannot deliver here.",
+                    arguments,
+                    deliver="app",
+                )
+            )
+        return (
+            CronDelivery(kind="app"),
+            f"Each run's answer goes to vBot: this chat belongs to your Channel, not to {target}.",
+        )
+    return (
+        CronDelivery(
+            kind="chat",
+            channel_id=chat.channel_id,
+            platform_target=chat.platform_target,
+            thread_id=chat.thread_id,
+        ),
+        None,
+    )
+
+
+def _watch(arguments: JsonObject) -> CronWatch | None:
+    """What a call has the job check before each run: an http(s) URL, else a command."""
+    text = arguments.get("watch", NO_WATCH)
+    if text == NO_WATCH:
+        return None
+    kind = "url" if _URL.fullmatch(text) else "command"
+    try:
+        return CronWatch.parse(kind, text)
+    except CronJobValidationError as error:
+        problem = (
+            f'watch "{text}" is not a valid http or https URL.'
+            if kind == "url"
+            else f"watch is a command of {len(text)} characters, and a command can have at "
+            "most 4000. Save the check as a script file and watch the command that runs it."
+        )
+        raise CronCallRefusedError(refusal(problem, arguments, watch=WATCH_STAND_IN)) from error
+
+
+def _stored_watch(cron_service: CronService, arguments: JsonObject) -> CronWatch | None:
+    """The watch of the job an update names, before the update."""
+    if arguments.get("action") != "update" or not isinstance(arguments.get("id"), str):
+        return None
+    try:
+        return cron_service.get_job(arguments["id"]).watch
+    except CronJobNotFoundError:
+        return None
+
+
+async def _with_first_check(
+    cron_service: CronService, result: JsonObject, before: CronWatch | None
+) -> JsonObject:
+    """Wait for the first check of a watch the call set or changed, and show its outcome."""
+    data = result.get("data")
+    if not result.get("ok") or not isinstance(data, dict) or "watch" not in data:
+        return result
+    finished = await cron_service.await_first_check(data["id"])
+    try:
+        job = cron_service.get_job(data["id"])
+    except CronJobNotFoundError:
+        return result
+    if job.watch is None or job.watch == before:
+        return result
+    notes = [data["note"]] if data.get("note") else []
+    if not finished:
+        notes.append("The first check is still running; list shows its outcome as last_check.")
+    elif job.last_checked_at is not None and job.last_check_error is not None:
+        notes.append(
+            "The first check failed (last_check_error). Fix watch with update, or the job stops "
+            f"after {MAX_CONSECUTIVE_CRON_FAILURES} failed checks in a row."
+        )
+    elif job.last_checked_at is not None:
+        notes.append("The first check recorded the current output; runs start when it changes.")
+    return _job_success(cron_service, job, notes)
 
 
 async def _handle_delete(cron_service: CronService, arguments: JsonObject) -> JsonObject:
@@ -525,6 +785,23 @@ def _validation_message(
         if others:
             return refusal(EVENT_REPEAT_REFUSAL, arguments, repeat=OMIT)
         return f"{REFUSAL_PREFIX}{EVENT_REPEAT_REFUSAL}"
+    if detail.startswith("Session does not exist"):
+        return (
+            f"{REFUSAL_PREFIX}{detail}. Continue this conversation or start each run in a new "
+            f"Session: {render_call(arguments, session=CURRENT_SESSION)} or "
+            f"{render_call(arguments, session=OMIT)}"
+        )
+    if detail.startswith(("delivery", "a job of a Project Agent cannot deliver")):
+        # The chat cannot take the job's answers; vBot always can.
+        return refusal(f"{detail}.", arguments, deliver="app")
+    if detail.startswith("watch applies only"):
+        text = 'watch needs a repeating schedule (five cron fields or "every <duration>")'
+        alternatives: list[dict[str, Any]] = [{"schedule": _REPEATING_STAND_IN}]
+        if action == "create":
+            text += "; to keep this schedule, leave watch out"
+            alternatives.append({"watch": OMIT})
+        calls = " or ".join(render_call(arguments, **fields) for fields in alternatives)
+        return f"{REFUSAL_PREFIX}{text}: {calls}"
     if "Completed or missed jobs" in detail:
         return (
             f"cron was not run: {detail}. The job has finished; create a new job instead, or "
@@ -534,9 +811,19 @@ def _validation_message(
 
 
 def _job_success(
-    cron_service: CronService, job: CronJob, notes: list[str] | None = None
+    cron_service: CronService,
+    job: CronJob,
+    notes: list[str] | None = None,
+    *,
+    secret: str | None = None,
 ) -> JsonObject:
     data = _job_fields(cron_service, job, ZoneInfo(cron_service.system_timezone_name()))
+    if secret is not None:
+        data["secret"] = secret
+        data["authenticate"] = (
+            f'Send each request as POST to url with the header "Authorization: Bearer {secret}", '
+            "or enter secret as the secret of a GitHub webhook (X-Hub-Signature-256)."
+        )
     if notes:
         data["note"] = " ".join(notes)
     return tool_success(data)
@@ -552,24 +839,50 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
     if job.schedule_type == "event":
         event = cron_service.bound_event(job)
         data["event"] = job.event_id if event is None else f"{event.title} ({job.event_id})"
-    # A one-time schedule is its own next run.
-    if job.schedule_type != "once":
+    webhook = cron_service.webhook_status(job)
+    if webhook is not None:
+        data["url"] = webhook.url or f"{webhook.path} on vBot's server address"
+        if webhook.reach is not None:
+            data["reachable_from"] = _WEBHOOK_REACH[webhook.reach]
+    # A one-time schedule is its own next run; a webhook job has none.
+    if job.schedule_type not in {"once", "webhook"}:
         data["next_run"] = _local_time(cron_service.next_fire_at(job), zone)
     if job.schedule_type == "event" and job.status == "active" and data["next_run"] is None:
         data["next_run"] = "none; no occurrence of the event lies ahead"
     data["target"] = format_agent_address(job.agent_id, job.project_id)
+    if job.session_id:
+        data["session"] = job.session_id
+    data["deliver"] = _delivery_text(job.delivery)
     if job.schedule_type != "once" and job.remaining_runs is not None:
         data["repeat"] = job.remaining_runs
+    if job.watch is not None:
+        data["watch"] = job.watch.target
+    if webhook is not None and webhook.last_received_at:
+        data["last_request"] = _local_time(webhook.last_received_at, zone)
+    if webhook is not None and webhook.waiting:
+        data["requests_waiting"] = webhook.waiting
     last_run = job.last_fired_at or job.last_attempt_at
     if last_run:
         data["last_run"] = _local_time(last_run, zone)
     if job.last_outcome:
-        data["last_outcome"] = job.last_outcome
+        silent = job.last_outcome == "success" and job.last_run_silent
+        data["last_outcome"] = "success (answered [SILENT])" if silent else job.last_outcome
     if job.last_error:
         data["last_error"] = job.last_error
+    if job.watch is not None and job.last_checked_at:
+        data["last_check"] = _local_time(job.last_checked_at, zone)
+    if job.watch is not None and job.last_check_error:
+        data["last_check_error"] = job.last_check_error
     if job.consecutive_failures:
         data["failures_in_a_row"] = job.consecutive_failures
     return data
+
+
+def _delivery_text(delivery: CronDelivery | None) -> str:
+    if delivery is None or delivery.kind != "chat":
+        return "none" if delivery is None else delivery.kind
+    thread = f", thread {delivery.thread_id}," if delivery.thread_id else ""
+    return f"chat {delivery.platform_target}{thread} of Channel {delivery.channel_id}"
 
 
 def _job_block(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> str:
@@ -579,7 +892,8 @@ def _job_block(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> str:
     lines.append("prompt: " + "\n  ".join(prompt_lines))
     if job.status == "failed":
         lines.append(
-            f'note: stopped after failed runs; {{"action":"enable","id":"{job.id}"}} restarts it.'
+            f"note: stopped after {'failed checks or runs' if job.watch else 'failed runs'}; "
+            f'{{"action":"enable","id":"{job.id}"}} restarts it.'
         )
     return "\n".join(lines)
 

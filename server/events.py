@@ -34,6 +34,9 @@ ACTIVITY_STATUS_EVENT = "activity_status"
 # Published once when a stop request reaches the server:
 # ``{"initiator": <STOP_INITIATORS value or "unknown">}``.
 SERVER_STOPPING_EVENT = "server_stopping"
+# A failure alert of a Cron job that delivers to vBot, for a failure no Run
+# reports: ``{"job_id", "name", "agent_id", "project_id", "message"}``.
+CRON_FAILURE_ALERT_EVENT = "cron_failure_alert"
 
 ALLOWED_SERVER_EVENT_TYPES = frozenset(
     {
@@ -50,6 +53,7 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
         RECALL_INDEX_STATUS_EVENT,
         ACTIVITY_STATUS_EVENT,
         SERVER_STOPPING_EVENT,
+        CRON_FAILURE_ALERT_EVENT,
     }
 )
 

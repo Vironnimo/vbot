@@ -15,13 +15,14 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.automation import CronService
+from core.automation.cron import CronDelivery, CronResult, CronWatch, WebhookStatus
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
 from server.events import ServerEventBus
-from tests.core.automation.cron_test_support import make_service
+from tests.core.automation.cron_test_support import make_service, secret_store
 from tests.server.rpc_test_support import rpc_error, rpc_result
 
 JsonObject = dict[str, Any]
@@ -40,8 +41,11 @@ _CREATE_DEFAULTS: JsonObject = {
     "remaining_runs": None,
     "session_id": None,
     "project_id": None,
+    "delivery": None,
+    "watch": None,
     "actor": "rpc",
 }
+_CHAT: JsonObject = {"kind": "chat", "channel_id": "tg-main", "platform_target": "chat-42"}
 
 
 def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None) -> SimpleNamespace:
@@ -55,6 +59,14 @@ def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None)
         cron_service.format_schedule.side_effect = CronService.format_schedule
         cron_service.next_fire_at.return_value = None
         cron_service.bound_event.return_value = SimpleNamespace(title="Standup")
+        cron_service.webhook_status.return_value = WebhookStatus(
+            url="https://vbot.example.com/api/hooks/job-123",
+            path="/api/hooks/job-123",
+            reach="internet",
+            last_received_at=None,
+            waiting=0,
+            dropped=0,
+        )
         for edit in ("create_job", "update_job", "delete_job", "enable_job", "disable_job"):
             setattr(cron_service, edit, AsyncMock())
     return SimpleNamespace(
@@ -90,6 +102,13 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
         "last_error": None,
         "consecutive_failures": 0,
         "created_at": "2026-05-14T09:00:00+00:00",
+        "delivery": None,
+        "last_result": None,
+        "last_run_silent": False,
+        "watch": None,
+        "last_checked_at": None,
+        "last_changed_at": None,
+        "last_check_error": None,
     }
     fields.update(changes)
     return SimpleNamespace(**fields)
@@ -215,6 +234,45 @@ async def test_bootstrap_list_projects_each_job() -> None:
             {"target": "builder@vbot", "project_id": "vbot"},
             id="project-target",
         ),
+        # Kind none is stored as no delivery; a chat is passed on whole.
+        pytest.param(
+            {**_CRON_PARAMS, "delivery": {"kind": "none"}},
+            _cron_job(),
+            {
+                "agent_id": "main",
+                "name": "Status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+            },
+            {"delivery": {"kind": "none"}},
+            id="delivery-none",
+        ),
+        pytest.param(
+            {**_CRON_PARAMS, "delivery": {**_CHAT, "thread_id": " 7 "}},
+            _cron_job(delivery=CronDelivery.from_dict({**_CHAT, "thread_id": "7"})),
+            {
+                "agent_id": "main",
+                "name": "Status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+                "delivery": CronDelivery.from_dict({**_CHAT, "thread_id": "7"}),
+            },
+            {"delivery": {**_CHAT, "thread_id": "7"}},
+            id="delivery-chat",
+        ),
+        pytest.param(
+            {**_CRON_PARAMS, "watch": {"url": " https://status.example/ "}},
+            _cron_job(watch=CronWatch("url", "https://status.example/")),
+            {
+                "agent_id": "main",
+                "name": "Status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+                "watch": CronWatch("url", "https://status.example/"),
+            },
+            {"watch": {"url": "https://status.example/"}, "last_checked_at": None},
+            id="watch",
+        ),
         pytest.param(
             {
                 "agent_id": "main",
@@ -290,6 +348,29 @@ async def test_bootstrap_list_projects_each_job() -> None:
             },
             id="event",
         ),
+        # A webhook job keeps no time; its URL comes back with it.
+        pytest.param(
+            {
+                "agent_id": "main",
+                "prompt": "Triage the issue",
+                "schedule_type": "webhook",
+                "cron_expression": "*/5 * * * *",
+            },
+            _cron_job(name="Triage the issue", schedule_type="webhook", cron_expression=None),
+            {"agent_id": "main", "schedule_type": "webhook"},
+            {
+                "schedule": "webhook",
+                "webhook": {
+                    "url": "https://vbot.example.com/api/hooks/job-123",
+                    "path": "/api/hooks/job-123",
+                    "reach": "internet",
+                    "last_received_at": None,
+                    "waiting": 0,
+                    "dropped": 0,
+                },
+            },
+            id="webhook",
+        ),
     ],
 )
 async def test_cron_create_passes_the_normalized_job_to_the_service(
@@ -322,6 +403,15 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
             last_completed_at="2026-05-14T09:56:00+00:00",
             last_run_id="run-1",
             last_outcome="success",
+            delivery=CronDelivery(kind="app"),
+            last_run_silent=True,
+            last_result=CronResult(
+                text="Two new posts.", at="2026-05-14T08:56:00+00:00", run_id="run-0"
+            ),
+            watch=CronWatch("command", "git log -1 --oneline"),
+            last_checked_at="2026-05-14T10:00:00+00:00",
+            last_changed_at="2026-05-14T09:55:00+00:00",
+            last_check_error="The check command exited with code 128: not a git repository",
         )
     ]
     cron_service.system_timezone_name.return_value = "Europe/Berlin"
@@ -351,16 +441,30 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                 "event_title": None,
                 "remaining_runs": None,
                 "session_id": "session-1",
+                "delivery": {"kind": "app"},
                 "status": "active",
                 "last_fired_at": "2026-05-14T09:55:00+00:00",
                 "last_attempt_at": "2026-05-14T09:55:00+00:00",
                 "last_completed_at": "2026-05-14T09:56:00+00:00",
                 "last_run_id": "run-1",
                 "last_outcome": "success",
+                "last_run_silent": True,
+                "last_result": {
+                    "text": "Two new posts.",
+                    "at": "2026-05-14T08:56:00+00:00",
+                    "run_id": "run-0",
+                },
                 "last_error": None,
+                "watch": {"command": "git log -1 --oneline"},
+                "last_checked_at": "2026-05-14T10:00:00+00:00",
+                "last_changed_at": "2026-05-14T09:55:00+00:00",
+                "last_check_error": (
+                    "The check command exited with code 128: not a git repository"
+                ),
                 "consecutive_failures": 0,
                 "next_fire_at": "2026-05-14T10:05:00+00:00",
                 "created_at": "2026-05-14T09:00:00+00:00",
+                "webhook": None,
             }
         ],
         "system_timezone": "Europe/Berlin",
@@ -396,6 +500,18 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
         ),
         # Re-targeting re-parses the address, so a bare target clears the Project.
         pytest.param({"agent_id": "main"}, {"agent_id": "main", "project_id": None}, id="retarget"),
+        pytest.param(
+            {"delivery": _CHAT}, {"delivery": CronDelivery.from_dict(_CHAT)}, id="delivery"
+        ),
+        # null and kind none both stop delivering.
+        pytest.param({"delivery": None}, {"delivery": None}, id="no-delivery"),
+        pytest.param({"delivery": {"kind": "none"}}, {"delivery": None}, id="delivery-none"),
+        pytest.param(
+            {"watch": {"command": "git status --short"}},
+            {"watch": CronWatch("command", "git status --short")},
+            id="watch",
+        ),
+        pytest.param({"watch": None}, {"watch": None}, id="no-watch"),
     ],
 )
 async def test_cron_update_passes_only_the_given_fields(
@@ -477,12 +593,21 @@ async def test_cron_job_actions_address_one_job(
             },
         ),
         ("cron.update", {"id": "job-1", "event_time": "start - 32d"}),
+        ("cron.create", {**_CRON_PARAMS, "delivery": "app"}),
+        ("cron.create", {**_CRON_PARAMS, "delivery": {"kind": "chat", "channel_id": "tg-main"}}),
+        ("cron.update", {"id": "job-1", "delivery": {"kind": "app", "channel_id": "tg-main"}}),
+        ("cron.update", {"id": "job-1", "delivery": {"kind": "app", "sound": True}}),
+        ("cron.create", {**_CRON_PARAMS, "watch": "https://status.example/"}),
+        ("cron.update", {"id": "job-1", "watch": {"command": "ls", "url": "https://a.example"}}),
+        ("cron.update", {"id": "job-1", "watch": {"url": "ftp://files.example/status"}}),
         ("cron.list", {"extra": True}),
         ("bootstrap.list", {"extra": True}),
         ("cron.update", {"prompt": "missing id"}),
         ("cron.delete", {}),
         ("cron.enable", {}),
         ("cron.disable", {}),
+        ("cron.webhook_secret", {}),
+        ("cron.rotate_webhook_secret", {"id": "job-1", "secret": "vbw_chosen"}),
         ("bootstrap.create", {"agent_id": "main", "prompt": "Check", "mode": "sometimes"}),
     ],
 )
@@ -579,3 +704,37 @@ async def test_cron_target_resolution_failure_maps_to_precise_code(
     assert error["code"] == expected_code
     resolver.resolve_agent.assert_called_once()
     assert cron_service.list_jobs() == []
+
+
+@pytest.mark.asyncio
+async def test_a_webhook_secret_is_revealed_and_rotated_by_job(tmp_path: Path) -> None:
+    cron_service, _trigger_service = make_service(tmp_path)
+    cron_service.set_webhook_secrets(secret_store(tmp_path))
+    cron_service.bind_webhook_url("http://127.0.0.1:8765", "computer")
+    state = _cron_state(cron_service)
+    created = await rpc_result(
+        state, "cron.create", agent_id="main", prompt="Triage", schedule_type="webhook"
+    )
+    timed = await rpc_result(state, "cron.create", **_CRON_PARAMS)
+
+    revealed = await rpc_result(state, "cron.webhook_secret", id=created["id"])
+    rotated = await rpc_result(state, "cron.rotate_webhook_secret", id=created["id"])
+    current = await rpc_result(state, "cron.webhook_secret", id=created["id"])
+    refused = await rpc_error(state, "cron.webhook_secret", id=timed["id"])
+    missing = await rpc_error(state, "cron.rotate_webhook_secret", id="cron_missing")
+
+    assert created["webhook"] == {
+        "url": f"http://127.0.0.1:8765/api/hooks/{created['id']}",
+        "path": f"/api/hooks/{created['id']}",
+        "reach": "computer",
+        "last_received_at": None,
+        "waiting": 0,
+        "dropped": 0,
+    }
+    assert revealed["secret"].startswith("vbw_")
+    assert revealed["webhook"] == created["webhook"]
+    assert rotated["secret"] != revealed["secret"]
+    assert current == rotated
+    assert refused["code"] == "domain_error"
+    assert "its schedule is not 'webhook'" in refused["message"]
+    assert missing["code"] == "domain_error"

@@ -9,6 +9,7 @@ from cli._parser_common import (
     BOOTSTRAP_HELP,
     BOOTSTRAP_MODES,
     CONFIG_HELP,
+    CRON_DELIVERY_KINDS,
     CRON_HELP,
     CRON_STATUSES,
     DEBUG_HELP,
@@ -77,6 +78,8 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         help="Maximum future fires; recurring schedules are unlimited when omitted",
     )
     _add_cron_session_argument(create_parser)
+    _add_cron_delivery_arguments(create_parser, update=False)
+    create_parser.add_argument("--watch", metavar="<command-or-url>", help=_CRON_WATCH_HELP)
 
     update_parser = _add_command_parser(
         cron_subparsers,
@@ -109,12 +112,41 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     update_parser.add_argument(
         "--status", choices=CRON_STATUSES, help="Set the job status directly"
     )
+    _add_cron_delivery_arguments(update_parser, update=True)
+    watch_group = update_parser.add_mutually_exclusive_group()
+    watch_group.add_argument(
+        "--watch",
+        metavar="<command-or-url>",
+        help=f"{_CRON_WATCH_HELP.removesuffix('. Omit for none')}. Omit to keep the current one",
+    )
+    watch_group.add_argument(
+        "--clear-watch",
+        action="store_true",
+        help="Remove the watch, so every due time starts a Run",
+    )
 
     for command in ("delete", "enable", "disable"):
         command_parser = _add_command_parser(
             cron_subparsers, command, CRON_HELP[command], example=f"cron {command} <job-id>"
         )
         command_parser.add_argument("id", metavar="<job-id>", help=f"Cron job id to {command}")
+
+    secret_parser = _add_command_parser(
+        cron_subparsers, "secret", CRON_HELP["secret"], example="cron secret <job-id>"
+    )
+    secret_parser.epilog = (
+        "Prints the job's webhook URL, the secret and how a request proves it. Exit 0 when "
+        "shown or replaced; 1 when the job has no webhook or is not found."
+    )
+    secret_parser.add_argument("id", metavar="<job-id>", help="Exact id of a webhook job")
+    secret_parser.add_argument(
+        "--rotate",
+        action="store_true",
+        help=(
+            "Replace the secret; requests that send the old one are refused from then on. "
+            "Omit to show the current secret"
+        ),
+    )
 
 
 def _add_cron_schedule_arguments(group: argparse._MutuallyExclusiveGroup) -> None:
@@ -141,6 +173,50 @@ def _add_cron_schedule_arguments(group: argparse._MutuallyExclusiveGroup) -> Non
         "--event",
         metavar="<event-id>",
         help="Run once at every occurrence of this calendar event",
+    )
+    group.add_argument(
+        "--webhook",
+        action="store_true",
+        help=(
+            "Run whenever a request reaches the job's webhook URL; each Run gets the request's "
+            "headers and body. The output shows the URL and the secret requests send"
+        ),
+    )
+
+
+_CRON_WATCH_HELP = (
+    "Before each Run, run this command or read this page, and start the Run only when its "
+    "output changed since the last check; the Run gets the change. An http:// or https:// "
+    "address is read as a page; anything else runs in the host shell (PowerShell on Windows, "
+    "bash elsewhere). Only for --cron and --every jobs. Omit for none"
+)
+
+
+def _add_cron_delivery_arguments(parser: argparse.ArgumentParser, *, update: bool) -> None:
+    omit = "Omit to keep the current one" if update else "Omit for none"
+    parser.add_argument(
+        "--deliver",
+        choices=CRON_DELIVERY_KINDS,
+        help=(
+            "Where each Run's final answer goes: app (the Run's Session shows as unread in vBot "
+            "and the user gets a notification), chat (a Channel chat named by --channel and "
+            f"--chat) or none (the answer stays in the Run's Session). {omit}"
+        ),
+    )
+    parser.add_argument(
+        "--channel",
+        metavar="<channel-id>",
+        help="For chat delivery: the Channel, by its id from vbot channel list",
+    )
+    parser.add_argument(
+        "--chat",
+        metavar="<chat-id>",
+        help="For chat delivery: the chat on that Channel, such as one of its allowed_chat_ids",
+    )
+    parser.add_argument(
+        "--thread",
+        metavar="<thread-id>",
+        help="For chat delivery: a thread or topic in that chat. Omit to post in the chat itself",
     )
 
 

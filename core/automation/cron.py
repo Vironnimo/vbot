@@ -16,6 +16,7 @@ from core.automation import _cron_events as _events
 from core.automation import _cron_schedule as _schedule
 from core.automation import _cron_timing as _timing
 from core.automation._cron_binding import CronEventBinding
+from core.automation._cron_delivery import ChatDelivery, CronFailureAlert, check_chat_delivery
 from core.automation._cron_execution import CronExecution, _missing_session_text
 from core.automation._cron_jobs import (
     _MUTABLE_FIELDS,
@@ -23,6 +24,7 @@ from core.automation._cron_jobs import (
     _SCHEDULE_FIELDS,
     CRON_EXPRESSION_FIELD_COUNT,
     CRON_JOBS_FORMAT,
+    LAST_RESULT_MAX_CHARS,
     MAX_ACTIVE_CRON_JOBS,
     MAX_CONCURRENT_CRON_RUNS,
     MAX_CONSECUTIVE_CRON_FAILURES,
@@ -30,12 +32,14 @@ from core.automation._cron_jobs import (
     MAX_STORED_CRON_JOBS,
     MIN_INTERVAL_SECONDS,
     TERMINAL_CRON_JOB_STATUSES,
+    CronDelivery,
     CronJob,
     CronJobInPastError,
     CronJobNotFoundError,
     CronJobStatus,
     CronJobValidationError,
     CronOccurrence,
+    CronResult,
     CronRunOutcome,
     CronServiceError,
     CronStorageError,
@@ -43,9 +47,12 @@ from core.automation._cron_jobs import (
     CronTargetError,
     CronTargetProjectNotFoundError,
     CronTargetUnavailableError,
+    CronWatch,
+    DeliveryKind,
     EventEdge,
     ParsedSchedule,
     ScheduleType,
+    WatchKind,
     _as_utc,
     _derive_cron_job_name,
     _load_cron_jobs_payload,
@@ -59,6 +66,15 @@ from core.automation._cron_jobs import (
 )
 from core.automation._cron_projection import CronProjection
 from core.automation._cron_scheduler import CronScheduler
+from core.automation._cron_watch import WatchCheckError, WatchChecks
+from core.automation._cron_watcher import FIRST_CHECK_WAIT_SECONDS, CronWatcher
+from core.automation._cron_webhook_events import WEBHOOK_BODY_MAX_BYTES, WEBHOOK_PATH_PREFIX
+from core.automation._cron_webhooks import (
+    CronWebhooks,
+    WebhookReach,
+    WebhookReceipt,
+    WebhookStatus,
+)
 from core.calendar import BoundJob, CalendarProjection, CalendarStorageError
 from core.config_validation import JsonDiagnostic
 from core.json_documents import JsonDocumentWriteError, write_json_document
@@ -78,17 +94,22 @@ if TYPE_CHECKING:
     from core.automation.automation import TriggerService
     from core.calendar import CalendarEvent
     from core.projects import AgentResolver
+    from core.secrets import SecretStore
     from core.sessions import ChatSessionManager
 
 
 __all__ = [
     "CRON_EXPRESSION_FIELD_COUNT",
+    "ChatDelivery",
+    "CronDelivery",
+    "CronFailureAlert",
     "CronJob",
     "CronJobInPastError",
     "CronJobNotFoundError",
     "CronJobStatus",
     "CronJobValidationError",
     "CronOccurrence",
+    "CronResult",
     "CronRunOutcome",
     "CronServiceError",
     "CronStorageError",
@@ -96,7 +117,10 @@ __all__ = [
     "CronTargetError",
     "CronTargetProjectNotFoundError",
     "CronTargetUnavailableError",
+    "CronWatch",
+    "DeliveryKind",
     "EventCalendar",
+    "LAST_RESULT_MAX_CHARS",
     "MAX_ACTIVE_CRON_JOBS",
     "MAX_CONCURRENT_CRON_RUNS",
     "MAX_CONSECUTIVE_CRON_FAILURES",
@@ -106,6 +130,14 @@ __all__ = [
     "ParsedSchedule",
     "ScheduleType",
     "TERMINAL_CRON_JOB_STATUSES",
+    "WEBHOOK_BODY_MAX_BYTES",
+    "WEBHOOK_PATH_PREFIX",
+    "WatchCheckError",
+    "WatchChecks",
+    "WatchKind",
+    "WebhookReach",
+    "WebhookReceipt",
+    "WebhookStatus",
     "load_validated_cron_jobs_json",
     "validate_cron_jobs_data",
     "validate_cron_jobs_file",
@@ -148,6 +180,16 @@ class CronService:
     (schedule type ``event``). The calendar asks this service before an event
     change and after an event is deleted (``check_event_change`` and
     ``event_deleted``), and its change notifications wake the event jobs.
+
+    A job with a ``watch`` checks a command or URL at each due time and runs
+    only when the output changed (``_cron_watcher``); the Runtime wires the
+    checks in (``set_watch_checks``).
+
+    A ``webhook`` job runs when its URL receives a request that proves the
+    job's secret (``_cron_webhooks``). The secrets live in the Secret Store the
+    Runtime wires in (``set_webhook_secrets``); the server tells the service
+    its address (``bind_webhook_url``) and hands it each request
+    (``receive_webhook``).
     """
 
     def __init__(
@@ -165,6 +207,10 @@ class CronService:
         self._agent_resolver = agent_resolver
         self._sessions = sessions
         self._calendar = calendar
+        # Delivers Run answers and failure alerts to Channel chats once wired.
+        self._chats: ChatDelivery | None = None
+        # Runs the checks of watching jobs once wired.
+        self._watch_checks: WatchChecks | None = None
         self._data_root = Path(data_root).expanduser()
         self._cron_dir = self._data_root / "cron"
         self._jobs_path = self._cron_dir / "jobs.json"
@@ -178,6 +224,7 @@ class CronService:
         self._pending_restarts: set[str] = set()
         self._run_slots = asyncio.Semaphore(MAX_CONCURRENT_CRON_RUNS)
         self._changed_callbacks: set[Callable[[], None]] = set()
+        self._failure_alert_callbacks: set[Callable[[CronFailureAlert], None]] = set()
         self._timezone = _resolve_timezone(tz)
         self._timezone_changed = asyncio.Event()
         # Replaced and set on every calendar change: event jobs recompute their occurrences.
@@ -188,8 +235,95 @@ class CronService:
         self._scheduler: CronScheduler = CronScheduler(self)
         self._execution: CronExecution = CronExecution(self)
         self._event_binding: CronEventBinding = CronEventBinding(self)
+        self._watcher: CronWatcher = CronWatcher(self)
+        self._webhooks: CronWebhooks = CronWebhooks(self)
         if calendar is not None:
             calendar.add_changed_callback(self._event_binding._on_calendar_changed)
+
+    def set_chat_delivery(self, chats: ChatDelivery | None) -> None:
+        """Wire the Channels that deliver jobs' answers and alerts to chats.
+
+        Without it, a job cannot be set to deliver to a chat, and a stored chat
+        delivery logs a warning instead of sending.
+        """
+        self._chats = chats
+
+    def set_watch_checks(self, checks: WatchChecks | None) -> None:
+        """Wire what runs the checks of watching jobs.
+
+        Without it, a job cannot be set to watch, and a stored watch fails its
+        checks.
+        """
+        self._watch_checks = checks
+
+    def set_webhook_secrets(self, store: SecretStore | None) -> None:
+        """Wire the Secret Store that keeps the secrets of webhook jobs.
+
+        Without it, a job cannot get a webhook schedule, and requests to a
+        stored webhook job are refused.
+        """
+        self._webhooks.set_secret_store(store)
+
+    def bind_webhook_url(self, base_url: str | None, reach: WebhookReach | None) -> None:
+        """Tell the service the address its webhook URLs start with, and who reaches it.
+
+        ``base_url`` is a scheme and authority such as ``https://vbot.example.com``;
+        None while no server serves the webhooks.
+        """
+        self._webhooks.bind_url(base_url, reach)
+
+    def webhook_status(self, job: CronJob) -> WebhookStatus | None:
+        """The URL and the received requests of a webhook job; None for any other job."""
+        if job.schedule_type != "webhook":
+            return None
+        return self._webhooks.status(job)
+
+    async def webhook_secret(self, job_id: str) -> str:
+        """The secret a webhook job's requests prove.
+
+        Raises ``CronJobNotFoundError``, ``CronJobValidationError`` for a job
+        without a webhook schedule, and ``CronStorageError`` when the secret
+        cannot be read or none is stored (rotating creates a new one).
+        """
+        self._webhook_job(job_id)
+        secret = await self._webhooks.secret(job_id)
+        if secret is None:
+            raise CronStorageError(
+                f"Cron job {job_id} has no webhook secret stored; rotate it to create a new one"
+            )
+        return secret
+
+    async def rotate_webhook_secret(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> str:
+        """Replace a webhook job's secret; requests proving the old one are refused from now on."""
+        async with self._edits:
+            self._webhook_job(job_id)
+            secret = await settle_before_cancelling(self._webhooks.issue_secret(job_id))
+        _LOGGER.info("Cron webhook secret rotated (job=%s actor=%s)", job_id, actor)
+        return secret
+
+    async def receive_webhook(
+        self, job_id: str, headers: list[tuple[str, str]], body: bytes
+    ) -> WebhookReceipt:
+        """Accept one request to a webhook job's URL for the job's next Run.
+
+        ``headers`` are the request's header pairs with lowercase names and
+        ``body`` its raw body of at most ``WEBHOOK_BODY_MAX_BYTES``. The request
+        is stored before this returns ``accepted``. An unknown, inactive or
+        non-webhook job and a wrong secret are all ``refused``; ``unavailable``
+        means the request proved the secret but could not be stored.
+        """
+        return await self._webhooks.receive(job_id, headers, body)
+
+    def _webhook_job(self, job_id: str) -> CronJob:
+        self._ensure_jobs_loaded()
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise CronJobNotFoundError(f"Cron job not found: {job_id}")
+        if job.schedule_type != "webhook":
+            raise CronJobValidationError(
+                f"Cron job {job_id} has no webhook: its schedule is not 'webhook'"
+            )
+        return job
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to persisted Cron changes and return an unsubscribe function."""
@@ -197,6 +331,22 @@ class CronService:
 
         def unsubscribe() -> None:
             self._changed_callbacks.discard(callback)
+
+        return unsubscribe
+
+    def add_failure_alert_callback(
+        self, callback: Callable[[CronFailureAlert], None]
+    ) -> Callable[[], None]:
+        """Subscribe to failure alerts for vBot itself and return an unsubscribe function.
+
+        A job that delivers to vBot raises one at the second failure of a streak
+        and when it stops, for failures no failed Run reports: failed checks and
+        Runs that could not start. The callback runs on the Event Loop.
+        """
+        self._failure_alert_callbacks.add(callback)
+
+        def unsubscribe() -> None:
+            self._failure_alert_callbacks.discard(callback)
 
         return unsubscribe
 
@@ -218,6 +368,8 @@ class CronService:
         session_id: str | None = None,
         status: CronJobStatus = "active",
         project_id: str | None = None,
+        delivery: CronDelivery | None = None,
+        watch: CronWatch | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CronJob:
         """Create and persist a new cron job.
@@ -225,7 +377,10 @@ class CronService:
         ``project_id=None`` is a global/identity target (unchanged); a set value
         scopes the fired Session/Run to that project's anchor. An ``event`` job
         names an existing calendar event; occurrences due before it was created
-        are not owed.
+        are not owed. ``delivery`` says where each Run's final answer goes; a
+        chat must belong to a Channel of the job's Identity Agent. ``watch``
+        makes a recurring job run only when the output of its check changed;
+        an active job checks it at once (:meth:`await_first_check`).
         """
         if schedule_type != "event" and (
             event_id is not None or event_edge is not None or event_offset_minutes is not None
@@ -258,18 +413,36 @@ class CronService:
                 last_fired_at=None,
                 created_at=_timing._utc_now_iso(),
                 project_id=project_id,
+                delivery=delivery,
+                watch=watch,
             )
             self._validate_job(job, validate_references=False)
+            self._check_watch_available(job)
+            if job.schedule_type == "webhook":
+                self._webhooks.check_available()
             self._event_binding._check_event_binding(job)
-            await self._validate_references_async(job)
+            await self._validate_references_async(job, check_delivery=True)
             self._reject_past_once_run(job)
             self._validate_capacity(job)
             self._jobs[job.id] = job
 
             async def save() -> None:
-                await self._save_edit(lambda: self._jobs.pop(job.id, None))
+                if job.schedule_type == "webhook":
+                    try:
+                        await self._webhooks.issue_secret(job.id)
+                    except BaseException:
+                        self._jobs.pop(job.id, None)
+                        raise
+                try:
+                    await self._save_edit(lambda: self._jobs.pop(job.id, None))
+                except BaseException:
+                    if job.schedule_type == "webhook":
+                        await self._webhooks.discard_secret(job.id)
+                    raise
                 if self._started and job.status == "active":
                     self._scheduler._start_job_task(job)
+                    if job.watch is not None:
+                        self._watcher.start_first_check(job.id)
 
             await settle_before_cancelling(save())
 
@@ -489,34 +662,89 @@ class CronService:
         """Apply ``fields`` to memory and the job tasks at once, then save; undo both on failure.
 
         Returns the job before and after the edit and the names that changed.
+        A job that gets a webhook schedule gets a new secret before the save,
+        and one that leaves it loses its secret and waiting requests after it.
         """
         async with self._edits:
             job, candidate, changed_fields, restart_task = self._stage_update(
                 job_id, fields, validate_references=False
             )
-            if changed_fields:
-                await self._validate_references_async(candidate)
-                # A fire may have changed the job while its references were checked.
-                job, candidate, changed_fields, restart_task = self._stage_update(
-                    job_id, fields, validate_references=False
-                )
-            if changed_fields:
-                edited = self._clone_job(candidate)
-                self._jobs[job_id] = candidate
-                # Job tasks follow memory at once, so a fire in flight sees the edit.
+            issued = False
+            try:
+                if changed_fields:
+                    # A chat is checked when it or the job's Agent changes, so an
+                    # unrelated edit (pausing, say) works while its Channel is gone.
+                    await self._validate_references_async(
+                        candidate,
+                        check_delivery=bool({"delivery", "agent_id"} & set(changed_fields)),
+                    )
+                    if candidate.schedule_type == "webhook" and job.schedule_type != "webhook":
+                        await settle_before_cancelling(self._prepare_webhook(job_id))
+                        issued = True
+                    # A fire may have changed the job while its references were checked.
+                    job, candidate, changed_fields, restart_task = self._stage_update(
+                        job_id, fields, validate_references=False
+                    )
+                if changed_fields:
+                    await self._apply_edit(job_id, job, candidate, changed_fields, restart_task)
+            except BaseException:
+                if issued:
+                    await settle_before_cancelling(self._webhooks.discard_secret(job_id))
+                raise
+        return self._clone_job(job), self._clone_job(candidate), changed_fields
+
+    async def _apply_edit(
+        self,
+        job_id: str,
+        job: CronJob,
+        candidate: CronJob,
+        changed_fields: list[str],
+        restart_task: bool,
+    ) -> None:
+        """Apply a staged edit to memory and the job tasks at once, then save; undo on failure."""
+        edited = self._clone_job(candidate)
+        self._jobs[job_id] = candidate
+        # Job tasks follow memory at once, so a fire in flight sees the edit.
+        if self._started and restart_task:
+            self._scheduler._restart_job_task(candidate)
+
+        def undo() -> None:
+            if self._jobs.get(job_id) is candidate:
+                # A fire during the save records on the live job; keep that.
+                _take_back_edit(candidate, before=job, edited=edited)
+                self._execution._restore_once_budget(candidate)
                 if self._started and restart_task:
                     self._scheduler._restart_job_task(candidate)
 
-                def undo() -> None:
-                    if self._jobs.get(job_id) is candidate:
-                        # A fire during the save records on the live job; keep that.
-                        _take_back_edit(candidate, before=job, edited=edited)
-                        self._execution._restore_once_budget(candidate)
-                        if self._started and restart_task:
-                            self._scheduler._restart_job_task(candidate)
+        await settle_before_cancelling(self._save_edit(undo))
+        if job.schedule_type == "webhook" and candidate.schedule_type != "webhook":
+            await settle_before_cancelling(self._webhooks.discard(job_id))
+        if "watch" in changed_fields:
+            await self._renew_watch(candidate)
 
-                await settle_before_cancelling(self._save_edit(undo))
-        return self._clone_job(job), self._clone_job(candidate), changed_fields
+    async def _prepare_webhook(self, job_id: str) -> None:
+        """Give a job that gets a webhook schedule a new secret and no stale requests."""
+        await self._webhooks.discard(job_id, keep_secret=True)
+        await self._webhooks.issue_secret(job_id)
+
+    async def _renew_watch(self, job: CronJob) -> None:
+        """After a saved watch change: forget the baseline, and check a new watch at once.
+
+        The ordered writer removes the baseline before the first check can write one.
+        """
+        await self._watcher.remove_baseline(job.id)
+        if self._started and job.status == "active" and job.watch is not None:
+            self._watcher.start_first_check(job.id)
+
+    async def await_first_check(self, job_id: str) -> bool:
+        """Wait for the first check of a watch just set on the job to record its outcome.
+
+        True once no first check of the job is pending: it recorded
+        ``last_checked_at`` (and ``last_check_error`` when it failed), or none
+        ran because the job is paused. False when it still runs after
+        ``FIRST_CHECK_WAIT_SECONDS``; the wait never stops it.
+        """
+        return await self._watcher.wait_for_first_check(job_id, FIRST_CHECK_WAIT_SECONDS)
 
     def _stage_update(
         self, job_id: str, fields: dict[str, Any], *, validate_references: bool = True
@@ -584,11 +812,21 @@ class CronService:
             candidate.consecutive_failures = 0
             if candidate.remaining_runs == 0:
                 candidate.remaining_runs = 1
+        if candidate.schedule_type == "webhook" and job.schedule_type != "webhook":
+            self._webhooks.check_available()
+        watch_changed = "watch" in fields and candidate.watch != job.watch
+        if watch_changed:
+            # Checks of an earlier watch say nothing about this one.
+            candidate.last_checked_at = None
+            candidate.last_changed_at = None
+            candidate.last_check_error = None
         if candidate.status == "active" and (
             job.status != "active"
+            or watch_changed
             or any(getattr(job, name) != getattr(candidate, name) for name in _SCHEDULE_FIELDS)
         ):
-            # Fires due while the job was inactive or on its earlier schedule are not owed.
+            # Fires due while the job was inactive, on its earlier schedule or
+            # under its earlier watch are not owed.
             candidate.covered_until = _timing._utc_now_iso()
             candidate.event_progress = None
 
@@ -601,6 +839,8 @@ class CronService:
             return job, job, [], False
 
         self._validate_job(candidate, validate_references=validate_references)
+        if watch_changed:
+            self._check_watch_available(candidate)
         if (
             candidate.schedule_type == "once"
             and job.status not in TERMINAL_CRON_JOB_STATUSES
@@ -643,6 +883,11 @@ class CronService:
                 await _CRON_WRITER.call_async(
                     partial(_claims.remove, self._once_fire_claims_dir, job_id)
                 )
+                if removed.watch is not None:
+                    await self._watcher.remove_baseline(job_id)
+                self._watcher.forget(job_id)
+                if removed.schedule_type == "webhook":
+                    await self._webhooks.discard(job_id)
 
             await settle_before_cancelling(save())
         _LOGGER.info("Cron job deleted (job=%s actor=%s)", job_id, actor)
@@ -761,6 +1006,17 @@ class CronService:
                     exc_info=(type(error), error, error.__traceback__),
                 )
 
+    def _raise_failure_alert(self, alert: CronFailureAlert) -> None:
+        for callback in tuple(self._failure_alert_callbacks):
+            try:
+                callback(alert)
+            except Exception as error:
+                _LOGGER.error(
+                    "Cron failure alert callback failed: %s",
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
     def _ensure_jobs_loaded(self, *, allow_degraded: bool = False) -> None:
         if self._jobs_loaded:
             if self._storage_load_error is not None and not allow_degraded:
@@ -848,12 +1104,20 @@ class CronService:
             self._validate_references(job)
         _schedule.normalize_job_schedule(self._timezone, _timing._utc_now(), job)
 
-    async def _validate_references_async(self, job: CronJob) -> None:
-        """Event-Loop-safe :meth:`_validate_references`: its reads use the Session pool."""
+    async def _validate_references_async(
+        self, job: CronJob, *, check_delivery: bool = False
+    ) -> None:
+        """Event-Loop-safe :meth:`_validate_references`: its reads use the Session pool.
+
+        With ``check_delivery``, a chat delivery's Channel must exist and belong
+        to the job's Agent.
+        """
         if self._sessions is None:
             self._validate_references(job)
-            return
-        await self._sessions.run_async(self._validate_references, job)
+        else:
+            await self._sessions.run_async(self._validate_references, job)
+        if check_delivery:
+            await check_chat_delivery(job, self._chats)
 
     def _validate_references(self, job: CronJob) -> None:
         """Refuse a job whose target Agent or selected Session is unavailable. Blocking."""
@@ -872,6 +1136,12 @@ class CronService:
             )
         ):
             raise CronJobValidationError(_missing_session_text(job))
+
+    def _check_watch_available(self, job: CronJob) -> None:
+        if job.watch is not None and self._watch_checks is None:
+            raise CronJobValidationError(
+                "watch is unavailable: this vBot process runs no watch checks"
+            )
 
     def _validate_capacity(self, candidate: CronJob, *, replacing_id: str | None = None) -> None:
         if candidate.status != "active":

@@ -75,14 +75,15 @@ def settle_run(
     run_id: str,
     status: str = "completed",
     completed_at: str = "2026-08-29T12:00:00Z",
+    run_kind: str = "user",
 ) -> None:
-    """Admit and finish one plain User Run; it becomes the latest completion.
+    """Admit and finish one Run, a plain User Run by default; it becomes the latest completion.
 
     Admission creates a missing Session, and the Run's summary entry is
     appended to its history, as the Run manager's lifecycle does.
     """
     manager._store.execution.admit_run(
-        address, SessionRunAdmission(run_id=run_id, run_kind="user", started_at=completed_at)
+        address, SessionRunAdmission(run_id=run_id, run_kind=run_kind, started_at=completed_at)
     )
     manager._store.execution.finish_run(
         address,

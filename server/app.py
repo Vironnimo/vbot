@@ -49,6 +49,7 @@ from server._app_lifecycle import (
     _unregister_terminal_change_bridge,
 )
 from server._bind import ServerBindState, _resolve_server_bind, _runtime_config
+from server._cron_webhooks import register_webhook_routes, webhook_base_url
 from server._http_dependencies import (
     _FASTAPI_IMPORT_ERROR,
     FastAPI,
@@ -228,6 +229,7 @@ def create_app(
         oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
         if oauth_redirects is not None:
             oauth_redirects.bind(_oauth_callback_url(access_settings, resolved_server_bind))
+        _bind_webhook_url(app_runtime, access_settings, resolved_server_bind)
         app.state.control_token = shutdown_token
         app.state.server_identity = _server_identity(app_runtime)
         app.state.request_restart = request_restart
@@ -315,6 +317,7 @@ def create_app(
     # Added last, so it runs first: before the Origin guard and routing.
     app.add_middleware(AccessGuard, service=access_service, file_delivery=file_delivery)
     register_access_routes(app, access_service)
+    register_webhook_routes(app, access_service)
 
     @app.get("/health")
     async def health() -> JsonObject:
@@ -800,6 +803,15 @@ def _public_browser_origins(access: AccessConfig) -> frozenset[tuple[str, str, i
     """The configured public origin of ``authenticated`` mode, if any."""
     origin = access.public_origin()
     return frozenset() if origin is None else frozenset({origin})
+
+
+def _bind_webhook_url(runtime: Any, access: AccessConfig, server_bind: ServerBindState) -> None:
+    """Tell Cron the address its webhook URLs start with; a Runtime without Cron has none."""
+    try:
+        cron_service = runtime.cron_service
+    except AttributeError, RuntimeError:
+        return
+    cron_service.bind_webhook_url(*webhook_base_url(access, server_bind))
 
 
 def _oauth_callback_url(access: AccessConfig, server_bind: ServerBindState) -> str | None:

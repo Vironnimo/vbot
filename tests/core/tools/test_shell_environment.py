@@ -17,6 +17,7 @@ from core.tools.shell_environment import (
     RunIdentity,
     command_environment,
     terminal_environment,
+    unattended_command_environment,
 )
 
 
@@ -86,6 +87,9 @@ def test_command_layers_apply_in_order_and_the_run_identity_wins(
     other = command_environment(RunIdentity("agent-2", "session-2", "project-2", "token-2"))
     assert layers.base == other.base
     assert layers.base["PAGER"] == "cat"
+    # A command vBot runs outside a Run starts with these layers and nothing of a Run.
+    unattended = unattended_command_environment()
+    assert (unattended.base, unattended.changes) == (layers.base, {})
     assert "VBOT_SCRATCH_DIR" not in other.complete()
     assert "TMP" not in other.complete()
     per_call = {"MODE", "API_TOKEN", "VBOT_RUN_AGENT_ID", "VBOT_RUN_PROJECT_ID"}

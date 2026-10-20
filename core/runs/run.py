@@ -20,6 +20,9 @@ from core.utils.errors import VBotError
 JsonObject = dict[str, Any]
 RunExecutor = Callable[["Run"], Awaitable[Any]]
 CancelCallback = Callable[[], Any]
+# Decides from the final status and result whether a finished Run counts as
+# Agent activity (a Session completion the user is told about).
+CompletionActivity = Callable[["RunStatus", Any], bool]
 # Active runs, queues, and guards key on ``SessionAddress`` (born in
 # ``core.sessions``): the project anchor is part of the identity because
 # ``session.create`` accepts caller-chosen session ids, so identity ``builder``
@@ -222,6 +225,9 @@ class RunAdmission:
     # attribute the review to that Session without reading fork metadata.
     source_session_id: str | None = None
     expected_session_generation_id: str | None = None
+    # Overrides ``contributes_to_agent_activity`` for the finished Run once its
+    # outcome is known, before the completion is recorded or announced.
+    completion_activity: CompletionActivity | None = None
 
 
 # Module-level singleton so ``admission`` can default without a call at the
@@ -330,6 +336,7 @@ class Run:
         execution_input_id: str | None = None,
         source_session_id: str | None = None,
         expected_session_generation_id: str | None = None,
+        completion_activity: CompletionActivity | None = None,
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
@@ -349,6 +356,8 @@ class Run:
         # Accessors may exclude system work from Agent/Session status while the
         # Run remains fully executable, observable, and persisted.
         self.contributes_to_agent_activity = contributes_to_agent_activity
+        # Optional decision that replaces the flag above once the Run finished.
+        self.completion_activity = completion_activity
         # Stable public correlation for work whose durable result must remain
         # addressable after the in-memory Run has been pruned. It is internal
         # to Run orchestration and is persisted only on the terminal summary.

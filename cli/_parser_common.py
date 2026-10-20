@@ -72,6 +72,7 @@ CHANNEL_RESPONSE_MODES = tuple(sorted(ALLOWED_CHANNEL_RESPONSE_MODES))
 
 
 CRON_STATUSES = ("active", "paused")
+CRON_DELIVERY_KINDS = ("app", "chat", "none")
 
 
 BOOTSTRAP_MODES = ("once", "always")
@@ -325,6 +326,7 @@ CRON_HELP = {
     "delete": "Delete a cron job",
     "enable": "Enable a cron job",
     "disable": "Disable a cron job",
+    "secret": "Show or replace the secret that requests to a webhook job's URL send",
 }
 
 

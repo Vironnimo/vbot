@@ -299,7 +299,19 @@ export function visibleSessionsForSelection(
     (session) =>
       session?.id === normalizedSelectedSessionId ||
       !isSessionHiddenByDefault(session) ||
+      isReportedBackgroundSession(session) ||
       isHiddenCategoryEnabled(session, normalizedFilters),
+  );
+}
+
+// A background Run the user was told about (such as a Cron Run that delivers
+// to vBot) lists its Session with the conversations, as the server does. It
+// stays out of the Agent's landing choice.
+function isReportedBackgroundSession(session) {
+  return (
+    !isSubAgentSession(session) &&
+    isBackgroundOnlySession(session) &&
+    asOptionalText(session?.latest_completion_run_id) !== null
   );
 }
 

@@ -39,6 +39,10 @@ _FOREGROUND_RUN_KINDS = frozenset({"user", "system"})
 _AUTOMATION_RUN_KINDS = {"cron": "Cron"}
 _FAILED_UPDATE_PHASES = frozenset({"failed", "rolled_back", "needs_attention"})
 _REMEMBERED_RUNS = 256
+# A Cron job's failure that no Run reports, such as a failed check.
+_CRON_FAILURE_ALERT_EVENT = "cron_failure_alert"
+# Windows shows at most this many characters of a toast's body.
+_TOAST_BODY_MAX_CHARS = 255
 
 Rpc = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any] | None]]
 
@@ -64,22 +68,23 @@ class ToastSink(Protocol):
 def run_toast_kind(event_type: object, payload: dict[str, Any]) -> str | None:
     """Return the toast kind a terminal Run event deserves, if any.
 
-    Cron and Calendar Runs notify only on failure. Other background work
-    (Subagents, Channels, reflections, internal continuations) never notifies;
-    cancellation is always the user's own action.
+    Every Cron failure notifies; a Cron Run that completes notifies only when it
+    counts as Agent activity (its job delivers to vBot and it had something to
+    report). Other background work (Subagents, Channels, reflections, internal
+    continuations) never notifies; cancellation is always the user's own action.
     """
 
     outcome = _RUN_OUTCOMES.get(str(event_type))
     if outcome is None:
         return None
     run_kind = payload.get("run_kind")
-    if run_kind in _AUTOMATION_RUN_KINDS:
-        return None if outcome == "completed" else "automation_failed"
     # Protocol field of /ws Run events; present only when false.
-    if (
-        run_kind not in _FOREGROUND_RUN_KINDS
-        or payload.get("contributes_to_agent_activity") is False
-    ):
+    quiet = payload.get("contributes_to_agent_activity") is False
+    if run_kind in _AUTOMATION_RUN_KINDS:
+        if outcome != "completed":
+            return "automation_failed"
+        return None if quiet else "run_completed"
+    if run_kind not in _FOREGROUND_RUN_KINDS or quiet:
         return None
     return "run_completed" if outcome == "completed" else "run_failed"
 
@@ -162,6 +167,12 @@ class Notifier:
                 run_id = scope.get("read_run_id")
                 if isinstance(run_id, str):
                     self._acknowledge(run_id)
+            return
+        if event_type == _CRON_FAILURE_ALERT_EVENT:
+            if isinstance(payload.get("job_id"), str):
+                self._track(
+                    asyncio.get_running_loop().create_task(self._deliver_job_alert(payload))
+                )
             return
         kind = run_toast_kind(event_type, payload)
         run_id = payload.get("run_id")
@@ -259,6 +270,31 @@ class Notifier:
                 _run_body(event_type, payload, title),
                 failure=kind != "run_completed",
                 session=(address, session_id) if agent_id and session_id else None,
+            )
+        )
+
+    async def _deliver_job_alert(self, payload: dict[str, Any]) -> None:
+        """Show a Cron job's failure alert; it has no Run, so no Session to open."""
+        agent_id = str(payload.get("agent_id") or "")
+        project_id = payload.get("project_id")
+        _settings, agent = await asyncio.gather(
+            self._refresh_settings(),
+            self._rpc("agent.get", {"id": agent_id}) if agent_id and not project_id else _none(),
+        )
+        with self._lock:
+            if not self._enabled.get("automation_failed", True):
+                return
+        agent_name = _text(agent.get("name") if agent else None) or agent_id
+        body = _text(payload.get("message")) or _text(payload.get("name"))
+        if len(body) > _TOAST_BODY_MAX_CHARS:
+            body = body[: _TOAST_BODY_MAX_CHARS - 1] + "…"
+        self._sink.show(
+            Toast(
+                f"cron:{payload['job_id']}",
+                "automation_failed",
+                f"Cron job failed · {agent_name}",
+                body,
+                failure=True,
             )
         )
 

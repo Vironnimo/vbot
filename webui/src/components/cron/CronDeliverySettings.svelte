@@ -1,0 +1,170 @@
+<script>
+  // The Delivery section of a job's form: where each Run's final answer goes
+  // and, for a chat, the Channel, chat and optional thread.
+  import { t } from '$lib/i18n.js';
+  import { CRON_DELIVERY_CHAT } from '$lib/cronView.js';
+  import { channelPlatformLabel } from '../settings/channels/controller.svelte.js';
+  import { deliveryKindOptions } from './presentation.js';
+  import TextField from '../ui/TextField.svelte';
+  import Dropdown from '../Dropdown.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
+
+  // `channels` are the Channels `channel.list` returned; only those of the
+  // job's Agent are offered, since a job delivers only to its own Agent's chats.
+  let { editor, channels = [] } = $props();
+  const deliveryKinds = deliveryKindOptions();
+
+  let values = $derived(editor.formValues);
+  let isChat = $derived(values.delivery_kind === CRON_DELIVERY_CHAT);
+  let agentChannels = $derived(
+    channels.filter((channel) => channel.agent_id === values.agent_id),
+  );
+  // A stored Channel that is not offered (gone, or of another Agent) stays
+  // selectable, so the form shows what is saved and the save names the cause.
+  let channelOptions = $derived.by(() => {
+    const options = agentChannels.map((channel) => ({
+      value: channel.id,
+      label: `${channel.id} · ${channelPlatformLabel(channel.platform)}`,
+    }));
+    const stored = values.delivery_channel_id;
+    if (stored && !options.some((option) => option.value === stored)) {
+      options.push({ value: stored, label: stored });
+    }
+    return options;
+  });
+  // The chosen Channel's allowed chats are offered as chat IDs.
+  let chatSuggestions = $derived(
+    agentChannels.find((channel) => channel.id === values.delivery_channel_id)
+      ?.allowed_chat_ids ?? [],
+  );
+
+  // Choosing a chat preselects the Agent's only Channel.
+  function chooseKind(kind) {
+    editor.updateFormField('delivery_kind', kind);
+    if (
+      kind === CRON_DELIVERY_CHAT &&
+      !values.delivery_channel_id &&
+      agentChannels.length === 1
+    ) {
+      editor.updateFormField('delivery_channel_id', agentChannels[0].id);
+    }
+  }
+</script>
+
+<section class="s-section" aria-labelledby="cron-section-delivery">
+  <header class="s-section__head">
+    <h3 class="s-section__title" id="cron-section-delivery">
+      {t('cron.sections.delivery')}
+    </h3>
+  </header>
+  <p class="s-section__desc">
+    {t('cron.sections.deliverySubtitle')}
+  </p>
+  <div class="s-section__body">
+    <div class="s-group">
+      <div class="s-row">
+        <div class="s-row-info">
+          <label class="s-row-label" for="cron-job-delivery">
+            {t('cron.form.delivery')}
+          </label>
+        </div>
+        <div class="s-row-control">
+          <Dropdown
+            id="cron-job-delivery"
+            value={values.delivery_kind}
+            options={deliveryKinds}
+            ariaLabel={t('cron.form.delivery')}
+            disabled={editor.isCreating && editor.submittingForm}
+            triggerClass="cron-dropdown"
+            listClass="cron-dropdown-list"
+            onValueChange={chooseKind}
+          />
+        </div>
+      </div>
+
+      {#if isChat}
+        <div class="s-row">
+          <div class="s-row-info">
+            <label class="s-row-label" for="cron-job-delivery-channel">
+              {t('cron.form.deliveryChannel')}
+              <span class="cron-required" aria-hidden="true">*</span>
+            </label>
+            {#if channelOptions.length === 0}
+              <div class="s-row-desc">
+                {t('cron.form.deliveryChannelNone')}
+              </div>
+            {/if}
+          </div>
+          <div class="s-row-control">
+            <Dropdown
+              id="cron-job-delivery-channel"
+              value={values.delivery_channel_id}
+              options={channelOptions}
+              placeholder={t('cron.form.deliveryChannelPlaceholder')}
+              ariaLabel={t('cron.form.deliveryChannel')}
+              disabled={channelOptions.length === 0 ||
+                (editor.isCreating && editor.submittingForm)}
+              triggerClass="cron-dropdown"
+              listClass="cron-dropdown-list"
+              onValueChange={(next) =>
+                editor.updateFormField('delivery_channel_id', next)}
+            />
+          </div>
+        </div>
+
+        <div class="s-row">
+          <div class="s-row-info">
+            <label
+              class="s-row-label cron-label-with-hint"
+              for="cron-job-delivery-chat"
+            >
+              {t('cron.form.deliveryChat')}
+              <span class="cron-required" aria-hidden="true">*</span>
+              <InfoHint text={t('cron.form.deliveryChatHelp')} />
+            </label>
+          </div>
+          <div class="s-row-control">
+            <TextField
+              id="cron-job-delivery-chat"
+              code
+              list="cron-job-delivery-chats"
+              value={values.delivery_platform_target}
+              placeholder={t('cron.form.deliveryChatPlaceholder')}
+              disabled={editor.isCreating && editor.submittingForm}
+              onInput={(next) =>
+                editor.updateFormField('delivery_platform_target', next)}
+            />
+            <datalist id="cron-job-delivery-chats">
+              {#each chatSuggestions as chatId (chatId)}
+                <option value={chatId}></option>
+              {/each}
+            </datalist>
+          </div>
+        </div>
+
+        <div class="s-row">
+          <div class="s-row-info">
+            <label
+              class="s-row-label cron-label-with-hint"
+              for="cron-job-delivery-thread"
+            >
+              {t('cron.form.deliveryThread')}
+              <InfoHint text={t('cron.form.deliveryThreadHelp')} />
+            </label>
+          </div>
+          <div class="s-row-control">
+            <TextField
+              id="cron-job-delivery-thread"
+              code
+              value={values.delivery_thread_id}
+              placeholder={t('cron.form.deliveryThreadPlaceholder')}
+              disabled={editor.isCreating && editor.submittingForm}
+              onInput={(next) =>
+                editor.updateFormField('delivery_thread_id', next)}
+            />
+          </div>
+        </div>
+      {/if}
+    </div>
+  </div>
+</section>
