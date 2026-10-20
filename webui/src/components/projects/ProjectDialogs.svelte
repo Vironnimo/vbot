@@ -4,7 +4,7 @@
   import FormField from '../ui/FormField.svelte';
   import TextField from '../ui/TextField.svelte';
   import PathField from '../ui/PathField.svelte';
-  import Toggle from '../ui/Toggle.svelte';
+  import Checkbox from '../ui/Checkbox.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ArchiveDeleteOption from '../archive/ArchiveDeleteOption.svelte';
@@ -12,6 +12,16 @@
 
   let canSubmitAdd = $derived(
     projectsState.addForm.cwd.trim().length > 0 && !projectsState.addingProject,
+  );
+  let removeName = $derived(
+    projectsState.removeConfirmProject?.display_name ||
+      projectsState.removeConfirmProject?.project_id ||
+      '',
+  );
+  let rePointName = $derived(
+    projectsState.rePointProject?.display_name ||
+      projectsState.rePointProject?.project_id ||
+      '',
   );
 
   function closeAdd() {
@@ -48,23 +58,16 @@
 {#if projectsState.isAddOpen}
   <Modal
     title={t('projects.add.title')}
+    description={t('projects.add.subtitle')}
     labelledById="projects-add-title"
-    class="projects-view__modal"
+    size="md"
     closeDisabled={projectsState.addingProject}
     onClose={closeAdd}
   >
     {#snippet body()}
       <form onsubmit={submitAdd}>
         <div class="modal-body">
-          <p class="projects-help">
-            {t('projects.add.subtitle')}
-          </p>
-
-          <FormField
-            controlId="projects-add-cwd"
-            label={t('projects.add.cwd')}
-            help={t('projects.add.cwdHelp')}
-          >
+          <FormField controlId="projects-add-cwd" label={t('projects.add.cwd')}>
             <PathField
               id="projects-add-cwd"
               variant="modal"
@@ -91,7 +94,7 @@
           </FormField>
 
           {#if projectsState.addDetect?.sources?.length}
-            <p class="projects-help">
+            <p class="project-dialog__note">
               {t('projects.sources.detected', {
                 count: projectsState.addDetect.sources.length,
               })}
@@ -126,17 +129,18 @@
 
 {#if projectsState.rePointProject}
   <Modal
-    title={t('projects.rePoint.title')}
+    title={t('projects.rePoint.dialogTitle')}
+    description={t('projects.rePoint.dialogDescription', {
+      name: rePointName,
+    })}
     labelledById="projects-repoint-title"
-    class="projects-view__modal"
+    size="md"
+    closeDisabled={projectsState.rePointing}
     onClose={closeRePoint}
   >
     {#snippet body()}
       <form onsubmit={submitRePoint}>
         <div class="modal-body">
-          <p class="projects-help">
-            {t('projects.rePoint.description')}
-          </p>
           <FormField
             controlId="projects-repoint-cwd"
             label={t('projects.rePoint.cwd')}
@@ -188,8 +192,10 @@
 
 {#if projectsState.removeConfirmProject}
   <Modal
-    title={t('projects.remove.confirmTitle')}
-    class="projects-view__modal"
+    title={projectsState.removePermanently
+      ? t('projects.remove.permanentConfirmTitle', { name: removeName })
+      : t('projects.remove.confirmTitle', { name: removeName })}
+    size="sm"
     onClose={cancelRemove}
     closeDisabled={Boolean(projectsState.removingProjectId)}
   >
@@ -197,38 +203,27 @@
       <div class="modal-body">
         <p>
           {projectsState.removePermanently
-            ? t('projects.remove.permanentBody', {
-                name:
-                  projectsState.removeConfirmProject.display_name ||
-                  projectsState.removeConfirmProject.project_id,
-              })
-            : t('projects.remove.body', {
-                name:
-                  projectsState.removeConfirmProject.display_name ||
-                  projectsState.removeConfirmProject.project_id,
-              })}
+            ? t('projects.remove.permanentBody')
+            : t('projects.remove.body')}
         </p>
-        <div class="projects-remove-copy">
-          <Toggle
-            size="sm"
-            checked={projectsState.copyRootedAgentIdentityFiles}
-            disabled={Boolean(projectsState.removingProjectId)}
-            ariaLabel={t('projects.remove.copyIdentityFiles')}
-            onChange={(next) =>
-              (projectsState.copyRootedAgentIdentityFiles = next)}
-          />
-          <div>
-            <span>{t('projects.remove.copyIdentityFiles')}</span>
-            <p class="projects-help">
-              {t('projects.remove.copyIdentityFilesHelp')}
-            </p>
-          </div>
-        </div>
         <ArchiveDeleteOption
           permanent={projectsState.removePermanently}
           disabled={Boolean(projectsState.removingProjectId)}
           onChange={(next) => (projectsState.removePermanently = next)}
         />
+        <div class="project-dialog__option">
+          <Checkbox
+            checked={projectsState.copyRootedAgentIdentityFiles}
+            disabled={Boolean(projectsState.removingProjectId)}
+            aria-describedby="projects-remove-copy-help"
+            onChange={(next) =>
+              (projectsState.copyRootedAgentIdentityFiles = next)}
+            >{t('projects.remove.copyIdentityFiles')}</Checkbox
+          >
+          <p id="projects-remove-copy-help" class="project-dialog__note">
+            {t('projects.remove.copyIdentityFilesHelp')}
+          </p>
+        </div>
       </div>
     {/snippet}
     {#snippet footer()}
@@ -251,3 +246,24 @@
     {/snippet}
   </Modal>
 {/if}
+
+<style>
+  /* A quiet secondary line: the detected sources after a path is chosen, or
+     what a checkbox choice does. */
+  .project-dialog__note {
+    margin: 0;
+    color: var(--text-lo);
+    font-size: var(--fs-body-sm);
+    line-height: 1.5;
+  }
+
+  /* A checkbox with its explanation, aligned under the label text. */
+  .project-dialog__option {
+    display: grid;
+    gap: 4px;
+  }
+
+  .project-dialog__option .project-dialog__note {
+    padding-left: 26px;
+  }
+</style>

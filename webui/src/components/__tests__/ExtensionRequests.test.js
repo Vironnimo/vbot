@@ -308,8 +308,11 @@ describe('Extension requests', () => {
       },
     });
     expect(field(dialog, 'Email').querySelector('input').type).toBe('email');
-    expect(field(dialog, 'When').querySelector('input').type).toBe(
-      'datetime-local',
+    const [whenDate, whenTime] = field(dialog, 'When').querySelectorAll(
+      'input',
+    );
+    expect(whenTime.getAttribute('aria-label')).toBe(
+      t('extensions.inputTimeOfDay', { field: 'When' }),
     );
     expect(dialog.textContent).toContain(
       t('extensions.inputTimeZone', { zone: 'Europe/Berlin' }),
@@ -333,7 +336,14 @@ describe('Extension requests', () => {
     type(dialog, 'Count', '3');
     check(dialog, 'Beta');
     choose(dialog, 'Size', 'Small');
-    type(dialog, 'When', '2026-07-01T09:30');
+    for (const [input, value] of [
+      [whenDate, '2026-07-01'],
+      [whenTime, '09:30'],
+    ]) {
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+    }
     button(SEND).click();
     await vi.waitFor(closed);
     expect(operation).toHaveBeenCalledExactlyOnceWith('mcp', 'respond', {

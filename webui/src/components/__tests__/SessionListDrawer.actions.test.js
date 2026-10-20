@@ -118,10 +118,28 @@ describe('SessionListDrawer row actions', () => {
     expect(menuItems()).toEqual(expectedItems);
   });
 
-  it('renames inline: IME keys stay with the composition, Escape cancels and Enter saves', async () => {
+  it('renames inline from the shown name: IME keys stay with the composition, Escape cancels and Enter saves', async () => {
+    api.listSessions.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          auto_title: 'Weekly sync',
+          created_at: '2026-05-09T00:00:00+00:00',
+        },
+      ],
+    });
     drawer.mount();
     await waitForCondition(() => rowCount() === 1);
     const loadsBefore = api.listSessions.mock.calls.length;
+
+    // The field starts from the automatic name; saving it untouched keeps
+    // the name automatic and sends nothing.
+    chooseRowAction(t('sessions.rename'));
+    const seeded = document.querySelector('.session-row__edit-input');
+    expect(seeded.value).toBe('Weekly sync');
+    keydown(seeded, 'Enter');
+    flushSync();
+    expect(document.querySelector('.session-row__edit-input')).toBeNull();
 
     chooseRowAction(t('sessions.rename'));
     typeRename('Abandoned');
@@ -194,6 +212,9 @@ describe('SessionListDrawer row actions', () => {
       return document.querySelector('[role="dialog"]');
     });
     const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain(
+      t('sessions.delete_confirm_title', { name: t('sessions.newSession') }),
+    );
     expect(dialog.textContent).toContain(t('archive.deleteNotice.kept'));
     [...dialog.querySelectorAll('[role="checkbox"]')]
       .find((box) =>
@@ -202,6 +223,11 @@ describe('SessionListDrawer row actions', () => {
       .click();
     flushSync();
     expect(dialog.textContent).not.toContain(t('archive.deleteNotice.kept'));
+    expect(dialog.textContent).toContain(
+      t('sessions.delete_permanent_confirm_title', {
+        name: t('sessions.newSession'),
+      }),
+    );
     confirmDialog(t('archive.deletePermanently'));
     await waitForCondition(() => onSessionDeleted.mock.calls.length === 2);
     expect(api.deleteSession).toHaveBeenLastCalledWith('alpha', 'session-1', {

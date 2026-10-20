@@ -490,8 +490,9 @@ export function archiveErrorText(error) {
 // own, which the deletion removes too. `kept`: how many matching entries that
 // may hold such folders deleting every matching entry leaves alone.
 export function purgeConfirmText({
+  mode,
+  filters,
   count,
-  name = '',
   holdsOwnFolders,
   kept = 0,
 }) {
@@ -500,25 +501,47 @@ export function purgeConfirmText({
     () => t('archive.purgeAll.keptOne'),
     (count) => t('archive.purgeAll.keptMany', { count }),
   );
-  return [deleteConfirmText({ count, name, holdsOwnFolders }), keptText]
-    .filter(Boolean)
-    .join(' ');
+  const deleteText = emptiesArchive({ mode, filters })
+    ? countText(
+        count,
+        () => t('archive.purgeAll.everythingBodyOne'),
+        (count) => t('archive.purgeAll.everythingBody', { count }),
+      )
+    : deleteConfirmText({ count, holdsOwnFolders });
+  return [deleteText, keptText].filter(Boolean).join(' ');
 }
 
-function deleteConfirmText({ count, name, holdsOwnFolders }) {
-  if (name) {
-    return holdsOwnFolders
-      ? t('archive.purge.confirmOwnFolders', { name })
-      : t('archive.purge.confirm', { name });
+// The question a permanent-delete confirmation asks: the entry by name, how
+// many selected or matching entries, or whether to empty the whole Archive,
+// whose count the body names.
+export function purgeConfirmTitle({ mode, filters, name = '', count }) {
+  if (name) return t('archive.purge.confirmTitle', { name });
+  if (emptiesArchive({ mode, filters })) {
+    return t('archive.purgeAll.everythingTitle');
   }
+  if (mode === 'all') {
+    return count === 1
+      ? t('archive.purgeAll.matchingTitleOne')
+      : t('archive.purgeAll.matchingTitle', { count });
+  }
+  return count === 1
+    ? t('archive.purgeMany.confirmTitleOne')
+    : t('archive.purgeMany.confirmTitle', { count });
+}
+
+function emptiesArchive({ mode, filters }) {
+  return mode === 'all' && !hasArchiveFilters(filters);
+}
+
+function deleteConfirmText({ count, holdsOwnFolders }) {
   if (count === 1) {
     return holdsOwnFolders
-      ? t('archive.purgeMany.confirmOneOwnFolders')
-      : t('archive.purgeMany.confirmOne');
+      ? t('archive.purge.confirmOwnFolders')
+      : t('archive.purge.confirm');
   }
   return holdsOwnFolders
-    ? t('archive.purgeMany.confirmOwnFolders', { count })
-    : t('archive.purgeMany.confirm', { count });
+    ? t('archive.purgeMany.confirmOwnFolders')
+    : t('archive.purgeMany.confirm');
 }
 
 function listLength(value) {

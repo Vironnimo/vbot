@@ -754,6 +754,7 @@
 {#if pendingTransition}
   <Modal
     title={t('autosave.transitionFailureTitle')}
+    size="sm"
     closeDisabled={transitionSaving}
     onClose={() => (pendingTransition = null)}
   >

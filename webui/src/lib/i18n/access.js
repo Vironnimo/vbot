@@ -97,7 +97,7 @@ export default Object.freeze({
   'settings.access.rename.done': 'Device renamed.',
   'settings.access.revoke.button': 'Remove',
   'settings.access.revoke.aria': 'Remove {name}',
-  'settings.access.revoke.title': 'Remove {name}?',
+  'settings.access.revoke.title': 'Remove device “{name}”?',
   'settings.access.revoke.body':
     '{name} is signed out at once and has to sign in again to use vBot.',
   'settings.access.revoke.cascade':

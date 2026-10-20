@@ -118,8 +118,10 @@ def history_message(message: ChatMessage, *, file_delivery: Any | None = None) -
 
     Notes are internal. A note that records a Model fallback switch appears as
     its display notice, role ``model_fallback`` with both Models; one that
-    records a goal change appears as role ``goal_event`` with its fields. Neither
-    carries the note's Model-facing text.
+    records a goal change appears as role ``goal_event`` with its fields; one
+    that delivers ``message_parent`` messages appears as role
+    ``subagent_message`` with those ``messages``. None carries the note's
+    Model-facing text.
     """
     if message.role == "note" and message.model_fallback is not None:
         return {
@@ -136,6 +138,14 @@ def history_message(message: ChatMessage, *, file_delivery: Any | None = None) -
             "role": "goal_event",
             **({"run_id": message.run_id} if message.run_id is not None else {}),
             **message.goal_event.to_dict(),
+        }
+    if message.role == "note" and message.subagent_messages:
+        return {
+            "id": message.id,
+            "timestamp": message.timestamp,
+            "role": "subagent_message",
+            **({"run_id": message.run_id} if message.run_id is not None else {}),
+            "messages": [entry.to_dict() for entry in message.subagent_messages],
         }
     if message.role in _INTERNAL_HISTORY_ROLES:
         return None

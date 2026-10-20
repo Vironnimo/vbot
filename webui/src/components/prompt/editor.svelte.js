@@ -59,6 +59,16 @@ export function createPromptEditor(context) {
 
   let resetLayoutConfirmOpen = $state(false);
 
+  // The New block dialog and its name field; the error explains a name the
+  // pattern or the server refused, next to the field.
+  let newBlockOpen = $state(false);
+
+  let newBlockName = $state('');
+
+  let newBlockError = $state('');
+
+  let newBlockSaving = $state(false);
+
   // The reset-block confirm body speaks of the Default scope's built-in default
   // or an Agent scope's inherited Default content, matching the scope in effect.
   let resetConfirmBody = $derived(
@@ -376,36 +386,52 @@ export function createPromptEditor(context) {
   }
 
   // -- Custom block create / remove (T1) -----------------------------------
-  async function createCustomBlock() {
-    const slug = window.prompt(t('systemPrompt.blockList.newBlockPrompt'));
-    if (slug === null) {
-      return;
-    }
-    const trimmed = slug.trim();
-    if (!trimmed) {
+  function createCustomBlock() {
+    newBlockName = '';
+    newBlockError = '';
+    newBlockOpen = true;
+  }
+
+  function setNewBlockName(value) {
+    newBlockName = value;
+    newBlockError = '';
+  }
+
+  function cancelNewBlock() {
+    if (!newBlockSaving) newBlockOpen = false;
+  }
+
+  async function confirmNewBlock() {
+    const trimmed = newBlockName.trim();
+    if (!trimmed || newBlockSaving) {
       return;
     }
     if (!SLUG_PATTERN.test(trimmed)) {
-      context.showToast(t('systemPrompt.blockList.invalidSlug'), 'error');
+      newBlockError = t('systemPrompt.blockList.invalidSlug');
       return;
     }
 
+    newBlockSaving = true;
     try {
       await createPromptBlock(context.scopedParams({ slug: trimmed }));
-      await context.loadBlocksForScope(context.selectedScopeKey);
-      const created = blocks.find((block) => block.id === `user:${trimmed}`);
-      if (created) {
-        created.editorExpanded = true;
-        await tick();
-        document
-          .getElementById(`sp-block-body-${created.id}`)
-          ?.querySelector('textarea')
-          ?.focus();
-      }
-      context.schedulePreviewRefresh();
     } catch {
-      context.showToast(t('systemPrompt.blockList.createFailed'), 'error');
+      newBlockError = t('systemPrompt.blockList.createFailed');
+      return;
+    } finally {
+      newBlockSaving = false;
     }
+    newBlockOpen = false;
+    await context.loadBlocksForScope(context.selectedScopeKey);
+    const created = blocks.find((block) => block.id === `user:${trimmed}`);
+    if (created) {
+      created.editorExpanded = true;
+      await tick();
+      document
+        .getElementById(`sp-block-body-${created.id}`)
+        ?.querySelector('textarea')
+        ?.focus();
+    }
+    context.schedulePreviewRefresh();
   }
 
   function removeCustomBlock(blockId) {
@@ -539,6 +565,27 @@ export function createPromptEditor(context) {
     },
     get createCustomBlock() {
       return createCustomBlock;
+    },
+    get newBlockOpen() {
+      return newBlockOpen;
+    },
+    get newBlockName() {
+      return newBlockName;
+    },
+    get newBlockError() {
+      return newBlockError;
+    },
+    get newBlockSaving() {
+      return newBlockSaving;
+    },
+    get setNewBlockName() {
+      return setNewBlockName;
+    },
+    get cancelNewBlock() {
+      return cancelNewBlock;
+    },
+    get confirmNewBlock() {
+      return confirmNewBlock;
     },
     get removeCustomBlock() {
       return removeCustomBlock;

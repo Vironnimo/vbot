@@ -1,5 +1,5 @@
 import { trimmedString, parseJsonValue } from './values.js';
-import { activeLocaleTag, t } from '$lib/i18n.js';
+import { activeLocaleTag, formatFileSize, t } from '$lib/i18n.js';
 import { formatMoment } from '$lib/timeText.js';
 import { isPlainObject } from '$lib/values.js';
 import { toolNameForRunTool } from './toolFacts.js';
@@ -260,25 +260,6 @@ export const fileMentionStatusLabel = (block) => {
   return '';
 };
 
-// File size in the largest fitting unit: "812 bytes", "12.4 kB", "3.1 MB".
-function formatFileSize(bytes) {
-  if (!Number.isFinite(bytes) || bytes < 0) {
-    return '';
-  }
-  const [unit, size] =
-    bytes < 1000
-      ? ['byte', bytes]
-      : bytes < 1_000_000
-        ? ['kilobyte', bytes / 1000]
-        : ['megabyte', bytes / 1_000_000];
-  return new Intl.NumberFormat(activeLocaleTag(), {
-    style: 'unit',
-    unit,
-    unitDisplay: unit === 'byte' ? 'long' : 'short',
-    maximumFractionDigits: 1,
-  }).format(size);
-}
-
 /**
  * Tooltip details of a mentioned file: its complete path and, when its text
  * went into the message, that it did and how large it was. A file that was
@@ -406,7 +387,8 @@ export function timestampForItem(item) {
   if (
     item.type === 'compaction_separator' ||
     item.type === 'takeover_separator' ||
-    item.type === 'goal_event'
+    item.type === 'goal_event' ||
+    item.type === 'subagent_message'
   ) {
     return item.timestamp;
   }

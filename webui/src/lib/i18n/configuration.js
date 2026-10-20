@@ -14,6 +14,7 @@ export default Object.freeze({
   'extensions.cancelHelp': 'End the request without an answer.',
   'extensions.noChoice': 'No choice',
   'extensions.inputTimeZone': 'Time in {zone}.',
+  'extensions.inputTimeOfDay': '{field}: time',
   'extensions.inputExpires':
     'Answer by {time} ({distance}); then the request ends unanswered.',
   'extensions.inputRequired': 'Enter a value.',
@@ -298,7 +299,6 @@ export default Object.freeze({
     'No additional skill directories configured.',
   'settings.skills.scopeGlobal': 'Global skills',
   'settings.skills.scopeAgent': '{name} (private)',
-  'settings.skills.newSkill': 'New skill',
   'settings.skills.nameLabel': 'Skill name',
   'settings.skills.contentLabel': 'SKILL.md content',
   'settings.skills.namePlaceholder': 'skill-name',
@@ -309,7 +309,6 @@ export default Object.freeze({
   'settings.skills.contentSaveError': 'Skill could not be saved.',
   'settings.skills.deleted': 'Skill moved to Archived.',
   'settings.skills.deleteError': 'Skill could not be deleted.',
-  'settings.skills.deleteConfirmTitle': 'Delete skill',
   'settings.subagents.maxDepth': 'Maximum nesting depth',
   'settings.subagents.maxDepthHelp':
     'Sub-Agents can start Sub-Agents of their own. This sets how many levels deep that can go; at the limit, a Sub-Agent has to do the work itself. Default: 2.',
@@ -485,7 +484,7 @@ export default Object.freeze({
   'settings.recall.rebuild': 'Rebuild',
   'settings.recall.rebuildTitle': 'Rebuild the search index?',
   'settings.recall.rebuildBody':
-    'Indexes every conversation again from scratch. This is only needed when search by meaning finds poor results; after a model change vBot rebuilds the index on its own. A cloud embedding model bills its Provider again for all conversation text.',
+    'Every conversation is indexed again from scratch, which is only needed when search by meaning finds poor results. A cloud embedding model bills its Provider again for all conversation text.',
   'settings.recall.rebuildConfirm': 'Rebuild index',
   'settings.recall.rebuildError': 'The search index could not be rebuilt.',
   'settings.recall.modelOptions': 'Model options',
@@ -652,7 +651,7 @@ export default Object.freeze({
   'settings.credentials.replaceAria': 'Replace {name}',
   'settings.credentials.removeAria': 'Remove {name}',
   'settings.credentials.addTitle': 'Add credential',
-  'settings.credentials.replaceTitle': 'Replace {name}',
+  'settings.credentials.replaceTitle': 'Replace credential “{name}”',
   'settings.credentials.name': 'Name',
   'settings.credentials.nameHelp':
     'Letters, digits and underscores, not starting with a digit, like an environment variable.',
@@ -671,7 +670,7 @@ export default Object.freeze({
   'settings.credentials.saved': '{name} saved.',
   'settings.credentials.savedShadowed':
     '{name} saved, but the server environment also sets it and takes precedence.',
-  'settings.credentials.removeTitle': 'Remove {name}?',
+  'settings.credentials.removeTitle': 'Remove credential “{name}”?',
   'settings.credentials.removeBody':
     'vBot deletes the saved value. Skills, Channels, Providers and connections that read {name} lose it until it is saved again.',
   'settings.credentials.removeError': 'The credential could not be removed.',
@@ -1009,6 +1008,8 @@ export default Object.freeze({
   'settings.providers.add.connectionButton': 'Add connection',
   'settings.providers.add.title': 'Add provider',
   'settings.providers.add.chooseProvider': 'Choose a provider to connect.',
+  'settings.providers.add.search': 'Search providers…',
+  'settings.providers.add.noMatch': 'No provider matches “{query}”.',
   'settings.providers.add.chooseMethod': 'Choose how to connect {provider}.',
   'settings.providers.add.allConnected':
     'All available providers are already connected.',
@@ -1037,10 +1038,11 @@ export default Object.freeze({
     'Add the local endpoint. Models are discovered now and loaded only when used.',
   'settings.providers.add.localSubmit': 'Add provider',
   'settings.providers.custom.addButton': 'Add custom',
-  'settings.providers.custom.addTitle': 'Add Custom Provider',
-  'settings.providers.custom.editTitle': 'Edit Custom Provider',
+  'settings.providers.custom.addTitle': 'Add custom provider',
+  'settings.providers.custom.editTitle': 'Edit custom provider',
   'settings.providers.custom.intro':
     'Connect an OpenAI-compatible endpoint you control and describe its Models.',
+  'settings.providers.custom.connectionTitle': 'Connection',
   'settings.providers.custom.id': 'Provider id',
   'settings.providers.custom.idHint':
     'Stable id used in Model references, for example local-ai.',
@@ -1048,6 +1050,7 @@ export default Object.freeze({
   'settings.providers.custom.adapter': 'Adapter',
   'settings.providers.custom.adapterOpenAiCompatible': 'OpenAI compatible',
   'settings.providers.custom.auth': 'Authentication',
+  'settings.providers.custom.authMethod': 'Method',
   'settings.providers.custom.authApiKey': 'Bearer API key',
   'settings.providers.custom.authNone': 'No API key',
   'settings.providers.custom.baseUrl': 'Endpoint URL',
@@ -1056,23 +1059,33 @@ export default Object.freeze({
   'settings.providers.custom.baseUrlPlaceholder': 'http://127.0.0.1:8080/v1',
   'settings.providers.custom.modelsEndpoint': 'Model discovery path',
   'settings.providers.custom.modelsEndpointHint':
-    'Optional OpenAI-compatible path. Leave empty to use manual Models only.',
+    'Optional. Leave empty to use manual Models only.',
   'settings.providers.custom.modelsEndpointPlaceholder': '/models',
-  'settings.providers.custom.apiKey': 'API key (optional)',
-  'settings.providers.custom.replaceApiKey': 'Replace API key (optional)',
+  'settings.providers.custom.apiKey': 'API key',
+  'settings.providers.custom.replaceApiKey': 'Replace API key',
+  'settings.providers.custom.apiKeyNewHint':
+    'Optional. Stored in vBot’s encrypted Secret Store.',
   'settings.providers.custom.apiKeyHint':
     'Stored in vBot’s encrypted Secret Store. Leave empty to keep the current key.',
   'settings.providers.custom.modelsTitle': 'Manual Models',
   'settings.providers.custom.modelsHint':
-    'Manual facts override discovered Models with the same wire id.',
+    'Describe Models the endpoint does not list, or correct the facts of listed ones. A manual Model overrides a discovered Model with the same wire id.',
+  'settings.providers.custom.modelsHintAria': 'About manual Models',
   'settings.providers.custom.addModel': 'Add Model',
   'settings.providers.custom.noModels':
-    'No manual Models. Use discovery or add one here.',
+    'No manual Models. Discovered Models appear without one.',
   'settings.providers.custom.modelId': 'Wire id',
+  'settings.providers.custom.modelIdHint': 'The Model id the endpoint expects.',
   'settings.providers.custom.modelNumber': 'Model {number}',
   'settings.providers.custom.modelName': 'Display name',
+  'settings.providers.custom.modelContext': '{tokens} context',
+  'settings.providers.custom.modelDetailsAria': 'Details for {model}',
+  'settings.providers.custom.modelHasErrors':
+    'Some fields of this Model need fixing.',
+  'settings.providers.custom.removeModel': 'Remove Model',
   'settings.providers.custom.contextWindow': 'Context window',
   'settings.providers.custom.maxOutput': 'Max output tokens',
+  'settings.providers.custom.capabilities': 'Capabilities',
   'settings.providers.custom.inputModalities': 'Input modalities',
   'settings.providers.custom.inputModalitiesHint':
     'Comma-separated: text, image, audio, file, video',
@@ -1080,52 +1093,67 @@ export default Object.freeze({
   'settings.providers.custom.outputModalitiesHint':
     'Comma-separated: text, image, speech, transcription, embeddings',
   'settings.providers.custom.taskTypes': 'Task types',
-  'settings.providers.custom.taskTypesHint':
-    'Optional comma-separated explicit task types',
+  'settings.providers.custom.taskTypesHint': 'Optional, comma-separated.',
   'settings.providers.custom.parameters': 'Supported parameters',
   'settings.providers.custom.parametersHint':
-    'Optional comma-separated wire parameter names',
+    'Optional, comma-separated wire names.',
   'settings.providers.custom.voices': 'Supported voices',
-  'settings.providers.custom.voicesHint': 'Optional comma-separated voice ids',
+  'settings.providers.custom.voicesHint':
+    'Optional, comma-separated voice ids.',
   'settings.providers.custom.tools': 'Tools',
   'settings.providers.custom.vision': 'Vision',
   'settings.providers.custom.jsonMode': 'JSON mode',
   'settings.providers.custom.reasoning': 'Reasoning',
   'settings.providers.custom.capabilityAria': '{capability} for {model}',
+  'settings.providers.custom.validationIdRequired': 'Enter a Provider id.',
   'settings.providers.custom.validationId':
-    'Provider id must use lowercase letters and digits in hyphen-separated segments.',
+    'Use lowercase letters and digits in hyphen-separated segments.',
   'settings.providers.custom.validationName': 'Enter a Provider name.',
   'settings.providers.custom.validationBaseUrl':
     'Enter an absolute HTTP(S) endpoint URL.',
   'settings.providers.custom.validationModelId':
-    'Every Model needs a wire id without "::".',
+    'Enter a wire id without "::".',
   'settings.providers.custom.validationDuplicateModel':
-    'Model ids must be unique.',
+    'Another Model already uses this wire id.',
   'settings.providers.custom.validationPositiveInteger':
-    '{label} must be a positive whole number.',
-  'settings.providers.custom.wireTitle': 'Advanced: wire profile',
+    'Enter a positive whole number.',
+  'settings.providers.custom.advancedTitle': 'Advanced',
+  'settings.providers.custom.wireTitle': 'Wire profile',
   'settings.providers.custom.wireIntro':
-    'Tells vBot how this endpoint expects reasoning and request fields. Leave it empty to use the OpenAI Chat Completions defaults. Fill it in when reasoning has no effect, its text does not appear, or the endpoint rejects a request field.',
+    'How this endpoint expects reasoning and request fields.',
+  'settings.providers.custom.wireStateCustom': 'Custom',
+  'settings.providers.custom.wireStateDefault': 'Defaults',
+  'settings.providers.custom.wireWhen':
+    'Leave it empty to use the OpenAI Chat Completions defaults. Fill it in when reasoning has no effect, its text does not appear, or the endpoint rejects a request field.',
   'settings.providers.custom.wireLabel': 'Wire profile JSON',
   'settings.providers.custom.wireHint':
-    'A JSON object with "defaults" for every Model, "rules" for the Models a "when" condition matches (for example "when": {"prefix": "qwen"}) with their values under "set", and "models" with a "set" per Model id. Model entries win over rules, rules over defaults. Empty removes the profile.',
+    'A JSON object with "defaults" for every Model, "rules" for the Models a "when" condition matches (for example "when": {"prefix": "qwen"}) with their values under "set", and "models" with a "set" per Model id.\n\nModel entries win over rules, rules over defaults. Empty removes the profile.',
+  'settings.providers.custom.wireHintAria': 'About the wire profile format',
   'settings.providers.custom.wirePlaceholder':
     '{\n  "defaults": {\n    "reasoning": {"dialect": "thinking_toggle"},\n    "response": {"reasoning_fields": ["reasoning_content"]}\n  }\n}',
-  'settings.providers.custom.wireFieldsTitle': 'Common fields',
+  'settings.providers.custom.wireFieldsTitle': 'Field reference',
   'settings.providers.custom.wireFieldDialect':
-    'reasoning.dialect: how an effort is sent. reasoning_effort (the default) sends "reasoning_effort": "high"; thinking_toggle sends "thinking": {"type": "enabled"} or {"type": "disabled"}; thinking_toggle_with_effort sends reasoning_effort for a level and the thinking switch otherwise; openrouter_reasoning sends a "reasoning" object; none sends nothing.',
+    'How an effort is sent. reasoning_effort (the default) sends "reasoning_effort": "high"; thinking_toggle sends "thinking": {"type": "enabled"} or {"type": "disabled"}; thinking_toggle_with_effort sends reasoning_effort for a level and the thinking switch otherwise; openrouter_reasoning sends a "reasoning" object; none sends nothing.',
   'settings.providers.custom.wireFieldLevels':
-    'reasoning.levels: the effort levels the endpoint accepts, for example ["low", "high"]. Other efforts snap to an accepted level.',
+    'The effort levels the endpoint accepts, for example ["low", "high"]. Other efforts snap to an accepted level.',
   'settings.providers.custom.wireFieldOff':
-    'reasoning.off: what the effort none sends (auto, omit, enabled, lowest or a level). reasoning.unset: what is sent when no effort is chosen (omit, enabled or a level).',
-  'settings.providers.custom.wireFieldResponse':
-    'response.reasoning_fields: the response fields that carry reasoning text, in the order vBot checks them, for example ["reasoning_content"].',
-  'settings.providers.custom.wireFieldReplay':
-    'replay.history_field: the message field that sends earlier reasoning back with the conversation, for example "reasoning_content". replay.scope picks the turns (none, current_run, tool_turns or full_history), replay.fidelity the kind of reasoning state (meta_preferred, meta_only or readable_only).',
-  'settings.providers.custom.wireFieldRequest':
-    'request.output_limit_field: the field that limits output (max_tokens or max_completion_tokens). request.parameters: rules per request parameter, for example "temperature": {"mode": "drop"}.',
+    'What the effort none sends: auto, omit, enabled, lowest or a level.',
+  'settings.providers.custom.wireFieldUnset':
+    'What is sent when no effort is chosen: omit, enabled or a level.',
   'settings.providers.custom.wireFieldSupported':
-    'A Model whose Reasoning switch is off never gets reasoning fields, whatever "defaults" says. Turn the switch on, or set "reasoning": {"supported": true} in a rule or Model entry.',
+    'A Model without the Reasoning capability never gets reasoning fields, whatever "defaults" says. Turn the capability on, or set "reasoning": {"supported": true} in a rule or Model entry.',
+  'settings.providers.custom.wireFieldResponse':
+    'The response fields that carry reasoning text, in the order vBot checks them, for example ["reasoning_content"].',
+  'settings.providers.custom.wireFieldHistory':
+    'The message field that sends earlier reasoning back with the conversation, for example "reasoning_content".',
+  'settings.providers.custom.wireFieldScope':
+    'The turns whose reasoning is sent back: none, current_run, tool_turns or full_history.',
+  'settings.providers.custom.wireFieldFidelity':
+    'The kind of reasoning state sent back: meta_preferred, meta_only or readable_only.',
+  'settings.providers.custom.wireFieldOutputLimit':
+    'The field that limits output: max_tokens or max_completion_tokens.',
+  'settings.providers.custom.wireFieldParameters':
+    'Rules per request parameter, for example "temperature": {"mode": "drop"}.',
   'settings.providers.custom.wireInvalidJson':
     'The wire profile is not valid JSON: {detail}',
   'settings.providers.custom.wireNotObject':
@@ -1141,9 +1169,9 @@ export default Object.freeze({
   'settings.providers.custom.deleted': 'Custom Provider deleted.',
   'settings.providers.custom.deleteError':
     'Custom Provider could not be deleted.',
-  'settings.providers.custom.deleteTitle': 'Delete Custom Provider?',
+  'settings.providers.custom.deleteTitle': 'Delete custom provider “{name}”?',
   'settings.providers.custom.deleteBody':
-    'The Provider and its stored data-directory API keys are removed. Existing Model references are kept and become unavailable.',
+    'Its stored API keys are removed too. Model references to it stay but become unavailable.',
   'settings.channels.title': 'Channels',
   'settings.providers.connectedCount': '{count} connected',
   'settings.channels.add': 'Add channel',
@@ -1188,9 +1216,9 @@ export default Object.freeze({
   'settings.channels.empty': 'No Channels yet',
   'settings.channels.emptyHint':
     'Talk to your Agents from Telegram, Discord, Slack, Mattermost or WhatsApp.',
-  'settings.channels.delete_confirm_title': 'Delete channel',
+  'settings.channels.delete_confirm_title': 'Delete channel “{id}”?',
   'settings.channels.delete_confirm':
-    'Delete channel "{id}" permanently? vBot stops listening on it and its configuration is removed.',
+    'vBot stops listening on it and removes its configuration.',
   'settings.channels.createSuccess': 'Channel created.',
   'settings.channels.enableSuccess': 'Channel enabled.',
   'settings.channels.disableSuccess': 'Channel disabled.',
@@ -1397,9 +1425,9 @@ export default Object.freeze({
   'settings.voice.importTooLargeTitle': 'Wakeword model is too large.',
   'settings.voice.importTooLargeMessage':
     'Choose a TFLite model no larger than 20 MiB.',
-  'settings.voice.deleteConfirmTitle': 'Remove wakeword model',
+  'settings.voice.deleteConfirmTitle': 'Delete wakeword model “{name}”?',
   'settings.voice.deleteConfirm':
-    'Remove “{name}” permanently from this Desktop? The TFLite file stored by vBot will be deleted.',
+    'vBot deletes its stored TFLite file from this Desktop.',
   'settings.voice.deleteSuccess': 'Wakeword model removed.',
   'settings.voice.sensitivity': 'Sensitivity',
   'settings.voice.modelAction': 'When heard',

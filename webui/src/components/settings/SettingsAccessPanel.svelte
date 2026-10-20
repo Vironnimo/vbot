@@ -33,7 +33,7 @@
     accessModeDescription,
     describeDeviceUse,
     deviceErrorMessage,
-    deviceRevocationMessage,
+    deviceRevocationNotice,
   } from '$lib/settingsView.js';
   import { t } from '$lib/i18n.js';
 
@@ -369,6 +369,7 @@
 {#if renameTarget}
   <Modal
     title={t('settings.access.rename.title')}
+    size="sm"
     labelledById="rename-device-title"
     closeDisabled={dialogBusy}
     onClose={closeDialogs}
@@ -418,16 +419,28 @@
 {/if}
 
 {#if revokeTarget}
+  {@const notice = deviceRevocationNotice(revokeTarget, devices)}
   <ConfirmDialog
     title={t('settings.access.revoke.title', { name: revokeTarget.name })}
-    body={deviceRevocationMessage(revokeTarget, devices)}
+    body={notice.message}
     confirmLabel={t('settings.access.revoke.confirm')}
     busy={dialogBusy}
     error={dialogError}
     onConfirm={confirmRevoke}
     onCancel={closeDialogs}
-  />
+  >
+    {#snippet bodyExtra()}
+      {@render revocationDetails(notice)}
+    {/snippet}
+  </ConfirmDialog>
 {/if}
+
+{#snippet revocationDetails(notice)}
+  <p class="access-revocation__details">{notice.details}</p>
+  {#if notice.currentBrowser}
+    <Banner variant="warn">{t('settings.access.revoke.currentBrowser')}</Banner>
+  {/if}
+{/snippet}
 
 {#if revokeOthersOpen}
   <ConfirmDialog
@@ -444,22 +457,34 @@
 {/if}
 
 {#if signOutOpen}
+  {@const notice = deviceRevocationNotice(
+    devices.find((device) => device.current),
+    devices,
+    { signingOut: true },
+  )}
   <ConfirmDialog
     title={t('settings.access.signOut.title')}
-    body={deviceRevocationMessage(
-      devices.find((device) => device.current),
-      devices,
-      { signingOut: true },
-    )}
+    body={notice.message}
     confirmLabel={t('settings.access.signOut.confirm')}
     busy={dialogBusy}
     error={dialogError}
     onConfirm={confirmSignOut}
     onCancel={closeDialogs}
-  />
+  >
+    {#snippet bodyExtra()}
+      {@render revocationDetails(notice)}
+    {/snippet}
+  </ConfirmDialog>
 {/if}
 
 <style>
+  /* The cascade a removal or sign-out may reach, after its consequence. */
+  .access-revocation__details {
+    margin: 0;
+    color: var(--text-lo);
+    font-size: var(--fs-body-sm);
+  }
+
   /* Read-only facts read as plain values, like the server facts above. */
   .s-row > .s-row-control.access-fact {
     justify-content: flex-start;

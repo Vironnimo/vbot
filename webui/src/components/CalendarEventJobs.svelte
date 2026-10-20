@@ -1,20 +1,29 @@
 <script>
-  // The Agent jobs of one calendar event: the Cron jobs bound to it, each
-  // with when it runs relative to the event, its Agent, instruction and
-  // state, and a form to add, change or delete one.
+  // The Agent jobs of one calendar event: the Cron jobs bound to it as a
+  // compact list (when each runs relative to the event, its Agent and state;
+  // the instruction, next Run and last result in its details card), each with
+  // a row menu to open its Session, edit or delete it. Adding or editing a job
+  // opens its own dialog above the event's card; an existing job saves itself
+  // while it is edited, a new one when it is added.
   import { onDestroy, onMount } from 'svelte';
   import Button from './ui/Button.svelte';
   import Banner from './ui/Banner.svelte';
+  import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import ContextMenu from './ui/ContextMenu.svelte';
+  import { contextMenuAnchor, isContextMenuKey } from './ui/contextMenu.js';
   import FormField from './ui/FormField.svelte';
-  import TextField from './ui/TextField.svelte';
-  import TextArea from './ui/TextArea.svelte';
-  import StatusChip from './ui/StatusChip.svelte';
   import InfoHint from './ui/InfoHint.svelte';
+  import Modal from './ui/Modal.svelte';
   import SaveStatus from './ui/SaveStatus.svelte';
+  import StatusChip from './ui/StatusChip.svelte';
+  import TextArea from './ui/TextArea.svelte';
+  import TextField from './ui/TextField.svelte';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
+  import { portal } from '$lib/dropdownPanel.js';
+  import { tooltip } from '$lib/tooltip.js';
   import Dropdown from './Dropdown.svelte';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import {
@@ -75,12 +84,21 @@
   let sessionCursor = $state(null);
   let sessionsLoading = $state(false);
   let sessionRequest = 0;
+  // The job in the dialog: null while it is closed, without an id while it
+  // is being added.
   let editor = $state(null);
+  // Why the Agents could not be listed; shown with the list.
+  let catalogError = $state('');
+  // Why the job in the dialog could not be saved; shown in the dialog.
   let error = $state('');
   let busy = $state(false);
-  let deleting = $state('');
   let saving = $state(false);
   let baseline = $state('');
+  // The job whose deletion waits for confirmation, and why it failed.
+  let deleting = $state(null);
+  let deleteError = $state('');
+  // The open row menu (./ui/ContextMenu.svelte), or null.
+  let menu = $state(null);
   const autosaveContext = useAutosaveContext();
   const autosave = createDebouncedAutosave({
     getSnapshot: () => ({ eventId, ...editor }),
@@ -150,7 +168,7 @@
       targetTeams = catalog.projectTeams;
       showTargets(agentsRequest, catalog.agents);
       const failure = catalog.agentError ?? catalog.projectError;
-      error = failure
+      catalogError = failure
         ? (failure.message ?? String(failure))
         : catalog.failedProjects.length
           ? t('calendar.jobs.targetsPartial')
@@ -218,9 +236,12 @@
     loadSessions();
   }
 
-  function cancel() {
+  // Closing the dialog keeps an existing job's last edit: the pending save
+  // runs first. A job being added is discarded.
+  function close() {
     return autosaveContext.requestTransition(() => {
       editor = null;
+      error = '';
       sessionRequest += 1;
     });
   }
@@ -310,23 +331,75 @@
     }
   }
 
-  function remove(id) {
-    return autosaveContext.requestTransition(() => removeNow(id));
+  function requestRemove(job) {
+    return autosaveContext.requestTransition(() => {
+      deleteError = '';
+      deleting = job;
+    });
   }
 
-  async function removeNow(id) {
+  async function removeNow() {
+    const id = deleting?.id;
+    if (!id || busy) return;
     busy = true;
-    error = '';
+    deleteError = '';
     try {
       await deleteCronJob(id);
-      deleting = '';
+      deleting = null;
       if (editor?.id === id) editor = null;
       await onChanged();
     } catch (e) {
-      error = e.message ?? String(e);
+      deleteError = e.message ?? String(e);
     } finally {
       busy = false;
     }
+  }
+
+  // A job is named by when it runs; its instruction can be long.
+  function jobName(job) {
+    return eventTimeLabel(job.event_edge, job.event_offset_minutes);
+  }
+
+  function jobMenu(job) {
+    const blocked = busy || serverUnavailable;
+    return {
+      label: t('calendar.jobs.actions', { name: jobName(job) }),
+      items: [
+        ...(job.session_id && onOpenSession
+          ? [
+              {
+                id: 'session',
+                label: t('calendar.jobs.openSession'),
+                group: 'open',
+                onSelect: () =>
+                  autosaveContext.requestTransition(() =>
+                    onOpenSession(job.target, job.session_id),
+                  ),
+              },
+            ]
+          : []),
+        {
+          id: 'edit',
+          label: t('common.edit'),
+          group: 'open',
+          disabled: blocked,
+          onSelect: () => begin(job),
+        },
+        {
+          id: 'delete',
+          label: t('calendar.jobs.delete'),
+          danger: true,
+          group: 'delete',
+          disabled: blocked,
+          onSelect: () => requestRemove(job),
+        },
+      ],
+    };
+  }
+
+  function openMenu(job, event) {
+    event.preventDefault();
+    menu = { ...contextMenuAnchor(event), ...jobMenu(job) };
   }
 
   // When the job is due for the shown occurrence: the time alone on the
@@ -339,7 +412,7 @@
     return new Intl.DateTimeFormat(activeLocaleTag(), {
       timeZone,
       ...(sameDay ? {} : { weekday: 'short', day: 'numeric', month: 'short' }),
-      hour: '2-digit',
+      hour: 'numeric',
       minute: '2-digit',
     }).format(due);
   }
@@ -377,222 +450,292 @@
     }
     return parts.join(' · ');
   }
+
+  // A row's details card: the whole instruction and how the job runs.
+  function jobDetails(job) {
+    return {
+      title: eventTimeLabel(job.event_edge, job.event_offset_minutes),
+      text: job.prompt,
+      rows: [
+        { label: t('calendar.jobs.agent'), value: agentLabel(job.target) },
+        { label: t('calendar.jobs.runs'), value: runText(job) },
+      ],
+    };
+  }
 </script>
 
-<section class="calendar-jobs" aria-label={t('calendar.jobs.heading')}>
+<section class="calendar-jobs" aria-labelledby="calendar-jobs-heading">
   <div class="calendar-jobs-heading">
-    <h3>{t('calendar.jobs.heading')}</h3>
+    <h3 id="calendar-jobs-heading">{t('calendar.jobs.heading')}</h3>
     <InfoHint text={t('calendar.jobs.help')} />
-    <Button
-      variant="secondary"
-      disabled={busy || serverUnavailable || editor !== null}
-      onClick={() => begin()}>{t('calendar.jobs.add')}</Button
-    >
   </div>
-  {#if occurrence?.recurring}
-    <p class="calendar-detail-meta">
-      {t('calendar.jobs.series')}
-    </p>
-  {/if}
   {#if jobsError}
     <Banner variant="error">{t('calendar.jobs.loadError')} {jobsError}</Banner>
-  {:else if shownJobs.length === 0 && !editor}
-    <p class="calendar-detail-meta">
-      {t('calendar.jobs.empty')}
-    </p>
+  {:else if shownJobs.length === 0}
+    <p class="calendar-jobs-empty">{t('calendar.jobs.empty')}</p>
   {/if}
-  {#each shownJobs as job (job.id)}
-    <div class="calendar-job-row" data-testid={`calendar-job-${job.id}`}>
-      <div class="calendar-job-summary">
-        <strong
-          >{eventTimeLabel(job.event_edge, job.event_offset_minutes)}</strong
+  {#if shownJobs.length > 0}
+    <ul class="calendar-job-list">
+      {#each shownJobs as job (job.id)}
+        {@const due = dueText(job)}
+        <li
+          class="calendar-job-row"
+          class:calendar-job-row--inactive={job.status !== 'active'}
+          data-testid={`calendar-job-${job.id}`}
         >
-        {#if dueText(job)}<span class="calendar-job-due">{dueText(job)}</span
-          >{/if}
-        <span>{agentLabel(job.target)}</span>
-        <StatusChip variant={statusChipVariant(job)}
-          >{statusLabel(job.status)}</StatusChip
-        >
-      </div>
-      <p class="calendar-job-prompt">{job.prompt}</p>
-      <p class="calendar-detail-meta">{runText(job)}</p>
-      {#if job.last_error}
-        <p class="calendar-detail-meta calendar-job-error">
-          {t('calendar.jobs.error', { reason: job.last_error })}
-        </p>
-      {/if}
-      <div class="calendar-job-controls">
-        {#if job.session_id && onOpenSession}
-          <Button
-            variant="secondary"
-            onClick={() =>
-              autosaveContext.requestTransition(() =>
-                onOpenSession(job.target, job.session_id),
-              )}>{t('calendar.jobs.openSession')}</Button
-          >
-        {/if}
-        <Button
-          variant="secondary"
-          disabled={busy || serverUnavailable || editor !== null}
-          onClick={() => begin(job)}>{t('common.edit')}</Button
-        >
-        <Button
-          variant="danger"
-          disabled={busy || serverUnavailable}
-          onClick={() => (deleting = job.id)}>{t('common.delete')}</Button
-        >
-      </div>
-      {#if deleting === job.id}
-        <div class="calendar-job-controls">
-          <span>{t('calendar.jobs.deleteConfirm')}</span>
-          <Button
-            variant="danger"
-            disabled={busy}
-            onClick={() => remove(job.id)}>{t('common.delete')}</Button
-          >
-          <Button variant="secondary" onClick={() => (deleting = '')}
-            >{t('common.cancel')}</Button
-          >
-        </div>
-      {/if}
-    </div>
-  {/each}
-  {#if editor}
-    <form
-      class="calendar-job-editor"
-      onsubmit={(event) => {
-        event.preventDefault();
-        if (editor.id) autosave.participant.runSave('manual');
-        else save();
-      }}
-    >
-      <div class="calendar-form-row">
-        <FormField
-          label={t('calendar.jobs.agent')}
-          controlId="calendar-job-target"
-        >
-          <Dropdown
-            id="calendar-job-target"
-            value={editor.target}
-            options={targetOptions}
-            placeholder={t('calendar.jobs.chooseAgent')}
-            ariaLabel={t('calendar.jobs.agent')}
-            disabled={busy}
-            onValueChange={(next) => {
-              if (next === editor.target) return;
-              editor.target = next;
-              editor.session = '';
-              loadSessions();
+          <button
+            type="button"
+            class="calendar-job-main"
+            use:tooltip={() => jobDetails(job)}
+            onclick={() => {
+              if (!busy && !serverUnavailable) begin(job);
             }}
-          />
-        </FormField>
-        <FormField
-          label={t('calendar.jobs.session')}
-          controlId="calendar-job-session"
-        >
-          <Dropdown
-            id="calendar-job-session"
-            value={editor.session}
-            options={sessionOptions}
-            ariaLabel={t('calendar.jobs.session')}
-            disabled={busy || sessionsLoading}
-            onValueChange={(next) => (editor.session = next)}
-          />
-          {#if sessionCursor}<Button
-              variant="secondary"
-              disabled={sessionsLoading}
-              onClick={() => loadSessions(true)}
-              >{t('calendar.jobs.moreSessions')}</Button
-            >{/if}
-        </FormField>
-      </div>
-      <div
-        class="calendar-job-timing"
-        class:calendar-job-timing--at={editor.event_direction === 'at'}
-      >
-        <FormField
-          label={t('cron.eventTime.when')}
-          controlId="calendar-job-direction"
-        >
-          <Dropdown
-            id="calendar-job-direction"
-            value={editor.event_direction}
-            options={directionOptions}
-            ariaLabel={t('cron.eventTime.when')}
-            disabled={busy}
-            onValueChange={(next) => (editor.event_direction = next)}
-          />
-        </FormField>
-        {#if editor.event_direction !== 'at'}
-          <FormField
-            label={t('cron.eventTime.amount')}
-            controlId="calendar-job-amount"
-            ><TextField
-              id="calendar-job-amount"
-              type="number"
-              min="1"
-              value={editor.event_amount}
-              onInput={(value) => (editor.event_amount = value)}
-            /></FormField
+            oncontextmenu={(event) => openMenu(job, event)}
+            onkeydown={(event) => {
+              if (isContextMenuKey(event)) openMenu(job, event);
+            }}
           >
-          <FormField
-            label={t('cron.eventTime.unit')}
-            controlId="calendar-job-unit"
-            ><Dropdown
-              id="calendar-job-unit"
-              value={editor.event_unit}
-              options={unitOptions}
-              ariaLabel={t('cron.eventTime.unit')}
-              disabled={busy}
-              onValueChange={(next) => (editor.event_unit = next)}
-            /></FormField
+            <span class="calendar-job-summary">
+              <strong
+                >{eventTimeLabel(
+                  job.event_edge,
+                  job.event_offset_minutes,
+                )}</strong
+              >
+              {#if due}<span class="calendar-job-due">{due}</span>{/if}
+            </span>
+            <span class="calendar-job-agent"
+              >{agentLabel(job.target)} · {job.prompt}</span
+            >
+            {#if job.last_error}
+              <span class="calendar-job-error">
+                {t('calendar.jobs.error', { reason: job.last_error })}
+              </span>
+            {/if}
+          </button>
+          <StatusChip variant={statusChipVariant(job)}
+            >{statusLabel(job.status)}</StatusChip
           >
-        {/if}
-        <FormField
-          label={t('cron.eventTime.edge')}
-          controlId="calendar-job-edge"
-          ><Dropdown
-            id="calendar-job-edge"
-            value={editor.event_edge}
-            options={edgeOptions}
-            ariaLabel={t('cron.eventTime.edge')}
-            disabled={busy}
-            onValueChange={(next) => (editor.event_edge = next)}
-          /></FormField
-        >
-      </div>
-      <FormField
-        label={t('calendar.jobs.instruction')}
-        controlId="calendar-job-prompt"
-        ><TextArea
-          id="calendar-job-prompt"
-          value={editor.prompt}
-          onInput={(value) => (editor.prompt = value)}
-          rows={4}
-          placeholder={t('calendar.jobs.instructionPlaceholder')}
-        /></FormField
-      >
-      <div class="calendar-job-controls">
-        {#if editor.id}
-          <SaveStatus
-            {saving}
-            pending={autosave.participant.hasChanges()}
-            onClick={() => autosave.participant.runSave('manual')}
-          />
-        {:else}
           <Button
-            variant="primary"
-            disabled={busy || serverUnavailable}
-            onClick={save}
+            variant="tertiary"
+            icon
+            class="calendar-job-menu"
+            ariaLabel={t('calendar.jobs.actions', { name: jobName(job) })}
+            aria-haspopup="menu"
+            onClick={(event) => openMenu(job, event)}
+            ><svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="currentColor"
+              aria-hidden="true"
+              ><circle cx="3.5" cy="8" r="1.25" /><circle
+                cx="8"
+                cy="8"
+                r="1.25"
+              /><circle cx="12.5" cy="8" r="1.25" /></svg
+            ></Button
           >
-            {t('common.save')}
-          </Button>
-        {/if}
-        <Button variant="secondary" disabled={busy} onClick={cancel}>
-          {t('common.cancel')}
-        </Button>
-      </div>
-    </form>
+        </li>
+      {/each}
+    </ul>
   {/if}
-  {#if error}<Banner variant="error">{error}</Banner>{/if}
+  {#if catalogError}
+    <p class="calendar-jobs-notice" role="status">{catalogError}</p>
+  {/if}
+  <div>
+    <Button
+      variant="tertiary"
+      class="calendar-jobs-add"
+      disabled={busy || serverUnavailable || editor !== null}
+      onClick={() => begin()}
+      ><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+        ><path
+          d="M8 3.25v9.5M3.25 8h9.5"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+        /></svg
+      >{t('calendar.jobs.add')}</Button
+    >
+  </div>
 </section>
+
+<ContextMenu {menu} onClose={() => (menu = null)} />
+
+<!-- The dialogs leave the event's card, which floats on its own layer. -->
+{#if editor || deleting}
+  <div class="calendar-job-dialogs" use:portal>
+    {#if editor}
+      <Modal
+        title={editor.id
+          ? t('calendar.jobs.editTitle')
+          : t('calendar.jobs.add')}
+        description={occurrence?.recurring
+          ? t('calendar.jobs.leadSeries', { title: occurrence?.title ?? '' })
+          : t('calendar.jobs.lead', { title: occurrence?.title ?? '' })}
+        size="md"
+        class="calendar-job-dialog"
+        onClose={close}
+      >
+        {#snippet body()}
+          <form
+            class="calendar-job-editor"
+            onsubmit={(event) => {
+              event.preventDefault();
+              if (editor.id) autosave.participant.runSave('manual');
+              else save();
+            }}
+          >
+            <div class="modal-body">
+              <FormField
+                label={t('calendar.jobs.agent')}
+                controlId="calendar-job-target"
+              >
+                <Dropdown
+                  id="calendar-job-target"
+                  value={editor.target}
+                  options={targetOptions}
+                  placeholder={t('calendar.jobs.chooseAgent')}
+                  ariaLabel={t('calendar.jobs.agent')}
+                  disabled={busy}
+                  onValueChange={(next) => {
+                    if (next === editor.target) return;
+                    editor.target = next;
+                    editor.session = '';
+                    loadSessions();
+                  }}
+                />
+              </FormField>
+              <FormField
+                label={t('calendar.jobs.session')}
+                controlId="calendar-job-session"
+              >
+                <Dropdown
+                  id="calendar-job-session"
+                  value={editor.session}
+                  options={sessionOptions}
+                  ariaLabel={t('calendar.jobs.session')}
+                  disabled={busy || sessionsLoading}
+                  onValueChange={(next) => (editor.session = next)}
+                />
+                {#snippet actions()}
+                  {#if sessionCursor}
+                    <Button
+                      variant="tertiary"
+                      disabled={sessionsLoading}
+                      onClick={() => loadSessions(true)}
+                      >{t('calendar.jobs.moreSessions')}</Button
+                    >
+                  {/if}
+                {/snippet}
+              </FormField>
+              <div class="calendar-job-timing">
+                <FormField
+                  label={t('cron.eventTime.when')}
+                  controlId="calendar-job-direction"
+                >
+                  <div class="calendar-job-pair">
+                    <Dropdown
+                      id="calendar-job-direction"
+                      value={editor.event_direction}
+                      options={directionOptions}
+                      ariaLabel={t('cron.eventTime.when')}
+                      disabled={busy}
+                      onValueChange={(next) => (editor.event_direction = next)}
+                    />
+                    <Dropdown
+                      id="calendar-job-edge"
+                      value={editor.event_edge}
+                      options={edgeOptions}
+                      ariaLabel={t('cron.eventTime.edge')}
+                      disabled={busy}
+                      onValueChange={(next) => (editor.event_edge = next)}
+                    />
+                  </div>
+                </FormField>
+                {#if editor.event_direction !== 'at'}
+                  <FormField
+                    label={t('cron.eventTime.offset')}
+                    controlId="calendar-job-amount"
+                  >
+                    <div class="calendar-job-pair">
+                      <TextField
+                        id="calendar-job-amount"
+                        class="calendar-job-amount"
+                        type="number"
+                        min="1"
+                        value={editor.event_amount}
+                        ariaLabel={t('cron.eventTime.amount')}
+                        disabled={busy}
+                        onInput={(value) => (editor.event_amount = value)}
+                      />
+                      <Dropdown
+                        id="calendar-job-unit"
+                        value={editor.event_unit}
+                        options={unitOptions}
+                        ariaLabel={t('cron.eventTime.unit')}
+                        disabled={busy}
+                        onValueChange={(next) => (editor.event_unit = next)}
+                      />
+                    </div>
+                  </FormField>
+                {/if}
+              </div>
+              <FormField
+                label={t('calendar.jobs.instruction')}
+                controlId="calendar-job-prompt"
+                ><TextArea
+                  id="calendar-job-prompt"
+                  value={editor.prompt}
+                  onInput={(value) => (editor.prompt = value)}
+                  rows={4}
+                  placeholder={t('calendar.jobs.instructionPlaceholder')}
+                /></FormField
+              >
+              {#if error}<Banner variant="error">{error}</Banner>{/if}
+            </div>
+            <div class="modal-footer">
+              {#if editor.id}
+                <div class="modal-footer__start">
+                  <SaveStatus
+                    {saving}
+                    pending={autosave.participant.hasChanges()}
+                    onClick={() => autosave.participant.runSave('manual')}
+                  />
+                </div>
+                <Button variant="primary" onClick={close}
+                  >{t('calendar.jobs.done')}</Button
+                >
+              {:else}
+                <Button variant="secondary" disabled={busy} onClick={close}>
+                  {t('common.cancel')}
+                </Button>
+                <Button
+                  variant="primary"
+                  type="submit"
+                  loading={busy}
+                  disabled={serverUnavailable}
+                >
+                  {t('calendar.jobs.create')}
+                </Button>
+              {/if}
+            </div>
+          </form>
+        {/snippet}
+      </Modal>
+    {/if}
+    {#if deleting}
+      <ConfirmDialog
+        title={t('calendar.jobs.deleteTitle', { name: jobName(deleting) })}
+        body={t('calendar.jobs.deleteBody')}
+        confirmLabel={t('common.delete')}
+        {busy}
+        error={deleteError}
+        onConfirm={removeNow}
+        onCancel={() => (deleting = null)}
+      />
+    {/if}
+  </div>
+{/if}

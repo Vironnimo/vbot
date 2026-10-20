@@ -90,6 +90,35 @@ function button(label, root = document) {
     (item) => item.textContent.trim() === label,
   );
 }
+// The row's menu ("⋯") lists the job's actions.
+function menuItem(row, label) {
+  row.querySelector('button[aria-haspopup="menu"]').click();
+  flushSync();
+  return [...document.querySelectorAll('[role="menuitem"]')].find(
+    (item) => item.textContent.trim() === label,
+  );
+}
+function editJob(id = 'cron-1') {
+  document
+    .querySelector(`[data-testid="calendar-job-${id}"] .calendar-job-main`)
+    .click();
+}
+// The open quick tooltip's rows as [label, value] pairs.
+function tooltipRows() {
+  return [...document.querySelectorAll('#app-tooltip dd')].map((value) => [
+    value.previousElementSibling?.tagName === 'DT'
+      ? value.previousElementSibling.textContent
+      : '',
+    value.textContent,
+  ]);
+}
+function focusWithKeyboard(element) {
+  document.body.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+  );
+  element.focus();
+  flushSync();
+}
 function change(id, value) {
   const input = document.getElementById(id);
   input.value = value;
@@ -187,33 +216,41 @@ it('shows when each job of the event runs, for which Agent, and how it went', as
   expect(text).toContain(statusLabel('active'));
   expect(text).toContain('Prepare the agenda');
   expect(text).toContain(
-    t('calendar.jobs.next', {
-      time: compactTimestamp(failed.next_fire_at, 'UTC'),
-    }),
-  );
-  expect(text).toContain(
-    t('calendar.jobs.lastAt', {
-      outcome: outcomeLabel('failed'),
-      time: compactTimestamp(failed.last_completed_at, 'UTC'),
-    }),
-  );
-  expect(text).toContain(
     t('calendar.jobs.error', { reason: 'Provider timed out' }),
   );
+  // Its details card adds the next Run and the last result.
+  focusWithKeyboard(row.querySelector('.calendar-job-main'));
+  expect(tooltipRows()).toContainEqual([
+    t('calendar.jobs.runs'),
+    [
+      t('calendar.jobs.next', {
+        time: compactTimestamp(failed.next_fire_at, 'UTC'),
+      }),
+      t('calendar.jobs.lastAt', {
+        outcome: outcomeLabel('failed'),
+        time: compactTimestamp(failed.last_completed_at, 'UTC'),
+      }),
+    ].join(' · '),
+  ]);
 
-  // A job with a fixed Session opens it.
-  button(t('calendar.jobs.openSession'), row).click();
+  // A job with a fixed Session opens it from the row menu.
+  menuItem(row, t('calendar.jobs.openSession')).click();
+  await settle();
   expect(open).toHaveBeenCalledWith('main', 'existing');
 
   // Delete asks first.
-  button(t('common.delete'), row).click();
-  flushSync();
+  menuItem(row, t('calendar.jobs.delete')).click();
+  await settle();
   expect(rpcMock).not.toHaveBeenCalledWith('cron.delete', expect.anything());
-  const confirm = [...row.querySelectorAll('.calendar-job-controls')].at(-1);
+  const confirm = document.querySelector('[role="dialog"][aria-modal="true"]');
+  expect(confirm.textContent).toContain(
+    t('calendar.jobs.deleteTitle', { name: '30 minutes before start' }),
+  );
   button(t('common.delete'), confirm).click();
   await settle();
   expect(rpcMock).toHaveBeenCalledWith('cron.delete', { id: 'cron-1' });
   expect(onChanged).toHaveBeenCalledOnce();
+  expect(document.querySelector('[aria-modal="true"]')).toBeNull();
 });
 
 it('adds a job 30 minutes before the start in a new Session, keeping the edit after a failed save', async () => {
@@ -235,13 +272,13 @@ it('adds a job 30 minutes before the start in a new Session, keeping the edit af
   change('calendar-job-prompt', 'Prepare meeting');
 
   rpcMock.mockRejectedValueOnce(new Error('test-owned failure'));
-  button(t('common.save')).click();
+  button(t('calendar.jobs.create')).click();
   await settle();
   expect(document.body.textContent).toContain('test-owned failure');
   expect(document.querySelector('.calendar-job-editor')).not.toBeNull();
   expect(onChanged).not.toHaveBeenCalled();
 
-  button(t('common.save')).click();
+  button(t('calendar.jobs.create')).click();
   await settle();
   expect(rpcMock).toHaveBeenLastCalledWith('cron.create', {
     agent_id: 'main',
@@ -266,7 +303,7 @@ it('edits the Agent, Session and timing of a job from the choice fields', async 
   );
   mountJobs({ jobs: [job({ session_id: 'existing' })] });
   await settle();
-  button(t('common.edit')).click();
+  editJob();
   await settle();
   expect(triggerLabel('calendar-job-session')).toBe('Existing discussion');
 
@@ -331,7 +368,7 @@ it('keeps an existing job editable through slow autosave, failure, and a protect
       },
     });
     await settle();
-    button(t('common.edit')).click();
+    editJob();
     await settle();
     const prompt = document.getElementById('calendar-job-prompt');
     change('calendar-job-prompt', 'First edit');
@@ -348,7 +385,7 @@ it('keeps an existing job editable through slow autosave, failure, and a protect
     expect(coordinator.hasPending()).toBe(true);
     await vi.advanceTimersByTimeAsync(1600);
     expect(updates).toBe(2);
-    button(t('common.cancel')).click();
+    button(t('calendar.jobs.done')).click();
     await settle();
     expect(updates).toBe(3);
     expect(rpcMock).toHaveBeenCalledWith(
@@ -417,7 +454,7 @@ it('names the Agents anew after an Agent change and keeps the open edit', async 
   });
   component = mount(CalendarEventJobs, { target: document.body, props });
   await settle();
-  button(t('common.edit')).click();
+  editJob();
   await settle();
   change('calendar-job-prompt', 'Review the agenda');
 
@@ -425,7 +462,7 @@ it('names the Agents anew after an Agent change and keeps the open edit', async 
   props.agentsRefreshToken += 1;
   await settle();
 
-  expect(document.querySelector('.calendar-job-summary').textContent).toContain(
+  expect(document.querySelector('.calendar-job-agent').textContent).toContain(
     'Main Desk',
   );
   expect(triggerLabel('calendar-job-target')).toBe('Main Desk');

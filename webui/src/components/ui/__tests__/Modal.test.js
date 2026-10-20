@@ -107,6 +107,41 @@ describe('Modal', () => {
     expect(onClose).toHaveBeenCalledTimes(3);
   });
 
+  it('keeps changed input on a backdrop click and on a selection dragged out of the box', () => {
+    const onClose = vi.fn();
+    render({
+      onClose,
+      body: snippet('<div class="modal-body"><input class="field" /></div>'),
+    });
+    const overlay = document.body.querySelector('.modal-overlay');
+    const box = document.body.querySelector('.modal');
+
+    box.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    overlay.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, detail: 1 }),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+
+    document.body
+      .querySelector('.field')
+      .dispatchEvent(new Event('input', { bubbles: true }));
+    overlay.click();
+    expect(onClose).not.toHaveBeenCalled();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('describes the dialog by its optional description', () => {
+    render({ description: 'Runs on the server.' });
+
+    const dialog = document.body.querySelector('.modal');
+    const description = document.getElementById(
+      dialog.getAttribute('aria-describedby'),
+    );
+    expect(description.textContent).toBe('Runs on the server.');
+  });
+
   it('leaves Escape consumed by a nested control to that control', () => {
     const onClose = vi.fn();
     render({ onClose });

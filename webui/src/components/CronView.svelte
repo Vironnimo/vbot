@@ -965,8 +965,10 @@
 
   {#if editor.deleteConfirmJob}
     <ConfirmDialog
-      title={t('cron.deleteConfirmTitle')}
-      body={t('cron.deleteConfirm', { name: editor.deleteConfirmJob.name })}
+      title={t('cron.deleteConfirmTitle', {
+        name: editor.deleteConfirmJob.name,
+      })}
+      body={t('cron.deleteConfirm')}
       confirmLabel={t('common.delete')}
       onConfirm={editor.confirmDeleteJob}
       onCancel={editor.cancelDeleteJob}

@@ -15,6 +15,7 @@ import asyncio
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, cast
 
+from core.chat.messages import SubAgentMessage
 from core.projects import (
     InvalidAgentAddressError,
     WorkingProjectMissingError,
@@ -261,6 +262,8 @@ class SubAgentCoordinator:
         parent = link.parent
         activity = await self._activities.ensure(_caller(context))
         delivery_id = new_id("subagent-message")
+        content = cast(str, arguments["content"]).strip()
+        caller = _caller(context)
         delivery = self._trigger_service.submit_completion(
             parent,
             notice_id=delivery_id,
@@ -269,9 +272,18 @@ class SubAgentCoordinator:
                 id=link.id,
                 title=link.title or link.id,
                 delivery_id=delivery_id,
-                content=cast(str, arguments["content"]).strip(),
+                content=content,
             ),
             execution_owner=context.execution_owner,
+            subagent_message=SubAgentMessage(
+                subagent_id=link.id,
+                title=link.title or link.id,
+                content=content,
+                delivery_id=delivery_id,
+                agent_id=caller.agent_id,
+                session_id=caller.session_id,
+                project_id=caller.project_id,
+            ),
         )
         delivery.add_done_callback(_log_message_delivery)
         if activity is not None:

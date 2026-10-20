@@ -391,6 +391,25 @@ export const subAgentTask = (tool) =>
 export const subAgentPreview = (tool) =>
   truncateToolLabel(subAgentTask(tool), MAX_SUBAGENT_PREVIEW_LENGTH);
 
+// The `message_parent` messages a `subagent_message` row shows: a Run child
+// carries `messages` itself, a History row on its `message`.
+export const subAgentMessages = (item) => {
+  const source = isPlainObject(item?.message) ? item.message : item;
+  return Array.isArray(source?.messages)
+    ? source.messages.filter(isPlainObject)
+    : [];
+};
+
+export const subAgentMessagePreview = (entry) =>
+  truncateToolLabel(trimmedString(entry?.content), MAX_SUBAGENT_PREVIEW_LENGTH);
+
+// The Session of the Sub-Agent that sent a message, as navigation expects it.
+export const subAgentMessageTarget = (entry) => {
+  const agentId = qualifyAgentAddress(entry?.agent_id, entry?.project_id);
+  const sessionId = trimmedString(entry?.session_id);
+  return agentId && sessionId ? { agentId, sessionId } : null;
+};
+
 // The title a new Sub-Agent got from its `run` call; '' for other rows and
 // for calls made before the title was required.
 export const subAgentDescription = (tool) =>

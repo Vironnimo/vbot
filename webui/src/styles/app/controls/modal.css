@@ -1,12 +1,26 @@
+/* Dialog shell (`Modal.svelte`). The dialog is the most elevated surface, so
+   it sits on the floating-card surface with darker inset fields, carries no
+   divider lines (whitespace separates header, body and footer; a hairline
+   appears only while the body is scrolled) and floats near the top, so a
+   dialog whose content grows extends downwards instead of jumping. Callers
+   choose a width through `size`; a `sheet` docks at the window's end at full
+   height; phones get a bottom sheet. Callers render their content in
+   `.modal-body`, which scrolls within the bounded height; a form around body
+   and footer takes no layout box of its own. */
 .modal-overlay {
+  --modal-gutter: 24px;
+  --modal-top: max(48px, 11vh);
+
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
   display: none;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.62);
-  backdrop-filter: blur(3px);
+  padding: var(--modal-top) var(--modal-gutter) var(--modal-gutter);
+  background: var(--modal-scrim);
+  backdrop-filter: blur(4px) saturate(0.9);
+  animation: modal-scrim-in 160ms ease-out;
 }
 
 .modal-overlay.open {
@@ -14,55 +28,86 @@
 }
 
 .modal {
-  width: 440px;
-  max-width: 90vw;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-lg);
-  animation: modal-in 180ms ease;
-  background: var(--surface);
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.25),
-    0 24px 64px rgba(0, 0, 0, 0.55);
-}
+  --modal-surface: var(--surface-2);
+  --modal-pad-x: 24px;
+  --field-surface: var(--surface);
 
-@keyframes modal-in {
-  from {
-    opacity: 0;
-    transform: scale(0.97) translateY(-6px);
-  }
-
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
-}
-
-.modal-header,
-.modal-footer {
+  position: relative;
   display: flex;
-  align-items: center;
-  border-color: var(--border);
+  width: var(--modal-width, 480px);
+  max-width: 100%;
+  max-height: calc(100dvh - var(--modal-top) - var(--modal-gutter));
+  flex-direction: column;
+  border: 1px solid var(--border-2);
+  border-radius: 12px;
+  background: var(--modal-surface);
+  box-shadow: var(--modal-elevation);
+  outline: none;
+  animation: modal-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.modal--sm {
+  --modal-width: 420px;
+}
+
+.modal--md {
+  --modal-width: 520px;
+}
+
+.modal--lg {
+  --modal-width: 720px;
+}
+
+.modal--xl {
+  --modal-width: 960px;
+}
+
+.modal > form {
+  display: contents;
 }
 
 .modal-header {
-  justify-content: space-between;
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px calc(var(--modal-pad-x) - 8px) 12px var(--modal-pad-x);
+}
+
+.modal-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 2px;
 }
 
 .modal-title {
+  margin: 0;
   color: var(--text-hi);
-  font-size: var(--fs-heading-sm);
+  font-size: var(--fs-heading-md);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.modal-description {
+  margin: 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
 }
 
 .modal-close {
   display: flex;
   width: 30px;
   height: 30px;
+  flex: none;
   align-items: center;
   justify-content: center;
+  margin-top: -2px;
   border-radius: var(--r-md);
   color: var(--text-lo);
   background: transparent;
@@ -71,14 +116,203 @@
     color 120ms ease;
 }
 
-.modal-close:hover {
+.modal-close:hover:not(:disabled) {
   color: var(--text-hi);
   background: var(--surface-3);
 }
 
+.modal-close:disabled {
+  opacity: 0.4;
+}
+
+/* The body scrolls inside the bounded dialog. The two `local` covers ride
+   with the content and hide the fixed hairlines while the body rests at its
+   top or bottom edge, so a line shows only where content continues. */
 .modal-body {
   display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 14px;
-  padding: 20px;
+  gap: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px var(--modal-pad-x) 20px;
+  background:
+    linear-gradient(var(--modal-surface), var(--modal-surface)) top / 100% 2px
+      no-repeat local,
+    linear-gradient(var(--modal-surface), var(--modal-surface)) bottom / 100%
+      2px no-repeat local,
+    linear-gradient(var(--border), var(--border)) top / 100% 1px no-repeat
+      scroll,
+    linear-gradient(var(--border), var(--border)) bottom / 100% 1px no-repeat
+      scroll;
+  color: var(--text-med);
+  font-size: var(--fs-body-md);
+  line-height: 1.55;
+}
+
+.modal-body > p {
+  margin: 0;
+}
+
+.modal-body strong {
+  color: var(--text-hi);
+  font-weight: 600;
+}
+
+.modal-footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px var(--modal-pad-x) 20px;
+}
+
+/* Footer content that belongs at the start (Back, a status line) pushes the
+   actions to the end. */
+.modal-footer__start {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
+/* A dialog's destructive decision is its one filled action. */
+.modal-footer .btn-danger:not(.btn-icon) {
+  border-color: transparent;
+  color: var(--on-danger);
+  background: var(--red);
+  font-weight: 600;
+}
+
+.modal-footer .btn-danger:not(.btn-icon):hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--on-danger);
+  background: color-mix(in srgb, var(--red) 86%, white);
+}
+
+.modal-footer .btn-danger:not(.btn-icon):disabled {
+  opacity: 0.5;
+}
+
+/* Side sheet: docked at the window's end at full height. */
+.modal-overlay--sheet {
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 8px;
+}
+
+.modal--sheet {
+  max-height: none;
+  border-radius: 12px;
+  animation-name: modal-sheet-in;
+}
+
+.modal--sheet.modal--sm,
+.modal--sheet.modal--md {
+  --modal-width: 520px;
+}
+
+.modal--sheet.modal--lg,
+.modal--sheet.modal--xl {
+  --modal-width: 680px;
+}
+
+.modal--sheet .modal-header {
+  padding-top: 22px;
+}
+
+.modal--sheet .modal-footer {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* A dialog opened from another one: a step lower over a lighter scrim, so
+   the dialog it came from stays recognizable above it, dimmed. */
+.modal-overlay--stacked {
+  --modal-top: calc(max(48px, 11vh) + 52px);
+
+  background: color-mix(in srgb, var(--modal-scrim) 55%, transparent);
+  backdrop-filter: none;
+}
+
+/* Backdrop click after the user changed something: the dialog stays and
+   briefly acknowledges the click instead of discarding the input. */
+.modal--nudge {
+  animation: modal-nudge 260ms ease;
+}
+
+@keyframes modal-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+@keyframes modal-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+
+@keyframes modal-sheet-up {
+  from {
+    transform: translateY(32px);
+    opacity: 0;
+  }
+}
+
+@keyframes modal-nudge {
+  40% {
+    transform: scale(1.012);
+  }
+}
+
+@media (max-width: 640px) {
+  .modal-overlay,
+  .modal-overlay--sheet {
+    align-items: flex-end;
+    justify-content: stretch;
+    padding: 0;
+  }
+
+  .modal,
+  .modal--sheet {
+    --modal-pad-x: 18px;
+
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    border-width: 1px 0 0;
+    border-radius: 16px 16px 0 0;
+    animation-name: modal-sheet-up;
+  }
+
+  .modal-footer {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .modal-footer > .btn-primary,
+  .modal-footer > .btn-secondary,
+  .modal-footer > .btn-danger {
+    min-height: 40px;
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal,
+  .modal--nudge {
+    animation: none;
+  }
 }

@@ -159,6 +159,21 @@ def test_semantic_timeline_rows_name_user_steer_takeover_and_compaction_states()
     assert item_text(turn) == "Goal · automatic turn 2 of 30"
     assert item_text(paused) == "Goal paused at its limit of 30 automatic turns"
     assert item_text(unknown) == "Goal updated"
+    # A Sub-Agent message names its sender; a Run child and a History row read alike.
+    one = {"type": "subagent_message", "messages": [{"title": "Worker", "content": "Found it"}]}
+    two = {
+        "type": "subagent_message",
+        "message": {
+            "role": "subagent_message",
+            "messages": [
+                {"title": "Worker", "content": "Found it"},
+                {"title": "Fixer", "content": "Done"},
+            ],
+        },
+    }
+    assert (item_heading(one), item_text(one)) == ("Message from Sub-Agent Worker", "Found it")
+    assert item_heading(two) == "Messages from Sub-Agents"
+    assert item_text(two) == "Worker: Found it\n\nFixer: Done"
 
 
 def test_file_links_find_canonical_speech_artifacts_and_original_download_urls() -> None:

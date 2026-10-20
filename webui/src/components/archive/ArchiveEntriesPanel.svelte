@@ -41,6 +41,7 @@
     isPurgeable,
     mayHoldUserFolders,
     purgeConfirmText,
+    purgeConfirmTitle,
     purgeResultToast,
     restoreConflictText,
     restoreWarningsText,
@@ -692,12 +693,12 @@
 
 {#if purgeConfirm}
   <ConfirmDialog
-    title={purgeConfirm.mode === 'all' &&
-    !hasArchiveFilters(purgeConfirm.filters)
-      ? t('archive.purgeAll.everythingTitle')
-      : t('archive.purge.confirmTitle')}
+    title={purgeConfirmTitle(purgeConfirm)}
     body={purgeConfirmText(purgeConfirm)}
-    confirmLabel={t('archive.deletePermanently')}
+    confirmLabel={purgeConfirm.mode === 'all' &&
+    !hasArchiveFilters(purgeConfirm.filters)
+      ? t('archive.purgeAll.everythingAction')
+      : t('archive.deletePermanently')}
     onConfirm={confirmPurge}
     onCancel={() => (purgeConfirm = null)}
   />

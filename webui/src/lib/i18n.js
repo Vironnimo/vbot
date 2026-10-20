@@ -97,3 +97,22 @@ export function init(locale = DEFAULT_LOCALE) {
 export function activeLocaleTag() {
   return activeLocale;
 }
+
+// File size in the largest fitting unit: "812 bytes", "12.4 kB", "3.1 MB".
+export function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return '';
+  }
+  const [unit, size] =
+    bytes < 1000
+      ? ['byte', bytes]
+      : bytes < 1_000_000
+        ? ['kilobyte', bytes / 1000]
+        : ['megabyte', bytes / 1_000_000];
+  return new Intl.NumberFormat(activeLocaleTag(), {
+    style: 'unit',
+    unit,
+    unitDisplay: unit === 'byte' ? 'long' : 'short',
+    maximumFractionDigits: 1,
+  }).format(size);
+}

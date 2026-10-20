@@ -122,14 +122,6 @@
   font-size: var(--fs-body-sm);
 }
 
-.agents-view .agents-view__create-modal {
-  width: min(520px, 90vw);
-}
-
-.agents-view .agents-view__create-modal-body {
-  gap: 14px;
-}
-
 /* ── Rows ───────────────────────────────────────────────────────────────── */
 
 /* Validation message under a row's description; the control carries
@@ -152,11 +144,6 @@
 
 .agents-view .agents-view__dropdown {
   width: 100%;
-}
-
-.agents-view .agents-view__thinking-list {
-  max-height: 280px;
-  overflow-y: auto;
 }
 
 .agents-view .agents-view__reset-inherit {

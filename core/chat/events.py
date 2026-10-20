@@ -38,6 +38,7 @@ from core.runs import (
     ERROR_MESSAGE_PERSISTED_EVENT,
     GOAL_EVENT_RECORDED_EVENT,
     REASONING_EVENT,
+    SUBAGENT_MESSAGE_RECORDED_EVENT,
     Run,
 )
 from core.sessions import ChatSession
@@ -84,16 +85,28 @@ def _emit_message_event(
     )
 
 
-def _emit_goal_events(run: Run, messages: Sequence[ChatMessage]) -> None:
-    """Announce the goal changes a Run's persisted input records."""
+def _emit_display_records(run: Run, messages: Sequence[ChatMessage]) -> None:
+    """Announce the goal changes and Sub-Agent messages persisted notes record."""
     for message in messages:
-        if message.role == "note" and message.goal_event is not None:
+        if message.role != "note":
+            continue
+        if message.goal_event is not None:
             run.emit(
                 GOAL_EVENT_RECORDED_EVENT,
                 {
                     "id": message.id,
                     "timestamp": message.timestamp,
                     **message.goal_event.to_dict(),
+                },
+                allow_after_cancel=True,
+            )
+        if message.subagent_messages:
+            run.emit(
+                SUBAGENT_MESSAGE_RECORDED_EVENT,
+                {
+                    "id": message.id,
+                    "timestamp": message.timestamp,
+                    "messages": [entry.to_dict() for entry in message.subagent_messages],
                 },
                 allow_after_cancel=True,
             )

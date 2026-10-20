@@ -44,11 +44,37 @@
   color: var(--text-med);
   font-size: var(--fs-body-sm);
 }
-.mcp-editor,
-.mcp-group {
+/* The connection editor sheet uses the Settings section grammar. Arguments
+   and name/value mappings are stacked rows holding a list of entries, each
+   with its remove action, then the add button. */
+.mcp-editor__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mcp-editor .s-group__rows > .s-group__block {
+  padding: 14px 18px 14px 33px;
+  border-top: 1px solid var(--border);
+}
+.mcp-list {
   display: grid;
-  gap: 14px;
+  gap: 8px;
   min-width: 0;
+}
+.mcp-list__entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.mcp-list__entry--pair {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+.mcp-list__add {
+  display: flex;
+}
+.mcp-editor__note {
+  margin: 0;
 }
 /* A connection row is its name, its optional one-line description and, when
    it failed, the error; the head toggles its details like a Provider row. */
@@ -98,32 +124,6 @@
 .mcp-actions > .mcp-actions__remove {
   margin-left: auto;
 }
-.mcp-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
-.mcp-entry {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: end;
-}
-.mcp-mapping {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-}
-.mcp-group {
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
-  justify-items: start;
-}
-.mcp-group > .mcp-entry {
-  width: 100%;
-}
-.mcp-advanced {
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
-}
 .mcp-panel summary,
 .mcp-modal summary {
   cursor: pointer;
@@ -131,23 +131,8 @@
   font-size: var(--fs-body-md);
   padding: 6px 0 14px;
 }
-.modal.mcp-modal,
-.modal.mcp-credentials-modal {
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100dvh - 32px);
-}
-.modal.mcp-modal {
-  width: min(720px, calc(100vw - 32px));
-}
-.modal.mcp-modal .modal-body,
-.modal.mcp-credentials-modal .modal-body {
-  overflow-y: auto;
-  min-height: 0;
-}
-.mcp-inspector {
-  display: grid;
-  gap: 14px;
+.mcp-inspector__state {
+  margin-left: auto;
 }
 .mcp-capability-search {
   display: grid;
@@ -169,9 +154,11 @@
   .mcp-capability-search {
     grid-template-columns: minmax(0, 1fr) auto;
   }
-  .mcp-grid,
-  .mcp-mapping {
-    grid-template-columns: minmax(0, 1fr);
+  .mcp-list__entry--pair {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .mcp-list__entry--pair > :first-child {
+    grid-column: 1 / -1;
   }
 }
 .mcp-subhead__actions {
@@ -180,14 +167,11 @@
   gap: 8px;
 }
 /* A new connection can be filled from a command line or URL. */
-.mcp-quick-fill {
+.mcp-quick-fill__line {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: start;
-}
-.mcp-quick-fill > .btn-secondary {
-  margin-top: 24px;
+  gap: 8px;
+  align-items: center;
 }
 /* Why a connection fails: the technical error and the local server's last
    error output. */
@@ -218,36 +202,20 @@
 }
 .mcp-import__server {
   display: grid;
-  gap: 8px;
-  padding: 12px;
+  gap: 10px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   min-width: 0;
+}
+.mcp-import__server p {
+  margin: 0;
 }
 .mcp-import__name {
   overflow-wrap: anywhere;
 }
-@media (max-width: 640px) {
-  .mcp-quick-fill {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .mcp-quick-fill > .btn-secondary {
-    margin-top: 0;
-  }
-}
 /* The catalog dialog: search and category, then a grid of service tiles,
-   each with its initials on a color its id fixes. While it lists services
-   its height stays fixed, so the search field holds still as results
-   change. */
-.modal.mcp-catalog-modal {
-  width: min(960px, calc(100vw - 32px));
-}
-.modal.mcp-catalog-modal--browse {
-  height: min(820px, calc(100dvh - 32px));
-}
-.modal.mcp-catalog-modal--browse .modal-body {
-  flex: 1;
-}
+   each with its initials on a color its id fixes. */
 /* A step change moves focus to the dialog's title, which is not a control. */
 .modal.mcp-catalog-modal .modal-title:focus {
   outline: none;
@@ -272,10 +240,14 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px;
+  padding: 14px;
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   min-width: 0;
+}
+.mcp-catalog__paste-form {
+  display: grid;
+  gap: 12px;
 }
 .mcp-catalog__head {
   display: flex;
@@ -308,6 +280,11 @@
 }
 .mcp-catalog__tile > p {
   margin: 0;
+}
+/* Descriptions reserve three lines, so tiles without notes share one
+   height and their actions line up across rows. */
+.mcp-catalog__tile > .mcp-catalog__description {
+  min-height: 3lh;
 }
 .mcp-catalog__actions {
   display: flex;

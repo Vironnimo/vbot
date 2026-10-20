@@ -264,13 +264,6 @@
   font-size: var(--fs-label-sm);
 }
 
-.modal-footer {
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 14px 20px 18px;
-  border-top: 1px solid var(--border);
-}
-
 .image-lightbox {
   position: fixed;
   inset: 0;

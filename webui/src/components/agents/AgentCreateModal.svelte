@@ -185,6 +185,9 @@
     if (formErrors[fieldName] === 'required') {
       return t('agents.form.required');
     }
+    if (formErrors[fieldName] === 'invalid_id') {
+      return t('agents.rename.invalidId');
+    }
     if (formErrors[fieldName] === 'too_long') {
       return t('agents.form.descriptionTooLong', {
         max: AGENT_DESCRIPTION_MAX_LENGTH,
@@ -197,18 +200,18 @@
 <Modal
   title={t('agents.create')}
   labelledById="agent-create-modal-title"
-  class="agents-view__create-modal"
+  size="md"
   closeDisabled={isSaving}
   onClose={close}
 >
   {#snippet body()}
     <form onsubmit={submit}>
-      <div class="modal-body agents-view__create-modal-body">
+      <div class="modal-body">
         <FormField
           controlId="agent-create-id"
           label={t('agents.form.id')}
           required
-          help={t('agents.form.idHelp')}
+          help={t('agents.form.idCreateHelp')}
           error={formErrors.id ? fieldError('id') : ''}
         >
           {#snippet children(field)}
@@ -286,7 +289,6 @@
             ariaLabel={t('agents.form.model')}
             disabled={isSaving}
             triggerClass="agents-view__dropdown"
-            panelClass="agents-view__search-panel agents-view__modal-search-panel"
             footerActionLabel={modelFilterFooter}
             onFooterAction={() => (showAllModels = !showAllModels)}
             onValueChange={updateModelSelection}
@@ -310,7 +312,6 @@
             disabled={isSaving || effortDropdownDisabled}
             ariaLabel={t('agents.form.thinkingEffort')}
             triggerClass="agents-view__dropdown"
-            listClass="agents-view__thinking-list agents-view__modal-thinking-list"
             onValueChange={(selectedValue) => {
               formValues.thinking_effort = selectedValue;
             }}

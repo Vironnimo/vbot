@@ -5,10 +5,12 @@
   import Modal from '../ui/Modal.svelte';
   import Button from '../ui/Button.svelte';
   import Banner from '../ui/Banner.svelte';
+  import Checkbox from '../ui/Checkbox.svelte';
+  import FileDropZone from '../ui/FileDropZone.svelte';
+  import FormField from '../ui/FormField.svelte';
   import TextField from '../ui/TextField.svelte';
   import PathField from '../ui/PathField.svelte';
   import TabList from '../ui/TabList.svelte';
-  import Toggle from '../ui/Toggle.svelte';
   import Dropdown from '../Dropdown.svelte';
 
   let {
@@ -56,8 +58,8 @@
     if (clearCandidates) candidates = [];
   }
 
-  function chooseFile(event) {
-    file = event.currentTarget.files?.[0] ?? null;
+  function chooseFile(next) {
+    file = next;
     packagePath = '';
     resetPreview();
     if (file?.size > archiveLimit) error = t('skills.install.tooLarge');
@@ -118,12 +120,12 @@
 
 <Modal
   title={t('skills.install.title')}
-  class="skills-install-modal"
+  size="lg"
   closeDisabled={Boolean(busy)}
   {onClose}
 >
   {#snippet body()}
-    <div class="skills-modal-body skills-install-body">
+    <div class="modal-body">
       <TabList
         ariaLabel={t('skills.install.sourceType')}
         idPrefix="skill-install"
@@ -157,100 +159,118 @@
         aria-labelledby={`skill-install-tab-${mode}`}
       >
         {#if mode === 'link'}
-          <div class="skills-field">
-            <label class="skills-field-label" for="skill-install-source"
-              >{t('skills.install.source')}</label
-            >
-            <!-- Completes only typed absolute paths, never links. -->
-            <PathField
-              id="skill-install-source"
-              mode="any"
-              value={source}
-              disabled={Boolean(busy)}
-              placeholder="https://…"
-              onInput={(value) => {
-                source = value;
-                packagePath = '';
-                resetPreview();
-              }}
-            />
-            <p class="skills-field-help">{t('skills.install.linkHelp')}</p>
-          </div>
+          <FormField
+            controlId="skill-install-source"
+            label={t('skills.install.source')}
+            help={t('skills.install.linkHelp')}
+          >
+            {#snippet children(field)}
+              <!-- Completes only typed absolute paths, never links. -->
+              <PathField
+                id={field.controlId}
+                mode="any"
+                value={source}
+                disabled={Boolean(busy)}
+                placeholder="https://…"
+                aria-describedby={field.describedBy}
+                onInput={(value) => {
+                  source = value;
+                  packagePath = '';
+                  resetPreview();
+                }}
+              />
+            {/snippet}
+          </FormField>
         {:else}
-          <div class="skills-field">
-            <label class="skills-field-label" for="skill-install-file"
-              >{t('skills.install.file')}</label
-            >
-            <input
-              id="skill-install-file"
-              class="skills-install-file"
-              type="file"
-              accept=".skill,.zip,.tar,.tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz"
-              disabled={Boolean(busy)}
-              onchange={chooseFile}
-            />
-            <p class="skills-field-help">{t('skills.install.fileHelp')}</p>
-          </div>
+          <FormField
+            controlId="skill-install-file"
+            label={t('skills.install.file')}
+          >
+            {#snippet children(field)}
+              <FileDropZone
+                id={field.controlId}
+                accept=".skill,.zip,.tar,.tar.gz,.tgz,.tar.bz2,.tbz2,.tar.xz,.txz"
+                {file}
+                hint={t('skills.install.fileHelp')}
+                disabled={Boolean(busy)}
+                invalid={Boolean(file && file.size > archiveLimit)}
+                ariaLabelledby={field.labelId}
+                onFile={chooseFile}
+              />
+            {/snippet}
+          </FormField>
         {/if}
       </div>
-      <div class="skills-field">
-        <span class="skills-field-label" id="skill-install-scope-label"
-          >{t('skills.install.destination')}</span
-        >
-        <Dropdown
-          ariaLabel={t('skills.install.destination')}
-          value={scope}
-          options={scopeOptions}
-          disabled={Boolean(busy)}
-          onValueChange={(value) => {
-            scope = value;
-            resetPreview();
-          }}
-        />
-        <p class="skills-field-help">
-          {scope === 'global'
-            ? t('skills.createGlobalHelp')
-            : t('skills.createPrivateHelp')}
-        </p>
-      </div>
-      <details class="skills-install-options">
-        <summary>{t('skills.install.options')}</summary>
-        <div class="skills-field">
-          <label class="skills-field-label" for="skill-install-path"
-            >{t('skills.install.path')}</label
-          >
-          <TextField
-            id="skill-install-path"
-            value={packagePath}
+      <FormField
+        controlId="skill-install-scope"
+        label={t('skills.install.destination')}
+        help={scope === 'global'
+          ? t('skills.createGlobalHelp')
+          : t('skills.createPrivateHelp')}
+      >
+        {#snippet children(field)}
+          <Dropdown
+            id={field.controlId}
+            ariaLabel={t('skills.install.destination')}
+            ariaDescribedby={field.describedBy}
+            value={scope}
+            options={scopeOptions}
             disabled={Boolean(busy)}
-            onInput={(value) => {
-              packagePath = value;
+            onValueChange={(value) => {
+              scope = value;
               resetPreview();
             }}
           />
-          <p class="skills-field-help">{t('skills.install.pathHelp')}</p>
-        </div>
-        {#if mode === 'link'}
-          <div class="skills-field">
-            <label class="skills-field-label" for="skill-install-ref"
-              >{t('skills.install.ref')}</label
+        {/snippet}
+      </FormField>
+      <details class="skills-install-options">
+        <summary>{t('skills.install.options')}</summary>
+        <div class="skills-install-options__fields">
+          <FormField
+            controlId="skill-install-path"
+            label={t('skills.install.path')}
+            help={t('skills.install.pathHelp')}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                value={packagePath}
+                code
+                disabled={Boolean(busy)}
+                aria-describedby={field.describedBy}
+                onInput={(value) => {
+                  packagePath = value;
+                  resetPreview();
+                }}
+              />
+            {/snippet}
+          </FormField>
+          {#if mode === 'link'}
+            <FormField
+              controlId="skill-install-ref"
+              label={t('skills.install.ref')}
             >
-            <TextField
-              id="skill-install-ref"
-              value={revision}
-              disabled={Boolean(busy)}
-              onInput={(value) => {
-                revision = value;
-                resetPreview();
-              }}
-            />
-          </div>
-        {/if}
+              <TextField
+                id="skill-install-ref"
+                value={revision}
+                code
+                disabled={Boolean(busy)}
+                onInput={(value) => {
+                  revision = value;
+                  resetPreview();
+                }}
+              />
+            </FormField>
+          {/if}
+        </div>
       </details>
       {#if candidates.length}
-        <div class="skills-field">
-          <span class="skills-field-label">{t('skills.install.choose')}</span>
+        <FormField
+          controlId="skill-install-candidate"
+          label={t('skills.install.choose')}
+        >
           <Dropdown
+            id="skill-install-candidate"
             ariaLabel={t('skills.install.choose')}
             value={packagePath}
             disabled={Boolean(busy)}
@@ -264,7 +284,7 @@
               void submit(true);
             }}
           />
-        </div>
+        </FormField>
       {/if}
       {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
       {#if busy}<Banner variant="info" role="status"
@@ -278,8 +298,8 @@
           aria-label={t('skills.install.preview')}
         >
           <h3>{preview.name}</h3>
-          <p>{selected?.description}</p>
-          <p class="skills-field-help">
+          {#if selected?.description}<p>{selected.description}</p>{/if}
+          <p class="skills-install-preview__meta">
             {preview.files === 1
               ? t('skills.install.summaryOne', { scope: scopeLabel })
               : t('skills.install.summary', {
@@ -300,17 +320,20 @@
             <Banner variant="info">{t('skills.install.unchanged')}</Banner>
           {:else if needsReplace}
             <div class="skills-install-replace">
-              <Toggle
+              <Checkbox
                 checked={replace}
-                onChange={(value) => (replace = value)}
                 disabled={Boolean(busy)}
-                ariaLabel={t('skills.install.replace', {
-                  name: preview.name,
-                })}
-              />
-              <span>{t('skills.install.replace', { name: preview.name })}</span>
+                aria-describedby="skill-install-replace-help"
+                onChange={(value) => (replace = value)}
+                >{t('skills.install.replace', { name: preview.name })}</Checkbox
+              >
+              <p
+                id="skill-install-replace-help"
+                class="skills-install-preview__meta"
+              >
+                {t('skills.install.replaceHelp')}
+              </p>
             </div>
-            <p class="skills-field-help">{t('skills.install.replaceHelp')}</p>
           {/if}
         </section>
       {/if}

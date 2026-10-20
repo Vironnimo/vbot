@@ -15,7 +15,7 @@ import pytest
 
 from core.automation import LearningChanges
 from core.chat import ChatMessage, ChatSessionManager, ToolCall
-from core.chat.messages import GoalEvent, ModelFallback
+from core.chat.messages import GoalEvent, ModelFallback, SubAgentMessage
 from core.database import write_bootstrap_marker
 from core.memory import MemoryService, MemoryWriter
 from core.projects import AgentResolutionError
@@ -222,6 +222,12 @@ async def test_history_hides_notes(history: _History) -> None:
     )
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Visible response"))
     session.add_note("Goal note for the Model", goal_event=GoalEvent("paused", reason="stop"))
+    session.add_note(
+        "Sub-Agent message for the Model",
+        subagent_messages=[
+            SubAgentMessage("sub_a", "Worker", "Found it", "d1", "coder", "child", "proj")
+        ],
+    )
 
     result = await history.read(session_id="session-one")
 
@@ -230,7 +236,21 @@ async def test_history_hides_notes(history: _History) -> None:
         "model_fallback",
         "assistant",
         "goal_event",
+        "subagent_message",
     ]
+    # A delivered Sub-Agent message appears only as its display row.
+    assert result["messages"][4]["messages"] == [
+        {
+            "subagent_id": "sub_a",
+            "title": "Worker",
+            "content": "Found it",
+            "delivery_id": "d1",
+            "agent_id": "coder",
+            "session_id": "child",
+            "project_id": "proj",
+        }
+    ]
+    assert "Sub-Agent message for the Model" not in str(result["messages"])
     # A goal note appears only as its display row.
     goal = result["messages"][3]
     assert {key: goal[key] for key in ("event", "reason")} == {"event": "paused", "reason": "stop"}

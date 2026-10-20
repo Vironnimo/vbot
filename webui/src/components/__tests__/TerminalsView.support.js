@@ -271,12 +271,6 @@ function readyAll(terminals, ansi = '') {
   flushSync();
 }
 
-function submitStartForm() {
-  document
-    .querySelector('#terminal-start-form')
-    .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-}
-
 function flushAnimationFrames(count = 1) {
   let wait = Promise.resolve();
   for (let index = 0; index < count; index += 1) {
@@ -462,7 +456,6 @@ export {
   userGroup,
   terminalListResponse,
   readyAll,
-  submitStartForm,
   flushAnimationFrames,
   waitFor,
   findButton,

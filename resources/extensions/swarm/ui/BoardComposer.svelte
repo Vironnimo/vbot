@@ -33,7 +33,7 @@
 
 {#if board.composeOpen && model.selectedSwarm}<Modal
     title={t('swarm.board.openComposer')}
-    class="board-composer-dialog"
+    size="md"
     closeDisabled={board.posting}
     onClose={() => (board.composeOpen = false)}
   >

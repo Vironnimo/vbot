@@ -272,11 +272,6 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     getStatisticsRunActivity: (params) =>
       call('statistics.run_activity', params),
     listProjects: () => call('project.list'),
-    reorderProjects: (projectIds, expectedRevision) =>
-      call('project.reorder', {
-        project_ids: projectIds,
-        expected_revision: expectedRevision,
-      }),
     listCronJobs: () => call('cron.list'),
     getCronWebhookSecret: (id) => call('cron.webhook_secret', { id }),
     rotateCronWebhookSecret: (id) => call('cron.rotate_webhook_secret', { id }),
@@ -285,6 +280,11 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     addProject: (params) => call('project.add', params),
     setProject: (projectId, changes) =>
       call('project.set', { project_id: projectId, ...changes }),
+    reorderProjects: (projectIds, expectedRevision) =>
+      call('project.reorder', {
+        project_ids: projectIds,
+        expected_revision: expectedRevision,
+      }),
     removeProject: (
       projectId,
       { copyRootedAgentIdentityFiles = false, permanent = false } = {},

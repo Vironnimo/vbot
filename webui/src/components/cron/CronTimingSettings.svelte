@@ -16,7 +16,10 @@
     eventUnitOptions,
     eventEdgeOptions,
   } from './presentation.js';
+  import { dateKeyInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
   import TextField from '../ui/TextField.svelte';
+  import DateField from '../ui/DateField.svelte';
+  import TimeField from '../ui/TimeField.svelte';
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   let { editor, systemTimezone } = $props();
@@ -32,6 +35,16 @@
     CRON_FREQUENCY_WEEKLY,
     CRON_FREQUENCY_MONTHLY,
   ]);
+  // A one-time run is edited as a date and a time and stored as one
+  // "YYYY-MM-DDTHH:MM" wall-clock value in the server's time zone. The first
+  // half chosen fills the other with 9:00 or today.
+  const DEFAULT_RUN_TIME = '09:00';
+  let runAtDate = $derived((editor.formValues.run_at ?? '').slice(0, 10));
+  let runAtTime = $derived((editor.formValues.run_at ?? '').slice(11, 16));
+  function updateRunAt({ date = runAtDate, time = runAtTime }) {
+    const day = date || dateKeyInApplicationZone();
+    editor.updateFormField('run_at', `${day}T${time || DEFAULT_RUN_TIME}`);
+  }
   // The edited event time in words, from the form's event time fields.
   function editedEventTimeLabel(values) {
     const amount = Number(values.event_amount);
@@ -190,13 +203,23 @@
                 })}
               </div>
             </div>
-            <div class="s-row-control">
-              <TextField
+            <div class="s-row-control cron-run-at-control">
+              <DateField
                 id="cron-job-run-at"
-                type="datetime-local"
-                value={editor.formValues.run_at}
+                value={runAtDate}
+                placeholder={t('dateField.choose')}
+                required
                 disabled={editor.isCreating && editor.submittingForm}
-                onInput={(next) => editor.updateFormField('run_at', next)}
+                onChange={(date) => updateRunAt({ date })}
+              />
+              <TimeField
+                id="cron-job-run-at-time"
+                ariaLabel={t('cron.form.time')}
+                value={runAtTime}
+                placeholder={t('cron.form.time')}
+                required
+                disabled={editor.isCreating && editor.submittingForm}
+                onChange={(time) => updateRunAt({ time })}
               />
             </div>
           </div>
@@ -364,12 +387,12 @@
                 </div>
               </div>
               <div class="s-row-control s-row-control--number">
-                <TextField
+                <TimeField
                   id="cron-job-time"
-                  type="time"
                   value={editor.formValues.time}
+                  required
                   disabled={editor.isCreating && editor.submittingForm}
-                  onInput={(time) => editor.updateSchedule({ time })}
+                  onChange={(time) => editor.updateSchedule({ time })}
                 />
               </div>
             </div>

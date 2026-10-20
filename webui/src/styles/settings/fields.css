@@ -75,3 +75,12 @@
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);
 }
+
+/* A row's validation message, under its description; the control carries
+   the invalid border and points here with aria-describedby. */
+.s-row-error {
+  margin: 4px 0 0;
+  color: var(--red);
+  font-size: var(--fs-body-sm);
+  line-height: 1.4;
+}

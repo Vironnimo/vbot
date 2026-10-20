@@ -17,6 +17,9 @@ export function createSessionActions(context) {
 
   let editValue = $state('');
 
+  // The name the rename field started from; saving it unchanged is no rename.
+  let editInitialValue = '';
+
   let renameError = $state(null);
 
   let renameSaving = $state(false);
@@ -46,14 +49,19 @@ export function createSessionActions(context) {
 
   const SESSION_TITLE_MAX_LENGTH = 200;
 
-  // Enter inline-rename for a row. Seeds the field with the existing custom
-  // title (empty when the row currently shows an automatic label, so the user
-  // names it fresh).
+  // Enter inline-rename for a row. Seeds the field with the name the row
+  // shows, so the user edits it; a Session without any name yet (listed as
+  // "New Session") starts empty.
   const startRename = (session) => {
     context.closeMenu();
     editingSessionId = session.id;
     editingAgentAddress = session.agent_address || asText(context.agentId);
-    editValue = session.title ?? '';
+    const named =
+      session.title ||
+      session.auto_title ||
+      (session.platform && session.platform_conv_id);
+    editValue = named ? sessionDisplayName(session) : '';
+    editInitialValue = editValue;
     renameError = null;
   };
 
@@ -61,6 +69,7 @@ export function createSessionActions(context) {
     editingSessionId = null;
     editingAgentAddress = '';
     editValue = '';
+    editInitialValue = '';
     renameError = null;
   };
 
@@ -68,6 +77,12 @@ export function createSessionActions(context) {
     const sessionId = editingSessionId;
     const targetAgentId = editingAgentAddress || asText(context.agentId);
     if (!sessionId || !targetAgentId || renameSaving) {
+      return;
+    }
+    // An untouched automatic name stays automatic instead of becoming the
+    // Session's own title.
+    if (editValue === editInitialValue) {
+      cancelRename();
       return;
     }
 
@@ -78,6 +93,7 @@ export function createSessionActions(context) {
       editingSessionId = null;
       editingAgentAddress = '';
       editValue = '';
+      editInitialValue = '';
       // Re-fetch so the row reflects the server-normalized title (and the
       // fallback label when the name was cleared).
       await context.loadSessions();
@@ -149,21 +165,32 @@ export function createSessionActions(context) {
     }
   };
 
-  // The confirm body reflects whether the pending session is channel-bound.
-  let deleteConfirmMessage = $derived.by(() => {
+  // The confirm dialog names the pending Session in its question; the body
+  // reflects whether it is channel-bound.
+  let deleteConfirmTitle = $derived.by(() => {
     const session = deleteConfirmSession;
     if (!session) {
       return '';
     }
     const name = session.display_name || sessionDisplayName(session);
+    return deletePermanently
+      ? t('sessions.delete_permanent_confirm_title', { name })
+      : t('sessions.delete_confirm_title', { name });
+  });
+
+  let deleteConfirmMessage = $derived.by(() => {
+    const session = deleteConfirmSession;
+    if (!session) {
+      return '';
+    }
     if (deletePermanently) {
       return session.is_channel_session
-        ? t('sessions.delete_permanent_confirm_channel', { name })
-        : t('sessions.delete_permanent_confirm', { name });
+        ? t('sessions.delete_permanent_confirm_channel')
+        : t('sessions.delete_permanent_confirm');
     }
     return session.is_channel_session
-      ? t('sessions.delete_confirm_channel', { name })
-      : t('sessions.delete_confirm', { name });
+      ? t('sessions.delete_confirm_channel')
+      : t('sessions.delete_confirm');
   });
 
   const cancelDelete = () => {
@@ -322,11 +349,11 @@ export function createSessionActions(context) {
     get savePolicy() {
       return savePolicy;
     },
+    get deleteConfirmTitle() {
+      return deleteConfirmTitle;
+    },
     get deleteConfirmMessage() {
       return deleteConfirmMessage;
-    },
-    set deleteConfirmMessage(value) {
-      deleteConfirmMessage = value;
     },
     get cancelDelete() {
       return cancelDelete;

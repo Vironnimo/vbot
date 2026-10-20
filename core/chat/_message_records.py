@@ -329,6 +329,62 @@ class GoalEvent:
 
 
 @dataclass(frozen=True)
+class SubAgentMessage:
+    """A ``message_parent`` message a note delivers, for display in the Parent's conversation.
+
+    Presentation only: the note's text is what the Model reads; this record
+    never enters a Provider request. ``subagent_id`` and ``title`` name the
+    Sub-Agent, ``agent_id``, ``project_id`` and ``session_id`` address its
+    Session, ``delivery_id`` is the id its ``message_parent`` call returned.
+    """
+
+    subagent_id: str
+    title: str
+    content: str
+    delivery_id: str
+    agent_id: str
+    session_id: str
+    project_id: str | None = None
+
+    def __post_init__(self) -> None:
+        for key in ("subagent_id", "title", "content", "delivery_id", "agent_id", "session_id"):
+            text = getattr(self, key)
+            if not isinstance(text, str) or not text:
+                raise ChatMessageValidationError(
+                    f"Sub-Agent message {key} must be a non-empty string"
+                )
+        if self.project_id is not None and (
+            not isinstance(self.project_id, str) or not self.project_id
+        ):
+            raise ChatMessageValidationError("Sub-Agent message project_id must be a string")
+
+    def to_dict(self) -> JsonObject:
+        """Return a JSON-serializable dictionary; ``project_id`` only when set."""
+        data: JsonObject = {
+            key: getattr(self, key)
+            for key in ("subagent_id", "title", "content", "delivery_id", "agent_id", "session_id")
+        }
+        if self.project_id is not None:
+            data["project_id"] = self.project_id
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Any) -> SubAgentMessage:
+        """Build a Sub-Agent message from a JSON object, ignoring unknown fields."""
+        if not isinstance(data, dict):
+            raise ChatMessageValidationError("subagent_messages entries must be objects")
+        return cls(
+            subagent_id=cast(str, data.get("subagent_id")),
+            title=cast(str, data.get("title")),
+            content=cast(str, data.get("content")),
+            delivery_id=cast(str, data.get("delivery_id")),
+            agent_id=cast(str, data.get("agent_id")),
+            session_id=cast(str, data.get("session_id")),
+            project_id=data.get("project_id"),
+        )
+
+
+@dataclass(frozen=True)
 class ReplySurface:
     """Immutable identity and rendering facts for one interactive reply destination."""
 

@@ -8,7 +8,6 @@
 
 const EDGE_PADDING = 8;
 const OFFSET = 4;
-const MIN_HEIGHT = 96;
 // The scroll area's default cap; `computePanelPosition`'s `maxHeight` moves it.
 const MAX_HEIGHT = 240;
 const FLIP_THRESHOLD = 200;
@@ -92,8 +91,10 @@ export function portal(node, target = document.body) {
 /**
  * Compute fixed-position coordinates for a panel anchored to `triggerElement`.
  * Flips above the trigger when there is little room below, and clamps within
- * the viewport. `reservedHeight` accounts for non-scrolling chrome (e.g. a
- * search header) when sizing the scroll area. Callers may supply a wider
+ * the viewport: the scroll area never grows past the room on the chosen side,
+ * so the whole panel always stays on screen. `reservedHeight` accounts for
+ * the panel's non-scrolling chrome (a search header, a footer action, its
+ * border) when sizing the scroll area. Callers may supply a wider
  * `panelWidth` (or a `minWidth` floor for the trigger width) and align its end
  * edge to a compact trigger. `maxHeight` replaces the default cap of the
  * scroll area, for a picker that serves as a page's navigation; the viewport
@@ -123,21 +124,21 @@ export function computePanelPosition(
   const availableBelow =
     window.innerHeight - rect.bottom - OFFSET - EDGE_PADDING;
   const availableAbove = rect.top - OFFSET - EDGE_PADDING;
-  // How tall the panel wants to be: the measured content (plus any reserved
-  // chrome such as a search header), capped to `maxHeight`, when the caller can
-  // measure it; otherwise a fixed threshold. Flip above only when the panel
-  // does not fit below AND there is more room above — so a trigger near the
-  // viewport bottom opens upward instead of spilling off-screen.
+  // How tall the panel wants to be: the measured content capped to
+  // `maxHeight`, plus any reserved chrome, when the caller can measure it;
+  // otherwise a fixed threshold. Flip above only when the panel does not fit
+  // below AND there is more room above — so a trigger near the viewport bottom
+  // opens upward instead of spilling off-screen.
   const desiredHeight =
     contentHeight != null
-      ? Math.min(contentHeight + reservedHeight, maxHeight)
+      ? Math.min(contentHeight, maxHeight) + reservedHeight
       : FLIP_THRESHOLD;
   const useAbove =
     availableBelow < desiredHeight && availableAbove > availableBelow;
 
   const available = useAbove ? availableAbove : availableBelow;
   const optionsMaxHeight = Math.max(
-    MIN_HEIGHT,
+    0,
     Math.min(available - reservedHeight, maxHeight),
   );
 

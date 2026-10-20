@@ -44,10 +44,20 @@ describe('CustomProviderModal', () => {
     });
     flushSync();
 
+    // Save stays enabled; a click on it marks the fields that need fixing.
+    button('Save').click();
+    await waitForCondition(() =>
+      document.getElementById('custom-provider-id-error'),
+    );
+    expect(document.getElementById('custom-provider-base-url-error')).not.toBe(
+      null,
+    );
+    expect(rpcMock).not.toHaveBeenCalled();
+
     input('custom-provider-id', 'local-ai');
     input('custom-provider-name', 'Local AI');
     input('custom-provider-base-url', 'http://127.0.0.1:8080/v1');
-    select('custom-provider-auth', 'none');
+    chooseDropdownOption('custom-provider-auth', 'No API key');
     button('Add Model').click();
     flushSync();
     input('custom-model-0-id', 'chat-model');
@@ -170,7 +180,15 @@ describe('CustomProviderModal', () => {
     });
     flushSync();
 
-    expect(document.querySelector('details.custom-wire').open).toBe(true);
+    // A record with a wire block opens the wire profile disclosure.
+    expect(
+      document
+        .querySelector('[aria-controls="custom-provider-wire-block"]')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(document.getElementById('custom-provider-wire-block').hidden).toBe(
+      false,
+    );
     expect(
       JSON.parse(document.getElementById('custom-provider-wire').value),
     ).toEqual(wire);
@@ -222,10 +240,16 @@ function input(id, value) {
   flushSync();
 }
 
-function select(id, value) {
-  const element = document.getElementById(id);
-  element.value = value;
-  element.dispatchEvent(new Event('change', { bubbles: true }));
+function chooseDropdownOption(triggerId, label) {
+  document
+    .getElementById(triggerId)
+    .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+  // The list is portaled to <body>; only the open dropdown renders one.
+  const option = [
+    ...document.querySelectorAll('.dropdown-primitive__list .dropdown-option'),
+  ].find((item) => item.textContent.trim() === label);
+  option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   flushSync();
 }
 
