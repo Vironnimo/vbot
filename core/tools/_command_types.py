@@ -213,7 +213,6 @@ class CompletionSink(Protocol):
         notice_id: str,
         origin_run_id: str,
         body: str,
-        on_persisted: Callable[[], None] | None = None,
         execution_owner: RunExecutionOwner | None = None,
         wake: bool = True,
     ) -> Awaitable[None]: ...

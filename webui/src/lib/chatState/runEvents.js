@@ -292,7 +292,14 @@ function finishRun(sessionState, event) {
     completedRunId &&
     sessionState.latestCompletionRunId === completedRunId &&
     !sessionState.hasUnreadCompletion;
-  if (contributesToAgentActivity && !completionAlreadyRead) {
+  if (contributesToAgentActivity && event?.payload?.completion_read === true) {
+    // The Session recorded it read: a Sub-Agent answering its Parent.
+    sessionState.hasUnreadCompletion = false;
+    sessionState.latestCompletionRunId = completedRunId;
+    sessionState.unreadRunId = '';
+    sessionState.unreadRunStatus = '';
+    sessionState.unreadRunAt = '';
+  } else if (contributesToAgentActivity && !completionAlreadyRead) {
     sessionState.hasUnreadCompletion = true;
     sessionState.latestCompletionRunId = completedRunId;
     sessionState.unreadRunId = completedRunId;

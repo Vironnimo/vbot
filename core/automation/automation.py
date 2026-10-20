@@ -101,7 +101,6 @@ class TriggerService:
         notice_id: str,
         origin_run_id: str,
         body: str,
-        on_persisted: Callable[[], None] | None = None,
         execution_owner: RunExecutionOwner | None = None,
         wake: bool = True,
     ) -> asyncio.Future[None]:
@@ -115,7 +114,6 @@ class TriggerService:
             notice_id=notice_id,
             origin_run_id=origin_run_id,
             body=body,
-            on_persisted=on_persisted,
             execution_owner=execution_owner,
             wake=wake,
         )

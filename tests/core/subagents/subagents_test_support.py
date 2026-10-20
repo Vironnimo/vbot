@@ -72,7 +72,6 @@ class RecordingTriggerService:
         notice_id: str,
         origin_run_id: str,
         body: str,
-        on_persisted: Callable[[], None] | None = None,
         execution_owner: Any | None = None,
         wake: bool = True,
     ) -> asyncio.Future[None]:
@@ -87,8 +86,6 @@ class RecordingTriggerService:
             )
         )
         self._submitted.set()
-        if on_persisted is not None:
-            on_persisted()
         delivery: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         delivery.set_result(None)
         return delivery

@@ -242,20 +242,31 @@ def finish_run(
             state["latest_completion_at"],
         )
     )
+    # A Sub-Agent Run that ends answering its Parent reports to the Parent, not
+    # to the user: its completion is read from the start, whether or not an
+    # answer reaches the Parent (a stopped tree forwards none).
+    read_on_completion = (
+        completion.contributes_to_activity and summary.subagent_reply_target == "parent"
+    )
+    read = run_key if read_on_completion else state["read_completion_run_key"]
     connection.execute(
         "UPDATE sessions SET next_seq = ?, last_activity_at = ?, "
         "last_entry_id = ?, latest_completion_run_key = ?, latest_completion_status = ?, "
-        "latest_completion_at = ?, history_revision = history_revision + 1, "
+        "latest_completion_at = ?, read_completion_run_key = ?, "
+        "history_revision = history_revision + 1, "
         "state_revision = state_revision + 1 WHERE session_key = ?",
-        (seq + 1, completed_at, summary.id, *latest, session_key),
+        (seq + 1, completed_at, summary.id, *latest, read, session_key),
     )
     _store_fts.fts_index_keys(connection, [entry_key])
     generation_id = str(state["generation_id"])
-    return {
+    result: JsonObject = {
         "history_persisted": True,
         "history_generation_id": generation_id,
         "history_cursor": _encode_chat_history_cursor(generation_id, seq + 1),
     }
+    if read_on_completion:
+        result["completion_read"] = True
+    return result
 
 
 def record_run_changes(

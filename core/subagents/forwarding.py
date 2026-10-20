@@ -159,7 +159,7 @@ class SubAgentForwarding:
         result = await _turn_outcome(self._runtime, run)
         if result is None:
             return
-        outcome, answer, answer_ids, mark_read = result
+        outcome, answer, answer_ids = result
         link = await self._read_link(address)
         if link is None or run.id in self._silenced:
             return
@@ -190,7 +190,6 @@ class SubAgentForwarding:
             origin_run_id=run.id,
             body=body,
             execution_owner=run.execution_owner,
-            on_persisted=(lambda: self._mark_read(address, run.id)) if mark_read else None,
         )
         delivery.add_done_callback(lambda done: _log_delivery(done, link, run.id))
         if activity is not None:
@@ -262,17 +261,6 @@ class SubAgentForwarding:
             return FACTS_NO_SIBLINGS_PENDING_TEXT
         return FACTS_SIBLINGS_PENDING_TEMPLATE.format(entries="; ".join(pending))
 
-    def _mark_read(self, address: SessionAddress, run_id: str) -> None:
-        try:
-            self._runtime.chat_sessions.mark_terminal_run_read(address, run_id)
-        except Exception:
-            _LOGGER.warning(
-                "Failed to mark a forwarded Sub-Agent answer read (session=%s run=%s)",
-                address.session_id,
-                run_id,
-                exc_info=True,
-            )
-
     async def _notify_user_reply(self, address: SessionAddress, message_id: str) -> None:
         sessions = self._runtime.chat_sessions
         link = await self._read_link(address)
@@ -342,7 +330,7 @@ def is_working(runtime: RuntimeServices, address: SessionAddress) -> bool:
 
 async def _turn_outcome(
     runtime: RuntimeServices, run: Run
-) -> tuple[str, str, tuple[str, ...], bool] | None:
+) -> tuple[str, str, tuple[str, ...]] | None:
     """Return the Run's outcome and every complete answer, in persistence order.
 
     Steering can continue a Run after a complete answer. Its return value is
@@ -417,7 +405,6 @@ async def _turn_outcome(
         outcome,
         "\n\n".join(sections) or fallback,
         tuple(m.id for m in answers),
-        final_target == "parent",
     )
 
 

@@ -186,6 +186,24 @@ describe('server conversation projection transport', () => {
     expect(h.reconcileRunSession).not.toHaveBeenCalled();
   });
 
+  it('leaves no unread result for a completion the Session recorded read', () => {
+    const h = setup({ isDisplayedSession: () => false });
+    send(h, 'run_started', 1, 'to-user', { status: 'running' });
+    send(h, 'run_completed', 2, 'to-user', { status: 'completed' });
+    expect(h.displayedSession().hasUnreadCompletion).toBe(true);
+    send(h, 'run_started', 1, 'to-parent', { status: 'running' });
+    send(h, 'run_cancelled', 2, 'to-parent', {
+      status: 'cancelled',
+      completion_read: true,
+    });
+    expect(h.displayedSession()).toMatchObject({
+      status: 'cancelled',
+      hasUnreadCompletion: false,
+      latestCompletionRunId: 'to-parent',
+      unreadRunId: '',
+    });
+  });
+
   it('restores child activity from a connection snapshot and recovers a missing displayed Run', () => {
     const h = setup();
     h.stream.applyConnectionSnapshot({

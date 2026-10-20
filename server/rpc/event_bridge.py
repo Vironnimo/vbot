@@ -371,6 +371,9 @@ async def _server_event_from_run_event(
             )
         if "change_stats" in event.payload:
             payload["change_stats"] = event.payload["change_stats"]
+        # The Session recorded this completion as read: no unread marker.
+        if event.payload.get("completion_read") is True:
+            payload["completion_read"] = True
     if event.type == RUN_COMPLETED_EVENT and "usage" in event.payload:
         payload["usage"] = remove_opaque_provider_metadata(event.payload["usage"])
     if event.type == RUN_FAILED_EVENT and "error" in event.payload:

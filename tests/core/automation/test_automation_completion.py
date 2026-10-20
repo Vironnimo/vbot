@@ -615,7 +615,6 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
     completion_loop = SimpleNamespace(
         start_run=AsyncMock(side_effect=RuntimeError("provider unavailable"))
     )
-    persisted = Mock()
     trigger_service = TriggerService(
         cast(Any, completion_loop),
         run_manager,
@@ -628,12 +627,10 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
         notice_id="bash:fallback",
         origin_run_id="origin-run",
         body="background command finished",
-        on_persisted=persisted,
     )
     await asyncio.wait_for(delivery, timeout=5)
 
     completion_loop.start_run.assert_awaited_once()
-    persisted.assert_called_once_with()
     notes = _notes(sessions.get(_ADDRESS))
     assert len(notes) == 1
     assert "background command finished" in notes[0]

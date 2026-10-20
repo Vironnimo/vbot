@@ -61,7 +61,6 @@ class _CompletionNotice:
     body: str
     delivered: asyncio.Future[None]
     boundary_run: Run | None
-    on_persisted: Callable[[], None] | None = None
     suppress_run: bool = False
     execution_owner: RunExecutionOwner | None = None
     # False: reach an active Run at its next boundary, but never start one.
@@ -134,7 +133,6 @@ class _CompletionDeliveryCoordinator:
         notice_id: str,
         origin_run_id: str,
         body: str,
-        on_persisted: Callable[[], None] | None,
         execution_owner: RunExecutionOwner | None = None,
         wake: bool = True,
     ) -> asyncio.Future[None]:
@@ -165,7 +163,6 @@ class _CompletionDeliveryCoordinator:
             body=body,
             delivered=delivered,
             boundary_run=boundary_run,
-            on_persisted=on_persisted,
             suppress_run=suppress_run,
             execution_owner=execution_owner,
             wake=wake,
@@ -251,7 +248,7 @@ class _CompletionDeliveryCoordinator:
         # Waking notices stay pending until the Model answered this request.
         for notice in pending:
             if notice.wake:
-                self._confirm(address, notice)
+                self._confirm(notice)
         return message
 
     async def _deliver(
@@ -662,23 +659,11 @@ class _CompletionDeliveryCoordinator:
             if bucket.notices.get(notice.id) is not notice:
                 continue
             bucket.notices.pop(notice.id, None)
-            self._confirm(address, notice)
+            self._confirm(notice)
 
     @staticmethod
-    def _confirm(address: SessionAddress, notice: _CompletionNotice) -> None:
+    def _confirm(notice: _CompletionNotice) -> None:
         """Tell the producer, once, that the notice is persisted."""
-        on_persisted, notice.on_persisted = notice.on_persisted, None
-        if on_persisted is not None:
-            try:
-                on_persisted()
-            except Exception:
-                _LOGGER.warning(
-                    "Completion persistence callback failed (agent=%s session=%s notice=%s)",
-                    address.agent_id,
-                    address.session_id,
-                    notice.id,
-                    exc_info=True,
-                )
         if not notice.delivered.done():
             notice.delivered.set_result(None)
 

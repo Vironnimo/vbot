@@ -136,6 +136,11 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         assert await item.future is run
         receipt = await asyncio.wait_for(submitted.get(), 5)
         assert not receipt.done()
+        # A Run ending with Parent replies is read before, and without, delivery;
+        # one ending with user replies stays unread for the user.
+        summary = sessions.summary(child.address)
+        assert summary is not None
+        assert summary["has_unread_completion"] is (not steered_parent)
         [state] = await coordinator.subagents(parent.address)
         assert state.activity_file is not None
         activity_path = Path(state.activity_file)
@@ -155,9 +160,6 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
             assert body.index("MAIN_REPORT") < body.index("ADDENDUM")
         for answer, forwarded in zip(answers, (initial_parent, steered_parent), strict=True):
             assert body.count(answer.id) == int(forwarded)
-        summary = sessions.summary(child.address)
-        assert summary is not None
-        assert summary["has_unread_completion"] is (not steered_parent)
         await coordinator.drain_activity()
         log = activity_path.read_text(encoding="utf-8")
         assert "Delivered: stored in the Parent Session." in log

@@ -201,7 +201,14 @@ _CHANGE_STATS = {
             RUN_COMPLETED_EVENT,
             {"status": "completed"},
             {"status": "completed"},
-            ("usage", "session_usage", "context_usage", "timing", "change_stats"),
+            (
+                "usage",
+                "session_usage",
+                "context_usage",
+                "timing",
+                "change_stats",
+                "completion_read",
+            ),
             id="completed-without-usage",
         ),
         # Only a completed Run reports usage; internal continuation state stays hidden.
@@ -220,8 +227,18 @@ _CHANGE_STATS = {
         ),
         pytest.param(
             RUN_INTERRUPTED_EVENT,
-            {"status": "interrupted", "cause": "network", "change_stats": _CHANGE_STATS},
-            {"status": "interrupted", "cause": "network", "change_stats": _CHANGE_STATS},
+            {
+                "status": "interrupted",
+                "cause": "network",
+                "change_stats": _CHANGE_STATS,
+                "completion_read": True,
+            },
+            {
+                "status": "interrupted",
+                "cause": "network",
+                "change_stats": _CHANGE_STATS,
+                "completion_read": True,
+            },
             ("error",),
             id="interrupted",
         ),

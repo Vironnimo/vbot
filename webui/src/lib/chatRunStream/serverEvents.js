@@ -38,6 +38,9 @@ export function runEventFromServerEvent(serverEvent) {
   if (typeof payload.error === 'string') {
     runPayload.error = payload.error;
   }
+  if (payload.completion_read === true) {
+    runPayload.completion_read = true;
+  }
 
   return {
     type: runEventType,

@@ -16,7 +16,7 @@ On Run start and steering, Chat selects `parent` for Parent input and `user` for
 
 ## Delivery notices
 
-Deliveries go through `TriggerService.submit_completion`: forwarded answers use notice id `subagent:<run_id>` and the Run's execution owner. `on_persisted` marks the terminal Run read only if its terminal reply target was Parent, leaving a later user-directed answer unread. Explicit Parent messages use fresh notice ids. The reply-target notice `subagent-user-reply:<message_id>` has `wake=False`: persisted without starting a Run; an active Parent reads it at its next boundary.
+Deliveries go through `TriggerService.submit_completion`: forwarded answers use notice id `subagent:<run_id>` and the Run's execution owner. Read state does not depend on delivery: a Run whose terminal reply target is Parent is read when it completes (`sessions/runs.md` -> Completion activity), so a stopped tree, a dropped answer or a failed delivery leaves no unread marker, while a user-directed answer stays unread. Explicit Parent messages use fresh notice ids. The reply-target notice `subagent-user-reply:<message_id>` has `wake=False`: persisted without starting a Run; an active Parent reads it at its next boundary.
 
 ## Activity file
 
