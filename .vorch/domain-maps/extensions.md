@@ -91,6 +91,7 @@ Read these only when your task matches - not by default.
 - Changing Computer Use, its opt-in Tools, the access mode and app approvals, screenshots and coordinates, the desktop target, or desktop input -> `extensions/computer-use.md`
 - Restoring the archived Browser Use Extension or locating its replacement -> `extensions/browser-use.md`
 - Changing the bundled Home Assistant Extension, its four Tools, settings, readiness, retry behavior, or security constraints -> `extensions/homeassistant.md`
+- Changing the bundled KeePassXC Secret Source, its settings, unlock, keepassxc-cli calls, entry paths, field mapping, or entry creation -> `extensions/keepassxc.md`
 - Changing the bundled MCP client, transports, Tool opt-ins, callbacks, media preservation, or protocol compatibility -> `extensions/mcp.md`
 - Adding or changing an Extension-owned page or configuration editor -> `webui.md` and `webui/extension-pages.md`; editable settings, existing-record forms, and save/navigation behavior also require `webui/autosave.md`
 - Changing Swarm profiles, peer coordination, participant delivery/completion, or the Swarms page -> `extensions/swarm.md`
