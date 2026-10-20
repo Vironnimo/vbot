@@ -298,7 +298,6 @@ export default Object.freeze({
     'No additional skill directories configured.',
   'settings.skills.scopeGlobal': 'Global skills',
   'settings.skills.scopeAgent': '{name} (private)',
-  'settings.skills.newSkill': 'New skill',
   'settings.skills.nameLabel': 'Skill name',
   'settings.skills.contentLabel': 'SKILL.md content',
   'settings.skills.namePlaceholder': 'skill-name',
@@ -309,7 +308,6 @@ export default Object.freeze({
   'settings.skills.contentSaveError': 'Skill could not be saved.',
   'settings.skills.deleted': 'Skill moved to Archived.',
   'settings.skills.deleteError': 'Skill could not be deleted.',
-  'settings.skills.deleteConfirmTitle': 'Delete skill',
   'settings.subagents.maxDepth': 'Maximum nesting depth',
   'settings.subagents.maxDepthHelp':
     'Sub-Agents can start Sub-Agents of their own. This sets how many levels deep that can go; at the limit, a Sub-Agent has to do the work itself. Default: 2.',

@@ -1,8 +1,9 @@
 <script>
   // The archive choice inside a delete dialog: while the item moves to the
-  // Archive, when the Archive deletes it; and the option to delete it
-  // permanently right away instead. The dialog owns the choice and switches
-  // its own wording and confirm label with it.
+  // Archive, a quiet second line under the dialog's message says when the
+  // Archive deletes it; below it, the option to delete it permanently right
+  // away instead. The dialog owns the choice and switches its own wording and
+  // confirm label with it.
   import Checkbox from '../ui/Checkbox.svelte';
   import { archiveDeletionNotice } from '$lib/archiveRetention.svelte.js';
   import { t } from '$lib/i18n.js';
@@ -26,13 +27,12 @@
 <style>
   .archive-delete-option {
     display: grid;
-    gap: 10px;
-    margin-top: 12px;
+    gap: 16px;
   }
 
   .archive-delete-option__notice {
     margin: 0;
-    color: var(--text-med);
+    color: var(--text-lo);
     font-size: var(--fs-body-sm);
     line-height: 1.5;
   }

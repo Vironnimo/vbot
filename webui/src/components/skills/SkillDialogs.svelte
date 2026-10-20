@@ -9,6 +9,7 @@
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
+  import FormField from '../ui/FormField.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import TextArea from '../ui/TextArea.svelte';
@@ -20,36 +21,37 @@
 
 {#if actions.showCreateModal}
   <Modal
-    title={t('settings.skills.newSkill')}
-    class="skills-editor-modal"
+    title={t('settings.skills.create')}
+    size="lg"
     labelledById="skill-create-modal-title"
     closeDisabled={actions.busy}
     onClose={actions.closeCreateModal}
   >
     {#snippet body()}
-      <div class="skills-modal-body">
-        <div class="skills-field">
-          <label class="skills-field-label" for="create-scope">
-            {t('skills.createScopeLabel')}
-          </label>
-          <Dropdown
-            id="create-scope"
-            disabled={actions.busy}
-            value={actions.createScope}
-            options={actions.scopeOptions}
-            ariaLabel={t('skills.createScopeLabel')}
-            onValueChange={(value) => (actions.createScope = value)}
-          />
-          <p class="skills-secondary">
-            {actions.createScope === 'global'
-              ? t('skills.createGlobalHelp')
-              : t('skills.createPrivateHelp')}
-          </p>
-        </div>
-        <div class="skills-field">
-          <label class="skills-field-label" for="new-skill-name">
-            {t('settings.skills.nameLabel')}
-          </label>
+      <div class="modal-body">
+        <FormField
+          controlId="create-scope"
+          label={t('skills.createScopeLabel')}
+          help={actions.createScope === 'global'
+            ? t('skills.createGlobalHelp')
+            : t('skills.createPrivateHelp')}
+        >
+          {#snippet children(field)}
+            <Dropdown
+              id={field.controlId}
+              disabled={actions.busy}
+              value={actions.createScope}
+              options={actions.scopeOptions}
+              ariaLabel={t('skills.createScopeLabel')}
+              ariaDescribedby={field.describedBy}
+              onValueChange={(value) => (actions.createScope = value)}
+            />
+          {/snippet}
+        </FormField>
+        <FormField
+          controlId="new-skill-name"
+          label={t('settings.skills.nameLabel')}
+        >
           <TextField
             id="new-skill-name"
             disabled={actions.busy}
@@ -57,12 +59,12 @@
             onInput={(next) => (actions.newName = next)}
             placeholder={t('settings.skills.namePlaceholder')}
           />
-        </div>
-        <div class="skills-field">
-          <label class="skills-field-label" for="new-skill-description">
+        </FormField>
+        <FormField controlId="new-skill-description">
+          {#snippet labelContent()}
             {t('skills.descriptionLabel')}
             <InfoHint text={t('skills.descriptionHelp')} />
-          </label>
+          {/snippet}
           <TextField
             id="new-skill-description"
             disabled={actions.busy}
@@ -70,20 +72,21 @@
             onInput={(value) => (actions.newDescription = value)}
             placeholder={t('skills.descriptionPlaceholder')}
           />
-        </div>
-        <div class="skills-field">
-          <label class="skills-field-label" for="new-skill-content">
-            {t('skills.instructions')}
-          </label>
+        </FormField>
+        <FormField
+          controlId="new-skill-content"
+          label={t('skills.instructions')}
+        >
           <TextArea
             id="new-skill-content"
             disabled={actions.busy}
-            rows="12"
+            rows="10"
+            autoGrow
             value={actions.newContent}
             onInput={(value) => (actions.newContent = value)}
             placeholder={t('skills.instructionsPlaceholder')}
           />
-        </div>
+        </FormField>
       </div>
     {/snippet}
     {#snippet footer()}
@@ -108,31 +111,29 @@
 {#if actions.editing}
   <Modal
     title={t('skills.editTitle', { name: actions.editing.name })}
-    class="skills-editor-modal"
+    size="lg"
     labelledById="skill-edit-modal-title"
     closeDisabled={actions.busy}
     onClose={actions.closeEditModal}
   >
     {#snippet body()}
-      <div class="skills-modal-body">
+      <div class="modal-body">
         {#if actions.editing.shared}<Banner variant="info"
             >{t('skills.editSharedHelp')}</Banner
           >{/if}
-        <div class="skills-field">
-          <label
-            class="skills-field-label"
-            for={`skill-content-${actions.editing.name}`}
-          >
-            {t('settings.skills.contentLabel')}
-          </label>
+        <FormField
+          controlId={`skill-content-${actions.editing.name}`}
+          label={t('settings.skills.contentLabel')}
+        >
           <TextArea
             id={`skill-content-${actions.editing.name}`}
             code
             rows="16"
+            autoGrow
             value={actions.editContent}
             onInput={(value) => (actions.editContent = value)}
           />
-        </div>
+        </FormField>
       </div>
     {/snippet}
     {#snippet footer()}
@@ -156,7 +157,7 @@
 
 {#if actions.deleteTarget}
   <ConfirmDialog
-    title={t('settings.skills.deleteConfirmTitle')}
+    title={t('skills.deleteConfirmTitle', { name: actions.deleteTarget.name })}
     body={actions.deleteTarget.message}
     confirmLabel={t('common.delete')}
     onConfirm={actions.confirmDelete}
@@ -166,21 +167,26 @@
 
 {#if actions.revertTarget}
   <ConfirmDialog
-    title={t('skills.revert.title')}
+    title={actions.revertTarget.later !== null
+      ? t('skills.revert.togetherTitle', {
+          revisions: actions.revertTarget.revisions.join(', '),
+        })
+      : actions.revertTarget.pass
+        ? t('skills.revert.passTitle')
+        : t('skills.revert.title', {
+            revision: actions.revertTarget.revisions[0],
+            name: actions.revertTarget.name,
+          })}
     body={actions.revertTarget.later !== null
       ? t('skills.revert.together', {
           later: actions.revertTarget.later,
           name: actions.revertTarget.name,
-          revisions: actions.revertTarget.revisions.join(', '),
         })
       : actions.revertTarget.pass
         ? t('skills.revert.pass', {
             revisions: actions.revertTarget.revisions.join(', '),
           })
-        : t('skills.revert.confirm', {
-            revision: actions.revertTarget.revisions[0],
-            name: actions.revertTarget.name,
-          })}
+        : t('skills.revert.confirm')}
     confirmLabel={actions.revertTarget.later === null &&
     !actions.revertTarget.pass
       ? t('skills.revert.action')
@@ -193,8 +199,8 @@
 
 {#if actions.purgeTarget}
   <ConfirmDialog
-    title={t('skills.archived.purgeTitle')}
-    body={t('skills.archived.purgeConfirm', { name: actions.purgeTarget.name })}
+    title={t('skills.archived.purgeTitle', { name: actions.purgeTarget.name })}
+    body={t('skills.archived.purgeConfirm')}
     confirmLabel={t('skills.archived.purgeAction')}
     onConfirm={actions.confirmPurge}
     onCancel={actions.cancelPurge}

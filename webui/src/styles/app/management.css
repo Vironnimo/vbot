@@ -37,8 +37,9 @@
   letter-spacing: normal;
   text-transform: none;
 }
+/* Dialogs keep the shared field anatomy (forms.css) wherever they open. */
 :is(.agents-view, .projects-view, .settings-layout)
-  :is(.form-field__help, .projects-help, .detail-sub, .s-row-desc) {
+  :is(.form-field__help, .detail-sub, .s-row-desc):not(.modal *) {
   color: var(--text-med);
   font-size: var(--fs-body-sm);
 }

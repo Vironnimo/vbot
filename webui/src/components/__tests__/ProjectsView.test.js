@@ -499,20 +499,19 @@ describe('ProjectsView list and selection', () => {
     buttonByTestId('project-remove-demo').click();
     flushSync();
 
-    toggleByAriaLabel(
-      'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
-    ).click();
     const dialog = document.querySelector('[role="dialog"]');
+    const checkbox = (label) =>
+      [...dialog.querySelectorAll('[role="checkbox"]')].find((box) =>
+        box.textContent.includes(label),
+      );
+    checkbox(t('projects.remove.copyIdentityFiles')).click();
     expect(dialog.textContent).toContain(t('archive.deleteNotice.kept'));
-    [...dialog.querySelectorAll('[role="checkbox"]')]
-      .find((box) =>
-        box.textContent.includes(t('archive.deleteOption.permanent')),
-      )
-      .click();
+    checkbox(t('archive.deleteOption.permanent')).click();
     flushSync();
     expect(dialog.textContent).toContain(
-      t('projects.remove.permanentBody', { name: 'Demo' }),
+      t('projects.remove.permanentConfirmTitle', { name: 'Demo' }),
     );
+    expect(dialog.textContent).toContain(t('projects.remove.permanentBody'));
     confirmDialog(t('archive.deletePermanently'));
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
