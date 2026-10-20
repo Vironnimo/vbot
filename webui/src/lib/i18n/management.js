@@ -987,11 +987,11 @@ export default Object.freeze({
   'systemPrompt.fragmentEditor.modifiedIndicator': 'modified',
   'systemPrompt.fragmentEditor.modifiedHint':
     'Edited — differs from the built-in default.',
-  'systemPrompt.fragmentEditor.resetConfirmTitle': 'Reset block',
+  'systemPrompt.fragmentEditor.resetConfirmTitle': 'Reset block “{name}”?',
   'systemPrompt.fragmentEditor.resetConfirm':
-    'Reset this block to its default? This cannot be undone.',
+    'It returns to its built-in default content. This cannot be undone.',
   'systemPrompt.fragmentEditor.resetAgentConfirm':
-    'Reset this Agent block to the current Default content? This cannot be undone.',
+    'It returns to the current Default content. This cannot be undone.',
   'systemPrompt.preview.heading': 'Preview for',
   'systemPrompt.preview.copy': 'Copy',
   'systemPrompt.preview.tokenCount': '~{count} tokens',
@@ -1019,20 +1019,22 @@ export default Object.freeze({
   'systemPrompt.blockList.guide.scope':
     'Default applies to every Agent. Enable “Custom system prompt” in Agents to create an Agent-specific scope here.',
   'systemPrompt.blockList.newBlock': 'New block',
-  'systemPrompt.blockList.newBlockPrompt':
-    'Name for the new block (letters, digits, “-” or “_”):',
+  'systemPrompt.blockList.newBlockName': 'Block name',
+  'systemPrompt.blockList.newBlockHelp':
+    'Letters, digits, “-” or “_”, starting with a letter or digit.',
+  'systemPrompt.blockList.createBlock': 'Create block',
   'systemPrompt.blockList.invalidSlug':
-    'Invalid name — use letters, digits, “-” or “_”, starting with a letter or digit.',
+    'This name has characters that are not allowed.',
   'systemPrompt.blockList.createFailed':
-    'Failed to create block. The slug may be invalid or already used.',
-  'systemPrompt.blockList.removeConfirmTitle': 'Remove block',
+    'The block could not be created. The name may already be in use.',
+  'systemPrompt.blockList.removeConfirmTitle': 'Remove block “{name}”?',
   'systemPrompt.blockList.removeConfirm':
-    'Remove this custom block? This cannot be undone.',
+    'This custom block is deleted and cannot be restored.',
   'systemPrompt.blockList.removeFailed': 'Failed to remove block',
   'systemPrompt.blockList.resetLayout': 'Reset order & visibility',
-  'systemPrompt.blockList.resetLayoutConfirmTitle': 'Reset layout',
+  'systemPrompt.blockList.resetLayoutConfirmTitle': 'Reset order & visibility?',
   'systemPrompt.blockList.resetLayoutConfirm':
-    'Reset block order and visibility to the default? This cannot be undone.',
+    'Every block returns to its default position and switch setting. This cannot be undone.',
   'systemPrompt.blockList.customBadge': 'custom',
   'systemPrompt.blockList.customHint':
     'A block you added, not one of vBot’s built-in blocks. It can be removed.',
@@ -1187,9 +1189,9 @@ export default Object.freeze({
   'archive.state.restoring': 'Being restored',
   'archive.action.restore': 'Restore',
   'archive.action.restoreAs': 'Restore as…',
-  'archive.restoreAs.title': 'Restore under a new ID',
+  'archive.restoreAs.title': 'Restore “{name}” under a new ID',
   'archive.restoreAs.hint':
-    'Restores {name} under the ID you enter. Its Sessions keep their history; Channel conversations start fresh.',
+    'Its Sessions keep their history; Channel conversations start fresh.',
   'archive.restoreAs.agentLabel': 'New Agent ID',
   'archive.restoreAs.projectLabel': 'New Project ID',
   'archive.restoreAs.sessionLabel': 'New Session ID',
@@ -1239,19 +1241,17 @@ export default Object.freeze({
     'The Project {project} no longer exists, so the Agent is restored without it.',
   'archive.problem.externalWorkspaceMissing':
     'The Workspace folder {path} is gone, so the Agent uses its default Workspace.',
-  'archive.purge.confirmTitle': 'Delete permanently?',
+  'archive.purge.confirmTitle': 'Delete “{name}” permanently?',
   'archive.purge.confirm':
-    'Delete {name} permanently? Its Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+    'Its Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
   'archive.purge.confirmOwnFolders':
-    'Delete {name} permanently? It may hold folders of your own, which are deleted too. Nothing can be restored afterwards. Recorded usage and costs stay in Statistics.',
-  'archive.purgeMany.confirmOne':
-    'Delete 1 item permanently? Its Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
-  'archive.purgeMany.confirmOneOwnFolders':
-    'Delete 1 item permanently? It may hold folders of your own, which are deleted too. Nothing can be restored afterwards. Recorded usage and costs stay in Statistics.',
+    'It may hold folders of your own, which are deleted too. Nothing can be restored; recorded usage and costs stay in Statistics.',
+  'archive.purgeMany.confirmTitleOne': 'Delete 1 item permanently?',
+  'archive.purgeMany.confirmTitle': 'Delete {count} items permanently?',
   'archive.purgeMany.confirm':
-    'Delete {count} items permanently? Their Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+    'Their Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
   'archive.purgeMany.confirmOwnFolders':
-    'Delete {count} items permanently? Some may hold folders of your own, which are deleted too. Nothing can be restored afterwards. Recorded usage and costs stay in Statistics.',
+    'Some may hold folders of your own, which are deleted too. Nothing can be restored; recorded usage and costs stay in Statistics.',
   'archive.purge.success': '{name} deleted permanently.',
   'archive.purge.successOne': '1 item deleted permanently.',
   'archive.purge.successMany': '{count} items deleted permanently.',
@@ -1279,6 +1279,14 @@ export default Object.freeze({
   'archive.purge.error': 'Could not delete',
   'archive.purgeAll.everything': 'Empty Archive…',
   'archive.purgeAll.everythingTitle': 'Empty the Archive?',
+  'archive.purgeAll.everythingAction': 'Empty Archive',
+  'archive.purgeAll.everythingBodyOne':
+    '1 item and its Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+  'archive.purgeAll.everythingBody':
+    '{count} items and their Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+  'archive.purgeAll.matchingTitleOne': 'Delete 1 matching item permanently?',
+  'archive.purgeAll.matchingTitle':
+    'Delete {count} matching items permanently?',
   'archive.purgeAll.matching': 'Delete all matching…',
   'archive.purgeAll.nothing': 'Nothing here can be deleted right now.',
   'archive.purgeAll.onlyOwnFolders':

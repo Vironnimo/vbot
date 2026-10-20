@@ -401,7 +401,9 @@ describe('ArchiveEntriesPanel', () => {
       document.getElementById('archive-restore-as-id'),
     );
     const dialog = document.querySelector('[role="dialog"]');
-    expect(dialog.textContent).toContain(t('archive.restoreAs.title'));
+    expect(dialog.textContent).toContain(
+      t('archive.restoreAs.title', { name: 'Coder' }),
+    );
     expect(dialog.textContent).toContain(
       t('archive.restore.conflict', { id: 'coder' }),
     );
@@ -488,8 +490,12 @@ describe('ArchiveEntriesPanel', () => {
     );
     button(t('archive.deletePermanently')).click();
     flushSync();
-    expect(document.querySelector('[role="dialog"]').textContent).toContain(
-      t('archive.purgeMany.confirm', { count: 2 }),
+    const selectedDialog = document.querySelector('[role="dialog"]');
+    expect(selectedDialog.textContent).toContain(
+      t('archive.purgeMany.confirmTitle', { count: 2 }),
+    );
+    expect(selectedDialog.textContent).toContain(
+      t('archive.purgeMany.confirm'),
     );
     dialogButton(t('common.cancel')).click();
     flushSync();
@@ -517,9 +523,9 @@ describe('ArchiveEntriesPanel', () => {
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog.textContent).toContain(t('archive.purgeAll.everythingTitle'));
     expect(dialog.textContent).toContain(
-      `${t('archive.purgeMany.confirm', { count: 2 })} ${t('archive.purgeAll.keptOne')}`,
+      `${t('archive.purgeAll.everythingBody', { count: 2 })} ${t('archive.purgeAll.keptOne')}`,
     );
-    dialogButton(t('archive.deletePermanently')).click();
+    dialogButton(t('archive.purgeAll.everythingAction')).click();
     await waitForCondition(() => onToast.mock.calls.length === 2);
     expect(purgeMock).toHaveBeenLastCalledWith({ all: true, ...NO_FILTERS });
     expect(onToast).toHaveBeenLastCalledWith({
