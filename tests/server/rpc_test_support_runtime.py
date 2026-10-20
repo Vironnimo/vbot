@@ -384,6 +384,12 @@ class StubJobService:
     def add_changed_callback(self, _callback: Callable[[], None]) -> Callable[[], None]:
         return _unsubscribe
 
+    def bind_webhook_url(self, _base_url: str, _reach: str) -> None:
+        """Cron's webhook address; the stub has no webhook jobs."""
+
+    async def receive_webhook(self, _job_id: str, _headers: Any, _body: bytes) -> str:
+        return "refused"
+
 
 class StubChannelService:
     """Channel service double that holds no Channels."""

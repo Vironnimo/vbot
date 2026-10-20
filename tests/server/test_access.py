@@ -10,7 +10,8 @@ import threading
 from collections.abc import AsyncIterator, Iterator, MutableMapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, override
+from urllib.parse import urlsplit
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
@@ -21,6 +22,7 @@ from starlette.websockets import WebSocketDisconnect
 import server.app as server_app
 from core.access.config import AccessConfig, access_config
 from core.access.devices import DeviceStore
+from server._bind import ServerBindState
 from server.access import (
     AccessError,
     AccessGuard,
@@ -30,10 +32,12 @@ from server.access import (
     current_principal,
 )
 from server.access._limits import RefusalLog, SlidingWindow
+from server.access._rules import machine_host_names
 from server.app import create_app
 from server.rpc import methods
 from server.rpc.methods import dispatch_rpc
 from tests.server.app_test_support import ServerStubRuntime
+from tests.server.rpc_test_support_runtime import StubJobService
 
 _PUBLIC_URL = "https://vbot.example.org"
 _PROXY = "10.0.0.2"
@@ -72,14 +76,23 @@ def _authenticated(**options: Any) -> AccessConfig:
 
 @pytest.fixture
 def served(tmp_path: Path) -> Iterator[Any]:
-    """Serve an app in the given access mode; yields a factory of (app, client)."""
+    """Serve an app in the given access mode; yields a factory of (app, client).
+
+    Keyword arguments replace services of the stub Runtime.
+    """
     clients: list[TestClient] = []
 
-    def serve(access: AccessConfig | None = None) -> tuple[Any, TestClient]:
+    def serve(
+        access: AccessConfig | None = None,
+        *,
+        server_bind: ServerBindState | None = None,
+        **services: Any,
+    ) -> tuple[Any, TestClient]:
         app = create_app(
-            runtime=ServerStubRuntime(tmp_path / f"data-{len(clients)}"),
+            runtime=ServerStubRuntime(tmp_path / f"data-{len(clients)}", **services),
             access=access,
             local_access_token=_LOCAL_TOKEN,
+            server_bind=server_bind,
         )
         client = TestClient(_Network(app))
         client.__enter__()
@@ -230,6 +243,7 @@ def test_every_route_but_the_exempt_ones_needs_a_principal_when_authenticated(
         ("POST", "/api/auth/pair/start"),
         ("POST", "/api/auth/pair/poll"),
         ("GET", "/api/oauth/callback"),
+        ("POST", "/api/hooks/{job_id}"),
         ("POST", "/_vbot/control/shutdown"),
         ("GET", "/auth/ticket/{ticket}"),
         ("HEAD", "/auth/ticket/{ticket}"),
@@ -1191,3 +1205,144 @@ def test_rate_limits_and_the_refusal_log_stay_bounded_under_a_flood(
     assert summary.startswith("Access refused repeatedly (reason=invalid_token count=49 clients=")
     assert summary.count("203.0.113.") == 10
     assert summary.endswith(",... interval=60s)")
+
+
+_WEBHOOK = "/api/hooks/cron_hook"
+_WEBHOOK_SECRET = "vbw_" + "S" * 43
+_WEBHOOK_PROOF = {**_INTERNET, "Authorization": f"Bearer {_WEBHOOK_SECRET}"}
+
+
+class _WebhookCron(StubJobService):
+    """Cron as the webhook route sees it: job ``cron_hook`` takes ``_WEBHOOK_SECRET``."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.receipt = "accepted"
+        self.bound: tuple[str, str] | None = None
+        self.received: list[tuple[str, list[tuple[str, str]], bytes]] = []
+
+    @override
+    def bind_webhook_url(self, base_url: str, reach: str) -> None:
+        self.bound = (base_url, reach)
+
+    @override
+    async def receive_webhook(self, job_id: str, headers: Any, body: bytes) -> str:
+        self.received.append((job_id, list(headers), body))
+        proof = ("authorization", f"Bearer {_WEBHOOK_SECRET}")
+        return self.receipt if job_id == "cron_hook" and proof in headers else "refused"
+
+
+def test_a_webhook_request_proves_its_job_secret_instead_of_a_vbot_credential(
+    served: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    cron = _WebhookCron()
+    _app, client = served(_authenticated(), cron_service=cron)
+    _lan_app, lan = served(access_config("lan"), cron_service=cron)
+    payload = b'{"action": "opened"}'
+
+    accepted = client.post(
+        _WEBHOOK, content=payload, headers={**_WEBHOOK_PROOF, "Content-Type": "application/json"}
+    )
+    unknown = client.post("/api/hooks/cron_other", content=b"{}", headers=_WEBHOOK_PROOF)
+    wrong = client.post(
+        _WEBHOOK, content=b"{}", headers={**_INTERNET, "Authorization": "Bearer vbw_guess"}
+    )
+    bare = client.post(_WEBHOOK, content=b"{}", headers=_INTERNET)
+    read = client.get(_WEBHOOK, headers=_INTERNET)
+    nested = client.post(f"{_WEBHOOK}/more", headers=_INTERNET)
+    cron.receipt = "unavailable"
+    unstored = client.post(_WEBHOOK, content=b"{}", headers=_WEBHOOK_PROOF)
+    foreign = lan.post(
+        _WEBHOOK,
+        content=b"{}",
+        headers={"x-test-peer": "203.0.113.7", "Authorization": f"Bearer {_WEBHOOK_SECRET}"},
+    )
+
+    assert (accepted.status_code, accepted.json()) == (202, {"ok": True})
+    assert accepted.headers["cache-control"] == "no-store"
+    job_id, headers, body = cron.received[0]
+    assert (job_id, body) == ("cron_hook", payload)
+    assert ("content-type", "application/json") in headers
+    # An unknown job and a wrong or missing secret get the same answer: none reveals a job.
+    not_found = {"ok": False, "error": {"code": "not_found", "message": "Not found"}}
+    assert [(r.status_code, r.json()) for r in (unknown, wrong, bare)] == [(404, not_found)] * 3
+    assert "www-authenticate" not in wrong.headers
+    # Only a POST to the exact route shape goes without a vBot credential.
+    assert (read.status_code, nested.status_code) == (401, 401)
+    assert (unstored.status_code, unstored.headers["retry-after"]) == (503, "30")
+    # The access mode's peer rules hold: that request never reaches Cron.
+    assert foreign.status_code == 403
+    assert len(cron.received) == 5
+    refusals = [r.getMessage() for r in caplog.records if "Access refused" in r.getMessage()]
+    expected = "Access refused (reason=webhook_refused client=203.0.113.7 path=/api/hooks/...)"
+    assert expected in refusals
+    assert not any("invalid_token" in line for line in refusals)
+    assert _WEBHOOK_SECRET not in caplog.text
+    assert "opened" not in caplog.text
+
+
+def test_webhook_requests_are_capped_in_size_and_rate_per_client(
+    served: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    cron = _WebhookCron()
+    _app, client = served(_authenticated(), cron_service=cron)
+    limit = 256 * 1024
+    too_large = {
+        "ok": False,
+        "error": {"code": "too_large", "message": f"The request body exceeds {limit} bytes"},
+    }
+
+    largest = client.post(_WEBHOOK, content=b"x" * limit, headers=_WEBHOOK_PROOF)
+    declared = client.post(_WEBHOOK, content=b"x" * (limit + 1), headers=_WEBHOOK_PROOF)
+    streamed = client.post(_WEBHOOK, content=iter([b"x" * limit, b"x"]), headers=_WEBHOOK_PROOF)
+    guesses = [
+        client.post(_WEBHOOK, headers={**_INTERNET, "Authorization": "Bearer vbw_guess"})
+        for _attempt in range(20)
+    ]
+    after_guessing = client.post(_WEBHOOK, headers=_WEBHOOK_PROOF)
+    flooding = {**_WEBHOOK_PROOF, "X-Forwarded-For": "198.51.100.9"}
+    flood = [client.post(_WEBHOOK, headers=flooding).status_code for _attempt in range(61)]
+    calm = client.post(_WEBHOOK, headers={**_WEBHOOK_PROOF, "X-Forwarded-For": "198.51.100.10"})
+
+    assert largest.status_code == 202
+    assert [(r.status_code, r.json()) for r in (declared, streamed)] == [(413, too_large)] * 2
+    assert {r.status_code for r in guesses} == {404}
+    # Refused secrets lock their client out for a while, even with the right secret.
+    assert after_guessing.status_code == 429
+    assert int(after_guessing.headers["retry-after"]) > 0
+    assert flood == [202] * 60 + [429]
+    assert calm.status_code == 202
+    assert len(cron.received) == 1 + 20 + 60 + 1
+    refusals = {r.getMessage() for r in caplog.records if "Access refused" in r.getMessage()}
+    for reason in ("webhook_too_large", "webhook_rate_limited"):
+        assert any(f"reason={reason} " in line for line in refusals), reason
+
+
+@pytest.mark.parametrize(
+    ("access", "listen_host", "url", "reach"),
+    [
+        (_authenticated(), "0.0.0.0", _PUBLIC_URL, "internet"),
+        (None, "127.0.0.1", "http://127.0.0.1:8765", "computer"),
+        (None, "::1", "http://[::1]:8765", "computer"),
+        (access_config("lan"), "192.168.1.5", "http://192.168.1.5:8765", "network"),
+        (access_config("lan"), "0.0.0.0", None, "network"),
+    ],
+)
+def test_webhook_urls_start_with_an_address_their_callers_reach(
+    served: Any, access: AccessConfig | None, listen_host: str, url: str | None, reach: str
+) -> None:
+    cron = _WebhookCron()
+    bind: ServerBindState = {"listen_host": listen_host, "listen_port": 8765, "port_source": "cli"}
+
+    served(access, server_bind=bind, cron_service=cron)
+
+    assert cron.bound is not None
+    bound_url, bound_reach = cron.bound
+    assert bound_reach == reach
+    if url is None:
+        # Every interface: this computer's name, which the access guard answers to.
+        host = urlsplit(bound_url).hostname
+        assert host in machine_host_names() | {"127.0.0.1"}
+        assert bound_url == f"http://{host}:8765"
+    else:
+        assert bound_url == url

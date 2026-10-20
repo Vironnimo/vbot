@@ -62,6 +62,11 @@ INVALID_REQUEST = "invalid_request"
 PAIRING_NOT_FOUND = "pairing_not_found"
 DEVICE_NOT_FOUND = "device_not_found"
 
+#: Refusal reasons of Cron webhook requests, as the refusal log names them.
+WEBHOOK_REFUSED = "webhook_refused"
+WEBHOOK_RATE_LIMITED = "webhook_rate_limited"
+WEBHOOK_TOO_LARGE = "webhook_too_large"
+
 #: ``__Host-``: browsers keep it only when set Secure, with Path=/ and without
 #: Domain, so no other site or subdomain can plant or shadow it.
 DEVICE_COOKIE = "__Host-vbot_device"
@@ -161,6 +166,8 @@ class AccessService:
         self._pair_poll = _limit(60, 600, 60, clock)
         self._auth_failures = _limit(20, 200, 600, clock)
         self._approval_failures = _limit(10, 50, 600, clock)
+        self._webhook_requests = _limit(60, 600, 60, clock)
+        self._webhook_failures = SlidingWindow(20, 600, clock=clock)
         self._refusals: RefusalLog | None = None
         self._background: set[asyncio.Future[Any]] = set()
         self._flush_pending = False
@@ -285,6 +292,28 @@ class AccessService:
         wait = self._auth_failures.blocked(key)
         self._auth_failures.record(key)
         return wait
+
+    # Webhooks ----------------------------------------------------------------
+
+    def admit_webhook(self, facts: RequestFacts, path: str) -> float | None:
+        """Count one request to a Cron webhook; the wait when its client is over a limit.
+
+        A client waits once it sends too many requests or keeps being refused;
+        this computer's own clients stay outside the budget shared by all.
+        """
+        key = _client_key(facts)
+        wait = self._webhook_failures.blocked(key) or _acquire(
+            self._webhook_requests, key, local=facts.direct_loopback
+        )
+        if wait is not None:
+            self.refused(WEBHOOK_RATE_LIMITED, facts, path)
+        return wait
+
+    def refused_webhook(self, reason: str, facts: RequestFacts, path: str) -> None:
+        """Log a refused webhook request; a refused secret counts toward its client's limit."""
+        self.refused(reason, facts, path)
+        if reason == WEBHOOK_REFUSED:
+            self._webhook_failures.record(_client_key(facts))
 
     # Pairing -----------------------------------------------------------------
 
