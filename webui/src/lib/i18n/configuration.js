@@ -1009,6 +1009,8 @@ export default Object.freeze({
   'settings.providers.add.connectionButton': 'Add connection',
   'settings.providers.add.title': 'Add provider',
   'settings.providers.add.chooseProvider': 'Choose a provider to connect.',
+  'settings.providers.add.search': 'Search providers…',
+  'settings.providers.add.noMatch': 'No provider matches “{query}”.',
   'settings.providers.add.chooseMethod': 'Choose how to connect {provider}.',
   'settings.providers.add.allConnected':
     'All available providers are already connected.',
