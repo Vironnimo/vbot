@@ -339,7 +339,16 @@ def _find_text(
             next_offset = spans[-1][1] if len(trial) == len(spans) else position
             break
         spans = trial
-    searched = f"after character {offset}" if offset else f"in {_VIEW_NAMES[scope]}"
+    # A view cut at a size limit was searched only as far as it was saved; a 2,000,000-
+    # character JSON file read "No ... match ... in the whole page" (2026-10-20).
+    if _is_cut(snapshot, text):
+        searched = (
+            f"after character {offset} of the saved part"
+            if offset
+            else f"in {_SAVED_PART_NAMES[scope]}"
+        )
+    else:
+        searched = f"after character {offset}" if offset else f"in {_VIEW_NAMES[scope]}"
     if not spans:
         sections = (
             ", including navigation and footers"
@@ -373,6 +382,19 @@ def _find_text(
 
 
 _VIEW_NAMES = {"main": "the main content", "page": "the whole page"}
+_SAVED_PART_NAMES = {
+    "main": "the saved part of the main content",
+    "page": "the saved part of the page",
+}
+
+
+def _is_cut(snapshot: dict[str, Any], text: str) -> bool:
+    """Whether a view holds only part of the page: cut at the saved limit, or taken
+    from HTML cut at its extraction limit."""
+    warnings = snapshot.get("warnings", [])
+    if _PARTIAL_WARNING in warnings and len(text) >= MAX_SAVED_CHARS:
+        return True
+    return any("partial" in warning for warning in warnings if warning != _PARTIAL_WARNING)
 
 
 def _past_the_end(snapshot: dict[str, Any], scope: str, offset: int) -> str:

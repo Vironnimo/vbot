@@ -446,9 +446,18 @@ async def test_an_unusable_ref_beside_url_fetches_the_url_and_says_why(tmp_path,
 async def test_saved_limit_is_reported_without_claiming_completeness(tmp_path, monkeypatch):
     monkeypatch.setattr(pages, "MAX_SAVED_CHARS", 1500)
     install_http_get(monkeypatch, lambda url: make_result(text="Text " * 1000, url=url))
-    result = await fetch(tmp_path, {"url": "https://example.com/"})
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+    result = await tool.dispatch(context, {"url": "https://example.com/"})
     assert len(result["data"]["content"]) == 1500 and "more" not in result["data"]
     assert "Saved content is partial" in result["data"]["note"]
+    # A search covers only the saved part and says so.
+    ref = result["data"]["ref"]
+    missing = await tool.dispatch(context, {"ref": ref, "find": "Absent"})
+    assert missing["data"]["content"].startswith(
+        'No word-for-word match for "Absent" in the saved part of the page (1500 characters)'
+    )
+    found = await tool.dispatch(context, {"ref": ref, "find": "Text"})
+    assert found["data"]["shown"].endswith('matching "Text" in the saved part of the page')
 
 
 @pytest.mark.asyncio
