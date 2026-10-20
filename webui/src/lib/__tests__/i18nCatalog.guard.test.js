@@ -31,6 +31,8 @@ const REPO_DIR = join(
 // - A `tOr` key is completed with a server-sent code and renders its fallback
 //   when the code has no entry. Every entry the pattern matches counts as used.
 const COMPOSED_KEYS = {
+  // The activity calendar's metrics (statisticsView/activity.js ACTIVITY_METRICS).
+  'statistics.activity.metric.*': ['runs', 'tokens', 'cost'],
   // Project Source kinds and Profile translation states from the Projects contract.
   'projects.sources.*': ['agents', 'skills', 'instructions'],
   'projects.status.*': ['ready', 'limited', 'needs_attention'],

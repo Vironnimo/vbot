@@ -18,6 +18,7 @@ import {
 
 export * from './statisticsView/query.js';
 export * from './statisticsView/charts.js';
+export * from './statisticsView/activity.js';
 export {
   formatInteger,
   formatDecimal,
@@ -80,7 +81,16 @@ export function periodChange(
     const ratio = (now - before) / Math.abs(before);
     const rounded = Math.round(ratio * 1000) / 1000;
     direction = rounded > 0 ? 'up' : rounded < 0 ? 'down' : 'flat';
-    text = formatPercent(Math.abs(rounded), locale);
+    // From double on, a multiple reads better than a large percentage.
+    const multiple = before > 0 ? now / before : 0;
+    text =
+      multiple >= 2
+        ? t('statistics.change.times', {
+            value: numberFormat(locale, {
+              maximumFractionDigits: multiple < 10 ? 1 : 0,
+            }).format(multiple),
+          })
+        : formatPercent(Math.abs(rounded), locale);
   }
   let tone = 'neutral';
   if (judge === 'lowerIsBetter' && direction !== 'flat') {

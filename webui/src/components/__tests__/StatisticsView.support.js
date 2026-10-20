@@ -708,8 +708,74 @@ function makeDiagnosticsSection(overrides = {}) {
   };
 }
 
+/** The all-time `activity` section of the Overview's activity hero. */
+function makeActivitySection() {
+  return {
+    days: [
+      {
+        date: '2026-06-11',
+        runs: 3,
+        your_runs: 2,
+        messages: 3,
+        tokens: 120_000,
+        cost_usd: 0.8,
+      },
+      {
+        date: '2026-06-12',
+        runs: 6,
+        your_runs: 5,
+        messages: 7,
+        tokens: 530_000,
+        cost_usd: 5,
+      },
+    ],
+    totals: {
+      active_days: 2,
+      first_active: '2026-06-11',
+      runs: 9,
+      your_runs: 7,
+      messages: 10,
+      sessions: 3,
+      agents: 2,
+      tokens: 1_650_000,
+      cost_usd: 5.8,
+      tool_calls: 21,
+      changed_files: 0,
+      lines_added: 0,
+      lines_removed: 0,
+    },
+    streaks: {
+      current: 2,
+      current_start: '2026-06-11',
+      longest: 2,
+      longest_start: '2026-06-11',
+      longest_end: '2026-06-12',
+    },
+    by_hour: Array.from({ length: 24 }, (_, hour) => (hour === 14 ? 5 : 0)),
+    by_weekday: [0, 0, 0, 2, 5, 0, 0],
+    favorite_model: {
+      model: 'openrouter/anthropic/claude-sonnet-4',
+      tokens: 600_000,
+      calls: 30,
+      share: 0.92,
+    },
+    favorite_agent: { agent_id: 'main', runs: 5, share: 0.71 },
+    records: {
+      busiest_day: { date: '2026-06-12', your_runs: 5, tokens: 530_000 },
+      top_session: {
+        agent_id: 'main',
+        session_id: 'session-1',
+        session_title: 'Plan the release',
+        your_runs: 4,
+      },
+      longest_run: makeRunRow(),
+    },
+  };
+}
+
 const SECTION_BUILDERS = {
   overview: makeOverviewSection,
+  activity: makeActivitySection,
   usage: makeUsageSection,
   runs: makeRunsSection,
   tools: makeToolsSection,

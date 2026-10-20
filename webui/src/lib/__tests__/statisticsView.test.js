@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  activityCalendar,
   agentDisplay,
   agentTooltip,
   autoGranularity,
@@ -170,6 +171,9 @@ describe('statisticsView numbers', () => {
       text: '25.0%',
       tone: 'neutral',
     });
+    // From double on, a change reads as a multiple.
+    expect(periodChange(61, 1)).toMatchObject({ direction: 'up', text: '61×' });
+    expect(periodChange(2.5, 1)).toMatchObject({ text: '2.5×' });
     expect(periodChange(5, 0)).toMatchObject({ direction: 'up', text: 'new' });
     expect(periodChange(0, 0)).toMatchObject({ direction: 'flat' });
     expect(
@@ -180,6 +184,52 @@ describe('statisticsView numbers', () => {
     ).toMatchObject({ direction: 'up', tone: 'bad' });
     expect(periodChange(null, 3)).toBeNull();
     expect(periodChange(3, undefined)).toBeNull();
+  });
+});
+
+describe('statisticsView activity calendar', () => {
+  it('ends with the week of today and shades days by quartiles of the active ones', () => {
+    // 2026-10-20 is a Tuesday.
+    const days = [1, 2, 3, 4, 8].map((runs, index) => ({
+      date: `2026-10-1${index}`,
+      your_runs: runs,
+      tokens: runs * 1000,
+      cost_usd: null,
+    }));
+    const monday = activityCalendar(days, { today: '2026-10-20' });
+    expect(monday.weeks).toHaveLength(53);
+    const lastWeek = monday.weeks.at(-1);
+    expect(lastWeek[0].date).toBe('2026-10-19');
+    expect(lastWeek[1].date).toBe('2026-10-20');
+    expect(lastWeek.slice(2)).toEqual([null, null, null, null, null]);
+    const levels = monday.weeks
+      .flat()
+      .filter((cell) => cell?.date.startsWith('2026-10-1'))
+      .map((cell) => [cell.date, cell.level]);
+    expect(levels).toEqual([
+      ['2026-10-10', 1],
+      ['2026-10-11', 1],
+      ['2026-10-12', 2],
+      ['2026-10-13', 3],
+      ['2026-10-14', 4],
+      ['2026-10-15', 0],
+      ['2026-10-16', 0],
+      ['2026-10-17', 0],
+      ['2026-10-18', 0],
+      ['2026-10-19', 0],
+    ]);
+    expect(monday.months.at(-1)).toEqual({ column: 49, date: '2026-10-01' });
+
+    // A Sunday week start; an unknown cost counts as no cost.
+    const sunday = activityCalendar(days, {
+      today: '2026-10-20',
+      weekStart: 7,
+      metric: 'cost',
+    });
+    expect(sunday.weeks.at(-1)[0].date).toBe('2026-10-18');
+    expect(sunday.weeks.flat().every((cell) => !cell || cell.level === 0)).toBe(
+      true,
+    );
   });
 });
 

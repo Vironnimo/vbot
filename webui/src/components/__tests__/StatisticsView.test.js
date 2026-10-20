@@ -65,13 +65,35 @@ describe('StatisticsView', () => {
     expect(panel().querySelector('.stats-skeleton')).toBeTruthy();
     expect(panel().getAttribute('aria-busy')).toBe('true');
     // Local midnight in Berlin, 30 calendar days including today.
+    // The activity hero covers all time, whatever the range.
     expect(reportCalls()).toEqual([
       {
         since: '2026-05-14T22:00:00.000Z',
         timezone: 'Europe/Berlin',
         sections: ['overview'],
       },
+      { timezone: 'Europe/Berlin', sections: ['activity'] },
     ]);
+
+    // The hero sits above the range toolbar: a year of days, the user's
+    // active days shaded, and the current streak.
+    await waitForCondition(() => document.querySelector('.stats-activity'));
+    const hero = document.querySelector('.stats-activity');
+    expect(
+      hero.compareDocumentPosition(document.querySelector('.stats-toolbar')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const cells = hero.querySelectorAll('button.stats-heatmap__cell');
+    expect(cells.length).toBeGreaterThan(52 * 7);
+    expect(
+      hero.querySelectorAll(
+        'button.stats-heatmap__cell:not(.stats-heatmap__cell--0)',
+      ),
+    ).toHaveLength(2);
+    expect(hero.querySelectorAll('button[tabindex="0"]')).toHaveLength(1);
+    expect(hero.textContent).toContain(
+      t('statistics.activity.days.many', { count: '2' }),
+    );
 
     overview.resolve(makeReport(['overview']));
     await waitForOverview();

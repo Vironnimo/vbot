@@ -29,6 +29,7 @@
   import InfoHint from './ui/InfoHint.svelte';
   import TabList from './ui/TabList.svelte';
   import ProviderLimits from './statistics/ProviderLimits.svelte';
+  import ActivityPanel from './statistics/ActivityPanel.svelte';
   import OverviewPanel from './statistics/OverviewPanel.svelte';
   import UsagePanel from './statistics/UsagePanel.svelte';
   import RunsPanel from './statistics/RunsPanel.svelte';
@@ -52,6 +53,7 @@
   let usageDimension = $state('agent');
   let granularity = $state(null);
   let overviewMetric = $state('cost');
+  let activityMetric = $state('runs');
   let usageMetric = $state('cost');
   let extensionsVisible = $state(false);
 
@@ -64,6 +66,15 @@
   const entry = $derived(query ? statisticsReport(query.key) : null);
   const extensionsQuery = $derived(
     new StatisticsReportQuery('extensions', range, timeZone),
+  );
+  // The Overview's activity hero covers all time, whatever the range.
+  const activityQuery = $derived(
+    activeTab === 'overview'
+      ? new StatisticsReportQuery('activity', 'all', timeZone)
+      : null,
+  );
+  const activityEntry = $derived(
+    activityQuery ? statisticsReport(activityQuery.key) : null,
   );
   const tabs = $derived(
     STATISTICS_TABS.filter(
@@ -92,6 +103,12 @@
     untrack(() => requestStatisticsReport(selected));
   });
 
+  $effect(() => {
+    const selected = activityQuery;
+    if (!selected) return;
+    untrack(() => requestStatisticsReport(selected));
+  });
+
   // The Extensions tab shows only when the Extensions section reports
   // Extension activity in the range. It is asked once the shown tab has its
   // answer, so it never delays that tab; until a range has its answer, the
@@ -111,6 +128,9 @@
 
   function refresh() {
     if (query) requestStatisticsReport(query, { force: true });
+    if (activityQuery) {
+      requestStatisticsReport(activityQuery, { force: true });
+    }
   }
 
   function showTab(tab) {
@@ -173,6 +193,28 @@
       onChange={showTab}
     />
   </div>
+
+  {#if activityEntry}
+    {#if activityEntry.report?.activity}
+      <ActivityPanel
+        section={activityEntry.report.activity}
+        bind:metric={activityMetric}
+      />
+    {:else if activityEntry.error}
+      <Banner variant="error" aria-live="polite">
+        <span>{errorText(activityEntry.error)}</span>
+        <Button
+          variant="secondary"
+          disabled={activityEntry.loading}
+          onClick={refresh}
+        >
+          {t('common.retry')}
+        </Button>
+      </Banner>
+    {:else}
+      <StatisticsSkeleton tab="activity" />
+    {/if}
+  {/if}
 
   {#if activeTab !== 'limits'}
     <div class="stats-toolbar view-toolbar">

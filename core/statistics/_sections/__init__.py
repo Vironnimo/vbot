@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from core.statistics._sections import (
+    activity,
     diagnostics,
     extensions,
     overview,
@@ -23,6 +24,7 @@ from core.statistics._sections.window import ReportWindow, zone_for
 
 _BUILDERS: dict[str, Callable[[ReportContext], JsonObject]] = {
     "overview": overview.build,
+    "activity": activity.build,
     "usage": usage.build,
     "runs": runs.build,
     "tools": tools.build,

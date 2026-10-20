@@ -25,6 +25,9 @@ const TAB_SECTIONS = Object.freeze({
   tools: Object.freeze(['tools', 'skills']),
   extensions: Object.freeze(['extensions']),
   diagnostics: Object.freeze(['diagnostics']),
+  // Not a tab: the Overview's activity calendar, asked for all time beside
+  // the Overview's own report.
+  activity: Object.freeze(['activity']),
 });
 
 // Places of retired tabs open the tab that now holds their content.

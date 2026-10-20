@@ -4,6 +4,27 @@
   import InfoHint from '../../ui/InfoHint.svelte';
 
   let { tile } = $props();
+
+  // The tile's series as a sparkline path in a 100 x 24 box; null for fewer
+  // than two points or a flat zero series.
+  const spark = $derived.by(() => {
+    const values = (tile.spark ?? []).map((value) =>
+      typeof value === 'number' && Number.isFinite(value) ? value : 0,
+    );
+    const max = Math.max(0, ...values);
+    if (values.length < 2 || max <= 0) return null;
+    const points = values.map((value, index) => [
+      (index / (values.length - 1)) * 100,
+      22 - (value / max) * 20,
+    ]);
+    const line = points
+      .map(
+        ([x, y], index) =>
+          `${index ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)}`,
+      )
+      .join(' ');
+    return { line, area: `${line} L100 24 L0 24 Z` };
+  });
 </script>
 
 <div class="stats-tile">
@@ -40,6 +61,17 @@
       {@render changeMarker(tile.change)}
     {/if}
   </span>
+  {#if spark}
+    <svg
+      class="stats-tile__spark"
+      viewBox="0 0 100 24"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <path class="stats-tile__spark-area" d={spark.area} />
+      <path class="stats-tile__spark-line" d={spark.line} />
+    </svg>
+  {/if}
   {#if tile.detail}
     <span class="stats-tile__detail-row">
       <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the breakdown here.) -->

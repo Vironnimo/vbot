@@ -120,6 +120,11 @@ def test_a_report_without_activity_has_every_section_in_its_zero_form(
     assert [row["count"] for row in report["runs"]["errors"]["by_hour"]] == [0] * 24
     assert report["tools"]["totals"]["calls"] == 0
     assert report["extensions"] == {"extensions": []}
+    activity = report["activity"]
+    assert activity["days"] == []
+    assert activity["streaks"]["current"] == activity["totals"]["active_days"] == 0
+    assert activity["by_hour"] == [0] * 24
+    assert activity["favorite_model"] is activity["records"]["longest_run"] is None
     diagnostics = report["diagnostics"]
     assert diagnostics["roles"]["chat_messages_by_role"] == {"user": 0, "assistant": 0}
     assert diagnostics["roles"]["session_records_by_role"]["agent_takeover"] == 0
@@ -144,6 +149,79 @@ def test_a_report_builds_only_the_requested_sections_and_rejects_bad_requests(
     for request, message in requests:
         with pytest.raises(ValueError, match=message):
             service.report(**request)
+
+
+# -- Activity -----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_activity_counts_local_days_streaks_habits_and_records(
+    manager: ChatSessionManager, statistics: StatisticsFactory, ledger: UsageRecorder
+) -> None:
+    # The user's Runs at Berlin local 12:00 May 28, 23:30 May 29, 00:30 and
+    # 12:00 Jun 1; an automation Run on May 30 makes no day active.
+    session = manager.create("main", session_id="work")
+    starts = {
+        "a": (datetime(2026, 5, 28, 10, 0, tzinfo=UTC), 1_000, "user"),
+        "b": (datetime(2026, 5, 29, 21, 30, tzinfo=UTC), 60_000, "user"),
+        "cron": (datetime(2026, 5, 30, 10, 0, tzinfo=UTC), 1_000, "cron"),
+        "c": (datetime(2026, 5, 31, 22, 30, tzinfo=UTC), 1_000, "user"),
+        "d": (datetime(2026, 6, 1, 10, 0, tzinfo=UTC), 1_000, "user"),
+    }
+    for run_id, (start, duration_ms, kind) in starts.items():
+        _admit(manager, session.address, run_id, kind, at=start)
+        seed_history(
+            manager.get(session.address),
+            [_summary(run_id, start=start, duration_ms=duration_ms)],
+        )
+    await _call(
+        ledger,
+        {"input_tokens": 300, "output_tokens": 20},
+        model="p/big",
+        address=session.address,
+        run_id="d",
+        at=starts["d"][0],
+    )
+    await _call(ledger, {"input_tokens": 10, "output_tokens": 5}, model="p/small", at=BASE)
+    service = statistics(usage_recorder=ledger, clock=_clock)
+
+    activity = service.report(timezone="Europe/Berlin", sections=["activity"])["activity"]
+
+    assert [(day["date"], day["runs"], day["your_runs"]) for day in activity["days"]] == [
+        ("2026-05-28", 1, 1),
+        ("2026-05-29", 1, 1),
+        ("2026-05-30", 1, 0),
+        ("2026-06-01", 2, 2),
+    ]
+    assert activity["days"][-1]["tokens"] == 335
+    assert activity["totals"]["active_days"] == 3
+    assert activity["totals"]["first_active"] == "2026-05-28"
+    assert (activity["totals"]["runs"], activity["totals"]["your_runs"]) == (5, 4)
+    # Today (Jun 2, 02:30 local) has no Run yet, so yesterday keeps the streak.
+    assert activity["streaks"] == {
+        "current": 1,
+        "current_start": "2026-06-01",
+        "longest": 2,
+        "longest_start": "2026-05-28",
+        "longest_end": "2026-05-29",
+    }
+    assert [hour for hour, runs in enumerate(activity["by_hour"]) if runs] == [0, 12, 23]
+    assert activity["by_hour"][12] == 2
+    assert activity["by_weekday"] == [2, 0, 0, 1, 1, 0, 0]
+    assert activity["favorite_model"] == {
+        "model": "p/big",
+        "tokens": 320,
+        "calls": 1,
+        "share": 320 / 335,
+    }
+    assert activity["favorite_agent"] == {"agent_id": "main", "runs": 4, "share": 1.0}
+    records = activity["records"]
+    assert records["busiest_day"] == {"date": "2026-06-01", "your_runs": 2, "tokens": 335}
+    assert records["top_session"]["your_runs"] == 4
+    assert (records["longest_run"]["run_id"], records["longest_run"]["duration_ms"]) == (
+        "b",
+        60_000,
+    )
 
 
 # -- Windows and time ---------------------------------------------------------
