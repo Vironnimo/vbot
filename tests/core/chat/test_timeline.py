@@ -351,6 +351,30 @@ def test_checkpoint_and_fallback_stay_between_their_surrounding_phases() -> None
     )
 
 
+def test_subagent_message_rows_sit_where_the_message_arrived() -> None:
+    # A message read inside a Run is one of its items; one stored without a Run
+    # is its own row.
+    entry = {"subagent_id": "sub_a", "title": "Worker", "content": "Found it"}
+    messages = [
+        message("ask", "user", content="Fix it"),
+        message("before", "assistant", content="Working"),
+        message("in-run", "subagent_message", messages=[entry]),
+        message("after", "assistant", content="Done"),
+        message("summary", "run_summary", status="completed"),
+        message("idle", "subagent_message", history_run_id=None, messages=[entry]),
+    ]
+    items = history_timeline(messages)
+    assert [item["type"] for item in items] == ["message", "assistant_run", "subagent_message"]
+    assert items[2]["message"]["messages"] == [entry]
+    children = run_block(items)["items"]
+    assert [child["type"] for child in children] == [
+        "assistant_output",
+        "subagent_message",
+        "assistant_output",
+    ]
+    assert children[1]["messages"] == [entry]
+
+
 def test_goal_rows_stay_in_order_without_splitting_a_run() -> None:
     # A Run's goal row is one of its items; a change outside any Run is its own row.
     messages = [

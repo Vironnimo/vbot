@@ -387,7 +387,8 @@ export function timestampForItem(item) {
   if (
     item.type === 'compaction_separator' ||
     item.type === 'takeover_separator' ||
-    item.type === 'goal_event'
+    item.type === 'goal_event' ||
+    item.type === 'subagent_message'
   ) {
     return item.timestamp;
   }

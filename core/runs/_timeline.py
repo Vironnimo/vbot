@@ -177,6 +177,8 @@ class RunTimeline:
             self._fallback(event)
         elif kind == "goal_event_recorded":
             self._goal_event(event)
+        elif kind == "subagent_message_recorded":
+            self._subagent_message(event)
         elif kind.startswith("compaction_"):
             self._compaction(event)
         elif kind == "provider_heartbeat":
@@ -490,6 +492,22 @@ class RunTimeline:
                     for key in ("event", "reason", "objective", "turn", "max_turns")
                     if key in payload
                 },
+                "timestamp": payload.get("timestamp") or event.get("timestamp"),
+                "events": [copy.deepcopy(event)],
+            }
+        )
+
+    def _subagent_message(self, event: JsonObject) -> None:
+        payload = event.get("payload") or {}
+        note_id = payload.get("id")
+        child_id = f"subagent-message-{note_id}" if note_id else self._new_id("subagent_message")
+        if any(item["id"] == child_id for item in self.run["items"]):
+            return
+        self.run["items"].append(
+            {
+                "id": child_id,
+                "type": "subagent_message",
+                "messages": copy.deepcopy(payload.get("messages") or []),
                 "timestamp": payload.get("timestamp") or event.get("timestamp"),
                 "events": [copy.deepcopy(event)],
             }

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.chat import ChatLoop, ChatMessage, MessageSender, ReplySurface
 from core.chat.content_blocks import ContentBlock
+from core.chat.messages import SubAgentMessage
 from core.runs import (
     ActiveRunError,
     ChatRunManager,
@@ -103,11 +104,14 @@ class TriggerService:
         body: str,
         execution_owner: RunExecutionOwner | None = None,
         wake: bool = True,
+        subagent_message: SubAgentMessage | None = None,
     ) -> asyncio.Future[None]:
         """Coalesce one background result at the target Session's next Run boundary.
 
         An idle Session gets a Run that delivers it; with ``wake=False`` it is
-        persisted without one and reaches the Agent with its next Run.
+        persisted without one and reaches the Agent with its next Run. A
+        ``subagent_message`` travels as the display record of the delivering
+        note, so the conversation shows the message where it arrived.
         """
         return self._completion_delivery.submit(
             address,
@@ -116,6 +120,7 @@ class TriggerService:
             body=body,
             execution_owner=execution_owner,
             wake=wake,
+            subagent_message=subagent_message,
         )
 
     def set_owned_completion_starter(self, starter: Callable[..., Awaitable[Run]]) -> None:

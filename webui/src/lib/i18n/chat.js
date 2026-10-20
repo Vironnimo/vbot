@@ -333,6 +333,7 @@ export default Object.freeze({
   'chat.changedFiles.folderFilesMany': '{count} files',
   'chat.subagent.label': 'Subagent',
   'chat.subagent.sendLabel': 'Message to Subagent',
+  'chat.subagent.messageFromLabel': 'Message from Subagent',
   'chat.subagent.openSession': 'Open Sub-Agent Session',
   'chat.subagent.copyTask': 'Copy task',
   'chat.subagent.taskCopied': 'Task copied',

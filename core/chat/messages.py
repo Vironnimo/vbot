@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -140,6 +140,9 @@ from core.chat._message_records import (
     ReplySurfaceKind as ReplySurfaceKind,
 )
 from core.chat._message_records import (
+    SubAgentMessage as SubAgentMessage,
+)
+from core.chat._message_records import (
     ToolCall as ToolCall,
 )
 from core.chat._message_records import (
@@ -200,6 +203,7 @@ class ChatMessage:
     output_files: list[AssistantFileReference] | None = None
     model_fallback: ModelFallback | None = None
     goal_event: GoalEvent | None = None
+    subagent_messages: tuple[SubAgentMessage, ...] | None = None
     # Internal destination captured by Sessions when this entry is persisted.
     subagent_reply_target: str | None = None
     # Actual package loaded by a Skill activation; never sent to the Model.
@@ -242,12 +246,14 @@ class ChatMessage:
         *,
         model_fallback: ModelFallback | None = None,
         goal_event: GoalEvent | None = None,
+        subagent_messages: Sequence[SubAgentMessage] | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a kernel-internal note message.
 
-        A note that records a Model fallback switch or a goal change also
-        carries that record, which History shows in place of the note.
+        A note that records a Model fallback switch, a goal change or the
+        ``message_parent`` messages it delivers also carries that record, which
+        History shows in place of the note.
         """
         return cls(
             id=_new_message_id(),
@@ -256,6 +262,7 @@ class ChatMessage:
             content=content,
             model_fallback=model_fallback,
             goal_event=goal_event,
+            subagent_messages=tuple(subagent_messages) if subagent_messages else None,
         )
 
     @classmethod
@@ -581,6 +588,8 @@ class ChatMessage:
             message["model_fallback"] = self.model_fallback.to_dict()
         if self.goal_event is not None:
             message["goal_event"] = self.goal_event.to_dict()
+        if self.subagent_messages is not None:
+            message["subagent_messages"] = [entry.to_dict() for entry in self.subagent_messages]
         return message
 
     @classmethod
@@ -655,6 +664,16 @@ class ChatMessage:
         )
         goal_event_data = data.get("goal_event")
         goal_event = GoalEvent.from_dict(goal_event_data) if goal_event_data is not None else None
+        subagent_messages_data = data.get("subagent_messages")
+        if subagent_messages_data is not None and (
+            not isinstance(subagent_messages_data, list) or not subagent_messages_data
+        ):
+            raise ChatMessageValidationError("subagent_messages must be a non-empty array")
+        subagent_messages = (
+            tuple(SubAgentMessage.from_dict(entry) for entry in subagent_messages_data)
+            if subagent_messages_data is not None
+            else None
+        )
         try:
             package_data = data.get("skill_package")
             skill_package = (
@@ -708,6 +727,7 @@ class ChatMessage:
             output_files=output_files,
             model_fallback=model_fallback,
             goal_event=goal_event,
+            subagent_messages=subagent_messages,
         )
         message.validate()
         return message

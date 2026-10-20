@@ -149,6 +149,7 @@
 
 .btn-tertiary.terminals-view__history-button {
   height: 30px;
+  min-height: 30px;
   gap: 5px;
   padding: 0 8px;
 }
@@ -162,6 +163,7 @@
 
 .btn-secondary.terminals-view__start-main {
   height: 30px;
+  min-height: 30px;
   gap: 6px;
   padding: 0 10px;
   border-top-right-radius: 0;
@@ -171,6 +173,7 @@
 .btn-secondary.btn-icon.terminals-view__start-more {
   width: 24px;
   height: 30px;
+  min-height: 30px;
   margin-left: -1px;
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
@@ -355,6 +358,7 @@
 .btn-danger.btn-icon.terminals-view__tile-action {
   width: 24px;
   height: 24px;
+  min-height: 24px;
 }
 
 .terminals-view__latest-action {
@@ -392,13 +396,15 @@
   min-width: 0;
   min-height: 0;
   flex: 1;
-  padding: 8px 10px;
   overflow: hidden;
   background: var(--terminal-surface);
 }
 
+/* The inset belongs to the xterm element: FitAddon subtracts its padding,
+   but counts the host's padding as room because of border-box sizing. */
 .terminals-view__tile-host .xterm {
   height: 100%;
+  padding: 8px 10px;
 }
 
 .terminals-view__tile-host .xterm-viewport,

@@ -57,6 +57,7 @@
 
   import ChatTimelineEntry from './ChatTimelineEntry.svelte';
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
+  import ChatSubAgentMessage from './ChatSubAgentMessage.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
 
@@ -713,6 +714,12 @@
         <div class="date-sep goal-sep run-goal-sep">
           {goalEventLabel(child)}
         </div>
+      {:else if child.type === 'subagent_message'}
+        <ChatSubAgentMessage
+          item={child}
+          {onNavigateToSubAgent}
+          {onSubAgentContextMenu}
+        />
       {/if}
     {/snippet}
     {#each runDisplayGroups as group (group.id)}

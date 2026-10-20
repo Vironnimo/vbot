@@ -40,7 +40,7 @@ from core.chat.errors import (
 )
 from core.chat.events import (
     _close_adapter,
-    _emit_goal_events,
+    _emit_display_records,
     _emit_message_event,
     _persist_run_error,
 )
@@ -410,7 +410,7 @@ class RunExecution:
                         report_subagent_user_input(
                             self._dependencies, session_address, user_message.id
                         )
-                    _emit_goal_events(run, persisted_messages)
+                    _emit_display_records(run, persisted_messages)
                     if not internal and not request.input_already_persisted:
                         # A Stop during speech-to-text still persisted the input.
                         _emit_message_event(
