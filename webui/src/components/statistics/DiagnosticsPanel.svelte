@@ -1,8 +1,8 @@
 <script>
   // Diagnostics tab: troubleshooting detail, every block collapsed until
   // opened. Compactions, cache behaviour, the data quality of recorded
-  // usage per Model, bursts of failed Model attempts, runaway Runs, and the
-  // stored record structure.
+  // usage per Model, failed Model attempts by reason and their bursts,
+  // runaway Runs, and the stored record structure.
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import DataTable from '../ui/DataTable.svelte';
@@ -12,6 +12,8 @@
     agentFilterText,
     compactionStrategyLabel,
     compactionStrategyTooltip,
+    failureClassLabel,
+    failureClassTooltip,
     formatCost,
     formatDecimal,
     formatDurationMs,
@@ -316,6 +318,55 @@
       sortable: false,
       cell: agentsCell,
     },
+    {
+      id: 'classes',
+      label: t('statistics.failures.reasons'),
+      sortable: false,
+      cell: classesCell,
+    },
+  ]);
+
+  const failureClassColumns = $derived([
+    {
+      id: 'key',
+      label: t('statistics.failures.reason'),
+      sortValue: (row) => failureClassLabel(row.key),
+      cell: failureClassCell,
+    },
+    {
+      id: 'count',
+      label: t('statistics.col.failed'),
+      align: 'end',
+      defaultDirection: 'desc',
+      format: (row) =>
+        `${formatInteger(row.count, locale)} · ${formatShare(row.count, failedAttempts.total, locale)}`,
+    },
+    {
+      id: 'avg_duration_ms',
+      label: t('statistics.failures.avgDuration'),
+      hint: t('statistics.failures.durationHint'),
+      align: 'end',
+      defaultDirection: 'desc',
+      format: (row) => formatDurationMs(row.avg_duration_ms),
+    },
+    {
+      id: 'http_statuses',
+      label: t('statistics.failures.httpStatuses'),
+      sortable: false,
+      cell: httpStatusesCell,
+    },
+    {
+      id: 'providers',
+      label: t('statistics.dimension.provider'),
+      sortable: false,
+      cell: providersCell,
+    },
+    {
+      id: 'models',
+      label: t('statistics.col.models'),
+      sortable: false,
+      cell: modelsCell,
+    },
   ]);
 
   const roleRows = $derived(
@@ -393,6 +444,32 @@
 
 {#snippet agentsCell(row)}
   {@render burstEntries(row.agents ?? [], agentName, agentFilterText)}
+{/snippet}
+
+{#snippet classesCell(row)}
+  {@render burstEntries(row.classes ?? [], failureClassName, failureClassLabel)}
+{/snippet}
+
+{#snippet providersCell(row)}
+  {@render burstEntries(row.providers ?? [], plainName, (key) => key)}
+{/snippet}
+
+{#snippet httpStatusesCell(row)}
+  {@render burstEntries(row.http_statuses ?? [], plainName, (key) => key)}
+{/snippet}
+
+{#snippet failureClassCell(row)}
+  {@render failureClassName(row.key)}
+{/snippet}
+
+{#snippet failureClassName(key)}
+  <span class="stats-name" use:tooltip={failureClassTooltip(key)}
+    >{failureClassLabel(key)}</span
+  >
+{/snippet}
+
+{#snippet plainName(key)}
+  <span>{key}</span>
 {/snippet}
 
 {#snippet burstModel(key)}
@@ -540,6 +617,15 @@
     >
     <div class="stats-disclosure__body">
       <p class="stats-note">{t('statistics.errors.failedAttemptsHint')}</p>
+      <DataTable
+        columns={failureClassColumns}
+        rows={failedAttempts.by_class ?? []}
+        rowKey={(row) => row.key}
+        ariaLabel={t('statistics.failures.byClass')}
+        initialSort={{ column: 'count', direction: 'desc' }}
+        emptyText={t('statistics.none')}
+        dense
+      />
       <DataTable
         columns={burstColumns}
         rows={failedAttempts.hours ?? []}
