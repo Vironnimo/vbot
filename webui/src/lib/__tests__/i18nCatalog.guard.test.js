@@ -34,7 +34,7 @@ const COMPOSED_KEYS = {
   // The activity calendar's metrics (statisticsView/activity.js ACTIVITY_METRICS).
   'statistics.activity.metric.*': ['runs', 'tokens', 'cost'],
   // Project Source kinds and Profile translation states from the Projects contract.
-  'projects.sources.*': ['agents', 'skills', 'instructions'],
+  'projects.sources.*': ['agents', 'skills'],
   'projects.status.*': ['ready', 'limited', 'needs_attention'],
   'projects.translation.*': [
     'applied',
@@ -148,6 +148,8 @@ const COMPOSED_KEYS = {
   'settings.recall.indexError.*': 'tOr', // Recall index failure code
   'settings.webSearch.providers.*': 'tOr', // web search or fetch provider
   'statistics.errorKind.*': 'tOr', // recorded Run error kind
+  'statistics.failureClass.*': 'tOr', // recorded Model request failure class
+  'statistics.failureClassHint.*': 'tOr', // optional explanation of a failure class
   'statistics.origin.*': 'tOr', // Run origin
   'statistics.skills.origin.*': 'tOr', // Skill origin scope
   'statistics.status.*': 'tOr', // Run status

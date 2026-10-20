@@ -20,12 +20,13 @@
   );
   let mainFileSummary = $derived(
     instructionStatus.main_file
-      ? t(
-          projectsState.editForm.auto_instructions
-            ? 'projects.instructions.mainLoaded'
-            : 'projects.instructions.mainFound',
-          { file: instructionStatus.main_file },
-        )
+      ? projectsState.editForm.auto_instructions
+        ? t('projects.instructions.mainLoaded', {
+            file: instructionStatus.main_file,
+          })
+        : t('projects.instructions.mainFound', {
+            file: instructionStatus.main_file,
+          })
       : t('projects.instructions.mainNone'),
   );
 
