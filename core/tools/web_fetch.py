@@ -43,6 +43,7 @@ from core.tools._web_fetch_pages import (
     similar_refs,
 )
 from core.tools._web_fetch_services import FetchServiceError, clean_service_text, fetch_service
+from core.tools._web_fetch_walls import WALL_GUIDANCE, bot_wall, is_script_shell
 from core.tools.contracts import compile_tool_contract
 from core.tools.read_extract import (
     ExtractionError,
@@ -71,34 +72,6 @@ from core.tools.tools import (
 # guard so a fetched executable/archive returns a notice, not decoded garbage.
 _BINARY_DETECTION_BYTES = 8192
 
-# Bot-wall signatures. Some hosts answer HTTP 200 with a challenge or login
-# page instead of content (Reddit's DataDome check, Reddit's login redirect,
-# Cloudflare's interstitial). Reporting those as success would hand the agent
-# useless boilerplate disguised as page text, so they map to request_error.
-# Rules stay narrow and host-scoped on purpose: a generic heuristic would flag
-# real pages that merely link to a login (X profiles and tweets do exactly
-# that while carrying readable content).
-_CHALLENGE_TITLE_MARKERS: frozenset[str] = frozenset(
-    {
-        "just a moment...",
-        "access denied",
-        "verify you are human",
-        "attention required! | cloudflare",
-    }
-)
-_REDDIT_HOST_SUFFIX = "reddit.com"
-_REDDIT_CHALLENGE_MARKER = "prove your humanity"
-_REDDIT_LOGIN_PATH_PREFIX = "/login"
-# A line demanding JavaScript, as script-only apps show without it: "You need to
-# enable JavaScript to run this app." A page explaining how to enable it does not
-# start a line that way.
-_SCRIPT_DEMAND = re.compile(
-    r"^[#>*\s]*(?:(?:you (?:need|have) to|please,?) )?(?:enable|turn on) javascript"
-    r"|^[#>*\s]*(?:this (?:app|site|page|website) )?(?:requires|needs) javascript"
-    r"|^[#>*\s]*javascript (?:is required|must be enabled)",
-    re.I | re.M,
-)
-_WALL_GUIDANCE = "Try another source."
 # Direct failures a real browser can still read: bot checks, JavaScript pages and
 # redirect loops that wait for something only a browser does.
 _BROWSER_CODES = frozenset({"access_denied", "no_content", "redirect_loop"})
@@ -289,57 +262,6 @@ def _fetch_document_result(url: str, sniffed: str, data: bytes) -> JsonObject | 
     return tool_success({"content": output, "url": url, "source": "document"})
 
 
-def _detect_bot_wall(url: str, metadata: dict[str, str], text: str) -> str | None:
-    """Return a failure message when the page is a bot check or login wall.
-
-    ``None`` means the page carries real content (or claims to). Matching is
-    deliberately narrow — a host-scoped challenge marker, a host-scoped login
-    path, one exact well-known challenge title — so pages that merely link to
-    a login form are never flagged.
-    """
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    path = parsed.path or ""
-    title = metadata.get("title", "").strip().lower()
-
-    generic_wall = title in {"access denied", "verify you are human"}
-    wall_text = re.sub(r"^[#>*\s]+", "", text).strip().lower()
-    wall_evidence = wall_text == title or bool(
-        re.search(
-            r"verify (?:that )?you are (?:a )?human|you (?:have been|are) blocked"
-            r"|you (?:do not|don't) have permission|request (?:was )?blocked",
-            wall_text,
-        )
-    )
-    if (
-        title in _CHALLENGE_TITLE_MARKERS
-        and len(text) < 4000
-        and (not generic_wall or (len(text) < 600 and wall_evidence))
-    ):
-        return f"Blocked by a bot check at {url}; no readable content. {_WALL_GUIDANCE}"
-
-    # A localized reCAPTCHA interstitial can answer HTTP 200. Require its title
-    # and opening access-check sentence about this host, not a mere CAPTCHA
-    # mention or an embedded widget on a page with useful content.
-    if (
-        len(text) < 4000
-        and re.fullmatch(r"ihr browser wird geprüft\s*[-–—]\s*recaptcha", title)
-        and re.match(
-            rf"ihr browser wird geprüft,\s+bevor sie auf {re.escape(host)} zugreifen können",
-            re.sub(r"^[#>*\s]+", "", wall_text.removeprefix(title)),
-        )
-    ):
-        return f"Blocked by a bot check at {url}; no readable content. {_WALL_GUIDANCE}"
-
-    if host == _REDDIT_HOST_SUFFIX or host.endswith("." + _REDDIT_HOST_SUFFIX):
-        if path.startswith(_REDDIT_LOGIN_PATH_PREFIX):
-            return f"Blocked by a login wall at {url}; no readable content. {_WALL_GUIDANCE}"
-        if _REDDIT_CHALLENGE_MARKER in text.lower():
-            return f"Blocked by a bot check at {url}; no readable content. {_WALL_GUIDANCE}"
-
-    return None
-
-
 def _shape_success(
     attachment_store: Any,
     result: PublicResponse,
@@ -412,25 +334,15 @@ def _shape_success(
         final_url,
         include_links=output_mode == "markdown",
     )
-    wall = _detect_bot_wall(final_url, metadata, main)
+    wall = bot_wall(final_url, metadata, main)
     if wall is not None:
         return tool_failure("access_denied", wall, retryable=False)
-    if not main.strip() or (
-        len(main) < 600
-        and (
-            _SCRIPT_DEMAND.search(main)
-            or re.match(
-                "checking your browser|verify (?:that )?you are (?:a )?human",
-                re.sub(r"^[#>*\s]+", "", main),
-                re.I,
-            )
-        )
-    ):
+    if is_script_shell(main):
         return tool_failure(
             "no_content",
             (
                 f"{final_url} has no readable content without JavaScript, or shows an "
-                f"access check instead. {_WALL_GUIDANCE}"
+                f"access check instead. {WALL_GUIDANCE}"
             ),
             retryable=False,
         )
@@ -740,7 +652,7 @@ def make_web_fetch_handler(
             if final.username or final.password:
                 raise ValueError("Service returned a URL containing credentials.")
             await check_public_url(data["url"])
-            wall = _detect_bot_wall(data["url"], {"title": data.get("title", "")}, data["content"])
+            wall = bot_wall(data["url"], {"title": data.get("title", "")}, data["content"])
             if wall:
                 raise FetchServiceError(wall)
             return tool_success(data)
