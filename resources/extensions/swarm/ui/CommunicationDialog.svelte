@@ -29,7 +29,7 @@
 {#if model.runActions.settingsRun && model.runActions.deliveryDraft}<Modal
     title={t('swarm.communication.title')}
     description={runTitle(model.runActions.settingsRun)}
-    size="md"
+    size="lg"
     closeDisabled={busy}
     onClose={model.runActions.closeSettings}
     >{#snippet body()}<div class="modal-body">

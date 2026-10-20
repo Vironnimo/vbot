@@ -613,15 +613,17 @@
         </div>
       {/snippet}
       {#snippet footer()}
-        <!-- A long path loses its start; the tooltip shows it whole. -->
-        <code
-          class="path-browser__choice"
-          use:tooltip={{
-            text: browser.chosenValue,
-            mono: true,
-            whenTruncated: true,
-          }}><bdi>{browser.chosenValue}</bdi></code
-        >
+        {#if browser.chosenValue}
+          <!-- A long path loses its start; the tooltip shows it whole. -->
+          <code
+            class="path-browser__choice"
+            use:tooltip={{
+              text: browser.chosenValue,
+              mono: true,
+              whenTruncated: true,
+            }}><bdi>{browser.chosenValue}</bdi></code
+          >
+        {/if}
         <Button variant="secondary" onClick={onClose}
           >{t('common.cancel')}</Button
         >
@@ -918,5 +920,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     direction: rtl;
+  }
+
+  /* On a phone the buttons share the footer row, so the chosen path takes
+     its own line above them. */
+  @media (max-width: 640px) {
+    :global(.modal-footer):has(> .path-browser__choice) {
+      flex-wrap: wrap;
+    }
+
+    .path-browser__choice {
+      flex-basis: 100%;
+    }
   }
 </style>
