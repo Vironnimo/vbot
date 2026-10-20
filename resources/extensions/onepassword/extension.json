@@ -1,0 +1,6 @@
+{
+  "name": "1Password",
+  "description": "Use items of your 1Password vaults as Agent Secrets, read through the 1Password CLI with a service account.",
+  "version": "1.0.0",
+  "api_version": 17
+}
