@@ -370,8 +370,25 @@ async def test_html_becomes_readable_text(
             ['{"recipe": "cake", "tasty": true}'],
             ["Binary content"],
         ),
+        # Data labelled HTML without any markup keeps its tabs and line breaks.
+        (
+            "https://example.com/api/series?format=csv",
+            "text/html; charset=utf-8",
+            b"Latitude:\t52.5\nyear\tmonth\tirradiation\n2020\t1\t21.3\n2020\t2\t40.7\n",
+            ["Latitude:\t52.5\nyear\tmonth\tirradiation\n2020\t1\t21.3\n"],
+            [],
+        ),
     ],
-    ids=["pdf", "docx-without-extension", "scanned-pdf", "malformed-pdf", "exe", "nul", "json"],
+    ids=[
+        "pdf",
+        "docx-without-extension",
+        "scanned-pdf",
+        "malformed-pdf",
+        "exe",
+        "nul",
+        "json",
+        "csv-labelled-html",
+    ],
 )
 async def test_non_html_responses_become_text_or_a_binary_notice(
     tmp_path: Path,

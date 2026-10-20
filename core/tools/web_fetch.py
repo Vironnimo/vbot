@@ -81,6 +81,8 @@ _BINARY_DETECTION_BYTES = 8192
 # Direct failures a real browser can still read: bot checks, JavaScript pages and
 # redirect loops that wait for something only a browser does.
 _BROWSER_CODES = frozenset({"access_denied", "no_content", "redirect_loop"})
+# A tag, comment or doctype: what a body labelled HTML must show to be read as HTML.
+_MARKUP = re.compile(r"<(?:!doctype|!--|/?[a-z][a-z0-9-]*(?:\s[^<>]*)?/?>)", re.I)
 # Several URLs in one call share roughly two single-page results of Context.
 _MULTI_PAGE_BUDGET = 2 * DEFAULT_MAX_CHARS
 _MULTI_PAGE_MIN_CHARS = 2_000
@@ -300,7 +302,9 @@ def _shape_success(
         return _binary_notice(final_url, sniffed, len(result.content))
 
     raw_body = result.text
-    is_html = "html" in media_type or (
+    # A server can label data such as CSV text/html; without any markup near the
+    # start it reads as plain text, which keeps its tabs and line breaks.
+    is_html = ("html" in media_type and bool(_MARKUP.search(raw_body[:4096]))) or (
         media_type in {"", "text/plain", "application/octet-stream"}
         and re.match(
             r"(?:(?:<!--[\s\S]*?-->|<\?xml[^>]*\?>)\s*)*"
