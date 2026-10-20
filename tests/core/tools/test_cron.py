@@ -11,6 +11,8 @@ from unittest.mock import Mock
 import pytest
 
 import core.tools.cron as cron_tool_module
+from core.automation.cron import CronDelivery
+from core.chat import ReplySurface
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -41,7 +43,10 @@ def test_schema_advertises_only_the_canonical_fields() -> None:
         "schedule",
         "event_id",
         "repeat",
+        "session",
+        "deliver",
     ]
+    assert properties["deliver"]["enum"] == ["here", "app", "none"]
     assert properties["action"]["enum"] == [
         "create",
         "list",
@@ -172,6 +177,9 @@ def test_list_shows_every_job_as_a_readable_block(tmp_path: Path) -> None:
         {"action": "create", "name": "Paused", "prompt": PROMPT, "schedule": "every 2h"}
     )
     paused_id = paused["data"]["id"]
+    quiet = next(job for job in tool.jobs() if job.name == "Digest")
+    tool.service._jobs[quiet.id].last_outcome = "success"
+    tool.service._jobs[quiet.id].last_run_silent = True
     tool.call({"action": "disable", "id": paused_id})
     failed = tool.service._jobs[paused_id]
     failed.status = "failed"
@@ -186,6 +194,7 @@ def test_list_shows_every_job_as_a_readable_block(tmp_path: Path) -> None:
     header, digest, stopped = text.split("\n\n")
     assert header == "jobs: 2\ntimezone: Europe/Berlin"
     assert "name: Digest\nstatus: active\nschedule: 0 8 * * *\n" in digest
+    assert "last_outcome: success (answered [SILENT])" in digest
     assert digest.endswith("prompt: Write the digest.\n  Keep it short.")
     assert "status: failed" in stopped
     assert "next_run" not in stopped
@@ -537,6 +546,125 @@ def test_target_choices_wait_for_the_reference_lock(tmp_path: Path, action: str)
 # -- jobs at calendar events -----------------------------------------------------------------
 
 
+def _chat(thread_id: str | None = None) -> ReplySurface:
+    """The calling Run answers chat-42 of agent-one's Telegram Channel tg-main."""
+    return ReplySurface(
+        kind="channel",
+        platform="telegram",
+        platform_display_name="Telegram",
+        channel_id="tg-main",
+        conversation_kind="direct",
+        platform_target="chat-42",
+        thread_id=thread_id,
+    )
+
+
+@pytest.mark.parametrize(
+    ("surface", "fields", "delivery", "shown"),
+    [
+        pytest.param(None, {}, CronDelivery(kind="app"), "app", id="vbot"),
+        pytest.param(
+            _chat(),
+            {},
+            CronDelivery(kind="chat", channel_id="tg-main", platform_target="chat-42"),
+            "chat chat-42 of Channel tg-main",
+            id="chat",
+        ),
+        pytest.param(
+            _chat("7"),
+            {"deliver": "here"},
+            CronDelivery(
+                kind="chat", channel_id="tg-main", platform_target="chat-42", thread_id="7"
+            ),
+            "chat chat-42, thread 7, of Channel tg-main",
+            id="chat-thread",
+        ),
+        # Hermes names the platform of the chat the job was made in.
+        pytest.param(
+            _chat(),
+            {"deliver": "Telegram"},
+            CronDelivery(kind="chat", channel_id="tg-main", platform_target="chat-42"),
+            "chat chat-42 of Channel tg-main",
+            id="this-platform",
+        ),
+        pytest.param(_chat(), {"deliver": "app"}, CronDelivery(kind="app"), "app", id="app"),
+        pytest.param(_chat(), {"deliver": "none"}, None, "none", id="none"),
+        # The chat belongs to the caller's Channel; another Agent's job reports in vBot.
+        pytest.param(
+            _chat(), {"target": "builder"}, CronDelivery(kind="app"), "app", id="other-agent"
+        ),
+    ],
+)
+def test_answers_go_to_the_conversation_the_job_was_made_in_unless_told_otherwise(
+    tmp_path: Path,
+    surface: ReplySurface | None,
+    fields: dict[str, Any],
+    delivery: CronDelivery | None,
+    shown: str,
+) -> None:
+    tool = cron_tool(tmp_path)
+
+    envelope, text = tool.call(
+        {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *", **fields},
+        reply_surface=surface,
+    )
+
+    assert envelope["ok"] is True, text
+    assert tool.only_job().delivery == delivery
+    assert f"deliver: {shown}" in text
+    assert ("not to builder" in text) == ("target" in fields)
+
+
+@pytest.mark.parametrize(
+    ("fields", "cause"),
+    [
+        pytest.param(
+            {"target": "builder", "deliver": "here"},
+            "this chat belongs to your Channel, so a job of builder cannot deliver here",
+            id="another-agents-job",
+        ),
+        pytest.param(
+            {"deliver": "slack"}, "this conversation is not a slack chat", id="another-platform"
+        ),
+        pytest.param({}, "delivery Channel tg-main is not available", id="channel-gone"),
+    ],
+)
+def test_a_chat_that_cannot_take_the_answers_is_refused_with_vbot_instead(
+    tmp_path: Path, fields: dict[str, Any], cause: str
+) -> None:
+    tool = cron_tool(tmp_path)
+    if not fields:
+        tool.chats.owners.clear()
+
+    message = tool.refused(
+        {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *", **fields},
+        reply_surface=_chat(),
+    )
+
+    assert cause in message
+    assert message.endswith('"deliver":"app"}')
+
+
+def test_session_current_continues_this_conversation_until_new(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+
+    job, created = tool.created(
+        {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *", "session": "current"}
+    )
+    refused = tool.refused(
+        {"action": "update", "id": job.id, "target": "builder", "session": "current"}
+    )
+    _envelope, renewed = tool.call({"action": "update", "id": job.id, "session": "new"})
+
+    assert job.session_id == "session-one"
+    assert "session: session-one" in created
+    assert 'session "current" is your conversation, so a job of builder cannot continue it' in (
+        refused
+    )
+    assert tool.only_job().session_id is None
+    assert "session:" not in renewed
+
+
 def _standup(tool: CronTool) -> str:
     """Mondays 09:00-09:15 from 2030-01-07; return its id."""
     return tool.calendar.create_event(
@@ -575,6 +703,7 @@ def test_event_job_runs_before_at_or_after_each_occurrence(
         f"event: Standup ({standup})",
         f"next_run: {next_run}",
         "target: agent-one",
+        "deliver: app",
     ]
 
 

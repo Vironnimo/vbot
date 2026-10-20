@@ -23,7 +23,18 @@ class CronCallRefusedError(ValueError):
 REFUSAL_PREFIX = "cron was not run: "
 
 
-_CALL_ORDER = ("action", "id", "event_id", "target", "name", "prompt", "schedule", "repeat")
+_CALL_ORDER = (
+    "action",
+    "id",
+    "event_id",
+    "target",
+    "name",
+    "prompt",
+    "schedule",
+    "repeat",
+    "session",
+    "deliver",
+)
 
 
 _LONG_PROMPT = 120

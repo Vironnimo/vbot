@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from core.automation.cron import (
+    CronDelivery,
     CronJobInPastError,
     CronJobNotFoundError,
     CronJobValidationError,
@@ -20,9 +21,13 @@ from core.automation.cron import (
 )
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.tools._cron_arguments import (
+    CURRENT_SESSION,
+    DELIVER_PLATFORM_FIELD,
     ENABLED_FIELD,
     EVENT_REPEAT_REFUSAL,
     EVENT_TIME_STAND_IN,
+    HERE,
+    NEW_SESSION,
     OMIT,
     REFUSAL_PREFIX,
     SELF_TARGET,
@@ -36,6 +41,7 @@ from core.tools._cron_arguments import (
 )
 from core.tools._cron_timezone import zoned_schedule
 from core.tools._durations import LATE_LIMITS_FIELD, with_late_limits_note
+from core.tools.call_syntax import spelling
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
@@ -63,7 +69,17 @@ CRON_TOOL_DESCRIPTION = (
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
 
 _ID_ACTIONS = frozenset({"update", "delete", "enable", "disable"})
-_UPDATE_FIELDS = ("target", "name", "prompt", "schedule", "event_id", "repeat", ENABLED_FIELD)
+_UPDATE_FIELDS = (
+    "target",
+    "name",
+    "prompt",
+    "schedule",
+    "event_id",
+    "repeat",
+    "session",
+    "deliver",
+    ENABLED_FIELD,
+)
 _SCHEDULE_FORMS = (
     'Use five cron fields in server time such as "0 9 * * 1-5" (weekdays at 09:00), '
     '"every 2h", "in 30m", or a local time such as "2030-01-01T09:00".'
@@ -137,6 +153,23 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "Number of runs before the job ends. Omit for no limit; null on update removes "
                 "a limit."
+            ),
+        },
+        "session": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Session each run continues: current for this conversation, or a Session id. "
+                "Omit to start each run in a new Session without this conversation; on update, "
+                "new does that again."
+            ),
+        },
+        "deliver": {
+            "type": "string",
+            "enum": ["here", "app", "none"],
+            "description": (
+                "Where each run's final answer goes: here (this chat, or vBot outside a chat), "
+                "app (vBot, with a notification) or none. Omit on create for here."
             ),
         },
     },
@@ -311,6 +344,10 @@ async def _handle_create(
             )
         )
     paused = arguments.get(ENABLED_FIELD) is False
+    session_id = (
+        _session_id(context, arguments, agent_id, project_id) if "session" in arguments else None
+    )
+    delivery, delivery_note = _delivery(context, arguments, agent_id, project_id)
     job = await cron_service.create_job(
         agent_id=agent_id,
         name=arguments.get("name"),
@@ -324,12 +361,15 @@ async def _handle_create(
         event_edge=parsed.event_edge,
         event_offset_minutes=parsed.event_offset_minutes,
         remaining_runs=repeat,
-        session_id=None,
+        session_id=session_id,
         status="paused" if paused else "active",
         project_id=project_id,
+        delivery=delivery.stored(),
         actor="tool",
     )
     notes = [note] if note else []
+    if delivery_note:
+        notes.append(delivery_note)
     if paused:
         notes.append(f'The job is paused; {{"action":"enable","id":"{job.id}"}} starts it.')
     return _job_success(cron_service, job, notes)
@@ -357,8 +397,8 @@ async def _handle_update(
     if not any(name in arguments for name in _UPDATE_FIELDS):
         raise CronCallRefusedError(
             refusal(
-                "update needs a field to change: name, prompt, schedule, event_id, repeat, or "
-                "target. To pause or resume the job, use disable or enable.",
+                "update needs a field to change: name, prompt, schedule, event_id, repeat, "
+                "target, session or deliver. To pause or resume the job, use disable or enable.",
                 arguments,
                 schedule=_SCHEDULE_STAND_IN,
             )
@@ -387,6 +427,19 @@ async def _handle_update(
             updates["remaining_runs"] = 1
     if "repeat" in arguments:
         updates["remaining_runs"] = arguments["repeat"]
+    if "session" in arguments or "deliver" in arguments:
+        # Both are read against the Agent that runs the job after this update.
+        current = cron_service.get_job(job_id)
+        agent_id, project_id = (
+            (updates["agent_id"], updates["project_id"])
+            if "agent_id" in updates
+            else (current.agent_id, current.project_id)
+        )
+        if "session" in arguments:
+            updates["session_id"] = _session_id(context, arguments, agent_id, project_id)
+        if "deliver" in arguments:
+            delivery, _note = _delivery(context, arguments, agent_id, project_id)
+            updates["delivery"] = delivery.stored()
     if ENABLED_FIELD in arguments:
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
     job = await cron_service.update_job(job_id, actor="tool", **updates)
@@ -398,6 +451,85 @@ def _target_agent(context: ToolContext, target: str) -> tuple[str, str | None]:
     if target == SELF_TARGET:
         return context.agent_id, context.project_id
     return parse_agent_address(target)
+
+
+def _session_id(
+    context: ToolContext, arguments: JsonObject, agent_id: str, project_id: str | None
+) -> str | None:
+    """The Session a call pins the job to; None starts each run in a new Session."""
+    session: str = arguments["session"]
+    if session == NEW_SESSION:
+        return None
+    if session != CURRENT_SESSION:
+        return session
+    if (agent_id, project_id) != (context.agent_id, context.project_id):
+        raise CronCallRefusedError(
+            refusal(
+                'session "current" is your conversation, so a job of '
+                f"{format_agent_address(agent_id, project_id)} cannot continue it.",
+                arguments,
+                session=OMIT,
+            )
+        )
+    return context.session_id
+
+
+def _delivery(
+    context: ToolContext, arguments: JsonObject, agent_id: str, project_id: str | None
+) -> tuple[CronDelivery, str | None]:
+    """Where a call sends the job's answers, with a note when here is not this chat.
+
+    here is the chat this Run answers, when the job runs as the Agent whose Channel
+    it is; outside a chat it is vBot.
+    """
+    choice = arguments.get("deliver", HERE)
+    if choice != HERE:
+        return CronDelivery(kind=choice), None
+    surface = context.reply_surface
+    chat = (
+        surface
+        if surface is not None
+        and surface.kind == "channel"
+        and surface.channel_id
+        and surface.platform_target
+        else None
+    )
+    platform = arguments.get(DELIVER_PLATFORM_FIELD)
+    if platform is not None and (chat is None or spelling(chat.platform or "") != platform):
+        raise CronCallRefusedError(
+            refusal(
+                f"this conversation is not a {platform} chat, and a job delivers each run's "
+                "answer only to this conversation (here), to vBot (app) or nowhere (none).",
+                arguments,
+                deliver="app",
+            )
+        )
+    if chat is None:
+        return CronDelivery(kind="app"), None
+    assert chat.channel_id is not None and chat.platform_target is not None
+    if (agent_id, project_id) != (context.agent_id, None):
+        target = format_agent_address(agent_id, project_id)
+        if "deliver" in arguments:
+            raise CronCallRefusedError(
+                refusal(
+                    f"this chat belongs to your Channel, so a job of {target} cannot deliver here.",
+                    arguments,
+                    deliver="app",
+                )
+            )
+        return (
+            CronDelivery(kind="app"),
+            f"Each run's answer goes to vBot: this chat belongs to your Channel, not to {target}.",
+        )
+    return (
+        CronDelivery(
+            kind="chat",
+            channel_id=chat.channel_id,
+            platform_target=chat.platform_target,
+            thread_id=chat.thread_id,
+        ),
+        None,
+    )
 
 
 async def _handle_delete(cron_service: CronService, arguments: JsonObject) -> JsonObject:
@@ -525,6 +657,15 @@ def _validation_message(
         if others:
             return refusal(EVENT_REPEAT_REFUSAL, arguments, repeat=OMIT)
         return f"{REFUSAL_PREFIX}{EVENT_REPEAT_REFUSAL}"
+    if detail.startswith("Session does not exist"):
+        return (
+            f"{REFUSAL_PREFIX}{detail}. Continue this conversation or start each run in a new "
+            f"Session: {render_call(arguments, session=CURRENT_SESSION)} or "
+            f"{render_call(arguments, session=OMIT)}"
+        )
+    if detail.startswith(("delivery", "a job of a Project Agent cannot deliver")):
+        # The chat cannot take the job's answers; vBot always can.
+        return refusal(f"{detail}.", arguments, deliver="app")
     if "Completed or missed jobs" in detail:
         return (
             f"cron was not run: {detail}. The job has finished; create a new job instead, or "
@@ -558,18 +699,29 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
     if job.schedule_type == "event" and job.status == "active" and data["next_run"] is None:
         data["next_run"] = "none; no occurrence of the event lies ahead"
     data["target"] = format_agent_address(job.agent_id, job.project_id)
+    if job.session_id:
+        data["session"] = job.session_id
+    data["deliver"] = _delivery_text(job.delivery)
     if job.schedule_type != "once" and job.remaining_runs is not None:
         data["repeat"] = job.remaining_runs
     last_run = job.last_fired_at or job.last_attempt_at
     if last_run:
         data["last_run"] = _local_time(last_run, zone)
     if job.last_outcome:
-        data["last_outcome"] = job.last_outcome
+        silent = job.last_outcome == "success" and job.last_run_silent
+        data["last_outcome"] = "success (answered [SILENT])" if silent else job.last_outcome
     if job.last_error:
         data["last_error"] = job.last_error
     if job.consecutive_failures:
         data["failures_in_a_row"] = job.consecutive_failures
     return data
+
+
+def _delivery_text(delivery: CronDelivery | None) -> str:
+    if delivery is None or delivery.kind != "chat":
+        return "none" if delivery is None else delivery.kind
+    thread = f", thread {delivery.thread_id}," if delivery.thread_id else ""
+    return f"chat {delivery.platform_target}{thread} of Channel {delivery.channel_id}"
 
 
 def _job_block(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> str:

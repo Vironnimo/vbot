@@ -11,9 +11,9 @@ with ``schedule`` and ``payload`` objects, ``jobId``), and scheduled-task Tools
 schedule is an event time, which Models also write as reminder offsets
 (``minutes_before: 30``, ``-PT30M``, ``30 minutes before``, ``before_start``).
 This owner maps them onto the canonical fields so a call whose intent is clear
-executes. What vBot cannot honor as written (delivering the reply, choosing a
-Session, firing on demand, several actions in one call, readings with different
-effects) fails before any side effect with the corrected call.
+executes. What vBot cannot honor as written (delivering to another chat, firing
+on demand, several actions in one call, readings with different effects) fails
+before any side effect with the corrected call.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from core.tools._cron_call import (
     TIMEZONE_FIELD,
     CronCallRefusedError,
     _Problems,
+    _set_field,
     refusal,
     render_call,
 )
@@ -59,15 +60,35 @@ from core.tools.call_syntax import (
 )
 from core.tools.contracts import ToolContract, ToolContractError
 
-# Accepted so a requested time zone or paused state reaches the handler, which
-# converts, applies or refuses it, and so the handler reports ignored late-start
-# limits. Never advertised.
+CURRENT_SESSION = "current"
+"""The ``session`` that names the calling Session; the handler resolves it."""
+NEW_SESSION = "new"
+"""The ``session`` that starts each run in a new Session."""
+DELIVER_PLATFORM_FIELD = "deliver_platform"
+"""The platform a ``deliver`` value named; "here" holds only in a chat on it."""
+HERE = "here"
+DELIVERY_CHOICES = (HERE, "app", "none")
+
+# Accepted so a requested time zone, paused state or delivery platform reaches
+# the handler, which converts, applies or refuses it, and so the handler reports
+# ignored late-start limits. Never advertised.
 UNADVERTISED_PARAMETERS: dict[str, Any] = {
     TIMEZONE_FIELD: {"type": "string", "minLength": 1},
     ENABLED_FIELD: {"type": "boolean"},
     LATE_LIMITS_FIELD: LATE_LIMITS_PARAMETER,
+    DELIVER_PLATFORM_FIELD: {"type": "string", "minLength": 1},
 }
-_CHANGE_FIELDS = ("target", "name", "prompt", "schedule", "event_id", "repeat", ENABLED_FIELD)
+_CHANGE_FIELDS = (
+    "target",
+    "name",
+    "prompt",
+    "schedule",
+    "event_id",
+    "repeat",
+    "session",
+    "deliver",
+    ENABLED_FIELD,
+)
 _LATE_START = (
     "A fire that vBot missed, for example while the server was off, starts once, late, and "
     "its Run is told how late it is. To have a late Run skip the instruction, say so in "
@@ -182,11 +203,53 @@ _ONE_SHOT_KEYS = frozenset(
     {"onetime", "oneshot", "once", "runonce", "deleteafterrun", "deleteafterfire"}
 )
 _SESSION_KEYS = frozenset({"sessionid", "session", "sessionkey", "sessiontarget"})
-_FRESH_SESSION_WORDS = frozenset({"new", "fresh", "isolated", "auto", "default"})
+_FRESH_SESSION_WORDS = frozenset(
+    {"new", "fresh", "isolated", "auto", "default", "newsession", "separate"}
+)
+# OpenClaw's "main" Session is the conversation the job was made in.
+_CURRENT_SESSION_WORDS = frozenset(
+    {
+        "current",
+        "this",
+        "here",
+        "same",
+        "main",
+        "self",
+        "currentsession",
+        "thissession",
+        "conversation",
+        "thisconversation",
+    }
+)
 _DELIVERY_KEYS = frozenset(
     {"deliver", "delivery", "deliverto", "notify", "notifyoncompletion", "notifyuser", "announce"}
 )
-_NO_DELIVERY_WORDS = frozenset({"local", "none", "off", "silent", "false", "no"})
+_HERE_WORDS = frozenset(
+    {
+        "here",
+        "origin",
+        "chat",
+        "thischat",
+        "this",
+        "current",
+        "same",
+        "reply",
+        "conversation",
+        "source",
+        "last",
+        "announce",
+        "user",
+        "true",
+        "yes",
+        "on",
+    }
+)
+_APP_WORDS = frozenset({"app", "vbot", "desktop", "notification", "webui", "inbox"})
+_NO_DELIVERY_WORDS = frozenset({"none", "local", "off", "silent", "false", "no", "nowhere"})
+_PLATFORM_WORDS = frozenset({"telegram", "discord", "slack", "mattermost", "whatsapp"})
+_DELIVERY_FORMS = (
+    "A job delivers each run's answer to this conversation (here), to vBot (app) or nowhere (none):"
+)
 _DESCRIPTION_KEYS = frozenset({"description", "desc", "summary", "details"})
 # Accepted without effect: vBot jobs always persist, and list always shows every job.
 _IGNORED_KEYS = frozenset({"durable", "persist", "persistent", "includedisabled", "reason"})
@@ -432,38 +495,92 @@ def _read_recurrence(arguments: dict[str, Any], problems: _Problems) -> None:
 
 
 def _read_session(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Read Session choices as ``current``, ``new`` or a Session id."""
     for key in list(arguments):
         if spelling(key) not in _SESSION_KEYS:
             continue
         item = arguments.pop(key)
-        if is_placeholder(item) or spelling(str(item)) in _FRESH_SESSION_WORDS:
+        if isinstance(item, str) and spelling(item) in _CURRENT_SESSION_WORDS:
+            value = CURRENT_SESSION
+        elif is_placeholder(item):
             continue
-        problems.add(
-            f'every fire starts a fresh Session, so "{key}" cannot choose one; the prompt must '
-            "carry everything the Run needs."
-        )
+        elif isinstance(item, str) and spelling(item) in _FRESH_SESSION_WORDS:
+            value = NEW_SESSION
+        elif isinstance(item, str) and not _TEMPLATE.match(item):
+            value = item.strip()
+        else:
+            problems.add(
+                f'"{key}" takes current for this conversation or a Session id; leave it out to '
+                "start each run in a new Session.",
+                session=OMIT,
+            )
+            continue
+        _set_field(arguments, "session", value, problems)
 
 
 def _read_delivery(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Read delivery requests as ``here``, ``app`` or ``none``."""
     for key in list(arguments):
         if spelling(key) not in _DELIVERY_KEYS:
             continue
-        item = arguments.pop(key)
-        if isinstance(item, dict):
-            mode = next((v for k, v in item.items() if spelling(k) == "mode"), None)
-            if len(item) == 1 and mode is not None and spelling(str(mode)) in _NO_DELIVERY_WORDS:
-                continue
-        elif (
-            is_placeholder(item)
-            or _boolean(item) is False
-            or (isinstance(item, str) and spelling(item) in _NO_DELIVERY_WORDS)
-        ):
+        choice = _delivery_choice(arguments.pop(key), problems)
+        if choice is None:
             continue
-        problems.add(
-            f'a job cannot deliver its reply ("{key}"): each fire runs in a fresh Session and '
-            "nobody is notified. Say in prompt how the result should reach the user, for "
-            "example which Tool to send it with."
-        )
+        word, platform = choice
+        _set_field(arguments, "deliver", word, problems)
+        if platform is not None:
+            _set_field(arguments, DELIVER_PLATFORM_FIELD, platform, problems)
+
+
+def _delivery_choice(item: Any, problems: _Problems) -> tuple[str, str | None] | None:
+    """The delivery a value asks for, with the platform it names; None asks for nothing."""
+    request = _json_object(item)
+    if request is not None:
+        # OpenClaw: {"mode": "announce" | "none", "channel": ..., "to": ...}.
+        fields = {spelling(name): value for name, value in request.items()}
+        mode = fields.get("mode")
+        if isinstance(mode, str) and spelling(mode) in _NO_DELIVERY_WORDS:
+            return "none", None
+        chat = next((fields[name] for name in ("to", "target", "chatid") if name in fields), None)
+        if not is_placeholder(chat):
+            _refuse_other_chat(f"{fields.get('channel', '')}:{chat}".lstrip(":"), problems)
+            return None
+        channel = fields.get("channel")
+        item = HERE if is_placeholder(channel) else channel
+    if isinstance(item, bool):
+        return (HERE if item else "none"), None
+    if not isinstance(item, str):
+        if item is not None:
+            _refuse_delivery(str(item), problems)
+        return None
+    word = spelling(item)
+    for choice, words in ((HERE, _HERE_WORDS), ("app", _APP_WORDS), ("none", _NO_DELIVERY_WORDS)):
+        if word in words:
+            return choice, None
+    if word in _PLATFORM_WORDS:
+        return HERE, word
+    if is_placeholder(item):
+        return None
+    platform, separator, _chat = item.partition(":")
+    if separator and spelling(platform) in _PLATFORM_WORDS:
+        _refuse_other_chat(item, problems)
+    else:
+        _refuse_delivery(item, problems)
+    return None
+
+
+def _refuse_other_chat(chat: str, problems: _Problems) -> None:
+    problems.choose(
+        f'deliver "{chat}" names another chat. {_DELIVERY_FORMS}',
+        [{"deliver": HERE}, {"deliver": "app"}],
+    )
+
+
+def _refuse_delivery(item: str, problems: _Problems) -> None:
+    problems.choose(
+        f'deliver "{item}" is not a delivery target. {_DELIVERY_FORMS}',
+        [{"deliver": choice} for choice in DELIVERY_CHOICES],
+    )
 
 
 def _read_extras(arguments: dict[str, Any]) -> None:
@@ -674,9 +791,14 @@ def _boolean(value: Any) -> Any:
 
 __all__ = [
     "CLOCK_SCHEDULE",
+    "CURRENT_SESSION",
+    "DELIVERY_CHOICES",
+    "DELIVER_PLATFORM_FIELD",
     "ENABLED_FIELD",
     "EVENT_REPEAT_REFUSAL",
     "EVENT_TIME_STAND_IN",
+    "HERE",
+    "NEW_SESSION",
     "SELF_TARGET",
     "CronCallRefusedError",
     "OMIT",

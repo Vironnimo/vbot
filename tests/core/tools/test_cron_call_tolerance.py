@@ -190,58 +190,93 @@ def test_status_on_update_pauses_and_resumes(tool: CronTool) -> None:
     assert (job.status, job.interval_seconds) == ("active", 10800)
 
 
-@pytest.mark.parametrize("session", ["", "new", "isolated", "none"])
-def test_fresh_session_spellings_are_accepted(tool: CronTool, session: str) -> None:
-    tool.created(
-        {"action": "create", "prompt": JOB_PROMPT, "schedule": "every 2h", "session_id": session}
-    )
-
-
 @pytest.mark.parametrize(
-    "fields", [{"session_id": "sess_abc"}, {"sessionTarget": "main"}, {"session": "current"}]
+    ("fields", "session_id"),
+    [
+        pytest.param({"session_id": ""}, None, id="empty"),
+        pytest.param({"session_id": "new"}, None, id="new"),
+        pytest.param({"sessionTarget": "isolated"}, None, id="openclaw-isolated"),
+        pytest.param({"session": "none"}, None, id="none"),
+        pytest.param({"session_id": "sess_abc"}, "sess_abc", id="session-id"),
+        pytest.param({"sessionTarget": "main"}, "session-one", id="openclaw-main"),
+        pytest.param({"sessionKey": "this"}, "session-one", id="this"),
+    ],
 )
-def test_chosen_session_is_refused(tool: CronTool, fields: dict[str, Any]) -> None:
-    message = tool.refused(
+def test_session_spellings_choose_a_new_or_a_continued_session(
+    tool: CronTool, fields: dict[str, Any], session_id: str | None
+) -> None:
+    job, _text = tool.created(
         {"action": "create", "prompt": JOB_PROMPT, "schedule": "every 2h", **fields}
     )
 
-    assert "every fire starts a fresh Session" in message
+    assert job.session_id == session_id
+
+
+@pytest.mark.parametrize("session", [{"id": "sess_abc"}, "<session id>"])
+def test_a_session_that_names_no_session_is_refused(tool: CronTool, session: Any) -> None:
+    message = tool.refused(
+        {"action": "create", "prompt": JOB_PROMPT, "schedule": "every 2h", "session": session}
+    )
+
+    assert '"session" takes current for this conversation or a Session id' in message
     assert message.endswith(
         f'Send: {{"action":"create","prompt":"{JOB_PROMPT}","schedule":"every 2h"}}'
     )
 
 
 @pytest.mark.parametrize(
-    "fields",
+    ("fields", "delivery"),
     [
-        {"deliver": "local"},
-        {"deliver": ""},
-        {"delivery": {"mode": "none"}},
-        {"notifyOnCompletion": False},
-        {"durable": True},
-        {"durable": False},
+        pytest.param({"deliver": "local"}, None, id="hermes-local"),
+        pytest.param({"delivery": {"mode": "none"}}, None, id="openclaw-none"),
+        pytest.param({"notifyOnCompletion": False}, None, id="no-notification"),
+        pytest.param({"deliver": ""}, "app", id="empty"),
+        pytest.param({"deliver": "origin"}, "app", id="hermes-origin"),
+        pytest.param({"delivery": {"mode": "announce"}}, "app", id="openclaw-announce"),
+        pytest.param({"notifyOnCompletion": True}, "app", id="notification"),
+        pytest.param({"deliver": "vBot"}, "app", id="vbot"),
+        pytest.param({"durable": True}, "app", id="durable"),
+        pytest.param({"durable": False}, "app", id="not-durable"),
     ],
 )
-def test_fields_that_request_nothing_extra_run(tool: CronTool, fields: dict[str, Any]) -> None:
-    tool.created({"action": "create", "prompt": JOB_PROMPT, "schedule": "every 2h", **fields})
+def test_delivery_spellings_reach_this_conversation_or_nowhere(
+    tool: CronTool, fields: dict[str, Any], delivery: str | None
+) -> None:
+    # Outside a chat, this conversation is vBot.
+    job, _text = tool.created(
+        {"action": "create", "prompt": JOB_PROMPT, "schedule": "every 2h", **fields}
+    )
+
+    assert (job.delivery and job.delivery.kind) == delivery
 
 
 @pytest.mark.parametrize(
-    "fields",
+    ("fields", "cause"),
     [
-        {"deliver": "origin"},
-        {"deliver": "telegram:-100123"},
-        {"delivery": {"mode": "announce", "channel": "telegram"}},
-        {"notifyOnCompletion": True},
+        pytest.param(
+            {"deliver": "telegram:-100123"},
+            'deliver "telegram:-100123" names another chat',
+            id="hermes-chat",
+        ),
+        pytest.param(
+            {"delivery": {"mode": "announce", "channel": "telegram", "to": "-100123"}},
+            'deliver "telegram:-100123" names another chat',
+            id="openclaw-chat",
+        ),
+        pytest.param(
+            {"deliver": "email"}, 'deliver "email" is not a delivery target', id="unknown"
+        ),
     ],
 )
-def test_requested_delivery_is_refused(tool: CronTool, fields: dict[str, Any]) -> None:
+def test_delivery_elsewhere_is_refused_with_the_targets_a_job_has(
+    tool: CronTool, fields: dict[str, Any], cause: str
+) -> None:
     message = tool.refused(
         {"action": "create", "prompt": JOB_PROMPT, "schedule": "every 2h", **fields}
     )
 
-    assert "a job cannot deliver its reply" in message
-    assert "Say in prompt how the result should reach the user" in message
+    assert cause in message
+    assert '"deliver":"here"}' in message and '"deliver":"app"}' in message
 
 
 def test_refusal_names_other_fields_the_corrected_call_drops(tool: CronTool) -> None:
@@ -250,7 +285,7 @@ def test_refusal_names_other_fields_the_corrected_call_drops(tool: CronTool) -> 
             "action": "create",
             "prompt": JOB_PROMPT,
             "schedule": "every 2h",
-            "deliver": "origin",
+            "deliver": "telegram:-100123",
             "skills": ["ops"],
             "max_delay": "1h",
         },
