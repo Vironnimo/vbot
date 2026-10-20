@@ -47,6 +47,7 @@ from core.tools._shell_results import (
     not_run_problem,
     running_output_note,
     running_output_text,
+    silence_note,
     stop_with,
 )
 from core.tools._tool_display import display_notice, display_text
@@ -449,6 +450,7 @@ def _running_next(
     """
     command_id = report.command_id
     log = running_output_note(report)
+    silence = silence_note(report)
     stop = stop_with(report, names)
     if reason == "background":
         # Often a server: its result arrives only once it is stopped, and the
@@ -476,6 +478,7 @@ def _running_next(
     ):
         # A program that waits for the console never ends, and its result
         # otherwise reads like a slow command's that delivers later.
+        silence = ""
         stopping = (
             "It has printed nothing and its processes are idle. If it waits for console input, "
             f"which commands never get, stop it {stop} and pass the answer as an option or "
@@ -490,13 +493,14 @@ def _running_next(
     if reason == "moved":
         return (
             "The user moved the command to the background after "
-            f"{duration(report.elapsed_seconds)}; it continues as {command_id}.{log} {tail}"
+            f"{duration(report.elapsed_seconds)}; it continues as {command_id}."
+            f"{silence}{log} {tail}"
         )
     if reason == "timeout":
         opening = f"The command was still running at its {wait_seconds:g}-second timeout"
     else:
         opening = f"The command was still running after {SHELL_DEFAULT_WAIT_SECONDS:g} seconds"
-    return f"{opening} and continues in the background as {command_id}.{log} {tail}"
+    return f"{opening} and continues in the background as {command_id}.{silence}{log} {tail}"
 
 
 # Display

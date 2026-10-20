@@ -581,6 +581,11 @@ async def test_a_command_still_running_when_the_wait_passes_continues_and_delive
     log_file(result["next"])
     # Only a silent command whose processes are idle on Windows may wait for the console.
     assert ("console input" in result["next"]) is (run == "silent-idle")
+    # Output that stopped arriving 5 minutes ago or more is named, so the wait does
+    # not read as progress.
+    assert ("It has printed no new output for 10 minutes." in result["next"]) is (
+        wait == SHELL_MAX_WAIT_SECONDS
+    )
     assert (queries == 0) is run.endswith("posix")
     # Nothing stops a command for taking long: it is listed and keeps running.
     await shell.commands.advance(3 * SHELL_MAX_WAIT_SECONDS, step=30)

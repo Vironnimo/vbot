@@ -137,6 +137,8 @@ class CommandRecord:
         self._services = services
         self._not_run_codes = dict(not_run_codes or {})
         self.started_at = services.monotonic()
+        # When the last output arrived; None before the first.
+        self._output_at: float | None = None
         self._background = False
         self._deliver = False
         self._exit_code: int | None = None
@@ -246,6 +248,10 @@ class CommandRecord:
             ),
             background=self._background,
             elapsed_seconds=max(0.0, ended_at - self.started_at),
+            silent_seconds=max(
+                0.0,
+                ended_at - (self.started_at if self._output_at is None else self._output_at),
+            ),
             not_run=(
                 self._not_run_codes.get(self._exit_code)
                 if self.ended and self._exit_code is not None
@@ -513,6 +519,7 @@ class CommandRecord:
                 # cleaned: a command that prints faster waits for its pipe.
                 while data := await self._process.read():
                     self._activity += 1
+                    self._output_at = self._services.monotonic()
                     await self._feed(data)
             except Exception:
                 _LOGGER.error(
