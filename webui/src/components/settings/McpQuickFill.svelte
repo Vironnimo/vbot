@@ -1,9 +1,10 @@
 <script>
   // Fills a new connection from the command line or URL a server's setup
   // instructions show. `onFill` receives the text and resolves once the form
-  // was filled or handed on; a rejection shows its message here.
+  // was filled or handed on; a rejection shows its message here. It renders
+  // as one stacked Settings row: label and hint, then the field with its
+  // Fill in button.
   import Button from '../ui/Button.svelte';
-  import FormField from '../ui/FormField.svelte';
   import TextField from '../ui/TextField.svelte';
   import { t } from '$lib/i18n.js';
 
@@ -14,6 +15,7 @@
   let text = $state('');
   let error = $state('');
   let filling = $state(false);
+  let controlId = `${componentId}-text`;
 
   async function fill() {
     if (!text.trim() || filling) return;
@@ -30,39 +32,45 @@
   }
 </script>
 
-<div class="mcp-quick-fill">
-  <FormField
-    controlId={`${componentId}-text`}
-    label={t('mcp.quickFill')}
-    help={t('mcp.quickFillHelp')}
-    {error}
-  >
-    {#snippet children(field)}<TextField
-        id={field.controlId}
-        aria-describedby={field.describedBy}
-        invalid={field.invalid}
-        code
-        autocomplete="off"
-        spellcheck="false"
-        placeholder={t('mcp.quickFillPlaceholder')}
-        value={text}
-        disabled={disabled || filling}
-        onInput={(value) => {
-          text = value;
-          error = '';
-        }}
-        onkeydown={(event) => {
-          // Enter fills from the text instead of saving the connection.
-          if (event.key !== 'Enter') return;
-          event.preventDefault();
-          void fill();
-        }}
-      />{/snippet}
-  </FormField>
-  <Button
-    variant="secondary"
-    disabled={disabled || filling || !text.trim()}
-    loading={filling}
-    onClick={fill}>{t('mcp.quickFillApply')}</Button
-  >
+<div class="s-row s-row--stacked mcp-quick-fill">
+  <div class="s-row-info">
+    <label class="s-row-label" for={controlId}>{t('mcp.quickFill')}</label>
+    <div class="s-row-desc" id={`${controlId}-help`}>
+      {t('mcp.quickFillHelp')}
+    </div>
+  </div>
+  <div class="mcp-quick-fill__line">
+    <TextField
+      id={controlId}
+      aria-describedby={error
+        ? `${controlId}-help ${controlId}-error`
+        : `${controlId}-help`}
+      invalid={Boolean(error)}
+      code
+      autocomplete="off"
+      spellcheck="false"
+      placeholder={t('mcp.quickFillPlaceholder')}
+      value={text}
+      disabled={disabled || filling}
+      onInput={(value) => {
+        text = value;
+        error = '';
+      }}
+      onkeydown={(event) => {
+        // Enter fills from the text instead of saving the connection.
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        void fill();
+      }}
+    />
+    <Button
+      variant="secondary"
+      disabled={disabled || filling || !text.trim()}
+      loading={filling}
+      onClick={fill}>{t('mcp.quickFillApply')}</Button
+    >
+  </div>
+  {#if error}
+    <p class="s-row-error" id={`${controlId}-error`}>{error}</p>
+  {/if}
 </div>

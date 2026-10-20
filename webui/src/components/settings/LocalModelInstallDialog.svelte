@@ -36,12 +36,12 @@
 
 <Modal
   title={t('settings.localModel.dialogTitle', { model: label })}
+  description={t('settings.localModel.dialogIntro')}
   class="local-model-dialog"
   {onClose}
 >
   {#snippet body()}
     <div class="modal-body local-model-dialog__body">
-      <p>{t('settings.localModel.dialogIntro')}</p>
       {#if note}
         <p class="local-model-dialog__note">{note}</p>
       {/if}
@@ -94,7 +94,6 @@
 
 <style>
   .local-model-dialog__body {
-    display: grid;
     gap: 10px;
   }
 

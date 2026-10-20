@@ -828,7 +828,9 @@
 
   {#if deleteCustomCandidate}
     <ConfirmDialog
-      title={t('settings.providers.custom.deleteTitle')}
+      title={t('settings.providers.custom.deleteTitle', {
+        name: providerDisplayName(deleteCustomCandidate),
+      })}
       body={t('settings.providers.custom.deleteBody')}
       confirmLabel={t('common.delete')}
       onConfirm={confirmDeleteCustomProvider}

@@ -510,14 +510,6 @@
 
 /* The shared dialog is portaled outside the view. Limit these reading and
    spacing adjustments to its explicit first-run variant. */
-.provider-connect-modal--setup #provider-connect-key-form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.provider-connect-modal--setup .provider-connect-modal__hint {
-  margin: 0;
-}
 .provider-connect-modal--setup .device-flow-link {
   font-family: var(--font-ui);
   font-size: var(--fs-body-lg);
@@ -532,7 +524,8 @@
 .provider-connect-modal--setup input::placeholder {
   color: var(--onboarding-muted);
 }
-.provider-connect-modal--setup .provider-connect-modal__hint,
+.provider-connect-modal--setup .modal-description,
+.provider-connect-modal--setup .provider-connect-modal__note,
 .provider-connect-modal--setup .provider-pick-item__detail {
   color: var(--onboarding-muted);
   font-family: var(--font-ui);
@@ -540,23 +533,18 @@
   line-height: 1.55;
 }
 .provider-connect-modal--setup .provider-pick-item {
-  width: 100%;
   min-height: 80px;
   padding: 16px;
-  gap: 6px;
 }
-.provider-connect-modal--setup .provider-pick-item__name,
-.provider-connect-modal--setup .provider-connect-method {
-  font-family: var(--font-ui);
+.provider-connect-modal--setup .provider-pick-item__text {
+  gap: 4px;
+}
+.provider-connect-modal--setup .provider-pick-item__name {
   font-size: var(--fs-body-lg);
-  font-weight: 500;
-  color: var(--text-hi);
 }
-.provider-connect-modal--setup .provider-connect-method {
-  display: block;
-  margin-bottom: 4px;
-}
-.provider-connect-modal--setup :is(button, a, input):focus-visible {
+/* List rows keep their inset ring; the list clips anything outside it. */
+.provider-connect-modal--setup
+  :is(button:not(.provider-pick-item), a, input):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
