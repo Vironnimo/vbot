@@ -116,6 +116,12 @@
      strongly, the tablet menu overlay only lightly. */
   --scrim: rgba(0, 0, 0, 0.55);
   --scrim-light: rgba(0, 0, 0, 0.3);
+  /* Dialogs: a warm scrim and the deepest elevation, with a faint top light
+     so the largest floating surface reads as raised rather than flat. */
+  --modal-scrim: rgba(8, 7, 5, 0.6);
+  --modal-elevation:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 24px 48px -12px rgba(0, 0, 0, 0.6), 0 40px 96px -24px rgba(0, 0, 0, 0.5);
   /* Status colors. Amber (running/warning) is deliberately yellower than the
      orange accent so a warning never reads as a selection or primary action. */
   --green: #5fcf8f;
@@ -126,6 +132,8 @@
   --blue-dim: color-mix(in srgb, var(--blue) 16%, transparent);
   --red: #f28b82;
   --red-dim: color-mix(in srgb, var(--red) 12%, transparent);
+  /* Text on a solid red fill (a dialog's destructive decision). */
+  --on-danger: #1f0d0b;
   --font-ui: 'Geist', system-ui, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Code', monospace;
   /* Type scale — sizes only, shared by the component styles. Use these

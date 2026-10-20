@@ -4,8 +4,10 @@
   // decision every destructive action needs. Callers own the open state
   // (conditionally render this dialog), pass already-translated copy, and route
   // both close paths through `onCancel` so overlay-click, Escape, and × all
-  // resolve as a cancel. The confirm button carries the action verb and renders
-  // in the `danger` variant for irreversible actions.
+  // resolve as a cancel. The title asks the question and names the target
+  // ("Delete agent “tester”?"); the message states the consequence. The
+  // confirm button carries the action verb and renders in the `danger`
+  // variant, a filled red decision, for destructive actions.
   //
   // A caller that waits for the confirmed action keeps the dialog open with
   // `busy` while it runs (the confirm button shows progress and the dialog
@@ -45,10 +47,17 @@
   let confirmVariant = $derived(danger ? 'danger' : 'primary');
 </script>
 
-<Modal {title} labelledById={titleId} closeDisabled={busy} onClose={onCancel}>
+<Modal
+  {title}
+  labelledById={titleId}
+  size="sm"
+  class="confirm-dialog"
+  closeDisabled={busy}
+  onClose={onCancel}
+>
   {#snippet body()}
     <div class="modal-body">
-      <p>{bodyText}</p>
+      <p class="confirm-dialog__message">{bodyText}</p>
       {@render bodyExtra?.()}
       {#if error}
         <Banner variant="error" role="alert">{error}</Banner>
