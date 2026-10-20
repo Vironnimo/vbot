@@ -20,19 +20,35 @@ import {
 describe('StatisticsView', () => {
   const suite = setupStatisticsViewSuite();
 
-  it('lazily loads provider usage and its history when the Limits sub-view opens', async () => {
+  it('shows live usage as a strip on the Overview and in full on Limits', async () => {
     rpcMock.mockImplementation(routedRpc(makeUsageReport()));
 
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
 
-    // provider.usage is not fetched until the Limits tab is opened.
-    expect(rpcMock).not.toHaveBeenCalledWith('provider.usage');
+    // The Overview strip shows each window's use and reset; a Provider
+    // without usage is left to the Limits sub-view.
+    await waitForCondition(() => document.querySelector('.stats-limits-strip'));
+    const strip = document.querySelector('.stats-limits-strip');
+    expect(strip.textContent).toContain('OpenAI');
+    expect(strip.textContent).toContain('Plus');
+    expect(
+      [...strip.querySelectorAll('.stats-limits-strip__used')].map((used) =>
+        used.textContent.trim(),
+      ),
+    ).toEqual(['43%', '88%']);
+    expect(
+      strip.querySelector('.stats-limits-strip__fill--warn'),
+    ).not.toBeNull();
+    expect(
+      strip.querySelector('.stats-limits-strip__reset').textContent,
+    ).toMatch(/^Resets in /);
+    expect(strip.textContent).not.toContain('GitHub Copilot');
 
-    openLimitsTab();
-    await waitForCondition(() => document.body.textContent.includes('OpenAI'));
+    buttonNamed('statistics.overview.limitsAll').click();
+    await waitForCondition(() => document.querySelector('.stats-limit-card'));
+    expect(document.querySelector('.stats-limits-strip')).toBeNull();
 
-    expect(rpcMock).toHaveBeenCalledWith('provider.usage');
     expect(document.body.textContent).toContain('Plus');
     expect(document.body.textContent).toContain('5h');
     expect(document.querySelector('.stats-limit-window__reset')).toBeTruthy();
@@ -101,32 +117,30 @@ describe('StatisticsView', () => {
     ).toContain('$4.50');
   });
 
-  it('refreshes provider usage every ten seconds only while Limits is visible', async () => {
+  it('refreshes provider usage every ten seconds only while Overview or Limits shows it', async () => {
     vi.useFakeTimers();
     rpcMock.mockImplementation(routedRpc(makeUsageReport()));
+    const usageCalls = () =>
+      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage')
+        .length;
 
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
-
-    openLimitsTab();
-    await waitForCondition(
-      () =>
-        rpcMock.mock.calls.filter(([method]) => method === 'provider.usage')
-          .length === 1,
-    );
+    await waitForCondition(() => usageCalls() === 1);
 
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(
-      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
-    ).toHaveLength(2);
+    expect(usageCalls()).toBe(2);
 
-    buttonNamed('statistics.subview.overview').click();
+    // Opening Limits revalidates at once, then keeps the same interval.
+    openLimitsTab();
+    await waitForCondition(() => usageCalls() === 3);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(usageCalls()).toBe(4);
+
+    buttonNamed('statistics.subview.usage').click();
     flushSync();
     await vi.advanceTimersByTimeAsync(20_000);
-
-    expect(
-      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
-    ).toHaveLength(2);
+    expect(usageCalls()).toBe(4);
   });
 
   it('pauses provider usage while the page is hidden and refreshes on return', async () => {
@@ -139,7 +153,6 @@ describe('StatisticsView', () => {
 
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
-    openLimitsTab();
     await waitForCondition(
       () =>
         rpcMock.mock.calls.filter(([method]) => method === 'provider.usage')
@@ -165,23 +178,29 @@ describe('StatisticsView', () => {
   });
 
   it('keeps a contextual Retry after a Limits RPC failure', async () => {
-    let usageCalls = 0;
+    let available = false;
     rpcMock.mockImplementation((method) => {
       if (method !== 'provider.usage') {
         return Promise.resolve(makeReport());
       }
-      usageCalls += 1;
-      return usageCalls === 1
-        ? Promise.reject(new Error('limits unavailable'))
-        : Promise.resolve(makeUsageReport());
+      return available
+        ? Promise.resolve(makeUsageReport())
+        : Promise.reject(new Error('limits unavailable'));
     });
 
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
+    // The Overview strip stays out of the way; Limits explains the failure.
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'provider.usage'),
+    );
+    expect(document.querySelector('.stats-limits-strip')).toBeNull();
+    expect(document.body.textContent).not.toContain('limits unavailable');
     openLimitsTab();
     await waitForCondition(() =>
       document.body.textContent.includes('limits unavailable'),
     );
+    available = true;
 
     const retryButton = [
       ...document.querySelectorAll('.stats-panel button'),
@@ -189,7 +208,6 @@ describe('StatisticsView', () => {
     retryButton.click();
     await waitForCondition(() => document.body.textContent.includes('OpenAI'));
 
-    expect(usageCalls).toBe(2);
     expect(document.body.textContent).not.toContain('limits unavailable');
   });
 
@@ -259,8 +277,8 @@ describe('StatisticsView', () => {
         .length;
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
-    openLimitsTab();
     await waitForCondition(() => pending.length === 1);
+    openLimitsTab();
 
     // Polling and reopening Limits wait for the pending request.
     buttonNamed('statistics.subview.overview').click();

@@ -1,13 +1,16 @@
 <script>
-  import { onMount } from 'svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import LimitHistory from './LimitHistory.svelte';
-  import { getProviderUsage } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import { formatMoment } from '$lib/timeText.js';
+  import {
+    loadProviderUsage,
+    providerUsage,
+    watchProviderUsage,
+  } from '$lib/providerUsage.svelte.js';
   import {
     clampUsagePercent,
     formatResetAt,
@@ -16,93 +19,18 @@
     usageWindowUnitsText,
   } from '$lib/statisticsLimits.js';
 
+  // The Limits sub-view shows live provider usage (provider.usage) in full,
+  // separate from the local Statistics report; it watches the shared live
+  // usage while it is shown.
   let { active = false } = $props();
-  const USAGE_REFRESH_INTERVAL_MS = 10_000;
-  let destroyed = false;
-  let pageVisible = $state(false);
-  // The Limits sub-view loads live provider usage on its own (provider.usage),
-  // separate from the local Statistics report. It is fetched lazily on
-  // first open so opening Statistics never pings provider usage endpoints.
-  // While the sub-view stays visible it polls through the server's shared
-  // provider cache, so multiple windows do not multiply outbound requests.
-  let usageReport = $state(null);
-  let usageLoading = $state(false);
-  let usageError = $state('');
-  let usageRequest = null;
 
   const locale = $derived(activeLocaleTag());
-  const usageProviders = $derived(usageReport?.providers ?? []);
+  const usageProviders = $derived(providerUsage.report?.providers ?? []);
+
   $effect(() => {
-    if (!active || !pageVisible) {
-      return;
-    }
-
-    let cancelled = false;
-    let timeoutId;
-    async function pollUsage() {
-      await loadUsage();
-      if (!cancelled) {
-        timeoutId = setTimeout(pollUsage, USAGE_REFRESH_INTERVAL_MS);
-      }
-    }
-
-    pollUsage();
-    return () => {
-      cancelled = true;
-      clearTimeout(timeoutId);
-    };
+    if (!active) return;
+    return watchProviderUsage();
   });
-
-  onMount(() => {
-    const handleVisibilityChange = () => {
-      pageVisible = document.visibilityState !== 'hidden';
-    };
-    handleVisibilityChange();
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      destroyed = true;
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  });
-
-  function loadUsage() {
-    if (usageRequest) {
-      return usageRequest;
-    }
-    usageRequest = fetchUsage().finally(() => {
-      usageRequest = null;
-    });
-    return usageRequest;
-  }
-
-  async function fetchUsage() {
-    usageLoading = true;
-    usageError = '';
-    try {
-      const result = await getProviderUsage();
-      if (destroyed) {
-        return;
-      }
-      usageReport = result;
-    } catch (error) {
-      if (destroyed) {
-        return;
-      }
-      usageReport = null;
-      usageError = errorMessageText(error, t('statistics.limits.loadError'));
-    } finally {
-      if (!destroyed) {
-        usageLoading = false;
-      }
-    }
-  }
-
-  function errorMessageText(error, fallback) {
-    if (typeof error?.message === 'string' && error.message.trim()) {
-      return error.message.trim();
-    }
-    return fallback;
-  }
 </script>
 
 {#snippet limitWindow(window)}
@@ -179,7 +107,7 @@
 
 {#if active}
   <div class="stats-panel">
-    {#if usageLoading && !usageReport}
+    {#if providerUsage.loading && !providerUsage.report}
       <p class="stats-view__placeholder">
         {t('statistics.limits.loading')}
       </p>
@@ -190,10 +118,10 @@
         </p>
       </div>
 
-      {#if usageError}
+      {#if providerUsage.error}
         <Banner variant="error" aria-live="polite">
-          <span>{usageError}</span>
-          <Button variant="secondary" onClick={loadUsage}>
+          <span>{providerUsage.error}</span>
+          <Button variant="secondary" onClick={loadProviderUsage}>
             {t('common.retry')}
           </Button>
         </Banner>

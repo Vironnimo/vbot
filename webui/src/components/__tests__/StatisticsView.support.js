@@ -17,6 +17,8 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 const { default: StatisticsView } = await import('../StatisticsView.svelte');
 const { clearStatisticsReports } =
   await import('../../lib/statisticsReports.svelte.js');
+const { clearProviderUsage } =
+  await import('../../lib/providerUsage.svelte.js');
 
 // `statistics.report` sections in the shapes the server sends (canonical
 // UTC timestamps, `{ key, count }` lists). Each tab requests only its own
@@ -925,6 +927,7 @@ function setupStatisticsViewSuite() {
     init('en');
     setApplicationTimeZone('UTC');
     clearStatisticsReports();
+    clearProviderUsage();
     try {
       localStorage.clear();
     } catch {
