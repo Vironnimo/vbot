@@ -741,6 +741,71 @@ describe('Swarm Run start', () => {
   const directoryProfile = { ...profile, id: 'prf-b', name: 'Other' };
   const directory = () => document.getElementById('swarm-start-directory');
 
+  it('retries an unchanged start with the same request identity after a lost reply', async () => {
+    const { bridge, operation } = createBridge();
+    overrideOperations(operation, {
+      'swarms.start': () => {
+        throw new Error('request_timeout');
+      },
+    });
+    await render(bridge);
+    fill('swarm-goal', 'goal-sentinel');
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      button(START_RUN).click();
+      await vi.waitFor(() =>
+        expect(callsTo(operation, 'swarms.start')).toHaveLength(attempt),
+      );
+      await settle();
+    }
+    const calls = callsTo(operation, 'swarms.start');
+    expect(calls[1][1]).toEqual(calls[0][1]);
+    fill('swarm-goal', 'another request');
+    button(START_RUN).click();
+    await vi.waitFor(() =>
+      expect(callsTo(operation, 'swarms.start')).toHaveLength(3),
+    );
+    expect(callsTo(operation, 'swarms.start')[2][1].request_id).not.toBe(
+      calls[0][1].request_id,
+    );
+  });
+
+  it('retains a selected profile from a later page through background refresh', async () => {
+    const { bridge, operation } = createBridge();
+    overrideOperations(operation, {
+      'profiles.list': ({ cursor }) =>
+        cursor
+          ? {
+              entries: [
+                {
+                  ...directoryProfile,
+                  working_directory: { kind: 'directory', path: 'D:/other' },
+                },
+              ],
+            }
+          : { entries: [profile], cursor: 'profiles-2' },
+      'swarms.start': () => ({ swarm_id: swarm.id }),
+    });
+    await render(bridge);
+    picker().click();
+    await tick();
+    pickerPanel().querySelector('.searchable-dropdown__footer').click();
+    await vi.waitFor(() => expect(pickerOption('Other')).toBeDefined());
+    picker().click();
+    await choose('swarm-start-profile', 'Other');
+    expect(directory().value).toBe('D:/other');
+    bridge.invalidate({ resource: 'profiles', ids: [profile.id], revision: 2 });
+    await settle();
+    expect(directory().value).toBe('D:/other');
+    fill('swarm-goal', 'selected-profile-goal');
+    button(START_RUN).click();
+    await vi.waitFor(() =>
+      expect(callsTo(operation, 'swarms.start')).toHaveLength(1),
+    );
+    expect(callsTo(operation, 'swarms.start')[0][1].profile_id).toBe(
+      directoryProfile.id,
+    );
+  });
+
   it('prefills the Run directory, preserves edits during invalidation and submits only the override', async () => {
     const { bridge, operation } = createBridge();
     overrideOperations(operation, {

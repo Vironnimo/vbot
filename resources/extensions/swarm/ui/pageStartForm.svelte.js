@@ -26,6 +26,7 @@ export function createSwarmStartForm(context) {
   let directoryRequest = 0;
 
   let directoryFailed = false;
+  let retryStart = null;
 
   const startDisabledReason = $derived(
     context.loading && !context.profiles.length
@@ -116,18 +117,24 @@ export function createSwarmStartForm(context) {
     if (directoryLoading || context.pending) return;
     context.pending = 'start';
     let missingDirectory = false;
+    const payload = {
+      profile_id: selectedProfile.id,
+      expected_profile_revision: selectedProfile.revision,
+      prompt: goal,
+      ...(sameServerPath(runDirectory, defaultDirectory)
+        ? {}
+        : { working_directory: runDirectory }),
+    };
+    const fingerprint = JSON.stringify(payload);
+    if (retryStart?.fingerprint !== fingerprint)
+      retryStart = { fingerprint, id: requestId() };
     try {
       const result = await context.call('swarms.start', {
-        profile_id: selectedProfile.id,
-        expected_profile_revision: selectedProfile.revision,
-        prompt: goal,
-        request_id: requestId(),
-        // The default spelled another way (`C:/work/`) is still the default.
-        ...(sameServerPath(runDirectory, defaultDirectory)
-          ? {}
-          : { working_directory: runDirectory }),
+        ...payload,
+        request_id: retryStart.id,
       });
-      goal = '';
+      retryStart = null;
+      if (goal === payload.prompt) goal = '';
       const id = result.swarm_id ?? result.id;
       context.focusRequest = { kind: 'run', id };
       await context.refresh();

@@ -504,6 +504,7 @@ def _mutate(
     notes: list[str] = []
     outcomes: list[Json] = []
     passages: list[Json] = []
+    replacement_author_id = author_id
     if action == "create":
         title, content, deleted = arguments["title"], arguments["content"], 0
         duplicate = connection.execute(
@@ -564,14 +565,21 @@ def _mutate(
             )
         if current["deleted"] and action != "restore":
             raise SwarmStoreError("wiki_deleted", details=state)
-        # Replacing the whole page must not silently discard a peer's revision. A
-        # participant replacing a revision it saved itself discards no one else's change.
+        # A title or passage change cannot make inherited content the caller's
+        # own snapshot. Only a whole submitted body grants unbased replacement;
+        # a peer's content edit revokes it until another based whole-body write.
         if (
             "content" in arguments
             and expected is None
-            and (actor is None or current["author_id"] != actor["id"])
+            and (
+                actor is None
+                or current["author_id"] != author_id
+                or current["replacement_author_id"] != author_id
+            )
         ):
             raise SwarmStoreError("invalid_arguments", field="expected_revision", details=state)
+        if "content" not in arguments:
+            replacement_author_id = source["replacement_author_id"]
         if edits:
             content, outcomes, notes, misses, passages = _apply_edits(
                 connection, page_id, current["revision"], content, edits
@@ -592,14 +600,16 @@ def _mutate(
             line = outcomes[0]["line"]
             if content == current["content"] and title == current["title"]:
                 return finish({**metadata(current), "unchanged": True, "line": line})
+            if content != current["content"] and replacement_author_id != author_id:
+                replacement_author_id = None
         if len(content) > _TEXT_CHARS:
             raise SwarmStoreError("invalid_arguments", field="content")
         revision = current["revision"] + 1
         connection.execute("UPDATE wiki_pages SET revision=? WHERE id=?", (revision, page_id))
     connection.execute(
         "INSERT INTO "
-        "wiki_revisions(swarm_id,page_id,revision,title,content,deleted,author_id,author_name,author_kind,created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "wiki_revisions(swarm_id,page_id,revision,title,content,deleted,author_id,author_name,author_kind,created_at,replacement_author_id)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
             swarm_id,
             page_id,
@@ -611,6 +621,7 @@ def _mutate(
             actor["display_name"] if actor is not None else "User",
             "participant" if actor is not None else "user",
             now,
+            replacement_author_id,
         ),
     )
     result = metadata(_page(connection, swarm_id, page_id))

@@ -276,6 +276,13 @@ async def test_delete_removes_board_and_bound_sessions_but_keeps_profile_and_oth
         ),
     )
     await board.store.post_human(sid, text="Delete this Board post", request_id="post")
+    await board.store.post(
+        sid,
+        binding.participant_id,
+        text="Deduplicated participant post",
+        request_id="participant-post",
+        step_id="participant-step",
+    )
     await board.store.prepare_inbox_delivery(sid, binding.participant_id)
     await board.service.management.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
     result = await board.service.management.operation("swarms.delete", {"swarm_id": sid})

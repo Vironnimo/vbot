@@ -463,6 +463,7 @@ async def test_started_run_is_titled_in_the_background_and_listed_by_title(lifec
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("restriction_source", ["profile", "binding"])
 @pytest.mark.parametrize(
     ("denied", "waiting"),
     [
@@ -474,18 +475,36 @@ async def test_started_run_is_titled_in_the_background_and_listed_by_title(lifec
     ],
 )
 async def test_disabled_swarm_tools_stay_unavailable_on_start_and_resume(
-    lifecycle, tmp_path, denied, waiting
+    lifecycle, tmp_path, denied, waiting, restriction_source, monkeypatch
 ):
     # swarm_inbox is offered because one route holds posts back until the participant is idle;
     # with every route delivering at once it is not (see the participants test).
     names = {"swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"}
+    if restriction_source == "binding":
+        # Host preparation (including a repository profile) can narrow the
+        # owner's requested policy before creating the immutable binding.
+        create_binding = lifecycle.groups.create
+
+        async def narrowed(group_id, participant_id, config, **kwargs):
+            return await create_binding(
+                group_id,
+                participant_id,
+                replace(config, tool_access=replace(config.tool_access, denied=tuple(denied))),
+                **kwargs,
+            )
+
+        monkeypatch.setattr(lifecycle.groups, "create", narrowed)
     profile = await lifecycle.service.store.save_profile(
         {
             "schema_version": 1,
             "name": "Selective",
             "participants": [{"model": "fixture/model", "count": 1}],
             "working_directory": {"kind": "directory", "path": str(tmp_path)},
-            "tool_access": {"mode": "selected", "allowed": [], "denied": denied},
+            "tool_access": {
+                "mode": "selected",
+                "allowed": [],
+                "denied": denied if restriction_source == "profile" else [],
+            },
             "delivery": {waiting: {"mode": "idle", "wake_idle": True}},
         },
         expected_revision=None,

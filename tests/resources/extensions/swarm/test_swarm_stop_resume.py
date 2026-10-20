@@ -17,6 +17,107 @@ from tests.resources.extensions.swarm.swarm_test_support import (
 
 
 @pytest.mark.asyncio
+async def test_pending_start_does_not_block_stopping_another_swarm(
+    lifecycle, tmp_path, monkeypatch
+):
+    service = lifecycle.service
+    profile = await single_participant_profile(lifecycle, tmp_path)
+    other = await service.management.operation(
+        "swarms.start",
+        {"profile_id": profile["id"], "prompt": "other", "request_id": "other"},
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = lifecycle.groups.start
+
+    async def held(handle, participant_id, run_input):
+        entered.set()
+        await release.wait()
+        return await original(handle, participant_id, run_input)
+
+    monkeypatch.setattr(lifecycle.groups, "start", held)
+    starting = asyncio.create_task(
+        service.management.operation(
+            "swarms.start",
+            {"profile_id": profile["id"], "prompt": "pending", "request_id": "pending"},
+        )
+    )
+    try:
+        async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
+            await entered.wait()
+            stopped = await service.management.operation(
+                "swarms.stop",
+                {"swarm_id": other["swarm_id"], "request_id": "stop-other"},
+            )
+            assert stopped["state"] in {"stopped", "cancelled"}
+            assert not starting.done()
+    finally:
+        release.set()
+        await starting
+
+
+@pytest.mark.asyncio
+async def test_resume_during_wake_admission_keeps_the_active_participant(
+    lifecycle, tmp_path, monkeypatch
+):
+    service = lifecycle.service
+    adapter = PausedSwarmAdapter(pause_at=2)
+    lifecycle.runtime.adapter = adapter
+    profile = await single_participant_profile(lifecycle, tmp_path)
+    started = await service.management.operation(
+        "swarms.start",
+        {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"},
+    )
+    sid = started["swarm_id"]
+    await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
+    await wait_idle(service, sid)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = lifecycle.groups.start
+
+    async def held(handle, participant_id, run_input):
+        # The facade has admitted the Run, but Swarm has not recorded it yet.
+        result = await original(handle, participant_id, run_input)
+        entered.set()
+        await release.wait()
+        return result
+
+    monkeypatch.setattr(lifecycle.groups, "start", held)
+    await service.store.post_human(sid, text="wake sentinel", request_id="post")
+    waking = asyncio.create_task(service._schedule_wakes(sid))
+    resuming = None
+    try:
+        async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
+            await entered.wait()
+            await adapter.started.wait()
+            resuming = asyncio.create_task(
+                service.management.operation(
+                    "swarms.resume",
+                    {"swarm_id": sid, "request_id": "resume"},
+                )
+            )
+            release.set()
+            await waking
+            result = await resuming
+            assert all("error" not in item for item in result["runs"])
+            snapshot = await service.store.get_swarm(sid)
+            assert snapshot["participants"][0]["state"] == "running"
+            assert (
+                len(
+                    lifecycle.runtime.chat_sessions.owned_runs(
+                        owner_name="swarm",
+                        group_id=sid,
+                    )
+                )
+                == 2
+            )
+    finally:
+        release.set()
+        adapter.release.set()
+        await asyncio.gather(waking, *([resuming] if resuming else []), return_exceptions=True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("reminder_enabled", [True, False])
 async def test_stop_resume_preserves_one_initial_input_for_unfinished_participant(
     lifecycle, tmp_path, monkeypatch, reminder_enabled

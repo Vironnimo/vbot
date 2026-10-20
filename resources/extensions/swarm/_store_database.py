@@ -173,7 +173,7 @@ CREATE TABLE delivery_batch_entries(receipt_id TEXT NOT NULL REFERENCES delivery
 CREATE TABLE requests(scope TEXT NOT NULL,request_id TEXT NOT NULL,payload_hash TEXT NOT NULL,outcome TEXT NOT NULL,PRIMARY KEY(scope,request_id)) STRICT;
 CREATE TABLE swarm_goals(swarm_id TEXT PRIMARY KEY REFERENCES swarms(id),post_id TEXT NOT NULL REFERENCES posts(id)) STRICT;
 CREATE TABLE wiki_pages(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),revision INTEGER NOT NULL) STRICT;
-CREATE TABLE wiki_revisions(id INTEGER PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),page_id TEXT NOT NULL REFERENCES wiki_pages(id),revision INTEGER NOT NULL,title TEXT NOT NULL,content TEXT NOT NULL,deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),author_id TEXT NOT NULL,author_name TEXT NOT NULL,author_kind TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(page_id,revision)) STRICT;
+CREATE TABLE wiki_revisions(id INTEGER PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),page_id TEXT NOT NULL REFERENCES wiki_pages(id),revision INTEGER NOT NULL,title TEXT NOT NULL,content TEXT NOT NULL,deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),author_id TEXT NOT NULL,author_name TEXT NOT NULL,author_kind TEXT NOT NULL,created_at TEXT NOT NULL,replacement_author_id TEXT,UNIQUE(page_id,revision)) STRICT;
 CREATE INDEX wiki_revision_page ON wiki_revisions(swarm_id,page_id,id DESC);
 CREATE INDEX recipients_pending_participant ON recipients(participant_id,post_id) WHERE delivered_at IS NULL;
 CREATE INDEX delivery_batches_pending_participant ON delivery_batches(participant_id,effect_kind,created_at) WHERE acknowledged_at IS NULL;
@@ -188,7 +188,7 @@ PARTICIPANT_COLUMNS = "id,swarm_id,model,display_name,ordinal,state,idle_boundar
 DISCUSSION_COLUMNS = "id,swarm_id,title,sequence,is_main,created_at"
 POST_COLUMNS = "id,swarm_id,discussion_id,sequence,author_kind,author_id,author_name,text,reply_to,recipients_json,created_at"
 WIKI_PAGE_COLUMNS = "id,swarm_id,revision"
-WIKI_REVISION_COLUMNS = "id,swarm_id,page_id,revision,title,content,deleted,author_id,author_name,author_kind,created_at"
+WIKI_REVISION_COLUMNS = "id,swarm_id,page_id,revision,title,content,deleted,author_id,author_name,author_kind,created_at,replacement_author_id"
 
 
 def qualified(columns: str, alias: str) -> str:

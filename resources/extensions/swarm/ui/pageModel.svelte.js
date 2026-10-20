@@ -574,9 +574,24 @@ export function createSwarmPageModel(host) {
 
   async function loadProfiles() {
     const request = ++profilesRequest;
-    const result = await call('profiles.list', { limit: 100 });
+    const wanted = profiles.length;
+    const selectedId = start.selectedProfile?.id;
+    let result = await call('profiles.list', { limit: 100 });
+    let loadedProfiles = page(result);
+    while (
+      result.cursor &&
+      (loadedProfiles.length < wanted ||
+        (selectedId && !loadedProfiles.some((item) => item.id === selectedId)))
+    ) {
+      if (disposed || request !== profilesRequest) return;
+      result = await call('profiles.list', {
+        limit: 100,
+        cursor: result.cursor,
+      });
+      loadedProfiles = appendNew(loadedProfiles, page(result));
+    }
     if (disposed || request !== profilesRequest) return;
-    profiles = page(result);
+    profiles = loadedProfiles;
     profilesCursor = result.cursor ?? null;
     profilesLoaded = true;
     if (routeWaits) void applyRoute(route);

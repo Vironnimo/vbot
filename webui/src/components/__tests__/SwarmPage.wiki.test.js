@@ -425,6 +425,51 @@ describe('Swarm Wiki pages', () => {
 });
 
 describe('Swarm Wiki drafts and refresh', () => {
+  it.each(['delete', 'restore'])(
+    'keeps a new page draft when an earlier %s finishes',
+    async (action) => {
+      const fixture = wikiBridge();
+      await openWiki(fixture);
+      if (action === 'restore') {
+        fixture.peerEdit();
+        fixture.bridge.invalidate();
+        await vi.waitFor(() =>
+          expect(wikiContent()).toContain('Peer evidence'),
+        );
+        button(t('swarm.wiki.history')).click();
+        await vi.waitFor(() =>
+          expect(
+            document.querySelector('.wiki-version[data-revision="1"]'),
+          ).not.toBeNull(),
+        );
+        document.querySelector('.wiki-version[data-revision="1"]').click();
+        await vi.waitFor(() =>
+          expect(button(t('swarm.wiki.restore'))).toBeDefined(),
+        );
+      }
+      let finish;
+      holdWiki(fixture, action, (resolve) => {
+        finish = () => resolve({});
+      });
+      button(
+        t(action === 'delete' ? 'swarm.wiki.delete' : 'swarm.wiki.restore'),
+      ).click();
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      document
+        .querySelector(`button[aria-label="${t('swarm.wiki.new')}"]`)
+        .click();
+      await tick();
+      fill('wiki-title', 'New page');
+      fill('wiki-content', 'Keep this draft');
+      finish();
+      await settle();
+      expect(document.getElementById('wiki-content')?.value).toBe(
+        'Keep this draft',
+      );
+      expect(document.getElementById('wiki-title')?.value).toBe('New page');
+    },
+  );
+
   it('saves the current draft before switching tabs and preserves a conflicting draft', async () => {
     const fixture = wikiBridge();
     await openWiki(fixture);

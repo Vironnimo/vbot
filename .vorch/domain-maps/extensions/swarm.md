@@ -74,6 +74,8 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   Project choices load when opening a profile editor; the Run form also loads
   the catalog to resolve a selected Project default, not on display context
   updates. Failed editor loads leave the overview usable (`SwarmPage.test.js`).
+  Profile refreshes retain the loaded page depth and fetch through the selected
+  profile, so a selection beyond the first 100 entries survives invalidation.
 - The profile editor is one continuous configuration page in the shared
   section grammar (`webui/design.md` -> Settings, Agents, Projects, and
   Schedules): Swarm, Participants, Working directory, Instructions, Tool access,
@@ -184,7 +186,7 @@ request together before implementation. The Agents decide when they are ready to
 act; no fixed roles, discussion rounds, plan template or approval phase are imposed.
 Resume preserves admitted Session history and supplies the same initial message to
 participants not yet admitted. Existing profiles and historical messages are not
-rewritten. New profile defaults orient participants toward the shared collaboration Tools available to them and ask for posts that add information, answer questions, report results or request action; acknowledgments of acknowledgments and empty closing posts are unnecessary. Existing profile instructions and started snapshots remain as saved. When Board is disabled, the initial message carries the exact original request directly. With Wiki available it retains peer discussion guidance; with Wiki disabled it avoids requiring inaccessible collaboration. Disabling Inbox also removes Inbox-specific delivery guidance.
+rewritten. New profile defaults orient participants toward the shared collaboration Tools available to them and ask for posts that add information, answer questions, report results or request action; acknowledgments of acknowledgments and empty closing posts are unnecessary. Existing profile instructions and started snapshots remain as saved. When Board is disabled, the initial message carries the exact original request directly. With Wiki available it retains peer discussion guidance; with Wiki disabled it avoids requiring inaccessible collaboration. Start and Resume choose this wording from each effective Session binding, including repository denials, rather than only the saved profile. Disabling Inbox also removes Inbox-specific delivery guidance.
 Evidence: `agent_text.py`, `test_swarm_start.py`, `test_swarm_wiki.py`.
 
 `swarm_wiki` is available only to bound participant Sessions of the owning Swarm.
@@ -260,8 +262,13 @@ Tool Call identity, and drops an Agent-sent `request_id`; management keeps its o
 `expected_revision` is required only for whole-content replacement, so a newer
 peer revision is never silently discarded; when present on other changes it is
 checked strictly. A participant's whole-content update without it replaces the
-current revision when that participant saved it, since no peer change can be lost,
-and the Tool notes the replaced revision. The Store decides this inside the write
+current revision only when that participant saved it and supplied its full content
+without an intervening peer content edit. The nullable
+`wiki_revisions.replacement_author_id` records that provenance: a title change
+retains it, a peer passage edit clears it, and a revision-checked whole-content
+write establishes it again. Old revisions without provenance require
+`expected_revision`; renaming or editing one passage never grants ownership of
+inherited content. The Tool notes the replaced revision. The Store decides this inside the write
 (`_store_wiki.py::_mutate`), so the payload stays stable and a replayed Tool Call
 returns its saved outcome; management changes always need `expected_revision`. All 5
 such refusals of one Swarm Run hit the caller's own revision (Sessions, 2026-09).
@@ -802,10 +809,11 @@ one participant accounted for 211 of them (Sessions, 2026-09). `swarm_state`
 states the pacing only as its bound: when a non-addressed route wakes idle
 participants, its posts start a Run "within" the longest Quiet period
 (`_board_view.wake_text`).
-A wake announces (`wake_pending_seq`) only through the newest post of the first
-batch it will deliver when that exceeds the previous announcement, so posts
-beyond that batch trigger another wake after the Run instead of waiting for an
-unrelated post. Evidence: `test_swarm_wake_policy.py`,
+A wake announces (`wake_pending_seq`) through the newest post of its first batch,
+without moving the watermark backwards. Eligibility follows pending recipients,
+not that watermark: prioritizing addressed posts must not strand older pending
+posts. Each wake admission uses its prepared delivery receipt as its identity,
+so batches at the same watermark still start distinct Runs. Evidence: `test_swarm_wake_policy.py`,
 `test_runs_without_tools_pace_wakes_until_addressed_or_quiet_ends`.
 
 Enabling a communication route returns eligible wake candidates and schedules
@@ -833,8 +841,12 @@ The Store's integer lifecycle epoch and the temporary facade's opaque admission
 epoch are different identities and are linked explicitly. Stop closes execution
 admission; the Board still accepts user posts. A new human Board post after Stop or
 startup interruption persists first, then resumes the same participant Sessions.
-Posting serializes with Stop/Resume/delete so a message sent during draining waits
-for it to finish. Resume prepares delivery without scheduling an additional
+Start admission, automatic wakes, posting, Stop, Resume and delete share one
+control lock per Swarm. All initial inputs are admitted before automatic
+continuations; Resume cannot race an automatic admission. A pending admission
+does not block operations on another Swarm. Concurrent Starts with the same
+request id also serialize before creating the Swarm. A message sent during
+draining waits for it to finish. Resume prepares delivery without scheduling an additional
 automatic wake. Replaying a saved post never restarts a later stopped execution;
 participant Tools retain their epoch checks. Records are not deleted. Startup
 recovery marks unfinished execution interrupted and never admits work automatically. Stale callbacks cannot reuse an
@@ -856,6 +868,9 @@ admitting work again. Start validates replay against the retained profile and
 effective configuration before consulting the current profile, directory or
 catalog, so later edits/removal cannot invalidate a matching receipt; changed
 goals, revision pins and effective directory/Project selections still conflict.
+The start form retains its request id after a failed call while the payload is
+unchanged, so retrying a lost response returns the original Run. A successful
+Start or changed payload gives the next submission a new id (`SwarmPage.test.js`).
 A completed Stop returns its saved drain result, and an
 unfinished Stop can drain only its original lifecycle epoch. The receipts survive
 restart and later Resume attempts. An interrupted admission requires a new explicit
@@ -1162,8 +1177,8 @@ revealed post keeps clear of it.
 The page offers confirmed deletion. `swarms.delete` marks a closed
 Swarm `deleting`, removes its bound participant Sessions through the host, then
 transactionally removes its Board, Wiki pages and revisions, participants, events
-and request receipts.
-The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; the durable
+and request receipts, including participant `post_step` deduplication receipts.
+The profile and other Swarms remain. Start/Stop/Resume/Delete serialize per Swarm; the durable
 deletion marker blocks Resume, including request replay, and survives restart so
 a failed deletion can be retried. Tests: `test_swarm_operations.py`, `SwarmPage.test.js`.
 
@@ -1308,7 +1323,7 @@ Search runs 300 ms after typing stops or at once on Enter; refreshes reload at l
 as many pages as are loaded, so they never take back "Load more". History lists
 versions newest first and marks the current one; an older revision shows a banner to
 restore it or go back to the current one, and only the current revision of a page
-that is not deleted can be edited. After its first visit, its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations, and only `wiki` changes of its Swarm (or a full refresh) reload the Wiki. Late background reads cannot replace a newly opened page or an edit draft. Existing pages autosave and flush before local or shell navigation; new pages save explicitly, and Cancel returns to the page shown before. The editor ends with the shared save state (`webui/autosave.md`), whose Save action also creates a new page. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
+that is not deleted can be edited. After its first visit, its state remains mounted for the selected Swarm across tab changes, while hidden tabs render no controls and schedule no refreshes. Reopening shows retained entries/content immediately while checking current revisions; unchanged open pages are not re-read on unrelated invalidations, and only `wiki` changes of its Swarm (or a full refresh) reload the Wiki. Late background reads and delete/restore completions cannot replace a newly opened page or an edit draft; mutation busy state is separate from a newer editor's save state. Existing pages autosave and flush before local or shell navigation; new pages save explicitly, and Cancel returns to the page shown before. The editor ends with the shared save state (`webui/autosave.md`), whose Save action also creates a new page. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes `webui/src/components/__tests__/SwarmPage.wiki.test.js` plus the bundled-page build test.
 
 
 The Decisions Tool, management operation, tab, and linked-question enrichment are

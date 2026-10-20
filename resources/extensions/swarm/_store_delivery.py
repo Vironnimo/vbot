@@ -295,7 +295,6 @@ def _prepare_automatic_delivery(
             ]
             wake = (
                 announce
-                and newest > announced
                 and not participant["wake_pending"]
                 and participant["state"] in {"idle"}
                 and any(
@@ -358,7 +357,6 @@ def _prepare_automatic_delivery(
         epoch_value = int(epoch["epoch"])
         wake = bool(
             announce
-            and newest > announced
             and not participant["wake_pending"]
             and can_wake
             and participant["state"] in {"idle"}
@@ -444,13 +442,13 @@ def _prepare_automatic_delivery(
 def _announced_through(rows: Sequence[sqlite3.Row], newest: int, announced: int) -> int:
     """Return the sequence a wake announces: through the batch its Run receives first.
 
-    Posts beyond that batch stay unannounced, so if the Run ends before receiving
-    them they start another wake. The fallback to ``newest`` keeps announcements
-    strictly increasing, which the wake's admission key relies on.
+    Priority selection can leave older posts pending. Announcements never go
+    backwards, but eligibility follows pending recipients, not this watermark.
+    Each wake's admission key names its prepared delivery receipt.
     """
 
     delivered = max((int(row["sequence"]) for row in rows), default=0)
-    return delivered if delivered > announced else newest
+    return max(delivered or newest, announced)
 
 
 def _list_prepared_deliveries(db: SwarmDatabase, cursor: str | None, limit: int) -> Page:
@@ -481,10 +479,18 @@ def _claim_wake(db: SwarmDatabase, swarm_id: str, participant_id: str, expected_
         participant = _participant(connection, swarm_id, participant_id)
         if not participant["wake_pending"] or int(participant["wake_epoch"]) != expected_epoch:
             return {"participant_id": participant_id, "pending": False}
+        batch = connection.execute(
+            "SELECT receipt_id FROM delivery_batches WHERE participant_id=? "
+            "AND effect_kind='swarm_automatic' AND acknowledged_at IS NULL ORDER BY created_at LIMIT 1",
+            (participant_id,),
+        ).fetchone()
+        if batch is None:
+            return {"participant_id": participant_id, "pending": False}
         return {
             "participant_id": participant_id,
             "pending": True,
             "boundary": participant["idle_boundary"],
+            "receipt_id": batch["receipt_id"],
         }
 
     return db._write(operation)
