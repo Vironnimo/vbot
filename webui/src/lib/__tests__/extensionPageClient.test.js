@@ -239,13 +239,13 @@ describe('extension page client', () => {
     expect(failures.map(listingErrorReason)).toEqual(['unreadable', 'invalid']);
   });
 
-  it("asks the host for a Run's step window and for the steps before its gap", () => {
+  it("asks the host for a Run's step window and for the steps before its gap", async () => {
     const target = parent();
     client = createExtensionPageClient({ target });
     initialize(target);
     const lastCall = () => target.postMessage.mock.calls.at(-1)[0];
 
-    void client.subscribeRun('group', 'run', 3, {
+    const subscribed = client.subscribeRun('group', 'run', 3, {
       timeline: true,
       childLimit: 100,
     });
@@ -259,7 +259,15 @@ describe('extension page client', () => {
         child_limit: 100,
       },
     });
-    void client.readRunChildren('group', 'participant', {
+    const subscription = { id: 'subscription', replay_through_sequence: 3 };
+    dispatchFrom(target, {
+      ...lastCall(),
+      type: 'vbot.extension.result',
+      result: subscription,
+    });
+    await expect(subscribed).resolves.toEqual(subscription);
+
+    const children = client.readRunChildren('group', 'participant', {
       runId: 'run',
       before: 'step-3',
       historyGeneration: 'generation',
@@ -276,6 +284,13 @@ describe('extension page client', () => {
         limit: 100,
       },
     });
+    const page = { children: [], has_more: false };
+    dispatchFrom(target, {
+      ...lastCall(),
+      type: 'vbot.extension.result',
+      result: page,
+    });
+    await expect(children).resolves.toEqual(page);
   });
 
   it('reports whether layers are open and closes the topmost one when the host asks', () => {
