@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import secrets as _random
 import string
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -62,6 +63,7 @@ from core.utils.logging import get_logger
 
 __all__ = [
     "LIFETIMES",
+    "RecordedUse",
     "DEFAULT_PASSWORD_SYMBOLS",
     "REFERENCE_PATTERN",
     "SECRET_KINDS",
@@ -100,6 +102,7 @@ ChangeKind = Literal["created", "changed", "deleted"]
 #: Symbols a generated password contains unless the caller names others.
 DEFAULT_PASSWORD_SYMBOLS: Final = "!#$%&()*+,-./:;<=>?@[]^_{|}~"
 _MIN_PASSWORD = 8
+_RECENT_USES = 20
 _MAX_PASSWORD = 128
 
 
@@ -127,6 +130,17 @@ class SecretUse:
 def describe_uses(uses: Iterable[SecretUse]) -> list[str]:
     """How a call's display names the Secrets it used (``GITHUB.password (terminal)``)."""
     return list(dict.fromkeys(f"{use.label} ({use.sink})" for use in uses))
+
+
+@dataclass(frozen=True)
+class RecordedUse:
+    """One substitution as Settings shows it: never a value."""
+
+    field: str
+    sink: SinkClass
+    agent_id: str
+    session_id: str
+    at: datetime
 
 
 @dataclass(frozen=True)
@@ -167,6 +181,8 @@ class AgentSecrets:
         self._masker: SecretMasker | None = None
         self._listeners: list[ChangeListener] = []
         self._loaded = False
+        # The latest uses of each Secret since this process started, newest last.
+        self._uses: dict[str, deque[RecordedUse]] = {}
 
     # -- loading and listeners -------------------------------------------------
 
@@ -552,6 +568,7 @@ class AgentSecrets:
                 "Tell the user if this use is needed; they can allow it in Settings -> Secrets.",
             )
         value = self.field_value(secret, target)
+        self._record_use(secret, target.name, sink, agent_id, session_id)
         if secret.lifetime == "once":
             with self._lock:
                 if secret.id in self._records:
@@ -640,8 +657,25 @@ class AgentSecrets:
                 )
             values = {variables[item.name]: self.field_value(secret, item) for item in fields}
             uses = [SecretUse(secret.name, item.name, "environment") for item in fields]
+            for item in fields:
+                self._record_use(secret, item.name, "environment", agent_id, session_id)
             return values, uses
         return None
+
+    def recent_uses(self, secret_id: str) -> list[RecordedUse]:
+        """The latest uses of a Secret since this process started, newest first."""
+        with self._lock:
+            return list(reversed(self._uses.get(secret_id, ())))
+
+    def _record_use(
+        self, secret: AgentSecret, field_name: str, sink: SinkClass, agent_id: str, session_id: str
+    ) -> None:
+        use = RecordedUse(field_name, sink, agent_id, session_id, self._clock())
+        with self._lock:
+            self._uses.setdefault(secret.id, deque(maxlen=_RECENT_USES)).append(use)
+        _LOGGER.debug(
+            "Agent Secret %s.%s used (sink=%s agent=%s)", secret.name, field_name, sink, agent_id
+        )
 
     # -- masking ---------------------------------------------------------------
 
