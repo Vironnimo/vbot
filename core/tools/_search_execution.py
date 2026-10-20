@@ -73,6 +73,10 @@ class ScanResult:
     entries: list[tuple[bytes, int]] = field(default_factory=list)
     files_searched: int | None = None
     warnings: list[str] = field(default_factory=list)
+    # One "Could not read <path>: <reason>." per path ripgrep could not read, and the
+    # number of further diagnostics past the native bound, which are such paths too.
+    unreadable: list[str] = field(default_factory=list)
+    unreadable_unnamed: int = 0
     # The bound that cut the pass short: MAX_ENTRIES ("entries") or MAX_SCAN_BYTES ("output").
     stopped_by: Literal["entries", "output"] | None = None
     interrupted: bool = False
@@ -195,10 +199,14 @@ _NOT_FOUND = frozenset({2, 3}) if os.name == "nt" else frozenset({errno.ENOENT})
 
 
 def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
-    """Turn ripgrep's exit status and diagnostics into a failure or warnings.
+    """Turn ripgrep's exit status and diagnostics into a refusal or warnings.
 
-    Files ripgrep could not read become warnings in English; any other
-    diagnostic means ripgrep refused the query.
+    ripgrep refuses a query before it searches: it fails, prints nothing and
+    names no path it could not search. Only such a run raises; its message is
+    empty when ripgrep gave no reason. In a run that searched, files ripgrep
+    could not read are counted and named in English (``unreadable``), and every
+    other diagnostic becomes a warning, so a search with results never fails
+    over them. ripgrep exits with 2 after any such diagnostic, matches or not.
     """
     result = ScanResult(interrupted=outcome.interrupted)
     if outcome.interrupted:
@@ -209,7 +217,7 @@ def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
             messages.append(line)
         else:
             messages[-1] += "\n" + line
-    refused = []
+    other = []
     for message in messages:
         text = message.removeprefix("rg: ")
         match = _IO_ERROR.match(message)
@@ -220,7 +228,7 @@ def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
                 continue
             error = OSError(None, None, None, code) if os.name == "nt" else OSError(code, "")
             label = _label(match["path"], scope, cwd)
-            result.warnings.append(f"Could not read {label}: {os_error_reason(error)}.")
+            result.unreadable.append(f"Could not read {label}: {os_error_reason(error)}.")
             continue
         if text.startswith("File system loop found: "):
             result.warnings.append(f"Skipped a link loop: {text.split(': ', 1)[1]}.")
@@ -232,14 +240,14 @@ def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
             reason = problem.splitlines()[0].rstrip(".") if problem else "unknown problem"
             result.warnings.append(f"ripgrep reported for {_label(path, scope, cwd)}: {reason}.")
             continue
-        refused.append(text)
-    if refused:
-        raise SearchRefusedError("\n".join(refused))
-    if outcome.returncode not in (0, 1, None) and not result.warnings:
-        raise SearchRefusedError(
-            "search_files could not complete the search: the search engine exited with "
-            f"code {outcome.returncode}. Retry the call."
-        )
+        other.append(text)
+    searched = outcome.printed or result.warnings or result.unreadable
+    if outcome.returncode not in (0, 1, None) and not searched:
+        raise SearchRefusedError("\n".join(other))
+    result.warnings.extend(
+        f"ripgrep reported: {text.splitlines()[0].rstrip('.')}." for text in other
+    )
+    result.unreadable_unnamed = outcome.dropped
     return result
 
 
@@ -311,8 +319,14 @@ def explain_failure(message: str, patterns: Sequence[str] = ()) -> str:
     """Say what ripgrep refused and how to correct the call. Nothing was searched.
 
     *patterns* are the regular expressions the call sent, in ripgrep's order, so
-    a regex error can point at the pattern as sent.
+    a regex error can point at the pattern as sent. An empty *message* stands for
+    a failure ripgrep gave no reason for.
     """
+    if not message:
+        return (
+            "The search engine failed without giving a reason. Nothing was searched. "
+            "Retry the call."
+        )
     if any(marker in message for marker in _PATTERN_ERRORS):
         advice = (
             'To search literal text, add "-F" to args; otherwise correct the regular expression.'
@@ -348,7 +362,10 @@ def explain_failure(message: str, patterns: Sequence[str] = ()) -> str:
             '["--type-list"]} lists the names; or select files by name with glob, such as '
             '"*.ext".'
         )
-    return f"{message}\nNothing was searched."
+    return (
+        f"ripgrep refused the search:\n{message}\nNothing was searched. Correct the call as "
+        'that message says; {"args": ["--help"]} lists the accepted flags.'
+    )
 
 
 def pattern_retry(
@@ -660,8 +677,11 @@ class SearchExecution:
         scope: Scope,
         paths: list[bytes],
         max_count: int,
-    ) -> tuple[dict[bytes, list[dict[str, Any]]], list[str]]:
-        """Return ripgrep's match and context events for explicit files of one scope."""
+    ) -> tuple[dict[bytes, list[dict[str, Any]]], ScanResult]:
+        """Return ripgrep's match and context events for explicit files of one scope.
+
+        The second value holds the warnings and unreadable files of every batch.
+        """
         base = [
             *DEFAULT_ARGUMENTS,
             *query.rg_args,
@@ -675,7 +695,7 @@ class SearchExecution:
         ]
         length = sum(len(argument) + 3 for argument in base) + len(str(self.binary))
         events: dict[bytes, list[dict[str, Any]]] = {}
-        warnings: list[str] = []
+        problems = ScanResult()
         batch: list[str] = []
         size = length
 
@@ -710,7 +730,9 @@ class SearchExecution:
                 path = Path(os.path.normpath(scope.cwd / os.fsdecode(current_path)))
                 raise SearchBoundError("record", path) from None
             judged = _judge(outcome, scope, self.cwd)
-            warnings.extend(judged.warnings)
+            problems.warnings.extend(judged.warnings)
+            problems.unreadable.extend(judged.unreadable)
+            problems.unreadable_unnamed += judged.unreadable_unnamed
 
         for path in paths:
             argument = os.fsdecode(path)
@@ -723,7 +745,7 @@ class SearchExecution:
             size += argument_size
         if batch:
             execute()
-        return events, warnings
+        return events, problems
 
     def reference_text(self, arguments: list[str]) -> str:
         """Return ripgrep's own reference output, such as its file type list."""

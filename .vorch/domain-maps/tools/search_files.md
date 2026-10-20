@@ -36,7 +36,8 @@ services:
 - `core/tools/_search_results.py`: ordering, pages and rendering (`entry_page`,
   `content_window`, `content_page`) and the `summary`.
 - `core/tools/_search_hints.py`: when a pattern looks like file names
-  (`file_name_extensions`), literal text or fixed text to count, and the notes
+  (`file_name_extensions`), literal text, fixed text to count or a phrase that
+  wrapped text can break across lines (`wrapped_phrases`), and the notes
   for results that miss what the pattern seems to ask for; `_search` runs the
   passes behind them.
 
@@ -160,7 +161,8 @@ Modes:
   and got only `No matches`; a note naming the matching files did not change
   its next call either (agent-eval 2026-10-10). Coverage:
   `test_search_files_arguments.py::test_a_content_search_without_matches_lists_files_whose_names_match`.
-- When no name matches either, a single pattern (without `-v`) gets one of three
+- When no name matches either, a phrase a line break hid gets its note (Wrapped
+  phrases, below); otherwise a single pattern (without `-v`) gets one of three
   notes (`_note_no_match`):
   - **Literal text.** A regex holding an operator with which it can miss its own
     text (`?+()[]{}^$\`; `.`, `*` and `|` cannot) is counted once more with
@@ -224,6 +226,30 @@ Modes:
   get no note. A Swarm Agent counted an id that occurred three times on one JSON
   line, got `1` and needed a second call with `--count-matches` (Swarm run
   2026-10-12). Coverage: `test_a_line_count_says_how_many_matches_the_lines_hold`.
+- **Wrapped phrases** (`_note_wrapped_phrases`, `wrapped_phrases`): wrapped
+  prose (HTML, Markdown) breaks a phrase across lines, where words separated by
+  spaces in `pattern` never match. When every pattern is fixed text (any
+  pattern under `-F`, or `finds_fixed_text`) and one has a space between two
+  words, a content, files or count search without `-v` or `-x` that found
+  nothing, or found matches on its first page, counts once more with
+  `--multiline`: one regex per gap between words, each requiring a line break
+  there, so the count holds exactly the occurrences a search within lines
+  misses. When it finds some, the `note` gives their number and the call that
+  finds every occurrence: the patterns joined with `|`, `\s+` between words
+  (literal text escaped), and `-U` (`-F` replaced or removed). Without matches
+  within lines: `Within one line, pattern matches nothing; with a line break
+  between its words it occurs 1 time in 1 file. To find it, pass pattern
+  "and\s+the\s+feed-in" and add -U to args.`; beside matches: `The results
+  leave out 1 match in 1 file with a line break between words of pattern. To
+  include it, pass pattern "feed-in\s+tariff" and add -U to args.` The pass gets
+  half the remaining time on its own budget, so running out leaves the note out
+  without making the result partial; on this repository (3,500 files) it took
+  about as long as the counting pass, 5-50 ms. Swarm run 2026-10-20: Agents used
+  multi-word searches to confirm text was gone, and 12 of 177 plain multi-word
+  searches missed an occurrence wrapped across lines, one of them answering only
+  `No matches` (11 had other matches). Replaying the Run's 192 searches with a
+  space in `pattern` gave this note on 12, the slowest call taking 113 ms.
+  Coverage: `test_a_phrase_search_counts_the_matches_a_line_break_hides`.
 
 The owner normalizer repairs common encodings and wrappers. It also accepts field
 names from other search Tools and command-line habits when their meaning is exact
@@ -418,17 +444,33 @@ Documented deviations from plain `rg`, all deliberate:
 
 Diagnostics (`_judge`):
 
-- IO errors (`(os error N)`) become English warnings that name the path, with
-  the reason from `file_state.os_error_reason`. A not-found error for a path
-  that no longer exists is dropped: the file was deleted between ripgrep's walk
-  and its read, so nothing is missing from the result. Swarm Sessions (2026-10)
-  marked results incomplete for vanished `*.sqlite-journal` files
-  (`test_a_file_deleted_during_the_search_is_no_read_failure`).
-- Link loops become warnings ("Skipped a link loop").
-- Any other diagnostic that starts with an existing path becomes a warning, for
-  example an invalid ignore file.
-- Anything else means ripgrep refused the query, and the call fails with
-  `search_error` and a correction. Exit 1 means no match.
+- ripgrep exits with 0 after a match, 1 without one, and 2 after any error,
+  also when a file it could not read sits beside matches. It refuses a query
+  (regex, flag, glob or type errors) before it searches, so a refused run
+  prints nothing and names no path. Only such a run fails the call, with
+  `search_error` and a correction (`explain_failure`); a message that maps to
+  no known refusal keeps ripgrep's text and points to `--help`, and a failure
+  without any message says so and asks for a retry.
+- A run that searched never fails over its diagnostics. IO errors
+  (`(os error N)`) are files ripgrep could not read: the result names the
+  first five, sorted, with the reason from `file_state.os_error_reason`
+  (`Could not read <path>: <reason>.`), and counts the rest together with the
+  messages past the stderr bound (`Could not read 395 more paths.`;
+  `_Found.read_failures`). A not-found error for a path that no longer exists
+  is dropped: the file was deleted between ripgrep's walk and its read, so
+  nothing is missing from the result. Swarm Sessions (2026-10) marked results
+  incomplete for vanished `*.sqlite-journal` files.
+- Link loops become warnings ("Skipped a link loop"), and any other diagnostic
+  that starts with an existing path names it, for example an invalid ignore
+  file. Anything else becomes `ripgrep reported: <message>.`
+- Swarm run 2026-10-20: a files search over a Scratch Area root holding a
+  browser profile in use failed with `search_error` whose whole message was a
+  path cut off mid-name plus `Nothing was searched.`, and the Agent switched to
+  a shell listing (one call). Its locked files (`os error 32`) had filled the
+  former 8 KiB stderr bound, the last message was cut mid-line, and the cut
+  message, read as a refusal, discarded the whole search. Coverage:
+  `test_files_ripgrep_could_not_read_are_warnings_beside_the_results`,
+  `test_diagnostics_are_kept_as_whole_messages_and_the_rest_counted`.
 - If ripgrep rejects a regex and the call is not literal, `pattern_retry` runs
   once:
   - a rejected newline in a content search reruns with `--multiline` unless
@@ -541,9 +583,12 @@ notice about the next page and each warning
   a Run cancellation returns partial results with a warning. A user cancellation
   kills the child and returns `cancelled_by_user`.
 - **Child process:** each child's RSS is bounded at 512 MiB (`MAX_CHILD_MEMORY`),
-  polled every 50 ms. One output record is bounded at 8 MiB, the output queue and
-  stderr are bounded, and one counting or listing pass is bounded at 256 MiB of
-  output. A record is a line, or one path or name where ripgrep ends them with
+  polled every 50 ms. One output record is bounded at 8 MiB, the output queue is
+  bounded, and one counting or listing pass is bounded at 256 MiB of output.
+  stderr keeps whole messages up to 64 KiB (`_DIAGNOSTIC_BYTES`; a message is an
+  `rg: ` line with its continuation lines); a message that no longer fits is
+  left out and counted (`NativeOutcome.dropped`), so no reader sees a message
+  cut short. `--debug` reports are matched as they arrive and are not kept. A record is a line, or one path or name where ripgrep ends them with
   NUL (`--files --null`, `--files-without-match --null`, `--null-data`, and the
   picker's `list_selected_files`); those callers pass `native_lines` the NUL
   `terminator`. Read as lines, a file list over 8 MiB was one record and failed
@@ -630,6 +675,8 @@ blank placeholders, so no sentence has to warn about them.
 | `path_not_found` for a page number: `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki {...}.` | Three searches named a Wiki page number as `path` and got `Path not found` (Swarm Sessions, 2026-10-12). Only when `swarm_wiki` is offered. |
 | Bare flag beside its field: `--glob in args had no value and was ignored; glob gives "tools/*.py".` | The call runs as the named field says; the note tells the Agent the flag had no effect, so it does not repeat it (Swarm run 2026-10-12: one call failed with `needs a value as the next item` although `glob` gave the value). |
 | Across lines: `Within one line, pattern matches nothing; across lines it occurs in 1 file. Add -U to args to let a match span lines.` | A search whose regex was written to cross a line break (`[\s\S]`) found nothing without `-U`, and the empty result gave no cause (Sessions, 2026-10-13). Names the flag; only when the `-U` count finds the text, so the note never sends the Agent to a search that also comes back empty. |
+| Wrapped phrase, no match within lines: `Within one line, pattern matches nothing; with a line break between its words it occurs 1 time in 1 file. To find it, pass pattern "and\s+the\s+feed-in" and add -U to args.` | Swarm run 2026-10-20: a phrase searched to confirm it was gone answered `No matches` while it occurred wrapped in HTML, which reads as a false "gone" (F4). `-U` alone does not help a literal space, so the note gives the pattern to send; `replace -F with -U in args` (or `remove -F from args`) when the call was literal, since the suggested pattern is a regex. Only when the count finds the text. |
+| Wrapped phrase beside matches: `The results leave out 1 match in 1 file with a line break between words of pattern. To include it, pass pattern "feed-in\s+tariff" and add -U to args.` | 11 of the 12 plain multi-word searches that missed a wrapped occurrence in that Run had other matches, so a note only for empty results would have missed them (F4). "leave out" says the shown results are short of the whole; the suggested call finds every occurrence, those within lines included. |
 | Rejected newline: `The pattern matches across lines, so the search ran with -U.` | Names the inferred multiline mode without claiming dotall or a changed pattern. A rejected `\n` search on 2026-10-19 led the Agent to abandon the relation between two lines and make two weaker searches instead (F2, F5). Explicit literal mode and `--no-multiline` keep their meaning. |
 | Literal text: `As a regular expression, pattern matches nothing ("?" is an operator); as literal text it occurs in 1 file. Add -F to args to search for it literally.` | An empty result for a URL with `?` read as "the URL is absent" (Swarm run 2026-10-12). Names the operator so the Agent sees why, and the flag that searches the text. |
 | File names: `No file name matches pattern either. To list similar file names, pass glob "harvest_*.txt" without pattern.` | `No matches` alone did not tell the Agent that names were checked too; it searched the same missing files three times (Swarm run 2026-10-12). "without pattern" keeps the suggested call a listing, since `glob` beside `pattern` still searches contents. |
@@ -640,6 +687,10 @@ blank placeholders, so no sentence has to warn about them.
 | `--head was read as limit=60 (results per page).` | The Agent sent `--head 60` to bound the results and got only unknown-flag advice (Swarm run 2026-10-13). Names the accepted interpretation and its counting unit (F2, F4). |
 | Warning, and in `path_not_found`, for args items read as paths while `pattern` is set: `args takes ripgrep options, and an item without a leading - is a path, so "<item>" [and "<item>"] was [were] read as a path [paths]. To search it [them] as another pattern [further patterns], put -e before it [each]: args [<the sent args with "-e" before each such item>].` | An Agent passed further patterns as plain `args` items next to `pattern` and got only `Path not found: def`, which did not say that `args` takes options or how to pass more patterns (F2, F5; Swarm review 2026-10-12). The first sentence names the rule the Agent missed, the second the ready call, which keeps the other `args` items, since Agents send a suggested call as it stands. Not for an item with a path separator or a similar existing path, which reads as a mistyped path. |
 | `path_not_found` ending when every missing root came from `args`: `Nothing was searched. Correct the path[s] in args, or remove it [them] to search the working directory.` | The former ending, `Correct path, or omit it ...`, named the `path` field, which such a call did not set (F5). |
+| Warnings for unreadable files: `Could not read <path>: <reason>.` for the first five, then `Could not read 395 more paths.` | Swarm run 2026-10-20: a search beside a browser profile in use failed over its locked files and the Agent switched to a shell listing (one call; Diagnostics). The results stay; the names show where the unread files are, the count says how many without filling every warning slot with paths (F4, F6). |
+| Warning for any other diagnostic of a search that ran: `ripgrep reported: <message>.` | Such a message used to fail the whole search, results included; as a warning it keeps them and marks the result incomplete (F4; Swarm run 2026-10-20, one call). |
+| Unknown refusal: `ripgrep refused the search:` / `<message>` / `Nothing was searched. Correct the call as that message says; {"args": ["--help"]} lists the accepted flags.` | Replaces `<message>` / `Nothing was searched.`, which gave no next step; in the Swarm run of 2026-10-20 its message was a cut path fragment, which read like nothing at all (F5). |
+| Failure without a message: `The search engine failed without giving a reason. Nothing was searched. Retry the call.` | Replaces `search_files could not complete the search: the search engine exited with code 2. Retry the call.` / `Nothing was searched.`, which ran together two endings and named an exit code the Agent cannot act on (F5). |
 
 The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are
 covered by `test_search_files_arguments.py` (the help examples run against a

@@ -1,7 +1,8 @@
 """Notes for search_files results that miss what their pattern seems to ask for.
 
 The handler runs the passes behind these notes; this module decides when a
-pattern looks like file names or like literal text, and words the notes.
+pattern looks like file names, like literal text or like a phrase that wrapped
+text can break across lines, and words the notes.
 """
 
 from __future__ import annotations
@@ -31,6 +32,12 @@ _WORD = re.compile(r"\w")
 _LINE_BREAKING = re.compile(r"(?<!\\)(?:\\\\)*\\s|\(\?[a-zA-Z]*s[a-zA-Z]*[:)]")
 # Plain file-name globs, sometimes joined with regex alternation by mistake.
 _GLOB_NAMES = re.compile(r"[\w./*?\-]+(?:\|[\w./*?\-]+)*")
+# Characters ripgrep's regex syntax reads as operators; escaped, each matches itself.
+_REGEX_META = frozenset("\\.+*?()|[]{}^$#&-~")
+# Whitespace between two words of a phrase that holds a line break.
+_BROKEN_GAP = r"[^\S\n]*\n\s*"
+# Bound on the regexes of one wrapped-phrase count, which go on a command line.
+_WRAPPED_PHRASE_CHARACTERS = 16000
 
 
 def repaired_glob_note(pattern: str, repaired: str, *, filtered: bool) -> str | None:
@@ -132,6 +139,84 @@ def spanning_note(files: int) -> str:
     return (
         f"Within one line, pattern matches nothing; across lines it occurs in {where}. "
         "Add -U to args to let a match span lines."
+    )
+
+
+def _phrase_words(pattern: str, *, literal: bool) -> list[list[str]]:
+    """Split fixed text into its alternatives, each a list of its words as regex text.
+
+    A regex keeps its escapes and alternation; literal text is escaped and has
+    no alternatives. Whitespace separates words.
+    """
+    alternatives: list[list[str]] = [[""]]
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        index += 1
+        words = alternatives[-1]
+        if character.isspace():
+            if words[-1]:
+                words.append("")
+        elif literal:
+            words[-1] += "\\" + character if character in _REGEX_META else character
+        elif character == "\\":
+            words[-1] += character + pattern[index : index + 1]
+            index += 1
+        elif character == "|":
+            alternatives.append([""])
+        else:
+            words[-1] += character
+    return [[word for word in words if word] for words in alternatives]
+
+
+def wrapped_phrases(patterns: list[str], *, literal: bool) -> tuple[list[str], str] | None:
+    """Return regexes matching the patterns' phrases only across a line break, and the
+    regex that matches the phrases with any whitespace between their words.
+
+    Wrapped prose (HTML, Markdown) breaks long phrases across lines, where a
+    search for words separated by spaces misses them. Only fixed text
+    qualifies: any pattern under -F, or a regex that ``finds_fixed_text``.
+    Each returned regex requires a line break at one gap between two words, so
+    their matches are the ones a search within lines misses. ``None`` when no
+    pattern holds a phrase, or when the regexes would not fit a command line.
+    """
+    alternatives: list[list[str]] = []
+    for pattern in patterns:
+        if "\n" in pattern or not (literal or finds_fixed_text(pattern)):
+            return None
+        alternatives.extend(_phrase_words(pattern, literal=literal))
+    spanning = [
+        r"\s+".join(words[:gap]) + _BROKEN_GAP + r"\s+".join(words[gap:])
+        for words in alternatives
+        for gap in range(1, len(words))
+    ]
+    if not spanning or sum(map(len, spanning)) > _WRAPPED_PHRASE_CHARACTERS:
+        return None
+    return spanning, "|".join(r"\s+".join(words) for words in alternatives)
+
+
+def wrapped_phrase_note(
+    pattern: str, matches: int, files: int, *, matched: bool, literal: bool, multiline: bool
+) -> str:
+    """Say how many matches a line break between words of the phrase hides, and which
+    call finds them; ``matched`` when the search found others within lines."""
+    where = "1 file" if files == 1 else f"{files} files"
+    them = "it" if matches == 1 else "them"
+    if literal:
+        change = " and remove -F from args" if multiline else " and replace -F with -U in args"
+    else:
+        change = "" if multiline else " and add -U to args"
+    call = f'pass pattern "{pattern}"{change}'
+    if matched:
+        hidden = "1 match" if matches == 1 else f"{matches} matches"
+        return (
+            f"The results leave out {hidden} in {where} with a line break between words of "
+            f"pattern. To include {them}, {call}."
+        )
+    times = "1 time" if matches == 1 else f"{matches} times"
+    return (
+        "Within one line, pattern matches nothing; with a line break between its words it "
+        f"occurs {times} in {where}. To find {them}, {call}."
     )
 
 

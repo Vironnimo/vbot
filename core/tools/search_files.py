@@ -58,6 +58,8 @@ from core.tools._search_hints import (
     repaired_glob_note,
     spanning_note,
     unnamed_files_note,
+    wrapped_phrase_note,
+    wrapped_phrases,
 )
 from core.tools._search_query import (
     LIST_MODES,
@@ -182,6 +184,10 @@ def _entry(scope_index: int, scope: Scope, native: bytes, count: int, cwd: Path)
     return Entry(path, path_label(path, cwd), scope_index, native, count)
 
 
+# Paths named in the warnings about files ripgrep could not read, before "N more".
+_UNREADABLE_SHOWN = 5
+
+
 @dataclass
 class _Found:
     """Everything the counting or listing passes found, over all scopes."""
@@ -192,6 +198,9 @@ class _Found:
     complete: bool = True
     # Paths that ignore files excluded from the walk.
     ignored: list[Path] = field(default_factory=list)
+    # Paths ripgrep could not read, as warnings, and how many more it did not name.
+    unreadable: list[str] = field(default_factory=list)
+    unreadable_unnamed: int = 0
 
     def take(self, index: int, scope: Scope, result: ScanResult, cwd: Path) -> None:
         self.entries.extend(
@@ -199,6 +208,10 @@ class _Found:
         )
         self.warnings.extend(result.warnings)
         self.ignored.extend(result.ignored)
+        self.unreadable.extend(result.unreadable)
+        self.unreadable_unnamed += result.unreadable_unnamed
+        if result.unreadable or result.unreadable_unnamed:
+            self.complete = False
         if result.stopped_by is not None:
             reason = ""
             if result.stopped_by == "output":
@@ -211,6 +224,20 @@ class _Found:
             self.complete = False
         if result.files_searched is not None:
             self.files_searched = (self.files_searched or 0) + result.files_searched
+
+    def read_failures(self) -> list[str]:
+        """Name the first paths ripgrep could not read and count the others.
+
+        A root full of locked files, such as a browser profile, otherwise filled
+        every warning slot with them.
+        """
+        named = sorted(set(self.unreadable))
+        shown = named[:_UNREADABLE_SHOWN]
+        rest = len(named) - len(shown) + self.unreadable_unnamed
+        if rest:
+            more = " more" if shown else ""
+            shown.append(f"Could not read {rest}{more} {'path' if rest == 1 else 'paths'}.")
+        return shown
 
     def finish(self, query: SearchQuery) -> None:
         seen: set[str] = set()
@@ -250,6 +277,7 @@ def _list_directories(
         files.take(index, scope, result, execution.cwd)
         skipped.update(os.path.normcase(path) for path in result.skipped)
     found.warnings, found.complete, found.ignored = files.warnings, files.complete, files.ignored
+    found.unreadable, found.unreadable_unnamed = files.unreadable, files.unreadable_unnamed
     holding: set[str] | None = None
     if any(argument.startswith(("--type=", "--type-not=")) for argument in query.rg_args):
         holding = set()
@@ -480,6 +508,58 @@ def _recount(
     return found
 
 
+def _note_wrapped_phrases(
+    execution: SearchExecution,
+    query: SearchQuery,
+    scopes: list[Scope],
+    patterns: list[str],
+    *,
+    matched: bool,
+) -> bool:
+    """Count the matches a line break between two words of a phrase hid from the search.
+
+    Returns whether a note now says how many there are and which call finds
+    them; ``matched`` when the search found others within lines. One more
+    counting pass runs, and only for fixed text with a space in it. It gets half
+    the remaining time, and running out of it leaves the note out without
+    making the search's own result partial.
+    """
+    if (
+        patterns is not query.patterns
+        or query.mode not in {"content", "files_with_matches", "count"}
+        or "--invert-match" in query.rg_args
+        or "--line-regexp" in query.rg_args
+    ):
+        return False
+    phrases = wrapped_phrases(patterns, literal=query.literal)
+    if phrases is None:
+        return False
+    spanning, pattern = phrases
+    variant = replace(
+        query, rg_args=[*query.rg_args, "--no-fixed-strings", "--multiline"], literal=False
+    )
+    budget = SearchBudget(
+        execution.context, timeout_seconds=execution.budget.remaining_seconds() / 2
+    )
+    spare = SearchExecution(execution.binary, execution.context, budget, execution.cwd)
+    found = _recount(spare, variant, scopes, spanning)
+    matches = sum(entry.count for entry in found.entries) if found is not None else 0
+    if found is None or not matches:
+        return False
+    files = sum(1 for entry in found.entries if entry.count)
+    query.notes.append(
+        wrapped_phrase_note(
+            pattern,
+            matches,
+            files,
+            matched=matched,
+            literal=query.literal,
+            multiline=query.multiline,
+        )
+    )
+    return True
+
+
 def _note_no_match(
     execution: SearchExecution,
     query: SearchQuery,
@@ -623,35 +703,36 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -
             found.entries = named
             _restart_past_the_end(query, len(named))
             return _Outcome(entry_page(named, query), found, len(named), len(named))
-        _note_no_match(execution, query, scopes, patterns, listed, repair_note)
+        if not _note_wrapped_phrases(execution, query, scopes, patterns, matched=False):
+            _note_no_match(execution, query, scopes, patterns, listed, repair_note)
     elif not found.entries:
         # Only a result without entries names the paths ignore files excluded.
         for scope in scopes:
             found.ignored.extend(execution.ignored_scan(query, scope))
+    _restart_past_the_end(query, lines_total if query.mode == "content" else len(found.entries))
+    if lines_total and not query.offset and found.complete and not execution.budget.stopped:
+        if query.mode == "files_with_matches":
+            _note_named_files(execution, query, scopes)
+        elif query.mode == "count":
+            _note_match_count(execution, query, scopes, patterns, lines_total)
+        _note_wrapped_phrases(execution, query, scopes, patterns, matched=True)
     if query.mode != "content":
-        _restart_past_the_end(query, len(found.entries))
-        if lines_total and not query.offset and found.complete and not execution.budget.stopped:
-            if query.mode == "files_with_matches":
-                _note_named_files(execution, query, scopes)
-            elif query.mode == "count":
-                _note_match_count(execution, query, scopes, patterns, lines_total)
         page = entry_page(found.entries, query)
         return _Outcome(page, found, len(found.entries), lines_total)
-    _restart_past_the_end(query, lines_total)
     window = content_window(found.entries, query.offset, query.limit)
     events: dict[tuple[int, bytes], list[dict[str, Any]]] = {}
     for index, scope in enumerate(scopes):
         selected = [(entry, skip) for entry, skip in window if entry.scope == index]
         if not selected:
             continue
-        scope_events, warnings = execution.line_events(
+        scope_events, problems = execution.line_events(
             query,
             patterns,
             scope,
             [entry.native for entry, _ in selected],
             max(skip for _, skip in selected) + query.limit,
         )
-        found.warnings.extend(warnings)
+        found.take(index, scope, problems, execution.cwd)
         events.update(((index, path), value) for path, value in scope_events.items())
     page = content_page(window, events, query)
     return _Outcome(page, found, lines_total, lines_total)
@@ -699,7 +780,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     if budget.cancelled_by_user or context.was_cancelled_by_user():
         return tool_failure("cancelled_by_user", "Search aborted by the user")
     page, found = outcome.page, outcome.found
-    warnings = [*missing, *found.warnings]
+    warnings = [*missing, *found.read_failures(), *found.warnings]
     if budget.timed_out:
         warnings.append(
             "The search stopped at its 30-second limit, so results are partial. Narrow path "

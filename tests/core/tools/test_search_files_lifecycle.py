@@ -413,6 +413,41 @@ def test_skip_reports_keep_a_name_with_a_line_break_whole(tmp_path, monkeypatch)
     assert outcome.diagnostics == ""
 
 
+def test_diagnostics_are_kept_as_whole_messages_and_the_rest_counted(tmp_path, monkeypatch):
+    # Swarm run 2026-10-20: locked files of a browser profile filled stderr, and the
+    # last message, cut at the former byte bound, failed a search that had results.
+    regex_error = b"rg: regex parse error:\n    (?:a)\n    ^\nerror: an example\n"
+    locked = [
+        f"rg: ./profile/cache/entry_{index:04}: in use (os error 32)\n".encode()
+        for index in range(3000)
+    ]
+    child = SimpleNamespace(
+        pid=1234,
+        stdout=io.BytesIO(b"found\n"),
+        stderr=io.BytesIO(regex_error + b"".join(locked)),
+        returncode=2,
+        poll=lambda: 2,
+        wait=lambda **_kwargs: 2,
+    )
+
+    def gone(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr("core.tools._search_native.subprocess.Popen", lambda *_args, **_kw: child)
+    monkeypatch.setattr("core.tools._search_native.psutil.Process", gone)
+    outcome = NativeOutcome()
+    lines = native_lines(
+        Path(sys.executable), [], None, SearchBudget(None), cwd=tmp_path, outcome=outcome
+    )
+
+    assert list(lines) == [b"found\n"]
+    assert outcome.printed
+    kept = outcome.diagnostics.splitlines()
+    assert kept[:4] == regex_error.decode().splitlines()
+    assert kept[4:] == [line.decode().strip() for line in locked[: len(kept) - 4]]
+    assert outcome.dropped == len(locked) - (len(kept) - 4) > 0
+
+
 def test_child_memory_is_bounded_and_polled_at_an_interval(tmp_path, monkeypatch):
     original = subprocess.Popen
     polls: list[int] = []

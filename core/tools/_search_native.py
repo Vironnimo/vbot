@@ -47,6 +47,10 @@ _SKIPPED = re.compile(
 )
 # Bound on one --debug message kept for matching; a longer one is matched on its start.
 _DEBUG_MESSAGE_BYTES = 1024 * 1024
+# Bound on the diagnostics kept from one child. Messages are kept whole: one that no
+# longer fits is left out and counted, so no reader sees a message cut short. A
+# regex error repeats the pattern from the command line, which this bound exceeds.
+_DIAGNOSTIC_BYTES = 64 * 1024
 
 
 class SearchBoundError(RuntimeError):
@@ -72,7 +76,12 @@ class NativeOutcome:
     """How one native run ended, for callers that judge its diagnostics themselves."""
 
     returncode: int | None = None
+    # Whole diagnostic messages other than --debug reports, up to _DIAGNOSTIC_BYTES.
     diagnostics: str = ""
+    # Diagnostic messages left out because they no longer fit the bound.
+    dropped: int = 0
+    # Whether the child printed any output record.
+    printed: bool = False
     interrupted: bool = False
     # Paths ripgrep's walker skipped, as --debug reports them, in its own spelling.
     skipped: list[bytes] = field(default_factory=list)
@@ -123,6 +132,7 @@ def native_lines(
     # stops, which also releases an output thread blocked in put.
     messages: queue.Queue[tuple[str, list[bytes]]] = queue.Queue(maxsize=8)
     diagnostics = bytearray()
+    dropped = 0
 
     def kill(child: subprocess.Popen[bytes]) -> None:
         with contextlib.suppress(OSError):
@@ -158,25 +168,41 @@ def native_lines(
             if skipped[2] == b"Gitignore":
                 outcome.ignored.append(skipped[1])
 
+    def keep(message: bytearray) -> None:
+        """Keep one whole diagnostic message, or count it when it no longer fits."""
+        nonlocal dropped
+        if len(diagnostics) + len(message) <= _DIAGNOSTIC_BYTES:
+            diagnostics.extend(message)
+        else:
+            dropped += 1
+
     def errors() -> None:
         assert stderr is not None
         # A message starts with "rg: "; lines without it continue the previous one,
-        # such as the regex error inside a debug message about engine fallback, or
-        # the rest of a skipped path that holds a line break. So a debug message is
-        # matched once the next message starts, or at the end.
+        # such as the lines of a regex error, the regex error inside a debug message
+        # about engine fallback, or the rest of a skipped path that holds a line
+        # break. So a message is judged once the next one starts, or at the end.
         debug: bytearray | None = None
+        message: bytearray | None = None
         while line := stderr.readline(65536):
             if line.startswith(b"rg: "):
                 if debug is not None:
                     note_skip(debug)
+                if message is not None:
+                    keep(message)
                 debug = bytearray() if line.startswith(b"rg: DEBUG|") else None
+                message = None if debug is not None else bytearray()
             if debug is not None:
                 debug += line[: _DEBUG_MESSAGE_BYTES - len(debug)]
                 continue
-            if len(diagnostics) < 8192:
-                diagnostics.extend(line[: 8192 - len(diagnostics)])
+            if message is None:
+                message = bytearray()
+            # Past the bound a message cannot be kept, so it grows no further.
+            message += line[: _DIAGNOSTIC_BYTES + 1 - len(message)]
         if debug is not None:
             note_skip(debug)
+        if message is not None:
+            keep(message)
 
     threads = [
         threading.Thread(target=output, daemon=True),
@@ -221,6 +247,8 @@ def native_lines(
                 break
             if kind == "too_long":
                 raise SearchBoundError("record")
+            if outcome is not None:
+                outcome.printed = True
             yield from records
         # EOF can precede process exit. Keep checking cancellation here as well
         # instead of waiting for the entire remaining search budget at once.
@@ -235,6 +263,7 @@ def native_lines(
         if outcome is not None:
             outcome.returncode = process.poll()
             outcome.diagnostics = text
+            outcome.dropped = dropped
             outcome.interrupted = interrupted
             return
         if output_finished and budget.timed_out:
