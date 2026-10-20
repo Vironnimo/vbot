@@ -837,13 +837,13 @@
     user-select: none;
   }
 
-  .path-browser__row:hover,
-  .path-browser__row.active {
+  .path-browser__row:hover {
     background: var(--surface-3);
   }
 
   .path-browser__row.active {
-    box-shadow: inset 2px 0 0 var(--accent);
+    color: var(--text-hi);
+    background: var(--selected-surface);
   }
 
   .path-browser__row--hidden {

@@ -5,7 +5,7 @@
    input/textarea` tag selectors stay as a safety net for non-primitive fields. */
 .s-input,
 .modal-input,
-.agents-view input,
+.agents-view input:where(:not([type='radio'], [type='checkbox'])),
 .agents-view textarea {
   border: 1px solid var(--border-2);
   border-radius: var(--r-md);
@@ -28,7 +28,7 @@
 
 .s-input:focus,
 .modal-input:focus,
-.agents-view input:focus,
+.agents-view input:where(:not([type='radio'], [type='checkbox'])):focus,
 .agents-view textarea:focus {
   border-color: var(--accent);
   box-shadow: var(--field-focus-ring);
