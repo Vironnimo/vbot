@@ -258,6 +258,30 @@ export function groupByDay(items, dayKeyOf) {
   return grouped;
 }
 
+// Repeat an occurrence on every visible day it overlaps. Calendar ends are
+// exclusive, including midnight and all-day dates; bound the walk to the view.
+export function groupOccurrencesByDay(items, timeZone, { from, to }) {
+  const grouped = {};
+  for (const item of items) {
+    const first = dayKeyForOccurrence(item, timeZone);
+    const last = item.all_day
+      ? item.end
+        ? addDaysToKey(item.end.slice(0, 10), -1)
+        : first
+      : item.end_utc
+        ? dayKeyInZone(new Date(Date.parse(item.end_utc) - 1), timeZone)
+        : first;
+    for (
+      let day = first > from ? first : from;
+      first && day <= to && day <= last;
+      day = addDaysToKey(day, 1)
+    ) {
+      (grouped[day] ??= []).push(item);
+    }
+  }
+  return grouped;
+}
+
 export function sortDayEntries(entries) {
   return [...entries].sort((left, right) => {
     if (left.all_day !== right.all_day) {

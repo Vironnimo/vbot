@@ -69,6 +69,29 @@ function wait(ms) {
 describe('TerminalsView views and starting', () => {
   const view = setupTerminalsViewSuite();
 
+  it('initializes only the current host when a tile remounts during xterm loading', async () => {
+    const { createTerminalRenderer } =
+      await import('../terminals/terminalRenderer.svelte.js');
+    const renderer = createTerminalRenderer({
+      viewState: { streams: {} },
+      findTerminal: () => terminal(),
+      getController: () => ({ resize: vi.fn() }),
+      isMounted: () => true,
+      isUnavailable: () => false,
+      getMaximizedTerminalId: () => '',
+    });
+    const oldHost = document.createElement('div');
+    const host = document.createElement('div');
+    renderer.mountTile(oldHost, 'term-1').destroy();
+    renderer.mountTile(host, 'term-1');
+    await vi.dynamicImportSettled();
+    expect(terminalInstances).toHaveLength(1);
+    expect(oldHost.children).toHaveLength(0);
+    expect(host.querySelectorAll('.xterm')).toHaveLength(1);
+    renderer.destroy();
+    expect(terminalInstances[0].dispose).toHaveBeenCalledOnce();
+  });
+
   const conversation = (overrides = {}) =>
     manualGroup({
       group_id: 'session:vbot/main/ses-1',

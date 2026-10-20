@@ -700,68 +700,86 @@ describe('SettingsSpecializedModelsPanel', () => {
       expect(await choose('Provider default', 2)).toEqual({});
     });
 
-    it('keeps the options a newly selected target accepts unchanged', async () => {
-      const targets = [
-        { id: 'openai/gpt-image-1::api-key', label: 'GPT Image 1' },
-        { id: 'openai/gpt-image-1.5::api-key', label: 'GPT Image 1.5' },
-      ].map((target) => ({ ...target, kind: 'provider', usable: true }));
-      targetsFor('image_generation', targets);
-      const quality = (values) => ({
-        name: 'quality',
-        type: 'select',
-        label: 'Quality',
-        default: '',
-        options: values.map((value) => ({ value, label: value })),
-      });
-      api.getTaskModelOptions.mockImplementation(async (_taskType, target) => ({
-        fields:
-          target === targets[0].id
-            ? [quality(['', 'low', 'high']), { name: 'n', type: 'number' }]
-            : [
-                quality(['', 'high']),
-                { name: 'n', type: 'number', min: 1, max: 4 },
-              ],
-      }));
-      echoSavedModelTasks();
-      mountPanel(
-        committingProps({
-          taskTypes: ['image_generation'],
-          settings: {
-            model_tasks: {
-              image_generation: {
-                target: targets[0].id,
-                options: { quality: 'high', n: 8, style: 'vivid' },
+    it.each([false, true])(
+      'keeps compatible options when saving a target change (delayed schema: %s)',
+      async (delayed) => {
+        const schemaReady = deferred();
+        const targets = [
+          { id: 'openai/gpt-image-1::api-key', label: 'GPT Image 1' },
+          { id: 'openai/gpt-image-1.5::api-key', label: 'GPT Image 1.5' },
+        ].map((target) => ({ ...target, kind: 'provider', usable: true }));
+        targetsFor('image_generation', targets);
+        const quality = (values) => ({
+          name: 'quality',
+          type: 'select',
+          label: 'Quality',
+          default: '',
+          options: values.map((value) => ({ value, label: value })),
+        });
+        api.getTaskModelOptions.mockImplementation(
+          async (_taskType, target) => {
+            if (delayed && target === targets[1].id) await schemaReady.promise;
+            return {
+              fields:
+                target === targets[0].id
+                  ? [
+                      quality(['', 'low', 'high']),
+                      { name: 'n', type: 'number' },
+                    ]
+                  : [
+                      quality(['', 'high']),
+                      { name: 'n', type: 'number', min: 1, max: 4 },
+                    ],
+            };
+          },
+        );
+        echoSavedModelTasks();
+        mountPanel(
+          committingProps({
+            taskTypes: ['image_generation'],
+            settings: {
+              model_tasks: {
+                image_generation: {
+                  target: targets[0].id,
+                  options: { quality: 'high', n: 8, style: 'vivid' },
+                },
               },
             },
-          },
-        }),
-      );
-      await waitForCondition(() =>
-        document.getElementById('task-model-image_generation-quality'),
-      );
+          }),
+        );
+        await waitForCondition(() =>
+          document.getElementById('task-model-image_generation-quality'),
+        );
 
-      selectTarget('image_generation', 'GPT Image 1.5');
-      await waitForCondition(
-        () =>
-          api.getTaskModelOptions.mock.calls.some(
-            ([, target]) => target === targets[1].id,
-          ) &&
-          document
-            .getElementById('task-model-image_generation-quality')
-            ?.textContent.includes('high'),
-      );
-      button('Save').click();
-      await waitForCondition(
-        () => api.updateTaskModelSettings.mock.calls.length === 1,
-      );
-      // The count is out of the new range and the other Model's option is unknown.
-      expect(api.updateTaskModelSettings.mock.calls[0][0]).toEqual({
-        image_generation: {
-          target: targets[1].id,
-          options: { quality: 'high' },
-        },
-      });
-    });
+        selectTarget('image_generation', 'GPT Image 1.5');
+        if (delayed) {
+          button('Save').click();
+          await settle();
+          expect(api.updateTaskModelSettings).not.toHaveBeenCalled();
+          schemaReady.resolve();
+        }
+        await waitForCondition(
+          () =>
+            api.getTaskModelOptions.mock.calls.some(
+              ([, target]) => target === targets[1].id,
+            ) &&
+            document
+              .getElementById('task-model-image_generation-quality')
+              ?.textContent.includes('high'),
+        );
+        if (!delayed) button('Save').click();
+        await waitForCondition(
+          () => api.updateTaskModelSettings.mock.calls.length === 1,
+        );
+        // The count is out of the new range and the other Model's option is unknown.
+        expect(api.updateTaskModelSettings.mock.calls[0][0]).toEqual({
+          image_generation: {
+            target: targets[1].id,
+            options: { quality: 'high' },
+          },
+        });
+      },
+    );
 
     it.each([{ retired: true }, { voice: 'removed' }])(
       'resets stale options without changing the target: %j',

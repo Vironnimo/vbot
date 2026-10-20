@@ -1,4 +1,5 @@
 import { accessLossFromClose } from '../api.js';
+import { t } from '../i18n.js';
 import { reconnectBackoffDelay } from '../backoff.js';
 import { createPtyFrameSanitizer } from './protocol.js';
 import { clampTerminalGrid } from './state.js';
@@ -14,7 +15,7 @@ const INPUT_FLUSH_DELAY_MS = 24;
 const INPUT_CHUNK_CHARS = 32_768;
 
 // Input typed while the socket reconnects waits for it, up to the server's
-// per-message limit; anything beyond is dropped rather than replayed late.
+// per-message limit; reject a larger insertion whole, with visible feedback.
 const INPUT_BACKLOG_CHARS = 65_536;
 
 // A socket that still sits in WS_CONNECTING past this budget is treated as
@@ -226,7 +227,15 @@ export function createTerminalConnection({
     if (ended || closed || typeof data !== 'string' || !data) {
       return;
     }
-    inputBuffer = (inputBuffer + data).slice(0, INPUT_BACKLOG_CHARS);
+    if (inputBuffer.length + data.length > INPUT_BACKLOG_CHARS) flushInput();
+    if (
+      (!ready || inputBuffer) &&
+      inputBuffer.length + data.length > INPUT_BACKLOG_CHARS
+    ) {
+      onInputFailed(t('terminals.inputBacklogFull'));
+      return;
+    }
+    inputBuffer += data;
     if (immediate || inputBuffer.length >= INPUT_CHUNK_CHARS) {
       flushInput();
       return;
@@ -239,7 +248,14 @@ export function createTerminalConnection({
   function flushInput() {
     clearInputTimer();
     while (inputBuffer && !ended) {
-      const data = inputBuffer.slice(0, INPUT_CHUNK_CHARS);
+      let end = Math.min(inputBuffer.length, INPUT_CHUNK_CHARS);
+      // Keep a UTF-16 surrogate pair in one JSON message.
+      if (
+        end < inputBuffer.length &&
+        /[\uD800-\uDBFF]/.test(inputBuffer[end - 1])
+      )
+        end -= 1;
+      const data = inputBuffer.slice(0, end);
       if (!send({ type: 'input', data })) {
         // Not connected: the backlog goes out once the stream is ready.
         return;

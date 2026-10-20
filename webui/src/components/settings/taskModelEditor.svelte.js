@@ -6,6 +6,7 @@
 // participant and its lifecycle with the creating component.
 
 import { onDestroy, onMount, untrack } from 'svelte';
+import { SvelteSet } from 'svelte/reactivity';
 
 import {
   getTaskModelOptions,
@@ -117,6 +118,7 @@ export function createTaskModelEditor({
   let pendingReload = $state(false);
   let lastModelsRefreshToken = null;
   let schemaRequestIds = {};
+  const targetChanges = new SvelteSet();
   let destroyed = false;
 
   let saveDisabled = $derived(
@@ -265,6 +267,9 @@ export function createTaskModelEditor({
   }
 
   async function saveBindings() {
+    // Carrying compatible options is part of the user's target change. A
+    // transition or autosave must include it even when the schema is slow.
+    while (targetChanges.size) await Promise.all([...targetChanges]);
     if (
       !autoSaveArmed ||
       taskModelBindingsMatch(bindings, scopedBindings(getSettings()))
@@ -308,21 +313,24 @@ export function createTaskModelEditor({
 
   // The new target starts from its defaults plus the previous options it
   // accepts unchanged, so switching between similar Models keeps the choices.
-  async function setTarget(taskType, target) {
+  function setTarget(taskType, target) {
     onError('');
     markEdit();
     const previousOptions = binding(taskType).options;
     bindings = { ...bindings, [taskType]: { target, options: {} } };
 
-    try {
-      if (await loadSchema(taskType, target)) {
-        carryOptions(taskType, target, previousOptions);
-      }
-    } catch (error) {
-      onError(
-        `${t('settings.specializedModels.optionsLoadError')} ${error.message}`,
-      );
-    }
+    const change = loadSchema(taskType, target)
+      .then((current) => {
+        if (current) carryOptions(taskType, target, previousOptions);
+      })
+      .catch((error) => {
+        onError(
+          `${t('settings.specializedModels.optionsLoadError')} ${error.message}`,
+        );
+      })
+      .finally(() => targetChanges.delete(change));
+    targetChanges.add(change);
+    return change;
   }
 
   function carryOptions(taskType, target, previousOptions) {

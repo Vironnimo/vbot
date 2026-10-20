@@ -154,11 +154,20 @@ describe('SettingsGeneralPanel', () => {
     const callsBefore = listClientsMock.mock.calls.length;
     expect(callsBefore).toBeGreaterThanOrEqual(1);
 
+    let resolveOlder;
+    listClientsMock.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveOlder = resolve)),
+    );
     props.clientsRefreshToken = 1;
     flushSync();
+    props.clientsRefreshToken = 2;
+    flushSync();
+    await flushAsync();
+    resolveOlder(roster());
     await flushAsync();
 
     expect(listClientsMock.mock.calls.length).toBeGreaterThan(callsBefore);
+    expect(document.body.querySelectorAll('.s-client-row')).toHaveLength(0);
   });
 
   it('shows an error message when the roster fails to load', async () => {
