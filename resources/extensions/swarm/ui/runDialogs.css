@@ -1,28 +1,7 @@
 /* The page's Run and Swarm dialogs (CommunicationDialog.svelte,
    RunDetailsDialog.svelte, RunDeleteDialog.svelte, SwarmDeleteDialog.svelte).
    They render outside the page, so their rules are not scoped to
-   `.swarm-page`. A long dialog scrolls inside its body while the header and
-   footer stay. */
-.modal.swarm-dialog {
-  display: flex;
-  flex-direction: column;
-  width: min(600px, calc(100vw - 32px));
-  max-width: none;
-  max-height: calc(100dvh - 32px);
-}
-.modal.swarm-dialog .modal-body {
-  min-height: 0;
-  overflow-y: auto;
-}
-/* What the dialog acts on: a Run's title, or what names the target of a
-   deletion besides its title. */
-.swarm-dialog__target {
-  color: var(--text-hi);
-  font-size: var(--fs-body-md);
-  font-weight: 500;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
+   `.swarm-page`. */
 .swarm-dialog__note {
   color: var(--text-lo);
   font-size: var(--fs-body-sm);

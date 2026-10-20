@@ -28,10 +28,10 @@
 
 {#if run}<Modal
     title={t('swarm.run.details')}
-    class="swarm-dialog swarm-details-dialog"
+    description={runTitle(run)}
+    size="md"
     onClose={model.runActions.closeDetails}
     >{#snippet body()}<div class="modal-body">
-        <p class="swarm-dialog__target">{runTitle(run)}</p>
         <dl class="s-group swarm-details__facts">
           <div class="swarm-details__fact">
             <dt>{t('swarm.profile')}</dt>
