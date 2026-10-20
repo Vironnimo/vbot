@@ -89,6 +89,9 @@ class ToolDispatchContext:
     _tool_loads: list[tuple[str, tuple[str, ...]]] = field(
         default_factory=list, init=False, repr=False, compare=False
     )
+    _worked_paths: list[tuple[str, tuple[Path, ...]]] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
 
     def register_result_persisted(
         self,
@@ -168,6 +171,15 @@ class ToolDispatchContext:
     def record_tool_load(self, tool_call_id: str, names: Sequence[str]) -> None:
         """Keep the Tools a successful ``load_tools`` call loaded, for its Result's batch."""
         self._tool_loads.append((tool_call_id, tuple(names)))
+
+    def record_worked_paths(self, tool_call_id: str, paths: Sequence[Path]) -> None:
+        """Keep the paths a finished call worked in, for its Result's batch."""
+        self._worked_paths.append((tool_call_id, tuple(paths)))
+
+    @property
+    def worked_paths(self) -> tuple[tuple[str, tuple[Path, ...]], ...]:
+        """``(tool_call_id, absolute paths)`` of each call that recorded paths."""
+        return tuple(self._worked_paths)
 
     @property
     def tool_loads(self) -> tuple[tuple[str, tuple[str, ...]], ...]:

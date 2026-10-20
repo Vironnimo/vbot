@@ -21,6 +21,10 @@ from datetime import datetime
 from typing import Any, Literal
 
 from core.chat._effort_epoch import EffortState, effort_change_from_note
+from core.chat._folder_instructions import (
+    folder_instructions_from_note,
+    is_folder_instructions_note,
+)
 from core.chat._message_history import reply_surface_from_note
 from core.chat._prompt_block_epoch import prompt_block_change_from_note
 from core.chat._request_images import (
@@ -912,7 +916,7 @@ def note_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
     separate, explicitly untrusted quoted-context user messages, never system
     reminders. An effort change note becomes an effort update message at its
     position (``core.providers.effort_updates``), which no reminder groups with.
-    A malformed skill, Tool-change, prompt-block or effort change note is
+    A malformed skill, Tool-change, prompt-block, folder-instructions or effort change note is
     dropped from the request (it stays in canonical Session history for debugging),
     and so is a ``loaded`` Tool-change note: the ``load_tools`` Result before it
     already showed the definition.
@@ -940,6 +944,8 @@ def note_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
         ):
             continue
         if is_prompt_block_change_note(note) and prompt_block_change_from_note(note) is None:
+            continue
+        if is_folder_instructions_note(note) and folder_instructions_from_note(note) is None:
             continue
         if is_effort_change_note(note):
             effort_change = effort_change_from_note(note)
@@ -1020,6 +1026,9 @@ def _system_reminder_body(message: ChatMessage) -> str:
     prompt_block_change = prompt_block_change_from_note(message)
     if prompt_block_change is not None:
         return prompt_block_change.text
+    folder_instructions = folder_instructions_from_note(message)
+    if folder_instructions is not None:
+        return folder_instructions.reminder_text()
     reply_surface = reply_surface_from_note(message)
     if reply_surface is not None:
         content = reply_surface.reminder_text()

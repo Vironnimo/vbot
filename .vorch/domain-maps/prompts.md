@@ -48,7 +48,7 @@ Core, memory and data block ids and what each renders: `prompts/core-blocks.md`.
 
 **Render inputs:** Producers are closures over manager-held registries and request-scoped overrides; static contribution snapshots and change planning pass the same Skill registry, pinned Skill catalog and prompt-epoch effort as ordinary assembly. `BlockRenderContext` carries `subagent_session` for role-dependent prose, `tool_available` (which Tools the receiving Agent can call: the given `effective_tool_definitions` or On-demand Tools, else the Agent's live policy) and deliberately **no conversation messages** - message-dependent content belongs to the `context` extension hook.
 
-**Prompt files:** `render_prompt_file` (`blocks.py`) is the single reader for every file vBot puts into a Model's Context on its own: `{include:...}` files (SOUL included) and Project auto-load files (`prompts/prompt-files.md`); Memory is not a file here (`memory.md`).
+**Prompt files:** `render_prompt_file` (`blocks.py`) is the single reader for every file vBot puts into a Model's Context on its own: `{include:...}` files (SOUL included) and Project instruction files (`prompts/prompt-files.md`); Memory is not a file here (`memory.md`).
 
 **Override cascade:** agent override <- default-scope override <- owner default; composed by the manager from two store reads, never by the store. Dynamic and data blocks have no override path. Request-local data namespaces therefore never reach the persistent override store.
 

@@ -308,6 +308,7 @@ class _EmittingToolRegistry(ToolRegistry):
 
             if result.get("ok") is True:
                 context._commit_owned_effects()
+            context._commit_worked_paths()
 
             # Media goes with failures too: a Tool attaches it for the Model to see,
             # such as a screenshot of what a failed input step left on screen.

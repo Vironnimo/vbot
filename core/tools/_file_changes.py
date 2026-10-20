@@ -325,6 +325,7 @@ def _commit(
 ) -> tuple[list[str], JsonObject | None]:
     completed: list[str] = []
     expected = before.copy()
+    context.record_worked_paths(*pending)
 
     def check_expected() -> None:
         for checked, snapshot in expected.items():
@@ -411,6 +412,7 @@ def _rename(
 ) -> tuple[list[str], JsonObject | None]:
     """Move a link itself, or respell a file name, as one directory-entry rename."""
     snapshot = before[source]
+    context.record_worked_paths(source, destination)
     unread = state.check_stale(context.session_id, source) in _UNREAD_CHANGES
     try:
         _rename_entry(source, destination, before)
@@ -455,6 +457,7 @@ def _guard_failure(
     Showing the whole current content is the read the guard asks for, so the
     file is stamped and the same call succeeds when sent again.
     """
+    context.record_worked_paths(path)
     label = batch.shown(path)
     never = reason is StaleReason.NEVER_READ
     code = "file_not_read" if never else "file_modified_since_read"
