@@ -72,6 +72,28 @@ describe('computePanelPosition', () => {
     ).toBe(800 - 130 - GAP);
   });
 
+  it('keeps the whole panel with its reserved chrome on screen', () => {
+    // A search header and a footer action (80px) stay; the options get the
+    // rest of the 220px below, and a measured list that needs more than that
+    // flips above, where 526px leave room for list and chrome.
+    const trigger = triggerAt({ top: 538, bottom: 568 });
+    const chrome = { reservedHeight: 80 };
+    expect(computePanelPosition(trigger, chrome)).toMatchObject({
+      placement: 'bottom',
+      optionsMaxHeight: 220 - 80,
+    });
+    expect(
+      computePanelPosition(trigger, { ...chrome, contentHeight: 160 }),
+    ).toMatchObject({ placement: 'top', optionsMaxHeight: 240 });
+
+    // With little room on either side the list shrinks instead of spilling.
+    window.innerHeight = 200;
+    const cramped = computePanelPosition(triggerAt({ top: 90, bottom: 110 }), {
+      reservedHeight: 44,
+    });
+    expect(cramped.optionsMaxHeight).toBe(200 - 110 - GAP - 44);
+  });
+
   it('right-aligns a wider floating menu and widens a narrow panel to its minimum within the viewport', () => {
     const menu = computePanelPosition(
       triggerAt({ top: 100, bottom: 124, left: 300, width: 24 }),

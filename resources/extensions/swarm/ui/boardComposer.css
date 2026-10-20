@@ -1,16 +1,5 @@
 /* The dialog that posts to the Board (BoardComposer.svelte). It renders
-   outside the page, so its rules are not scoped to `.swarm-page`. A long
-   draft scrolls inside the body while the header and footer stay. */
-.modal.board-composer-dialog {
-  display: flex;
-  flex-direction: column;
-  width: min(600px, calc(100vw - 32px));
-  max-height: calc(100dvh - 32px);
-}
-.modal.board-composer-dialog .modal-body {
-  min-height: 0;
-  overflow-y: auto;
-}
+   outside the page, so its rules are not scoped to `.swarm-page`. */
 /* The post a reply answers: a removable chip. */
 .board-composer__reply {
   display: inline-flex;

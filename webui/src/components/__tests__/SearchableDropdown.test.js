@@ -99,6 +99,45 @@ describe('SearchableDropdown', () => {
     expect(root.dataset.state).toBe('closed');
   });
 
+  it('leaves room for the search header and the footer action near the viewport bottom', async () => {
+    const originalHeight = window.innerHeight;
+    window.innerHeight = 800;
+    try {
+      mountedComponent = mount(SearchableDropdown, {
+        target: document.body,
+        props: {
+          id: 'footer-searchable-dropdown',
+          options: ['alpha', 'beta'],
+          footerActionLabel: 'Show all models',
+        },
+      });
+      flushSync();
+      const trigger = document.querySelector('#footer-searchable-dropdown');
+      trigger.getBoundingClientRect = () => ({
+        x: 120,
+        y: 538,
+        left: 120,
+        top: 538,
+        right: 464,
+        bottom: 568,
+        width: 344,
+        height: 30,
+      });
+
+      trigger.click();
+      // 800 - 568 - 12 = 220px below; header and footer keep 44 + 36 of it.
+      await vi.waitFor(() => {
+        expect(
+          document
+            .querySelector('.searchable-dropdown__panel')
+            ?.getAttribute('style'),
+        ).toContain('--searchable-dropdown-options-max-height: 140px');
+      });
+    } finally {
+      window.innerHeight = originalHeight;
+    }
+  });
+
   it.each([
     ['isComposing', { isComposing: true }],
     ['legacy keyCode 229', { keyCode: 229 }],

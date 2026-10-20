@@ -62,6 +62,9 @@
 
   const navigation = useNavigation();
   const stackEntry = {};
+  // A dialog opened from inside another one sits a step lower, so the
+  // dialog it came from still shows its title above it.
+  const stacked = openModals.length > 0;
   let releaseLayer = noop;
   let modalElement = $state();
   let overlayElement = $state();
@@ -227,6 +230,7 @@
   bind:this={overlayElement}
   class="modal-overlay open"
   class:modal-overlay--sheet={variant === 'sheet'}
+  class:modal-overlay--stacked={stacked}
   role="presentation"
   onpointerdown={handleOverlayPointerDown}
   onclick={handleOverlayClick}

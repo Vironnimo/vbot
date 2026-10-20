@@ -401,7 +401,7 @@ export default Object.freeze({
   'statistics.limits.creditsAvailable': 'Credits available',
   'statistics.limits.deleteHistory': 'Delete history',
   'statistics.limits.deleteHistoryBody':
-    'All stored hourly Subscription snapshots will be permanently deleted. Live limit cards and Provider connections are not affected.',
+    'All stored hourly Subscription snapshots are deleted now and cannot be restored. Live limit cards and Provider connections are not affected.',
   'statistics.limits.deleteHistoryConfirm': 'Delete history',
   'statistics.limits.deleteHistoryTitle': 'Delete limit history?',
   'statistics.limits.gap': 'Data gap',

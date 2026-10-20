@@ -581,79 +581,52 @@ button.skills-librarian__skill:focus-visible,
 .skills-mobile-nav {
   display: none;
 }
-.skills-install-modal.modal {
-  width: min(620px, 100%);
-}
-.skills-install-body .skills-field-help {
-  margin: 0;
+.skills-install-options summary {
+  width: fit-content;
   color: var(--text-med);
   font-size: var(--fs-body-sm);
-  line-height: 1.5;
-}
-.skills-install-options summary {
+  font-weight: 500;
   cursor: pointer;
-  color: var(--text-med);
 }
-.skills-install-options .skills-field {
-  margin-top: 14px;
-}
-.skills-install-file {
-  width: 100%;
-  color: var(--text-hi);
-  font: inherit;
-}
-.skills-install-file::file-selector-button {
-  padding: 8px 12px;
-  margin-right: 12px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-  color: var(--text-hi);
-  font: inherit;
-  cursor: pointer;
+/* The options open under their summary, aligned with its text. */
+.skills-install-options__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px 0 0 15px;
 }
 .skills-install-preview {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 16px;
+  gap: 8px;
+  padding: 14px 16px;
   border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
+  border-radius: var(--r-md);
+  background: var(--field-surface);
   overflow-wrap: anywhere;
 }
-.skills-install-preview h3,
+.skills-install-preview h3 {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: var(--fs-body-md);
+  font-weight: 600;
+}
 .skills-install-preview p {
   margin: 0;
 }
+.skills-install-preview__meta {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+/* The replace choice with its consequence, aligned under its label. */
 .skills-install-replace {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
 }
-.skills-editor-modal.modal {
-  width: 760px;
-}
-.skills-modal-body {
-  padding: 20px;
-  max-height: calc(100dvh - 160px);
-  overflow-y: auto;
-}
-.skills-modal-body,
-.skills-field {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.skills-field {
-  gap: 8px;
-}
-.skills-field-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font: 500 var(--fs-body-sm)/1.4 var(--font-ui);
-  color: var(--text-hi);
+.skills-install-replace .skills-install-preview__meta {
+  padding-left: 26px;
 }
 @media (max-width: 960px) {
   .skills-view .skills-nav {

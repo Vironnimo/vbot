@@ -266,12 +266,13 @@ export default Object.freeze({
   'skills.contentView': 'Skill content view',
   'skills.copyContent': 'Copy original text',
   'skills.loadingContent': 'Loading instructions…',
+  'skills.deleteConfirmTitle': 'Delete skill “{name}”?',
   'skills.deleteGlobalConfirm':
-    'Delete the global skill "{name}"? Every Agent and project that uses it loses it. It moves to Archived, where you can restore it.',
+    'Every Agent and project that uses this global skill loses it. It moves to Archived, where you can restore it.',
   'skills.deletePrivateConfirm':
-    'Delete "{name}", a private skill of {owner}? {owner} loses it. It moves to Archived, where you can restore it.',
+    '{owner} loses this private skill. It moves to Archived, where you can restore it.',
   'skills.deleteSharedConfirm':
-    'Delete "{name}", a private skill of {owner}? {owner} and the Agents it is shared with lose it. It moves to Archived, where you can restore it.',
+    '{owner} and the Agents it is shared with lose this private skill. It moves to Archived, where you can restore it.',
   'skills.createGlobalHelp':
     'Stored in the global collection. Each Agent’s Skill selection decides whether it can use this skill.',
   'skills.createPrivateHelp':
@@ -292,9 +293,9 @@ export default Object.freeze({
   'skills.archived.published': 'Made a global skill on {date}',
   'skills.archived.restore': 'Restore',
   'skills.archived.purge': 'Delete permanently…',
-  'skills.archived.purgeTitle': 'Delete permanently',
+  'skills.archived.purgeTitle': 'Delete “{name}” permanently?',
   'skills.archived.purgeConfirm':
-    'Permanently delete the archived skill "{name}"? Its files cannot be restored afterwards.',
+    'Its files are deleted now and cannot be restored.',
   'skills.archived.purgeAction': 'Delete permanently',
   'skills.archived.restored': 'Skill “{name}” restored.',
   'skills.archived.restoreError': 'The skill could not be restored.',
@@ -351,13 +352,15 @@ export default Object.freeze({
   'skills.revision.fileAdded': 'Added {path}',
   'skills.revision.fileChanged': 'Changed {path}',
   'skills.revision.fileRemoved': 'Removed {path}',
-  'skills.revert.title': 'Revert change',
+  'skills.revert.title': 'Revert revision {revision} of “{name}”?',
   'skills.revert.confirm':
-    'Take back revision {revision} of skill "{name}"? The revert is recorded as a new revision that you can revert in turn.',
+    'The revert is recorded as a new revision that you can revert in turn.',
+  'skills.revert.togetherTitle': 'Revert revisions {revisions} together?',
   'skills.revert.together':
-    'Revision {later} later changed the same part of skill "{name}", so revisions {revisions} can only be reverted together. Revert them together?',
+    'Revision {later} later changed the same part of “{name}”, so these revisions can only be reverted together.',
+  'skills.revert.passTitle': 'Revert the last maintenance pass?',
   'skills.revert.pass':
-    'Take back all changes of the last Skill maintenance pass, revisions {revisions}? Each revert is recorded as a new revision that you can revert in turn.',
+    'This takes back revisions {revisions}. Each revert is recorded as a new revision that you can revert in turn.',
   'skills.revert.action': 'Revert',
   'skills.revert.togetherAction': 'Revert together',
   'skills.revert.doneOne': 'Revision {revision} reverted.',
@@ -515,10 +518,12 @@ export default Object.freeze({
   'agents.deleteTitle': 'Delete this Agent',
   'agents.deleteDescription':
     'Moves the Agent, its private Skills and its Sessions to the Archive, where you can restore them. An Agent that is still referenced or has active Runs cannot be deleted.',
+  'agents.deleteConfirmTitle': 'Delete agent “{name}”?',
+  'agents.deletePermanentConfirmTitle': 'Delete agent “{name}” permanently?',
   'agents.deleteConfirm':
-    'Delete {name}? The Agent, its private Skills and its Sessions move to the Archive, where you can restore them. A Workspace outside the Agent’s own folder in vBot’s data directory stays where it is. An Agent that is still referenced or has active Runs cannot be deleted.',
+    'The Agent, its private Skills and its Sessions move to the Archive, where you can restore them. A Workspace outside vBot’s data folder stays where it is.',
   'agents.deletePermanentConfirm':
-    'Delete {name} permanently? The Agent, its private Skills and its Sessions are deleted now and cannot be restored. A Workspace outside the Agent’s own folder in vBot’s data directory stays where it is. Recorded usage and costs stay in Statistics.',
+    'The Agent, its private Skills and its Sessions are deleted now and cannot be restored. A Workspace outside vBot’s data folder and the usage in Statistics are kept.',
   'agents.deleteBusy':
     'This Agent has an active or queued Run and cannot be deleted right now.',
   'agents.deleteInUse':
@@ -580,6 +585,8 @@ export default Object.freeze({
     'edit, write and apply_patch are always loaded together.',
   'agents.form.idHelp':
     'Used to address this Agent. Use Change ID to rename it and update its references.',
+  'agents.form.idCreateHelp':
+    'Used to address this Agent. You can change it later.',
   'agents.form.fallbackModelPlaceholder': 'None',
   'agents.form.modelUnavailableOption': 'Unavailable / custom: {model}',
   'agents.form.modelUnavailableConnectionOption':
@@ -619,9 +626,9 @@ export default Object.freeze({
   'agents.form.projectUnavailableHelp':
     'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
   'agents.form.unavailableProject': 'Unavailable project',
-  'agents.workspaceMove.title': 'Change Workspace?',
+  'agents.workspaceMove.title': 'Copy identity files to the new Workspace?',
   'agents.workspaceMove.body':
-    'Choose whether to copy SOUL.md, USER.md, and MEMORY.md into the new Workspace. Source files remain in place; existing destination versions are backed up before replacement.',
+    'Copies SOUL.md, USER.md and MEMORY.md. The originals stay where they are; files already in the new Workspace are backed up before they are replaced.',
   'agents.workspaceMove.copy': 'Copy files',
   'agents.workspaceMove.dontCopy': "Don't copy",
   'agents.form.submitCreate': 'Create agent',
@@ -663,7 +670,7 @@ export default Object.freeze({
   'agents.memory.deleteError': 'Memory entry could not be deleted.',
   'agents.memory.deleteConfirmTitle': 'Delete Memory entry?',
   'agents.memory.deleteConfirmBody':
-    'This permanently removes the selected Memory entry from the Agent’s Workspace.',
+    'It is removed from the Agent’s Workspace and cannot be restored.',
   'agents.memory.deleteConfirmAction': 'Delete Memory',
   'agents.detail.sessionId': 'Current session ID',
   'agents.detail.created': 'Created',
@@ -687,7 +694,7 @@ export default Object.freeze({
   'agents.tools.openExtensions': 'Open Extensions',
   'agents.confirmDisableCustomPrompt.title': 'Disable custom system prompt?',
   'agents.confirmDisableCustomPrompt.body':
-    'This agent has customized prompt blocks. They will be kept, but the agent stops using them and follows the Default scope again. Re-enabling brings them back.',
+    'The customized prompt blocks are kept, but the Agent follows the Default scope again until you turn them back on.',
   'agents.confirmDisableCustomPrompt.confirm': 'Disable custom prompt',
   'projects.title': 'Projects',
   'projects.loading': 'Loading projects…',
@@ -698,11 +705,9 @@ export default Object.freeze({
     'Choose Add project (+) to connect your first repository.',
   'projects.add.title': 'Add project',
   'projects.add.subtitle':
-    'Enter the path to a repository on this machine. The folder must already exist; vBot reads it but never writes to it.',
+    'Choose an existing repository folder on this machine. vBot reads it but never writes to it.',
   'projects.add.cwd': 'Repository path',
   'projects.add.cwdPlaceholder': 'C:/path/to/repository',
-  'projects.add.cwdHelp':
-    'The folder must exist. The project is created immediately and then scanned — you can remove it again afterwards.',
   'projects.add.displayName': 'Display name',
   'projects.add.displayNamePlaceholder':
     'Optional — defaults to the folder name',
@@ -750,15 +755,17 @@ export default Object.freeze({
   'projects.menu.copyFailed': 'The path could not be copied.',
   'projects.menu.rePoint': 'Re-point…',
   'projects.menu.remove': 'Remove…',
-  'projects.remove.confirmTitle': 'Remove project',
+  'projects.remove.confirmTitle': 'Remove project “{name}”?',
+  'projects.remove.permanentConfirmTitle':
+    'Remove project “{name}” permanently?',
   'projects.remove.body':
-    'Remove {name}? The Project and its Sessions move to the Archive, where you can restore them. Agents that use it as their default project are reset to their Default Workspace. Their own Sessions stay; those that work in this Project cannot continue until it is restored. The repository and old Workspace files are never touched.',
+    'The Project and its Sessions move to the Archive, where you can restore them. The repository itself is not touched.',
   'projects.remove.permanentBody':
-    'Remove {name} permanently? The Project’s vBot data and its Sessions are deleted now and cannot be restored. Agents that use it as their default project are reset to their Default Workspace. Their own Sessions stay; those that work in this Project cannot continue. The repository and old Workspace files are never touched.',
+    'The Project’s vBot data and its Sessions are deleted now and cannot be restored. The repository itself is not touched.',
   'projects.remove.copyIdentityFiles':
-    'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
+    'Copy identity files to the Agents’ Default Workspaces',
   'projects.remove.copyIdentityFilesHelp':
-    'When enabled, existing destination versions are backed up before replacement. One choice applies to every affected Agent.',
+    'Agents that use this project by default return to their Default Workspace. This copies their SOUL.md, USER.md and MEMORY.md along; files already there are backed up first.',
   'projects.remove.archived': 'Project moved to the Archive.',
   'projects.remove.deletedPermanently': 'Project deleted permanently.',
   'projects.remove.resetOneAgent':
@@ -902,6 +909,9 @@ export default Object.freeze({
   'projects.details.added': 'Added',
   'projects.rePoint.description':
     'The repository folder for this project no longer exists. Point it at the new location to restore the project.',
+  'projects.rePoint.dialogTitle': 'Re-point project',
+  'projects.rePoint.dialogDescription':
+    'Choose the folder where the repository of “{name}” is now.',
   'projects.rePoint.cwd': 'New repository path',
   'projects.rePoint.cwdPlaceholder': 'C:/path/to/repository',
   'projects.rePoint.submit': 'Re-point',
@@ -977,11 +987,11 @@ export default Object.freeze({
   'systemPrompt.fragmentEditor.modifiedIndicator': 'modified',
   'systemPrompt.fragmentEditor.modifiedHint':
     'Edited — differs from the built-in default.',
-  'systemPrompt.fragmentEditor.resetConfirmTitle': 'Reset block',
+  'systemPrompt.fragmentEditor.resetConfirmTitle': 'Reset block “{name}”?',
   'systemPrompt.fragmentEditor.resetConfirm':
-    'Reset this block to its default? This cannot be undone.',
+    'It returns to its built-in default content. This cannot be undone.',
   'systemPrompt.fragmentEditor.resetAgentConfirm':
-    'Reset this Agent block to the current Default content? This cannot be undone.',
+    'It returns to the current Default content. This cannot be undone.',
   'systemPrompt.preview.heading': 'Preview for',
   'systemPrompt.preview.copy': 'Copy',
   'systemPrompt.preview.tokenCount': '~{count} tokens',
@@ -1009,20 +1019,22 @@ export default Object.freeze({
   'systemPrompt.blockList.guide.scope':
     'Default applies to every Agent. Enable “Custom system prompt” in Agents to create an Agent-specific scope here.',
   'systemPrompt.blockList.newBlock': 'New block',
-  'systemPrompt.blockList.newBlockPrompt':
-    'Name for the new block (letters, digits, “-” or “_”):',
+  'systemPrompt.blockList.newBlockName': 'Block name',
+  'systemPrompt.blockList.newBlockHelp':
+    'Letters, digits, “-” or “_”, starting with a letter or digit.',
+  'systemPrompt.blockList.createBlock': 'Create block',
   'systemPrompt.blockList.invalidSlug':
-    'Invalid name — use letters, digits, “-” or “_”, starting with a letter or digit.',
+    'This name has characters that are not allowed.',
   'systemPrompt.blockList.createFailed':
-    'Failed to create block. The slug may be invalid or already used.',
-  'systemPrompt.blockList.removeConfirmTitle': 'Remove block',
+    'The block could not be created. The name may already be in use.',
+  'systemPrompt.blockList.removeConfirmTitle': 'Remove block “{name}”?',
   'systemPrompt.blockList.removeConfirm':
-    'Remove this custom block? This cannot be undone.',
+    'This custom block is deleted and cannot be restored.',
   'systemPrompt.blockList.removeFailed': 'Failed to remove block',
   'systemPrompt.blockList.resetLayout': 'Reset order & visibility',
-  'systemPrompt.blockList.resetLayoutConfirmTitle': 'Reset layout',
+  'systemPrompt.blockList.resetLayoutConfirmTitle': 'Reset order & visibility?',
   'systemPrompt.blockList.resetLayoutConfirm':
-    'Reset block order and visibility to the default? This cannot be undone.',
+    'Every block returns to its default position and switch setting. This cannot be undone.',
   'systemPrompt.blockList.customBadge': 'custom',
   'systemPrompt.blockList.customHint':
     'A block you added, not one of vBot’s built-in blocks. It can be removed.',
@@ -1095,16 +1107,17 @@ export default Object.freeze({
   'agents.rename.invalidId':
     'Use 1–64 letters, numbers, hyphens, or underscores, starting with a letter or number.',
   'agents.rename.sameId': 'Enter an ID different from the current one.',
-  'agents.rename.title': 'Change Agent ID?',
+  'agents.rename.title': 'Change Agent ID',
   'agents.rename.body':
-    'The complete Identity Agent moves to the new ID, including Sessions, Memory, prompts, private Skills, and its internal Workspace. Live Channels, Cron jobs, delegation policies, and Sub-Agent navigation links are updated. Historical records keep the ID they were created with.',
+    'Sessions, Memory, prompts, private Skills and the internal Workspace move with the Agent.',
+  'agents.rename.help':
+    'Channels, schedules, delegation policies and Sub-Agent links switch to the new ID. Past records keep the old one.',
   'agents.rename.newId': 'New Agent ID',
   'agents.rename.confirm': 'Change ID',
   'agents.renamed': 'Agent ID changed.',
   'agents.renameError': 'Could not change Agent ID.',
   'archive.deletePermanently': 'Delete permanently',
-  'archive.deleteOption.permanent':
-    'Delete permanently instead of moving it to the Archive',
+  'archive.deleteOption.permanent': 'Delete permanently instead',
   'archive.deleteNotice.days':
     'It stays in Settings › Archive for {days} days, then vBot deletes it automatically.',
   'archive.deleteNotice.oneDay':
@@ -1176,9 +1189,9 @@ export default Object.freeze({
   'archive.state.restoring': 'Being restored',
   'archive.action.restore': 'Restore',
   'archive.action.restoreAs': 'Restore as…',
-  'archive.restoreAs.title': 'Restore under a new ID',
+  'archive.restoreAs.title': 'Restore “{name}” under a new ID',
   'archive.restoreAs.hint':
-    'Restores {name} under the ID you enter. Its Sessions keep their history; Channel conversations start fresh.',
+    'Its Sessions keep their history; Channel conversations start fresh.',
   'archive.restoreAs.agentLabel': 'New Agent ID',
   'archive.restoreAs.projectLabel': 'New Project ID',
   'archive.restoreAs.sessionLabel': 'New Session ID',
@@ -1228,19 +1241,17 @@ export default Object.freeze({
     'The Project {project} no longer exists, so the Agent is restored without it.',
   'archive.problem.externalWorkspaceMissing':
     'The Workspace folder {path} is gone, so the Agent uses its default Workspace.',
-  'archive.purge.confirmTitle': 'Delete permanently?',
+  'archive.purge.confirmTitle': 'Delete “{name}” permanently?',
   'archive.purge.confirm':
-    'Delete {name} permanently? Its Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+    'Its Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
   'archive.purge.confirmOwnFolders':
-    'Delete {name} permanently? It may hold folders of your own, which are deleted too. Nothing can be restored afterwards. Recorded usage and costs stay in Statistics.',
-  'archive.purgeMany.confirmOne':
-    'Delete 1 item permanently? Its Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
-  'archive.purgeMany.confirmOneOwnFolders':
-    'Delete 1 item permanently? It may hold folders of your own, which are deleted too. Nothing can be restored afterwards. Recorded usage and costs stay in Statistics.',
+    'It may hold folders of your own, which are deleted too. Nothing can be restored; recorded usage and costs stay in Statistics.',
+  'archive.purgeMany.confirmTitleOne': 'Delete 1 item permanently?',
+  'archive.purgeMany.confirmTitle': 'Delete {count} items permanently?',
   'archive.purgeMany.confirm':
-    'Delete {count} items permanently? Their Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+    'Their Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
   'archive.purgeMany.confirmOwnFolders':
-    'Delete {count} items permanently? Some may hold folders of your own, which are deleted too. Nothing can be restored afterwards. Recorded usage and costs stay in Statistics.',
+    'Some may hold folders of your own, which are deleted too. Nothing can be restored; recorded usage and costs stay in Statistics.',
   'archive.purge.success': '{name} deleted permanently.',
   'archive.purge.successOne': '1 item deleted permanently.',
   'archive.purge.successMany': '{count} items deleted permanently.',
@@ -1268,6 +1279,14 @@ export default Object.freeze({
   'archive.purge.error': 'Could not delete',
   'archive.purgeAll.everything': 'Empty Archive…',
   'archive.purgeAll.everythingTitle': 'Empty the Archive?',
+  'archive.purgeAll.everythingAction': 'Empty Archive',
+  'archive.purgeAll.everythingBodyOne':
+    '1 item and its Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+  'archive.purgeAll.everythingBody':
+    '{count} items and their Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+  'archive.purgeAll.matchingTitleOne': 'Delete 1 matching item permanently?',
+  'archive.purgeAll.matchingTitle':
+    'Delete {count} matching items permanently?',
   'archive.purgeAll.matching': 'Delete all matching…',
   'archive.purgeAll.nothing': 'Nothing here can be deleted right now.',
   'archive.purgeAll.onlyOwnFolders':

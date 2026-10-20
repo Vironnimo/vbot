@@ -891,7 +891,7 @@ describe('Swarm profile deletion', () => {
     button(DELETE_SWARM).click();
     await tick();
     expect(dialog().textContent).toContain(
-      t('swarm.delete.body', {
+      t('swarm.delete.title', {
         name: 'Saved rename',
       }),
     );

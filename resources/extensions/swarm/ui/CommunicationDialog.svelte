@@ -28,13 +28,11 @@
 
 {#if model.runActions.settingsRun && model.runActions.deliveryDraft}<Modal
     title={t('swarm.communication.title')}
-    class="swarm-dialog swarm-communication-dialog"
+    description={runTitle(model.runActions.settingsRun)}
+    size="lg"
     closeDisabled={busy}
     onClose={model.runActions.closeSettings}
     >{#snippet body()}<div class="modal-body">
-        <p class="swarm-dialog__target">
-          {runTitle(model.runActions.settingsRun)}
-        </p>
         <DeliverySettings
           idPrefix="swarm-live-delivery"
           value={model.runActions.deliveryDraft}

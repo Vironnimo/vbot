@@ -15,7 +15,7 @@ export default Object.freeze({
   'swarm.resuming': 'Resuming…',
   'swarm.resume': 'Resume',
   'swarm.deleteRun.stopFirst': 'Stop the Run first',
-  'swarm.deleteRun.title': 'Delete Run',
+  'swarm.deleteRun.title': 'Delete Run “{title}”?',
   // A Run's state in words (runPresentation.js).
   'swarm.state.preparing': 'Preparing',
   'swarm.state.running': 'Running',
@@ -145,8 +145,8 @@ export default Object.freeze({
   'swarm.start.noProfiles': 'Create a Swarm first',
   'swarm.start.directoryLoading': 'Loading the working directory…',
   'swarm.deleteRun.body':
-    'Permanently delete “{title}” with its Board, Wiki and participant Sessions? The Swarm is kept. This cannot be undone.',
-  'swarm.delete.body': 'Delete “{name}”? Existing Runs remain available.',
+    'Its Board, Wiki and participant Sessions are deleted and cannot be restored. The Swarm is kept.',
+  'swarm.delete.body': 'Its existing Runs stay available.',
   'swarm.communication.title': 'Communication settings',
   'swarm.communication.routeChange': '{route} · {setting}: {before} → {after}',
   'swarm.communication.change': '{setting}: {before} → {after}',
@@ -313,7 +313,7 @@ export default Object.freeze({
   'swarm.profile.keepEditing': 'Keep editing',
   'swarm.profile.leaveIncompleteBody':
     'Some settings are incomplete, so the changes could not be saved. Complete them, or discard the changes and continue.',
-  'swarm.delete.title': 'Delete Swarm',
+  'swarm.delete.title': 'Delete Swarm “{name}”?',
   // How Board messages reach participants (DeliverySettings.svelte).
   'swarm.delivery.receive': 'Receive messages',
   'swarm.delivery.receiveHelp':

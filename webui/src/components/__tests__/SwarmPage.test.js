@@ -1029,7 +1029,7 @@ describe('Swarm Run controls', () => {
       await settle();
       await chooseRunAction(DELETE);
       expect(dialog().textContent).toContain(
-        t('swarm.deleteRun.body', { title: 'Investigate' }),
+        t('swarm.deleteRun.title', { title: 'Investigate' }),
       );
       // Back in the app dismisses the confirmation like Cancel.
       bridge.back();

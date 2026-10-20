@@ -132,7 +132,7 @@ describe('Skill installation dialog', () => {
     await settle();
     const replaceAction = () => button(t('skills.install.replaceAction'));
     expect(replaceAction().disabled).toBe(true);
-    click(document.querySelector('[role="switch"]'));
+    click(document.querySelector('[role="checkbox"]'));
     expect(replaceAction().disabled).toBe(false);
 
     // Escape closes only the open destination list; a second Escape closes
@@ -164,9 +164,9 @@ describe('Skill installation dialog', () => {
     click(button(t('skills.install.check')));
     await settle();
     expect(
-      document.querySelector('[role="switch"]').getAttribute('aria-checked'),
+      document.querySelector('[role="checkbox"]').getAttribute('aria-checked'),
     ).toBe('false');
-    click(document.querySelector('[role="switch"]'));
+    click(document.querySelector('[role="checkbox"]'));
     click(replaceAction());
     await settle();
     expect(installSkill).toHaveBeenLastCalledWith(

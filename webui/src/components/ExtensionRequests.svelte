@@ -167,175 +167,168 @@
     {#snippet body()}
       <form
         id={`${componentId}-form`}
-        class="modal-body extension-input"
         novalidate
         onsubmit={(event) => {
           event.preventDefault();
           if (!opensPage) void respond('accept');
         }}
       >
-        {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
-        {#if opensPage}
-          <p>{t('extensions.urlRequest', { name: requester })}</p>
-          {#if selected.payload?.message}
-            <p class="extension-input__message">{selected.payload.message}</p>
-          {/if}
-          <RequestedUrl
-            url={selected.payload?.url}
-            openLabel={t('extensions.openPage')}
-            disabled={busy}
-            onOpen={() => respond('accept')}
-            onOpenFailed={() => (error = t('extensions.openFailed'))}
-          />
-          <p class="extension-input__hint">{t('extensions.urlConsent')}</p>
-        {:else}
-          <p class="extension-input__message">
-            {selected.payload?.message ?? t('extensions.signInHelp')}
-          </p>
-        {/if}
-        {#if selected.expires_at}
-          <p class="extension-input__hint">
-            {t('extensions.inputExpires', {
-              time: formatAbsoluteTime(selected.expires_at),
-              distance: formatRelativeTime(selected.expires_at),
-            })}
-          </p>
-        {/if}
-        {#if selected.kind === 'oauth'}
-          {#if selected.payload?.url}
+        <div class="modal-body extension-input">
+          {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
+          {#if opensPage}
+            <p>{t('extensions.urlRequest', { name: requester })}</p>
+            {#if selected.payload?.message}
+              <p class="extension-input__message">{selected.payload.message}</p>
+            {/if}
             <RequestedUrl
-              url={selected.payload.url}
-              openLabel={t('extensions.openSignIn')}
+              url={selected.payload?.url}
+              openLabel={t('extensions.openPage')}
               disabled={busy}
+              onOpen={() => respond('accept')}
               onOpenFailed={() => (error = t('extensions.openFailed'))}
             />
+            <p class="extension-input__hint">{t('extensions.urlConsent')}</p>
+          {:else}
+            <p class="extension-input__message">
+              {selected.payload?.message ?? t('extensions.signInHelp')}
+            </p>
           {/if}
-          <FormField label={t('extensions.redirectUrl')} full>
-            {#snippet children(field)}
-              <TextField
-                id={field.controlId}
-                type="password"
-                autocomplete="off"
-                value={drafts.redirect_url ?? ''}
-                onInput={(value) => setDraft('redirect_url', value)}
+          {#if selected.expires_at}
+            <p class="extension-input__hint">
+              {t('extensions.inputExpires', {
+                time: formatAbsoluteTime(selected.expires_at),
+                distance: formatRelativeTime(selected.expires_at),
+              })}
+            </p>
+          {/if}
+          {#if selected.kind === 'oauth'}
+            {#if selected.payload?.url}
+              <RequestedUrl
+                url={selected.payload.url}
+                openLabel={t('extensions.openSignIn')}
                 disabled={busy}
+                onOpenFailed={() => (error = t('extensions.openFailed'))}
               />
-            {/snippet}
-          </FormField>
-        {:else if !opensPage}
-          {#each fields as input (input.key)}
-            {#if input.kind === 'boolean'}
-              <div class="extension-input__choice">
-                <Checkbox
-                  checked={drafts[input.key] === true}
-                  disabled={busy}
-                  onChange={(checked) => setDraft(input.key, checked)}
-                  >{input.label}</Checkbox
-                >
-                {#if input.description}<p class="extension-input__hint">
-                    {input.description}
-                  </p>{/if}
-              </div>
-            {:else if input.kind === 'multiselect'}
-              <fieldset
-                class="extension-input__choices"
-                aria-describedby={errors[input.key]
-                  ? `${componentId}-${input.key}-error`
-                  : undefined}
-              >
-                <legend
-                  >{input.label}{#if input.required}<span
-                      class="extension-input__required"
-                      aria-hidden="true">*</span
-                    >{/if}</legend
-                >
-                {#if input.description}<p class="extension-input__hint">
-                    {input.description}
-                  </p>{/if}
-                {#each input.options as option (option.value)}
-                  <Checkbox
-                    checked={(drafts[input.key] ?? []).includes(option.value)}
-                    disabled={busy}
-                    onChange={(checked) =>
-                      toggleChoice(input, option.value, checked)}
-                    >{option.label}</Checkbox
-                  >
-                {/each}
-                {#if errors[input.key]}<p
-                    id={`${componentId}-${input.key}-error`}
-                    class="extension-input__error"
-                  >
-                    {errors[input.key]}
-                  </p>{/if}
-              </fieldset>
-            {:else}
-              <FormField
-                controlId={`${componentId}-${input.key}`}
-                label={input.label}
-                help={fieldHelp(input)}
-                error={errors[input.key] ?? ''}
-                required={input.required}
-                full
-              >
-                {#snippet children(field)}
-                  {#if input.kind === 'select'}
-                    <Dropdown
-                      id={field.controlId}
-                      ariaLabelledby={field.labelId}
-                      ariaDescribedby={field.describedBy}
-                      value={drafts[input.key] ?? ''}
-                      options={input.required
-                        ? input.options
-                        : [
-                            { value: '', label: t('extensions.noChoice') },
-                            ...input.options,
-                          ]}
-                      onValueChange={(value) => setDraft(input.key, value)}
-                      disabled={busy}
-                    />
-                  {:else if input.kind === 'number'}
-                    <TextField
-                      id={field.controlId}
-                      aria-describedby={field.describedBy}
-                      type="number"
-                      inputmode={input.integer ? 'numeric' : 'decimal'}
-                      step={input.integer ? 1 : 'any'}
-                      min={input.minimum}
-                      max={input.maximum}
-                      invalid={field.invalid}
-                      value={drafts[input.key] ?? ''}
-                      onInput={(value) => setDraft(input.key, value)}
-                      disabled={busy}
-                    />
-                  {:else}
-                    <TextField
-                      id={field.controlId}
-                      aria-describedby={field.describedBy}
-                      type={input.kind === 'text' ? input.type : 'text'}
-                      minlength={input.minLength}
-                      maxlength={input.maxLength}
-                      invalid={field.invalid}
-                      value={drafts[input.key] ?? ''}
-                      onInput={(value) => setDraft(input.key, value)}
-                      disabled={busy}
-                    />
-                  {/if}
-                {/snippet}
-              </FormField>
             {/if}
-          {/each}
-        {/if}
+            <FormField label={t('extensions.redirectUrl')} full>
+              {#snippet children(field)}
+                <TextField
+                  id={field.controlId}
+                  type="password"
+                  autocomplete="off"
+                  value={drafts.redirect_url ?? ''}
+                  onInput={(value) => setDraft('redirect_url', value)}
+                  disabled={busy}
+                />
+              {/snippet}
+            </FormField>
+          {:else if !opensPage}
+            {#each fields as input (input.key)}
+              {#if input.kind === 'boolean'}
+                <div class="extension-input__choice">
+                  <Checkbox
+                    checked={drafts[input.key] === true}
+                    disabled={busy}
+                    onChange={(checked) => setDraft(input.key, checked)}
+                    >{input.label}</Checkbox
+                  >
+                  {#if input.description}<p class="extension-input__hint">
+                      {input.description}
+                    </p>{/if}
+                </div>
+              {:else if input.kind === 'multiselect'}
+                <fieldset
+                  class="extension-input__choices"
+                  aria-describedby={errors[input.key]
+                    ? `${componentId}-${input.key}-error`
+                    : undefined}
+                >
+                  <legend
+                    >{input.label}{#if input.required}<span
+                        class="extension-input__required"
+                        aria-hidden="true">*</span
+                      >{/if}</legend
+                  >
+                  {#if input.description}<p class="extension-input__hint">
+                      {input.description}
+                    </p>{/if}
+                  {#each input.options as option (option.value)}
+                    <Checkbox
+                      checked={(drafts[input.key] ?? []).includes(option.value)}
+                      disabled={busy}
+                      onChange={(checked) =>
+                        toggleChoice(input, option.value, checked)}
+                      >{option.label}</Checkbox
+                    >
+                  {/each}
+                  {#if errors[input.key]}<p
+                      id={`${componentId}-${input.key}-error`}
+                      class="extension-input__error"
+                    >
+                      {errors[input.key]}
+                    </p>{/if}
+                </fieldset>
+              {:else}
+                <FormField
+                  controlId={`${componentId}-${input.key}`}
+                  label={input.label}
+                  help={fieldHelp(input)}
+                  error={errors[input.key] ?? ''}
+                  required={input.required}
+                  full
+                >
+                  {#snippet children(field)}
+                    {#if input.kind === 'select'}
+                      <Dropdown
+                        id={field.controlId}
+                        ariaLabelledby={field.labelId}
+                        ariaDescribedby={field.describedBy}
+                        value={drafts[input.key] ?? ''}
+                        options={input.required
+                          ? input.options
+                          : [
+                              { value: '', label: t('extensions.noChoice') },
+                              ...input.options,
+                            ]}
+                        onValueChange={(value) => setDraft(input.key, value)}
+                        disabled={busy}
+                      />
+                    {:else if input.kind === 'number'}
+                      <TextField
+                        id={field.controlId}
+                        aria-describedby={field.describedBy}
+                        type="number"
+                        inputmode={input.integer ? 'numeric' : 'decimal'}
+                        step={input.integer ? 1 : 'any'}
+                        min={input.minimum}
+                        max={input.maximum}
+                        invalid={field.invalid}
+                        value={drafts[input.key] ?? ''}
+                        onInput={(value) => setDraft(input.key, value)}
+                        disabled={busy}
+                      />
+                    {:else}
+                      <TextField
+                        id={field.controlId}
+                        aria-describedby={field.describedBy}
+                        type={input.kind === 'text' ? input.type : 'text'}
+                        minlength={input.minLength}
+                        maxlength={input.maxLength}
+                        invalid={field.invalid}
+                        value={drafts[input.key] ?? ''}
+                        onInput={(value) => setDraft(input.key, value)}
+                        disabled={busy}
+                      />
+                    {/if}
+                  {/snippet}
+                </FormField>
+              {/if}
+            {/each}
+          {/if}
+        </div>
       </form>
     {/snippet}
     {#snippet footer()}
-      {#if !opensPage}
-        <Button
-          variant="primary"
-          type="submit"
-          form={`${componentId}-form`}
-          disabled={busy}>{t('extensions.sendResponse')}</Button
-        >
-      {/if}
       <Button
         variant="secondary"
         tooltip={t('extensions.declineHelp')}
@@ -348,17 +341,19 @@
         onClick={() => respond('cancel')}
         disabled={busy}>{t('extensions.cancelInput')}</Button
       >
+      {#if !opensPage}
+        <Button
+          variant="primary"
+          type="submit"
+          form={`${componentId}-form`}
+          disabled={busy}>{t('extensions.sendResponse')}</Button
+        >
+      {/if}
     {/snippet}
   </Modal>
 {/if}
 
 <style>
-  .extension-input {
-    display: grid;
-    gap: 14px;
-    max-height: 65vh;
-    overflow-y: auto;
-  }
   .extension-input p {
     margin: 0;
   }
@@ -367,8 +362,9 @@
     overflow-wrap: anywhere;
   }
   .extension-input__hint {
-    color: var(--text-med);
+    color: var(--text-lo);
     font-size: var(--fs-body-sm);
+    line-height: 1.4;
   }
   .extension-input__choice {
     display: grid;

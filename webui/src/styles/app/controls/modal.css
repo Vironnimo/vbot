@@ -230,6 +230,15 @@
   border-top: 1px solid var(--border);
 }
 
+/* A dialog opened from another one: a step lower over a lighter scrim, so
+   the dialog it came from stays recognizable above it, dimmed. */
+.modal-overlay--stacked {
+  --modal-top: calc(max(48px, 11vh) + 52px);
+
+  background: color-mix(in srgb, var(--modal-scrim) 55%, transparent);
+  backdrop-filter: none;
+}
+
 /* Backdrop click after the user changed something: the dialog stays and
    briefly acknowledges the click instead of discarding the input. */
 .modal--nudge {

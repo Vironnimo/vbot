@@ -696,35 +696,37 @@
 {#if renameDialogOpen}
   <Modal
     title={t('agents.rename.title')}
+    description={t('agents.rename.body')}
+    size="md"
     closeDisabled={isRenaming}
     onClose={closeRenameDialog}
   >
     {#snippet body()}
       <form id="agent-rename-form" onsubmit={renameSelectedAgent}>
-        <p>
-          {t('agents.rename.body')}
-        </p>
-        <FormField
-          controlId="agent-rename-id"
-          label={t('agents.rename.newId')}
-          required
-          error={renameError}
-        >
-          {#snippet children(field)}
-            <TextField
-              id={field.controlId}
-              value={renameValue}
-              onInput={(next) => {
-                renameValue = next;
-                renameError = '';
-              }}
-              invalid={field.invalid}
-              disabled={isRenaming}
-              aria-describedby={field.describedBy}
-              autofocus
-            />
-          {/snippet}
-        </FormField>
+        <div class="modal-body">
+          <FormField
+            controlId="agent-rename-id"
+            label={t('agents.rename.newId')}
+            help={t('agents.rename.help')}
+            required
+            error={renameError}
+          >
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                value={renameValue}
+                onInput={(next) => {
+                  renameValue = next;
+                  renameError = '';
+                }}
+                invalid={field.invalid}
+                disabled={isRenaming}
+                aria-describedby={field.describedBy}
+                autofocus
+              />
+            {/snippet}
+          </FormField>
+        </div>
       </form>
     {/snippet}
     {#snippet footer()}
@@ -750,12 +752,13 @@
 {#if workspaceDecisionOpen}
   <Modal
     title={t('agents.workspaceMove.title')}
+    size="sm"
     onClose={cancelWorkspaceDecision}
   >
     {#snippet body()}
-      <p>
-        {t('agents.workspaceMove.body')}
-      </p>
+      <div class="modal-body">
+        <p>{t('agents.workspaceMove.body')}</p>
+      </div>
     {/snippet}
     {#snippet footer()}
       <Button variant="secondary" onClick={cancelWorkspaceDecision}>

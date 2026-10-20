@@ -11,10 +11,10 @@
 </script>
 
 {#if model.runActions.swarmDeleteCandidate}<ConfirmDialog
-    title={t('swarm.deleteRun.title')}
-    body={t('swarm.deleteRun.body', {
+    title={t('swarm.deleteRun.title', {
       title: runTitle(model.runActions.swarmDeleteCandidate),
     })}
+    body={t('swarm.deleteRun.body')}
     confirmLabel={t('common.delete')}
     busy={model.pending === 'delete'}
     error={model.runActions.deleteError}
