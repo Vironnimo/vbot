@@ -1,19 +1,23 @@
 # Secrets
 
-The Secret Store: credentials and OAuth tokens of a data directory, encrypted at rest in `<data-dir>/secrets.json`, plus the conversion of the plaintext credential files it replaced.
+The Secret Store: credentials and OAuth tokens of a data directory, encrypted at rest in `<data-dir>/secrets.json`, plus the conversion of the plaintext credential files it replaced; and Agent Secrets, kept in the same store.
 
 ## Overview
 
-`core/secrets/` owns the store document, the protection of its data key, and the one-time conversion of `.env` and `oauth/*.json`. It is a kernel module of its own rather than part of `core/storage/` because it carries its own persisted format, cryptography, per-system key protection and operator commands, and because consumers outside Storage build on it directly: the Provider `TokenStore`, `doctor` validation and the `vbot data-store secrets` commands work without a `StorageManager`. Storage keeps the credential API that every other domain uses; the database kernel never imports it (it only receives the health projection).
+`core/secrets/` owns the store document, the protection of its data key, the one-time conversion of `.env` and `oauth/*.json`, and Agent Secrets. It is a kernel module of its own rather than part of `core/storage/` because it carries its own persisted format, cryptography, per-system key protection and operator commands, and because consumers outside Storage build on it directly: the Provider `TokenStore`, `doctor` validation and the `vbot data-store secrets` commands work without a `StorageManager`. Storage keeps the credential API that every other domain uses; the database kernel never imports it (it only receives the health projection).
 
 `store.py` owns store state, key opening, transactions and process locking; `_document.py` owns the document schema, structural validation and decoding. Public store exports remain in `store.py`.
 
 - Owns: `secrets.json` (format, reads, writes, reset), `secrets.lock`, key creation and lookup, entry encryption, credential-name folding, plaintext import/retirement, the health projection.
 - Does not own: which names a domain stores (environment-variable names chosen by Providers, Extensions, Channels, web Tools; token ids chosen by `core/providers/token_store.py`), process-environment precedence (`runtime.md` -> Service properties, `provider_credentials`), the `secrets.*` RPC handlers (`server/rpc/secret_methods.py`, contract below), the operator command grammar (`cli/data-store.md`), or the WebUI.
 
-Consumers: `StorageManager.secrets` is the one store instance per data directory and process; `load_data_dir_credentials`/`set_data_dir_credential`/`remove_data_dir_credential` use the `credentials` section (`storage.md`), and `TokenStore(storage.secrets)` uses `oauth_tokens` (`providers/connections.md`). Runtime credential resolution, `ProviderCredentialResolver`, Skill `env` requirements, Extension `set_secret`, MCP credential writes and the `secrets.*` RPCs all reach the store through those Storage functions. Process environment still wins over a stored value, and names stay environment-variable names.
+Consumers: `StorageManager.secrets` is the one store instance per data directory and process; `load_data_dir_credentials`/`set_data_dir_credential`/`remove_data_dir_credential` use the `credentials` section (`storage.md`), `TokenStore(storage.secrets)` uses `oauth_tokens` (`providers/connections.md`), and `AgentSecrets(storage.secrets)` uses `agent_secrets`. Runtime credential resolution, `ProviderCredentialResolver`, Skill `env` requirements, Extension `set_secret`, MCP credential writes and the `secrets.*` RPCs all reach the store through those Storage functions. Process environment still wins over a stored value, and names stay environment-variable names.
+
+Agent Secrets (`agent_secrets.py` and its helpers) decide which values exist, who may use them where, and what masking replaces. Where values go is not owned here: Tools declare sink arguments and the Tool registry substitutes (`tools.md` -> Contracts), Chat and Compaction apply the masker, Extensions contribute Secret Sources. The `secrets` Tool, `/secret` and the RPCs live with their callers (`secrets/agent-secrets.md` -> Source).
 
 ## Terms
+
+Agent Secret is a shared term (`.vorch/GLOSSARY.md`).
 
 ### Secret Store
 `<data-dir>/secrets.json` plus its data key. Not the OS keychain: on Windows only the key is wrapped by DPAPI; the entries live in the data directory.
@@ -27,6 +31,18 @@ One entry that does not authenticate under the store's key, name and section. It
 ### Import record
 The `plaintext_import` field: which plaintext files a conversion imported and the keyed fingerprint of every value it put into the store. It decides which store values the conversion may still replace or remove (`secrets/plaintext-conversion.md`).
 
+### Secret reference
+`{{secret:NAME[.field]}}`: what an Agent writes where a value belongs and what masking shows instead of the value; outside a sink it stays literal text.
+
+### Sink
+A class of Tool arguments where vBot substitutes references (`environment`, `terminal`, `files`, `typing`, `external_tools`); each Agent Secret lists its allowed sinks.
+
+### Secret Source
+A password manager an Extension contributes (`SecretSource`) that an Agent Secret can be bound to; it supplies values, never grants. Not an Extension's own credential (`set_secret`).
+
+### Secret request
+An Agent's `secrets` `request`: a form the user answers or declines within 10 minutes.
+
 ## Data Model
 
 `secrets.json` is a Generation 1 JSON document (`SECRET_STORE_FORMAT`, written by `write_json_document` owner-only on every platform, with mode 0o600 on POSIX, sorted keys, unknown fields preserved):
@@ -35,6 +51,7 @@ The `plaintext_import` field: which plaintext files a conversion imported and th
 - `key`: `{id, protection, check, wrapped?}`. `protection` is `dpapi` or `key_file`; `check` is a sealed constant that proves a key belongs to this store; `wrapped` is the DPAPI-wrapped data key (DPAPI only).
 - `credentials`: environment-variable name -> sealed value.
 - `oauth_tokens`: token id (`<provider>-<connection>[--<account>]`) -> sealed token document text (the OAuth token JSON format stays owned by `token_store.py`).
+- `agent_secrets`: Secret id -> sealed Agent Secret record, metadata and values together (`secrets/agent-secrets.md` -> Records).
 - `plaintext_import`: the Import record, only while a conversion is unfinished.
 
 A sealed entry is `base64(nonce || ciphertext || tag)`, AES-256-GCM with a fresh 96-bit nonce per write; the associated data is `vbot-secret-store/1`, store id, key id, section and name, so a ciphertext copied to another name, section, store or key does not open (`_crypto.py`). Entry names match `ENTRY_NAME_PATTERN`. Values are UTF-8 strings.
@@ -57,11 +74,17 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 - Credential names (`store.py`): `CREDENTIAL_NAME_PATTERN` (an environment-variable name of at most 200 characters; Storage's `ENV_KEY_PATTERN`, the RPCs, the CLI and the import accept only such names, while `ENTRY_NAME_PATTERN` also admits OAuth token ids), `CREDENTIAL_NAMES_IGNORE_CASE` (Windows), `credential_name_key(name)` (uppercase on Windows, the name elsewhere), `fold_credential_names(entries)` (one entry per credential: the all-uppercase spelling wins, otherwise the first spelling in sorted order). Storage, the Runtime fallback and the import use this one rule.
 - Errors: `SecretStoreError` (a `StorageError`; nothing changed), `SecretStoreUnavailableError`, `SecretEntryUnavailableError`.
 - Health: `secret_store_health` (`plaintext.py`) is the status projection; `data-store.status` carries it as `secrets`, and its `degraded_reason` degrades the data store (`database/snapshots-and-recovery.md` -> Status).
-- Plaintext files: vBot never reads `.env` or `oauth/*.json` except through the conversion, which `settle_plaintext_credentials` runs in every Runtime start before credentials load: an update's verification start imports (a failure fails the verification), the first normal start retires, and every mode warns about other plaintext files, which stay ignored (`secrets/plaintext-conversion.md`).
+- Plaintext files: vBot never reads `.env` or `oauth/*.json` except through the conversion, which `settle_plaintext_credentials` runs in every Runtime start before credentials load; other plaintext files stay ignored (`secrets/plaintext-conversion.md` -> Settle per start mode).
 
 ### Credential RPCs
 
 `secrets.list|set|unset` manage the `credentials` section by name. A value enters only through `secrets.set` and never appears in a result, an error or a log (contract: `secrets/credential-rpcs.md`). The `vbot data-store secrets` commands use them, or the store directly for a stopped loopback target (`cli/data-store.md`).
+
+### Agent Secrets
+
+- `Runtime.agent_secrets` (`AgentSecrets` over `StorageManager.secrets`) and `Runtime.secret_requests`: reads come from memory; writes and Secret Source calls block, so run them off the Event Loop.
+- Use is checked per Agent id and Session; a Sub-Agent Session uses only what was bound to or passed into it (`passed_only`). A value leaves only through `substitute` (sink arguments), `environment` (shell `env_keys`) and `agent_secrets.reveal`, the one RPC that returns a concealed value; all else is `describe()` or masked text.
+- The `agent_secrets.*` RPCs are distinct from `secrets.*`; changes publish `resource_changed` kind `agent_secrets`. Extension API 17 adds `api.register_secret_source` and `secret_sinks`.
 
 ## States
 
@@ -84,6 +107,11 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 - Key-file-backed stores re-read the external key before each access, including writes: removal or replacement makes the store unavailable immediately, and restoring the original key restores access without restarting. Document-backed protections can cache a view until `secrets.json` changes (Runtime still snapshots credentials at start).
 - Key lookup depends on the process: its account (DPAPI, `HOME`) and `VBOT_SECRET_KEY_FILE`. A CLI started with another account or variable can fail to open a store the server opens; `secrets reset` therefore defers to the running server, and the store is never destroyed.
 - Because restores keep the live store, a future store format change needs its own rollback story. Restoring a named copy from before a `reset` brings back a document whose key may be gone.
+- The Agent Secret masker also masks the data-directory credentials, as `{{secret:<ENV_NAME>}}`, though no Agent can use such a reference; values under 8 characters are never masked.
+
+## Agent-facing text
+
+This domain owns the `secrets` Tool definition, results and errors and the `## Secrets` System Prompt block with its Secret lines (`core/tools/secrets.py`), the note `/secret` and its form add to a Session (`core/chat/secret_giving.py`) and the substitution refusals (`SecretUseError` in `core/secrets/agent_secrets.py`). Before you change, add or delete a sentence of them, read `secrets/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add. Shell and Sub-Agent Secret texts: `tools/shell/agent-facing-text.md`, `subagents/agent-facing-text.md`.
 
 ## References
 
@@ -91,3 +119,4 @@ Read these only when your task matches - not by default.
 
 - Changing the `.env`/`oauth` conversion (import, retire, `settle_plaintext_credentials`), the Import record, or the plaintext and quarantined-store findings of `doctor` and the data-store status -> `secrets/plaintext-conversion.md`
 - Changing the `secrets.*` RPCs or their clients -> `secrets/credential-rpcs.md`
+- Changing Agent Secrets (records, grants, Sub-Agent pass-through, sinks, masking, Secret Sources, requests, `/secret`, Channel message removal, `agent_secrets.*` RPCs) -> `secrets/agent-secrets.md`

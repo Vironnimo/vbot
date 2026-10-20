@@ -31,6 +31,7 @@ Resolved per compaction decision: Session override -> Agent effective (incl. Pro
 - Every attempt plans and calls Models outside the Session write lock and commits through `ChatSession.commit_compaction`, which writes only while the snapshot cursor is still current (`sessions/history-api.md`). A stale result writes nothing - no checkpoint, no prompt-epoch change; automatic attempts carry concurrently appended notes into the checkpoint and rebuild after other changes (`compaction/run-coordination.md` -> Commit and staleness).
 - Automatic checkpoints must reclaim >=4,096 estimated tokens; no per-Run limit - every later safe boundary re-evaluates trigger and usefulness rules. A new-context check before any Model call keeps fixed overhead from causing a paid call per boundary.
 - Sessions persists checkpoints plus the optional `compaction_policy` metadata override (each evaluation reads only that value through `metadata_value`); Settings/Agents/Projects validate the same shape as nullable inheritance overrides; server exposes both override and effective values in listings, WebUI edits all scopes.
+- Runtime passes `CompactionService(secret_masker=...)` (`AgentSecrets.masker`), so every Compaction Model request masks known Agent Secret values through the same `model_facing_request` projection Chat uses (`secrets/agent-secrets.md` -> Masking).
 
 ## Invariants & Gotchas
 
