@@ -610,9 +610,21 @@ class BoardCall:
         found = unaddressed_mentions(value, self.roster)
         if found.others:
             key = ("opening_one" if opening == 1 else "opening_many") if opening else where
-            self.notes.append(
+            parts = [
                 text.MENTION_NO_ONE[key].format(mentions=spoken_list(found.others), count=opening)
+            ]
+            # One possessive example covers every possessive; a close name is named per word.
+            possessive = [item.name for item in found.corrections if item.possessive]
+            if possessive:
+                parts.append(text.MENTION_CORRECTED["possessive"].format(name=possessive[0]))
+            parts.extend(
+                text.MENTION_CORRECTED["close"].format(written=item.written, name=item.name)
+                for item in found.corrections
+                if not item.possessive
             )
+            if len(found.corrections) < len(found.others):
+                parts.append(text.MENTION_HOW["opening" if opening else "address"])
+            self.notes.append(" ".join(parts))
         if found.user:
             self.notes.append(text.MENTION_USER.format(mentions=spoken_list(found.user)))
 

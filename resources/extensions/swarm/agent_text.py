@@ -410,16 +410,24 @@ BOARD_OUTSIDE = {
     "receive it, {names} among them; a name without @ addresses no one.",
 }
 # "@all", its synonyms and "@" before a word that names no participant address no one;
-# the note says what readers receive instead.
+# the note says what readers receive instead, then how to address.
 MENTION_NO_ONE = {
-    "opening_one": "{mentions} addressed no one, so 1 participant receives only its opening "
-    "lines. To reach a participant in full, write @ before their name, as in @Name.",
+    "opening_one": "{mentions} addressed no one, so 1 participant receives only its opening lines.",
     "opening_many": "{mentions} addressed no one, so {count} participants receive only its "
-    "opening lines. To reach a participant in full, write @ before their name, as in @Name.",
+    "opening lines.",
     "main": "{mentions} addressed no one; every participant receives this main-discussion post "
-    "anyway. To address a participant, write @ before their name, as in @Name.",
-    "other": "{mentions} addressed no one. To address a participant, write @ before their name, "
-    "as in @Name.",
+    "anyway.",
+    "other": "{mentions} addressed no one.",
+}
+MENTION_HOW = {
+    "opening": "To reach a participant in full, write @ before their name, as in @Name.",
+    "address": "To address a participant, write @ before their name, as in @Name.",
+}
+# Instead of the general rule, for an "@" word that most likely meant a participant.
+MENTION_CORRECTED = {
+    "possessive": "@ addresses a participant only when no letter follows the name, as in "
+    "@{name}'s.",
+    "close": "For {written}, did you mean @{name}?",
 }
 MENTION_USER = (
     "{mentions} addressed no one: the user is not a participant and sees every Board post."

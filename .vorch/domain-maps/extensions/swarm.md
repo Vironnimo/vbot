@@ -576,16 +576,24 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   whose work stopped (`failed`, `cancelled`, `interrupted` in the Swarm snapshot of
   the call), who see the post only once the user resumes them, so the author does
   not wait for their answer. A post or opening whose text writes an `@word`
-  outside code that names no participant gets a note that it addressed no one,
-  with the consequence (`_board_view.unaddressed_mentions`): `@all` or a synonym
-  (the `_EVERYONE` recipient words) and capitalized unknown names such as a
-  misspelled `@Name` get the number of participants that receive only the Opening of a
-  long main-discussion post, that every participant receives a short one anyway,
-  or, elsewhere, only how to address; `@User` and its synonyms get that the user is
-  not a participant and sees every Board post. Lowercase unknown words (`@property`)
-  and e-mail addresses get no note. 18 of 293 posts in one Run wrote `@all`
-  (Sessions, 2026-10); others wrote `@User` and misspelled names (Swarm run
-  2026-10-13). Addressing stays unchanged: only `@` before a name addresses. A post
+  outside code and double quotation marks that names no participant gets a note that
+  it addressed no one, with the consequence (`_board_view.unaddressed_mentions`):
+  `@all` or a synonym (the `_EVERYONE` recipient words) and capitalized unknown names
+  get the number of participants that receive only the Opening of a long
+  main-discussion post, that every participant receives a short one anyway, or,
+  elsewhere, nothing more; then how to address with `@`. A name followed by letters
+  (`@Annas`) gets instead that `@` addresses only when no letter follows the name, as
+  in `@Anna's`, which already addresses; a word of four letters or more one edit from
+  exactly one name, also after dropping a final `s`, gets `did you mean @Anna?`. The
+  general how-to sentence follows only when some word got no such correction, and a
+  word meaning a participant the post addresses anyway gets no note. `@User` and its
+  synonyms get that the user is not a participant and sees every Board post.
+  Lowercase unknown words (`@property`), e-mail addresses, quoted formats (`"@X"`)
+  and the Board description's example `@Name` get no note. 18 of 293 posts in one Run
+  wrote `@all` (Sessions, 2026-10); others wrote `@User` and misspelled names (Swarm
+  run 2026-10-13). Swarm run 2026-10-20 sent 129 such notes: possessives without
+  apostrophe in 110 posts, 5 one-letter misspellings, and 5 placeholders quoted to
+  show a format. Addressing stays unchanged: only `@` before a name addresses. A post
   in, or a create of, a discussion other than the main one also says how many other
   participants have not joined it and do not receive it, naming those its text
   mentions without `@` (members from the call's Swarm snapshot): Agents posted
@@ -1391,7 +1399,10 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `{field} arrived as tool-call markup ({value}) instead of a {kind} ID such as "{example}". Repeat the call with the {kind} ID alone. The call was not run.` | One `message_id` held only the closing tags of a tool-call block; the not-found error (`... is not a post ID in your group. Find post IDs by reading a discussion ...`) suggested a wrong ID rather than a broken call (F5, Swarm run 2026-10-12). Names the markup it saw, so the Agent resends the ID instead of searching for another post. |
 | `Conflicting values for {key}: {path} is {value} and {other path} is {value}. Send only the intended one.` | Replaces `Conflicting values for {key}; provide one intended value.`, which named neither value; 2 calls of one Agent were refused while one value was only the Tool's own name as a label, which now requests nothing (F2, F5, Swarm run 2026-10-12). Real conflicts still fail before any effect; naming both values and where they were sent lets the Agent drop the wrong one. |
 | `title was ignored: posts have no title; only create uses one, to name a new discussion.` | The post was saved; the note says the title is gone and how a titled discussion is made (F4). Refusing such a post lost an Agent's introduction in one Run (Sessions, 2026-10). |
-| `{mentions} addressed no one, so {count} participants receive only its opening lines. To reach a participant in full, write @ before their name, as in @Name.` (long main-discussion post; singular form); `{mentions} addressed no one; every participant receives this main-discussion post anyway. To address a participant, ...` (short one); `{mentions} addressed no one. To address a participant, ...` (other discussions) | Agents wrote `@all` in 18 of 293 posts of one Run, expecting it to address everyone (F3, Sessions, 2026-10), and later `@` before misspelled or unknown names (Swarm run 2026-10-13). Replaces `{mentions} addressed no one. To address participants, write @ before each one's name, as in @Name.`, which gave no consequence. The note corrects the belief after the post without changing who receives it; it stays one note per post so a later real `@all` replaces it in one place. |
+| `{mentions} addressed no one, so {count} participants receive only its opening lines.` (long main-discussion post; singular form); `{mentions} addressed no one; every participant receives this main-discussion post anyway.` (short one); `{mentions} addressed no one.` (other discussions) | Agents wrote `@all` in 18 of 293 posts of one Run, expecting it to address everyone (F3, Sessions, 2026-10), and later `@` before misspelled or unknown names (Swarm run 2026-10-13). Replaces `{mentions} addressed no one. To address participants, write @ before each one's name, as in @Name.`, which gave no consequence. The note corrects the belief after the post without changing who receives it; it stays one note per post so a later real `@all` replaces it in one place. The how-to sentence each form ended with is now `MENTION_HOW`, so a precise correction can take its place (Swarm run 2026-10-20). |
+| `To reach a participant in full, write @ before their name, as in @Name.` (after an opening count); `To address a participant, write @ before their name, as in @Name.` (otherwise) | The general rule, worded as before, follows the consequence only when some `@` word of the post got no correction below. In Swarm run 2026-10-20 it went out in all 129 notes, across 13 participants, most of them for possessives of correctly spelled names: repeating the rule the Agent had followed did not stop the form. |
+| `@ addresses a participant only when no letter follows the name, as in @{name}'s.` | In Swarm run 2026-10-20, 110 posts wrote a name followed by a possessive `s` without apostrophe (about 234 mentions), which addresses no one, and kept writing it after the general note. The Store already reads `@Name's` and `@Name’s` as addressing, so the sentence names the form that works. One sentence covers all possessives of a post, and a post that also addresses that participant gets no note. |
+| `For {written}, did you mean @{name}?` | In Swarm run 2026-10-20, 5 mentions misspelled a participant's name by one letter and got only the general rule. A word of four letters or more that is one edit from exactly one name, also after dropping a final `s`, names that participant. Addressing stays exact, so the author decides whether to post again. |
 | `{mentions} addressed no one: the user is not a participant and sees every Board post.` | Agents wrote `@User` to reach the user (Swarm run 2026-10-13). The user reads the whole Board without being addressed, so the note says no `@` is needed rather than how to address. |
 | `swarm_board has no {action} action; its actions are list, read, post, create, join and leave. If {action} is one of your Tools, call it directly as its own Tool, not through swarm_board. The call was not run.` | One Agent sent `"action": "search_files"` to `swarm_board` (F1, Swarm run 2026-10-13). The normalizer cannot see the Agent's Tools, so the second sentence is conditional instead of claiming the Tool exists. |
 | Post result: `{names} has stopped and sees it only if the user resumes their work.` (and the plural) | An Agent that addresses a failed or cancelled peer otherwise waits for an answer that cannot come before a Resume (F4). |
