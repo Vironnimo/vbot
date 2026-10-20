@@ -341,3 +341,33 @@ def test_session_usage_matches_the_canonical_python_aggregation(manager):
 
     # The usage covers the whole Session, not only the one-record page.
     assert read(session, limit=1).session_usage == aggregate_session_usage(messages)
+
+
+def test_output_measurements_follow_the_full_current_view_across_pages_forks_and_edits(manager):
+    session = manager.create("coder")
+    question = ChatMessage.user("first")
+    speed = {"output_tokens_per_second": 50, "first_token_ms": 900, "basis": "output"}
+    measured = ChatMessage.assistant(
+        content="long answer", model="provider/first", usage={"speed": speed}
+    )
+    next_question = ChatMessage.user("second")
+    latency = {"first_token_ms": 20, "duration_ms": 25}
+    short = ChatMessage.assistant(content="yes", model="provider/second", usage={"speed": latency})
+    session.append_many([question, measured, next_question, short, ChatMessage.user("latest")])
+    expected_speed = {**speed, "model": measured.model, "message_id": measured.id}
+    expected_latency = {**latency, "model": short.model, "message_id": short.id}
+    newest = read(session, limit=1)
+    assert newest.output_speed == expected_speed
+    assert newest.output_latency == expected_latency
+    assert all(message.role == "user" for message in newest.page.messages)
+    older = read(session, before=newest.page.before_cursor, limit=1)
+    assert (older.output_speed, older.output_latency) == (expected_speed, expected_latency)
+    fork = asyncio.run(manager.fork(session.address))
+    session.apply_edit(next_question.id, [ChatMessage.user("replacement")])
+    reset = read(session, after=newest.after_cursor)
+    assert not reset.incremental
+    assert reset.output_speed == reset.output_latency == expected_speed
+    assert read(fork, limit=1).output_latency == expected_latency
+    session.apply_edit(question.id, [ChatMessage.user("start again")])
+    cleared = read(session)
+    assert cleared.output_speed is None and cleared.output_latency is None

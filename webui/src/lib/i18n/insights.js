@@ -700,7 +700,11 @@ export default Object.freeze({
   'statistics.usage.filter': 'Filter rows',
   'statistics.usage.filterCalls': 'Filter calls',
   'statistics.usage.firstTokenHint':
-    'Average time from sending a Chat request until its first output arrived. Waiting in a queue and reading the prompt count toward it.',
+    'Median time from starting a completed Chat request until its first Reasoning, answer or Tool Call arrived; p95 is the time within which 95% of these requests first produced output. Includes request preparation, network and Provider waiting, but excludes earlier failed attempts and time before the request.',
+  'statistics.usage.firstTokenMedian': 'Median',
+  'statistics.usage.firstTokenP95': '95th percentile',
+  'statistics.usage.firstTokenP95Value': 'p95 {value}',
+  'statistics.usage.firstTokenAverage': 'Average',
   'statistics.usage.hitRate': '{rate} hit rate',
   'statistics.usage.identityUsage': 'Outside a Project',
   'statistics.usage.input': 'Input tokens',
@@ -709,7 +713,22 @@ export default Object.freeze({
   'statistics.usage.perMillionHint':
     'Cost divided by all tokens of the row, per million tokens.',
   'statistics.usage.speedHint':
-    'How fast the Model wrote: all measured output tokens divided by the time spent writing them, so longer answers weigh more. Only Chat steps long enough to measure count.',
+    'Tokens divided by the measured output time, separately for each measurement basis. Stream rates are approximate; short or buffered steps can have no rate. Only completed Chat steps with a measurable rate count. Rates with different bases are not ranked together.',
+  'statistics.usage.speedAnswer': 'Answer',
+  'statistics.usage.speedOutput': 'Full output',
+  'statistics.usage.speedProvider': 'Provider decode',
+  'statistics.usage.speedUnknown': 'Unknown basis',
+  'statistics.usage.approximateSpeed': '≈{value}',
+  'statistics.usage.answerSpeedHint':
+    'Approximate rate of answer text and Tool Calls received by vBot, excluding Reasoning. Network buffering can affect the observed rate.',
+  'statistics.usage.outputSpeedHint':
+    'Approximate rate of all output received by vBot, including streamed Reasoning and Tool Calls. Network buffering can affect the observed rate.',
+  'statistics.usage.providerSpeedHint':
+    'Decode rate measured by the Provider. Its timing differs from the stream arrival rate observed by vBot.',
+  'statistics.usage.unknownSpeedHint':
+    'These calls recorded a speed without its measurement basis, so no comparable rate is shown.',
+  'statistics.usage.providerComparisonHint':
+    'Provider figures reflect the Models and work used in this period. Compare the same Model and similar workloads when judging Provider performance.',
   'statistics.usage.speedMeasured': 'Measured over',
   'statistics.usage.speedMeasuredValue': '{tokens} tokens in {duration}',
   'statistics.usage.speedValue': '{rate} tok/s',

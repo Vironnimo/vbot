@@ -17,6 +17,7 @@ import {
 } from './chatState.js';
 import {
   nextContextUsage,
+  updateSessionOutputMeasurements,
   updateSessionUsage,
 } from './chatState/sessionState.js';
 
@@ -199,6 +200,9 @@ export function createChatRunStream({
           : {}),
         payload: state,
       });
+    // The independent semantic projections also win over terminal Usage,
+    // which may repeat an earlier step after a failed or cancelled attempt.
+    updateSessionOutputMeasurements(session, state);
   }
 
   function attachRunStream(session, run) {

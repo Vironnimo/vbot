@@ -520,6 +520,7 @@ def test_subagent_and_speech_activity_attach_to_their_tool_without_new_rows() ->
 
 def test_nonvisual_progress_updates_metadata_and_never_adds_rows() -> None:
     timeline = RunTimeline("run")
+    speed = {"output_tokens_per_second": 50, "first_token_ms": 900, "basis": "output"}
     emit(timeline, "provider_request_status", {"state": "retrying", "attempt": 2})
     assert block(timeline)["providerRequestStatus"]["attempt"] == 2
     emit(timeline, "provider_heartbeat", {"idle_seconds": 30})
@@ -531,6 +532,9 @@ def test_nonvisual_progress_updates_metadata_and_never_adds_rows() -> None:
             "iteration_count": 2,
             "session_usage": {"total_tokens": 100},
             "context_usage": {"tokens": 50},
+            "usage": {"speed": speed},
+            "model": "provider/first",
+            "message_id": "first",
         },
     )
     emit(timeline, "run_controls_changed", {"compaction": {"state": "idle"}})
@@ -549,8 +553,30 @@ def test_nonvisual_progress_updates_metadata_and_never_adds_rows() -> None:
     assert block(timeline)["changeStats"]["files"] == 0
     assert timeline.state["session_usage"] == {"total_tokens": 100}
     assert timeline.state["controls_sequence"] == 4
+    latency = {"first_token_ms": 20, "duration_ms": 25}
+    emit(
+        timeline,
+        "model_step_usage",
+        {
+            "usage": {"speed": latency},
+            "model": "provider/second",
+            "message_id": "second",
+        },
+    )
+    assert timeline.state["output_speed"] == {
+        **speed,
+        "model": "provider/first",
+        "message_id": "first",
+    }
+    assert timeline.state["output_latency"] == {
+        **latency,
+        "model": "provider/second",
+        "message_id": "second",
+    }
     emit(timeline, "assistant_output_delta", {"content_delta": "Alive"})
     assert block(timeline)["providerHeartbeat"] is None
+    emit(timeline, "run_cancelled", {"status": "cancelled", "usage": {"speed": latency}})
+    assert timeline.state["output_latency"]["model"] == "provider/second"
 
 
 def test_projection_retains_complete_text_beyond_raw_replay_and_releases_at_settlement() -> None:

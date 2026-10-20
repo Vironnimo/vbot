@@ -5,21 +5,22 @@ stream records when output arrived (``OutputTimer``); once the step's output
 tokens are known, ``complete_output_speed`` turns those marks into the
 step's public ``usage.speed`` (``chat/usage.md`` -> Output speed).
 
-Tokens per second is the Model's generation speed while it was writing, not
-request throughput: the window starts at the first output, so queueing and
-prompt processing count toward the time to first token instead, and only
-output that arrived after the first network read counts, since the first
-read's tokens were generated before the window began. Provider behaviors
-that would otherwise make the figure absurd:
+The client estimates an observed streaming rate, not the Model's decode
+speed: the window starts at the first output, so queueing and prompt
+processing count toward the time to first token instead. Only output after
+the first arrival group counts, since that group's tokens were generated
+before the window began. Token allocation by characters and arrival grouping
+remain approximate even when the Provider reports exact total tokens.
+Provider behaviors that would otherwise make the figure absurd:
 
 - Reasoning a Provider counts but never streams (hidden, or only summarized)
   was generated before or between the visible deltas, outside any window
-  vBot can see. When the counted output clearly exceeds what was streamed,
-  only the answer counts, over the answer's own window.
+  vBot can see. Known hidden or summarized Reasoning, or counted output that
+  clearly exceeds what was streamed, leaves only the answer over its own window.
 - Output that arrives in bursts (a buffering proxy, a cached response, a busy
-  Event Loop) spans no real generation time. Deltas that follow each other
-  within two milliseconds came from one read; a window needs four such
-  arrivals, and none after the first may carry half of its output.
+  Event Loop) can span little of its generation time. Deltas that follow each
+  other within two milliseconds are grouped heuristically; a window needs
+  four such arrivals, and none after the first may carry over half its output.
 
 A speed the Provider measured itself (local servers report their decode
 speed) takes precedence over the stream measurement.
@@ -29,6 +30,7 @@ from __future__ import annotations
 
 import math
 import time
+from array import array
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
@@ -45,8 +47,11 @@ STREAM_TIMING_FIELD = "stream_timing"
 REPORTED_SPEED_FIELD = "reported_output_tokens_per_second"
 """Normalized Usage field for a decode speed the Provider measured itself."""
 
+REPORTED_DURATION_FIELD = "reported_output_duration_ms"
+"""Normalized Usage field for the Provider's own decode measurement window."""
+
 ARRIVAL_GAP_SECONDS = 0.002
-"""Deltas closer together than this arrived with one network read."""
+"""Group deltas this close as one arrival; transport reads are not observable here."""
 
 MIN_SPEED_ARRIVALS = 4
 MIN_SPEED_WINDOW_MS = 100
@@ -54,9 +59,8 @@ MIN_SPEED_TOKENS = 10
 MAX_ARRIVAL_SHARE = 0.5
 """No single arrival after the first may carry more of the window's output."""
 
-# Counted output within this ratio of the locally estimated streamed text
-# (plus a small allowance for framing) was streamed as it was generated;
-# local and Provider tokenizers differ by far less than hidden Reasoning adds.
+# A conservative fallback when the Provider does not identify hidden Reasoning.
+# Agreement with the local estimate cannot prove that every token was streamed.
 _STREAMED_COVERAGE_RATIO = 1.5
 _STREAMED_COVERAGE_SLACK_TOKENS = 16
 
@@ -114,19 +118,28 @@ class OutputTimer:
         self._sent: float | None = None
         self._output = _Arrivals()
         self._answer = _Arrivals()
+        # Finalization can reclassify an inline Reasoning prefix. Compact
+        # arrays retain exact fragment times/lengths without text copies or
+        # one Python object per mark in very long responses.
+        self._answer_times = array("d")
+        self._answer_chars = array("Q")
+        self._answer_content = bytearray()
 
     def request_sent(self) -> None:
         self._sent = self._clock()
 
-    def output(self, chars: int, *, answer: bool) -> None:
+    def output(self, chars: int, *, answer: bool, content: bool = False) -> None:
         if self._sent is None:
             return
         now = self._clock()
         self._output.add(now, chars)
         if answer:
             self._answer.add(now, chars)
+            self._answer_times.append(now)
+            self._answer_chars.append(chars)
+            self._answer_content.append(content)
 
-    def marks(self) -> JsonObject | None:
+    def marks(self, *, answer_content_span: tuple[int, int] | None = None) -> JsonObject | None:
         """Arrival marks in ms since the request was sent, or None without output."""
         if self._sent is None:
             return None
@@ -134,10 +147,29 @@ class OutputTimer:
         if output is None:
             return None
         marks: JsonObject = {"output": output}
-        answer = self._answer.marks(self._sent)
+        answer_arrivals = self._answer
+        if answer_content_span is not None:
+            answer_arrivals = self._answer_after_normalization(*answer_content_span)
+        answer = answer_arrivals.marks(self._sent)
         if answer is not None:
             marks["answer"] = answer
         return marks
+
+    def _answer_after_normalization(self, start: int, end: int) -> _Arrivals:
+        """Retain the finalized content's span and every Tool Call fragment."""
+        answer = _Arrivals()
+        offset = 0
+        for now, chars, content in zip(
+            self._answer_times, self._answer_chars, self._answer_content, strict=True
+        ):
+            if content:
+                length = max(0, min(offset + chars, end) - max(offset, start))
+                offset += chars
+            else:
+                length = chars
+            if length:
+                answer.add(now, length)
+        return answer
 
 
 def complete_output_speed(message: ChatMessage) -> ChatMessage:
@@ -147,11 +179,14 @@ def complete_output_speed(message: ChatMessage) -> ChatMessage:
     A step without stream marks or a reported speed is returned unchanged.
     """
     usage = message.usage
-    if not usage or (STREAM_TIMING_FIELD not in usage and REPORTED_SPEED_FIELD not in usage):
+    if not usage or not any(
+        key in usage for key in (STREAM_TIMING_FIELD, REPORTED_SPEED_FIELD, REPORTED_DURATION_FIELD)
+    ):
         return message
     usage = dict(usage)
     marks = usage.pop(STREAM_TIMING_FIELD, None)
     reported = reported_speed(usage.pop(REPORTED_SPEED_FIELD, None))
+    reported_duration = _finite_number(usage.pop(REPORTED_DURATION_FIELD, None))
     speed: JsonObject = {}
     if isinstance(marks, dict):
         speed["first_token_ms"] = marks["output"]["first_ms"]
@@ -159,7 +194,7 @@ def complete_output_speed(message: ChatMessage) -> ChatMessage:
             speed["first_answer_ms"] = marks["answer"]["first_ms"]
         speed["duration_ms"] = marks["output"]["last_ms"]
     if reported is not None:
-        speed.update(_reported_speed(reported, usage))
+        speed.update(_reported_speed(reported, reported_duration))
     elif isinstance(marks, dict):
         speed.update(_measured_speed(marks, usage, message))
     if speed:
@@ -167,22 +202,50 @@ def complete_output_speed(message: ChatMessage) -> ChatMessage:
     return replace(message, usage=usage)
 
 
+def output_measurements(
+    usage: object, *, model: str | None = None, message_id: str | None = None
+) -> dict[str, JsonObject]:
+    """Project independently available rate and latency for live/History readers."""
+    if not isinstance(usage, dict) or not isinstance(speed := usage.get(SPEED_FIELD), dict):
+        return {}
+    measurement = dict(speed)
+    if model is not None:
+        measurement["model"] = model
+    if message_id is not None:
+        measurement["message_id"] = message_id
+    measurements: dict[str, JsonObject] = {}
+    if reported_speed(speed.get("output_tokens_per_second")) is not None:
+        measurements["output_speed"] = dict(measurement)
+    latency = _finite_number(speed.get("first_token_ms"))
+    if latency is not None and latency >= 0:
+        measurements["output_latency"] = dict(measurement)
+    return measurements
+
+
 def reported_speed(value: Any) -> float | None:
     """Return a valid Provider-reported speed (finite, positive), else None."""
+    number = _finite_number(value)
+    return number if number is not None and number > 0 else None
+
+
+def _finite_number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    if not math.isfinite(value) or value <= 0:
+    try:
+        number = float(value)
+    except OverflowError:
         return None
-    return float(value)
+    return number if math.isfinite(number) else None
 
 
-def _reported_speed(rate: float, usage: JsonObject) -> JsonObject:
+def _reported_speed(rate: float, duration_ms: float | None) -> JsonObject:
     speed: JsonObject = {"output_tokens_per_second": round(rate, 1)}
-    tokens = _count(usage.get("output_tokens"))
-    if tokens and usage.get("output_tokens_estimated") is not True:
-        # The window the Provider's own measurement implies, so every speed
-        # can be weighted by its tokens alike.
-        speed.update(tokens=tokens, window_ms=max(1, round(tokens * 1000 / rate)))
+    if duration_ms is not None and duration_ms > 0:
+        # Preserve the actual measured window. Its effective token count can
+        # differ from Usage output (llama.cpp excludes its first token).
+        tokens = _finite_number(rate * (duration_ms / 1000))
+        if tokens is not None and round(tokens) > 0:
+            speed.update(tokens=round(tokens), window_ms=max(1, round(duration_ms)))
     speed["basis"] = "provider"
     return speed
 
@@ -194,12 +257,22 @@ def _measured_speed(marks: JsonObject, usage: JsonObject, message: ChatMessage) 
     answer_tokens, _ = estimate_message_tokens(
         {key: value for key, value in message.to_dict().items() if key in ("content", "tool_calls")}
     )
-    streamed_tokens = answer_tokens
-    if message.reasoning:
-        streamed_tokens += estimate_tokens(message.reasoning)[0]
+    readable_reasoning_tokens = estimate_tokens(message.reasoning)[0] if message.reasoning else 0
+    streamed_tokens = answer_tokens + readable_reasoning_tokens
+    reasoning_tokens = _count(usage.get("reasoning_tokens"))
+    hidden_reasoning = bool(message.reasoning_summary) or (
+        reasoning_tokens is not None
+        and reasoning_tokens > 0
+        and (
+            not message.reasoning
+            or reasoning_tokens
+            > readable_reasoning_tokens * _STREAMED_COVERAGE_RATIO + _STREAMED_COVERAGE_SLACK_TOKENS
+        )
+    )
     estimated = usage.get("output_tokens_estimated") is True
     if (
-        output_tokens
+        not hidden_reasoning
+        and output_tokens
         <= streamed_tokens * _STREAMED_COVERAGE_RATIO + _STREAMED_COVERAGE_SLACK_TOKENS
     ):
         basis = "output"
@@ -210,7 +283,6 @@ def _measured_speed(marks: JsonObject, usage: JsonObject, message: ChatMessage) 
         if arrivals is None:
             return {}
         basis = "answer"
-        reasoning_tokens = _count(usage.get("reasoning_tokens"))
         if not estimated and reasoning_tokens is not None and output_tokens > reasoning_tokens:
             tokens = output_tokens - reasoning_tokens
         else:

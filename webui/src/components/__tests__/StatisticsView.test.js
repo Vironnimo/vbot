@@ -361,12 +361,26 @@ describe('StatisticsView', () => {
         .getAttribute('aria-selected'),
     ).toBe('true');
     expect(breakdown().textContent).toContain('model-breakdown-sentinel');
-    // Model rows add their output speed and average time to first token.
+    // Distinct measurement bases never collapse to the old mixed scalar.
     const header = () => breakdown().querySelector('thead').textContent;
     expect(header()).toContain(t('statistics.col.speed'));
     expect(header()).toContain(t('statistics.col.firstToken'));
-    expect(breakdown().textContent).toContain('48 tok/s');
-    expect(breakdown().textContent).toContain('850 ms');
+    expect(breakdown().textContent).toContain('≈40 tok/s');
+    expect(breakdown().textContent).toContain('80 tok/s');
+    expect(breakdown().textContent).not.toContain('48 tok/s');
+    expect(breakdown().textContent).toContain(
+      t('statistics.usage.speedAnswer'),
+    );
+    expect(breakdown().textContent).toContain(
+      t('statistics.usage.speedProvider'),
+    );
+    expect(breakdown().textContent).toContain('500 ms');
+    expect(breakdown().textContent).toContain('p95 1.8 s');
+    expect(
+      [...breakdown().querySelectorAll('thead button')].some(
+        (button) => button.textContent.trim() === t('statistics.col.speed'),
+      ),
+    ).toBe(false);
 
     // Calls made outside any Session are their own Agent row; an Agent mixes
     // Models, so it has no speed.

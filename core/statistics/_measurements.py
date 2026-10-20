@@ -11,6 +11,7 @@ from core.statistics.report import JsonObject
 from core.tools import is_tool_result_envelope
 
 UNKNOWN_MODEL_KEY = "unknown"
+SPEED_BASES = ("output", "answer", "provider")
 
 
 def _provider_model_key(model: str | None) -> str:
@@ -71,10 +72,10 @@ def _usage_nonnegative_int(usage: JsonObject | None, field_name: str) -> int | N
     return value
 
 
-def _speed_facts(usage: JsonObject) -> tuple[int | None, int | None, bool, int | None]:
+def _speed_facts(usage: JsonObject) -> tuple[int | None, int | None, bool, int | None, str]:
     """A call's measured output-speed window and its time to first token.
 
-    Returns ``(tokens, window_ms, estimated, first_token_ms)`` from Chat's
+    Returns ``(tokens, window_ms, estimated, first_token_ms, basis)`` from Chat's
     ``usage.speed`` (``chat/usage.md`` -> Output speed). A window counts only
     with positive whole tokens and duration, so every measured call weighs its
     tokens alike in a token-weighted speed; ``estimated`` marks a counted
@@ -82,13 +83,20 @@ def _speed_facts(usage: JsonObject) -> tuple[int | None, int | None, bool, int |
     """
     speed = usage.get("speed")
     if not isinstance(speed, dict):
-        return None, None, False, None
+        return None, None, False, None, "unknown"
     tokens = _usage_nonnegative_int(speed, "tokens")
     window_ms = _usage_nonnegative_int(speed, "window_ms")
     if not tokens or not window_ms:
         tokens = window_ms = None
     estimated = tokens is not None and speed.get("estimated") is True
-    return tokens, window_ms, estimated, _usage_nonnegative_int(speed, "first_token_ms")
+    basis = speed.get("basis")
+    return (
+        tokens,
+        window_ms,
+        estimated,
+        _usage_nonnegative_int(speed, "first_token_ms"),
+        basis if basis in SPEED_BASES else "unknown",
+    )
 
 
 def _nearest_rank_percentile(sorted_values: list[int], percentile: float) -> float | None:

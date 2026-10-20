@@ -46,6 +46,8 @@ vbot performance recordings [--limit <count>]
 
 Reports summarize stored Session activity. Request the section the question needs.
 
+For Model response speed and waiting time, use `vbot statistics usage`; its Model and Provider rows show rates by measurement basis and first-token median, p95, and average.
+
 ```bash
 vbot statistics overview [--since <iso>] [--until <iso>]
 vbot statistics usage    [--since <iso>] [--until <iso>]

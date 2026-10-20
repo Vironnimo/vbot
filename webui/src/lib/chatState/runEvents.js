@@ -198,7 +198,10 @@ export function applyRunControls(sessionState, run) {
 
 function applyModelStepUsage(sessionState, payload) {
   if (payload?.usage) {
-    updateSessionUsage(sessionState, payload.usage, { model: payload.model });
+    updateSessionUsage(sessionState, payload.usage, {
+      model: payload.model,
+      messageId: payload.message_id,
+    });
   }
   if (payload?.session_usage) {
     sessionState.sessionUsage = payload.session_usage;

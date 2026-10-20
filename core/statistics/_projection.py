@@ -47,7 +47,7 @@ CALL_COLUMNS = (
     "input_estimated, output_estimated, has_cache, reasoning_present, cache_read_present, "
     "cache_write_present, price_estimated, reported_cost_usd, retrospective, priced, "
     "cost_usd, cost_source, cost_json, purpose, speed_tokens, speed_window_ms, "
-    "speed_estimated, first_token_ms"
+    "speed_estimated, first_token_ms, speed_basis"
 )
 # The column definitions of every call table (Session calls and ledger calls),
 # in ``CALL_COLUMNS`` order and keyed by ``(session_key, seq)``.
@@ -84,6 +84,7 @@ CALL_TABLE_DEFINITION = """(
     speed_window_ms INTEGER,
     speed_estimated INTEGER NOT NULL,
     first_token_ms INTEGER,
+    speed_basis TEXT NOT NULL,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID"""
 
@@ -354,7 +355,9 @@ class ProjectedRows:
             cost = project_cost(snapshot) or dict(UNKNOWN_COST)
             cost_class, cost_amount = cost_source_class(cost)
             serialized_cost = cost_json(cost)
-        speed_tokens, speed_window_ms, speed_estimated, first_token_ms = _speed_facts(values)
+        speed_tokens, speed_window_ms, speed_estimated, first_token_ms, speed_basis = _speed_facts(
+            values
+        )
         self.calls.append(
             (
                 self.session_key,
@@ -389,6 +392,7 @@ class ProjectedRows:
                 speed_window_ms,
                 int(speed_estimated),
                 first_token_ms,
+                speed_basis,
             )
         )
 

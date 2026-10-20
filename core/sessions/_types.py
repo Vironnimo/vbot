@@ -362,6 +362,8 @@ class SessionChatHistorySnapshot:
     has_newer: bool = False
     runs: tuple[JsonObject, ...] = ()
     unchanged: bool = False
+    output_speed: JsonObject | None = None
+    output_latency: JsonObject | None = None
 
 
 @dataclass(frozen=True)

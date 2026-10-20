@@ -38,6 +38,8 @@ _TOTAL_AMOUNTS = (
     "uncached_cost_usd",
     "output_tokens_per_second",
     "avg_first_token_ms",
+    "first_token_p50_ms",
+    "first_token_p95_ms",
 )
 
 
@@ -46,6 +48,7 @@ def _totals(**values: Any) -> dict[str, Any]:
     return {
         **dict.fromkeys(_TOTAL_COUNTS, 0),
         **dict.fromkeys(_TOTAL_AMOUNTS),
+        "speed_by_basis": [],
         **values,
     }
 
@@ -309,6 +312,26 @@ def test_statistics_usage_prints_totals_breakdowns_and_costliest_work(
                         speed_calls=1,
                         avg_first_token_ms=850,
                         first_token_calls=2,
+                        first_token_p50_ms=500,
+                        first_token_p95_ms=1200,
+                        speed_by_basis=[
+                            {
+                                "basis": "answer",
+                                "calls": 1,
+                                "estimated_calls": 0,
+                                "tokens": 100,
+                                "window_ms": 2000,
+                                "output_tokens_per_second": 50,
+                            },
+                            {
+                                "basis": "provider",
+                                "calls": 1,
+                                "estimated_calls": 0,
+                                "tokens": 100,
+                                "window_ms": 1250,
+                                "output_tokens_per_second": 80,
+                            },
+                        ],
                     ),
                 },
                 {"key": "local/slow", "runs": 0, "sessions": 0, **_totals(calls=1)},
@@ -330,10 +353,14 @@ def test_statistics_usage_prints_totals_breakdowns_and_costliest_work(
         "model calls: 2 (failed=0, without usage=0)",
         "tokens: input=0 output=0 reasoning=0 (of which estimated: input=0 output=0)",
         "  openai/gpt-5: calls=2 failed=0 runs=1 sessions=1 input=0 output=0 cache_hit=- "
-        "cost=$0.5000 speed=48tok/s speed_calls=1 avg_first_token=850ms first_token_calls=2",
+        "cost=$0.5000 first_token_median=500ms first_token_p95=1.2s "
+        "avg_first_token=850ms first_token_calls=2",
+        "answer_speed=~50tok/s speed_calls=1 estimated_token_calls=0",
+        "provider_decode_speed=80tok/s speed_calls=1 estimated_token_calls=0",
         # A Model without a measured call shows none; other dimensions show no speed at all.
         "  local/slow: calls=1 failed=0 runs=0 sessions=0 input=0 output=0 cache_hit=- "
-        "cost=unknown speed=- speed_calls=0 avg_first_token=- first_token_calls=0",
+        "cost=unknown first_token_median=- first_token_p95=- "
+        "avg_first_token=- first_token_calls=0\n    speed=- speed_calls=0",
         "by project:\n  (no project): calls=2 failed=0 runs=1 sessions=1 input=0 output=0 "
         "cache_hit=- cost=unknown\n",
         "by provider:\n  no model calls recorded",
@@ -341,6 +368,7 @@ def test_statistics_usage_prints_totals_breakdowns_and_costliest_work(
         "costliest sessions:\n  no sessions recorded",
     ):
         assert text in out
+    assert "48tok/s" not in out
 
 
 def test_statistics_runs_prints_outcomes_percentiles_and_notable_runs(

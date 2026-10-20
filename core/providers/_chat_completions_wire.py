@@ -470,6 +470,9 @@ def _extract_openai_usage(response: dict[str, Any]) -> dict[str, Any] | None:
         speed = timings.get("predicted_per_second")
         if isinstance(speed, int | float) and not isinstance(speed, bool):
             normalized["reported_output_tokens_per_second"] = speed
+        duration_ms = timings.get("predicted_ms")
+        if isinstance(duration_ms, int | float) and not isinstance(duration_ms, bool):
+            normalized["reported_output_duration_ms"] = duration_ms
     return normalized
 
 

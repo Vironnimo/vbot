@@ -422,6 +422,96 @@ def test_output_timing_groups_output_deltas_into_arrivals_since_the_request(
 
 
 @pytest.mark.parametrize(
+    ("fragments", "native", "tool", "answer"),
+    [
+        pytest.param(
+            ["<thi", "nk>Plan</thi", "nk>\n  Answer", " tail "],
+            None,
+            False,
+            (3000, 4000, 11),
+            id="split-tags-and-answer-mid-delta",
+        ),
+        pytest.param(
+            ["Plan", "</think> ", "Answer"],
+            None,
+            False,
+            (3000, 3000, 6),
+            id="template-opener",
+        ),
+        pytest.param(
+            ["<think>Answer</think>", "\n Answer "],
+            None,
+            False,
+            (2000, 2000, 6),
+            id="answer-repeats-thought",
+        ),
+        pytest.param(
+            ["`<think>example", "</think>`"],
+            None,
+            False,
+            (1000, 2000, 24),
+            id="literal-code-tags",
+        ),
+        pytest.param(
+            ["<think>literal", "</think>"],
+            "Native Reasoning",
+            False,
+            (1000, 2000, 22),
+            id="native-reasoning-keeps-literal-content",
+        ),
+        pytest.param(
+            ["<think>Plan</think>"],
+            None,
+            True,
+            (5000, 5000, 6),
+            id="tool-after-inline-reasoning",
+        ),
+        pytest.param(["<think>Plan</think>"], None, False, None, id="reasoning-without-answer"),
+    ],
+)
+def test_output_timing_follows_the_finalized_answer_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    fragments: list[str],
+    native: str | None,
+    tool: bool,
+    answer: tuple[int, int, int] | None,
+) -> None:
+    clock = [0.0]
+    monkeypatch.setattr(output_speed_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    accumulator = StreamingAccumulator()
+    accumulator.request_sent()
+    if native:
+        clock[0] = 0.5
+        accumulator.add_delta({"type": "reasoning_delta", "text": native})
+    for second, text in enumerate(fragments, 1):
+        clock[0] = float(second)
+        accumulator.add_delta({"type": "content_delta", "text": text})
+    if tool:
+        clock[0] = 5
+        accumulator.add_delta(
+            {
+                "type": "tool_call_delta",
+                "id": "call_1",
+                "name_delta": "read",
+                "arguments_delta": "{}",
+            }
+        )
+    accumulator.finalize_assistant_fields()
+
+    timing = accumulator.output_timing
+    assert timing is not None
+    assert timing["output"]["first_ms"] == (500 if native else 1000)
+    if answer is None:
+        assert "answer" not in timing
+    else:
+        assert (
+            timing["answer"]["first_ms"],
+            timing["answer"]["last_ms"],
+            timing["answer"]["chars"],
+        ) == answer
+
+
+@pytest.mark.parametrize(
     "usage",
     [
         {"input_tokens": 250, "output_tokens": 80},
@@ -433,8 +523,13 @@ def test_output_timing_groups_output_deltas_into_arrivals_since_the_request(
             "cache_write_tokens": 30,
             "reasoning_tokens": 50,
         },
+        {
+            "output_tokens": 5,
+            "reported_output_tokens_per_second": 40.0,
+            "reported_output_duration_ms": 100.0,
+        },
     ],
-    ids=["counts", "partial", "token-details"],
+    ids=["counts", "partial", "token-details", "provider-rate-and-window"],
 )
 def test_usage_delta_reaches_the_final_response_without_a_visible_delta(usage: JsonObject) -> None:
     accumulator = StreamingAccumulator()
@@ -460,6 +555,8 @@ def test_usage_drops_invalid_optional_token_details() -> None:
             "cache_read_tokens": None,
             "cache_write_tokens": "bad",
             "reasoning_tokens": -1,
+            "reported_output_tokens_per_second": float("inf"),
+            "reported_output_duration_ms": True,
         }
     ).finalize_assistant_fields()
 

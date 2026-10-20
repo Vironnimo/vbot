@@ -12,14 +12,14 @@
   //   the row names the Model by its catalog name, the tooltip by its id.
   // - Thinking effort: Provider default or a level the effective Model
   //   offers; hidden for a Model without reasoning.
-  // - Output speed: tokens per second of the Session's newest measured
-  //   Model step (`usage.speed`), with its latency in the tooltip.
+  // - Output speed and request latency: independent server projections,
+  //   each identifying the Model step that supplied its measurement.
   import {
     THINKING_EFFORT_OPTIONS,
     effortOptionsForReasoning,
     reasoningForModelValue,
   } from '$lib/agentForm.js';
-  import { t } from '$lib/i18n.js';
+  import { activeLocaleTag, t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
     filterModelSelectOptions,
@@ -41,6 +41,7 @@
     view,
     // The Session's newest measured `usage.speed`; null hides it.
     outputSpeed = null,
+    outputLatency = null,
     projects = [],
     // Until the Project list is read, a Project missing from it is unknown.
     projectsLoaded = false,
@@ -243,9 +244,15 @@
   let speedLabel = $derived.by(() => {
     const rate = outputSpeed?.output_tokens_per_second;
     if (!Number.isFinite(rate) || rate <= 0) return '';
-    return t('chat.sessionSettings.speedValue', {
-      rate: rate < 10 ? rate.toFixed(1) : String(Math.round(rate)),
+    const label = t('chat.sessionSettings.speedValue', {
+      rate: new Intl.NumberFormat(activeLocaleTag(), {
+        maximumFractionDigits: rate < 10 ? 1 : 0,
+        minimumFractionDigits: rate < 10 ? 1 : 0,
+      }).format(rate),
     });
+    return outputSpeed.basis === 'provider'
+      ? label
+      : t('chat.sessionSettings.approximateSpeed', { value: label });
   });
   let speedTooltip = $derived.by(() => {
     if (!speedLabel) return null;
@@ -264,22 +271,6 @@
         value: modelNames.get(model) || model,
       });
     }
-    if (Number.isFinite(speed.first_token_ms)) {
-      rows.push({
-        label: t('chat.sessionSettings.firstToken'),
-        value: formatDurationMs(speed.first_token_ms),
-      });
-    }
-    // Reasoning streamed before the answer: when the answer began.
-    if (
-      Number.isFinite(speed.first_answer_ms) &&
-      speed.first_answer_ms > speed.first_token_ms
-    ) {
-      rows.push({
-        label: t('chat.sessionSettings.firstAnswer'),
-        value: formatDurationMs(speed.first_answer_ms),
-      });
-    }
     if (Number.isFinite(speed.tokens) && Number.isFinite(speed.window_ms)) {
       const tokens = speed.tokens;
       const duration = formatDurationMs(speed.window_ms);
@@ -295,10 +286,51 @@
       notes.push(t('chat.sessionSettings.speedAnswerOnly'));
     } else if (speed.basis === 'provider') {
       notes.push(t('chat.sessionSettings.speedReported'));
+    } else {
+      notes.push(t('chat.sessionSettings.speedStreamedOutput'));
     }
     return {
       title: t('chat.sessionSettings.speed'),
       text: notes.join(' '),
+      rows,
+      placement: 'top',
+    };
+  });
+
+  let latencyLabel = $derived(
+    Number.isFinite(outputLatency?.first_token_ms)
+      ? t('chat.sessionSettings.latencyValue', {
+          duration: formatDurationMs(outputLatency.first_token_ms),
+        })
+      : '',
+  );
+  let latencyTooltip = $derived.by(() => {
+    if (!latencyLabel) return null;
+    const latency = outputLatency;
+    const rows = [];
+    if (latency.model) {
+      const { model } = parseModelSelectionValue(latency.model);
+      rows.push({
+        label: t('chat.sessionSettings.model'),
+        value: modelNames.get(model) || model,
+      });
+    }
+    rows.push({
+      label: t('chat.sessionSettings.firstToken'),
+      value: formatDurationMs(latency.first_token_ms),
+    });
+    if (
+      Number.isFinite(latency.first_answer_ms) &&
+      latency.first_answer_ms > latency.first_token_ms
+    ) {
+      rows.push({
+        label: t('chat.sessionSettings.firstAnswer'),
+        value: formatDurationMs(latency.first_answer_ms),
+      });
+    }
+    return {
+      title: t('chat.sessionSettings.latency'),
+      text: t('chat.sessionSettings.latencyHint'),
       rows,
       placement: 'top',
     };
@@ -414,7 +446,7 @@
         />
       </span>
     {/if}
-    {#if speedLabel}
+    {#if speedLabel || latencyLabel}
       <span class="session-settings__field session-settings__field--icon">
         <svg
           class="session-settings__icon"
@@ -426,14 +458,30 @@
           <path d="M2.5 11.5a5.5 5.5 0 1 1 11 0" />
           <path d="M8 11.5l2.5-3.5" />
         </svg>
-        <span
-          class="session-settings__value session-settings__value--speed"
-          role="group"
-          aria-label={t('chat.sessionSettings.speed')}
-          use:tooltip={speedTooltip}
-        >
-          <span class="session-settings__value-label">{speedLabel}</span>
-        </span>
+        {#if speedLabel}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (The measurement details are keyboard-accessible.) -->
+          <span
+            class="session-settings__value session-settings__value--speed"
+            role="group"
+            tabindex="0"
+            aria-label={t('chat.sessionSettings.speed')}
+            use:tooltip={speedTooltip}
+          >
+            <span class="session-settings__value-label">{speedLabel}</span>
+          </span>
+        {/if}
+        {#if latencyLabel}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (The latency details are keyboard-accessible.) -->
+          <span
+            class="session-settings__value session-settings__value--speed"
+            role="group"
+            tabindex="0"
+            aria-label={t('chat.sessionSettings.latency')}
+            use:tooltip={latencyTooltip}
+          >
+            <span class="session-settings__value-label">{latencyLabel}</span>
+          </span>
+        {/if}
       </span>
     {/if}
   </div>
@@ -640,6 +688,12 @@
 
   .session-settings__value--speed {
     font-variant-numeric: tabular-nums;
+  }
+
+  .session-settings__field--icon
+    .session-settings__value--speed
+    + .session-settings__value--speed {
+    padding-left: 6px;
   }
 
   .session-settings__value-label {

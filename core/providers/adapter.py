@@ -233,7 +233,8 @@ class ProviderAdapter(ABC):
       including cached tokens; either primary token counter may be omitted when
       the upstream Provider reports only the other one, and Chat estimates only
       the missing field; optional ``reported_output_tokens_per_second`` when
-      the Provider measured its own decode speed, as local servers do)
+      the Provider measured its own decode speed, as local servers do, plus
+      ``reported_output_duration_ms`` for its actual measurement window)
     - ``{"type": "finish", "reason": "stop" | "tool_calls" |
       "output_truncated" | "content_filtered" | "error" | "unknown"}``
 

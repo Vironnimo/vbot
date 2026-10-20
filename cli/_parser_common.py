@@ -353,7 +353,11 @@ DEVICES_HELP = {
 
 STATISTICS_HELP = {
     "overview": "Show cost, tokens, cache, Run outcomes, leaders, and insights",
-    "usage": "Show cost and tokens by Model, Provider, Agent, Project, origin, and kind",
+    "usage": (
+        "Show cost and tokens by Model, Provider, Agent, Project, origin, and kind; "
+        "Model and Provider rows include speed by measurement basis and first-token "
+        "median, p95, and average"
+    ),
     "runs": "Show Run outcomes, duration and cost percentiles, and notable Runs",
     "compactions": "Show checkpoint counts, reclaimed context, Strategies, and top Sessions",
     "errors": "Show Run errors and failed Model requests by kind, Provider, Model, and Agent",

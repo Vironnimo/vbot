@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from core.chat._output_speed import complete_output_speed
+from core.chat._output_speed import complete_output_speed, output_measurements
 from core.chat.messages import ChatMessage
 
 JsonObject = dict[str, Any]
@@ -42,12 +42,17 @@ MARKS = {
 
 
 def _speed(
-    usage: JsonObject, *, marks: JsonObject = MARKS, reasoning: str | None = None
+    usage: JsonObject,
+    *,
+    marks: JsonObject = MARKS,
+    reasoning: str | None = None,
+    reasoning_summary: list[str] | None = None,
 ) -> JsonObject | None:
     completed = complete_output_speed(
         ChatMessage.assistant(
             content=ANSWER,
             reasoning=reasoning,
+            reasoning_summary=reasoning_summary,
             model="openai/gpt-5",
             usage={"input_tokens": 10, **usage, "stream_timing": marks},
         )
@@ -55,6 +60,7 @@ def _speed(
     assert completed.usage is not None
     assert "stream_timing" not in completed.usage
     assert "reported_output_tokens_per_second" not in completed.usage
+    assert "reported_output_duration_ms" not in completed.usage
     return completed.usage.get("speed")
 
 
@@ -62,7 +68,7 @@ def _speed(
     ("usage", "reasoning", "marks", "rate"),
     [
         pytest.param(
-            {"output_tokens": 300},
+            {"output_tokens": 300, "reasoning_tokens": 200},
             "thought " * 200,
             MARKS,
             {"output_tokens_per_second": 60.0, "tokens": 240, "window_ms": 4000, "basis": "output"},
@@ -86,7 +92,11 @@ def _speed(
             id="a-fast-model-within-a-short-window",
         ),
         pytest.param(
-            {"output_tokens": 100, "reported_output_tokens_per_second": 61.47},
+            {
+                "output_tokens": 101,
+                "reported_output_tokens_per_second": 61.47,
+                "reported_output_duration_ms": 1626.81,
+            },
             None,
             MARKS,
             {
@@ -96,6 +106,13 @@ def _speed(
                 "basis": "provider",
             },
             id="provider-measured-speed-wins",
+        ),
+        pytest.param(
+            {"output_tokens": 100, "reported_output_tokens_per_second": 61.47},
+            None,
+            MARKS,
+            {"output_tokens_per_second": 61.5, "basis": "provider"},
+            id="provider-rate-without-a-window-does-not-invent-one",
         ),
     ],
 )
@@ -144,3 +161,75 @@ def test_reasoning_counted_without_a_split_leaves_the_estimated_answer() -> None
     assert speed["estimated"] is True
     assert speed["window_ms"] == 2000
     assert 60 <= speed["tokens"] <= 110
+
+
+@pytest.mark.parametrize(
+    ("output_tokens", "reasoning_tokens", "reasoning", "summary"),
+    [
+        pytest.param(140, 40, None, None, id="small-hidden-reasoning"),
+        pytest.param(200, 100, "A short summary.", None, id="partial-readable-reasoning"),
+        pytest.param(
+            110, 10, "A short summary.", ["A short summary."], id="explicit-small-summary"
+        ),
+    ],
+)
+def test_hidden_reasoning_uses_answer_tokens_even_below_total_coverage_threshold(
+    output_tokens: int,
+    reasoning_tokens: int,
+    reasoning: str | None,
+    summary: list[str] | None,
+) -> None:
+    speed = _speed(
+        {"output_tokens": output_tokens, "reasoning_tokens": reasoning_tokens},
+        reasoning=reasoning,
+        reasoning_summary=summary,
+    )
+
+    assert speed is not None
+    assert speed["basis"] == "answer"
+    assert speed["tokens"] == 80
+    assert speed["window_ms"] == 2000
+    assert speed["output_tokens_per_second"] == 40.0
+    assert "estimated" not in speed
+
+
+@pytest.mark.parametrize(
+    ("speed", "keys"),
+    [
+        pytest.param(
+            {"output_tokens_per_second": 20.0, "first_token_ms": 700},
+            {"output_speed", "output_latency"},
+            id="both",
+        ),
+        pytest.param({"first_token_ms": 0}, {"output_latency"}, id="latency-only-including-zero"),
+        pytest.param(
+            {"output_tokens_per_second": 20.0, "basis": "provider"},
+            {"output_speed"},
+            id="rate-only",
+        ),
+        pytest.param({"output_tokens_per_second": 0, "first_token_ms": -1}, set(), id="range"),
+        pytest.param({"output_tokens_per_second": True, "first_token_ms": False}, set(), id="bool"),
+        pytest.param(
+            {"output_tokens_per_second": float("nan"), "first_token_ms": float("inf")},
+            set(),
+            id="non-finite",
+        ),
+        pytest.param(
+            {"output_tokens_per_second": 10**400, "first_token_ms": 10**400},
+            set(),
+            id="numeric-overflow",
+        ),
+    ],
+)
+def test_output_measurements_selects_rate_and_latency_independently(
+    speed: JsonObject, keys: set[str]
+) -> None:
+    projected = output_measurements(
+        {"speed": speed}, model="provider/model", message_id="message-one"
+    )
+
+    assert set(projected) == keys
+    for measurement in projected.values():
+        assert measurement == {**speed, "model": "provider/model", "message_id": "message-one"}
+        assert measurement is not speed
+    assert "model" not in speed

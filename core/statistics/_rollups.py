@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.runs import UNATTENDED_RUN_KINDS
+from core.statistics._measurements import SPEED_BASES
 from core.statistics._projection import MICROSECONDS_PER_HOUR
 from core.statistics._rollup_schema import ROLLUP_SCHEMA as ROLLUP_SCHEMA
 from core.statistics._rollup_schema import ROLLUP_TABLES
@@ -234,6 +235,7 @@ def maintain_rollups(connection: sqlite3.Connection, changes: RollupChanges) -> 
     if changes.usage_changed:
         if not changes.rebuild:
             _apply_usage_deltas(connection)
+            _apply_first_token_deltas(connection)
         connection.execute("DROP TABLE temp.rollup_usage_before")
     for name in _WORK_TABLES:
         connection.execute(f"DROP TABLE temp.{name}")
@@ -299,9 +301,10 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
             f"DELETE FROM {table} WHERE session_key IN "
             "(SELECT session_key FROM temp.rollup_fact_sessions)"
         )
-    connection.execute(
-        "DELETE FROM agg_usage WHERE unit_key IN (SELECT unit_key FROM temp.rollup_units)"
-    )
+    for table in ("agg_usage", "agg_first_token"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE unit_key IN (SELECT unit_key FROM temp.rollup_units)"
+        )
 
 
 # Background learning Runs (Reflection reviews, Librarian passes) share one origin.
@@ -447,6 +450,11 @@ USAGE_MEASURES = (
     "speed_window_ms",
     "first_token_calls",
     "first_token_ms",
+    *(
+        f"{basis}_speed_{measure}"
+        for basis in SPEED_BASES
+        for measure in ("calls", "estimated_calls", "tokens", "window_ms")
+    ),
 )
 # Each measure's sum over calls ``c`` of requests ``r``. Output speed stays
 # additive: the calls with a measured window, their tokens and window
@@ -485,10 +493,24 @@ _MEASURE_SQL = {
     "speed_window_ms": "SUM(COALESCE(c.speed_window_ms, 0))",
     "first_token_calls": "SUM(c.first_token_ms IS NOT NULL)",
     "first_token_ms": "SUM(COALESCE(c.first_token_ms, 0))",
+    **{
+        f"{basis}_speed_{measure}": (
+            f"SUM(CASE WHEN c.speed_basis = '{basis}' THEN {value} ELSE 0 END)"
+        )
+        for basis in SPEED_BASES
+        for measure, value in (
+            ("calls", "c.speed_window_ms IS NOT NULL"),
+            ("estimated_calls", "c.speed_estimated = 1"),
+            ("tokens", "COALESCE(c.speed_tokens, 0)"),
+            ("window_ms", "COALESCE(c.speed_window_ms, 0)"),
+        )
+    },
 }
 _USAGE_CUBE_MEASURES = tuple(name for name in USAGE_MEASURES if name != "failed_calls")
 _USAGE_KEYS = "hour, unit_key, origin, model_key, kind, status"
 _USAGE_COLUMNS = f"{_USAGE_KEYS}, {', '.join(_USAGE_CUBE_MEASURES)}"
+_FIRST_TOKEN_KEYS = f"{_USAGE_KEYS}, first_token_ms"
+_FIRST_TOKEN_COLUMNS = f"{_FIRST_TOKEN_KEYS}, calls"
 # A per-Model and purpose row of a Run: key, run id, Model, has Model, purpose,
 # first use, then ``USAGE_MEASURES``.
 _MODEL_KEY, _HAS_MODEL, _PURPOSE, _FIRST_USE, _MEASURES = 2, 3, 4, 5, 6
@@ -827,12 +849,19 @@ def _recompute_cache(connection: sqlite3.Connection, *, append: bool = False) ->
     connection.execute("DROP TABLE temp.rollup_cache_turns")
 
 
-def _usage_select(source: str, where: str, *, sequence: bool = False) -> str:
+def _usage_select(
+    source: str, where: str, *, sequence: bool = False, first_token: bool = False
+) -> str:
+    measures = (
+        "c.first_token_ms, COUNT(*)"
+        if first_token
+        else ", ".join(_MEASURE_SQL[name] for name in _USAGE_CUBE_MEASURES)
+    )
     return f"""
         SELECT {"r.seq, " if sequence else ""}{_HOUR} AS hour, r.session_key,
             {USAGE_ORIGIN_SQL} AS origin,
             c.model_key, c.purpose, r.status,
-            {", ".join(_MEASURE_SQL[name] for name in _USAGE_CUBE_MEASURES)}
+            {measures}
         FROM {source}
         CROSS JOIN stat_usage_units u ON u.session_key = r.session_key
         CROSS JOIN stat_usage_calls c ON c.session_key = r.session_key AND c.seq = r.seq
@@ -840,19 +869,25 @@ def _usage_select(source: str, where: str, *, sequence: bool = False) -> str:
             AND u.session_generation_id <> ''
         LEFT JOIN stat_run_records rr ON rr.session_key = s.session_key AND rr.run_id = r.run_id
         WHERE {where}
+            {"AND c.first_token_ms IS NOT NULL" if first_token else ""}
         GROUP BY {"r.seq, " if sequence else ""}hour, r.session_key, origin,
-            c.model_key, c.purpose, r.status
+            c.model_key, c.purpose, r.status{", c.first_token_ms" if first_token else ""}
     """
 
 
 def _recompute_usage(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        f"INSERT INTO agg_usage ({_USAGE_COLUMNS}) "
-        + _usage_select(
-            "temp.rollup_units d CROSS JOIN stat_usage_records r ON r.session_key = d.unit_key",
-            "1",
+    for table, columns, first_token in (
+        ("agg_usage", _USAGE_COLUMNS, False),
+        ("agg_first_token", _FIRST_TOKEN_COLUMNS, True),
+    ):
+        connection.execute(
+            f"INSERT INTO {table} ({columns}) "
+            + _usage_select(
+                "temp.rollup_units d CROSS JOIN stat_usage_records r ON r.session_key = d.unit_key",
+                "1",
+                first_token=first_token,
+            )
         )
-    )
 
 
 def _apply_usage_deltas(connection: sqlite3.Connection) -> None:
@@ -882,3 +917,33 @@ def _apply_usage_deltas(connection: sqlite3.Connection) -> None:
         f"(SELECT {_USAGE_KEYS} FROM temp.rollup_usage_deltas) AND calls = 0"
     )
     connection.execute("DROP TABLE temp.rollup_usage_deltas")
+
+
+def _apply_first_token_deltas(connection: sqlite3.Connection) -> None:
+    """Maintain exact millisecond frequency counts from the same call before-images."""
+    connection.execute("DROP TABLE IF EXISTS temp.rollup_first_token_deltas")
+    connection.execute(
+        f"CREATE TEMP TABLE rollup_first_token_deltas AS SELECT {_FIRST_TOKEN_KEYS}, "
+        "-first_token_calls AS calls FROM temp.rollup_usage_before b "
+        "WHERE b.first_token_calls > 0 "
+        "AND NOT EXISTS (SELECT 1 FROM temp.rollup_units d WHERE d.unit_key = b.unit_key)"
+    )
+    connection.execute(
+        f"INSERT INTO temp.rollup_first_token_deltas ({_FIRST_TOKEN_COLUMNS}) "
+        + _usage_select(
+            "temp.rollup_usage_before b CROSS JOIN stat_usage_records r ON r.seq = b.seq",
+            "NOT EXISTS (SELECT 1 FROM temp.rollup_units d WHERE d.unit_key = r.session_key)",
+            first_token=True,
+        )
+    )
+    connection.execute(
+        f"INSERT INTO agg_first_token ({_FIRST_TOKEN_COLUMNS}) "
+        f"SELECT {_FIRST_TOKEN_KEYS}, SUM(calls) FROM temp.rollup_first_token_deltas "
+        f"GROUP BY {_FIRST_TOKEN_KEYS}"
+        + _additive_update("agg_first_token", _FIRST_TOKEN_KEYS, "calls")
+    )
+    connection.execute(
+        f"DELETE FROM agg_first_token WHERE ({_FIRST_TOKEN_KEYS}) IN "
+        f"(SELECT {_FIRST_TOKEN_KEYS} FROM temp.rollup_first_token_deltas) AND calls = 0"
+    )
+    connection.execute("DROP TABLE temp.rollup_first_token_deltas")

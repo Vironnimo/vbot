@@ -213,6 +213,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       // The newest Model step with a measured output speed: its
       // `usage.speed` plus the `model` that answered, when known.
       outputSpeed: null,
+      // Latest measured latency, including a step too short for a speed.
+      outputLatency: null,
       sessionUsage: null,
       contextUsage: null,
       // The Session's effective Compaction Policy from `chat.history`; null
@@ -456,9 +458,13 @@ export function currentSessionState(state) {
   return state.sessions[sessionKey(agent.id, agent.current_session_id)] ?? null;
 }
 
-export function updateSessionUsage(sessionState, usage, { model } = {}) {
+export function updateSessionUsage(
+  sessionState,
+  usage,
+  { model, messageId } = {},
+) {
   sessionState.usage = usage;
-  const measured = measuredOutputSpeed(usage, model);
+  const measured = measuredOutputSpeed(usage, model, messageId);
   // A step too short to measure keeps the speed shown before it; a repeat of
   // the same measurement without its Model (the Run's terminal Usage) keeps
   // the Model already known.
@@ -471,24 +477,59 @@ export function updateSessionUsage(sessionState, usage, { model } = {}) {
   ) {
     sessionState.outputSpeed = measured;
   }
+  const latency = measuredOutputLatency(usage, model, messageId);
+  if (
+    latency &&
+    !(
+      latency.model === null &&
+      sameMeasurement(latency, sessionState.outputLatency)
+    )
+  ) {
+    sessionState.outputLatency = latency;
+  }
   return sessionState;
+}
+
+// History and semantic Run streams carry these authoritative projections.
+// An absent key preserves a value; null explicitly clears it.
+export function updateSessionOutputMeasurements(sessionState, projection) {
+  if (Object.hasOwn(projection, 'output_speed'))
+    sessionState.outputSpeed = projection.output_speed;
+  if (Object.hasOwn(projection, 'output_latency'))
+    sessionState.outputLatency = projection.output_latency;
 }
 
 function sameMeasurement(left, right) {
   if (!left || !right) return false;
   const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
   keys.delete('model');
+  keys.delete('message_id');
   return [...keys].every((key) => left[key] === right[key]);
 }
 
 // A step's `usage.speed` with the Model that answered, when the server
 // measured its tokens per second; otherwise null (the step was too short or
 // arrived in bursts).
-export function measuredOutputSpeed(usage, model = null) {
+export function measuredOutputSpeed(usage, model = null, messageId = null) {
   const speed = usage?.speed;
   const rate = speed?.output_tokens_per_second;
   if (!Number.isFinite(rate) || rate <= 0) return null;
-  return { ...speed, model: typeof model === 'string' && model ? model : null };
+  return identifiedMeasurement(speed, model, messageId);
+}
+
+function measuredOutputLatency(usage, model = null, messageId = null) {
+  const speed = usage?.speed;
+  const latency = speed?.first_token_ms;
+  if (!Number.isFinite(latency) || latency < 0) return null;
+  return identifiedMeasurement(speed, model, messageId);
+}
+
+function identifiedMeasurement(speed, model, messageId) {
+  return {
+    ...speed,
+    model: typeof model === 'string' && model ? model : null,
+    message_id: typeof messageId === 'string' && messageId ? messageId : null,
+  };
 }
 
 function normalizeServerQueuedItem(item) {

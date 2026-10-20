@@ -54,10 +54,13 @@ _ADDRESSES = {
         ),
         _SESSION_ADDRESS,
     ),
-    "agg_usage": (
-        "unit_key",
-        "stat_usage_units",
-        ("project_id", "agent_id", "session_id", "owner_name", "group_id"),
+    **dict.fromkeys(
+        ("agg_usage", "agg_first_token"),
+        (
+            "unit_key",
+            "stat_usage_units",
+            ("project_id", "agent_id", "session_id", "owner_name", "group_id"),
+        ),
     ),
 }
 
@@ -302,13 +305,24 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
         {"input_tokens": 75, "input_tokens_estimated": True, "speed": {"first_token_ms": 900}},
     )
     check()
+    await ledger.update(
+        pending,
+        {"speed": {"first_token_ms": 0, "tokens": 10, "window_ms": 250, "basis": "provider"}},
+    )
+    check()
     await ledger.finish(
         pending,
         {
             "input_tokens": 50,
             "output_tokens": 2,
             "reported_cost_usd": 0.1,
-            "speed": {"first_token_ms": 700, "tokens": 20, "window_ms": 500, "estimated": True},
+            "speed": {
+                "first_token_ms": 700,
+                "tokens": 20,
+                "window_ms": 500,
+                "estimated": True,
+                "basis": "answer",
+            },
         },
     )
     check()
@@ -354,6 +368,10 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
         for row in final["agg_usage"]
         if row["first_token_calls"]
     ) == [(1, 0, 8, 300), (1, 1, 20, 700)]
+    assert sorted((row["first_token_ms"], row["calls"]) for row in final["agg_first_token"]) == [
+        (300, 1),
+        (700, 1),
+    ]
     assert {row["origin"] for row in final["agg_usage"]} == {
         "background",
         "channel",

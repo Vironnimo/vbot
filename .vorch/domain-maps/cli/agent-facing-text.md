@@ -6,6 +6,9 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 
 | Text | Reason |
 |---|---|
+| Statistics usage help and `references/diagnostics.md`: Model and Provider rows include speed by measurement basis and first-token median, p95, and average | Routes Model latency questions to request measurements instead of server performance metrics; names the available summaries so an Agent needs no extra discovery call. |
+| Statistics usage output: `timing: completed Chat requests only; first token includes Reasoning or Tool output; earlier failed attempts are excluded` | Prevents an Agent interpreting a successful request's first output as the user's entire wait or as answer text only. |
+| Statistics usage output: `speed: separate answer, full output and Provider decode measurements; ~ marks approximate stream rates; Provider rows reflect their mix of Models and work` | Prevents comparisons between different time windows and token scopes, or reading a workload mix as an isolated Provider benchmark. |
 | Online update: `Release identity does not match the selected update channel '...'.` | The selected channel is part of the update request; reject a mismatched or missing channel before downloading or reporting already up to date, without suggesting the Agent switch channels. |
 | Online update: `Release package does not match the selected update channel '...'.` | A valid signature alone does not identify the requested channel; reject a mismatched or missing channel before staging publishes the version, while explicit local packages remain supported. |
 | Package admission: `This package does not declare compatible server authentication support.` | Missing or unsupported package metadata cannot prove that a downgrade will enforce login; explains why otherwise valid packages are refused. |

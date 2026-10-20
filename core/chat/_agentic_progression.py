@@ -627,6 +627,7 @@ class AgenticProgression:
                     {
                         "usage": dict(assistant_message.usage),
                         "model": assistant_message.model,
+                        "message_id": assistant_message.id,
                         "session_usage": dict(session_usage),
                         "context_usage": dict(assistant_context_usage),
                         "iteration_count": run.iteration_count,

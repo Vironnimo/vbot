@@ -207,24 +207,28 @@ async def test_breakdowns_rank_every_dimension_by_cost_with_runs_and_sessions(
 
 
 @pytest.mark.asyncio
-async def test_output_speed_is_token_weighted_per_model_with_its_measured_calls(
+async def test_output_speed_keeps_its_basis_and_exact_first_token_percentiles(
     statistics: StatisticsFactory, ledger: UsageRecorder
 ) -> None:
     def chat(model: str, **speed: Any) -> Any:
         usage = {"input_tokens": 10, "output_tokens": 500, "speed": speed}
-        return _call(ledger, usage, model=model)
+        return _call(ledger, usage, model=model, at=BASE)
 
     # 100 tokens in 1 s and 300 in 0.5 s: 400 tokens in 1.5 s, not the mean of 100 and 600.
     await chat("fast/m", first_token_ms=200, tokens=100, window_ms=1000, basis="output")
     await chat("fast/m", first_token_ms=400, tokens=300, window_ms=500, estimated=True)
+    await chat("fast/m", first_token_ms=400, tokens=300, window_ms=500, basis="output")
     # Too short to measure, or a window without time: only the first token counts.
     await chat("fast/m", first_token_ms=900, duration_ms=950)
     await chat("fast/m", first_token_ms=500, tokens=5, window_ms=0)
+    await chat("fast/m", first_token_ms=2500, tokens=50, window_ms=1000, basis="answer")
+    await chat("fast/m", first_token_ms=10_000, tokens=70, window_ms=1000, basis="provider")
     await chat("slow/m", first_token_ms=1000, tokens=50, window_ms=1000, basis="provider")
     # A request without a speed counts in neither figure.
-    await _call(ledger, {"input_tokens": 4}, kind="text_embedding", model="embed/m")
+    await _call(ledger, {"input_tokens": 4}, kind="text_embedding", model="embed/m", at=BASE)
 
-    usage = _usage(statistics(usage_recorder=ledger, clock=_clock))
+    service = statistics(usage_recorder=ledger, clock=_clock)
+    usage = _usage(service)
 
     def speed(row: Report) -> tuple[Any, ...]:
         return (
@@ -238,11 +242,55 @@ async def test_output_speed_is_token_weighted_per_model_with_its_measured_calls(
         )
 
     models = _rows(usage, "model")
-    assert speed(models["fast/m"]) == (266.7, 2, 1, 400, 1500, 500, 4)
+    assert speed(models["fast/m"]) == (None, 5, 1, 820, 4000, 2129, 7)
     assert speed(models["slow/m"]) == (50.0, 1, 0, 50, 1000, 1000, 1)
     assert speed(models["embed/m"]) == (None, 0, 0, 0, 0, None, 0)
-    assert speed(usage["totals"]) == (180.0, 3, 1, 450, 2500, 600, 5)
+    assert speed(usage["totals"]) == (None, 6, 1, 870, 5000, 1988, 8)
     assert speed(_rows(usage, "provider")["fast"]) == speed(models["fast/m"])
+    assert models["fast/m"]["speed_by_basis"] == [
+        {
+            "basis": basis,
+            "calls": calls,
+            "estimated_calls": estimated,
+            "tokens": tokens,
+            "window_ms": window,
+            "output_tokens_per_second": rate,
+        }
+        for basis, calls, estimated, tokens, window, rate in (
+            ("output", 2, 0, 400, 1500, 266.7),
+            ("answer", 1, 0, 50, 1000, 50.0),
+            ("provider", 1, 0, 70, 1000, 70.0),
+            ("unknown", 1, 1, 300, 500, 600.0),
+        )
+    ]
+    assert models["embed/m"]["speed_by_basis"] == []
+    assert (models["fast/m"]["first_token_p50_ms"], models["fast/m"]["first_token_p95_ms"]) == (
+        500,
+        10_000,
+    )
+    assert (usage["totals"]["first_token_p50_ms"], usage["totals"]["first_token_p95_ms"]) == (
+        500,
+        10_000,
+    )
+    for dimension, rows in usage["breakdowns"].items():
+        assert all("first_token_p50_ms" in row and "first_token_p95_ms" in row for row in rows), (
+            dimension
+        )
+    assert models["embed/m"]["first_token_p50_ms"] is None
+    assert models["embed/m"]["first_token_p95_ms"] is None
+    await _call(
+        ledger,
+        {"speed": {"first_token_ms": 99_999, "tokens": 20, "window_ms": 500, "basis": "output"}},
+        model="fast/m",
+        at=BASE + timedelta(hours=2),
+    )
+    bounded = _usage(service, since=BASE, until=BASE + timedelta(hours=1))
+    assert bounded["totals"] == usage["totals"]
+    assert bounded["breakdowns"] == usage["breakdowns"]
+    empty = _usage(service, since=BASE - timedelta(hours=1), until=BASE)["totals"]
+    assert empty["first_token_p50_ms"] is None
+    assert empty["first_token_p95_ms"] is None
+    assert empty["speed_by_basis"] == []
 
 
 # -- Cache figures ------------------------------------------------------------

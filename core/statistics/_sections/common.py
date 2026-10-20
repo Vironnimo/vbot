@@ -18,7 +18,7 @@ from typing import Any, NamedTuple
 from core.projects.address import format_agent_address
 from core.sessions import SessionAddress
 from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
-from core.statistics._measurements import _nearest_rank_index
+from core.statistics._measurements import SPEED_BASES, _nearest_rank_index
 from core.statistics._projection import MICROSECONDS_PER_HOUR
 from core.statistics._rollups import USAGE_MEASURES
 from core.statistics._sections.window import (
@@ -184,22 +184,45 @@ class Totals:
         }
 
     def _speed_json(self) -> JsonObject:
-        """Output speed: token-weighted over measured windows, first token on average.
-
-        The speed divides all measured tokens by all window time, so a long
-        answer weighs more than a short one and a call without a measured
-        window does not count; ``None`` without any measured call.
-        """
+        """Keep each measurement basis separate; an unknown basis stays unknown."""
         window_ms = self["speed_window_ms"]
         first_token_calls = self["first_token_calls"]
+        fields = ("calls", "estimated_calls", "tokens", "window_ms")
+        remaining = [
+            self["speed_calls"],
+            self["estimated_speed_calls"],
+            self["speed_tokens"],
+            window_ms,
+        ]
+        by_basis = []
+        for basis in (*SPEED_BASES, "unknown"):
+            values = (
+                remaining
+                if basis == "unknown"
+                else [self[f"{basis}_speed_{field}"] for field in fields]
+            )
+            if not values[0]:
+                continue
+            by_basis.append(
+                {
+                    "basis": basis,
+                    **dict(zip(fields, values, strict=True)),
+                    "output_tokens_per_second": round(values[2] * 1000 / values[3], 1),
+                }
+            )
+            if basis != "unknown":
+                remaining = [total - value for total, value in zip(remaining, values, strict=True)]
         return {
             "speed_calls": self["speed_calls"],
             "estimated_speed_calls": self["estimated_speed_calls"],
             "speed_tokens": self["speed_tokens"],
             "speed_window_ms": window_ms,
             "output_tokens_per_second": (
-                round(self["speed_tokens"] * 1000 / window_ms, 1) if window_ms else None
+                by_basis[0]["output_tokens_per_second"]
+                if len(by_basis) == 1 and by_basis[0]["basis"] != "unknown"
+                else None
             ),
+            "speed_by_basis": by_basis,
             "first_token_calls": first_token_calls,
             "avg_first_token_ms": (
                 round(self["first_token_ms"] / first_token_calls) if first_token_calls else None

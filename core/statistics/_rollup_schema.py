@@ -1,6 +1,14 @@
 """Disposable aggregate tables maintained by the Statistics rollup owner."""
 
-ROLLUP_SCHEMA = """
+from core.statistics._measurements import SPEED_BASES
+
+_SPEED_COLUMNS = "\n".join(
+    f"    {basis}_speed_{measure} INTEGER NOT NULL,"
+    for basis in SPEED_BASES
+    for measure in ("calls", "estimated_calls", "tokens", "window_ms")
+)
+
+ROLLUP_SCHEMA = f"""
 CREATE TABLE agg_runs (
     session_key INTEGER NOT NULL,
     run_id TEXT NOT NULL,
@@ -72,6 +80,7 @@ CREATE TABLE agg_run_models (
     speed_window_ms INTEGER NOT NULL,
     first_token_calls INTEGER NOT NULL,
     first_token_ms INTEGER NOT NULL,
+{_SPEED_COLUMNS}
     PRIMARY KEY (session_key, run_id, model_key)
 ) WITHOUT ROWID;
 CREATE TABLE agg_usage (
@@ -105,9 +114,22 @@ CREATE TABLE agg_usage (
     speed_window_ms INTEGER NOT NULL,
     first_token_calls INTEGER NOT NULL,
     first_token_ms INTEGER NOT NULL,
+{_SPEED_COLUMNS}
     PRIMARY KEY (hour, unit_key, origin, model_key, kind, status)
 ) WITHOUT ROWID;
 CREATE INDEX agg_usage_unit ON agg_usage(unit_key);
+CREATE TABLE agg_first_token (
+    hour INTEGER NOT NULL,
+    unit_key INTEGER NOT NULL,
+    origin TEXT NOT NULL,
+    model_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    first_token_ms INTEGER NOT NULL,
+    calls INTEGER NOT NULL,
+    PRIMARY KEY (hour, unit_key, origin, model_key, kind, status, first_token_ms)
+) WITHOUT ROWID;
+CREATE INDEX agg_first_token_unit ON agg_first_token(unit_key);
 CREATE TABLE agg_tools (
     hour INTEGER NOT NULL,
     session_key INTEGER NOT NULL,
@@ -170,6 +192,7 @@ ROLLUP_TABLES = (
     "agg_runs",
     "agg_run_models",
     "agg_usage",
+    "agg_first_token",
     "agg_tools",
     "agg_tool_latency",
     "agg_records",

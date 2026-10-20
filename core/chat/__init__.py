@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         latest_compaction_checkpoint,
         reply_surface_from_note,
     )
+    from core.chat._output_speed import output_measurements
     from core.chat._run_state import (
         ChatLoopDependencies,
         RequestState,
@@ -78,6 +79,7 @@ if TYPE_CHECKING:
 
 
 _EXPORT_MODULES = {
+    "output_measurements": "core.chat._output_speed",
     "EffortState": "core.chat._effort_epoch",
     "note_request_messages": "core.chat.wire_shaping",
     "system_reminder_request_message": "core.chat.wire_shaping",
@@ -131,6 +133,7 @@ _EXPORT_MODULES = {
 }
 
 __all__ = [
+    "output_measurements",
     "EffortState",
     "note_request_messages",
     "system_reminder_request_message",

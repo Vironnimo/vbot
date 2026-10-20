@@ -154,6 +154,9 @@ def project_timeline_history(
         response["last_usage"] = last_usage
     items = history_timeline(history_response.get("messages") or [])
     if active_run_snapshot is not None:
+        for field in ("output_speed", "output_latency"):
+            if field in active_run_snapshot.get("state", {}):
+                response[field] = active_run_snapshot["state"][field]
         run_id = active_run_snapshot["run_id"]
         positions = [index for index, item in enumerate(items) if item.get("run_id") == run_id]
         position = positions[0] if positions else len(items)
@@ -192,15 +195,28 @@ async def timeline_snapshot(state: Any, run: Run, *, child_limit: int = 0) -> Js
         session = await state.runtime.chat_sessions.get_async(address)
         messages = await session.load_run_messages_async(run.id)
 
-        def records() -> list[JsonObject]:
-            return [
+        def project() -> tuple[list[JsonObject], JsonObject]:
+            from core.chat import output_measurements
+
+            records = [
                 {**record, "history_run_id": run.id}
                 for message in messages
                 if (record := history_message(message, file_delivery=state.file_delivery))
                 is not None
             ]
+            output: JsonObject = {}
+            for message in messages:
+                if message.role == "assistant":
+                    output.update(
+                        output_measurements(
+                            message.usage,
+                            model=message.model,
+                            message_id=message.id,
+                        )
+                    )
+            return history_timeline(records), output
 
-        items = await FILE_PREVIEW_WORKERS.run(lambda: history_timeline(records()))
+        items, output = await FILE_PREVIEW_WORKERS.run(project)
         if not any(item["type"] == "assistant_run" for item in items):
             fallback = RunTimeline(run.id, timestamp=run.created_at)
             for event in run.events:
@@ -218,6 +234,7 @@ async def timeline_snapshot(state: Any, run: Run, *, child_limit: int = 0) -> Js
             "items": items,
             "state": {
                 **copy.deepcopy(run.terminal_payload_extras),
+                **output,
                 "status": run.status.value,
                 "controls": run.controls(),
                 "controls_sequence": run.last_sequence,

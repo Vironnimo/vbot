@@ -62,6 +62,17 @@ describe('server conversation projection transport', () => {
 
   it('restores usage, controls and Iterations from a snapshot beyond retained raw events', () => {
     const h = setup();
+    const speed = {
+      output_tokens_per_second: 50,
+      first_token_ms: 900,
+      model: 'provider/first',
+      message_id: 'first',
+    };
+    const latency = {
+      first_token_ms: 20,
+      model: 'provider/second',
+      message_id: 'second',
+    };
     h.stream.applyConnectionSnapshot({ active_runs: [activeRun('run-one')] });
     h.sse(
       timelineSnapshot('run-one', 5000, {
@@ -72,6 +83,8 @@ describe('server conversation projection transport', () => {
           context_usage: { tokens: 15 },
           session_usage: { input_tokens: 22 },
           usage: { input_tokens: 3 },
+          output_speed: speed,
+          output_latency: latency,
         },
       }),
     );
@@ -80,7 +93,21 @@ describe('server conversation projection transport', () => {
       contextUsage: { tokens: 15 },
       sessionUsage: { input_tokens: 22 },
       usage: { input_tokens: 3 },
+      outputSpeed: speed,
+      outputLatency: latency,
     });
+    h.sse(
+      timelinePatch('run-one', 5000, {
+        status: 'cancelled',
+        state: {
+          usage: { speed: { first_token_ms: 20 } },
+          output_speed: speed,
+          output_latency: latency,
+        },
+      }),
+    );
+    expect(h.displayedSession().outputSpeed).toEqual(speed);
+    expect(h.displayedSession().outputLatency).toEqual(latency);
   });
 
   it.each(['completed', 'failed', 'cancelled', 'interrupted'])(

@@ -457,14 +457,37 @@ describe('ChatView Session settings', () => {
       expect(rpcCalls('chat.timeline')).toHaveLength(historyReads);
     });
 
-    it('shows the newest measured output speed beside the Project', async () => {
+    it('shows independent, keyboard-accessible speed and latest latency beside the Project', async () => {
       rpcMock.mockImplementation(settingsRpcMock());
       await chat.mountChat(reactiveProps({ projects: PROJECTS }));
       const session = () => testChatStateRefs[0].sessions['alpha::session-1'];
       await waitForCondition(() => session()?.historyLoaded === true);
       const speedValue = () =>
         footer()?.querySelector('[role="group"][aria-label="Output speed"]');
+      const latencyValue = () =>
+        footer()?.querySelector(
+          '[role="group"][aria-label="Latest response latency"]',
+        );
       expect(speedValue()).toBeNull();
+      session().outputLatency = {
+        first_token_ms: 400,
+        first_answer_ms: 800,
+        model: 'provider/latest',
+      };
+      flushSync();
+      await waitForCondition(() => latencyValue() !== null);
+      expect(speedValue()).toBeNull();
+      expect(latencyValue().tabIndex).toBe(0);
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+      );
+      latencyValue().focus();
+      await waitForCondition(() =>
+        document
+          .querySelector('#app-tooltip')
+          ?.textContent.includes('provider/latest'),
+      );
+      expect(document.activeElement).toBe(latencyValue());
 
       session().outputSpeed = {
         first_token_ms: 900,
@@ -478,6 +501,20 @@ describe('ChatView Session settings', () => {
       flushSync();
 
       await waitForCondition(() => speedValue() !== null);
+      expect(speedValue().textContent.trim()).toBe('≈62 tok/s');
+      expect(speedValue().tabIndex).toBe(0);
+      speedValue().focus();
+      await waitForCondition(() =>
+        document
+          .querySelector('#app-tooltip')
+          ?.textContent.includes('openai/gpt-5'),
+      );
+      expect(document.querySelector('#app-tooltip').textContent).not.toContain(
+        'provider/latest',
+      );
+      expect(latencyValue().textContent).toContain('0.4');
+      session().outputSpeed = { ...session().outputSpeed, basis: 'provider' };
+      flushSync();
       expect(speedValue().textContent.trim()).toBe('62 tok/s');
     });
 

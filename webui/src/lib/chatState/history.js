@@ -3,7 +3,6 @@ import {
   CHAT_STATUS_IDLE,
   isRecord,
   isRunActive,
-  measuredOutputSpeed,
   nextContextUsage,
   TERMINAL_RUN_STATUSES,
 } from './sessionState.js';
@@ -80,9 +79,16 @@ export function loadHistory(sessionState, messages, options = {}) {
       const lastUsage = findLastUsage(sessionState.messages);
       if (lastUsage) sessionState.usage = lastUsage;
     }
-    sessionState.outputSpeed =
-      findLastOutputSpeed(sessionState.messages) ??
-      measuredOutputSpeed(sessionState.usage);
+  }
+  if (!options.preserveOutputSpeed || changedGeneration) {
+    if (Object.hasOwn(options, 'output_speed'))
+      sessionState.outputSpeed = options.output_speed;
+    else if (!incremental) sessionState.outputSpeed = null;
+  }
+  if (!options.preserveOutputLatency || changedGeneration) {
+    if (Object.hasOwn(options, 'output_latency'))
+      sessionState.outputLatency = options.output_latency;
+    else if (!incremental) sessionState.outputLatency = null;
   }
   // Whole-session totals come from the server (the loaded page may be a
   // slice); terminal run events refresh them between history loads.
@@ -217,17 +223,6 @@ export function prependHistory(sessionState, messages, options = {}) {
   return sessionState;
 }
 
-function findLastOutputSpeed(messages) {
-  for (let i = (messages ?? []).length - 1; i >= 0; i--) {
-    const speed =
-      messages[i]?.role === 'assistant'
-        ? measuredOutputSpeed(messages[i].usage, messages[i].model)
-        : null;
-    if (speed) return speed;
-  }
-  return null;
-}
-
 function findLastUsage(messages) {
   for (let i = (messages ?? []).length - 1; i >= 0; i--) {
     if (messages[i]?.role === 'assistant' && messages[i]?.usage) {
@@ -260,7 +255,8 @@ export function truncateSessionForEdit(sessionState, messageId, acceptedRunId) {
     sessionState.timelineItems = sessionState.timelineItems.slice(0, itemIndex);
   sessionState.timelineSequences = {};
   sessionState.usage = findLastUsage(sessionState.messages);
-  sessionState.outputSpeed = findLastOutputSpeed(sessionState.messages);
+  sessionState.outputSpeed = null;
+  sessionState.outputLatency = null;
   sessionState.contextUsage = null;
   return true;
 }

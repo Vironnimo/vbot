@@ -256,6 +256,9 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
         if context_usage is not None and "context_window" not in context_usage:
             context_usage = with_context_window(context_usage, read.context_window)
         response["context_usage"] = context_usage
+        if before is None:
+            response["output_speed"] = history.output_speed
+            response["output_latency"] = history.output_latency
     if before is None:
         statuses, still_running = _current_command_statuses(
             state,
@@ -590,6 +593,8 @@ def _empty_chat_history(agent_id: str) -> JsonObject:
         "history_reset": False,
         "has_newer": False,
         "has_more": False,
+        "output_speed": None,
+        "output_latency": None,
     }
 
 
