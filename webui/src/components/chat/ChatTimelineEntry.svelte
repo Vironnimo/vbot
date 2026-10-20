@@ -63,6 +63,7 @@
   import ChatReasoning from './ChatReasoning.svelte';
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
+  import ToolSecretsUsed from './ToolSecretsUsed.svelte';
   import UserMessageText from './UserMessageText.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
 
@@ -546,6 +547,7 @@
                 >{fact.text}</span
               >
             {/each}
+            <ToolSecretsUsed uses={eventPresentation.secretsUsed} />
           </summary>
           <ToolDetails
             tool={eventToolRow}

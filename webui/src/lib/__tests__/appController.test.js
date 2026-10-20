@@ -443,6 +443,7 @@ describe('App controller', () => {
     ['agents', []],
     ['queue', []],
     ['data_store', ['credentials']],
+    ['agent_secrets', ['agentSecrets']],
     ['mystery', []],
   ])('routes resource_changed(%s) to the tokens %j', async (kind, bumped) => {
     const { actions, controller, state } = setup();

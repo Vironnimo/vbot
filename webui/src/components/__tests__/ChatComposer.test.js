@@ -234,6 +234,30 @@ describe('ChatComposer', () => {
       expect(getHistory('agent')).toEqual(['hello there']);
     });
 
+    it('sends /secret with a value without keeping it and opens the Secret form for a bare /secret', async () => {
+      const onSendMessage = vi.fn().mockResolvedValue(true);
+      const onOpenSecretForm = vi.fn();
+      composer.mount({ ...sessionProps, onSendMessage, onOpenSecretForm });
+
+      typeInComposer('/secret API_KEY -- s3cr3t-value');
+      expect(getDraft('agent::one')).toBe('');
+      submitComposer();
+      await settle();
+      expect(onSendMessage).toHaveBeenCalledWith(
+        '/secret API_KEY -- s3cr3t-value',
+      );
+      expect(getHistory('agent')).toEqual([]);
+
+      await settle(3);
+      typeInComposer('/secret');
+      submitComposer();
+      await settle();
+      expect(onOpenSecretForm).toHaveBeenCalledOnce();
+      expect(onSendMessage).toHaveBeenCalledOnce();
+      expect(composerInput().value).toBe('');
+      expect(getDraft('agent::one')).toBe('');
+    });
+
     it.each([
       ['an in-progress', 'my draft'],
       ['an empty', ''],

@@ -220,6 +220,9 @@
   let credentialsRefreshToken = $derived(
     appControllerState.credentialsRefreshToken,
   );
+  let agentSecretsRefreshToken = $derived(
+    appControllerState.agentSecretsRefreshToken,
+  );
   let channelsRefreshToken = $derived(appControllerState.channelsRefreshToken);
   let cronRefreshToken = $derived(appControllerState.cronRefreshToken);
   let calendarRefreshToken = $derived(appControllerState.calendarRefreshToken);
@@ -720,6 +723,7 @@
         {runEvents}
         {commandStatuses}
         {terminalsRefreshToken}
+        {agentSecretsRefreshToken}
         {connectionSnapshot}
         {sessionsRefreshToken}
         {sessionInvalidations}
@@ -888,6 +892,7 @@
               {clientsRefreshToken}
               {devicesRefreshToken}
               {credentialsRefreshToken}
+              {agentSecretsRefreshToken}
               {channelsRefreshToken}
               {archiveRefreshToken}
               agentsRefreshToken={selection.agentsRefreshToken}

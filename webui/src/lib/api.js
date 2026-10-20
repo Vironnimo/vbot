@@ -268,6 +268,19 @@ export {
 } from './api/access.js';
 export { reportClientMetrics } from './api/performance.js';
 export {
+  answerSecretRequest,
+  createAgentSecret,
+  declineSecretRequest,
+  deleteAgentSecret,
+  giveAgentSecret,
+  listAgentSecrets,
+  listSecretSourceEntries,
+  lockSecretSource,
+  revealAgentSecret,
+  unlockSecretSource,
+  updateAgentSecret,
+} from './api/agentSecrets.js';
+export {
   createServerDirectory,
   listServerDirectory,
 } from './api/filesystem.js';
