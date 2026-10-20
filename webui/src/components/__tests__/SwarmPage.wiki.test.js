@@ -581,9 +581,9 @@ describe('Swarm Wiki drafts and refresh', () => {
       ids: ['swr-a'],
       revision: 3,
     });
-    await vi.waitFor(() =>
-      expect(wikiCalls(fixture, 'list')).toHaveLength(lists + 1),
-    );
+    // Let the scheduled pass's one-second interval elapse on the test clock.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(wikiCalls(fixture, 'list')).toHaveLength(lists + 1);
     finishList({
       entries: [{ page_id: 'wpg-one', title: 'Shared research', revision: 3 }],
     });
