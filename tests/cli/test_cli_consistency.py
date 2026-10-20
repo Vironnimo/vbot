@@ -183,6 +183,7 @@ AREAS = [
     ("session", ["list", "a"]),
     ("archive", ["list"]),
     ("data-store", ["status"]),
+    ("agent-secrets", ["list"]),
     ("channel", ["list"]),
     ("tool", ["list"]),
     ("prompt", ["list"]),

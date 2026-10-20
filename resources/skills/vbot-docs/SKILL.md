@@ -38,6 +38,7 @@ For a question about a past conversation, use `session_search` first; read `refe
 | Logs, Provider traces, Session usage statistics and server performance | `references/diagnostics.md` |
 | Server start/stop/restart, update, uninstall, Autostart, Desktop, Doctor, access mode and paired devices, reaching another vBot server and signing in to it | `references/server.md` |
 | Named credentials and the Secret Store, database health, data snapshots, configuration backups and recovery | `references/data-store.md` |
+| Agent Secrets that Agents use as `{{secret:NAME}}`: which Agents may use them and where, waiting Secret requests, Secret Sources such as password managers | `references/agent-secrets.md` |
 | Filesystem investigation, data location, backups or manual repair | `references/system-layout.md` |
 
 When no row fits, or the reference you read lacks the answer, search the `references` folder for the command, flag or term with `search_files`, its `path` set to that folder inside the directory the `skill` Tool reported when it loaded this Skill. Then read the file that matches.
