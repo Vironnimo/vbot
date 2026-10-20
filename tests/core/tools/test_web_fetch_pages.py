@@ -354,18 +354,26 @@ def mistyped(ref):
 
 
 @pytest.mark.parametrize(
-    ("requested", "final", "other_page"),
+    ("requested", "final", "redirect"),
     [
-        ("https://www.example.org/table/element/26/iron", "https://table.example.org/", True),
-        ("https://example.com/docs/page?id=26", "https://example.com/docs/page", True),
-        ("http://example.com/Docs/A%20B/", "https://www.example.com/docs/a b", False),
-        ("https://example.com/docs/", "https://example.com/docs/index.html", False),
-        ("https://example.com/r/x/", "https://example.com/r/x/?rdt=5&utm_source=feed", False),
+        ("https://www.example.org/table/element/26/iron", "https://table.example.org/", "other"),
+        ("https://example.com/docs/page?id=26", "https://example.com/docs/page", "other"),
+        ("https://example.com/manual/chapter-3", "https://example.com/tools/overview", "other"),
+        ("https://example.com/docs/guide/install", "https://example.com/docs/guide", "other"),
+        (
+            "https://example.eu/en/getting-started/api-service_en",
+            "https://example.eu/en/using-the-tool/api-service_en",
+            "moved",
+        ),
+        ("https://shop.example/p/old-name/1283/", "https://shop.example/p/new-name/1283/", "moved"),
+        ("http://example.com/Docs/A%20B/", "https://www.example.com/docs/a b", None),
+        ("https://example.com/docs/", "https://example.com/docs/index.html", None),
+        ("https://example.com/r/x/", "https://example.com/r/x/?rdt=5&utm_source=feed", None),
     ],
 )
 @pytest.mark.asyncio
 async def test_a_redirect_to_another_page_is_named_with_the_requested_url(
-    tmp_path, monkeypatch, requested, final, other_page
+    tmp_path, monkeypatch, requested, final, redirect
 ):
     install_http_get(monkeypatch, lambda url: make_result(text="Landing page", url=final))
     tool, context = web_fetch_registry(), make_context(tmp_path)
@@ -373,9 +381,14 @@ async def test_a_redirect_to_another_page_is_named_with_the_requested_url(
     fetched = await tool.dispatch(context, {"url": requested})
     saved = await tool.dispatch(context, {"url": requested, "ref": fetched["data"]["ref"]})
 
+    note = {
+        "other": f"This is not the requested page: {requested} redirected here.",
+        "moved": f"The page moved here from {requested}.",
+        None: None,
+    }[redirect]
     for data in (fetched["data"], saved["data"]):
         assert data["url"] == final
-        assert (requested in data.get("note", "")) is other_page
+        assert data.get("note") == note
 
 
 @pytest.mark.asyncio

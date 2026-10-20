@@ -490,11 +490,24 @@ def _page_address(url: str) -> tuple[str, set[tuple[str, str]]]:
 
 
 def _redirect_note(requested: str, final: str) -> str:
-    """Say so when a redirect led to another page than the requested one."""
+    """Say when a redirect led to another page, or to the requested page's new address.
+
+    A page whose section moved keeps its last path segment (its name or id); a
+    redirect to the site root, to a parent path or to a page with another last
+    segment means the requested page was not served.
+    """
     requested_path, requested_query = _page_address(requested)
     final_path, final_query = _page_address(final)
-    if requested_path == final_path and requested_query <= final_query:
-        return ""
+    if requested_query <= final_query:
+        if requested_path == final_path:
+            return ""
+        name = requested_path.rsplit("/", 1)[-1]
+        if (
+            name
+            and final_path.rsplit("/", 1)[-1] == name
+            and not requested_path.startswith(final_path + "/")
+        ):
+            return f"The page moved here from {requested}."
     return f"This is not the requested page: {requested} redirected here."
 
 
