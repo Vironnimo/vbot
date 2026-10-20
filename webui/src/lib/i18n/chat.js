@@ -445,9 +445,12 @@ export default Object.freeze({
   'chat.activity.later.unknown': 'another change',
   'chat.cancelBackgroundTaskError': 'Background task could not be cancelled.',
   'chat.subagentSessionNotice': 'Viewing a sub-agent session',
+  'chat.reflectionSessionNotice': 'Viewing a reflection session',
   'chat.liveCallNotice':
     'This Session records a Live voice call. Only the call writes to it.',
   'chat.returnToParentSession': 'Return to parent session',
+  'chat.returnToMainSession': 'Return to main session',
+  'chat.returnToSourceSession': 'Return to source session',
   'chat.returnToCurrentSession': 'Return to current session',
   'chat.errorDetails': 'Details',
   'chat.compactingCurrentConversation': 'Compacting current conversation…',
@@ -534,8 +537,6 @@ export default Object.freeze({
   'chat.sessionSettings.latencyValue': 'TTFT {duration}',
   'chat.sessionSettings.latencyHint':
     'Time from sending the latest measured request until its first text, Reasoning or Tool-call output arrived. Provider queueing and prompt processing are included. This is measured even when the response is too short for an output rate.',
-  'chat.activity.parentSession': 'Parent Session',
-  'chat.activity.openParentSession': 'Open parent Session · {session}',
   'sessions.title': 'Sessions',
   'sessions.newSession': 'New Session',
   'sessions.loading': 'Loading sessions…',

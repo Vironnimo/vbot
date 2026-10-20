@@ -804,6 +804,26 @@
                   : t('chat.returnToCurrentSession')}
               </Button>
             </Banner>
+          {:else if navigation.reflectionSessionActive}
+            <Banner
+              appearance="compact"
+              class="chat-view__footer-banner"
+              aria-live="polite"
+            >
+              <strong>
+                {t('chat.reflectionSessionNotice')}
+              </strong>
+              {#if navigation.reflectionSourceTarget}
+                <Button
+                  variant="tertiary"
+                  class="chat-view__reflection-session-return"
+                  disabled={chatState.loadingHistory}
+                  onClick={navigation.handleReturnToReflectionSource}
+                >
+                  {t('chat.returnToMainSession')}
+                </Button>
+              {/if}
+            </Banner>
           {/if}
           {#if providerSetupMissing}
             <Banner

@@ -1,5 +1,6 @@
 import { formatAgentAddress } from '$lib/agentAddress.js';
 import {
+  isReflectionSession,
   sessionDisplayName,
   sessionParentReference,
 } from '$lib/sessionListView.js';
@@ -14,6 +15,10 @@ export function createSessionProvenance(context) {
   // available from provenance alone; the Activity panel link waits for the
   // parent row so it can show the real Session name instead of a raw id.
   let subAgentParentTarget = $state(null);
+
+  // A Reflection Session returns to the Session its review forked from.
+  let reflectionSession = $state(false);
+  let reflectionSourceTarget = $state(null);
 
   let sessionParentLink = $state(null);
 
@@ -70,8 +75,7 @@ export function createSessionProvenance(context) {
     if (!displayKey || !addressing.agentAddress || !addressing.sessionId) {
       sessionParentFetchKey = '';
       sessionParentAddresses = [];
-      subAgentParentTarget = null;
-      sessionParentLink = null;
+      clearParent();
       return;
     }
     if (fetchKey === sessionParentFetchKey) {
@@ -84,8 +88,7 @@ export function createSessionProvenance(context) {
         sessionId: addressing.sessionId,
       },
     ];
-    subAgentParentTarget = null;
-    sessionParentLink = null;
+    clearParent();
     untrack(() =>
       loadSessionParent(
         fetchKey,
@@ -95,6 +98,13 @@ export function createSessionProvenance(context) {
       ),
     );
   });
+
+  function clearParent() {
+    subAgentParentTarget = null;
+    reflectionSession = false;
+    reflectionSourceTarget = null;
+    sessionParentLink = null;
+  }
 
   const loadSessionParent = async (
     fetchKey,
@@ -119,6 +129,11 @@ export function createSessionProvenance(context) {
         return;
       }
       const parent = sessionParentReference(child?.session);
+      const relation =
+        parent?.kind === 'fork' && isReflectionSession(child?.session)
+          ? 'reflection'
+          : parent?.kind;
+      reflectionSession = relation === 'reflection';
       if (!parent) {
         return;
       }
@@ -146,6 +161,8 @@ export function createSessionProvenance(context) {
       };
       if (parent.kind === 'subagent') {
         subAgentParentTarget = target;
+      } else if (relation === 'reflection') {
+        reflectionSourceTarget = target;
       }
 
       let parentSession = null;
@@ -171,9 +188,12 @@ export function createSessionProvenance(context) {
         sessionParentReference(parentSession)?.kind === 'subagent';
       if (parent.kind === 'subagent') {
         subAgentParentTarget = target;
+      } else if (relation === 'reflection') {
+        reflectionSourceTarget = target;
       }
       sessionParentLink = {
         displayName: sessionDisplayName(parentSession),
+        relation,
         target,
       };
     } catch {
@@ -184,6 +204,12 @@ export function createSessionProvenance(context) {
   return {
     get subAgentParentTarget() {
       return subAgentParentTarget;
+    },
+    get reflectionSession() {
+      return reflectionSession;
+    },
+    get reflectionSourceTarget() {
+      return reflectionSourceTarget;
     },
     get sessionParentLink() {
       return sessionParentLink;

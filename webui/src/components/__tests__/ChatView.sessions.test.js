@@ -37,6 +37,7 @@ import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const SUB_AGENT_NOTICE = () => t('chat.subagentSessionNotice');
+const REFLECTION_NOTICE = () => t('chat.reflectionSessionNotice');
 const returnToCurrentButton = () =>
   findButtonByText(t('chat.returnToCurrentSession'));
 const returnToParentButton = () =>
@@ -59,13 +60,17 @@ async function openFromDrawer(title) {
   row.click();
 }
 
-async function openSessionInfoLink(selector, text) {
+async function openSessionInfoParent(name) {
   document.querySelector('.chat-header__info-toggle').click();
   flushSync();
+  const link = () => document.querySelector('.chat-activity__parent-link');
   await waitForCondition(
-    () => document.querySelector(selector)?.textContent.trim() === text,
+    () =>
+      link()
+        ?.querySelector('.chat-activity__parent-name')
+        .textContent.trim() === name,
   );
-  document.querySelector(selector).click();
+  link().click();
   flushSync();
 }
 
@@ -1109,7 +1114,7 @@ describe('ChatView Sessions', () => {
 
       // Session info links the parent by its title; it opens as an ordinary
       // Session without a return notice.
-      await openSessionInfoLink('.chat-activity__parent-link', 'Root planning');
+      await openSessionInfoParent('Root planning');
       await waitForCondition(
         () =>
           document.body.textContent.includes('Root history') &&
@@ -1289,7 +1294,7 @@ describe('ChatView Sessions', () => {
       },
     );
 
-    it('opens the source Session from a Reflection Session link', async () => {
+    it('returns from a Reflection Session to its source Session', async () => {
       serveSessions({
         'alpha::session-1': {
           id: 'session-1',
@@ -1316,11 +1321,16 @@ describe('ChatView Sessions', () => {
       );
       await chat.mountChat();
 
-      await openSessionInfoLink(
-        '.chat-activity__parent-link',
-        'Original research',
-      );
+      await waitForText(REFLECTION_NOTICE());
+      const returnButton = () =>
+        findButtonByText(t('chat.returnToMainSession'));
+      await waitForCondition(() => Boolean(returnButton()));
+      returnButton().click();
+      flushSync();
       await waitForText('Original Session history');
+      await waitForCondition(
+        () => !document.body.textContent.includes(REFLECTION_NOTICE()),
+      );
       expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
         agent_id: 'alpha',
         session_id: 'source-session',

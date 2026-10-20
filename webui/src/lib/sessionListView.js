@@ -10,6 +10,12 @@ const BACKGROUND_ONLY_RUN_KINDS = new Set([
   'skill_reflection',
 ]);
 
+const REFLECTION_RUN_KINDS = [
+  'reflection',
+  'memory_reflection',
+  'skill_reflection',
+];
+
 // Category toggles that reveal hidden-by-default sessions. `allAgents` is a
 // scope toggle; it changes which sessions are loaded rather
 // than how the loaded list is classified, so the view helpers ignore it.
@@ -250,6 +256,13 @@ export function sessionDisplayName(session) {
   }
 
   return t('sessions.newSession');
+}
+
+// A Reflection Session is the fork a reflection review runs in; it keeps the
+// reflection's Run kind even after the user continues it.
+export function isReflectionSession(session) {
+  const runKinds = Array.isArray(session?.run_kinds) ? session.run_kinds : [];
+  return REFLECTION_RUN_KINDS.some((runKind) => runKinds.includes(runKind));
 }
 
 export function sessionParentReference(session) {

@@ -35,6 +35,12 @@ export function createChatViewNavigation(context) {
 
   const provenance = createSessionProvenance(context);
 
+  // A Reflection Session gets the same contextual notice, returning to the
+  // Session its review forked from.
+  let reflectionSessionActive = $derived(
+    !subAgentSessionActive && provenance.reflectionSession,
+  );
+
   // Any local override away from the selected agent's current session — also
   // true for same-agent drawer selections, which must offer a return path too.
   let sessionOverrideActive = $derived(Boolean(viewingSessionId));
@@ -633,6 +639,17 @@ export function createChatViewNavigation(context) {
     focusAfterLoad();
   };
 
+  const handleReturnToReflectionSource = () =>
+    asStep(async () => {
+      const target = provenance.reflectionSourceTarget;
+      if (!target || context.chatState.loadingHistory) {
+        return;
+      }
+      const focusAfterLoad = context.layout.captureComposerFocus();
+      await showParentSession(target);
+      focusAfterLoad();
+    });
+
   // User-initiated navigation from a child session to its parent session: a
   // normal session navigation and a new history step — Back returns to the
   // child. A parent that is itself a Sub-Agent Session keeps the contextual
@@ -926,6 +943,12 @@ export function createChatViewNavigation(context) {
     get subAgentParentTarget() {
       return provenance.subAgentParentTarget;
     },
+    get reflectionSessionActive() {
+      return reflectionSessionActive;
+    },
+    get reflectionSourceTarget() {
+      return provenance.reflectionSourceTarget;
+    },
     get sessionParentLink() {
       return provenance.sessionParentLink;
     },
@@ -952,6 +975,9 @@ export function createChatViewNavigation(context) {
     },
     get handleReturnToCurrentSession() {
       return handleReturnToCurrentSession;
+    },
+    get handleReturnToReflectionSource() {
+      return handleReturnToReflectionSource;
     },
     get navigateToParentSession() {
       return navigateToParentSession;

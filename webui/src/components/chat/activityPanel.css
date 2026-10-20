@@ -113,29 +113,48 @@
   line-clamp: 2;
   overflow-wrap: anywhere;
 }
+/* The way back to the parent: a full-width row of its own above the cards,
+   tinted with the accent so it does not get lost among them. */
 .chat-activity__parent-link.btn-tertiary {
-  min-width: 0;
-  max-width: 100%;
-  min-height: 20px;
-  justify-content: flex-end;
-  gap: 5px;
-  margin-left: auto;
-  padding: 0 2px;
-  border: 0;
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 44px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--accent-30);
+  border-radius: var(--r-lg);
+  background: var(--accent-08);
   color: var(--text-hi);
-  font-size: inherit;
-  font-weight: 400;
+  text-align: left;
+}
+.chat-activity__parent-link.btn-tertiary:hover:not(:disabled) {
+  background: var(--accent-12);
 }
 .chat-activity__parent-link svg {
-  flex: 0 0 12px;
+  flex: 0 0 14px;
+  color: var(--accent);
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.5;
 }
+.chat-activity__parent-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.chat-activity__parent-action {
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+}
 .chat-activity__parent-name {
   overflow: hidden;
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

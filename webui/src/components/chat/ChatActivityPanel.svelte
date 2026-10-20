@@ -212,10 +212,12 @@
     return () => clearInterval(intervalId);
   });
 
-  const parentSessionLabel = () =>
-    t('chat.activity.openParentSession', {
-      session: parentSession?.displayName ?? '',
-    });
+  const parentSessionAction = () =>
+    parentSession?.relation === 'reflection'
+      ? t('chat.returnToMainSession')
+      : parentSession?.relation === 'fork'
+        ? t('chat.returnToSourceSession')
+        : t('chat.returnToParentSession');
 
   // Token totals and cost over the Session's and its Sub-Agents' Runs, cache
   // reads as a share of the input; with Sub-Agents, a card splits them.
@@ -325,41 +327,8 @@
   <p class="chat-activity__session-name">
     {session?.displayName ?? t('chat.activity.title')}
   </p>
-  {#if parentSession || session?.createdAt || session?.lastActiveAt}
+  {#if session?.createdAt || session?.lastActiveAt}
     <dl class="chat-activity__facts">
-      {#if parentSession}
-        <div class="chat-activity__fact">
-          <dt>{t('chat.activity.parentSession')}</dt>
-          <dd>
-            <Button
-              variant="tertiary"
-              class="chat-activity__parent-link"
-              ariaLabel={parentSessionLabel()}
-              onClick={() => onNavigateToParentSession(parentSession.target)}
-            >
-              <svg
-                viewBox="0 0 16 16"
-                width="12"
-                height="12"
-                aria-hidden="true"
-              >
-                <path d="M6.5 4 2.5 8l4 4" />
-                <path d="M3 8h6.25a4.25 4.25 0 0 1 4.25 4.25V13" />
-              </svg>
-              <span
-                class="chat-activity__parent-name"
-                use:tooltip={{
-                  text: parentSession.displayName,
-                  whenTruncated: true,
-                  placement: 'left',
-                }}
-              >
-                {parentSession.displayName}
-              </span>
-            </Button>
-          </dd>
-        </div>
-      {/if}
       {#if session?.createdAt}
         <div class="chat-activity__fact">
           <dt>{t('chat.activity.overview.started')}</dt>
@@ -543,6 +512,35 @@
 
 {#if open}
   <aside {id} class="chat-activity" aria-label={t('chat.activity.label')}>
+    <!-- The way back to the parent stays visible above the cards, also while
+         the Session card is folded. -->
+    {#if parentSession}
+      <Button
+        variant="tertiary"
+        class="chat-activity__parent-link"
+        onClick={() => onNavigateToParentSession(parentSession.target)}
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path d="M6.5 4 2.5 8l4 4" />
+          <path d="M3 8h6.25a4.25 4.25 0 0 1 4.25 4.25V13" />
+        </svg>
+        <span class="chat-activity__parent-text">
+          <span class="chat-activity__parent-action">
+            {parentSessionAction()}
+          </span>
+          <span
+            class="chat-activity__parent-name"
+            use:tooltip={{
+              text: parentSession.displayName,
+              whenTruncated: true,
+              placement: 'left',
+            }}
+          >
+            {parentSession.displayName}
+          </span>
+        </span>
+      </Button>
+    {/if}
     {@render card(
       'session',
       t('chat.activity.title'),

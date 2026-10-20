@@ -477,31 +477,46 @@ describe('ChatActivityPanel', () => {
     },
   );
 
-  it('shows the resolved Parent Session as a navigation link', async () => {
-    const onNavigateToParentSession = vi.fn();
-    const target = {
-      agentAddress: 'alpha',
-      sessionId: 'source-session',
-      isSubAgentSession: false,
-    };
-    openPanel({
-      timelineItems: [],
-      parentSession: { displayName: 'Original research', target },
-      onNavigateToParentSession,
-    });
+  it.each([
+    ['subagent', 'chat.returnToParentSession'],
+    ['reflection', 'chat.returnToMainSession'],
+    ['fork', 'chat.returnToSourceSession'],
+  ])(
+    'shows the resolved %s parent as a row of its own above the cards',
+    async (relation, actionKey) => {
+      const onNavigateToParentSession = vi.fn();
+      const target = {
+        agentAddress: 'alpha',
+        sessionId: 'source-session',
+        isSubAgentSession: false,
+      };
+      openPanel({
+        timelineItems: [],
+        parentSession: { displayName: 'Original research', relation, target },
+        onNavigateToParentSession,
+      });
 
-    const parentLink = document.querySelector('.chat-activity__parent-link');
-    expect(parentLink.textContent.trim()).toBe('Original research');
-    expect(parentLink.getAttribute('aria-label')).toBe(
-      t('chat.activity.openParentSession', {
-        session: 'Original research',
-      }),
-    );
+      const parentLink = document.querySelector('.chat-activity__parent-link');
+      expect(parentLink.parentElement.firstElementChild).toBe(parentLink);
+      expect(
+        parentLink.querySelector('.chat-activity__parent-action').textContent,
+      ).toContain(t(actionKey));
+      expect(
+        parentLink.querySelector('.chat-activity__parent-name').textContent,
+      ).toContain('Original research');
 
-    parentLink.click();
-    await Promise.resolve();
-    expect(onNavigateToParentSession).toHaveBeenCalledWith(target);
-  });
+      // Folding the Session card keeps the way back.
+      document.querySelector('[data-card="session"] button').click();
+      flushSync();
+      expect(document.querySelector('.chat-activity__parent-link')).toBe(
+        parentLink,
+      );
+
+      parentLink.click();
+      await Promise.resolve();
+      expect(onNavigateToParentSession).toHaveBeenCalledWith(target);
+    },
+  );
 
   it('asks for the Session change stats while open and shows them', () => {
     const onSessionStatsWanted = vi.fn();
