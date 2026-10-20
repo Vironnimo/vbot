@@ -116,12 +116,17 @@ WIKI_EMPHASIS_COPY = (
 WIKI_EMPHASIS_CLIPPED = " (excerpt)"
 WIKI_STATUS = {
     "created": "Created.",
+    # Receipts saved before passage edits named their lines.
     "passage": "Replaced the passage at line {line}.",
+    "replaced": "Replaced {old} with {new}.",
+    "replaced_same": "Replaced {old}.",
+    "removed": "Removed {old}.",
     "content": "Replaced the whole content.",
     "title": "Renamed the page.",
     "deleted": "Deleted. Restore it with {call}",
     "restored": "Restored revision {revision}.",
     "unchanged": "Nothing changed: the page already holds this change.",
+    "unchanged_passage": "Nothing changed: the page already holds this change, at line {line}.",
     "unchanged_create": "Nothing changed: an identical page already exists.",
     "unchanged_delete": "Nothing changed: the page is already deleted.",
     "unchanged_edits": "Nothing changed: the page already holds these changes.",
@@ -143,6 +148,20 @@ WIKI_SAVED_SHOWN = (
     "Saved page content at revision {revision}, from line {line}: "
     "characters {start} to {end} of {total}."
 )
+# A create or whole-content update saved the caller's text unchanged.
+WIKI_SAVED_SIZE = "Saved as sent: {lines}, {chars}."
+WIKI_SAVED_EMPTY = "The page is now empty."
+WIKI_COUNT_LINES = {"one": "1 line", "many": "{count} lines"}
+WIKI_COUNT_CHARS = {"one": "1 character", "many": "{count} characters"}
+# Where a passage edit's text meets the saved page; lines not repeated show as their range.
+WIKI_SAVED_SEAM = "The saved page around the change, {lines} of {total}:"
+WIKI_LINES = {"one": "line {first}", "many": "lines {first}–{last}"}
+WIKI_SEAM_LINES = {
+    "sent": "[{lines} as in your new_text]",
+    "unchanged": "[{lines} unchanged]",
+    "cut": "[{lines} not shown]",
+}
+WIKI_SEAM_CLIPPED = "[{count} characters not shown]"
 WIKI_LIST_PAGES = "Pages, most recently changed first ({count} shown)."
 WIKI_LIST_MATCHES = 'Pages containing "{query}", most recently changed first ({count} shown).'
 WIKI_LIST_NONE = "The Wiki has no pages yet."

@@ -339,16 +339,33 @@ operation keep returning raw data (`next_call`, `current_revision`, excerpts) fo
 `WikiPanel.svelte`. Agents read plain text: read shows the revision as a sentence,
 a `shown` range and a `more` continuation before the verbatim content; list and
 history render one line per entry; mutations report a `status` sentence (delete
-names the copyable restore call). Content mutations also return a bounded excerpt
-from the exact saved revision (`_store_wiki._content_excerpt`). For an update it
-starts at the line of the first changed character (at most 400 characters before
-it when a line is long) and holds the whole changed passage and the 2 lines after
-it, at most 600 characters past the change and 4000 in all: an update replaced
-eight table rows with ten, and the two old rows it left below went unnoticed while
-the excerpt ended after eight lines (Swarm run 2026-10-13). A create shows up to 8
-lines or 2000 characters from the start. The Store retains the excerpt in the
-mutation receipt, so peer changes cannot alter a replay's evidence; continuations
-pin that revision. A create or update whose written text holds a `[[target]]` or
+names the copyable restore call). Content mutations report evidence from the exact
+saved revision instead of echoing the caller's text: in Swarm run 2026-10-20, 8
+creates and 5 whole-content updates returned all 21,481 excerpt characters as the
+Agent's own text, and 25 passage edits 15,028 of their 20,708. A create or
+whole-content update reports that the page holds the text as sent, with its size in
+lines and characters (`size`), and no content. A passage edit (`old_text` or
+`edits`) shows its seam (`_store_wiki._seam`): for each edit, the line before its
+first changed line, its first and last changed lines, and the 2 lines after it,
+where text the edit left in place would meet it: an update replaced eight table rows
+with ten, and the two old rows it left below went unnoticed while the excerpt ended
+after eight lines (Swarm run 2026-10-13). Whole lines the replaced passage and the
+written text share at their start or end count as context, not change. Lines
+between that hold `new_text` as sent appear as one bracketed range; lines the page
+holds otherwise, such as a kept line `copy_match` left in the page's wording, appear
+in full; lines between two edits appear as an unchanged range. A line over 400
+characters keeps 150 characters on each side of the change and names how many it
+leaves out; the seam keeps at most 4000 characters and then names the remaining
+lines and a revision-pinned read call from the next line. An edit that only removed
+whole lines shows the line before and the 2 lines after the removal. An `old_text`
+update's status names the lines `old_text` covered and those its replacement covers
+(`Replaced lines 29–32 with lines 29–31.`, `Removed lines 4–6.`): the one pure
+deletion of that Run reported `line 29` while its excerpt began at line 32, after
+the removed row, without the row above it. A passage edit the page already held
+names its line instead. Restore keeps its bounded excerpt (`_content_excerpt`): the
+restored text is not the caller's. The Store retains the evidence in the mutation
+receipt, so peer changes cannot alter a replay's evidence; continuations pin that
+revision; receipts saved before keep rendering their excerpt. A create or update whose written text holds a `[[target]]` or
 `#wiki/target` link that names no page by number or stored ID gets a note naming up
 to 5 such links and the page's own link as the form that works: Agents wrote
 `[[page-slug]]` links that open nothing (Swarm run 2026-10-13).
@@ -1381,6 +1398,10 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_wiki` create and update note: `{links} names no page, so it links nowhere. Link a page by its ID, as this page's link does: {link}` (and the plural) | Agents wrote wiki-style `[[page-slug]]` links that open nothing (F3, Swarm run 2026-10-13). The page's own link shows the working form, so the Agent can fix the links in one update. Code and escaped link markers receive no note: a literal code example triggered an irrelevant warning (F4, Swarm run 2026-10-14). |
 | `Nothing was run. action contains merged Tool-call fields instead of one action. Send action as {action} and {field} as a separate parameter; keep its value and the other parameters unchanged.` | 26 collapsed-field Board calls repeatedly received only the valid action list (F2, F5, Swarm run 2026-10-14). Naming the separate fields gives the correction without reconstructing or executing embedded targets or content. |
 | `Nothing was saved. {value} names a discussion, not a post. To post there, use discussion_id: {discussion} and omit message_id and reply_to. To answer a post, use its post ID instead.` | A post sent a discussion number as `message_id`; the error called it a missing `reply_to` post and suggested searching posts (F3, F5, Swarm run 2026-10-14). The message identifies the exact reference kind and both possible intents without redirecting the write. |
+| `swarm_wiki` create and whole-content update status: `Created. Saved as sent: {lines}, {chars}.` and `Replaced the whole content. Saved as sent: ...` (`1 line`, `{count} lines`, `1 character`, `{count} characters`); for an empty page `... The page is now empty.` | Replaces the `shown` range and excerpt of the saved page: in Swarm run 2026-10-20, 8 creates and 5 whole-content updates returned 21,481 excerpt characters, all of them the Agent's own text (F6). `as sent` says the page holds exactly that text and the size shows nothing was cut, so the Agent need not reread to verify (F4). |
+| `swarm_wiki` `old_text` update status: `Replaced {old} with {new}.`, `Replaced {old}.` (same lines), `Removed {old}.`, with `line {first}` or `lines {first}–{last}` | Replaces `Replaced the passage at line {line}.`, which stays for older receipts: the one pure deletion of Swarm run 2026-10-20 reported `line 29` while its excerpt began at line 32 (F4). Both ranges say how the line count moved, so later line references stay right without a reread. |
+| `swarm_wiki` passage edit `shown`: `The saved page around the change, {lines} of {total}:`, then the seam with `[{lines} as in your new_text]`, `[{lines} unchanged]`, `[{lines} not shown]` (followed by `more`) and, inside a long line, `[{count} characters not shown]` | Replaces `Saved page content at revision {revision}, from line {line}: characters {start} to {end} of {total}.` and its excerpt for passage edits: 25 passage edits of Swarm run 2026-10-20 returned 15,028 of their 20,708 excerpt characters as the Agent's own text (F6). The seam keeps what the Agent cannot know: where its text meets the page, including the 2 lines after it (Swarm run 2026-10-13), and lines the page holds other than sent. Each bracket names the lines it stands for, so the line numbers of the shown lines stay countable. |
+| `swarm_wiki` held passage edit: `Nothing changed: the page already holds this change, at line {line}.` | The result no longer shows an excerpt starting at that line; the line keeps the location, as the per-edit `edits` status already does (F4). |
 
 ## Repository Profiles
 

@@ -34,8 +34,8 @@ async def test_wiki_emphasis_copy_replaces_the_complete_intended_row(board, mark
     assert (await stored(board, page_id))["content"] == f"Before\n{replacement}\nAfter"
     assert "Markdown emphasis" in result["data"]["note"]
     assert current in result["data"]["note"]
-    assert result["data"]["content"].startswith(replacement)
-    assert "revision 2" in result["data"]["shown"]
+    assert result["data"]["status"] == "Replaced line 2."
+    assert result["data"]["content"] == f"Before\n{replacement}\nAfter"
 
 
 @pytest.mark.asyncio
@@ -130,7 +130,7 @@ async def test_wiki_emphasis_copy_after_a_long_non_fence_container_line(board, c
     saved = await stored(board, page_id)
     assert saved["content"] == prefix + "Changed"
     assert saved["revision"] == 2
-    assert result["data"]["content"] == "Changed"
+    assert result["data"]["content"].endswith("not a fence\nChanged")
 
 
 @pytest.mark.asyncio
@@ -189,25 +189,39 @@ async def test_wiki_emphasis_copy_without_a_prose_change_keeps_the_existing_revi
     )
     assert result["ok"], result
     assert result["data"]["revision"] == 1
-    assert result["data"]["content"] == current
+    assert result["data"]["status"] == (
+        "Nothing changed: the page already holds this change, at line 1."
+    )
     assert (await stored(board, page_id))["content"] == current
 
 
 @pytest.mark.asyncio
-async def test_wiki_mutation_excerpt_is_bounded_revision_pinned_and_replayable(board):
-    content = "\n".join(f"Row {i}: " + "x" * 400 for i in range(15))
-    page_id = await create(board, content)
+async def test_wiki_seam_is_bounded_revision_pinned_and_replayable(board):
+    rows = [f"Row {i:02d}: " + "x" * 200 for i in range(60)]
+    page_id = await create(board, "\n".join(rows))
     edit = {
         "action": "update",
         "page_id": page_id,
-        "old_text": "Row 4:",
-        "new_text": "Revised row 4:",
+        "edits": [
+            {"old_text": f"Row {i:02d}:", "new_text": f"Revised row {i:02d}:"}
+            for i in range(5, 60, 6)
+        ],
     }
-    result = await invoke(board, edit, tool_call_id="excerpt-edit")
+    result = await invoke(board, edit, tool_call_id="seam-edit")
     data = result["data"]
     assert data["revision"] == 2
-    assert data["content"].startswith("Revised row 4:")
-    assert len(data["content"]) <= 2000
+    # Each edit shows the line before, its line and two after; lines between are named.
+    shown = data["content"].split("\n")
+    assert shown[:6] == [
+        rows[4],
+        rows[5].replace("Row", "Revised row"),
+        rows[6],
+        rows[7],
+        "[lines 9–10 unchanged]",
+        rows[10],
+    ]
+    assert len(data["content"]) <= 4100
+    assert shown[-1].startswith("[lines ") and shown[-1].endswith("–60 not shown]")
     next_call = continuation(data["more"])
     assert next_call["revision"] == 2
     await invoke(
@@ -221,16 +235,19 @@ async def test_wiki_mutation_excerpt_is_bounded_revision_pinned_and_replayable(b
         peer=1,
     )
     more = await invoke(board, next_call)
-    expected = content.replace("Row 4:", "Revised row 4:")
-    assert more["data"]["content"] == expected[next_call["offset"] :]
-    replay = await invoke(board, edit, tool_call_id="excerpt-edit")
-    assert replay["data"]["content"] == data["content"]
-    assert replay["data"]["revision"] == 2
+    saved = "\n".join(rows)
+    for item in edit["edits"]:
+        saved = saved.replace(item["old_text"], item["new_text"])
+    assert more["data"]["content"] == saved[next_call["offset"] :]
+    first_cut = int(shown[-1].removeprefix("[lines ").split("–")[0])
+    assert more["data"]["content"].startswith(saved.split("\n")[first_cut - 1])
+    replay = await invoke(board, edit, tool_call_id="seam-edit")
+    assert (replay["data"]["content"], replay["data"]["revision"]) == (data["content"], 2)
     assert (await stored(board, page_id))["content"] == "Peer revision"
 
 
 @pytest.mark.asyncio
-async def test_wiki_excerpt_shows_the_whole_changed_passage_and_the_lines_after_it(board):
+async def test_wiki_seam_shows_the_changed_passage_edges_and_the_lines_after_it(board):
     old_rows = [f"| {i} | old |" for i in range(10)]
     new_rows = [f"| {i} | new |" for i in range(10)]
     content = "\n".join(["# Table", *old_rows, "Closing line one", "Closing line two"])
@@ -245,54 +262,100 @@ async def test_wiki_excerpt_shows_the_whole_changed_passage_and_the_lines_after_
             "new_text": "\n".join(new_rows),
         },
     )
-    assert result["data"]["content"] == "\n".join([*new_rows, *old_rows[8:]]) + "\n"
+    data = result["data"]
+    assert data["status"] == "Replaced lines 2–9 with lines 2–11."
+    assert data["shown"] == "The saved page around the change, lines 1–13 of 15:"
+    assert data["content"] == "\n".join(
+        ["# Table", new_rows[0], "[lines 3–10 as in your new_text]", new_rows[9], *old_rows[8:]]
+    )
 
 
 @pytest.mark.asyncio
-async def test_wiki_deletion_and_whole_page_replacement_show_actual_saved_content(board):
+async def test_wiki_seam_shows_lines_the_page_holds_other_than_sent(board):
+    page_id = await create(board, "\n".join(f"Line {n}" for n in range(1, 11)))
+    # The kept line 4 was copied with an error; the page keeps its own wording.
+    result = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "old_text": "Line 3\nLine 4 typo\nLine 5\nLine 6\nLine 7",
+            "new_text": "Line 3!\nLine 4 typo\nLine 5\nLine 6\nLine 7!",
+        },
+    )
+    data = result["data"]
+    assert data["status"] == "Replaced lines 3–7."
+    assert data["content"] == (
+        "Line 2\nLine 3!\nLine 4\n[lines 5–6 as in your new_text]\nLine 7!\nLine 8\nLine 9"
+    )
+
+
+@pytest.mark.asyncio
+async def test_wiki_deletion_and_whole_page_replacement_report_what_was_saved(board):
     page_id = await create(board, "Before\nRemove this\nAfter")
     removed = await invoke(
         board,
         {"action": "update", "page_id": page_id, "old_text": "Remove this\n", "new_text": ""},
     )
-    assert removed["data"]["content"] == "After"
+    assert removed["data"]["status"] == "Removed line 2."
+    # The seam starts one line before the removed lines.
+    assert removed["data"]["content"] == "Before\nAfter"
     replaced = await invoke(
         board,
-        {"action": "update", "page_id": page_id, "content": "", "expected_revision": 2},
+        {
+            "action": "update",
+            "page_id": page_id,
+            "content": "A\nB\nC\nD\nE",
+            "expected_revision": 2,
+        },
     )
-    assert replaced["data"]["content"] == ""
+    assert replaced["data"]["status"] == (
+        "Replaced the whole content. Saved as sent: 5 lines, 9 characters."
+    )
+    assert "content" not in replaced["data"] and "more" not in replaced["data"]
+    shortened = await invoke(
+        board,
+        {"action": "update", "page_id": page_id, "old_text": "B\nC\nD", "new_text": "B\nD"},
+    )
+    assert shortened["data"]["status"] == "Replaced lines 2–4 with lines 2–3."
+    assert shortened["data"]["content"] == "B\nD\nE"
+    emptied = await invoke(
+        board,
+        {"action": "update", "page_id": page_id, "content": "", "expected_revision": 4},
+    )
+    assert emptied["data"]["status"] == "Replaced the whole content. The page is now empty."
+    assert "content" not in emptied["data"]
     assert (await stored(board, page_id))["content"] == ""
-    assert (await stored(board, page_id))["revision"] == 3
+    assert (await stored(board, page_id))["revision"] == 5
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"], ids=["LF", "CRLF", "CR"])
-async def test_wiki_excerpt_shows_a_change_late_in_a_long_line_and_end_deletion(board, newline):
-    first_line = "First line must stay outside the changed excerpt." + newline
+async def test_wiki_seam_shows_a_change_late_in_a_long_line_and_end_deletion(board, newline):
+    first_line = "First line, the line before the change."
     prefix, suffix = "Before " * 500, " After" * 500
-    page_id = await create(board, first_line + prefix + "OLD VALUE" + suffix)
+    page_id = await create(board, first_line + newline + prefix + "OLD VALUE" + suffix)
     changed = await invoke(
         board,
         {"action": "update", "page_id": page_id, "old_text": "OLD VALUE", "new_text": "NEW VALUE"},
     )
     data = changed["data"]
-    assert "from line 2:" in data["shown"]
-    assert first_line not in data["content"]
-    assert "NEW VALUE" in data["content"]
-    assert len(data["content"]) <= 2000
-    next_call = continuation(data["more"])
-    assert next_call["revision"] == 2
-    actual = first_line + prefix + "NEW VALUE" + suffix
-    assert (
-        data["content"] == actual[next_call["offset"] - len(data["content"]) : next_call["offset"]]
+    assert data["status"] == "Replaced line 2."
+    # A long line keeps 150 characters on each side of the changed text.
+    line = prefix + "NEW VALUE" + suffix
+    start, end = len(prefix) - 150, len(prefix) + len("NEW VALUE") + 150
+    assert data["content"] == (
+        f"{first_line}\n[{start} characters not shown]{line[start:end]}"
+        f"[{len(line) - end} characters not shown]"
     )
-    tail = await invoke(board, next_call)
-    assert tail["data"]["content"] == actual[next_call["offset"] :]
+    assert "more" not in data
     removed = await invoke(
         board,
         {"action": "update", "page_id": page_id, "old_text": suffix, "new_text": ""},
     )
-    assert removed["data"]["content"].endswith("NEW VALUE")
+    kept = prefix + "NEW VALUE"
+    assert removed["data"]["content"] == (
+        f"{first_line}\n[{len(kept) - 300} characters not shown]{kept[-300:]}"
+    )
     assert "more" not in removed["data"]
-    assert "from line 2:" in removed["data"]["shown"]
-    assert (await stored(board, page_id))["content"] == first_line + prefix + "NEW VALUE"
+    assert (await stored(board, page_id))["content"] == first_line + newline + kept

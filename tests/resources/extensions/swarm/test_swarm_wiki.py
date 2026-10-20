@@ -477,9 +477,8 @@ async def test_wiki_results_read_as_text(board):
     author = board.swarm["participants"][0]["display_name"]
     assert visible(created) == (
         f"page_id: {page_id}\ntitle: Plan\nrevision: 1\nlink: [Plan](#wiki/{page_id})\n"
-        "status: Created.\n"
-        "shown: Saved page content at revision 1, from line 1: characters 0 to 16 of 16.\n"
-        'note: create needs a title; used the first heading, "Plan".\n\n# Plan\n\nStep one'
+        "status: Created. Saved as sent: 3 lines, 16 characters.\n"
+        'note: create needs a title; used the first heading, "Plan".'
     )
     assert visible(await invoke(board, {"action": "read", "page_id": page_id})) == (
         f"page_id: {page_id}\ntitle: Plan\nrevision: 1 (current), saved by {author}\n"
@@ -500,7 +499,11 @@ async def test_wiki_results_read_as_text(board):
     edited = await invoke(
         board, {"action": "update", "page_id": page_id, "old_text": "Step one", "new_text": "Done"}
     )
-    assert edited["data"]["status"] == "Replaced the passage at line 3."
+    assert visible(edited) == (
+        f"page_id: {page_id}\ntitle: Plan\nrevision: 2\nlink: [Plan](#wiki/{page_id})\n"
+        "status: Replaced line 3.\n"
+        "shown: The saved page around the change, lines 2–3 of 3:\n\n\nDone"
+    )
     history = visible(await invoke(board, {"action": "history", "page_id": page_id}))
     assert re.fullmatch(
         rf'history: Revisions of "Plan" \({page_id}\), newest first \(2 shown\)\.\n\n'
@@ -614,7 +617,7 @@ async def test_wiki_request_ids_come_from_the_tool_call(board):
         (
             "Intro\nStatus: final\nNext: review\nEnd",
             {"old_text": "Status: done\nNext: review", "new_text": "Status: final\nNext: review"},
-            "Nothing changed: the page already holds this change.",
+            "Nothing changed: the page already holds this change, at line 2.",
         ),
         (
             "Intro\nTimeout is 30 seconds for retries\nEnd",
@@ -622,13 +625,13 @@ async def test_wiki_request_ids_come_from_the_tool_call(board):
                 "old_text": "Timeout is 20 seconds for retries",
                 "new_text": "Timeout is 30 seconds for retries",
             },
-            "Nothing changed: the page already holds this change.",
+            "Nothing changed: the page already holds this change, at line 2.",
         ),
         # A table row's empty cells after the change anchor it with the cells before.
         (
             "| B01 | 1 (H) | *free* | |\n| B02 | 2 (He) | Alba | |\n| B03 | 3 (Li) | *free* | |",
             {"old_text": "| B02 | 2 (He) | *free* | |", "new_text": "| B02 | 2 (He) | Alba | |"},
-            "Nothing changed: the page already holds this change.",
+            "Nothing changed: the page already holds this change, at line 2.",
         ),
         (
             "Intro\nStatus: final\nNext: review\nTimeout is 30 seconds for retries\nEnd",
@@ -971,7 +974,9 @@ async def test_wiki_conflicts_show_what_changed_and_the_retry(board):
     # A stale passage edit the peer already made changes nothing; another change of that
     # passage names the revision and author that changed it, which the changes show.
     same = {**stale, "old_text": "Status: pending", "new_text": "Status: done"}
-    assert (await invoke(board, same))["data"]["status"] == WIKI_STATUS["unchanged"]
+    assert (await invoke(board, same))["data"]["status"] == WIKI_STATUS["unchanged_passage"].format(
+        line=2
+    )
     other = await invoke(board, {**same, "new_text": "Status: blocked"})
     lines = other["error"]["message"].splitlines()
     assert "-Status: pending" in lines and "+Status: done" in lines

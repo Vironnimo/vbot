@@ -417,9 +417,12 @@ def _mutation(action: str, data: Json, arguments: Json) -> Json:
     status = text.WIKI_STATUS
     if data.get("unchanged"):
         key = "unchanged_edits" if "edits" in arguments else f"unchanged_{action}"
-        rendered["status"] = status.get(key, status["unchanged"])
+        if "old_text" in arguments and "line" in data:
+            rendered["status"] = status["unchanged_passage"].format(line=data["line"])
+        else:
+            rendered["status"] = status.get(key, status["unchanged"])
     elif action == "create":
-        rendered["status"] = status["created"]
+        rendered["status"] = _sized(status["created"], data)
     elif action == "delete":
         rendered["status"] = status["deleted"].format(
             call=_call({"action": "restore", "page_id": reference, "revision": data["revision"]})
@@ -429,14 +432,17 @@ def _mutation(action: str, data: Json, arguments: Json) -> Json:
     else:
         parts = []
         if "old_text" in arguments:
-            parts.append(status["passage"].format(line=data.get("line", 1)))
+            parts.append(_replaced(data))
         elif "edits" in arguments:
             parts.append(_edits_status(data["edits"]))
         elif "content" in arguments:
-            parts.append(status["content"])
+            parts.append(_sized(status["content"], data))
         if "title" in arguments:
             parts.append(status["title"])
         rendered["status"] = " ".join(parts)
+    seam = data.get("seam")
+    if seam is not None:
+        rendered.update(_seam(seam, reference, data["revision"]))
     excerpt = data.get("content_excerpt")
     if excerpt is not None:
         end = excerpt["offset"] + len(excerpt["content"])
@@ -460,3 +466,84 @@ def _mutation(action: str, data: Json, arguments: Json) -> Json:
                 )
             )
     return rendered
+
+
+def _line_span(first: int, last: int) -> str:
+    """Name lines: "line 3", "lines 3–5"."""
+
+    return text.WIKI_LINES["one" if first == last else "many"].format(first=first, last=last)
+
+
+def _count(forms: dict[str, str], count: int) -> str:
+    return forms["one" if count == 1 else "many"].format(count=count)
+
+
+def _sized(status: str, data: Json) -> str:
+    """Add to a create's or whole-content update's status that the page holds the text as sent.
+
+    The text is the caller's own, so its size is the evidence; receipts saved
+    before sizes were recorded have none.
+    """
+
+    size = data.get("size")
+    if size is None:
+        return status
+    if not size["chars"]:
+        return f"{status} {text.WIKI_SAVED_EMPTY}"
+    saved = text.WIKI_SAVED_SIZE.format(
+        lines=_count(text.WIKI_COUNT_LINES, size["lines"]),
+        chars=_count(text.WIKI_COUNT_CHARS, size["chars"]),
+    )
+    return f"{status} {saved}"
+
+
+def _replaced(data: Json) -> str:
+    """Name the lines old_text covered and the lines its replacement covers now."""
+
+    status = text.WIKI_STATUS
+    replaced = data.get("replaced")
+    if replaced is None:
+        return status["passage"].format(line=data.get("line", 1))
+    old = _line_span(*replaced["old"])
+    first, last = replaced["new"]
+    if last < first:
+        return status["removed"].format(old=old)
+    if replaced["new"] == replaced["old"]:
+        return status["replaced_same"].format(old=old)
+    return status["replaced"].format(old=old, new=_line_span(first, last))
+
+
+def _seam(seam: Json, reference: str, revision: int) -> Json:
+    """Render where a passage edit's text meets the saved page."""
+
+    rendered: Json = {
+        "shown": text.WIKI_SAVED_SEAM.format(
+            lines=_line_span(seam["first"], seam["last"]), total=seam["lines"]
+        ),
+        "content": "\n".join(map(_seam_part, seam["parts"])),
+    }
+    if "offset" in seam:
+        read = {"action": "read", "page_id": reference, "revision": revision}
+        rendered["more"] = text.WIKI_READ_MORE.format(
+            call=_call({**read, "offset": seam["offset"]})
+        )
+    return rendered
+
+
+def _seam_part(part: Json) -> str:
+    """Render one seam part: a page line, a long line's excerpts, or a range of lines."""
+
+    if "lines" in part:
+        return text.WIKI_SEAM_LINES[part["kind"]].format(lines=_line_span(*part["lines"]))
+    if "text" in part:
+        return str(part["text"])
+    shown: list[str] = []
+    end = 0
+    for start, piece in part["pieces"]:
+        if start > end:
+            shown.append(text.WIKI_SEAM_CLIPPED.format(count=start - end))
+        shown.append(piece)
+        end = start + len(piece)
+    if end < part["chars"]:
+        shown.append(text.WIKI_SEAM_CLIPPED.format(count=part["chars"] - end))
+    return "".join(shown)
