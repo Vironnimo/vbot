@@ -998,6 +998,7 @@ def test_typographic_quotes_that_end_a_powershell_string_are_named(
     assert annotate_failure(command, 0, output) is None
 
 
+_NODE_FAILED = ("node.exe exited with code 1",)
 # What Python on Windows prints when it writes to an output that was closed.
 _CLOSED_OUTPUT = (
     "Traceback (most recent call last):\n"
@@ -1027,37 +1028,53 @@ _CLOSED_OUTPUT = (
             ("`Select-Object -First 3`", "python", "code 2"),
         ),
         (
-            "foreach ($u in 'a', 'b') { python check.py $u 2>&1 | Select-String hits | "
-            "Select-Object -First 1 }",
-            "hits=0",
-            _FAILED * 2,
-            2,
-            ("`Select-Object -First 1`", "code 1"),
-        ),
-        (
             "& 'C:/venv/Scripts/python.exe' build.py *>&1 | select -f:4; 'done'",
             "step",
             _FAILED,
             5,
             ("`select -f:4`", "python"),
         ),
-        # $LASTEXITCODE read after the stage does not hold the program's code.
+        (
+            "cd app; node tests/check.js 2>&1 | Select-Object -Skip 2 -First 20",
+            "checked",
+            ("node.exe exited with code 1 (tests/check.js)",),
+            20,
+            ("`Select-Object -Skip 2 -First 20`", "node", "code 1"),
+        ),
+        # $LASTEXITCODE read after a stage that passed its lines does not hold the
+        # program's code; a stage that did not fill waited for the program.
+        (
+            'python check.py 2>&1 | Select-Object -First 3; "exit=$LASTEXITCODE"',
+            "error: bad url",
+            _FAILED,
+            4,
+            ("`Select-Object -First 3`", "$LASTEXITCODE"),
+        ),
         (
             'python check.py 2>&1 | Select-Object -First 3; "exit=$LASTEXITCODE"',
             "error: bad url",
             _FAILED,
             3,
-            ("`Select-Object -First 3`", "$LASTEXITCODE"),
+            None,
         ),
         # No failed program: it finished its work; its errors bypassed the stage;
         # a run outside such a pipeline may have failed.
         ("python build.py 2>&1 | Select-Object -First 8", "step", (), 8, None),
-        # The output already shows why it failed.
+        # The output already shows why it failed, in any language or as a mark.
         (
             "python check.py --url x 2>&1 | Select-Object -First 3",
             "Traceback (most recent call last):\nValueError: bad url",
             ("python.exe exited with code 2",),
             3,
+            None,
+        ),
+        ("node t.js 2>&1 | Select-Object -First 2", "FEHLER  page.html", _NODE_FAILED, 2, None),
+        ("node t.js 2>&1 | Select-Object -First 2", "   \u2717 page.html", _NODE_FAILED, 2, None),
+        (
+            "node t.js 2>&1 | Select-Object -First 2",
+            "AssertionError [ERR_ASSERTION]: 1 == 2",
+            _NODE_FAILED,
+            2,
             None,
         ),
         ("python build.py | Select-Object -First 8", "ValueError: bad", _FAILED, 8, None),
@@ -1068,95 +1085,37 @@ _CLOSED_OUTPUT = (
             8,
             None,
         ),
-        # Recorded selectors identify a failed call among distinct Python calls.
-        (
-            "python -m compileall .; python -m package.check 2>&1 | Select-Object -First 2",
-            "checked",
-            ("python.exe exited with code 2 (-m package.check)",),
-            8,
-            ("python -m package.check", "code 2", "`Select-Object -First 2`"),
-        ),
-        (
-            "python -u 'scripts/check.py' 2>&1 | Select-Object -First 2; python report.py",
-            "checked",
-            (
-                "python.exe exited with code 2 (scripts/check.py)",
-                "python.exe exited with code 3 (report.py)",
-            ),
-            8,
-            ("python scripts/check.py", "code 2"),
-        ),
-        (
-            'python "scripts/check files.py" 2>&1 | Select-Object -First 2; python report.py',
-            "checked",
-            ("python.exe exited with code 2 (scripts/check files.py)",),
-            8,
-            ("python scripts/check files.py", "code 2"),
-        ),
-        (
-            "python one.py 2>&1 | Select-Object -First 2; "
-            "python two.py 2>&1 | Select-Object -First 3",
-            "checked",
-            ("python.exe exited with code 2 (two.py)",),
-            8,
-            ("python two.py", "code 2", "`Select-Object -First 3`"),
-        ),
-        # A different or unavailable selector never implicates the trimmed call.
+        # Another statement's output makes the stage's lines unknown, and shared
+        # output cannot establish which of two calls hit the closed pipe.
         (
             "python check.py 2>&1 | Select-Object -First 2; python report.py",
             "checked",
-            ("python.exe exited with code 2 (report.py)",),
-            8,
-            None,
-        ),
-        (
-            "python check.py 2>&1 | Select-Object -First 2; python report.py",
-            "checked",
-            _FAILED,
-            8,
-            None,
-        ),
-        (
-            "python check.py 2>&1 | Select-Object -First 2; python ./check.py --other",
-            "checked",
             ("python.exe exited with code 2 (check.py)",),
             8,
             None,
         ),
-        (
-            'python -c "one()" 2>&1 | Select-Object -First 2; python -c "two()"',
-            "checked",
-            ("python.exe exited with code 2 (-c)",),
-            8,
-            None,
-        ),
-        (
-            "python check.py 2>&1 | Select-Object -First 2; python $other",
-            "checked",
-            ("python.exe exited with code 2 (check.py)",),
-            8,
-            None,
-        ),
-        (
-            "python check.py 2>&1 | Select-Object -First 2; python report.py | python check.py",
-            "checked",
-            ("python.exe exited with code 2 (check.py)",),
-            8,
-            None,
-        ),
-        (
-            "python check.py 2>&1 | Select-Object -First 2; python report.py (python check.py)",
-            "checked",
-            ("python.exe exited with code 2 (check.py)",),
-            8,
-            None,
-        ),
-        # Shared output cannot establish which of two calls hit the closed pipe.
         (
             "python check.py 2>&1 | Select-Object -First 2; python report.py",
             _CLOSED_OUTPUT,
             ("python.exe exited with code 2 (check.py)",),
             8,
+            None,
+        ),
+        ("Write-Output 'a'; node t.js 2>&1 | Select-Object -First 3", "a", _NODE_FAILED, 3, None),
+        # A stage behind another stage, or inside a block, passed fewer lines than
+        # the command printed.
+        (
+            "node t.js 2>&1 | Select-String Fehler | Select-Object -First 12",
+            "page.html",
+            _NODE_FAILED,
+            12,
+            None,
+        ),
+        (
+            "foreach ($u in 'a', 'b') { python check.py $u 2>&1 | Select-Object -First 1 }",
+            "hits=0",
+            _FAILED * 2,
+            2,
             None,
         ),
         # The output never reached 8 lines, -Wait lets it finish, a query loses

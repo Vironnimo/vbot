@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-import bisect
 import re
 from collections.abc import Callable, Sequence
-from pathlib import PureWindowsPath
 
 from . import _shell_hint_common as _common
 from ._shell_hint_code import (
+    _COMMAND_WORD,
     _FIRST_STAGE,
     _PIPELINE_PROGRAM,
-    _PIPELINE_START,
     _POWERSHELL_NOT_RECOGNIZED,
     _calls,
     _powershell_code,
     _program_at,
     _top_level_split,
     _top_level_statements,
+    _working_program,
 )
 from ._shell_hint_common import (
     _DEV_NULL,
@@ -44,12 +43,14 @@ _CLOSED_OUTPUT = re.compile(
 _STAGE_SHOWN_CHARS = 60
 _LAST_EXIT_CODE = re.compile(r"\$LASTEXITCODE\b", re.I)
 # A line that says why a program failed: an exception (Python, Node, .NET), an
-# error or fatal message, possibly after the program's name (argparse's
-# "prog: error: ..."), or unittest's FAIL/ERROR lines.
+# error or fatal message in English, German, French, Italian, Spanish or
+# Portuguese, possibly after the program's name (argparse's "prog: error: ..."),
+# unittest's FAIL/ERROR lines, TAP's "not ok", or a failure mark; also as a
+# Select-String context line ("> ").
 _ERROR_LINE = re.compile(
-    r"^[ \t]*+(?:[\w.]*(?:Error|Exception)(?::|$)"
-    r"|(?:[\w.-]++:[ \t]*+)?(?:error|fatal|ERROR|FATAL|Error)\b[:!]?[ \t]"
-    r"|FAIL(?:ED)?\b|npm ERR!)",
+    r"^[ \t]*+(?:>[ \t]*+)?(?:[\w.]*(?:Error|Exception)(?:[ \t]\[\w+\])?(?::|$)"
+    r"|(?:[\w.-]++:[ \t]*+)?(?i:error|erreur|errore|erro|fehler|fatal)\b[:!]?[ \t]"
+    r"|FAIL(?:ED)?\b|npm ERR!|not ok\b|[\u2717\u2718\u2716\u274c])",
     re.M,
 )
 
@@ -81,91 +82,6 @@ def _stage_text(command: str, code: str, start: int, end: int) -> str:
     return text
 
 
-_LITERAL_PYTHON_SELECTOR = re.compile(
-    r"[ \t]+(?:-[bBdEiIOPqsSuvx]+[ \t]+)*(?P<module>-m[ \t]+)?"
-    r"(?P<selector>\"[^\"\r\n]*+\"|'[^'\r\n]*+'|[^\s|;&<>(){}'\"]++)"
-    r"(?=$|[\s|;&<>])"
-)
-_EXIT_WITH_INVOCATION = re.compile(r"(\d+)(?: \(0x[0-9A-F]{8}\))? \(([^\r\n]+)\)")
-
-
-def _invocation_key(selector: str) -> str | None:
-    """Comparable literal module/script identity; inline code has no identity."""
-    if selector.startswith("-m "):
-        module = selector[3:]
-        return selector if all(part.isidentifier() for part in module.split(".")) else None
-    if (
-        not selector.lower().endswith((".py", ".pyw", ".pyz"))
-        or any(char in selector for char in "$`*?[]")
-        or not selector.isprintable()
-    ):
-        return None
-    return PureWindowsPath(selector).as_posix().casefold()
-
-
-def _first_invocation_failures(
-    command: str, code: str, program: str, failed_programs: Sequence[str]
-) -> dict[int, tuple[str, list[str]]]:
-    """Correlate one failure only within simple, separate literal Python calls.
-
-    Nested expressions, another command family, unknown selectors or an extra
-    native pipeline stage leave attribution unknown. A repeated selector also
-    cannot tell which invocation failed, even when its arguments differ.
-    """
-    if not re.fullmatch(r"pythonw?(?:\d+(?:\.\d+)*)?", program):
-        return {}
-    if re.search(r"[(){}=`]|\|\|", code):
-        return {}
-    selectors: dict[int, str] = {}
-    occurrences: dict[str, int] = {}
-    for left, right in _top_level_statements(code):
-        if _program_at(command, code, left, right) != program:
-            return {}
-        first = _PIPELINE_PROGRAM.match(code, left, right)
-        assert first is not None
-        # Only the leading call operator and stream-merging redirections may
-        # contain &: chains or another invocation would defeat the correlation.
-        if "&" in re.sub(r"[0-6*]>&[0-6]", "", code[first.end() : right]):
-            return {}
-        for pipe in re.finditer(r"\|", code[first.end() : right]):
-            stage = _PIPELINE_PROGRAM.match(code, first.end() + pipe.end(), right)
-            if stage is None or stage[1].lower() not in (
-                "select",
-                "select-object",
-                "select-string",
-            ):
-                return {}
-        match = _LITERAL_PYTHON_SELECTOR.match(command, first.end(), right)
-        if match is None:
-            return {}
-        selector = match["selector"]
-        if selector[0] in "'\"":
-            selector = selector[1:-1]
-        if match["module"]:
-            selector = f"-m {selector}"
-        key = _invocation_key(selector)
-        if key is None:
-            return {}
-        selectors[left] = key
-        occurrences[key] = occurrences.get(key, 0) + 1
-    failures: dict[str, tuple[str, list[str]]] = {}
-    for entry in failed_programs:
-        name, _, detail = entry.partition(" exited with code ")
-        if name.lower().removesuffix(".exe") != program:
-            continue
-        failure = _EXIT_WITH_INVOCATION.fullmatch(detail)
-        if failure is None or (key := _invocation_key(failure[2])) is None:
-            continue
-        _, codes = failures.setdefault(key, (failure[2], []))
-        if failure[1] not in codes:
-            codes.append(failure[1])
-    return {
-        left: failures[key]
-        for left, key in selectors.items()
-        if occurrences[key] == 1 and key in failures
-    }
-
-
 def _hint_first_stage(
     command: str,
     exit_code: int | None,
@@ -183,58 +99,46 @@ def _hint_first_stage(
     stage also drops an error the program merged into the output after line N:
     a script's own usage error and an HTTP error read as a stop it was not.
 
-    So a failed run of the pipeline's program is required, and a stop is named
-    only with the closed output's error in the output. Otherwise, when the stage
-    received the program's errors (2>&1), the hint names the program's failure
-    and that the stage can have hidden why. A program also run outside such a
-    pipeline gets a hint only when a recorded literal Python selector identifies
-    this invocation among simple, separate calls; their shared output cannot
-    prove which call failed at a closed pipe.
+    So the stage must directly follow the program, as the first stage of a
+    top-level statement without && or ||, and that program must have a failed
+    run. A stop is named only with the closed output's error in the output and
+    the program run once. Otherwise the stage must provably have passed N lines:
+    the program's errors went into it (2>&1), it is the statement's last stage,
+    and every other statement prints nothing or a literal string, so the
+    statement's own lines are known. A stage behind another one, such as
+    Select-String, or inside a block passed fewer lines than the command printed
+    (Swarm run 2026-10-20: 4 of 6 such hints).
     """
     if not _common._POWERSHELL or "|" not in command or not failed_programs:
         return None
-    code = _powershell_code(command).flat
-    starts = [0, *(match.end() for match in _PIPELINE_START.finditer(code))]
-    staged: dict[int, tuple[re.Match[str], int]] = {}
-    for stage in _FIRST_STAGE.finditer(code):
-        count = _FIRST_COUNT.search(stage["arguments"])
-        if count is None or _WAIT.search(stage["arguments"]):
-            continue
-        start = starts[bisect.bisect_right(starts, stage.start()) - 1]
-        if start not in staged and 0 < int(count[1]) <= output_lines:
-            staged[start] = (stage, int(count[1]))
-    if not staged:
-        return None
-    occurrences: dict[str, int] = {}
-    for start in starts:
-        if (program := _program_at(command, code, start)) is not None:
-            occurrences[program] = occurrences.get(program, 0) + 1
-    # Correlation requires every statement to call the same Python program, so
-    # one attempt also settles every other candidate, without rescanning.
-    invocations: dict[int, tuple[str, list[str]]] | None = None
+    flat = _powershell_code(command).flat
+    statements = _top_level_statements(flat)
     window = _scan_window(output)
-    for start, (stage, lines) in staged.items():
-        program = _program_at(command, code, start, stage.start())
-        if program is None:
+    for left, right in statements:
+        if _top_level_split(flat, left, right, _CHAIN):
             continue
-        correlated = occurrences.get(program, 0) > 1
-        if correlated:
-            if invocations is None:
-                invocations = _first_invocation_failures(command, code, program, failed_programs)
-            identity = invocations.get(start)
-            if identity is None:
-                continue
-            selector, codes = identity
-            program = f"{program} {selector}"
-        else:
-            codes = _exit_codes(failed_programs, program)
-        if not codes:
+        pipes = _top_level_split(flat, left, right, _PIPE)
+        if not pipes:
             continue
-        written = _stage_text(command, code, stage.start() + 1, stage.end())
+        stage = _FIRST_STAGE.match(flat, pipes[0], pipes[1] if len(pipes) > 1 else right)
+        if stage is None:
+            continue
+        count = _FIRST_COUNT.search(stage["arguments"])
+        if count is None or _WAIT.search(stage["arguments"]) or int(count[1]) <= 0:
+            continue
+        lines = int(count[1])
+        program = _program_at(command, flat, left, pipes[0])
+        codes = [] if program is None else _exit_codes(failed_programs, program)
+        if program is None or not codes:
+            continue
+        written = _stage_text(command, flat, stage.start() + 1, stage.end())
         counted = f"{lines} line{'' if lines == 1 else 's'}"
         zero = ", although the command exited with code 0" if exit_code == 0 else ""
-        closed = None if correlated else _CLOSED_OUTPUT.search(window)
-        if closed is not None:
+        runs = sum(
+            _program_at(command, flat, run.end()) == program for run in _RUN_START.finditer(flat)
+        ) + (_program_at(command, flat, 0) == program)
+        closed = _CLOSED_OUTPUT.search(window)
+        if closed is not None and runs == 1 and lines <= output_lines:
             return (
                 f"`{written}` closed {program}'s output after {counted}, and {program} failed "
                 f"at its next write ({closed[0].strip()}){zero}: what {program} does after "
@@ -242,9 +146,14 @@ def _hint_first_stage(
                 "without that stage (long output keeps its first and last lines), or add "
                 "-Wait to Select-Object."
             )
+        # Errors that bypassed the stage count among the statement's lines.
+        if len(pipes) > 1 or not _MERGED_ERRORS.search(flat, left, stage.start()):
+            continue
+        own = _own_lines(command, flat, statements, left, output_lines)
+        if own is None or own < lines:
+            continue
         parts: list[str] = []
-        # Its errors went into the stage, and the output shows no line saying why.
-        if _MERGED_ERRORS.search(code, start, stage.start()) and not _ERROR_LINE.search(window):
+        if not _ERROR_LINE.search(window):
             parts.append(
                 f"Its output, errors included (2>&1), went through `{written}`, which passes on "
                 f"only the first {counted} and then closes that output: the lines that say why "
@@ -267,6 +176,49 @@ def _hint_first_stage(
             + " ".join(parts)
         )
     return None
+
+
+# Where a program can run: after a separator, a pipe or an opening bracket.
+_RUN_START = re.compile(r"[;\n{(|]|&&")
+# Statements that print nothing: a change of location, or an assignment.
+_LOCATION_CHANGE = re.compile(
+    r"(?:cd|chdir|sl|Set-Location|Push-Location|pushd|Pop-Location|popd)(?:[ \t]+[^|&(){}]*+)?",
+    re.IGNORECASE,
+)
+_ASSIGNMENT = re.compile(r"\$[\w:]+[ \t]*+[-+*/]?=(?!=)")
+# A statement that prints one literal string.
+_LITERAL_PRINT = re.compile(
+    r"(?:(?:Write-Output|Write-Host|echo|write)[ \t]+)?(?:'[^']*+'|\"[^\"`]*+\")", re.IGNORECASE
+)
+
+
+def _own_lines(
+    command: str, flat: str, statements: list[tuple[int, int]], own: int, output_lines: int
+) -> int | None:
+    """The lines the statement starting at *own* printed: the command's lines
+    less the other statements', when each of those prints nothing or a literal
+    string; None when another statement can print more."""
+    other = 0
+    for left, right in statements:
+        if left == own:
+            continue
+        code = flat[left:right].strip()
+        text = command[left:right].strip()
+        if _LOCATION_CHANGE.fullmatch(code) and not re.search(r"-pa", code, re.IGNORECASE):
+            continue
+        assignment = _ASSIGNMENT.match(code)
+        if assignment is not None:
+            value = code[assignment.end() :]
+            if "&" in value or re.search(r"write-host", value, re.IGNORECASE):
+                return None
+            if any(_working_program(word[0]) for word in _COMMAND_WORD.finditer(value)):
+                return None
+            continue
+        if _LITERAL_PRINT.fullmatch(text) and "$(" not in text:
+            other += text.count("\n") + 1
+            continue
+        return None
+    return output_lines - other
 
 
 _CHAIN = re.compile(r"&&|\|\|")
