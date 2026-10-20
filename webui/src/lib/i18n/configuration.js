@@ -1037,10 +1037,11 @@ export default Object.freeze({
     'Add the local endpoint. Models are discovered now and loaded only when used.',
   'settings.providers.add.localSubmit': 'Add provider',
   'settings.providers.custom.addButton': 'Add custom',
-  'settings.providers.custom.addTitle': 'Add Custom Provider',
-  'settings.providers.custom.editTitle': 'Edit Custom Provider',
+  'settings.providers.custom.addTitle': 'Add custom provider',
+  'settings.providers.custom.editTitle': 'Edit custom provider',
   'settings.providers.custom.intro':
     'Connect an OpenAI-compatible endpoint you control and describe its Models.',
+  'settings.providers.custom.connectionTitle': 'Connection',
   'settings.providers.custom.id': 'Provider id',
   'settings.providers.custom.idHint':
     'Stable id used in Model references, for example local-ai.',
@@ -1048,6 +1049,7 @@ export default Object.freeze({
   'settings.providers.custom.adapter': 'Adapter',
   'settings.providers.custom.adapterOpenAiCompatible': 'OpenAI compatible',
   'settings.providers.custom.auth': 'Authentication',
+  'settings.providers.custom.authMethod': 'Method',
   'settings.providers.custom.authApiKey': 'Bearer API key',
   'settings.providers.custom.authNone': 'No API key',
   'settings.providers.custom.baseUrl': 'Endpoint URL',
@@ -1056,23 +1058,33 @@ export default Object.freeze({
   'settings.providers.custom.baseUrlPlaceholder': 'http://127.0.0.1:8080/v1',
   'settings.providers.custom.modelsEndpoint': 'Model discovery path',
   'settings.providers.custom.modelsEndpointHint':
-    'Optional OpenAI-compatible path. Leave empty to use manual Models only.',
+    'Optional. Leave empty to use manual Models only.',
   'settings.providers.custom.modelsEndpointPlaceholder': '/models',
-  'settings.providers.custom.apiKey': 'API key (optional)',
-  'settings.providers.custom.replaceApiKey': 'Replace API key (optional)',
+  'settings.providers.custom.apiKey': 'API key',
+  'settings.providers.custom.replaceApiKey': 'Replace API key',
+  'settings.providers.custom.apiKeyNewHint':
+    'Optional. Stored in vBot’s encrypted Secret Store.',
   'settings.providers.custom.apiKeyHint':
     'Stored in vBot’s encrypted Secret Store. Leave empty to keep the current key.',
   'settings.providers.custom.modelsTitle': 'Manual Models',
   'settings.providers.custom.modelsHint':
-    'Manual facts override discovered Models with the same wire id.',
+    'Describe Models the endpoint does not list, or correct the facts of listed ones. A manual Model overrides a discovered Model with the same wire id.',
+  'settings.providers.custom.modelsHintAria': 'About manual Models',
   'settings.providers.custom.addModel': 'Add Model',
   'settings.providers.custom.noModels':
-    'No manual Models. Use discovery or add one here.',
+    'No manual Models. Discovered Models appear without one.',
   'settings.providers.custom.modelId': 'Wire id',
+  'settings.providers.custom.modelIdHint': 'The Model id the endpoint expects.',
   'settings.providers.custom.modelNumber': 'Model {number}',
   'settings.providers.custom.modelName': 'Display name',
+  'settings.providers.custom.modelContext': '{tokens} context',
+  'settings.providers.custom.modelDetailsAria': 'Details for {model}',
+  'settings.providers.custom.modelHasErrors':
+    'Some fields of this Model need fixing.',
+  'settings.providers.custom.removeModel': 'Remove Model',
   'settings.providers.custom.contextWindow': 'Context window',
   'settings.providers.custom.maxOutput': 'Max output tokens',
+  'settings.providers.custom.capabilities': 'Capabilities',
   'settings.providers.custom.inputModalities': 'Input modalities',
   'settings.providers.custom.inputModalitiesHint':
     'Comma-separated: text, image, audio, file, video',
@@ -1080,52 +1092,67 @@ export default Object.freeze({
   'settings.providers.custom.outputModalitiesHint':
     'Comma-separated: text, image, speech, transcription, embeddings',
   'settings.providers.custom.taskTypes': 'Task types',
-  'settings.providers.custom.taskTypesHint':
-    'Optional comma-separated explicit task types',
+  'settings.providers.custom.taskTypesHint': 'Optional, comma-separated.',
   'settings.providers.custom.parameters': 'Supported parameters',
   'settings.providers.custom.parametersHint':
-    'Optional comma-separated wire parameter names',
+    'Optional, comma-separated wire names.',
   'settings.providers.custom.voices': 'Supported voices',
-  'settings.providers.custom.voicesHint': 'Optional comma-separated voice ids',
+  'settings.providers.custom.voicesHint':
+    'Optional, comma-separated voice ids.',
   'settings.providers.custom.tools': 'Tools',
   'settings.providers.custom.vision': 'Vision',
   'settings.providers.custom.jsonMode': 'JSON mode',
   'settings.providers.custom.reasoning': 'Reasoning',
   'settings.providers.custom.capabilityAria': '{capability} for {model}',
+  'settings.providers.custom.validationIdRequired': 'Enter a Provider id.',
   'settings.providers.custom.validationId':
-    'Provider id must use lowercase letters and digits in hyphen-separated segments.',
+    'Use lowercase letters and digits in hyphen-separated segments.',
   'settings.providers.custom.validationName': 'Enter a Provider name.',
   'settings.providers.custom.validationBaseUrl':
     'Enter an absolute HTTP(S) endpoint URL.',
   'settings.providers.custom.validationModelId':
-    'Every Model needs a wire id without "::".',
+    'Enter a wire id without "::".',
   'settings.providers.custom.validationDuplicateModel':
-    'Model ids must be unique.',
+    'Another Model already uses this wire id.',
   'settings.providers.custom.validationPositiveInteger':
-    '{label} must be a positive whole number.',
-  'settings.providers.custom.wireTitle': 'Advanced: wire profile',
+    'Enter a positive whole number.',
+  'settings.providers.custom.advancedTitle': 'Advanced',
+  'settings.providers.custom.wireTitle': 'Wire profile',
   'settings.providers.custom.wireIntro':
-    'Tells vBot how this endpoint expects reasoning and request fields. Leave it empty to use the OpenAI Chat Completions defaults. Fill it in when reasoning has no effect, its text does not appear, or the endpoint rejects a request field.',
+    'How this endpoint expects reasoning and request fields.',
+  'settings.providers.custom.wireStateCustom': 'Custom',
+  'settings.providers.custom.wireStateDefault': 'Defaults',
+  'settings.providers.custom.wireWhen':
+    'Leave it empty to use the OpenAI Chat Completions defaults. Fill it in when reasoning has no effect, its text does not appear, or the endpoint rejects a request field.',
   'settings.providers.custom.wireLabel': 'Wire profile JSON',
   'settings.providers.custom.wireHint':
-    'A JSON object with "defaults" for every Model, "rules" for the Models a "when" condition matches (for example "when": {"prefix": "qwen"}) with their values under "set", and "models" with a "set" per Model id. Model entries win over rules, rules over defaults. Empty removes the profile.',
+    'A JSON object with "defaults" for every Model, "rules" for the Models a "when" condition matches (for example "when": {"prefix": "qwen"}) with their values under "set", and "models" with a "set" per Model id.\n\nModel entries win over rules, rules over defaults. Empty removes the profile.',
+  'settings.providers.custom.wireHintAria': 'About the wire profile format',
   'settings.providers.custom.wirePlaceholder':
     '{\n  "defaults": {\n    "reasoning": {"dialect": "thinking_toggle"},\n    "response": {"reasoning_fields": ["reasoning_content"]}\n  }\n}',
-  'settings.providers.custom.wireFieldsTitle': 'Common fields',
+  'settings.providers.custom.wireFieldsTitle': 'Field reference',
   'settings.providers.custom.wireFieldDialect':
-    'reasoning.dialect: how an effort is sent. reasoning_effort (the default) sends "reasoning_effort": "high"; thinking_toggle sends "thinking": {"type": "enabled"} or {"type": "disabled"}; thinking_toggle_with_effort sends reasoning_effort for a level and the thinking switch otherwise; openrouter_reasoning sends a "reasoning" object; none sends nothing.',
+    'How an effort is sent. reasoning_effort (the default) sends "reasoning_effort": "high"; thinking_toggle sends "thinking": {"type": "enabled"} or {"type": "disabled"}; thinking_toggle_with_effort sends reasoning_effort for a level and the thinking switch otherwise; openrouter_reasoning sends a "reasoning" object; none sends nothing.',
   'settings.providers.custom.wireFieldLevels':
-    'reasoning.levels: the effort levels the endpoint accepts, for example ["low", "high"]. Other efforts snap to an accepted level.',
+    'The effort levels the endpoint accepts, for example ["low", "high"]. Other efforts snap to an accepted level.',
   'settings.providers.custom.wireFieldOff':
-    'reasoning.off: what the effort none sends (auto, omit, enabled, lowest or a level). reasoning.unset: what is sent when no effort is chosen (omit, enabled or a level).',
-  'settings.providers.custom.wireFieldResponse':
-    'response.reasoning_fields: the response fields that carry reasoning text, in the order vBot checks them, for example ["reasoning_content"].',
-  'settings.providers.custom.wireFieldReplay':
-    'replay.history_field: the message field that sends earlier reasoning back with the conversation, for example "reasoning_content". replay.scope picks the turns (none, current_run, tool_turns or full_history), replay.fidelity the kind of reasoning state (meta_preferred, meta_only or readable_only).',
-  'settings.providers.custom.wireFieldRequest':
-    'request.output_limit_field: the field that limits output (max_tokens or max_completion_tokens). request.parameters: rules per request parameter, for example "temperature": {"mode": "drop"}.',
+    'What the effort none sends: auto, omit, enabled, lowest or a level.',
+  'settings.providers.custom.wireFieldUnset':
+    'What is sent when no effort is chosen: omit, enabled or a level.',
   'settings.providers.custom.wireFieldSupported':
-    'A Model whose Reasoning switch is off never gets reasoning fields, whatever "defaults" says. Turn the switch on, or set "reasoning": {"supported": true} in a rule or Model entry.',
+    'A Model without the Reasoning capability never gets reasoning fields, whatever "defaults" says. Turn the capability on, or set "reasoning": {"supported": true} in a rule or Model entry.',
+  'settings.providers.custom.wireFieldResponse':
+    'The response fields that carry reasoning text, in the order vBot checks them, for example ["reasoning_content"].',
+  'settings.providers.custom.wireFieldHistory':
+    'The message field that sends earlier reasoning back with the conversation, for example "reasoning_content".',
+  'settings.providers.custom.wireFieldScope':
+    'The turns whose reasoning is sent back: none, current_run, tool_turns or full_history.',
+  'settings.providers.custom.wireFieldFidelity':
+    'The kind of reasoning state sent back: meta_preferred, meta_only or readable_only.',
+  'settings.providers.custom.wireFieldOutputLimit':
+    'The field that limits output: max_tokens or max_completion_tokens.',
+  'settings.providers.custom.wireFieldParameters':
+    'Rules per request parameter, for example "temperature": {"mode": "drop"}.',
   'settings.providers.custom.wireInvalidJson':
     'The wire profile is not valid JSON: {detail}',
   'settings.providers.custom.wireNotObject':

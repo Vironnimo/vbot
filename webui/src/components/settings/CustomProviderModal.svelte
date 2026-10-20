@@ -1,18 +1,26 @@
 <script>
-  import { untrack } from 'svelte';
+  // Custom Provider editor: a sheet in the Settings section grammar —
+  // Connection, Authentication, Manual Models and the Advanced wire profile.
+  // Save stays enabled; a click on it checks every field and shows each
+  // problem under its row, opening the Model or the wire profile it is in.
+  import { tick, untrack } from 'svelte';
 
   import { saveCustomProvider } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import { isSettingsConflict } from '$lib/settingsSave.js';
+  import Dropdown from '../Dropdown.svelte';
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import FormField from '../ui/FormField.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
-  import Toggle from '../ui/Toggle.svelte';
+  import CustomModelEntry from './CustomModelEntry.svelte';
 
   const noop = () => {};
   const PROVIDER_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+  const NO_ERRORS = Object.freeze({ models: [] });
 
   let {
     provider = null,
@@ -21,13 +29,75 @@
     onClose = noop,
   } = $props();
 
+  const ADAPTER_OPTIONS = [
+    {
+      value: 'openai_compatible',
+      label: t('settings.providers.custom.adapterOpenAiCompatible'),
+    },
+  ];
+  const AUTH_OPTIONS = [
+    { value: 'api_key', label: t('settings.providers.custom.authApiKey') },
+    { value: 'none', label: t('settings.providers.custom.authNone') },
+  ];
+  // The wire profile fields most endpoints need; names are code values.
+  const WIRE_FIELDS = [
+    {
+      name: 'reasoning.dialect',
+      text: t('settings.providers.custom.wireFieldDialect'),
+    },
+    {
+      name: 'reasoning.levels',
+      text: t('settings.providers.custom.wireFieldLevels'),
+    },
+    {
+      name: 'reasoning.off',
+      text: t('settings.providers.custom.wireFieldOff'),
+    },
+    {
+      name: 'reasoning.unset',
+      text: t('settings.providers.custom.wireFieldUnset'),
+    },
+    {
+      name: 'reasoning.supported',
+      text: t('settings.providers.custom.wireFieldSupported'),
+    },
+    {
+      name: 'response.reasoning_fields',
+      text: t('settings.providers.custom.wireFieldResponse'),
+    },
+    {
+      name: 'replay.history_field',
+      text: t('settings.providers.custom.wireFieldHistory'),
+    },
+    {
+      name: 'replay.scope',
+      text: t('settings.providers.custom.wireFieldScope'),
+    },
+    {
+      name: 'replay.fidelity',
+      text: t('settings.providers.custom.wireFieldFidelity'),
+    },
+    {
+      name: 'request.output_limit_field',
+      text: t('settings.providers.custom.wireFieldOutputLimit'),
+    },
+    {
+      name: 'request.parameters',
+      text: t('settings.providers.custom.wireFieldParameters'),
+    },
+  ];
+
+  let nextModelKey = 0;
+
   function csv(values) {
     return Array.isArray(values) ? values.join(', ') : '';
   }
 
   function modelDraft(modelId = '', model = {}) {
     const capabilities = model?.capabilities ?? {};
+    nextModelKey += 1;
     return {
+      key: nextModelKey,
       modelId,
       name: model?.name ?? modelId,
       contextWindow:
@@ -96,16 +166,6 @@
     return { value, error: '' };
   }
 
-  const WIRE_FIELD_HELP = [
-    t('settings.providers.custom.wireFieldDialect'),
-    t('settings.providers.custom.wireFieldLevels'),
-    t('settings.providers.custom.wireFieldOff'),
-    t('settings.providers.custom.wireFieldResponse'),
-    t('settings.providers.custom.wireFieldReplay'),
-    t('settings.providers.custom.wireFieldRequest'),
-    t('settings.providers.custom.wireFieldSupported'),
-  ];
-
   let providerId = $state(untrack(() => provider?.id ?? ''));
   let name = $state(untrack(() => provider?.name ?? ''));
   let adapter = $state(untrack(() => provider?.adapter ?? 'openai_compatible'));
@@ -116,20 +176,42 @@
     untrack(() => provider?.models_endpoint ?? '/models'),
   );
   let models = $state(untrack(initialModels));
+  let expandedModels = $state([]);
   let wireText = $state(untrack(initialWireText));
   let wireOpen = $state(untrack(() => initialWireText() !== ''));
   let wireIssues = $state([]);
+  let attempted = $state(false);
   let saving = $state(false);
   let errorMessage = $state('');
+  let errorBanner = $state();
   let editing = $derived(provider !== null);
   let wireError = $derived(parseWire(wireText).error);
+  // Field problems show once Save was clicked and then follow every edit.
+  let errors = $derived(attempted ? collectErrors() : NO_ERRORS);
 
-  function addModel() {
-    models = [...models, modelDraft()];
+  function isExpanded(model) {
+    return expandedModels.includes(model.key);
+  }
+
+  function toggleModel(model) {
+    expandedModels = isExpanded(model)
+      ? expandedModels.filter((key) => key !== model.key)
+      : [...expandedModels, model.key];
+  }
+
+  async function addModel() {
+    const draft = modelDraft();
+    models = [...models, draft];
+    expandedModels = [...expandedModels, draft.key];
+    await tick();
+    document.getElementById(`custom-model-${models.length - 1}-id`)?.focus();
   }
 
   function removeModel(index) {
+    const removed = models[index];
     models = models.filter((_, modelIndex) => modelIndex !== index);
+    expandedModels = expandedModels.filter((key) => key !== removed?.key);
+    errorMessage = '';
   }
 
   function updateModel(index, patch) {
@@ -150,76 +232,112 @@
     ];
   }
 
-  function optionalPositiveInteger(value, label) {
+  function optionalPositiveInteger(value) {
     const normalized = String(value ?? '').trim();
-    if (!normalized) {
-      return null;
-    }
-    const parsed = Number(normalized);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-      throw new Error(
-        t('settings.providers.custom.validationPositiveInteger', { label }),
-      );
-    }
-    return parsed;
+    return normalized ? Number(normalized) : null;
   }
 
-  function validateBaseUrl(value) {
+  function isOptionalPositiveInteger(value) {
+    const parsed = optionalPositiveInteger(value);
+    return parsed === null || (Number.isInteger(parsed) && parsed > 0);
+  }
+
+  function isValidBaseUrl(value) {
     let parsed;
     try {
       parsed = new URL(value);
     } catch {
-      throw new Error(t('settings.providers.custom.validationBaseUrl'));
+      return false;
     }
-    if (
-      !['http:', 'https:'].includes(parsed.protocol) ||
-      parsed.username ||
-      parsed.password ||
-      parsed.search ||
-      parsed.hash
-    ) {
-      throw new Error(t('settings.providers.custom.validationBaseUrl'));
+    return (
+      ['http:', 'https:'].includes(parsed.protocol) &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.search &&
+      !parsed.hash
+    );
+  }
+
+  function collectErrors() {
+    const found = { models: [] };
+    if (!providerId.trim()) {
+      found.id = t('settings.providers.custom.validationIdRequired');
+    } else if (!PROVIDER_ID_PATTERN.test(providerId.trim())) {
+      found.id = t('settings.providers.custom.validationId');
     }
+    if (!name.trim()) {
+      found.name = t('settings.providers.custom.validationName');
+    }
+    if (!isValidBaseUrl(baseUrl.trim())) {
+      found.baseUrl = t('settings.providers.custom.validationBaseUrl');
+    }
+    const seen = [];
+    for (const model of models) {
+      const modelErrors = {};
+      const modelId = model.modelId.trim();
+      if (!modelId || modelId.includes('::')) {
+        modelErrors.id = t('settings.providers.custom.validationModelId');
+      } else if (seen.includes(modelId)) {
+        modelErrors.id = t(
+          'settings.providers.custom.validationDuplicateModel',
+        );
+      }
+      seen.push(modelId);
+      if (!isOptionalPositiveInteger(model.contextWindow)) {
+        modelErrors.context = t(
+          'settings.providers.custom.validationPositiveInteger',
+        );
+      }
+      if (!isOptionalPositiveInteger(model.maxOutputTokens)) {
+        modelErrors.output = t(
+          'settings.providers.custom.validationPositiveInteger',
+        );
+      }
+      found.models.push(modelErrors);
+    }
+    return found;
+  }
+
+  // The first control with a problem, in reading order.
+  function firstInvalidControl(found) {
+    if (found.id) return 'custom-provider-id';
+    if (found.name) return 'custom-provider-name';
+    if (found.baseUrl) return 'custom-provider-base-url';
+    for (const [index, modelErrors] of found.models.entries()) {
+      for (const field of ['id', 'context', 'output']) {
+        if (modelErrors[field]) return `custom-model-${index}-${field}`;
+      }
+    }
+    return wireError ? 'custom-provider-wire' : '';
+  }
+
+  async function revealProblems(found) {
+    const modelsWithErrors = models.filter((_, index) =>
+      Object.values(found.models[index] ?? {}).some(Boolean),
+    );
+    expandedModels = [
+      ...new Set([
+        ...expandedModels,
+        ...modelsWithErrors.map((model) => model.key),
+      ]),
+    ];
+    if (wireError) {
+      wireOpen = true;
+    }
+    await tick();
+    const controlId = firstInvalidControl(found);
+    document.getElementById(controlId)?.focus();
   }
 
   function buildProvider() {
     const id = providerId.trim();
-    if (!PROVIDER_ID_PATTERN.test(id)) {
-      throw new Error(t('settings.providers.custom.validationId'));
-    }
-    if (!name.trim()) {
-      throw new Error(t('settings.providers.custom.validationName'));
-    }
-    validateBaseUrl(baseUrl.trim());
-
     const modelMap = {};
-    for (const [index, model] of models.entries()) {
-      const modelLabel = t('settings.providers.custom.modelNumber', {
-        number: index + 1,
-      });
+    for (const model of models) {
       const modelId = model.modelId.trim();
-      if (!modelId || modelId.includes('::')) {
-        throw new Error(t('settings.providers.custom.validationModelId'));
-      }
-      if (modelMap[modelId]) {
-        throw new Error(
-          t('settings.providers.custom.validationDuplicateModel'),
-        );
-      }
       modelMap[modelId] = {
         name: model.name.trim() || modelId,
-        context_window: optionalPositiveInteger(
-          model.contextWindow,
-          `${modelLabel} ${t(
-            'settings.providers.custom.contextWindow',
-          ).toLocaleLowerCase()}`,
-        ),
-        max_output_tokens: optionalPositiveInteger(
-          model.maxOutputTokens,
-          `${modelLabel} ${t(
-            'settings.providers.custom.maxOutput',
-          ).toLocaleLowerCase()}`,
-        ),
+        context_window: optionalPositiveInteger(model.contextWindow),
+        max_output_tokens: optionalPositiveInteger(model.maxOutputTokens),
         capabilities: {
           vision: model.vision,
           tools: model.tools,
@@ -235,12 +353,6 @@
       };
     }
 
-    const wire = parseWire(wireText);
-    if (wire.error) {
-      wireOpen = true;
-      throw new Error(wire.error);
-    }
-
     const customProvider = {
       id,
       name: name.trim(),
@@ -251,10 +363,17 @@
       defaults: provider?.defaults ?? {},
       models: modelMap,
     };
+    const wire = parseWire(wireText);
     if (wire.value !== undefined) {
       customProvider.wire = wire.value;
     }
     return customProvider;
+  }
+
+  async function showError(message) {
+    errorMessage = message;
+    await tick();
+    errorBanner?.scrollIntoView?.({ block: 'nearest' });
   }
 
   async function submit(event) {
@@ -263,11 +382,10 @@
       return;
     }
 
-    let customProvider;
-    try {
-      customProvider = buildProvider();
-    } catch (error) {
-      errorMessage = error.message;
+    attempted = true;
+    const found = collectErrors();
+    if (firstInvalidControl(found)) {
+      await revealProblems(found);
       return;
     }
 
@@ -275,7 +393,7 @@
     errorMessage = '';
     wireIssues = [];
     try {
-      const params = { provider: customProvider };
+      const params = { provider: buildProvider() };
       if (provider?.revision) {
         // The server refuses the save if the record changed after this modal opened.
         params.expected_revision = provider.revision;
@@ -293,21 +411,35 @@
     } catch (error) {
       const issues = error.details?.data?.wire_issues;
       if (isSettingsConflict(error)) {
-        errorMessage = t('settings.providers.custom.changedElsewhere');
+        showError(t('settings.providers.custom.changedElsewhere'));
       } else if (Array.isArray(issues) && issues.length > 0) {
         wireIssues = issues.map(String);
         wireOpen = true;
-        errorMessage = `${t('settings.providers.custom.saveError')} ${t(
-          'settings.providers.custom.wireIssuesHint',
-        )}`;
+        showError(
+          `${t('settings.providers.custom.saveError')} ${t(
+            'settings.providers.custom.wireIssuesHint',
+          )}`,
+        );
       } else {
-        errorMessage = `${t(
-          'settings.providers.custom.saveError',
-        )} ${error.message}`;
+        showError(
+          `${t('settings.providers.custom.saveError')} ${error.message}`,
+        );
       }
     } finally {
       saving = false;
     }
+  }
+
+  function describedBy(field, hasHelp = true) {
+    return (
+      [
+        hasHelp && `custom-provider-${field}-desc`,
+        errors[field === 'base-url' ? 'baseUrl' : field] &&
+          `custom-provider-${field}-error`,
+      ]
+        .filter(Boolean)
+        .join(' ') || undefined
+    );
   }
 </script>
 
@@ -315,564 +447,457 @@
   title={editing
     ? t('settings.providers.custom.editTitle')
     : t('settings.providers.custom.addTitle')}
+  description={t('settings.providers.custom.intro')}
   labelledById="custom-provider-modal-title"
-  class="custom-provider-modal"
+  size="lg"
+  variant="sheet"
   closeDisabled={saving}
   {onClose}
 >
   {#snippet body()}
-    <form
-      id="custom-provider-form"
-      class="modal-body custom-provider-form"
-      onsubmit={submit}
-    >
-      <p class="custom-provider-form__intro">
-        {t('settings.providers.custom.intro')}
-      </p>
-
-      <div class="custom-provider-form__grid">
-        <FormField
-          controlId="custom-provider-id"
-          label={t('settings.providers.custom.id')}
-          help={t('settings.providers.custom.idHint')}
-          required
+    <form id="custom-provider-form" novalidate onsubmit={submit}>
+      <div class="modal-body custom-provider-form">
+        <section
+          class="s-section"
+          aria-labelledby="custom-provider-connection-title"
         >
-          {#snippet children(field)}
-            <TextField
-              id={field.controlId}
-              value={providerId}
-              disabled={saving || editing}
-              invalid={field.invalid}
-              aria-describedby={field.describedBy}
-              onInput={(value) => {
-                providerId = value;
-                errorMessage = '';
-              }}
-            />
-          {/snippet}
-        </FormField>
-
-        <FormField
-          controlId="custom-provider-name"
-          label={t('settings.providers.custom.name')}
-          required
-        >
-          <TextField
-            id="custom-provider-name"
-            value={name}
-            disabled={saving}
-            onInput={(value) => {
-              name = value;
-              errorMessage = '';
-            }}
-          />
-        </FormField>
-
-        <FormField
-          controlId="custom-provider-adapter"
-          label={t('settings.providers.custom.adapter')}
-        >
-          <select
-            id="custom-provider-adapter"
-            class="s-input"
-            bind:value={adapter}
-            disabled={saving}
-          >
-            <option value="openai_compatible">
-              {t('settings.providers.custom.adapterOpenAiCompatible')}
-            </option>
-          </select>
-        </FormField>
-
-        <FormField
-          controlId="custom-provider-auth"
-          label={t('settings.providers.custom.auth')}
-        >
-          <select
-            id="custom-provider-auth"
-            class="s-input"
-            bind:value={auth}
-            disabled={saving}
-          >
-            <option value="api_key">
-              {t('settings.providers.custom.authApiKey')}
-            </option>
-            <option value="none">
-              {t('settings.providers.custom.authNone')}
-            </option>
-          </select>
-        </FormField>
-      </div>
-
-      <FormField
-        controlId="custom-provider-base-url"
-        label={t('settings.providers.custom.baseUrl')}
-        help={t('settings.providers.custom.baseUrlHint')}
-        required
-        full
-      >
-        <TextField
-          id="custom-provider-base-url"
-          code
-          value={baseUrl}
-          placeholder={t('settings.providers.custom.baseUrlPlaceholder')}
-          disabled={saving}
-          onInput={(value) => {
-            baseUrl = value;
-            errorMessage = '';
-          }}
-        />
-      </FormField>
-
-      <div class="custom-provider-form__grid">
-        <FormField
-          controlId="custom-provider-models-endpoint"
-          label={t('settings.providers.custom.modelsEndpoint')}
-          help={t('settings.providers.custom.modelsEndpointHint')}
-        >
-          <TextField
-            id="custom-provider-models-endpoint"
-            code
-            value={modelsEndpoint}
-            placeholder={t(
-              'settings.providers.custom.modelsEndpointPlaceholder',
-            )}
-            disabled={saving}
-            onInput={(value) => {
-              modelsEndpoint = value;
-              errorMessage = '';
-            }}
-          />
-        </FormField>
-
-        {#if auth === 'api_key'}
-          <FormField
-            controlId="custom-provider-api-key"
-            label={editing
-              ? t('settings.providers.custom.replaceApiKey')
-              : t('settings.providers.custom.apiKey')}
-            help={t('settings.providers.custom.apiKeyHint')}
-          >
-            <TextField
-              id="custom-provider-api-key"
-              type="password"
-              autocomplete="off"
-              value={apiKey}
-              disabled={saving}
-              onInput={(value) => {
-                apiKey = value;
-                errorMessage = '';
-              }}
-            />
-          </FormField>
-        {/if}
-      </div>
-
-      <section class="custom-models" aria-labelledby="custom-models-title">
-        <div class="custom-models__head">
-          <div>
-            <h4 id="custom-models-title">
-              {t('settings.providers.custom.modelsTitle')}
+          <div class="s-section__head">
+            <h4 class="s-section__title" id="custom-provider-connection-title">
+              {t('settings.providers.custom.connectionTitle')}
             </h4>
-            <p>
-              {t('settings.providers.custom.modelsHint')}
-            </p>
           </div>
-          <Button variant="secondary" disabled={saving} onClick={addModel}>
-            {t('settings.providers.custom.addModel')}
-          </Button>
-        </div>
-
-        {#if models.length === 0}
-          <div class="custom-models__empty">
-            {t('settings.providers.custom.noModels')}
-          </div>
-        {/if}
-
-        {#each models as model, index (`${index}-${model.modelId}`)}
-          <article class="custom-model-card">
-            <div class="custom-model-card__head">
-              <span>
-                {t('settings.providers.custom.modelNumber', {
-                  number: index + 1,
-                })}
-              </span>
-              <Button
-                variant="danger"
-                disabled={saving}
-                onClick={() => removeModel(index)}
-              >
-                {t('common.remove')}
-              </Button>
+          <div class="s-group">
+            <div class="s-row">
+              <div class="s-row-info">
+                <label class="s-row-label" for="custom-provider-id">
+                  {t('settings.providers.custom.id')}
+                </label>
+                <div class="s-row-desc" id="custom-provider-id-desc">
+                  {t('settings.providers.custom.idHint')}
+                </div>
+                {#if errors.id}
+                  <p
+                    class="s-row-error"
+                    id="custom-provider-id-error"
+                    role="alert"
+                  >
+                    {errors.id}
+                  </p>
+                {/if}
+              </div>
+              <div class="s-row-control">
+                <TextField
+                  id="custom-provider-id"
+                  code
+                  value={providerId}
+                  disabled={saving || editing}
+                  invalid={Boolean(errors.id)}
+                  aria-required="true"
+                  aria-describedby={describedBy('id')}
+                  onInput={(value) => {
+                    providerId = value;
+                    errorMessage = '';
+                  }}
+                />
+              </div>
             </div>
 
-            <div class="custom-provider-form__grid">
-              <FormField
-                controlId={`custom-model-${index}-id`}
-                label={t('settings.providers.custom.modelId')}
-                required
-              >
+            <div class="s-row">
+              <div class="s-row-info">
+                <label class="s-row-label" for="custom-provider-name">
+                  {t('settings.providers.custom.name')}
+                </label>
+                {#if errors.name}
+                  <p
+                    class="s-row-error"
+                    id="custom-provider-name-error"
+                    role="alert"
+                  >
+                    {errors.name}
+                  </p>
+                {/if}
+              </div>
+              <div class="s-row-control">
                 <TextField
-                  id={`custom-model-${index}-id`}
-                  value={model.modelId}
+                  id="custom-provider-name"
+                  value={name}
                   disabled={saving}
-                  onInput={(value) => updateModel(index, { modelId: value })}
+                  invalid={Boolean(errors.name)}
+                  aria-required="true"
+                  aria-describedby={describedBy('name', false)}
+                  onInput={(value) => {
+                    name = value;
+                    errorMessage = '';
+                  }}
                 />
-              </FormField>
-              <FormField
-                controlId={`custom-model-${index}-name`}
-                label={t('settings.providers.custom.modelName')}
-              >
-                <TextField
-                  id={`custom-model-${index}-name`}
-                  value={model.name}
-                  disabled={saving}
-                  onInput={(value) => updateModel(index, { name: value })}
-                />
-              </FormField>
-              <FormField
-                controlId={`custom-model-${index}-context`}
-                label={t('settings.providers.custom.contextWindow')}
-              >
-                <TextField
-                  id={`custom-model-${index}-context`}
-                  type="number"
-                  min="1"
-                  value={model.contextWindow}
-                  disabled={saving}
-                  onInput={(value) =>
-                    updateModel(index, { contextWindow: value })}
-                />
-              </FormField>
-              <FormField
-                controlId={`custom-model-${index}-output`}
-                label={t('settings.providers.custom.maxOutput')}
-              >
-                <TextField
-                  id={`custom-model-${index}-output`}
-                  type="number"
-                  min="1"
-                  value={model.maxOutputTokens}
-                  disabled={saving}
-                  onInput={(value) =>
-                    updateModel(index, { maxOutputTokens: value })}
-                />
-              </FormField>
-              <FormField
-                controlId={`custom-model-${index}-input-modalities`}
-                label={t('settings.providers.custom.inputModalities')}
-                help={t('settings.providers.custom.inputModalitiesHint')}
-              >
-                <TextField
-                  id={`custom-model-${index}-input-modalities`}
-                  value={model.inputModalities}
-                  disabled={saving}
-                  onInput={(value) =>
-                    updateModel(index, { inputModalities: value })}
-                />
-              </FormField>
-              <FormField
-                controlId={`custom-model-${index}-output-modalities`}
-                label={t('settings.providers.custom.outputModalities')}
-                help={t('settings.providers.custom.outputModalitiesHint')}
-              >
-                <TextField
-                  id={`custom-model-${index}-output-modalities`}
-                  value={model.outputModalities}
-                  disabled={saving}
-                  onInput={(value) =>
-                    updateModel(index, { outputModalities: value })}
-                />
-              </FormField>
-              <FormField
-                controlId={`custom-model-${index}-tasks`}
-                label={t('settings.providers.custom.taskTypes')}
-                help={t('settings.providers.custom.taskTypesHint')}
-              >
-                <TextField
-                  id={`custom-model-${index}-tasks`}
-                  value={model.taskTypes}
-                  disabled={saving}
-                  onInput={(value) => updateModel(index, { taskTypes: value })}
-                />
-              </FormField>
-              <FormField
-                controlId={`custom-model-${index}-parameters`}
-                label={t('settings.providers.custom.parameters')}
-                help={t('settings.providers.custom.parametersHint')}
-              >
-                <TextField
-                  id={`custom-model-${index}-parameters`}
-                  value={model.supportedParameters}
-                  disabled={saving}
-                  onInput={(value) =>
-                    updateModel(index, { supportedParameters: value })}
-                />
-              </FormField>
-              <FormField
-                controlId={`custom-model-${index}-voices`}
-                label={t('settings.providers.custom.voices')}
-                help={t('settings.providers.custom.voicesHint')}
-              >
-                <TextField
-                  id={`custom-model-${index}-voices`}
-                  value={model.supportedVoices}
-                  disabled={saving}
-                  onInput={(value) =>
-                    updateModel(index, { supportedVoices: value })}
-                />
-              </FormField>
+              </div>
             </div>
 
-            <div class="custom-model-card__capabilities">
-              {#each [['tools', t('settings.providers.custom.tools'), model.tools], ['vision', t('settings.providers.custom.vision'), model.vision], ['jsonMode', t('settings.providers.custom.jsonMode'), model.jsonMode], ['reasoning', t('settings.providers.custom.reasoning'), model.reasoning]] as capability (capability[0])}
-                <div class="custom-model-capability">
-                  <span>{capability[1]}</span>
-                  <Toggle
-                    size="sm"
-                    checked={capability[2]}
+            <div class="s-row">
+              <div class="s-row-info">
+                <label
+                  class="s-row-label"
+                  id="custom-provider-adapter-label"
+                  for="custom-provider-adapter"
+                >
+                  {t('settings.providers.custom.adapter')}
+                </label>
+              </div>
+              <div class="s-row-control">
+                <Dropdown
+                  id="custom-provider-adapter"
+                  value={adapter}
+                  options={ADAPTER_OPTIONS}
+                  ariaLabelledby="custom-provider-adapter-label"
+                  disabled={saving}
+                  onValueChange={(value) => (adapter = value)}
+                />
+              </div>
+            </div>
+
+            <div class="s-row">
+              <div class="s-row-info">
+                <label class="s-row-label" for="custom-provider-base-url">
+                  {t('settings.providers.custom.baseUrl')}
+                </label>
+                <div class="s-row-desc" id="custom-provider-base-url-desc">
+                  {t('settings.providers.custom.baseUrlHint')}
+                </div>
+                {#if errors.baseUrl}
+                  <p
+                    class="s-row-error"
+                    id="custom-provider-base-url-error"
+                    role="alert"
+                  >
+                    {errors.baseUrl}
+                  </p>
+                {/if}
+              </div>
+              <div class="s-row-control">
+                <TextField
+                  id="custom-provider-base-url"
+                  code
+                  value={baseUrl}
+                  placeholder={t(
+                    'settings.providers.custom.baseUrlPlaceholder',
+                  )}
+                  disabled={saving}
+                  invalid={Boolean(errors.baseUrl)}
+                  aria-required="true"
+                  aria-describedby={describedBy('base-url')}
+                  onInput={(value) => {
+                    baseUrl = value;
+                    errorMessage = '';
+                  }}
+                />
+              </div>
+            </div>
+
+            <div class="s-row">
+              <div class="s-row-info">
+                <label
+                  class="s-row-label"
+                  for="custom-provider-models-endpoint"
+                >
+                  {t('settings.providers.custom.modelsEndpoint')}
+                </label>
+                <div
+                  class="s-row-desc"
+                  id="custom-provider-models-endpoint-desc"
+                >
+                  {t('settings.providers.custom.modelsEndpointHint')}
+                </div>
+              </div>
+              <div class="s-row-control">
+                <TextField
+                  id="custom-provider-models-endpoint"
+                  code
+                  value={modelsEndpoint}
+                  placeholder={t(
+                    'settings.providers.custom.modelsEndpointPlaceholder',
+                  )}
+                  disabled={saving}
+                  aria-describedby="custom-provider-models-endpoint-desc"
+                  onInput={(value) => {
+                    modelsEndpoint = value;
+                    errorMessage = '';
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="s-section" aria-labelledby="custom-provider-auth-title">
+          <div class="s-section__head">
+            <h4 class="s-section__title" id="custom-provider-auth-title">
+              {t('settings.providers.custom.auth')}
+            </h4>
+          </div>
+          <div class="s-group">
+            <div class="s-row">
+              <div class="s-row-info">
+                <label
+                  class="s-row-label"
+                  id="custom-provider-auth-label"
+                  for="custom-provider-auth"
+                >
+                  {t('settings.providers.custom.authMethod')}
+                </label>
+              </div>
+              <div class="s-row-control">
+                <Dropdown
+                  id="custom-provider-auth"
+                  value={auth}
+                  options={AUTH_OPTIONS}
+                  ariaLabelledby="custom-provider-auth-label"
+                  disabled={saving}
+                  onValueChange={(value) => {
+                    auth = value;
+                    errorMessage = '';
+                  }}
+                />
+              </div>
+            </div>
+
+            {#if auth === 'api_key'}
+              <div class="s-row">
+                <div class="s-row-info">
+                  <label class="s-row-label" for="custom-provider-api-key">
+                    {editing
+                      ? t('settings.providers.custom.replaceApiKey')
+                      : t('settings.providers.custom.apiKey')}
+                  </label>
+                  <div class="s-row-desc" id="custom-provider-api-key-desc">
+                    {editing
+                      ? t('settings.providers.custom.apiKeyHint')
+                      : t('settings.providers.custom.apiKeyNewHint')}
+                  </div>
+                </div>
+                <div class="s-row-control">
+                  <TextField
+                    id="custom-provider-api-key"
+                    type="password"
+                    autocomplete="off"
+                    value={apiKey}
                     disabled={saving}
-                    ariaLabel={t('settings.providers.custom.capabilityAria', {
-                      capability: capability[1],
-                      model:
-                        model.modelId ||
-                        t('settings.providers.custom.modelNumber', {
-                          number: index + 1,
-                        }),
-                    })}
-                    onChange={(checked) =>
-                      updateModel(index, { [capability[0]]: checked })}
+                    aria-describedby="custom-provider-api-key-desc"
+                    onInput={(value) => {
+                      apiKey = value;
+                      errorMessage = '';
+                    }}
                   />
                 </div>
-              {/each}
-            </div>
-          </article>
-        {/each}
-      </section>
-
-      <details class="custom-wire" bind:open={wireOpen}>
-        <summary>{t('settings.providers.custom.wireTitle')}</summary>
-        <div class="custom-wire__body">
-          <p class="custom-wire__intro">
-            {t('settings.providers.custom.wireIntro')}
-          </p>
-          <FormField
-            controlId="custom-provider-wire"
-            label={t('settings.providers.custom.wireLabel')}
-            help={t('settings.providers.custom.wireHint')}
-            error={wireError}
-            full
-          >
-            {#snippet children(field)}
-              <TextArea
-                id={field.controlId}
-                code
-                rows={10}
-                value={wireText}
-                invalid={field.invalid || wireIssues.length > 0}
-                placeholder={t('settings.providers.custom.wirePlaceholder')}
-                disabled={saving}
-                aria-describedby={field.describedBy}
-                onInput={(value) => {
-                  wireText = value;
-                  wireIssues = [];
-                  errorMessage = '';
-                }}
-              />
-            {/snippet}
-          </FormField>
-          {#if wireIssues.length > 0}
-            <div class="custom-wire__issues" role="alert">
-              <p>{t('settings.providers.custom.wireIssues')}</p>
-              <ul>
-                {#each wireIssues as issue, index (`${index}-${issue}`)}
-                  <li><code>{issue}</code></li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
-          <div class="custom-wire__fields">
-            <h5>{t('settings.providers.custom.wireFieldsTitle')}</h5>
-            <ul>
-              {#each WIRE_FIELD_HELP as line (line)}
-                <li>{line}</li>
-              {/each}
-            </ul>
+              </div>
+            {/if}
           </div>
-        </div>
-      </details>
+        </section>
 
-      {#if errorMessage}
-        <p class="custom-provider-form__error" role="alert">
-          {errorMessage}
-        </p>
-      {/if}
+        <section
+          class="s-section"
+          aria-labelledby="custom-provider-models-title"
+        >
+          <div class="s-section__head">
+            <h4 class="s-section__title" id="custom-provider-models-title">
+              {t('settings.providers.custom.modelsTitle')}
+            </h4>
+            <InfoHint
+              text={t('settings.providers.custom.modelsHint')}
+              ariaLabel={t('settings.providers.custom.modelsHintAria')}
+            />
+            <div class="s-section__aside">
+              <Button variant="secondary" disabled={saving} onClick={addModel}>
+                {t('settings.providers.custom.addModel')}
+              </Button>
+            </div>
+          </div>
+          <div class="s-group">
+            {#if models.length === 0}
+              <p class="s-group__block s-group__note">
+                {t('settings.providers.custom.noModels')}
+              </p>
+            {/if}
+            {#each models as model, index (model.key)}
+              <CustomModelEntry
+                {model}
+                {index}
+                expanded={isExpanded(model)}
+                errors={errors.models[index] ?? {}}
+                disabled={saving}
+                onToggle={() => toggleModel(model)}
+                onChange={(patch) => updateModel(index, patch)}
+                onRemove={() => removeModel(index)}
+              />
+            {/each}
+          </div>
+        </section>
+
+        <section
+          class="s-section"
+          aria-labelledby="custom-provider-advanced-title"
+        >
+          <div class="s-section__head">
+            <h4 class="s-section__title" id="custom-provider-advanced-title">
+              {t('settings.providers.custom.advancedTitle')}
+            </h4>
+          </div>
+          <div class="s-group">
+            <button
+              type="button"
+              class="s-row s-row--compact s-disclosure-row custom-wire__toggle"
+              aria-expanded={wireOpen}
+              aria-controls="custom-provider-wire-block"
+              onclick={() => (wireOpen = !wireOpen)}
+            >
+              <span class="s-row-info">
+                <span class="s-row-label" id="custom-provider-wire-title">
+                  <span
+                    class="disclosure-chevron"
+                    class:disclosure-chevron--open={wireOpen}
+                    aria-hidden="true"
+                  ></span>
+                  {t('settings.providers.custom.wireTitle')}
+                </span>
+                <span class="s-row-desc">
+                  {t('settings.providers.custom.wireIntro')}
+                </span>
+              </span>
+              <span class="s-disclosure__meta">
+                {wireText.trim()
+                  ? t('settings.providers.custom.wireStateCustom')
+                  : t('settings.providers.custom.wireStateDefault')}
+              </span>
+            </button>
+            <div
+              class="s-group__block custom-wire"
+              id="custom-provider-wire-block"
+              role="group"
+              aria-labelledby="custom-provider-wire-title"
+              hidden={!wireOpen}
+            >
+              <p class="s-group__note">
+                {t('settings.providers.custom.wireWhen')}
+              </p>
+              <FormField controlId="custom-provider-wire" error={wireError}>
+                {#snippet labelContent()}
+                  {t('settings.providers.custom.wireLabel')}
+                  <InfoHint
+                    text={t('settings.providers.custom.wireHint')}
+                    ariaLabel={t('settings.providers.custom.wireHintAria')}
+                  />
+                {/snippet}
+                {#snippet children(field)}
+                  <TextArea
+                    id={field.controlId}
+                    code
+                    rows={10}
+                    value={wireText}
+                    invalid={field.invalid || wireIssues.length > 0}
+                    placeholder={t('settings.providers.custom.wirePlaceholder')}
+                    disabled={saving}
+                    aria-describedby={field.describedBy}
+                    onInput={(value) => {
+                      wireText = value;
+                      wireIssues = [];
+                      errorMessage = '';
+                    }}
+                  />
+                {/snippet}
+              </FormField>
+              {#if wireIssues.length > 0}
+                <div class="custom-wire__issues" role="alert">
+                  <p>{t('settings.providers.custom.wireIssues')}</p>
+                  <ul>
+                    {#each wireIssues as issue, index (`${index}-${issue}`)}
+                      <li><code>{issue}</code></li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+              <details class="custom-wire__reference">
+                <summary
+                  >{t('settings.providers.custom.wireFieldsTitle')}</summary
+                >
+                <dl>
+                  {#each WIRE_FIELDS as field (field.name)}
+                    <div>
+                      <dt><code>{field.name}</code></dt>
+                      <dd>{field.text}</dd>
+                    </div>
+                  {/each}
+                </dl>
+              </details>
+            </div>
+          </div>
+        </section>
+
+        {#if errorMessage}
+          <div bind:this={errorBanner}>
+            <Banner variant="error" role="alert">{errorMessage}</Banner>
+          </div>
+        {/if}
+      </div>
+
+      <div class="modal-footer">
+        <Button variant="secondary" disabled={saving} onClick={onClose}>
+          {t('common.cancel')}
+        </Button>
+        <Button type="submit" variant="primary" disabled={saving}>
+          {saving ? t('common.saving') : t('common.save')}
+        </Button>
+      </div>
     </form>
-  {/snippet}
-
-  {#snippet footer()}
-    <Button variant="secondary" disabled={saving} onClick={onClose}>
-      {t('common.cancel')}
-    </Button>
-    <Button
-      type="submit"
-      form="custom-provider-form"
-      variant="primary"
-      disabled={saving}
-    >
-      {saving ? t('common.saving') : t('common.save')}
-    </Button>
   {/snippet}
 </Modal>
 
 <style>
-  :global(.custom-provider-modal) {
-    display: flex;
-    width: min(880px, calc(100vw - 2 * var(--space-lg)));
-    max-height: min(860px, calc(100vh - 2 * var(--space-lg)));
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .custom-provider-form {
-    min-height: 0;
-    flex: 1;
-    display: grid;
-    gap: var(--space-lg);
-    overflow-y: auto;
-  }
-
-  .custom-provider-form__intro {
-    margin: 0;
-    color: var(--text-med);
-    font-size: var(--fs-body-md);
-    line-height: 1.45;
-  }
-
-  .custom-models__head p {
-    margin: var(--space-xs) 0 0;
-    color: var(--text-med);
-    font-size: var(--fs-body-md);
-    line-height: 1.45;
-  }
-
-  .custom-provider-form__grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-md);
-  }
-
-  .custom-models {
-    display: grid;
-    gap: var(--space-md);
-    padding-top: var(--space-xs);
-    border-top: 1px solid var(--border);
-  }
-
-  .custom-models__head,
-  .custom-model-card__head,
-  .custom-model-capability {
+  /* The wire profile toggle carries a description under its label; both
+     line up after the chevron. */
+  .custom-wire__toggle .s-row-label {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--space-md);
   }
 
-  .custom-models__head h4 {
-    margin: 0;
-    font-size: var(--fs-heading-sm);
-  }
-
-  .custom-models__empty {
-    padding: var(--space-lg);
-    border: 1px dashed var(--border);
-    border-radius: var(--r-md);
-    color: var(--text-med);
-    text-align: center;
-  }
-
-  .custom-model-card {
-    display: grid;
-    gap: var(--space-md);
-    padding: var(--space-md);
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-  }
-
-  .custom-model-card__head {
-    color: var(--text-hi);
-    font-size: var(--fs-body-sm);
-    font-weight: 600;
-  }
-
-  .custom-model-card__capabilities {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: var(--space-sm);
-  }
-
-  .custom-model-capability {
-    padding: var(--space-sm);
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    color: var(--text-med);
-    font-size: var(--fs-body-sm);
-  }
-
-  .custom-provider-form__error {
-    margin: 0;
-    color: var(--red);
-    font-size: var(--fs-body-md);
+  .custom-wire__toggle .s-row-desc {
+    display: block;
+    padding-left: 15px;
+    color: var(--text-lo);
+    font-weight: 400;
   }
 
   .custom-wire {
-    padding-top: var(--space-xs);
-    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
 
-  .custom-wire summary {
-    padding: var(--space-xs) 0;
-    color: var(--text-hi);
-    font-size: var(--fs-heading-sm);
-    font-weight: 600;
-    cursor: pointer;
+  .custom-wire[hidden] {
+    display: none;
   }
 
-  .custom-wire__body {
-    display: grid;
-    gap: var(--space-md);
-    padding-top: var(--space-sm);
-  }
-
-  .custom-wire__intro,
-  .custom-wire__fields li,
-  .custom-wire__issues p {
+  .custom-wire > .s-group__note {
     margin: 0;
-    color: var(--text-med);
-    font-size: var(--fs-body-md);
-    line-height: 1.45;
-  }
-
-  .custom-wire__fields h5 {
-    margin: 0 0 var(--space-xs);
-    font-size: var(--fs-body-md);
-  }
-
-  .custom-wire__fields ul,
-  .custom-wire__issues ul {
-    display: grid;
-    gap: var(--space-xs);
-    margin: 0;
-    padding-left: var(--space-lg);
   }
 
   .custom-wire__issues {
     display: grid;
-    gap: var(--space-xs);
-    padding: var(--space-sm) var(--space-md);
+    gap: 4px;
+    padding: 10px 14px;
     border: 1px solid var(--red);
     border-radius: var(--r-md);
+  }
+
+  .custom-wire__issues p {
+    margin: 0;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+  }
+
+  .custom-wire__issues ul {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding-left: 18px;
   }
 
   .custom-wire__issues li {
@@ -881,10 +906,39 @@
     overflow-wrap: anywhere;
   }
 
-  @media (max-width: 720px) {
-    .custom-provider-form__grid,
-    .custom-model-card__capabilities {
-      grid-template-columns: 1fr;
-    }
+  .custom-wire__reference > :global(summary) {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .custom-wire__reference > :global(summary:hover) {
+    color: var(--text-hi);
+  }
+
+  .custom-wire__reference dl {
+    display: grid;
+    gap: 10px;
+    margin: 12px 0 0;
+  }
+
+  .custom-wire__reference dt {
+    margin: 0;
+  }
+
+  .custom-wire__reference dt code {
+    color: var(--text-hi);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+  }
+
+  .custom-wire__reference dd {
+    margin: 2px 0 0;
+    color: var(--text-lo);
+    font-size: var(--fs-body-sm);
+    line-height: 1.5;
   }
 </style>
