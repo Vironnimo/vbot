@@ -16,6 +16,7 @@ from core.automation.cron import (
     CronJobNotFoundError,
     CronJobValidationError,
     CronServiceError,
+    CronStorageError,
     CronTargetAgentNotFoundError,
     CronTargetError,
     CronTargetProjectNotFoundError,
@@ -37,6 +38,7 @@ from core.tools._cron_arguments import (
     SELF_TARGET,
     UNADVERTISED_PARAMETERS,
     WATCH_STAND_IN,
+    WEBHOOK_SECRET_FIELD,
     CronCallRefusedError,
     ambiguous_event_time,
     event_time_readings,
@@ -67,8 +69,8 @@ if TYPE_CHECKING:
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
-    "Schedule jobs that run an instruction later: once, repeatedly, or before, at or after a "
-    "calendar event."
+    "Schedule jobs that run an instruction later: once, repeatedly, before, at or after a "
+    "calendar event, or when the job's webhook URL receives a request."
 )
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
@@ -101,6 +103,12 @@ _TARGET_ADDRESS_RECOMMENDATION = (
 _TARGET_UNAVAILABLE_RECOMMENDATION = (
     'Choose another "target", or tell the user that the target Agent cannot run and why'
 )
+# Who can send requests to a webhook job's URL, by the reach Cron reports.
+_WEBHOOK_REACH = {
+    "internet": "the internet",
+    "network": "this computer and the home network",
+    "computer": "this computer only",
+}
 
 CRON_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -144,7 +152,9 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "When to run, in local time: five cron fields (minute hour day month "
                 "weekday), e.g. '0 9 * * 1-5' for weekdays at 09:00; 'every 30m', 'every 2h' "
-                "or 'every 1d'; or once with 'in 45m' or '2030-08-07T09:00'. Required on create."
+                "or 'every 1d'; or once with 'in 45m' or '2030-08-07T09:00'; or 'webhook' to "
+                "run whenever a request reaches the job's URL, and each run gets the request's "
+                "headers and body. Required on create."
             ),
         },
         "event_id": {
@@ -242,7 +252,10 @@ def register_cron_tool(
         CRON_TOOL_DESCRIPTION,
         CRON_TOOL_PARAMETERS,
         handler,
-        summary="Schedule an instruction to run later or around a calendar event.",
+        summary=(
+            "Schedule an instruction to run later, around a calendar event, or on a webhook "
+            "request."
+        ),
         open_input_schema=True,
         argument_normalizer=_normalize_cron_arguments,
         unadvertised_parameters=UNADVERTISED_PARAMETERS,
@@ -353,6 +366,7 @@ async def _handle_create(
                 arguments, _note = _server_time(cron_service, arguments)
         raise CronCallRefusedError(_missing_create_fields(missing, arguments))
     arguments, note = _server_time(cron_service, arguments)
+    secret_name = arguments.pop(WEBHOOK_SECRET_FIELD, None)
     agent_id, project_id = _target_agent(context, arguments.get("target", SELF_TARGET))
     parsed = _parse_schedule(cron_service, arguments)
     repeat = arguments.get("repeat")
@@ -396,7 +410,10 @@ async def _handle_create(
         notes.append(delivery_note)
     if paused:
         notes.append(f'The job is paused; {{"action":"enable","id":"{job.id}"}} starts it.')
-    return _job_success(cron_service, job, notes)
+    secret = await _new_webhook_secret(cron_service, job, notes)
+    if secret_name:
+        notes.append(_sent_secret_note(secret_name, shown=secret is not None))
+    return _job_success(cron_service, job, notes, secret=secret)
 
 
 def _handle_list(cron_service: CronService, arguments: JsonObject) -> JsonObject:
@@ -428,6 +445,8 @@ async def _handle_update(
                 schedule=_SCHEDULE_STAND_IN,
             )
         )
+    secret_name = arguments.pop(WEBHOOK_SECRET_FIELD, None)
+    was_webhook = cron_service.get_job(job_id).schedule_type == "webhook"
     updates: dict[str, Any] = {}
     if "target" in arguments:
         updates["agent_id"], updates["project_id"] = _target_agent(context, arguments["target"])
@@ -470,7 +489,34 @@ async def _handle_update(
     if ENABLED_FIELD in arguments:
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
     job = await cron_service.update_job(job_id, actor="tool", **updates)
-    return _job_success(cron_service, job, [note] if note else [])
+    notes = [note] if note else []
+    # A job that just became a webhook job got its secret with this call.
+    secret = None if was_webhook else await _new_webhook_secret(cron_service, job, notes)
+    if secret_name:
+        notes.append(_sent_secret_note(secret_name, shown=secret is not None))
+    return _job_success(cron_service, job, notes, secret=secret)
+
+
+async def _new_webhook_secret(
+    cron_service: CronService, job: CronJob, notes: list[str]
+) -> str | None:
+    """The secret of a webhook job this call made; None for any other job."""
+    if job.schedule_type != "webhook":
+        return None
+    try:
+        return await cron_service.webhook_secret(job.id)
+    except CronStorageError as error:
+        notes.append(
+            f"The job's secret could not be read ({str(error).rstrip('. ')}); the user can "
+            "show it in vBot's Schedules."
+        )
+        return None
+
+
+def _sent_secret_note(name: str, *, shown: bool) -> str:
+    if shown:
+        return f'"{name}" had no effect: vBot made the job\'s secret, shown as secret.'
+    return f'"{name}" had no effect: vBot makes a webhook job\'s secret itself.'
 
 
 def _target_agent(context: ToolContext, target: str) -> tuple[str, str | None]:
@@ -765,9 +811,19 @@ def _validation_message(
 
 
 def _job_success(
-    cron_service: CronService, job: CronJob, notes: list[str] | None = None
+    cron_service: CronService,
+    job: CronJob,
+    notes: list[str] | None = None,
+    *,
+    secret: str | None = None,
 ) -> JsonObject:
     data = _job_fields(cron_service, job, ZoneInfo(cron_service.system_timezone_name()))
+    if secret is not None:
+        data["secret"] = secret
+        data["authenticate"] = (
+            f'Send each request as POST to url with the header "Authorization: Bearer {secret}", '
+            "or enter secret as the secret of a GitHub webhook (X-Hub-Signature-256)."
+        )
     if notes:
         data["note"] = " ".join(notes)
     return tool_success(data)
@@ -783,8 +839,13 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
     if job.schedule_type == "event":
         event = cron_service.bound_event(job)
         data["event"] = job.event_id if event is None else f"{event.title} ({job.event_id})"
-    # A one-time schedule is its own next run.
-    if job.schedule_type != "once":
+    webhook = cron_service.webhook_status(job)
+    if webhook is not None:
+        data["url"] = webhook.url or f"{webhook.path} on vBot's server address"
+        if webhook.reach is not None:
+            data["reachable_from"] = _WEBHOOK_REACH[webhook.reach]
+    # A one-time schedule is its own next run; a webhook job has none.
+    if job.schedule_type not in {"once", "webhook"}:
         data["next_run"] = _local_time(cron_service.next_fire_at(job), zone)
     if job.schedule_type == "event" and job.status == "active" and data["next_run"] is None:
         data["next_run"] = "none; no occurrence of the event lies ahead"
@@ -796,6 +857,10 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
         data["repeat"] = job.remaining_runs
     if job.watch is not None:
         data["watch"] = job.watch.target
+    if webhook is not None and webhook.last_received_at:
+        data["last_request"] = _local_time(webhook.last_received_at, zone)
+    if webhook is not None and webhook.waiting:
+        data["requests_waiting"] = webhook.waiting
     last_run = job.last_fired_at or job.last_attempt_at
     if last_run:
         data["last_run"] = _local_time(last_run, zone)

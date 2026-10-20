@@ -20,7 +20,12 @@ from core.projects import (
 )
 from core.tools._cron_arguments import render_call
 from core.tools.cron import CRON_TOOL_NAME, CRON_TOOL_PARAMETERS
-from tests.core.tools.scheduling_tool_support import CronTool, cron_tool, scheduling_tools
+from tests.core.tools.scheduling_tool_support import (
+    WEBHOOK_BASE_URL,
+    CronTool,
+    cron_tool,
+    scheduling_tools,
+)
 
 PROMPT = "Check the nightly build and summarize failures."
 BERLIN_TIME = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+0[12]:00"
@@ -903,3 +908,36 @@ def test_update_moves_an_event_job_between_times_events_and_schedules(tmp_path: 
     # A schedule of another kind ends the binding.
     tool.succeeded({"action": "update", "id": job_id, "schedule": "every 2h"})
     assert fields() == ("interval", None, None, None)
+
+
+def test_a_webhook_job_shows_its_url_and_hands_out_its_secret_once(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    timed_id = tool.add_job()
+
+    envelope, created = tool.call({"action": "create", "prompt": PROMPT, "schedule": "webhook"})
+    job_id = envelope["data"]["id"]
+    secret = asyncio.run(tool.service.webhook_secret(job_id))
+    renamed = tool.succeeded({"action": "update", "id": job_id, "name": "GitHub events"})
+    switched = tool.succeeded({"action": "update", "id": timed_id, "schedule": "webhook"})
+    switched_secret = asyncio.run(tool.service.webhook_secret(timed_id))
+    received = asyncio.run(
+        tool.service.receive_webhook(job_id, [("authorization", f"Bearer {secret}")], b"{}")
+    )
+    listed = tool.succeeded({"action": "list", "id": job_id})
+
+    job = tool.service.get_job(job_id)
+    assert (job.schedule_type, job.cron_expression, job.interval_seconds) == ("webhook", None, None)
+    url = f"url: {WEBHOOK_BASE_URL}/api/hooks/{job_id}"
+    assert f"schedule: webhook\n{url}\nreachable_from: the internet\n" in created
+    assert "next_run" not in created
+    assert f"secret: {secret}" in created
+    assert f'"Authorization: Bearer {secret}"' in created
+    assert "X-Hub-Signature-256" in created
+    # The secret comes with the call that made the webhook, never again.
+    assert secret not in renamed
+    assert f"secret: {switched_secret}" in switched
+    assert received == "accepted"
+    assert url in listed
+    assert "requests_waiting: 1" in listed
+    assert re.search(rf"^last_request: {BERLIN_TIME}$", listed, re.MULTILINE)
+    assert secret not in listed

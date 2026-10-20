@@ -664,3 +664,46 @@ def test_late_start_limits_have_no_effect_and_the_result_says_so(
         assert "note" not in data
     else:
         assert data["note"].startswith(note)
+
+
+# -- webhook triggers ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"schedule": "Webhook"}, id="schedule"),
+        pytest.param({"type": "webhook"}, id="type"),
+        pytest.param({"schedule": {"kind": "hook"}}, id="schedule-object"),
+        # A webhook job keeps no time, so a time zone changes nothing.
+        pytest.param({"schedule_type": "webhook", "timezone": "America/New_York"}, id="zone"),
+    ],
+)
+def test_webhook_spellings_create_a_webhook_job(tool: CronTool, fields: dict[str, Any]) -> None:
+    job, text = tool.created({"action": "create", "prompt": JOB_PROMPT, **fields})
+
+    assert job.schedule_type == "webhook"
+    assert "note" not in text
+
+
+def test_a_webhook_route_of_another_harness_keeps_vbots_secret_and_no_event_filter(
+    tool: CronTool,
+) -> None:
+    job, text = tool.created(
+        {"action": "create", "prompt": JOB_PROMPT, "schedule": "webhook", "secret": "s3cret"}
+    )
+    message = tool.refused(
+        {"action": "create", "prompt": JOB_PROMPT, "schedule": "webhook", "events": ["push"]}
+    )
+    timed = tool.refused(
+        {"action": "create", "prompt": JOB_PROMPT, "type": "webhook", "schedule": "every 2h"}
+    )
+
+    assert job.schedule_type == "webhook"
+    assert "s3cret" not in text
+    assert 'note: "secret" had no effect' in text
+    assert '"events" is not available' in message
+    assert message.endswith(
+        f'Send: {{"action":"create","prompt":"{JOB_PROMPT}","schedule":"webhook"}}'
+    )
+    assert 'the schedule "every 2h" is not a webhook schedule' in timed

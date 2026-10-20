@@ -23,12 +23,18 @@ from core.providers.adapter import tool_result_text
 from core.tools.calendar import CALENDAR_TOOL_NAME, register_calendar_tool
 from core.tools.cron import CRON_TOOL_NAME, register_cron_tool
 from core.tools.tools import ToolContext, ToolRegistry
-from tests.core.automation.cron_test_support import FakeChats, FakeChecks, make_service
+from tests.core.automation.cron_test_support import (
+    FakeChats,
+    FakeChecks,
+    make_service,
+    secret_store,
+)
 from tests.core.tools.tools_test_support import dispatch_as_executor
 
 SERVER_ZONE = "Europe/Berlin"
 JOB_PROMPT = "Lint the wiki and report broken links."
 BOTH_TOOLS = (CALENDAR_TOOL_NAME, CRON_TOOL_NAME)
+WEBHOOK_BASE_URL = "https://vbot.example.com"
 
 
 @dataclass
@@ -172,6 +178,8 @@ def scheduling_tools(
     cron.set_chat_delivery(chats)
     checks = FakeChecks()
     cron.set_watch_checks(checks)
+    cron.set_webhook_secrets(secret_store(tmp_path))
+    cron.bind_webhook_url(WEBHOOK_BASE_URL, "internet")
     registry = ToolRegistry()
     reference_lock = asyncio.Lock()
     register_cron_tool(registry, cron, reference_lock=reference_lock)

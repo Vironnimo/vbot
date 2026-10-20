@@ -7,8 +7,9 @@ schema (``agent_id``, ``schedule_type``, ``cron_expression``, ``run_at``,
 (``cron``, ``recurring``, ``durable``), Hermes ``cronjob`` (``job_id``,
 ``pause``/``resume``/``remove``, ``deliver``), OpenClaw ``cron`` (a ``job``
 with ``schedule`` and ``payload`` objects, ``jobId``), and scheduled-task Tools
-(``cronExpression``, ``fireAt``, ``description``), and Hermes monitor gates
-(``monitor_url``) as ``watch``. With an ``event_id``, the
+(``cronExpression``, ``fireAt``, ``description``), Hermes monitor gates
+(``monitor_url``) as ``watch``, and webhook triggers (``type: webhook``, a
+Hermes webhook route's ``secret``). With an ``event_id``, the
 schedule is an event time, which Models also write as reminder offsets
 (``minutes_before: 30``, ``-PT30M``, ``30 minutes before``, ``before_start``).
 This owner maps them onto the canonical fields so a call whose intent is clear
@@ -40,6 +41,7 @@ from core.tools._cron_schedule_arguments import (
     CLOCK_SCHEDULE,
     EVENT_REPEAT_REFUSAL,
     EVENT_TIME_STAND_IN,
+    WEBHOOK_SCHEDULE,
     _names_event_offset,
     _read_event_schedule,
     _read_schedule,
@@ -69,17 +71,20 @@ NO_WATCH = "none"
 """The ``watch`` that stops watching on update; on create it is the default."""
 DELIVER_PLATFORM_FIELD = "deliver_platform"
 """The platform a ``deliver`` value named; "here" holds only in a chat on it."""
+WEBHOOK_SECRET_FIELD = "webhook_secret_name"
+"""The field a webhook call sent its own secret in; vBot makes the secret, so it has no effect."""
 HERE = "here"
 DELIVERY_CHOICES = (HERE, "app", "none")
 
 # Accepted so a requested time zone, paused state or delivery platform reaches
 # the handler, which converts, applies or refuses it, and so the handler reports
-# ignored late-start limits. Never advertised.
+# ignored late-start limits and webhook secrets. Never advertised.
 UNADVERTISED_PARAMETERS: dict[str, Any] = {
     TIMEZONE_FIELD: {"type": "string", "minLength": 1},
     ENABLED_FIELD: {"type": "boolean"},
     LATE_LIMITS_FIELD: LATE_LIMITS_PARAMETER,
     DELIVER_PLATFORM_FIELD: {"type": "string", "minLength": 1},
+    WEBHOOK_SECRET_FIELD: {"type": "string", "minLength": 1},
 }
 _CHANGE_FIELDS = (
     "target",
@@ -263,6 +268,21 @@ _SCRIPT_KEYS = frozenset({"script", "monitorscript", "watchscript", "triggerscri
 _SCRIPT_TRIGGER_KEYS = frozenset({"trigger"})
 WATCH_STAND_IN = "<command or URL to check>"
 _URL_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+# Hermes webhook routes filter events and carry their own secret.
+_WEBHOOK_FILTER_KEYS = frozenset(
+    {"events", "eventtypes", "eventfilter", "eventfilters", "filter", "filters"}
+)
+_WEBHOOK_SECRET_KEYS = frozenset(
+    {
+        "secret",
+        "token",
+        "webhooksecret",
+        "hmacsecret",
+        "signingsecret",
+        "webhooktoken",
+        "hooktoken",
+    }
+)
 _DESCRIPTION_KEYS = frozenset({"description", "desc", "summary", "details"})
 # Accepted without effect: vBot jobs always persist, and list always shows every job.
 _IGNORED_KEYS = frozenset({"durable", "persist", "persistent", "includedisabled", "reason"})
@@ -308,6 +328,7 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
     _read_recurrence(normalized, problems)
     _read_session(normalized, problems)
     _read_delivery(normalized, problems)
+    _read_webhook(normalized, problems)
     late_limits = take_late_limits(normalized, _LATE_START)
     _read_extras(normalized)
     _omit_placeholders(normalized, problems)
@@ -654,6 +675,28 @@ def _watch_value(key: str, item: Any, problems: _Problems, *, url: bool) -> str 
     return text
 
 
+def _read_webhook(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Settle the event filter and secret a webhook route of another harness brings along."""
+    if arguments.get("schedule") != WEBHOOK_SCHEDULE:
+        return
+    for key in list(arguments):
+        word = spelling(key)
+        if word in _WEBHOOK_FILTER_KEYS:
+            item = arguments.pop(key)
+            if is_placeholder(item) or item in ([], {}):
+                continue
+            # Dropped, the job would run for every event the call meant to filter out.
+            problems.add(
+                f'"{key}" is not available: every request that proves the job\'s secret starts '
+                "a run, and the run sees the request's headers, such as X-GitHub-Event. To act "
+                "on some events only, name them in prompt."
+            )
+        elif word in _WEBHOOK_SECRET_KEYS:
+            item = arguments.pop(key)
+            if not is_placeholder(item):
+                arguments[WEBHOOK_SECRET_FIELD] = key
+
+
 def _read_extras(arguments: dict[str, Any]) -> None:
     """Fold descriptive fields into name and drop fields that request nothing."""
     for key in list(arguments):
@@ -878,6 +921,8 @@ __all__ = [
     "TIMEZONE_FIELD",
     "UNADVERTISED_PARAMETERS",
     "WATCH_STAND_IN",
+    "WEBHOOK_SCHEDULE",
+    "WEBHOOK_SECRET_FIELD",
     "ambiguous_event_time",
     "event_time_readings",
     "normalize_cron_arguments",
