@@ -1006,6 +1006,13 @@ TOTALS_EDIT = (
             id="punctuation-in-common",
         ),
         pytest.param(TOTALS + "\n" + TOTALS, TOTALS_EDIT, False, id="new-text-twice"),
+        # The new text ends inside a line whose rest the edit would have replaced.
+        pytest.param(
+            TOTALS.replace("return total", "return total)"),
+            (TOTALS_EDIT[0].replace("return total", "return (total)"), TOTALS_EDIT[1]),
+            False,
+            id="new-text-inside-a-line",
+        ),
         # A copy of old_string with errors stands elsewhere: the edit can be meant there.
         pytest.param(
             TOTALS + "\ndef g(rows):\n    total = 0\n    for row in rows:\n        total += rows\n"

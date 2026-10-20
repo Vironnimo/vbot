@@ -264,7 +264,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
      this section), never under a repeated hint.
   7. `copy_match.match_copied_edit` places old lines copied with errors, unless
      the path is precise-only after an earlier failure or the new text is
-     already present (`copy_match` rule below).
+     already present as whole lines (`copy_match` rule below).
   8. Unchanged lines between `+` lines that the file holds nowhere are read as
      added lines missing their `+` (`_unmarked_additions`), as written: a
      space-prefixed line keeps that space as indentation, since the `+` was
@@ -326,13 +326,14 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 - Match errors show bounded candidate excerpts with `read`-style gutters
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
-  line N: the file has '...' where the patch has '...'` (`where old_string
+  line N, character C: the file has '...' where the patch has '...'` (`where old_string
   has` for `old_string` edits). Quoted text in these reports, in the `line_join`
   refusal and in notes holds the characters as the file or the call has them
   (`_patch_syntax.quoted`, not `repr`): a backslash or quote stays single, and
   only a character that shows nothing and is not whitespace is written as an
-  escape (`​`); text in `'` uses `"` when it holds `'` but not `"`
-  (`edit.md` -> Agent-facing text). An `old_string` of several lines may start
+  escape (`​`); text in `'` uses `"` when it holds `'` but not `"`, and the
+  two texts of a first difference share one quote character, chosen that way
+  for both (`edit.md` -> Agent-facing text). An `old_string` of several lines may start
   inside its first file line and end inside its last: those lines differ only
   when the file line does not end, or start, with them (`first_difference`
   without `whole_lines`; patch lines are whole lines, and one that is only part
@@ -366,9 +367,13 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   the longest lines were often added text copied without `+`, so 43 of 133 failed
   hunks in one Swarm said `No similar text` although most copied lines were in
   the file, and 10 of 76 checkable first differences named a line one to seven
-  lines too early (Sessions, 2026-09). Long differing lines show <=240-character windows
-  centered on the first substantive mismatch, with 1-based file/copied-line
-  character coordinates and explicit truncation. Truncated candidate excerpts
+  lines too early (Sessions, 2026-09). The first difference always names the
+  file line's 1-based character. A differing line of more than 80 characters
+  shows an 80-character window from 30 characters before the first substantive
+  mismatch (`_first_difference_window`), with 1-based file/copied-line character
+  coordinates and explicit truncation (Swarm run 2026-10-20: two whole
+  120-character lines hid that only their last quote differed; `edit.md` ->
+  Agent-facing text). `line_differences` keeps 240-character windows. Truncated candidate excerpts
   name a callable `read(path=..., offset="line:character", limit=...)` continuation;
   positions count Unicode characters and preserve LF/CRLF/CR line semantics.
   Overlapping excerpts merge before continuations are named: a continuation
@@ -376,8 +381,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   call. Separately named continuations of adjacent candidates mostly repeated
   shown lines (26 of 34 merged reports, Sessions, 2026-09).
   Diagnostics also note when the new
-  text already occurs (a change made earlier; not when `old_string` contains
-  `new_string`, as after a deletion). An `old_string` replacement whose change
+  text already occurs as whole lines (a change made earlier; not when
+  `old_string` contains `new_string`, as after a deletion, and not when other
+  text stands beside it on its first or last line, which the change would have
+  replaced: `x;"` stands in `x;")` whether or not `(x;")` became `x;"`;
+  `_edit_locations._new_text_line`, Swarm run 2026-10-20). An `old_string` replacement whose change
   the file already holds, by the evidence `tools/edit.md` -> Results names,
   changes nothing instead of failing (`_new_text_in_place`; an `apply_patch`
   step then reports `already contains this change`). An `old_string` of at
@@ -523,7 +531,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   decision 2026-09-25). `core/tools/copy_match.py` owns this for `apply_patch`
   hunks and `old_string` edits, `skill_manage` patches and Swarm Wiki edits; it
   runs only after every precise attempt and the already-applied check missed, and
-  not when the new text is already present. Where (location), from the number W
+  not when the new text is already present (for `apply_patch` and `edit`, as
+  whole lines). Where (location), from the number W
   of correctly copied words: below 3 the copy is exact up to spacing; from 3 it
   may misspell one word per 3 correct words, and a kept (context) line may lack
   or add words or signs, one per 2 correct words; from 12 it may also differ

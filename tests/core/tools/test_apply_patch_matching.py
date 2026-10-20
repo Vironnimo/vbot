@@ -1038,7 +1038,8 @@ def test_after_a_failed_hunk_later_hunks_need_exact_lines(tmp_path):
         "failure in this file, this change needs lines that match the file exactly"
     ) in text(result)
     assert (
-        "First difference, line 2: the file has 'value = 111' where the patch has 'value = 123'."
+        "First difference, line 2, character 10: the file has 'value = 111' where the patch has "
+        "'value = 123'."
     ) in text(result)
     assert path.read_text(encoding="utf-8") == before.replace("other = old", "other = new")
 

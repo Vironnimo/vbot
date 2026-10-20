@@ -13,8 +13,10 @@ from core.tools._edit_locations import (
     _GUTTER_WARNING,
     AlreadyApplied,
     DeviationNote,
+    _covers_lines,
     _deviations,
     _Found,
+    _new_text_line,
     _poststate,
 )
 from core.tools._fuzzy_text import _inside_crlf
@@ -89,10 +91,11 @@ def _apply_replacement(content: str, hunk: _Hunk, path: object) -> tuple[str, li
     details = _not_found(content, old, source="old_string")
     present = None
     if new.strip() and new != old:
-        present = _poststate(content, new, first=True)
+        # New text that is only part of a line proves no earlier edit (_covers_lines).
+        present = _new_text_line(content, new)
         # Text the old text already holds proves nothing about an earlier edit.
-        if isinstance(present, FuzzyReplacement) and new.strip() not in old:
-            details["already_present"] = present.first_changed_line
+        if present is not None and new.strip() not in old:
+            details["already_present"] = present
     if not replace_all and present is None and not hunk.precise_only:
         copied = replace_copied(content, old, new)
         if isinstance(copied, AmbiguousFuzzyMatch):
@@ -282,10 +285,10 @@ def _new_text_in_place(content: str, old: str, new: str) -> AlreadyApplied | Non
     """Say where ``new`` stands when the file already holds this edit's result.
 
     ``old`` is not in the file (the precise steps found nothing). The result
-    holds when ``new`` occurs exactly once and not inside ``old``, both share a
-    whole non-blank line at their start or end, so they name one passage, and
-    no copy of ``old`` with errors stands anywhere else. Then the edit has
-    nothing left to do; otherwise ``None``.
+    holds when ``new`` occurs exactly once, as whole lines (``_covers_lines``),
+    and not inside ``old``, both share a whole non-blank line at their start or
+    end, so they name one passage, and no copy of ``old`` with errors stands
+    anywhere else. Then the edit has nothing left to do; otherwise ``None``.
     """
     if not new.strip() or new.strip() in old or not _share_an_edge_line(old, new):
         return None
@@ -293,6 +296,8 @@ def _new_text_in_place(content: str, old: str, new: str) -> AlreadyApplied | Non
     if not isinstance(present, FuzzyReplacement):
         return None
     start, end = present.before_spans[0]
+    if not _covers_lines(content, new, start, end):
+        return None
     copied = replace_copied(content, old, new)
     if isinstance(copied, AmbiguousFuzzyMatch):
         return None

@@ -388,15 +388,20 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
         if difference.get("spacing")
         else ""
     )
+    # Both sides in the same quotes, so a ' for a " shows where it stands.
+    quote = (
+        '"'
+        if any("'" in difference[key] for key in ("file", "copy"))
+        and not any('"' in difference[key] for key in ("file", "copy"))
+        else "'"
+    )
     if not difference.get("truncated"):
-        held = (
-            f": after {after}, line {difference['line']} reads"
-            if after
-            else f", line {difference['line']}: the file has"
-        )
+        # The character shows where in the line to look, such as at a ' for a ".
+        place = f"line {difference['line']}, character {difference['character']}"
+        held = f": after {after}, {place}, reads" if after else f", {place}: the file has"
         return [
-            f"First difference{held} {quoted(difference['file'])} "
-            f"where {source} has {quoted(difference['copy'])}"
+            f"First difference{held} {quoted(difference['file'], quote)} "
+            f"where {source} has {quoted(difference['copy'], quote)}"
             + (f"; {spacing}." if spacing else "."),
             *unprefixed,
         ]
@@ -413,7 +418,7 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
         start = difference[f"{key}_start"]
         end = start + len(difference[key]) - 1
         lines.append(
-            f"{label} characters {start}-{end}: {quoted(difference[key])}"
+            f"{label} characters {start}-{end}: {quoted(difference[key], quote)}"
             if difference[key]
             else f"{label} character {start}: end of line."
         )
