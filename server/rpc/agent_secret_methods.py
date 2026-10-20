@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
+from core.chat.secret_giving import give_secret
 from core.secrets.agent_secrets import (
     LIFETIMES,
     SECRET_KINDS,
@@ -23,6 +24,7 @@ from core.secrets.agent_secrets import (
     SourceBinding,
 )
 from core.secrets.sources import SecretSource
+from core.sessions import SessionAddress
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_AGENT_SECRETS
 from server.rpc._mutations import serialized_mutation, serialized_read
@@ -48,6 +50,17 @@ _UPDATE_FIELDS = {
     "expires_at",
     "clear_expiry",
     "permanent",
+}
+_GIVE_FIELDS = {
+    "project_id",
+    "agent_id",
+    "session_id",
+    "name",
+    "kind",
+    "values",
+    "lifetime",
+    "expires_at",
+    "description",
 }
 _CREATE_FIELDS = {
     "name",
@@ -313,6 +326,34 @@ async def _answer(state: Any, params: JsonObject) -> JsonObject:
     return {"secret": _describe(_secrets(state), secret)}
 
 
+async def _give(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, _GIVE_FIELDS, "agent_secrets.give")
+    runtime = state.runtime
+    description = params.get("description") or ""
+    if not isinstance(description, str):
+        raise _invalid("params.description must be a string")
+    try:
+        given = await give_secret(
+            secrets=runtime.agent_secrets,
+            requests=runtime.secret_requests,
+            sessions=runtime.chat_sessions,
+            address=SessionAddress(
+                _optional_text(params, "project_id"),
+                _text(params, "agent_id"),
+                _text(params, "session_id"),
+            ),
+            name=_text(params, "name"),
+            kind=_choice(params, "kind", SECRET_KINDS, None),
+            values=_values(params) or {},
+            lifetime=_choice(params, "lifetime", LIFETIMES, "session"),
+            expires_at=_time(params, "expires_at"),
+            description=description,
+        )
+    except SecretRecordError as error:
+        raise _invalid(str(error)) from None
+    return {"secret": _describe(_secrets(state), given.secret), "replaced": given.replaced}
+
+
 async def _decline(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "agent_secrets.decline")
     try:
@@ -420,6 +461,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "agent_secrets.reveal": serialized_read(_reveal, lock_attribute=_LOCK),
         # Not serialized: an answer must not wait behind a slow source call.
         "agent_secrets.answer": _answer,
+        "agent_secrets.give": _give,
         "agent_secrets.decline": _decline,
         "agent_secrets.source_unlock": serialized_mutation(_unlock, lock_attribute=_LOCK),
         "agent_secrets.source_lock": serialized_mutation(_lock, lock_attribute=_LOCK),

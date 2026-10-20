@@ -109,6 +109,7 @@ async def test_answering_a_request_stores_the_value_for_the_waiting_agent(
 
     answered = asyncio.create_task(ask("STRIPE"))
     declined = asyncio.create_task(ask("OPENAI"))
+    given = asyncio.create_task(ask("GITHUB"))
     await asyncio.sleep(0)
     pending = {
         item["name"]: item for item in (await rpc_result(state, "agent_secrets.list"))["requests"]
@@ -118,14 +119,26 @@ async def test_answering_a_request_stores_the_value_for_the_waiting_agent(
         state, "agent_secrets.answer", id=pending["STRIPE"]["id"], values={"value": PASSWORD}
     )
     await rpc_result(state, "agent_secrets.decline", id=pending["OPENAI"]["id"])
+    # The /secret form answers a pending request of the same name in the Session.
+    gave = await rpc_result(
+        state,
+        "agent_secrets.give",
+        agent_id="main",
+        session_id="s1",
+        name="github",
+        kind="token",
+        values={"value": PASSWORD},
+    )
     stale = await rpc_error(state, "agent_secrets.decline", id=pending["OPENAI"]["id"])
 
     assert pending["STRIPE"]["fields"] == [{"name": "value", "concealed": True, "optional": False}]
     assert (await answered).status == "stored"
     assert (await declined).status == "declined"
+    assert (await given).status == "stored"
+    assert gave["replaced"] is False
     assert stored["secret"]["lifetime"] == "session"
     assert stored["secret"]["session_id"] == "s1"
-    assert PASSWORD not in json.dumps(stored)
+    assert PASSWORD not in json.dumps([stored, gave])
     assert state.runtime.agent_secrets.lookup("main", "s1", "STRIPE") is not None
     assert stale["message"] == "This request is no longer waiting; the Agent stopped asking."
     assert (await rpc_result(state, "agent_secrets.list"))["requests"] == []
