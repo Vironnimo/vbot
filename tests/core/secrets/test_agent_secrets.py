@@ -289,11 +289,11 @@ def test_environment_gives_every_field_for_a_name_or_one_field_for_its_variable(
     clock.now = datetime.fromtimestamp(59, UTC)
     secrets = _secrets(tmp_path, clock)
     _login(secrets)
-    secrets.update(
-        secrets.usable("main", "s1")[0].id,
-        actor="user",
-        values={"totp": TOTP_SEED},
-    )
+    secret_id = secrets.usable("main", "s1")[0].id
+    # A field added later is checked like one given at creation.
+    with pytest.raises(SecretRecordError):
+        secrets.update(secret_id, actor="user", values={"totp": "not a seed!"})
+    secrets.update(secret_id, actor="user", values={"totp": TOTP_SEED})
 
     everything = secrets.environment("main", "s1", "GITHUB")
     one = secrets.environment("main", "s1", "github_password")

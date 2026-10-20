@@ -942,15 +942,20 @@ def _build_fields(
         raise SecretRecordError("A Secret needs at least one field.")
     fields: list[SecretField] = []
     for name in names:
-        value = check_value(given[name], field_name=name)
-        if name == TOTP_FIELD:
-            try:
-                check_totp_seed(value)
-            except TotpSeedError as error:
-                raise SecretRecordError(f"The totp field is not a TOTP seed: {error}.") from None
+        value = _checked_value(name, given[name])
         hidden = bool(concealed.get(name, defaults.get(name, True)))
         fields.append(SecretField(name=name, concealed=hidden, value=value))
     return tuple(fields)
+
+
+def _checked_value(name: str, value: str) -> str:
+    checked = check_value(value, field_name=name)
+    if name == TOTP_FIELD:
+        try:
+            check_totp_seed(checked)
+        except TotpSeedError as error:
+            raise SecretRecordError(f"The totp field is not a TOTP seed: {error}.") from None
+    return checked
 
 
 def _with_values(secret: AgentSecret, values: Mapping[str, str]) -> tuple[SecretField, ...]:
@@ -958,14 +963,16 @@ def _with_values(secret: AgentSecret, values: Mapping[str, str]) -> tuple[Secret
     fields = []
     for item in secret.fields:
         if item.name in updates:
-            value = check_value(updates.pop(item.name), field_name=item.name)
-            if item.name == TOTP_FIELD:
-                check_totp_seed(value)
-            fields.append(replace(item, value=value))
+            fields.append(replace(item, value=_checked_value(item.name, updates.pop(item.name))))
         else:
             fields.append(item)
+    defaults = dict(KIND_FIELDS[secret.kind])
     for name, value in updates.items():
         fields.append(
-            SecretField(name=name, concealed=True, value=check_value(value, field_name=name))
+            SecretField(
+                name=name,
+                concealed=defaults.get(name, True),
+                value=_checked_value(name, value),
+            )
         )
     return tuple(fields)
