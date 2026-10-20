@@ -18,6 +18,8 @@ from resources.extensions.swarm.agent_text import (
     BOARD_PENDING_AUTOMATIC,
     BOARD_WAIT,
     CURSOR_AS_BEFORE,
+    MENTION_CORRECTED,
+    MENTION_HOW,
     MENTION_NO_ONE,
     MENTION_USER,
     POST_DUPLICATE,
@@ -541,12 +543,46 @@ async def test_board_addresses_participants_its_text_names_after_at_or_answers(b
     assert everyone["data"]["note"] == " ".join(
         (
             MENTION_NO_ONE["main"].format(mentions=f"@all, @Everyone and @{one}s"),
+            MENTION_CORRECTED["possessive"].format(name=one),
+            MENTION_HOW["address"],
             MENTION_USER.format(mentions="@User"),
         )
     )
     long, _ = await dispatch(board, {"text": "@team " + "word " * 300})
-    assert long["data"]["note"] == MENTION_NO_ONE["opening_many"].format(mentions="@team", count=2)
-    for unaddressed in ("mail ops x@all.example", "see @override and `@All`"):
+    assert long["data"]["note"] == " ".join(
+        (MENTION_NO_ONE["opening_many"].format(mentions="@team", count=2), MENTION_HOW["opening"])
+    )
+    # A possessive or a one-letter slip of a name gets the precise fix instead of the
+    # general rule; addressing itself stays exact.
+    possessive, _ = await dispatch(board, {"text": f"@{one}s draft is ready"})
+    assert possessive["data"]["delivery"] == "Queued for 2 participants."
+    assert possessive["data"]["note"] == " ".join(
+        (
+            MENTION_NO_ONE["main"].format(mentions=f"@{one}s"),
+            MENTION_CORRECTED["possessive"].format(name=one),
+        )
+    )
+    slip = f"{one[:2]}q{one[2:]}"
+    close, _ = await dispatch(board, {"text": f"@{slip} and @Stylesheet, please review"})
+    assert close["data"]["delivery"] == "Queued for 2 participants."
+    assert close["data"]["note"] == " ".join(
+        (
+            MENTION_NO_ONE["main"].format(mentions=f"@{slip} and @Stylesheet"),
+            MENTION_CORRECTED["close"].format(written=f"@{slip}", name=one),
+            MENTION_HOW["address"],
+        )
+    )
+    # A possessive with an apostrophe addresses already; so does a post that also writes
+    # the plain name. Quoted formats and the example @Name address no one and get no note.
+    for addressed in (f"@{one}'s plan", f"@{one}’s plan", f"@{one}: see @{one}s plan"):
+        reached, _ = await dispatch(board, {"text": addressed})
+        assert reached["data"]["delivery"] == f"Queued for 2 participants. {_reaches(one)}"
+        assert "note" not in reached["data"]
+    for unaddressed in (
+        "mail ops x@all.example",
+        "see @override and `@All`",
+        'Format: „@X“ or "@Y", as in @Name',
+    ):
         address, _ = await dispatch(board, {"text": unaddressed})
         assert "note" not in address["data"]
     # Outside the main discussion, the result says who does not receive a post and names

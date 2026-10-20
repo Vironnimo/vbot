@@ -59,13 +59,17 @@ _PASSAGE_CHARS = 1200
 class TextEdit:
     """The page content after the edit; ``applied`` is False when it already held it.
 
-    ``notes`` tell the caller where its ``old_text`` differed from the page.
+    ``notes`` tell the caller where its ``old_text`` differed from the page. An
+    applied edit names the passage it replaced, as (start, end) in the content
+    before it (``before``), and the text it wrote in ``content`` (``after``).
     """
 
     content: str
     line: int
     applied: bool
     notes: tuple[str, ...] = ()
+    before: tuple[int, int] | None = None
+    after: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -109,7 +113,7 @@ def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
         if isinstance(found, AmbiguousFuzzyMatch):
             return _ambiguous(content, found)
         if found is not None:
-            return TextEdit(found.new_content, found.first_changed_line, True)
+            return _applied(found)
     held = _already_applied(content, old, new)
     if held is not None:
         return TextEdit(content, held, False)
@@ -124,8 +128,7 @@ def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
         if isinstance(copied, AmbiguousFuzzyMatch):
             return _ambiguous(content, copied, similar=True)
         if copied is not None:
-            notes = tuple(copy_warnings(copied))
-            return TextEdit(copied.new_content, copied.first_changed_line, True, notes)
+            return _applied(copied, tuple(copy_warnings(copied)))
     candidates = find_closest_candidates(content, old)
     passages = tuple(
         Passage(candidate.line_number, candidate.text, candidate.truncated)
@@ -161,6 +164,19 @@ def apply_text_edit(content: str, old: str, new: str) -> TextEdit | EditMiss:
         differences=compared.differences,
         different_lines=compared.count,
         span=_span(content, compared.first_line, compared.last_line),
+    )
+
+
+def _applied(found: FuzzyReplacement, notes: tuple[str, ...] = ()) -> TextEdit:
+    """Describe a replacement of one passage as an applied edit."""
+
+    return TextEdit(
+        found.new_content,
+        found.first_changed_line,
+        True,
+        notes,
+        found.before_spans[0],
+        found.after_spans[0],
     )
 
 
@@ -204,10 +220,11 @@ def _emphasis_copy(content: str, old: str, new: str) -> TextEdit | EditMiss | No
     if len(current) <= _SNIPPET_LINE_CHARS:
         start = 0
     snippet = current[start : start + _SNIPPET_LINE_CHARS]
+    applied = updated != content
     return TextEdit(
         updated,
         line,
-        updated != content,
+        applied,
         (
             WIKI_EMPHASIS_COPY.format(
                 line=line,
@@ -215,6 +232,8 @@ def _emphasis_copy(content: str, old: str, new: str) -> TextEdit | EditMiss | No
                 content=snippet,
             ),
         ),
+        (offset, offset + len(current)) if applied else None,
+        (offset, offset + len(replacement)) if applied else None,
     )
 
 

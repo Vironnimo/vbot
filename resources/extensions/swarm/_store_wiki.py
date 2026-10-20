@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 import sqlite3
 from bisect import bisect_right
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from difflib import SequenceMatcher
 from itertools import islice
 from typing import cast
 
@@ -36,9 +37,15 @@ MUTATIONS = {"create", "update", "delete", "restore"}
 _ORIGIN_REVISIONS = 20
 # Passage edits one update applies together, each as old_text and new_text.
 _MAX_EDITS = 100
-# A change's evidence shows its whole changed passage and the lines after it, where
-# leftover text would meet it, within this many characters. Create shows the page's
-# start: the caller wrote all of it.
+# A passage edit's evidence shows where its text meets the page and this many lines
+# after it, within this many characters; a longer line keeps this many characters on
+# each side of the change.
+_SEAM_AFTER_LINES = 2
+_SEAM_CHARS = 4000
+_SEAM_LINE_CHARS = 400
+_SEAM_CUT_CHARS = 150
+# A restore's evidence shows its changed passage and the lines after it, within this
+# many characters; a restore that changed nothing shows the page's start.
 _EXCERPT_CHARS = 4000
 _EXCERPT_AFTER_LINES = 2
 _EXCERPT_AFTER_CHARS = 600
@@ -46,6 +53,8 @@ _EXCERPT_START_CHARS = 2000
 _EXCERPT_START_LINES = 8
 _TEXT_CHARS = 200000
 _LINE_BREAK = re.compile(r"\r\n|\n|\r")
+# A line with its line break, if any.
+_LINE = re.compile(r"[^\r\n]*(?:\r\n|\n|\r)|[^\r\n]+\Z")
 # Punctuation around a search word, as in a quoted phrase or a list of terms.
 _WORD_EDGE = "\"'.,;:!?()[]{}<>“”„‘’«»"
 _FIELDS = {
@@ -458,16 +467,31 @@ def _mutate(
     def metadata(row: sqlite3.Row) -> Json:
         return _metadata(row, _page_numbers(connection, swarm_id))
 
-    def finish(result: Json, *, changed: tuple[int, int] | None = None) -> Json:
-        if not result["deleted"] and (
-            action in {"create", "restore"} or {"old_text", "edits", "content"} & arguments.keys()
-        ):
+    def finish(
+        result: Json, *, changed: tuple[int, int] | None = None, passages: list[Json] | None = None
+    ) -> Json:
+        # Evidence comes from the exact saved revision and stays in the receipt. Text the
+        # caller wrote is evidence only where the page differs from it, so a create or
+        # whole-content update reports the saved size, and a passage edit shows where
+        # its text meets the page.
+        if result["deleted"]:
+            pass
+        elif action == "restore":
             saved = _page(connection, swarm_id, result["page_id"], result["revision"])
-            result["content_excerpt"] = _content_excerpt(
-                saved["content"],
-                result.get("line", 1),
-                None if action == "create" else changed,
-            )
+            result["content_excerpt"] = _content_excerpt(saved["content"], 1, changed)
+        elif result.get("unchanged"):
+            pass
+        elif passages:
+            saved = _page(connection, swarm_id, result["page_id"], result["revision"])
+            seam = _seam(saved["content"], passages)
+            if seam is not None:
+                result["seam"] = seam
+        elif action == "create" or "content" in arguments:
+            saved = _page(connection, swarm_id, result["page_id"], result["revision"])
+            result["size"] = {
+                "lines": _line_count(saved["content"]),
+                "chars": len(saved["content"]),
+            }
         connection.execute(
             "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
             (scope, arguments["request_id"], payload_hash, _dump(result)),
@@ -479,6 +503,7 @@ def _mutate(
     previous_content = ""
     notes: list[str] = []
     outcomes: list[Json] = []
+    passages: list[Json] = []
     if action == "create":
         title, content, deleted = arguments["title"], arguments["content"], 0
         duplicate = connection.execute(
@@ -548,7 +573,7 @@ def _mutate(
         ):
             raise SwarmStoreError("invalid_arguments", field="expected_revision", details=state)
         if edits:
-            content, outcomes, notes, misses = _apply_edits(
+            content, outcomes, notes, misses, passages = _apply_edits(
                 connection, page_id, current["revision"], content, edits
             )
             if misses:
@@ -591,11 +616,18 @@ def _mutate(
     result = metadata(_page(connection, swarm_id, page_id))
     if line is not None:
         result["line"] = line
+    if "old_text" in arguments and passages:
+        passage = passages[0]
+        # The lines old_text covered in the revision before, and those its replacement covers now.
+        result["replaced"] = {
+            "old": list(_line_range(previous_content, passage["before"])),
+            "new": list(_line_range(content, passage["after"], ends_line=passage["ends_line"])),
+        }
     if notes:
         result["notes"] = notes
     if "edits" in arguments:
         result["edits"] = outcomes
-    return finish(result, changed=_changed_span(previous_content, content))
+    return finish(result, changed=_changed_span(previous_content, content), passages=passages)
 
 
 def _passage_edits(arguments: Json) -> list[Json]:
@@ -610,17 +642,23 @@ def _passage_edits(arguments: Json) -> list[Json]:
 
 def _apply_edits(
     connection: sqlite3.Connection, page_id: str, current: int, content: str, edits: list[Json]
-) -> tuple[str, list[Json], list[str], list[tuple[int, Json]]]:
+) -> tuple[str, list[Json], list[str], list[tuple[int, Json]], list[Json]]:
     """Apply passage edits in order, each to the content the earlier ones left.
 
     Return that content; for each edit that applied, its number, its line in
     that content and whether it changed the page; the notes on its passages;
-    and each miss with its edit's number.
+    each miss with its edit's number; and, for each edit that changed the page,
+    its passage: what it replaced (``before``, in the content it was applied to)
+    and, in the returned content, the text it wrote (``after``) and the part of
+    that text that differs from the replaced passage (``changed``), its new_text,
+    and whether the replaced passage ended a line. A later edit that overlaps an
+    earlier one's text joins it, which then has no new_text to compare.
     """
 
     outcomes: list[Json] = []
     notes: list[str] = []
     misses: list[tuple[int, Json]] = []
+    passages: list[Json] = []
     for number, item in enumerate(edits, 1):
         edit = _edit(connection, page_id, current, content, item["old_text"], item["new_text"])
         if not isinstance(edit, TextEdit):
@@ -632,9 +670,74 @@ def _apply_edits(
             if outcome["line"] > edit.line:
                 outcome["line"] += shift
         outcomes.append({"edit": number, "line": edit.line, "applied": edit.applied})
+        if edit.before is not None and edit.after is not None:
+            for passage in passages:
+                joined = _overlaps(passage["after"], edit.before)
+                passage["after"] = _moved(passage["after"], edit.before, edit.after)
+                passage["changed"] = _moved(passage["changed"], edit.before, edit.after)
+                if joined:
+                    passage.update(new_text=None, between=False)
+            start, end = edit.before
+            old = _LINE.findall(content[start:end])
+            new = _LINE.findall(edit.content[edit.after[0] : edit.after[1]])
+            # Lines both share at the start and at the end are context, not change.
+            same_start = _shared_start(old, new)
+            same_end = _shared_start(old[same_start:][::-1], new[same_start:][::-1])
+            point = edit.after[0] + sum(map(len, new[:same_start]))
+            removed = old[same_start : len(old) - same_end]
+            passages.append(
+                {
+                    "before": edit.before,
+                    "after": edit.after,
+                    "changed": (point, edit.after[1] - sum(map(len, new[len(new) - same_end :]))),
+                    "new_text": item["new_text"],
+                    "ends_line": content[end - 1] in "\r\n",
+                    # The edit only removed whole lines, so no line of the page changed.
+                    "between": len(new) == same_start + same_end
+                    and bool(removed)
+                    and removed[-1].endswith(("\n", "\r"))
+                    and (point == 0 or edit.content[point - 1] in "\r\n"),
+                }
+            )
         content = edit.content
         notes.extend(edit.notes)
-    return content, outcomes, notes, misses
+    return content, outcomes, notes, misses, passages
+
+
+def _shared_start(first: Sequence[str], second: Sequence[str]) -> int:
+    """Return how many leading items, such as characters or lines, two sequences share."""
+
+    return next(
+        (
+            index
+            for index, (one, other) in enumerate(zip(first, second, strict=False))
+            if one != other
+        ),
+        min(len(first), len(second)),
+    )
+
+
+def _overlaps(span: tuple[int, int], replaced: tuple[int, int]) -> bool:
+    """Whether replacing ``replaced`` changes text inside ``span``."""
+
+    return replaced[0] < span[1] and replaced[1] > span[0]
+
+
+def _moved(
+    span: tuple[int, int], before: tuple[int, int], after: tuple[int, int]
+) -> tuple[int, int]:
+    """Return where text at ``span`` lies once ``before`` was replaced by the text at ``after``.
+
+    A replacement that overlaps the span joins it: the span then covers both.
+    """
+
+    start, end = span
+    shift = (after[1] - after[0]) - (before[1] - before[0])
+    if before[1] <= start:
+        return start + shift, end + shift
+    if before[0] >= end:
+        return span
+    return min(start, after[0]), max(end + shift, after[1])
 
 
 def _edit(
@@ -703,10 +806,7 @@ def _changed_span(before: str, after: str) -> tuple[int, int]:
     yields an empty span at the place of the deleted text.
     """
 
-    start = next(
-        (index for index, (old, new) in enumerate(zip(before, after, strict=False)) if old != new),
-        min(len(before), len(after)),
-    )
+    start = _shared_start(before, after)
     shared = 0
     room = min(len(before), len(after)) - start
     while shared < room and before[-1 - shared] == after[-1 - shared]:
@@ -745,6 +845,154 @@ def _content_excerpt(content: str, line: int, changed: tuple[int, int] | None) -
     end = starts[after] if after < len(starts) else len(content)
     end = min(end, changed_end + _EXCERPT_AFTER_CHARS, offset + _EXCERPT_CHARS)
     return _excerpt(content, index, offset, end)
+
+
+def _line_starts(content: str) -> list[int]:
+    """Return where each line of ``content`` starts; after a final line break, its end."""
+
+    return [0, *(match.end() for match in _LINE_BREAK.finditer(content))]
+
+
+def _line_count(content: str) -> int:
+    """Return how many lines ``content`` holds; a final line break ends the last one."""
+
+    starts = _line_starts(content)
+    return len(starts) - (starts[-1] == len(content))
+
+
+def _line_range(content: str, span: tuple[int, int], *, ends_line: bool = False) -> tuple[int, int]:
+    """Return the first and last line of ``content`` that ``span`` touches.
+
+    An empty span left by removing whole lines (the removed text ended a line, and
+    the span starts one) touches none: its last line comes before its first.
+    """
+
+    starts = _line_starts(content)
+    start, end = span
+    first = bisect_right(starts, start)
+    if end > start:
+        return first, bisect_right(starts, end - 1)
+    if ends_line and start in starts:
+        return first, first - 1
+    return first, first
+
+
+def _seam(content: str, passages: list[Json]) -> Json | None:
+    """Show where each passage edit's text meets the saved page.
+
+    For each edit: the line before its first changed line, its first and last
+    changed lines, and the lines after it, where text the edit left in place
+    would meet it (Swarm run 2026-10-13). Lines between that hold the edit's
+    new_text as sent appear only as their range: echoing them cost every
+    passage edit its own text again (Swarm run 2026-10-20). Lines the page
+    holds other than as sent appear in full. Long lines keep the text around
+    the change; the whole seam keeps at most ``_SEAM_CHARS`` characters and
+    then names the character offset to read on from.
+    """
+
+    starts = _line_starts(content)
+    lines = [line.rstrip("\r\n") for line in _LINE.findall(content)]
+    total = len(lines)
+    # Each shown line with the columns its excerpt must keep, and the lines as sent.
+    shown: dict[int, set[int]] = {}
+    sent: set[int] = set()
+
+    def show(line: int, column: int) -> None:
+        if 1 <= line <= total:
+            shown.setdefault(line, set()).add(column)
+
+    for passage in passages:
+        start, end = passage["changed"]
+        first = bisect_right(starts, start)
+        if end > start:
+            last = bisect_right(starts, end - 1)
+        else:
+            last = first - 1 if passage["between"] else first
+        show(first - 1, len(lines[first - 2]) if first >= 2 else 0)
+        if last >= first:
+            show(first, start - starts[first - 1])
+            show(last, end - starts[last - 1])
+        held, differs = _held_lines(content, passage, starts)
+        for line in range(first + 1, last):
+            if line in held:
+                sent.add(line)
+            else:
+                show(line, differs.get(line, 0))
+        for line in range(last + 1, last + 1 + _SEAM_AFTER_LINES):
+            show(line, 0)
+    if not shown:
+        return None
+    sent -= shown.keys()
+    low, high = min(shown.keys() | sent), max(shown.keys() | sent)
+    parts: list[Json] = []
+    seam: Json = {"first": low, "last": high, "lines": total, "parts": parts}
+    size = 0
+    line = low
+    while line <= high:
+        if line not in shown:
+            # A run of lines as sent, or of lines no edit touched.
+            kind = "sent" if line in sent else "unchanged"
+            end = line
+            while end < high and end + 1 not in shown and (end + 1 in sent) == (kind == "sent"):
+                end += 1
+            parts.append({"lines": [line, end], "kind": kind})
+            line = end + 1
+            continue
+        part = {"line": line, **_clip(lines[line - 1], shown[line])}
+        cost = len(part.get("text", "")) + sum(len(piece) for _, piece in part.get("pieces", ()))
+        if parts and size + cost > _SEAM_CHARS:
+            parts.append({"lines": [line, high], "kind": "cut"})
+            seam["offset"] = starts[line - 1]
+            break
+        parts.append(part)
+        size += cost + 1
+        line += 1
+    return seam
+
+
+def _held_lines(content: str, passage: Json, starts: list[int]) -> tuple[set[int], dict[int, int]]:
+    """Return the page lines of a passage's text that hold its new_text as sent.
+
+    Also return, for each line that differs from the line of new_text it
+    replaced, the column where it first differs.
+    """
+
+    new_text = passage["new_text"]
+    if new_text is None:
+        return set(), {}
+    start, end = passage["after"]
+    first = bisect_right(starts, start)
+    written = _LINE_BREAK.split(content[start:end])
+    sent = _LINE_BREAK.split(new_text)
+    if written == sent:
+        return {first + index for index in range(len(written))}, {}
+    held: set[int] = set()
+    differs: dict[int, int] = {}
+    matcher = SequenceMatcher(None, sent, written, autojunk=False)
+    for tag, sent_start, sent_end, written_start, written_end in matcher.get_opcodes():
+        for index in range(written_start, written_end):
+            other = sent_start + index - written_start
+            if tag == "equal":
+                held.add(first + index)
+            elif tag == "replace" and other < sent_end:
+                differs[first + index] = _shared_start(written[index], sent[other])
+    return held, differs
+
+
+def _clip(text: str, columns: set[int]) -> Json:
+    """Return a page line, or for a long one the text around each column it must keep."""
+
+    if len(text) <= _SEAM_LINE_CHARS:
+        return {"text": text}
+    width = 2 * _SEAM_CUT_CHARS
+    windows: list[list[int]] = []
+    for column in sorted(columns):
+        start = max(0, min(column - _SEAM_CUT_CHARS, len(text) - width))
+        if windows and start <= windows[-1][1]:
+            windows[-1][1] = max(windows[-1][1], start + width)
+        else:
+            windows.append([start, start + width])
+    return {"pieces": [[start, text[start:end]] for start, end in windows], "chars": len(text)}
 
 
 def _excerpt(content: str, index: int, offset: int, end: int) -> Json:

@@ -339,22 +339,47 @@ operation keep returning raw data (`next_call`, `current_revision`, excerpts) fo
 `WikiPanel.svelte`. Agents read plain text: read shows the revision as a sentence,
 a `shown` range and a `more` continuation before the verbatim content; list and
 history render one line per entry; mutations report a `status` sentence (delete
-names the copyable restore call). Content mutations also return a bounded excerpt
-from the exact saved revision (`_store_wiki._content_excerpt`). For an update it
-starts at the line of the first changed character (at most 400 characters before
-it when a line is long) and holds the whole changed passage and the 2 lines after
-it, at most 600 characters past the change and 4000 in all: an update replaced
-eight table rows with ten, and the two old rows it left below went unnoticed while
-the excerpt ended after eight lines (Swarm run 2026-10-13). A create shows up to 8
-lines or 2000 characters from the start. The Store retains the excerpt in the
-mutation receipt, so peer changes cannot alter a replay's evidence; continuations
-pin that revision. A create or update whose written text holds a `[[target]]` or
+names the copyable restore call). Content mutations report evidence from the exact
+saved revision instead of echoing the caller's text: in Swarm run 2026-10-20, 8
+creates and 5 whole-content updates returned all 21,481 excerpt characters as the
+Agent's own text, and 25 passage edits 15,028 of their 20,708. A create or
+whole-content update reports that the page holds the text as sent, with its size in
+lines and characters (`size`), and no content. A passage edit (`old_text` or
+`edits`) shows its seam (`_store_wiki._seam`): for each edit, the line before its
+first changed line, its first and last changed lines, and the 2 lines after it,
+where text the edit left in place would meet it: an update replaced eight table rows
+with ten, and the two old rows it left below went unnoticed while the excerpt ended
+after eight lines (Swarm run 2026-10-13). Whole lines the replaced passage and the
+written text share at their start or end count as context, not change. Lines
+between that hold `new_text` as sent appear as one bracketed range; lines the page
+holds otherwise, such as a kept line `copy_match` left in the page's wording, appear
+in full; lines between two edits appear as an unchanged range. A line over 400
+characters keeps 150 characters on each side of the change and names how many it
+leaves out; the seam keeps at most 4000 characters and then names the remaining
+lines and a revision-pinned read call from the next line. An edit that only removed
+whole lines shows the line before and the 2 lines after the removal. An `old_text`
+update's status names the lines `old_text` covered and those its replacement covers
+(`Replaced lines 29–32 with lines 29–31.`, `Removed lines 4–6.`): the one pure
+deletion of that Run reported `line 29` while its excerpt began at line 32, after
+the removed row, without the row above it. A passage edit the page already held
+names its line instead. Restore keeps its bounded excerpt (`_content_excerpt`): the
+restored text is not the caller's. The Store retains the evidence in the mutation
+receipt, so peer changes cannot alter a replay's evidence; continuations pin that
+revision; receipts saved before keep rendering their excerpt. A create or update whose written text holds a `[[target]]` or
 `#wiki/target` link that names no page by number or stored ID gets a note naming up
 to 5 such links and the page's own link as the form that works: Agents wrote
 `[[page-slug]]` links that open nothing (Swarm run 2026-10-13).
 The advisory ignores inline, fenced and indented code and escaped link markers,
 using the Wiki editor's existing code-span and fence recognition; a literal in
 inline code otherwise triggered a broken-link note (Swarm run 2026-10-14).
+An update without `title` whose written text holds a level-one heading compares the
+first non-blank lines of the revision before and the saved one
+(`WikiCall._note_stale_title`): when the page's title matched the old opening
+level-one heading (ignoring case and runs of whitespace) and the new one differs, a
+note says the title stayed and gives the rename call with the new heading. One
+whole-content update gave a page a new opening heading for a new purpose, while
+lists and links kept the old title through its last 3 revisions (Swarm run
+2026-10-20). A title that never matched its heading gets no note.
 Repairs that cannot change the effect run with a
 note: `read` without `page_id` lists pages, a pasted link or quoted ID yields its
 page reference, read-only calls resolve a page title or a unique close stored id
@@ -364,7 +389,13 @@ heading, `limit` above the action maximum is lowered, `expected_revision` is
 dropped on read-only actions, and a negative read `offset` counts back from the end of
 the page (one Agent sent `-6000` to read a page's end, Sessions, 2026-10). Without
 `action`, a call with `page_id` and no change implies `read`, also with `query`;
-`path` is an alias of `page_id` (`_tool_calls.py`). Writes never resolve a guessed page; they fail with
+`path` is an alias of `page_id` (`_tool_calls.py`). An `action` that spells a field
+name (`"action": "content"`) is refused before any effect, naming the action the other
+fields imply (`_implied_wiki_action`) or the valid actions
+(`_tool_calls._refuse_field_as_action`): the generic enum error left one Agent's
+whole-content update unsaved while the same response announced it on the Board
+(Swarm run 2026-10-20). Only canonical field names count, since aliases such as
+`deleted` are also words of other meanings. Writes never resolve a guessed page; they fail with
 the suggested page number, and an explicit `page_id` is never overridden. A passage
 `update` (`old_text` with `new_text`) without `page_id` runs on the one live page whose
 current content holds its exact `old_text` (`SwarmStore.wiki_pages(containing=...)`),
@@ -545,16 +576,24 @@ Swarm Tool calls follow the Tool error-tolerance rules (`../tools.md`). Owners:
   whose work stopped (`failed`, `cancelled`, `interrupted` in the Swarm snapshot of
   the call), who see the post only once the user resumes them, so the author does
   not wait for their answer. A post or opening whose text writes an `@word`
-  outside code that names no participant gets a note that it addressed no one,
-  with the consequence (`_board_view.unaddressed_mentions`): `@all` or a synonym
-  (the `_EVERYONE` recipient words) and capitalized unknown names such as a
-  misspelled `@Name` get the number of participants that receive only the Opening of a
-  long main-discussion post, that every participant receives a short one anyway,
-  or, elsewhere, only how to address; `@User` and its synonyms get that the user is
-  not a participant and sees every Board post. Lowercase unknown words (`@property`)
-  and e-mail addresses get no note. 18 of 293 posts in one Run wrote `@all`
-  (Sessions, 2026-10); others wrote `@User` and misspelled names (Swarm run
-  2026-10-13). Addressing stays unchanged: only `@` before a name addresses. A post
+  outside code and double quotation marks that names no participant gets a note that
+  it addressed no one, with the consequence (`_board_view.unaddressed_mentions`):
+  `@all` or a synonym (the `_EVERYONE` recipient words) and capitalized unknown names
+  get the number of participants that receive only the Opening of a long
+  main-discussion post, that every participant receives a short one anyway, or,
+  elsewhere, nothing more; then how to address with `@`. A name followed by letters
+  (`@Annas`) gets instead that `@` addresses only when no letter follows the name, as
+  in `@Anna's`, which already addresses; a word of four letters or more one edit from
+  exactly one name, also after dropping a final `s`, gets `did you mean @Anna?`. The
+  general how-to sentence follows only when some word got no such correction, and a
+  word meaning a participant the post addresses anyway gets no note. `@User` and its
+  synonyms get that the user is not a participant and sees every Board post.
+  Lowercase unknown words (`@property`), e-mail addresses, quoted formats (`"@X"`)
+  and the Board description's example `@Name` get no note. 18 of 293 posts in one Run
+  wrote `@all` (Sessions, 2026-10); others wrote `@User` and misspelled names (Swarm
+  run 2026-10-13). Swarm run 2026-10-20 sent 129 such notes: possessives without
+  apostrophe in 110 posts, 5 one-letter misspellings, and 5 placeholders quoted to
+  show a format. Addressing stays unchanged: only `@` before a name addresses. A post
   in, or a create of, a discussion other than the main one also says how many other
   participants have not joined it and do not receive it, naming those its text
   mentions without `@` (members from the call's Swarm snapshot): Agents posted
@@ -1367,7 +1406,10 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `{field} arrived as tool-call markup ({value}) instead of a {kind} ID such as "{example}". Repeat the call with the {kind} ID alone. The call was not run.` | One `message_id` held only the closing tags of a tool-call block; the not-found error (`... is not a post ID in your group. Find post IDs by reading a discussion ...`) suggested a wrong ID rather than a broken call (F5, Swarm run 2026-10-12). Names the markup it saw, so the Agent resends the ID instead of searching for another post. |
 | `Conflicting values for {key}: {path} is {value} and {other path} is {value}. Send only the intended one.` | Replaces `Conflicting values for {key}; provide one intended value.`, which named neither value; 2 calls of one Agent were refused while one value was only the Tool's own name as a label, which now requests nothing (F2, F5, Swarm run 2026-10-12). Real conflicts still fail before any effect; naming both values and where they were sent lets the Agent drop the wrong one. |
 | `title was ignored: posts have no title; only create uses one, to name a new discussion.` | The post was saved; the note says the title is gone and how a titled discussion is made (F4). Refusing such a post lost an Agent's introduction in one Run (Sessions, 2026-10). |
-| `{mentions} addressed no one, so {count} participants receive only its opening lines. To reach a participant in full, write @ before their name, as in @Name.` (long main-discussion post; singular form); `{mentions} addressed no one; every participant receives this main-discussion post anyway. To address a participant, ...` (short one); `{mentions} addressed no one. To address a participant, ...` (other discussions) | Agents wrote `@all` in 18 of 293 posts of one Run, expecting it to address everyone (F3, Sessions, 2026-10), and later `@` before misspelled or unknown names (Swarm run 2026-10-13). Replaces `{mentions} addressed no one. To address participants, write @ before each one's name, as in @Name.`, which gave no consequence. The note corrects the belief after the post without changing who receives it; it stays one note per post so a later real `@all` replaces it in one place. |
+| `{mentions} addressed no one, so {count} participants receive only its opening lines.` (long main-discussion post; singular form); `{mentions} addressed no one; every participant receives this main-discussion post anyway.` (short one); `{mentions} addressed no one.` (other discussions) | Agents wrote `@all` in 18 of 293 posts of one Run, expecting it to address everyone (F3, Sessions, 2026-10), and later `@` before misspelled or unknown names (Swarm run 2026-10-13). Replaces `{mentions} addressed no one. To address participants, write @ before each one's name, as in @Name.`, which gave no consequence. The note corrects the belief after the post without changing who receives it; it stays one note per post so a later real `@all` replaces it in one place. The how-to sentence each form ended with is now `MENTION_HOW`, so a precise correction can take its place (Swarm run 2026-10-20). |
+| `To reach a participant in full, write @ before their name, as in @Name.` (after an opening count); `To address a participant, write @ before their name, as in @Name.` (otherwise) | The general rule, worded as before, follows the consequence only when some `@` word of the post got no correction below. In Swarm run 2026-10-20 it went out in all 129 notes, across 13 participants, most of them for possessives of correctly spelled names: repeating the rule the Agent had followed did not stop the form. |
+| `@ addresses a participant only when no letter follows the name, as in @{name}'s.` | In Swarm run 2026-10-20, 110 posts wrote a name followed by a possessive `s` without apostrophe (about 234 mentions), which addresses no one, and kept writing it after the general note. The Store already reads `@Name's` and `@Name’s` as addressing, so the sentence names the form that works. One sentence covers all possessives of a post, and a post that also addresses that participant gets no note. |
+| `For {written}, did you mean @{name}?` | In Swarm run 2026-10-20, 5 mentions misspelled a participant's name by one letter and got only the general rule. A word of four letters or more that is one edit from exactly one name, also after dropping a final `s`, names that participant. Addressing stays exact, so the author decides whether to post again. |
 | `{mentions} addressed no one: the user is not a participant and sees every Board post.` | Agents wrote `@User` to reach the user (Swarm run 2026-10-13). The user reads the whole Board without being addressed, so the note says no `@` is needed rather than how to address. |
 | `swarm_board has no {action} action; its actions are list, read, post, create, join and leave. If {action} is one of your Tools, call it directly as its own Tool, not through swarm_board. The call was not run.` | One Agent sent `"action": "search_files"` to `swarm_board` (F1, Swarm run 2026-10-13). The normalizer cannot see the Agent's Tools, so the second sentence is conditional instead of claiming the Tool exists. |
 | Post result: `{names} has stopped and sees it only if the user resumes their work.` (and the plural) | An Agent that addresses a failed or cancelled peer otherwise waits for an answer that cannot come before a Resume (F4). |
@@ -1388,6 +1430,12 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_wiki` create and update note: `{links} names no page, so it links nowhere. Link a page by its ID, as this page's link does: {link}` (and the plural) | Agents wrote wiki-style `[[page-slug]]` links that open nothing (F3, Swarm run 2026-10-13). The page's own link shows the working form, so the Agent can fix the links in one update. Code and escaped link markers receive no note: a literal code example triggered an irrelevant warning (F4, Swarm run 2026-10-14). |
 | `Nothing was run. action contains merged Tool-call fields instead of one action. Send action as {action} and {field} as a separate parameter; keep its value and the other parameters unchanged.` | 26 collapsed-field Board calls repeatedly received only the valid action list (F2, F5, Swarm run 2026-10-14). Naming the separate fields gives the correction without reconstructing or executing embedded targets or content. |
 | `Nothing was saved. {value} names a discussion, not a post. To post there, use discussion_id: {discussion} and omit message_id and reply_to. To answer a post, use its post ID instead.` | A post sent a discussion number as `message_id`; the error called it a missing `reply_to` post and suggested searching posts (F3, F5, Swarm run 2026-10-14). The message identifies the exact reference kind and both possible intents without redirecting the write. |
+| `swarm_wiki` create and whole-content update status: `Created. Saved as sent: {lines}, {chars}.` and `Replaced the whole content. Saved as sent: ...` (`1 line`, `{count} lines`, `1 character`, `{count} characters`); for an empty page `... The page is now empty.` | Replaces the `shown` range and excerpt of the saved page: in Swarm run 2026-10-20, 8 creates and 5 whole-content updates returned 21,481 excerpt characters, all of them the Agent's own text (F6). `as sent` says the page holds exactly that text and the size shows nothing was cut, so the Agent need not reread to verify (F4). |
+| `swarm_wiki` `old_text` update status: `Replaced {old} with {new}.`, `Replaced {old}.` (same lines), `Removed {old}.`, with `line {first}` or `lines {first}–{last}` | Replaces `Replaced the passage at line {line}.`, which stays for older receipts: the one pure deletion of Swarm run 2026-10-20 reported `line 29` while its excerpt began at line 32 (F4). Both ranges say how the line count moved, so later line references stay right without a reread. |
+| `swarm_wiki` passage edit `shown`: `The saved page around the change, {lines} of {total}:`, then the seam with `[{lines} as in your new_text]`, `[{lines} unchanged]`, `[{lines} not shown]` (followed by `more`) and, inside a long line, `[{count} characters not shown]` | Replaces `Saved page content at revision {revision}, from line {line}: characters {start} to {end} of {total}.` and its excerpt for passage edits: 25 passage edits of Swarm run 2026-10-20 returned 15,028 of their 20,708 excerpt characters as the Agent's own text (F6). The seam keeps what the Agent cannot know: where its text meets the page, including the 2 lines after it (Swarm run 2026-10-13), and lines the page holds other than sent. Each bracket names the lines it stands for, so the line numbers of the shown lines stay countable. |
+| `swarm_wiki` held passage edit: `Nothing changed: the page already holds this change, at line {line}.` | The result no longer shows an excerpt starting at that line; the line keeps the location, as the per-edit `edits` status already does (F4). |
+| `swarm_wiki` refusal: `Nothing changed. action "{field}" names a field, not an action; the other fields you sent fit action "{action}". Repeat the call with "action": "{action}" if you meant it.` (without such fields: `... Send action as one of list, read, create, update, delete, history, restore, and {field} as its own field.`) | One Agent sent a whole-content update as `"action": "content"`; the enum error listed the actions without saying which one the call fit, and the same response announced the change on the Board while it was not saved (F2, F5, Swarm run 2026-10-20, 1 call). `Nothing changed.` comes first so the Agent does not take the change as made; the implied action comes from the fields it sent, and `if you meant it` leaves the decision to the Agent, since a whole-content update replaces the page. |
+| `swarm_wiki` update note: `The page is still titled "{title}", like the first heading you replaced. To rename it after the new heading, use swarm_wiki {"action": "update", "page_id": ..., "title": ...}` | A title changes only with `title`: one whole-content update replaced the opening heading that matched the page's title, and the page kept the old title in lists and links through its last 3 revisions (F4, Swarm run 2026-10-20, 1 update). The note names the kept title and a ready rename call; it stays silent where the title never matched the heading, since such titles are chosen on purpose. |
 
 ## Repository Profiles
 

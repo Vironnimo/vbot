@@ -477,9 +477,8 @@ async def test_wiki_results_read_as_text(board):
     author = board.swarm["participants"][0]["display_name"]
     assert visible(created) == (
         f"page_id: {page_id}\ntitle: Plan\nrevision: 1\nlink: [Plan](#wiki/{page_id})\n"
-        "status: Created.\n"
-        "shown: Saved page content at revision 1, from line 1: characters 0 to 16 of 16.\n"
-        'note: create needs a title; used the first heading, "Plan".\n\n# Plan\n\nStep one'
+        "status: Created. Saved as sent: 3 lines, 16 characters.\n"
+        'note: create needs a title; used the first heading, "Plan".'
     )
     assert visible(await invoke(board, {"action": "read", "page_id": page_id})) == (
         f"page_id: {page_id}\ntitle: Plan\nrevision: 1 (current), saved by {author}\n"
@@ -500,7 +499,11 @@ async def test_wiki_results_read_as_text(board):
     edited = await invoke(
         board, {"action": "update", "page_id": page_id, "old_text": "Step one", "new_text": "Done"}
     )
-    assert edited["data"]["status"] == "Replaced the passage at line 3."
+    assert visible(edited) == (
+        f"page_id: {page_id}\ntitle: Plan\nrevision: 2\nlink: [Plan](#wiki/{page_id})\n"
+        "status: Replaced line 3.\n"
+        "shown: The saved page around the change, lines 2–3 of 3:\n\n\nDone"
+    )
     history = visible(await invoke(board, {"action": "history", "page_id": page_id}))
     assert re.fullmatch(
         rf'history: Revisions of "Plan" \({page_id}\), newest first \(2 shown\)\.\n\n'
@@ -614,7 +617,7 @@ async def test_wiki_request_ids_come_from_the_tool_call(board):
         (
             "Intro\nStatus: final\nNext: review\nEnd",
             {"old_text": "Status: done\nNext: review", "new_text": "Status: final\nNext: review"},
-            "Nothing changed: the page already holds this change.",
+            "Nothing changed: the page already holds this change, at line 2.",
         ),
         (
             "Intro\nTimeout is 30 seconds for retries\nEnd",
@@ -622,13 +625,13 @@ async def test_wiki_request_ids_come_from_the_tool_call(board):
                 "old_text": "Timeout is 20 seconds for retries",
                 "new_text": "Timeout is 30 seconds for retries",
             },
-            "Nothing changed: the page already holds this change.",
+            "Nothing changed: the page already holds this change, at line 2.",
         ),
         # A table row's empty cells after the change anchor it with the cells before.
         (
             "| B01 | 1 (H) | *free* | |\n| B02 | 2 (He) | Alba | |\n| B03 | 3 (Li) | *free* | |",
             {"old_text": "| B02 | 2 (He) | *free* | |", "new_text": "| B02 | 2 (He) | Alba | |"},
-            "Nothing changed: the page already holds this change.",
+            "Nothing changed: the page already holds this change, at line 2.",
         ),
         (
             "Intro\nStatus: final\nNext: review\nTimeout is 30 seconds for retries\nEnd",
@@ -971,7 +974,9 @@ async def test_wiki_conflicts_show_what_changed_and_the_retry(board):
     # A stale passage edit the peer already made changes nothing; another change of that
     # passage names the revision and author that changed it, which the changes show.
     same = {**stale, "old_text": "Status: pending", "new_text": "Status: done"}
-    assert (await invoke(board, same))["data"]["status"] == WIKI_STATUS["unchanged"]
+    assert (await invoke(board, same))["data"]["status"] == WIKI_STATUS["unchanged_passage"].format(
+        line=2
+    )
     other = await invoke(board, {**same, "new_text": "Status: blocked"})
     lines = other["error"]["message"].splitlines()
     assert "-Status: pending" in lines and "+Status: done" in lines
@@ -1119,6 +1124,60 @@ async def test_wiki_create_decides_about_a_page_id_and_a_missing_title(board):
         "create. Repeat the call without it."
     )
     assert sorted(page["title"] for page in await pages(board)) == ["Notes", "Other"]
+
+
+@pytest.mark.asyncio
+async def test_wiki_update_notes_a_title_its_replaced_first_heading_matched(board):
+    page_id = await create(board, "# Plan\n\nBody", title="Plan")
+    replaced = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "content": "# Minutes\n\nBody",
+            "expected_revision": 1,
+        },
+    )
+    note = replaced["data"]["note"]
+    assert note == (
+        'The page is still titled "Plan", like the first heading you replaced. To rename it '
+        f'after the new heading, use swarm_wiki {{"action": "update", "page_id": "{page_id}", '
+        '"title": "Minutes"}'
+    )
+    renamed = await invoke(board, continuation(note))
+    assert (await stored(board, page_id))["title"] == "Minutes"
+    assert "note" not in renamed["data"]
+    # A passage edit of the heading gets the same note.
+    edited = await invoke(
+        board,
+        {"action": "update", "page_id": page_id, "old_text": "# Minutes", "new_text": "# Final"},
+    )
+    assert edited["data"]["note"].startswith('The page is still titled "Minutes"')
+    # A change that sets the title, or a heading the title did not match, needs no note.
+    spec = await create(board, "# Draft spec\nText", title="Spec")
+    for target, change in (
+        (page_id, {"old_text": "# Final", "new_text": "# Notes", "title": "Notes"}),
+        (spec, {"old_text": "# Draft spec", "new_text": "# Final spec"}),
+    ):
+        result = await invoke(board, {"action": "update", "page_id": target, **change})
+        assert result["ok"] and "note" not in result["data"], result
+
+
+@pytest.mark.asyncio
+async def test_wiki_action_naming_a_field_names_the_action_the_fields_fit(board):
+    page_id = await create(board, "Body")
+    replace = {"action": "Content", "page_id": page_id, "content": "New", "expected_revision": 1}
+    assert visible(await invoke(board, replace)) == (
+        'Error (invalid_arguments): Nothing changed. action "content" names a field, not an '
+        'action; the other fields you sent fit action "update". Repeat the call with '
+        '"action": "update" if you meant it.'
+    )
+    assert visible(await invoke(board, {"action": "content", "content": "New"})) == (
+        'Error (invalid_arguments): Nothing changed. action "content" names a field, not an '
+        "action. Send action as one of list, read, create, update, delete, history, restore, "
+        "and content as its own field."
+    )
+    assert (await stored(board, page_id))["revision"] == 1
 
 
 @pytest.mark.asyncio

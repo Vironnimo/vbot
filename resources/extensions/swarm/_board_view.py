@@ -16,9 +16,10 @@ from difflib import get_close_matches
 from typing import Any
 
 from core.tools.call_syntax import spelling
+from core.utils.edit_distance import edit_distance
 
 from . import agent_text as text
-from ._store_values import discussion_ref, post_ref
+from ._store_values import discussion_ref, mentioned_participants, post_ref
 from ._wake_pacing import ADDRESSED_ROUTES, QUIET_SECONDS
 
 Json = dict[str, Any]
@@ -615,9 +616,28 @@ def plain_mentions(value: str, names: Mapping[str, str]) -> list[str]:
     ]
 
 
-# "@" before a word, outside code, which may address a participant.
+# "@" before a word, outside code and quotations, which may address a participant.
 _AT_WORD = re.compile(r"(?<!\w)@(\w+)")
 _CODE = re.compile(r"```.*?(?:```|$)|`[^`\n]*`", re.DOTALL)
+# Text in double quotation marks on one line, as Agents quote a format such as "@X".
+_QUOTED = re.compile(r'"[^"\n]*"|„[^“”"\n]*[“”"]|“[^”\n]*”|«[^»\n]*»|»[^«\n]*«')
+# The example address of the Board description, quoted as a placeholder.
+_EXAMPLE = "name"
+# A word this short has too many one-letter neighbours to suggest a name for.
+_CLOSE_MIN_CHARS = 4
+
+
+@dataclass(frozen=True)
+class Correction:
+    """An "@" word that addressed no one and the participant name it most likely meant.
+
+    ``possessive`` marks letters right after the whole name, as in "@Konrads";
+    otherwise the word is one edit away from the name.
+    """
+
+    written: str
+    name: str
+    possessive: bool
 
 
 @dataclass(frozen=True)
@@ -626,31 +646,66 @@ class Unaddressed:
 
     ``others`` holds "@all" and its synonyms and capitalized words that name no
     participant (such as a name with a suffix); ``user`` holds words meaning the
-    user. Lowercase words such as code decorators are left out.
+    user. Lowercase words such as code decorators are left out, and so are words
+    in code or quotations and the example "@Name". ``corrections`` names the
+    participant meant by each of ``others`` that most likely meant one the post
+    does not address anyway; a word meaning one it does address is left out.
     """
 
     others: list[str]
     user: list[str]
+    corrections: list[Correction] = field(default_factory=list)
 
 
 def unaddressed_mentions(value: str, roster: Roster) -> Unaddressed:
     """Find the "@" words of a post's text that address no participant."""
 
-    known = {spelling(name) for name in roster.names.values()} | {
-        spelling(participant_id) for participant_id in roster.names
+    names = {spelling(name): name for name in roster.names.values()}
+    known = set(names) | {spelling(participant_id) for participant_id in roster.names}
+    addressed = {
+        spelling(roster.name(participant_id))
+        for participant_id in mentioned_participants(value, roster.names)
     }
     others: dict[str, str] = {}
     user: dict[str, str] = {}
-    for match in _AT_WORD.finditer(_CODE.sub(" ", value)):
+    corrections: dict[str, Correction] = {}
+    for match in _AT_WORD.finditer(_QUOTED.sub(" ", _CODE.sub(" ", value))):
         word = match.group(1)
         key = spelling(word)
-        if key in known:
+        if key in known or key == _EXAMPLE:
             continue
         if key in _EVERYONE or (word[:1].isupper() and key not in _USER):
+            meant = None if key in _EVERYONE else _meant(key, names)
+            if meant is not None:
+                if spelling(meant[0]) in addressed:
+                    continue  # The post addresses that participant anyway.
+                corrections.setdefault(word.casefold(), Correction(match.group(0), *meant))
             others.setdefault(word.casefold(), match.group(0))
         elif key in _USER:
             user.setdefault(word.casefold(), match.group(0))
-    return Unaddressed(list(others.values()), list(user.values()))
+    return Unaddressed(list(others.values()), list(user.values()), list(corrections.values()))
+
+
+def _meant(key: str, names: Mapping[str, str]) -> tuple[str, bool] | None:
+    """Return the participant name a spelled "@" word most likely meant, and whether it
+    is that whole name with a possessive "s", as in "@Konrads"; else None.
+
+    Otherwise the word, or the word without a final "s", must be one edit away from
+    exactly one name: a ratio of shared letters misses one-letter typos in short
+    names, such as "Kondad" for "Konrad".
+    """
+
+    if key.endswith("s") and key[:-1] in names:
+        return names[key[:-1]], True
+    if len(key) < _CLOSE_MIN_CHARS:
+        return None
+    forms = {key, key.removesuffix("s")}
+    close = {
+        name
+        for spelled, name in names.items()
+        if any(edit_distance(form, spelled, 1) <= 1 for form in forms)
+    }
+    return (close.pop(), False) if len(close) == 1 else None
 
 
 def with_notes(data: Json, notes: Sequence[str]) -> Json:
@@ -661,6 +716,7 @@ def with_notes(data: Json, notes: Sequence[str]) -> Json:
 
 __all__ = [
     "PAGE_LIMIT",
+    "Correction",
     "Recipients",
     "Unaddressed",
     "Roster",
