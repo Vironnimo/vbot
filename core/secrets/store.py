@@ -68,6 +68,9 @@ from core.secrets._crypto import (
     seal,
 )
 from core.secrets._document import (
+    AGENT_SECRETS as AGENT_SECRETS,
+)
+from core.secrets._document import (
     CREDENTIALS as CREDENTIALS,
 )
 from core.secrets._document import (
@@ -194,6 +197,7 @@ class SecretStoreStatus:
     key_location: str | None = None
     credentials: int = 0
     oauth_tokens: int = 0
+    agent_secrets: int = 0
     #: Entries that do not decrypt, as ``<section>/<name>``.
     damaged: tuple[str, ...] = ()
     #: Whether an import of plaintext credential files still waits to be finished.
@@ -214,6 +218,7 @@ class SecretStoreStatus:
             "new_key_location": self.new_key_location,
             "credentials": self.credentials,
             "oauth_tokens": self.oauth_tokens,
+            "agent_secrets": self.agent_secrets,
             "damaged": list(self.damaged),
             "import_pending": self.import_pending,
         }
@@ -412,6 +417,7 @@ class SecretStore:
                 key_location=location,
                 credentials=len(_section(view.document, CREDENTIALS)),
                 oauth_tokens=len(_section(view.document, OAUTH_TOKENS)),
+                agent_secrets=len(_section(view.document, AGENT_SECRETS)),
                 damaged=tuple(
                     f"{section}/{name}"
                     for section in SECTIONS

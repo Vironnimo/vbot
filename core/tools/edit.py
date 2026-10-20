@@ -563,7 +563,7 @@ _RESULT_SCHEMA: JsonObject = {"type": "object", "required": ["content"]}
 
 def register_edit_tools(registry: ToolRegistry, *, file_state: FileReadState) -> None:
     """Register ``edit`` and ``write``, which follow ``apply_patch``."""
-    for name, description, parameters, handler, normalizer, parts, hidden in (
+    for name, description, parameters, handler, normalizer, parts, hidden, sinks in (
         (
             EDIT_TOOL_NAME,
             EDIT_TOOL_DESCRIPTION,
@@ -572,6 +572,8 @@ def register_edit_tools(registry: ToolRegistry, *, file_state: FileReadState) ->
             normalize_edit_arguments,
             _edit_display_parts,
             _EDIT_HIDDEN_ARGUMENT_KEYS,
+            # old_string too, so an edit around a masked line still matches.
+            {"edits": "files"},
         ),
         (
             WRITE_TOOL_NAME,
@@ -581,6 +583,7 @@ def register_edit_tools(registry: ToolRegistry, *, file_state: FileReadState) ->
             normalize_write_arguments,
             _write_display_parts,
             _WRITE_HIDDEN_ARGUMENT_KEYS,
+            {"content": "files"},
         ),
     ):
         registry.register(
@@ -595,6 +598,7 @@ def register_edit_tools(registry: ToolRegistry, *, file_state: FileReadState) ->
             open_input_schema=True,
             argument_normalizer=_refusing(normalizer),
             unadvertised_parameters={_PAGE_ID: {}},
+            secret_sinks=sinks,
             result_schema=_RESULT_SCHEMA,
             display=ToolDisplay(parts_builder=parts, hidden_argument_keys=hidden, details=True),
         )

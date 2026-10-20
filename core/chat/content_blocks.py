@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from core.secrets.agent_secrets import SecretMasker
 from core.utils.errors import VBotError
 
 
@@ -69,6 +70,31 @@ class FileMentionBlock:
 
 
 ContentBlock = TextBlock | MediaBlock | FileBlock | FileMentionBlock
+
+
+def masked_content(
+    content: str | list[ContentBlock], masker: SecretMasker
+) -> str | list[ContentBlock]:
+    """User input with every known Secret value replaced by its reference.
+
+    Covers typed text, transcribed audio and ``@``-mention snapshots, so no
+    value the user pasted reaches the Session history or a Provider.
+    """
+    if not masker:
+        return content
+    if isinstance(content, str):
+        return masker.mask(content)
+    return [_masked_block(block, masker) for block in content]
+
+
+def _masked_block(block: ContentBlock, masker: SecretMasker) -> ContentBlock:
+    if isinstance(block, TextBlock):
+        return replace(block, text=masker.mask(block.text))
+    if isinstance(block, MediaBlock) and block.transcription:
+        return replace(block, transcription=masker.mask(block.transcription))
+    if isinstance(block, FileMentionBlock) and block.text:
+        return replace(block, text=masker.mask(block.text))
+    return block
 
 
 def content_block_to_dict(block: ContentBlock) -> dict[str, Any]:

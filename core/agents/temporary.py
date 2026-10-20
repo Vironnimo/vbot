@@ -663,7 +663,7 @@ class TemporaryExecutionGroups:
                         "Check its state through its Extension."
                     )
                 message = (
-                    ChatMessage.user(input.content)
+                    ChatMessage.user(self._chat.mask_user_input(input.content))
                     if input.kind == "initial"
                     else ChatMessage.note(input.content)
                 )

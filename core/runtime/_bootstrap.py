@@ -95,6 +95,7 @@ from core.runtime._shutdown import clean_up_failed_startup
 from core.runtime.databases import RETIRED_CANONICAL_DATABASES
 from core.runtime.keep_awake import KeepAwakeController
 from core.secrets import settle_plaintext_credentials
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import ChatSession, ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import (
@@ -233,6 +234,14 @@ def bootstrap(runtime: Runtime) -> None:
             tolerate_invalid=True,
         )
         runtime._token_store = TokenStore(runtime._storage.secrets)
+        runtime._agent_secrets = AgentSecrets(
+            runtime._storage.secrets,
+            clock=lambda: datetime.now(UTC),
+            credential_names=lambda: tuple(runtime._fallback_environment),
+        )
+        runtime._agent_secrets.reload()
+        runtime._agent_secrets.sweep()
+        runtime._agent_secrets.set_system_values(data_dir_credentials)
         runtime._provider_credentials = ProviderCredentialResolver(
             runtime._providers,
             fallback_credentials=data_dir_credentials,
@@ -358,6 +367,7 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._update_handoffs = UpdateHandoffs(runtime._storage.data_dir)
         runtime._update_handoffs.remove_expired_files()
         runtime._tools = ToolRegistry()
+        runtime._tools.set_secrets(runtime._agent_secrets)
         # Tool-owned System Prompt block declarations (D6): the tool side of the
         # unified contributor path. Project and Sub-Agent contribute their dynamic
         # catalogs/guidance here; the runtime hands declarations to the prompt
@@ -459,7 +469,9 @@ def bootstrap(runtime: Runtime) -> None:
             logger=runtime.logger,
             make_host=runtime._extension_host,
             archive_uninstalled_groups=runtime._archive_uninstalled_extension_groups,
+            refresh_secret_sources=runtime._refresh_secret_sources,
         )
+        runtime._refresh_secret_sources()
         # Skills load after extensions: a loaded extension may bundle its own skills
         # under ``<extension>/skills/``, which ``_global_roots`` folds into the
         # global pool, so the extension layer must be in place first.
@@ -584,8 +596,11 @@ def bootstrap(runtime: Runtime) -> None:
             raise RuntimeError("Attachment store not available")
         resolver = ContentBlockResolver(runtime._attachment_store, transcriber=runtime._speech)
         assert runtime._models is not None
+        agent_secrets = runtime._agent_secrets
         compaction_service = CompactionService(
-            pricing_lookup=runtime._models.pricing_for, usage_recorder=runtime._usage_recorder
+            pricing_lookup=runtime._models.pricing_for,
+            usage_recorder=runtime._usage_recorder,
+            secret_masker=lambda: agent_secrets.masker,
         )
 
         # The reflection service starts review runs through the runtime's
@@ -652,6 +667,7 @@ def bootstrap(runtime: Runtime) -> None:
             file_read_state=runtime._file_state,
             change_tracker=runtime._change_tracker,
             scratch_areas=runtime._scratch_areas,
+            secrets=runtime._agent_secrets,
             storage=runtime._storage,
             get_extension_registry=lambda: runtime.extensions,
             get_system_prompts=lambda: runtime.system_prompts,
@@ -798,6 +814,7 @@ def bootstrap(runtime: Runtime) -> None:
             update_handoffs=runtime._update_handoffs,
             projects=runtime._projects,
             scratch_areas=runtime._scratch_areas,
+            secrets=runtime._agent_secrets,
         )
         runtime._subagent_coordinator = SubAgentCoordinator(runtime, runtime._trigger_service)
         runtime._subagent_coordinator.install(runtime._chat_run_manager)

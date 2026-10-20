@@ -21,6 +21,7 @@ import shutil
 import sys
 import threading
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -29,6 +30,8 @@ import pytest
 import pytest_asyncio
 
 from core.projects import ProjectNotFoundError
+from core.secrets import KeyFileProtection, SecretStore
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.tools import _command_output as command_output_module
@@ -66,6 +69,7 @@ from core.tools.update_handoff import (
     read_update_handoff_ticket,
 )
 from core.utils.paths import model_path
+from tests.core.secrets.secrets_test_support import data_directory
 from tests.core.tools.command_manager_helpers import (
     OWNER,
     FakeClock,
@@ -105,6 +109,7 @@ class Shell:
         update_handoffs: UpdateHandoffs | None = None,
         projects: FakeProjects | None = None,
         scratch_areas: ScratchAreas | None = None,
+        secrets: AgentSecrets | None = None,
     ) -> None:
         self.commands = commands
         self.registry = ToolRegistry()
@@ -115,6 +120,7 @@ class Shell:
             update_handoffs=update_handoffs,
             projects=projects,  # type: ignore[arg-type]
             scratch_areas=scratch_areas,
+            secrets=secrets,
         )
         self.cancel_callbacks: list[Callable[[], Any]] = []
         self.background_callbacks: list[Callable[[], bool]] = []
@@ -349,6 +355,46 @@ async def test_ended_command_reports_output_exit_code_failed_programs_and_enviro
     # A command that ended in its call is never listed as a background command.
     assert shell.manager.commands([OWNER]) == []
     assert shell.sink.submissions == []
+
+
+@pytest.mark.asyncio
+async def test_agent_secrets_reach_only_the_command_environment(tmp_path: Path) -> None:
+    store = SecretStore(
+        data_directory(tmp_path, "secrets-data"),
+        protections=(KeyFileProtection(directories=(tmp_path / "keys",)),),
+    )
+    secrets = AgentSecrets(store, clock=lambda: datetime.now(UTC))
+    secrets.create(
+        name="github",
+        kind="login",
+        values={"username": "julian", "password": "hunter2-very-secret"},
+        actor="user",
+        agents=["agent-a"],
+    )
+    async with started_shell(tmp_path, secrets=secrets) as shell:
+        refused = await shell.call({"command": "login {{secret:GITHUB.password}}"})
+        call = shell.call(
+            {
+                "command": "login",
+                "env_keys": ["GITHUB", "API_TOKEN"],
+                "env": {"PGPASSWORD": "{{secret:GITHUB.password}}"},
+            }
+        )
+        process = await shell.started()
+        process.exit(0)
+        await shell.returned(call)
+
+    assert refused["ok"] is False
+    assert len(shell.launcher.processes) == 1
+    command, env = launched(shell.launcher)
+    assert command == "login"
+    assert (env["GITHUB_USERNAME"], env["GITHUB_PASSWORD"], env["PGPASSWORD"]) == (
+        "julian",
+        "hunter2-very-secret",
+        "hunter2-very-secret",
+    )
+    # A credential a command received is masked from then on, like a Secret.
+    assert secrets.masker.mask("value-of-API_TOKEN") == "{{secret:API_TOKEN}}"
 
 
 @pytest.mark.asyncio

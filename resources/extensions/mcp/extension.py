@@ -288,6 +288,8 @@ class MCPService:
                 "requires_opt_in": True,
                 "argument_normalizer": browse_normalizer(parent),
                 "announce_changes": ["parameters.target"],
+                # Secret values leave the machine to this server only where allowed.
+                "secret_sinks": {"arguments": "external_tools"},
             }
         ]
         for tool in (catalog or {}).get("tools", []):
@@ -308,6 +310,9 @@ class MCPService:
                     "catalog_visible": False,
                     "activation": "follows",
                     "activation_source": parent,
+                    "secret_sinks": dict.fromkeys(
+                        parameters.get("properties") or {}, "external_tools"
+                    ),
                 }
             )
         self.api.operations.replace_tools(runner.id, declarations)

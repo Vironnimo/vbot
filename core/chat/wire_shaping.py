@@ -102,6 +102,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_TOOL_TURNS,
     ReasoningReplayPolicy,
 )
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
     SKILL_AVAILABLE_NOTE_PREFIX,
@@ -255,7 +256,9 @@ def route_effort(
 
 
 def model_facing_request(
-    messages: list[JsonObject], tools: list[JsonObject]
+    messages: list[JsonObject],
+    tools: list[JsonObject],
+    masker: SecretMasker = EMPTY_MASKER,
 ) -> tuple[list[JsonObject], list[JsonObject]]:
     """Project one Provider request onto what the Model reads.
 
@@ -269,8 +272,13 @@ def model_facing_request(
     wires neutralize the Tool Result body when they render it
     (``tool_result_text``) and the readable text they replay from
     ``reasoning_meta``. System messages, ``reasoning_meta`` itself and Tool
-    call arguments are never changed here. The projection is deterministic and
+    call arguments are never neutralized. The projection is deterministic and
     returns unchanged items as they are; persisted history is never modified.
+
+    ``masker`` replaces every Secret value vBot knows with its reference in all
+    readable text, System messages and Tool call arguments included, so a value
+    that slipped past the masking of results and input never reaches a Provider
+    (``core.secrets.agent_secrets``). Media and ``reasoning_meta`` stay as they are.
     """
 
     def renamed(item: JsonObject) -> JsonObject:
@@ -299,8 +307,45 @@ def model_facing_request(
         elif role == "tool":
             _neutralize_field(message, TOOL_RESULT_CONTENT_BLOCKS_FIELD, changes)
             message = renamed(message)
+        if masker:
+            _mask_message(message, changes, masker)
         projected.append({**message, **changes} if changes else message)
     return projected, [renamed(tool) for tool in tools]
+
+
+def _mask_message(message: JsonObject, changes: JsonObject, masker: SecretMasker) -> None:
+    """Record in ``changes`` every readable field of ``message`` that masking changes."""
+
+    for key in ("content", "reasoning", TOOL_RESULT_CONTENT_BLOCKS_FIELD):
+        value = changes.get(key, message.get(key))
+        masked = _masked_text(value, masker)
+        if masked is not value:
+            changes[key] = masked
+    calls = changes.get("tool_calls", message.get("tool_calls"))
+    if isinstance(calls, list):
+        masked_calls = masker.mask_value(calls)
+        if masked_calls is not calls:
+            changes["tool_calls"] = masked_calls
+
+
+def _masked_text(value: Any, masker: SecretMasker) -> Any:
+    """Mask a string, or the ``text`` of each block in a content list; ``value`` if unchanged."""
+
+    if isinstance(value, str):
+        return value if not masker.contains(value) else masker.mask(value)
+    if not isinstance(value, list):
+        return value
+    blocks = list(value)
+    changed = False
+    for index, block in enumerate(blocks):
+        if (
+            isinstance(block, dict)
+            and isinstance(text := block.get("text"), str)
+            and masker.contains(text)
+        ):
+            blocks[index] = {**block, "text": masker.mask(text)}
+            changed = True
+    return blocks if changed else value
 
 
 def _neutralize_field(message: JsonObject, key: str, changes: JsonObject) -> None:

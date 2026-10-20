@@ -957,6 +957,7 @@ def register(api: ExtensionAPI) -> None:
         summary="Operate the server's desktop with mouse and keyboard.",
         display=ToolDisplay(summary_fields=("action",)),
         argument_normalizer=normalize_computer,
+        secret_sinks={"text": "typing"},
         **shared,
     )
     api.register_tool(
@@ -967,6 +968,7 @@ def register(api: ExtensionAPI) -> None:
         summary="Run several desktop steps in one call.",
         display=ToolDisplay(summary_builder=_summary),
         argument_normalizer=normalize_batch,
+        secret_sinks={"actions": "typing"},
         **shared,
     )
     api.register_tool(

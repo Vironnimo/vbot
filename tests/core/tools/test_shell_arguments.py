@@ -223,26 +223,35 @@ def test_disagreeing_timeouts_fail_before_running() -> None:
 
 
 @pytest.mark.parametrize(
-    ("env", "granted", "variables", "credentials"),
+    ("env", "granted", "variables", "credentials", "secrets"),
     [
         (
             {"DEBUG": "1", "RETRIES": 3, "VERBOSE": True},
             (),
             {"DEBUG": "1", "RETRIES": "3", "VERBOSE": "true"},
             [],
+            {},
         ),
-        ({"API_TOKEN": "$API_TOKEN"}, ("API_TOKEN",), {}, ["API_TOKEN"]),
-        ({"API_TOKEN": "${env:API_TOKEN}"}, ("API_TOKEN",), {}, ["API_TOKEN"]),
-        ({"API_TOKEN": ""}, ("API_TOKEN",), {}, ["API_TOKEN"]),
+        ({"API_TOKEN": "$API_TOKEN"}, ("API_TOKEN",), {}, ["API_TOKEN"], {}),
+        ({"API_TOKEN": "${env:API_TOKEN}"}, ("API_TOKEN",), {}, ["API_TOKEN"], {}),
+        ({"API_TOKEN": ""}, ("API_TOKEN",), {}, ["API_TOKEN"], {}),
         # A reference to an ungranted variable keeps the value the command inherits.
-        ({"HOME": "$HOME"}, (), {}, []),
-        ({"KEYBOARD_LAYOUT": "de"}, (), {"KEYBOARD_LAYOUT": "de"}, []),
+        ({"HOME": "$HOME"}, (), {}, [], {}),
+        ({"KEYBOARD_LAYOUT": "de"}, (), {"KEYBOARD_LAYOUT": "de"}, [], {}),
+        # A Secret reference alone becomes that Secret's value under any name.
+        (
+            {"PGPASSWORD": " {{secret:DB.password}} "},
+            (),
+            {},
+            [],
+            {"PGPASSWORD": "{{secret:DB.password}}"},
+        ),
     ],
 )
-def test_env_object_splits_into_variables_and_granted_credentials(
-    env, granted, variables, credentials
+def test_env_object_splits_into_variables_credentials_and_secrets(
+    env, granted, variables, credentials, secrets
 ) -> None:
-    assert split_env_object(env, frozenset(granted)) == (variables, credentials)
+    assert split_env_object(env, frozenset(granted)) == (variables, credentials, secrets)
 
 
 @pytest.mark.parametrize(
@@ -272,6 +281,8 @@ def test_env_object_splits_into_variables_and_granted_credentials(
             "set it inside the command instead.",
         ),
         ({"VBOT_RUN_AGENT_ID": "other"}, (), "env cannot set VBOT_RUN_AGENT_ID;"),
+        # A reference inside other text would put the value where it can leak.
+        ({"URL": "https://{{secret:DB.password}}@host"}, (), "env value for URL contains"),
         ({"A=B": "1"}, (), "env has an invalid variable name: 'A=B'."),
         ({"DEBUG": {"level": 1}}, (), "env value for DEBUG must be a string."),
     ],

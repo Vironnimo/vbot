@@ -5,10 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from core.secrets import KeyFileProtection, SecretStore
+from core.secrets.agent_secrets import AgentSecrets
 from core.tools import (
     DuplicateToolError,
     Tool,
@@ -22,6 +26,7 @@ from core.tools import (
     tool_success,
     tool_summary,
 )
+from tests.core.secrets.secrets_test_support import data_directory
 from tests.core.tools.tools_test_support import (
     READ_FILE_SCHEMA,
     JsonObject,
@@ -526,3 +531,51 @@ async def test_domain_argument_repair_precedes_schema_and_preserves_input() -> N
     with pytest.raises(ToolNotAllowedError):
         await registry.dispatch(context, original, [])
     assert calls == ["repair", {"count": 3}, "repair"]
+
+
+@pytest.mark.asyncio
+async def test_secret_references_become_values_only_in_declared_sinks(tmp_path: Path) -> None:
+    received: list[JsonObject] = []
+
+    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        received.append(arguments)
+        return tool_success({})
+
+    store = SecretStore(
+        data_directory(tmp_path),
+        protections=(KeyFileProtection(directories=(tmp_path / "keys",)),),
+    )
+    secrets = AgentSecrets(store, clock=lambda: datetime.now(UTC))
+    secrets.create(
+        name="api",
+        kind="token",
+        values={"value": "sk-1234567890"},
+        actor="user",
+        agents=["agent-1"],
+    )
+    registry = ToolRegistry()
+    registry.set_secrets(secrets)
+    registry.register(
+        "fixture",
+        "Fixture",
+        {
+            "type": "object",
+            "properties": {"content": {"type": "string"}, "path": {"type": "string"}},
+            "additionalProperties": False,
+        },
+        handler,
+        secret_sinks={"content": "files"},
+    )
+    arguments = {"content": "key={{secret:API}}", "path": "{{secret:API}}.txt"}
+
+    result = await registry.dispatch(make_context("fixture"), arguments, ["fixture"])
+    refused = await registry.dispatch(
+        make_context("fixture", agent_id="other"), arguments, ["fixture"]
+    )
+
+    assert result["ok"] is True
+    # Only the sink changes, and only on the handler's copy.
+    assert received == [{"content": "key=sk-1234567890", "path": "{{secret:API}}.txt"}]
+    assert arguments["content"] == "key={{secret:API}}"
+    assert refused["ok"] is False and refused["error"]["code"] == "secret_unavailable"
+    assert len(received) == 1

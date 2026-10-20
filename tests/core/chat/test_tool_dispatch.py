@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,8 @@ import pytest
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat.messages import ChatMessage, JsonObject
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, RunKind
+from core.secrets import KeyFileProtection, SecretStore
+from core.secrets.agent_secrets import AgentSecrets
 from core.skills import SkillRegistry
 from core.tools import (
     FileReadState,
@@ -361,6 +365,49 @@ async def test_dispatch_carries_final_ui_display_into_event_and_tool_message(
         {"kind": "count", "value": 10, "unit": "matches", "at_least": False}
     ]
     assert dispatched.messages[0].tool_display == completed.payload["display"]
+
+
+@pytest.mark.asyncio
+async def test_secret_values_leave_a_tool_call_only_as_references(tmp_path: Path) -> None:
+    value = "sk-1234567890abcdef"
+
+    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        context.add_display_notice("info", f"printed {arguments['content']}")
+        return tool_success({"content": f"output {arguments['content']}"})
+
+    store = SecretStore(
+        tmp_path / "data",
+        protections=(KeyFileProtection(directories=(tmp_path / "keys",)),),
+    )
+    (tmp_path / "data").mkdir(exist_ok=True)
+    secrets = AgentSecrets(store, clock=lambda: datetime.now(UTC))
+    tools = ToolRegistry()
+    tools.set_secrets(secrets)
+    tools.register(
+        "echo",
+        "Echo.",
+        {"type": "object", "additionalProperties": True},
+        handler,
+        open_input_schema=True,
+        secret_sinks={"content": "files"},
+    )
+    harness = ToolDispatchHarness(tmp_path, tools)
+    secrets.create(
+        name="api",
+        kind="token",
+        values={"value": value},
+        actor="user",
+        agents=[harness.agent.id],
+    )
+
+    dispatched = await harness.dispatch([call("echo", content="{{secret:API}}")])
+
+    [completed] = dispatched.events(TOOL_CALL_RESULT_EVENT)
+    persisted = json.dumps([message.to_dict() for message in dispatched.messages])
+    assert completed.payload["result"]["data"]["content"] == "output {{secret:API}}"
+    assert value not in json.dumps(completed.payload["display"])
+    assert value not in persisted
+    assert completed.payload["display"]["secrets_used"] == ["API.value (files)"]
 
 
 @pytest.mark.asyncio

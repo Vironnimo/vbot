@@ -188,7 +188,9 @@ class WireRequestRunner:
             effort, messages, adapter=adapter, model_id=model_id, fallback=agent.thinking_effort
         )
         # The projection reads every request text, so it stays off the Event Loop.
-        messages, tools = await _CHAT_TRANSFORM_WORKERS.run(model_facing_request, messages, tools)
+        messages, tools = await _CHAT_TRANSFORM_WORKERS.run(
+            model_facing_request, messages, tools, self._dependencies.secret_masker
+        )
         request_context = {
             **_resolve_request_context_kwargs(adapter, run, prompt_cache_affinity_id),
             **effort_kwargs,

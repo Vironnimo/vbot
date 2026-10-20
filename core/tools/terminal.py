@@ -906,6 +906,8 @@ def register_terminal_tool(
         open_input_schema=True,
         unadvertised_parameters=TERMINAL_UNADVERTISED_PARAMETERS,
         argument_normalizer=normalize_terminal_arguments,
+        # Answers password prompts; the length limit applies to the real value.
+        secret_sinks={"text": "terminal", "data": "terminal"},
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_terminal_display_parts,

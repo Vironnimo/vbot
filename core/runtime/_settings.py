@@ -221,6 +221,7 @@ def publish_credentials(
         return
     runtime._fallback_environment = dict(credentials)
     runtime.provider_credentials.reload_fallback_credentials(credentials)
+    runtime.agent_secrets.set_system_values(credentials)
     runtime._skill_operations().reload_environment(dict(credentials))
 
 

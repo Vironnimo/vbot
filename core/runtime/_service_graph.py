@@ -65,6 +65,7 @@ from core.runtime.interfaces import (
     ProviderCredentialResolverProtocol,
 )
 from core.runtime.keep_awake import KeepAwakeController
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.skills.authoring import (
@@ -115,6 +116,7 @@ class RuntimeServiceGraph:
         self._provider_usage: ProviderUsageService | None = None
         self._performance: PerformanceService | None = None
         self._token_store: TokenStore | None = None
+        self._agent_secrets: AgentSecrets | None = None
         self._fallback_environment: dict[str, str] = {}
         self._models: ModelRegistry | None = None
         self._model_tasks: TaskModelService | None = None
@@ -215,6 +217,10 @@ class RuntimeServiceGraph:
 
     token_store: _StartedService[TokenStore] = _StartedService(
         lambda runtime: runtime._token_store, "Token store not available"
+    )
+
+    agent_secrets: _StartedService[AgentSecrets] = _StartedService(
+        lambda runtime: runtime._agent_secrets, "Agent Secrets not available"
     )
 
     storage: _StartedService[StorageManager] = _StartedService(

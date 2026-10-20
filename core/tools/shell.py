@@ -13,6 +13,7 @@ from typing import Any
 
 from core.projects import ProjectStore
 from core.runs import TOOL_CALL_OUTPUT_EVENT
+from core.secrets.agent_secrets import AgentSecrets, SecretUse, SecretUseError, describe_uses
 from core.sessions import SessionAddress
 from core.tools._powershell import (
     PowerShellRequest,
@@ -180,9 +181,11 @@ class ShellTool:
         update_handoffs: UpdateHandoffs | None = None,
         projects: ProjectStore | None = None,
         scratch_areas: ScratchAreas | None = None,
+        secrets: AgentSecrets | None = None,
     ) -> None:
         self._commands = command_manager
         self._resolve_credential = credential_resolver or (lambda _name: "")
+        self._secrets = secrets
         self._update_handoffs = update_handoffs
         self._projects = projects
         self._scratch_areas = scratch_areas
@@ -191,12 +194,25 @@ class ShellTool:
 
     async def __call__(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         names = named_tools(context)
+        secrets = self._secrets
         call = _parse_call(
-            context, arguments, self._projects, terminal_available=names(TERMINAL_TOOL_NAME)
+            context,
+            arguments,
+            self._projects,
+            terminal_available=names(TERMINAL_TOOL_NAME),
+            secret_names=(
+                secrets.environment_names(context.agent_id, context.session_id)
+                if secrets is not None
+                else frozenset()
+            ),
         )
+        try:
+            secret_environment = await self._secret_environment(context, call)
+        except SecretUseError as error:
+            return tool_failure("secret_unavailable", str(error))
         handoff = _issue_update_handoff(self._update_handoffs, context)
         try:
-            command_id = await self._start(context, call, handoff, names)
+            command_id = await self._start(context, call, handoff, names, secret_environment)
         except _NotStartedError as failure:
             if handoff is not None:
                 handoff.release()
@@ -210,6 +226,32 @@ class ShellTool:
         if call.background:
             return await self._background_result(call, command_id, names, reason="background")
         return await self._wait(context, call, command_id, names)
+
+    async def _secret_environment(self, context: ToolContext, call: _ShellCall) -> dict[str, str]:
+        """The variables of the Agent Secrets this call names; blocking sources run off-loop."""
+        secrets = self._secrets
+        if secrets is None or not (call.secret_keys or call.secret_variables):
+            return {}
+
+        def resolve() -> tuple[dict[str, str], list[SecretUse]]:
+            variables: dict[str, str] = {}
+            uses: list[SecretUse] = []
+            for name in call.secret_keys:
+                found = secrets.environment(context.agent_id, context.session_id, name)
+                if found is not None:
+                    variables.update(found[0])
+                    uses.extend(found[1])
+            for name, reference in call.secret_variables:
+                variables[name], found_uses = secrets.substitute(
+                    context.agent_id, context.session_id, reference, "environment"
+                )
+                uses.extend(found_uses)
+            return variables, uses
+
+        variables, uses = await asyncio.to_thread(resolve)
+        if uses:
+            context.record_secret_uses(describe_uses(uses))
+        return variables
 
     async def _background_result(
         self,
@@ -242,8 +284,14 @@ class ShellTool:
         call: _ShellCall,
         handoff: UpdateHandoffGrant | None,
         names: ToolNames,
+        secret_environment: dict[str, str],
     ) -> str:
         credentials = {name: self._resolve_credential(name) for name in call.credential_names}
+        if self._secrets is not None:
+            # A credential the process inherited is masked once a command got it.
+            for name, value in credentials.items():
+                self._secrets.remember_value(value, f"{{{{secret:{name}}}}}")
+        credentials.update(secret_environment)
         scratch = None
         if self._scratch_areas is not None:
             # Scratch is optional; its owner logged an unavailable folder. The
@@ -551,6 +599,7 @@ def register_shell_tool(
     update_handoffs: UpdateHandoffs | None = None,
     projects: ProjectStore | None = None,
     scratch_areas: ScratchAreas | None = None,
+    secrets: AgentSecrets | None = None,
 ) -> ShellTool:
     """Register the shell Tool with a vBot Tool registry.
 
@@ -562,6 +611,7 @@ def register_shell_tool(
         update_handoffs=update_handoffs,
         projects=projects,
         scratch_areas=scratch_areas,
+        secrets=secrets,
     )
     registry.register(
         SHELL_TOOL_NAME,

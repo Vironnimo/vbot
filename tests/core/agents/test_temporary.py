@@ -640,6 +640,9 @@ class GroupTestChat:
         self.release = asyncio.Event()
         self.release.set()
 
+    def mask_user_input(self, content):
+        return content
+
     async def start_temporary_run(
         self, binding, _content, *, owner, input_id, input_already_persisted
     ):

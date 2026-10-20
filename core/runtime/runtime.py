@@ -779,6 +779,13 @@ class Runtime(RuntimeServiceGraph):
         """Read Skills off the loop; an editor refresh can preserve unchanged scopes."""
         await _settings.reload_skills_async(self, only_if_changed=only_if_changed)
 
+    def _refresh_secret_sources(self) -> None:
+        """Offer Agent Secrets the Secret Sources of the Extensions loaded now."""
+        if self._agent_secrets is not None:
+            self._agent_secrets.replace_sources(
+                self._extensions.secret_sources() if self._extensions is not None else []
+            )
+
     def _refresh_prompt_block_definitions(self) -> None:
         refresh_prompt_blocks(self._system_prompts, self._tool_prompt_blocks, self._extensions)
 
