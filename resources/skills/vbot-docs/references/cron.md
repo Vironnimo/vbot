@@ -24,6 +24,8 @@ A fire missed while vBot was not running, for example while the server was off o
 
 On create, omitting `--session` creates a fresh Session per fire. On update, omission preserves the current target; `--clear-session` restores fresh Sessions. A pinned Session must belong to the chosen Agent. Other omitted update fields stay unchanged.
 
+Jobs created here deliver no answer: each Run's answer stays in its Session, and `show` reports `delivery`. Where a job's answers go (vBot with a notification, a Channel chat, or nowhere) is chosen under Schedules in vBot.
+
 Write self-contained prompts stating the work, relevant constraints and expected report. A Project-targeted job can block Project removal; retarget or delete it first.
 
 ```bash
