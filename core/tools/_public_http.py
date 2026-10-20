@@ -14,6 +14,7 @@ every process that imports the Tools would otherwise pay.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import ipaddress
 import re
 import socket
@@ -237,16 +238,67 @@ async def _http_get(session: AsyncSession, url: str, max_bytes: int) -> PublicRe
             body.extend(chunk)
 
         content = bytes(body)
-        # curl_cffi decodes ``.text`` from this field using the response charset,
-        # so keep its established decoding behavior after streaming the body.
-        response.content = content
         return PublicResponse(
             status_code=response.status_code,
             headers=headers,
-            text=response.text,
+            text=_decoded(content, headers.get("content-type", "")),
             url=str(response.url),
             content=content,
         )
+
+
+_BYTE_ORDER_MARKS = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+_HEADER_CHARSET = re.compile(r"""charset\s*=\s*["']?([^"';\s]+)""", re.I)
+_XML_ENCODING = re.compile(rb"""<\?xml[^>]*?encoding\s*=\s*["']([\w.:-]+)""")
+_META_CHARSET = re.compile(rb"""<meta[^>]+?charset\s*=\s*["']?\s*([\w.:-]+)""", re.I)
+
+
+def _decoded(content: bytes, content_type: str) -> str:
+    """Decode a response body the way a browser would.
+
+    A byte order mark wins, then the charset of the Content-Type header, then for
+    markup a charset declared in its first 4 KB (XML declaration, ``<meta>``),
+    then UTF-8 if the bytes are valid UTF-8, else Windows-1252. Pages without a
+    header charset that declare Latin-1 in a ``<meta>`` (German law portals, for
+    example) otherwise lose every umlaut to U+FFFD.
+    """
+    for mark, marked in _BYTE_ORDER_MARKS:
+        if content.startswith(mark):
+            return content.decode(marked, errors="replace")
+    declared = _HEADER_CHARSET.search(content_type)
+    codec = _codec(declared[1], in_body=False) if declared else None
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    head = content[:4096].lstrip()
+    if codec is None and ("html" in media_type or "xml" in media_type or head[:1] == b"<"):
+        found = _XML_ENCODING.match(head) or _META_CHARSET.search(head)
+        codec = _codec(found[1].decode("ascii"), in_body=True) if found else None
+    if codec is not None:
+        return content.decode(codec, errors="replace")
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content.decode("cp1252", errors="replace")
+
+
+def _codec(label: str, *, in_body: bool) -> str | None:
+    """Return the Python codec for a charset label, as browsers read the label."""
+    try:
+        name = codecs.lookup(label).name
+        b"".decode(name)  # refuses codecs that do not decode text, such as base64
+    except LookupError, ValueError:
+        return None
+    if name in {"iso8859-1", "ascii"}:
+        # Browsers decode both labels as Windows-1252, which pages labelled
+        # Latin-1 use for characters such as the euro sign and typographic quotes.
+        return "cp1252"
+    if in_body and name.startswith(("utf-16", "utf-32")):
+        # A page that could declare this in readable ASCII is not UTF-16 or UTF-32.
+        return "utf-8"
+    return name
 
 
 def _declared_response_size(headers: dict[str, str]) -> int | None:

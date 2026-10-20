@@ -540,6 +540,36 @@ async def test_request_is_a_pinned_browser_like_get_with_a_streamed_body(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content_type", "body", "text"),
+    [
+        ("text/plain; charset=iso-8859-1", b"Gr\xfc\xdfe \x80 5", "Grüße € 5"),
+        ("text/plain; charset=iso-8859-1", b"\xef\xbb\xbfGr\xc3\xbc\xc3\x9fe", "Grüße"),
+        (
+            "text/html",
+            b'<html><head><meta http-equiv="Content-Type" content="text/html; '
+            b'charset=iso-8859-1" /><title>Gru\xdf</title></head>'
+            b"<body><main><p>Gr\xfc\xdfe aus K\xf6ln</p></main></body></html>",
+            "Grüße aus Köln",
+        ),
+        ("text/html", b"<p>Gr\xc3\xbc\xc3\x9fe aus K\xc3\xb6ln</p>", "Grüße aus Köln"),
+        ("text/plain", b"Gr\xfc\xdfe \x93aus\x94 K\xf6ln", "Grüße \u201caus\u201d Köln"),
+    ],
+    ids=["header-charset", "byte-order-mark", "meta-charset", "undeclared-utf-8", "undeclared"],
+)
+async def test_bodies_are_decoded_as_a_browser_decodes_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content_type: str, body: bytes, text: str
+) -> None:
+    response = StreamingResponse([body], headers={"Content-Type": content_type})
+    monkeypatch.setattr(curl_cffi.requests, "AsyncSession", lambda **_: StreamingSession(response))
+
+    result = await fetch(tmp_path, {"url": "https://example.com/stream"})
+
+    content = assert_success_envelope(result)["content"]
+    assert text in content and "\ufffd" not in content
+
+
+@pytest.mark.asyncio
 async def test_redirect_hosts_use_the_same_canonical_url_and_dns_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
