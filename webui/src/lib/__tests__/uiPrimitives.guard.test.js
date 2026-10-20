@@ -255,6 +255,23 @@ const PRIMITIVE_CLASSES = [
     },
   },
   {
+    owner: 'DateField',
+    classes: {
+      [ANY_ELEMENT]: [
+        'date-field',
+        'date-field__panel',
+        'date-field__grid',
+        'date-field__day',
+      ],
+    },
+  },
+  {
+    owner: 'TimeField',
+    classes: {
+      [ANY_ELEMENT]: ['time-field', 'time-field__list', 'time-field__option'],
+    },
+  },
+  {
     owner: 'TextArea',
     classes: {
       textarea: [
