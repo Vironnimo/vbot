@@ -4,7 +4,8 @@
   // per (sections, range, time zone) for the page's lifetime
   // (lib/statisticsReports.svelte.js), so a revisited tab shows its last
   // numbers immediately while a fresh request updates them. Limits reads
-  // live provider usage instead and keeps its own controls.
+  // live provider usage instead and keeps its own controls; the Overview
+  // shows the same live usage as a compact strip.
   import { untrack } from 'svelte';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { dateTimePrefs } from '$lib/dateTimePrefs.svelte.js';
@@ -23,6 +24,7 @@
     statisticsTabForPlace,
     statisticsTabLabel,
   } from '$lib/statisticsView.js';
+  import { loadProviderUsage } from '$lib/providerUsage.svelte.js';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import EmptyState from './ui/EmptyState.svelte';
@@ -30,6 +32,7 @@
   import TabList from './ui/TabList.svelte';
   import ProviderLimits from './statistics/ProviderLimits.svelte';
   import ActivityPanel from './statistics/ActivityPanel.svelte';
+  import LimitsStrip from './statistics/LimitsStrip.svelte';
   import OverviewPanel from './statistics/OverviewPanel.svelte';
   import UsagePanel from './statistics/UsagePanel.svelte';
   import RunsPanel from './statistics/RunsPanel.svelte';
@@ -131,6 +134,7 @@
     if (activityQuery) {
       requestStatisticsReport(activityQuery, { force: true });
     }
+    if (activeTab === 'overview') loadProviderUsage();
   }
 
   function showTab(tab) {
@@ -193,6 +197,10 @@
       onChange={showTab}
     />
   </div>
+
+  {#if activeTab === 'overview'}
+    <LimitsStrip onOpenLimits={() => showTab('limits')} />
+  {/if}
 
   {#if activityEntry}
     {#if activityEntry.report?.activity}

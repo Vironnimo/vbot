@@ -58,5 +58,5 @@ OpenAI, Ollama Cloud and OpenCode Go are live-verified as documented in their ma
 - Report shapes and probe contracts: internal `core/providers/_usage_types.py`; Provider response parsing: `_usage_parsers.py`. Existing public imports remain available from `usage.py`.
 - Durable schema, validation, `provider-usage.db` store and deletion: `core/providers/usage_history.py`
 - RPC validation/projection: `server/rpc/provider_usage_methods.py`
-- WebUI polling/presentation: `webui/src/components/statistics/ProviderLimits.svelte`, `webui/src/components/statistics/LimitHistory.svelte`, `webui/src/lib/statisticsView.js`
+- WebUI polling/presentation: `webui/src/lib/providerUsage.svelte.js` (shared live polling for the Overview limits strip and Limits), `webui/src/components/statistics/LimitsStrip.svelte`, `webui/src/components/statistics/ProviderLimits.svelte`, `webui/src/components/statistics/LimitHistory.svelte`, `webui/src/lib/statisticsView.js`
 - Focused coverage: `tests/core/providers/test_usage.py` (service and parsing through `report()`), `test_usage_history.py` (storage, off-loop reads and sampling), `tests/core/runtime/test_runtime_lifecycle.py`, `tests/server/rpc/test_provider_usage_methods.py`, and Statistics WebUI tests
