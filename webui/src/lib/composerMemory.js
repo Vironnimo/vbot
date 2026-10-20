@@ -21,6 +21,12 @@
 // those changes on persist, and adopts the other tabs' writes from the
 // `storage` event. Concurrent tabs neither erase nor resurrect each other's
 // entries.
+//
+// A `/secret` command with an argument can hold a Secret value: it is never
+// kept as a draft or a history entry, so it reaches neither memory nor
+// localStorage.
+
+import { holdsSecretArgument } from './agentSecrets.js';
 
 const DRAFTS_STORAGE_KEY = 'vbot.composer.drafts.v1';
 const HISTORY_STORAGE_KEY = 'vbot.composer.history.v1';
@@ -259,7 +265,7 @@ export function setDraft(sessionKey, text) {
     return;
   }
   const next = typeof text === 'string' ? text : '';
-  if (!next) {
+  if (!next || holdsSecretArgument(next)) {
     clearDraft(sessionKey);
     return;
   }
@@ -396,7 +402,7 @@ export function pushHistory(agentKey, text) {
     return;
   }
   const entry = typeof text === 'string' ? text.trim() : '';
-  if (!entry) {
+  if (!entry || holdsSecretArgument(entry)) {
     return;
   }
   const existing = histories[agentKey];

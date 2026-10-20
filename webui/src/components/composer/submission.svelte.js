@@ -8,6 +8,7 @@ import {
   extractMentionTokens,
   resolveMentionFiles,
 } from '$lib/fileMentions.js';
+import { isBareSecretCommand } from '$lib/agentSecrets.js';
 
 // Snapshot a submission before asynchronous lookups, then consume only its admitted draft.
 export function createComposerSubmission(context) {
@@ -83,6 +84,14 @@ export function createComposerSubmission(context) {
 
   const submit = async (snapshot = createSubmitSnapshot()) => {
     if (submitBlocked(snapshot)) {
+      return;
+    }
+    if (
+      snapshot.attachments.length === 0 &&
+      isBareSecretCommand(snapshot.content) &&
+      typeof context.onOpenSecretForm === 'function'
+    ) {
+      openSecretForm(snapshot);
       return;
     }
 
@@ -252,6 +261,22 @@ ${movedText}`
     // A composer already showing the Session shows what moved there; one
     // that has not switched yet loads it when it does.
     context.refreshMovedDraft(toKey);
+  };
+
+  // A bare `/secret` opens the Secret form instead of being sent; the form
+  // takes the value, so the command leaves the composer and its history.
+  const openSecretForm = (snapshot) => {
+    if (getDraft(snapshot.draftKey) === snapshot.content) {
+      clearDraft(snapshot.draftKey);
+    }
+    if (context.draftKey === snapshot.draftKey) {
+      context.content = '';
+      context.inputOrigin = '';
+      picker.triggerContext = null;
+      picker.activeSkillIndex = 0;
+      context.resetInputHistory();
+    }
+    context.onOpenSecretForm();
   };
 
   function submitCommand(command) {

@@ -28,6 +28,7 @@ export const RESOURCE_TOKEN_TERMINALS = 'terminals';
 export const RESOURCE_TOKEN_SKILLS = 'skills';
 export const RESOURCE_TOKEN_ARCHIVE = 'archive';
 export const RESOURCE_TOKEN_CREDENTIALS = 'credentials';
+export const RESOURCE_TOKEN_AGENT_SECRETS = 'agent_secrets';
 export const RESOURCE_KIND_DATA_STORE = 'data_store';
 
 // Which token group(s) each resource kind invalidates. Both a model-catalog
@@ -41,7 +42,9 @@ export const RESOURCE_KIND_DATA_STORE = 'data_store';
 // bump the "devices" group (re-fetch devices.list). A saved, replaced or
 // removed credential publishes "data_store" (the credential RPCs, service keys,
 // Channel tokens, Extension secrets) or only "providers" (Provider keys), so
-// both bump the "credentials" group (re-fetch secrets.list).
+// both bump the "credentials" group (re-fetch secrets.list). An Agent Secret,
+// Secret request or password-manager Source that changes publishes
+// "agent_secrets" (re-fetch agent_secrets.list).
 // New kinds add their mapping here.
 const KIND_TOKEN_GROUPS = {
   models: [RESOURCE_TOKEN_MODELS],
@@ -61,6 +64,7 @@ const KIND_TOKEN_GROUPS = {
   skills: [RESOURCE_TOKEN_SKILLS],
   archive: [RESOURCE_TOKEN_ARCHIVE],
   data_store: [RESOURCE_TOKEN_CREDENTIALS],
+  agent_secrets: [RESOURCE_TOKEN_AGENT_SECRETS],
 };
 
 // Return the refresh-token group(s) a resource kind invalidates (empty for an

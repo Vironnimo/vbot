@@ -29,8 +29,14 @@
 
   const noop = () => {};
   // The pages where credentials are entered (Provider keys and sign-ins, web
-  // service keys, Channel tokens, Extension secrets and named credentials).
-  const CREDENTIAL_PAGES = new Set(['providers', 'tools', 'integrations']);
+  // service keys, Channel tokens, Extension secrets, named credentials and
+  // Agent Secrets).
+  const CREDENTIAL_PAGES = new Set([
+    'providers',
+    'tools',
+    'integrations',
+    'secrets',
+  ]);
   let {
     // The place is `[page]` or `[page, section]`, or `[page, subPage]` on a
     // page with sub-pages (an Archive entry: `['archive', entryId]`); an App
@@ -68,6 +74,8 @@
     devicesRefreshToken = 0,
     // Saved credentials changed (Credentials).
     credentialsRefreshToken = 0,
+    // Agent Secrets, Secret requests or their Sources changed (Secrets).
+    agentSecretsRefreshToken = 0,
     channelsRefreshToken = 0,
     archiveRefreshToken = 0,
     agentsRefreshToken = 0,
@@ -342,6 +350,8 @@
     />
   {:else if panelId === 'credentials'}
     <Panel {credentialsRefreshToken} {onToast} />
+  {:else if panelId === 'agent_secrets'}
+    <Panel {agentSecretsRefreshToken} {agents} {onToast} />
   {:else if panelId === 'live_voice_model'}
     <Panel
       {settings}

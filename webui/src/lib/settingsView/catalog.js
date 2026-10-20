@@ -88,6 +88,10 @@ const sections = [
     id: 'credentials',
     label: () => t('settings.credentials.title'),
   },
+  {
+    id: 'agent_secrets',
+    label: () => t('settings.agentSecrets.title'),
+  },
   { id: 'server', label: () => t('settings.sections.server') },
   { id: 'access', label: () => t('settings.sections.access') },
   {
@@ -176,6 +180,12 @@ export function settingsPages(desktopCapabilities) {
       description: () => t('settings.pages.integrationsDescription'),
       // Named credentials last: they are rarely managed on their own.
       sections: ['channels', 'extensions', 'credentials'],
+    },
+    {
+      id: 'secrets',
+      label: () => t('settings.agentSecrets.title'),
+      description: () => t('settings.pages.secretsDescription'),
+      sections: ['agent_secrets'],
     },
     {
       id: 'archive',
