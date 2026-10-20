@@ -765,6 +765,7 @@ export default Object.freeze({
   'projects.remove.inUse':
     'A schedule or Bootstrap job uses one of this project’s agents, so it cannot be removed. Remove or retarget it first.',
   'projects.detail.sectionAutoLoad': 'Auto-load files',
+  'projects.detail.sectionInstructions': 'Instructions',
   'projects.detail.autoLoadInfo':
     'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
   'projects.detail.sectionTeam': 'Team',
@@ -804,9 +805,25 @@ export default Object.freeze({
   'projects.team.deniedToolsBaselineHelp':
     'These blocks apply only while the repository policy is active. A vBot Tool override replaces them.',
   'projects.team.overrideModelPlaceholder': 'No override',
-  'projects.sources.title': 'Sources',
-  'projects.sources.help':
-    'Enable sources and drag them into priority order. The first active definition of each name wins.',
+  'projects.sources.agentsTitle': 'Agent sources',
+  'projects.sources.agentsHelp':
+    'Where the Team comes from. Switch sources on or off and drag them into priority order; the first active definition of each Agent name wins.',
+  'projects.sources.agentsEmpty':
+    'No Agent definitions detected in this repository.',
+  'projects.sources.instructionsTitle': 'Instruction files of other tools',
+  'projects.sources.instructionsHelp':
+    'Load after the auto-load files while switched on. They often repeat AGENTS.md, so only one starts on.',
+  'projects.sources.skillsTitle': 'Skill folders',
+  'projects.sources.skillsHelp':
+    'Folders whose Skills this Project offers, inside or outside the repository. Drag them into priority order; the first active Skill of each name wins.',
+  'projects.sources.skillsEmpty':
+    'No Skill folder detected in this repository. Add one below.',
+  'projects.sources.selectionTitle': 'Skill selection',
+  'projects.sources.addFolder': 'Add folder',
+  'projects.sources.folderPlaceholder': 'Skill folder, e.g. .vbot/skills',
+  'projects.sources.folderMissing': 'Folder not found',
+  'projects.sources.removeFolder': 'Remove {folder}',
+  'projects.sources.modelUnmapped': 'Project default',
   'projects.sources.detected':
     '{count} sources detected. Configure their priority after adding the Project.',
   'projects.sources.agentCount.one': '1 Agent',

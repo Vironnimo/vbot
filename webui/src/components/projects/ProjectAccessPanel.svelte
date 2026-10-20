@@ -11,6 +11,9 @@
   } from '../skills/skillAccess.js';
   import { projectRowMenu } from '../skills/skillMenus.js';
   import ToolCatalogEditor from '../tools/ToolCatalogEditor.svelte';
+  import PathField from '../ui/PathField.svelte';
+  import ProjectSourceList from './ProjectSourceList.svelte';
+  import { isImeComposing } from '$lib/keyboard.js';
   import Button from '../ui/Button.svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
   import { contextMenuAnchor } from '../ui/contextMenu.js';
@@ -189,6 +192,23 @@
       );
   }
 
+  // The folder being added: typed or browsed, absolute or inside the
+  // repository; the server stores it and refuses one it cannot use.
+  let folderDraft = $state('');
+  let folderError = $state('');
+  let folderAdding = $state(false);
+
+  async function addFolder() {
+    const path = folderDraft.trim();
+    if (!path || folderAdding) return;
+    folderAdding = true;
+    folderError = '';
+    const result = await projectsController.addSkillFolder(path);
+    folderAdding = false;
+    if (result.ok) folderDraft = '';
+    else folderError = result.error;
+  }
+
   function toggleTool(name, enabled) {
     projectsController.updateListField('allowed_tools', name, enabled);
   }
@@ -269,10 +289,63 @@
         {t('projects.detail.sectionSkills')}
       </h3>
     </header>
-    <p class="s-section__desc">
-      {t('projects.manage.allowedSkillsHelp')}
-    </p>
     <div class="s-section__body">
+      <div class="s-subhead">
+        <h4 class="s-subhead__title">{t('projects.sources.skillsTitle')}</h4>
+      </div>
+      <p class="s-group__note projects-sources-help">
+        {t('projects.sources.skillsHelp')}
+      </p>
+      <ProjectSourceList {projectsState} {projectsController} kind="skills" />
+      <div class="s-group">
+        <div class="s-group__block projects-file-add">
+          <PathField
+            id="project-skill-folder-add"
+            class="projects-file-input"
+            mode="directory"
+            startPath={projectsController.selectedProject()?.cwd ?? ''}
+            projectShortcuts
+            value={folderDraft}
+            invalid={folderError !== ''}
+            placeholder={t('projects.sources.folderPlaceholder')}
+            ariaLabel={t('projects.sources.addFolder')}
+            onInput={(next) => {
+              folderDraft = next;
+              folderError = '';
+            }}
+            onkeydown={(event) => {
+              if (event.key === 'Enter' && !isImeComposing(event)) {
+                event.preventDefault();
+                void addFolder();
+              }
+            }}
+          />
+          <Button
+            variant="secondary"
+            data-testid="project-skill-folder-add"
+            loading={folderAdding}
+            disabled={folderDraft.trim().length === 0}
+            onClick={addFolder}
+          >
+            {t('projects.sources.addFolder')}
+          </Button>
+        </div>
+        {#if folderError}
+          <div
+            class="s-group__block s-group__note projects-source-problem"
+            role="alert"
+          >
+            {folderError}
+          </div>
+        {/if}
+      </div>
+
+      <div class="s-subhead">
+        <h4 class="s-subhead__title">{t('projects.sources.selectionTitle')}</h4>
+      </div>
+      <p class="s-group__note projects-sources-help">
+        {t('projects.manage.allowedSkillsHelp')}
+      </p>
       <SkillSelectionPanel
         groups={skillView.groups}
         active={skillView.active}

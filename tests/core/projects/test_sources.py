@@ -657,3 +657,34 @@ def test_a_skill_folder_linked_to_another_supplies_its_skills_once(repo):
     # Projects that already list the linked Source load the folder once.
     sources = [SourceSelection("claude.skills"), SourceSelection("shared.skills")]
     assert skill_roots(repo, sources) == [repo / ".agents/skills"]
+
+
+def test_skill_folder_sources_load_in_source_order_wherever_they_live(repo, tmp_path):
+    write(repo, ".vbot/skills/review/SKILL.md", "---\nname: review\ndescription: R.\n---\nR.")
+    write(repo, ".agents/skills/review/SKILL.md", "---\nname: review\ndescription: S.\n---\nS.")
+    outside = tmp_path / "elsewhere"
+    write(outside, "deploy/SKILL.md", "---\nname: deploy\ndescription: D.\n---\nD.")
+    sources = [
+        SourceSelection("folder:.vbot/skills"),
+        SourceSelection("shared.skills"),
+        SourceSelection(f"folder:{outside.as_posix()}"),
+        SourceSelection("folder:gone", enabled=False),
+    ]
+
+    result = scan_project(repo, sources=sources)
+
+    assert skill_roots(repo, sources) == [
+        repo / ".vbot/skills",
+        repo / ".agents/skills",
+        outside,
+    ]
+    assert [(row["id"], row["skills"]) for row in result.sources] == [
+        ("folder:.vbot/skills", 1),
+        ("shared.skills", 1),
+        (f"folder:{outside.as_posix()}", 1),
+        ("folder:gone", 0),
+    ]
+    # The folder Source wins the name; a switched-off missing folder is no finding.
+    assert [finding.detail for finding in result.report.findings] == [
+        "Skill 'review' from shared.skills is shadowed by folder:.vbot/skills."
+    ]

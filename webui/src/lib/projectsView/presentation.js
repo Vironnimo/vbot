@@ -498,6 +498,51 @@ export function buildRePointPayload(cwd) {
   return { cwd: asText(cwd).trim() };
 }
 
+// A Skill folder the user added to a Project is the Source `folder:<path>`.
+export const FOLDER_SOURCE_PREFIX = 'folder:';
+
+export function folderSourcePath(id) {
+  return typeof id === 'string' && id.startsWith(FOLDER_SOURCE_PREFIX)
+    ? id.slice(FOLDER_SOURCE_PREFIX.length)
+    : null;
+}
+
+// What a Source supplies ('agents', 'skills' or 'instructions'), from the
+// scan's Source rows; a Skill folder is known before its first scan. Unknown
+// ids (a later vBot's Sources) stay inert and belong to no section.
+export function sourceKind(source, scanSources = []) {
+  if (folderSourcePath(source?.id) !== null) return 'skills';
+  const kind = scanSources.find((row) => row.id === source?.id)?.kind;
+  return ['agents', 'skills', 'instructions'].includes(kind) ? kind : null;
+}
+
+// Moves one Source among those of its kind; the others keep their places in
+// the one ordered list the Project stores.
+export function reorderSourcesOfKind(sources, kindOf, kind, from, to) {
+  const slots = [];
+  sources.forEach((source, index) => {
+    if (kindOf(source) === kind) slots.push(index);
+  });
+  if (from === to || from >= slots.length || to >= slots.length) return sources;
+  const members = slots.map((index) => sources[index]);
+  members.splice(to, 0, members.splice(from, 1)[0]);
+  const next = [...sources];
+  slots.forEach((index, position) => (next[index] = members[position]));
+  return next;
+}
+
+// An added Skill folder starts active and first among the Skill Sources: the
+// folder chosen on purpose outranks what vBot detected.
+export function addSkillFolderSource(sources, path, kindOf) {
+  const id = `${FOLDER_SOURCE_PREFIX}${path.trim()}`;
+  if (!path.trim() || sources.some((source) => source.id === id))
+    return sources;
+  const first = sources.findIndex((source) => kindOf(source) === 'skills');
+  const next = [...sources];
+  next.splice(first === -1 ? next.length : first, 0, { id, enabled: true });
+  return next;
+}
+
 // Normalize one project record from the backend into a stable display shape.
 export function normalizeProject(project) {
   return {

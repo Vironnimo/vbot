@@ -18,7 +18,6 @@
     modelSelectionValue,
     parseModelSelectionValue,
   } from '$lib/modelSelection.js';
-  import ProjectSourcesPanel from './ProjectSourcesPanel.svelte';
   let {
     projectsState = $bindable(),
     projectsController,
@@ -183,12 +182,6 @@
         </div>
       </div>
     </section>
-
-    <ProjectSourcesPanel
-      {projectsState}
-      {projectsController}
-      modelOptions={allModelOptions}
-    />
 
     <section class="s-section" aria-labelledby="project-section-defaults">
       <header class="s-section__head">

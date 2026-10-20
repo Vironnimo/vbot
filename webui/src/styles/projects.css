@@ -601,8 +601,8 @@
   }
 }
 
-/* Sources: one sortable group whose rows are setting rows; the whole row
-   drags, the switch stays the row's control. */
+/* Sources: per kind one sortable group whose rows are setting rows; the
+   whole row drags, the switch stays the row's control. */
 .projects-view .projects-source-list {
   margin: 0;
   padding: 0;
@@ -618,9 +618,24 @@
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-.projects-view .projects-source-paths {
+.projects-view .projects-source-paths,
+.projects-view .projects-source-folder {
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);
+}
+
+.projects-view .projects-source-folder {
+  overflow-wrap: anywhere;
+}
+
+.projects-view .projects-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.projects-view .projects-sources-help {
+  margin: 0 0 8px;
 }
 
 .projects-view .projects-source-problem {

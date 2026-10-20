@@ -39,12 +39,19 @@ from core.archive import ArchiveSubjectInUseError
 from core.projects import (
     Project,
     cwd_exists,
+    normalize_cwd,
     project_tool_configurability_reason,
     slugify_project_id,
 )
 from core.projects.projects import OVERRIDE_FIELDS
 from core.projects.scan_report import FindingType, ScanFinding, ScanReport
-from core.projects.sources import AgentProfile, ScanResult, detect_sources, normalize_sources
+from core.projects.sources import (
+    AgentProfile,
+    ScanResult,
+    adopt_folder_sources,
+    detect_sources,
+    normalize_sources,
+)
 from core.runs import RunAdmissionBlockedError
 from core.settings import (
     PROJECT_TOOL_ALLOWLIST_WILDCARD,
@@ -197,7 +204,11 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
     default_top_p = (
         _validate_default_top_p(params["default_top_p"]) if "default_top_p" in params else None
     )
-    sources = _validated_sources(params["sources"]) if "sources" in params else None
+    sources = (
+        _validated_sources(params["sources"], root=normalize_cwd(cwd), known=set())
+        if "sources" in params
+        else None
+    )
     model_mappings = (
         _validated_model_mappings(state, params["model_mappings"])
         if "model_mappings" in params
@@ -350,6 +361,12 @@ def _update_project_record(
 
     try:
         current_project = _projects(state).get(project_id)
+        if "sources" in changes:
+            changes["sources"] = _validated_sources(
+                changes["sources"],
+                root=normalize_cwd(changes.get("cwd", current_project.cwd)),
+                known={source.id for source in current_project.sources},
+            )
         if "allowed_tools" in changes:
             _validate_project_tool_change(
                 state,
@@ -811,9 +828,15 @@ def _validate_default_thinking_effort(value: Any) -> str | None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
 
-def _validated_sources(value: Any) -> list[dict[str, Any]]:
+def _validated_sources(
+    value: Any, *, root: Path | None = None, known: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """Validate a Source list; with ``root``, also adopt its newly added Skill folders."""
     try:
-        return [item.to_dict() for item in normalize_sources(value)]
+        sources = normalize_sources(value)
+        if root is not None:
+            sources = adopt_folder_sources(root, sources, known=known or set())
+        return [item.to_dict() for item in sources]
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
 

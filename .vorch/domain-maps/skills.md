@@ -68,7 +68,7 @@ Write scope (v1 is data-dir only - vBot never writes the repo as runtime state):
 
 - **`skill_manage`** writes the calling Identity Agent's private home (in a Librarian Session, that of the Agent it maintains); update actions also reach a shared Skill in its owner's package and, for attended Agents, a global-home package; `publish` moves an own Skill into the global home (`skills/skill-manage.md`).
 - **RPC and user Accessors** write `global` and `agent:<id>` (an existing Identity Agent) as `HUMAN_WRITER`. **Installation** uses the same roots and owner (`skills/installation.md`).
-- **Project skills** stay repo-owned (ordinary `write`/`apply_patch`, validated at scan); folder and Extension Skills are read-only; bundled `resources/skills/` is refused.
+- **Project skills** stay Source-owned (ordinary `write`/`apply_patch`, validated at scan); folder and Extension Skills are read-only; bundled `resources/skills/` is refused.
 
 `SkillRuntime.invalidate_agent_skills(owner_id)` owns the dependency from a private home to its shared receivers and invalidates their registries in every Project context, also when the owning Agent is archived or renamed; writers only name the owner. A global write reloads Skills and invalidates every Agent-aware registry.
 

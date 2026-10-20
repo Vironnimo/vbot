@@ -36,7 +36,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 
 ### Source
 
-An independently detected repository input for Agents, Skills or always-on instructions. A Project stores one ordered list of Sources with on/off switches; the earliest active definition of an Agent or Skill name wins. Sources from several ecosystems can contribute to one Team.
+An input for Agents, Skills or always-on instructions: a repository location vBot detects, or a Skill folder Source (`folder:<path>`) the user adds, inside or outside the repository. A Project stores one ordered list of Sources with on/off switches; the earliest active definition of an Agent or Skill name wins, and names compete only within one kind. Sources from several ecosystems can contribute to one Team.
 
 ### Agent Profile
 
@@ -53,7 +53,7 @@ The format-neutral repository definition supplied by a Source adapter: Agent id,
 ## Boundary & Invariants
 
 - `project_id` is stable and names the Project Anchor; `cwd` is a mutable pointer to the repository. Repository equality and working-directory equality never establish Project identity.
-- Project-owned state lives under the data directory. The repository is a read-only configuration source: adapters may read its Agent and Skill files, but removal archives only the Project Anchor and never deletes or modifies repository content.
+- Project-owned state lives under the data directory. The repository and every Skill folder Source are read-only configuration sources: adapters may read their Agent and Skill files, but removal archives only the Project Anchor and never deletes or modifies their content.
 - A Project combines ordered, switchable Sources for Agents, Skills and instructions. Earlier active names win; shadowed definitions and unreadable inputs remain visible. New Sources activate on detection unless an active Agent/Skill name collides; an instruction Source activates only while no instruction file loads yet.
 - `project.json` owns Project defaults, capability ceilings, Skill selections, and per-Agent overrides. Runtime resolution combines those values with freshly read repository Agent configuration and global defaults; it does not copy repository Agent files into the Project Anchor.
 - Project Agent Sessions use `(project_id, agent_id, session_id)` addresses in `<data-dir>/sessions.db`; the Project Anchor no longer contains canonical Session files. Agent and Project identifiers still pass shared validation before entering either database addresses or filesystem anchors.

@@ -220,7 +220,7 @@ class ProjectStore:
             root = Path(project.cwd)
             sources = refresh_sources(
                 project.sources,
-                detect_sources(root, skill_scan=skill_scan),
+                detect_sources(root, skill_scan=skill_scan, selections=project.sources),
                 root=root,
                 instructions_loaded=any((root / name).is_file() for name in project.auto_load),
             )

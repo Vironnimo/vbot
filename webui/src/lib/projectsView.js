@@ -14,4 +14,8 @@ export {
   projectAgentTargetSummary,
   memberFieldIsOverridden,
   normalizeScanReport,
+  folderSourcePath,
+  sourceKind,
+  reorderSourcesOfKind,
+  addSkillFolderSource,
 } from './projectsView/presentation.js';

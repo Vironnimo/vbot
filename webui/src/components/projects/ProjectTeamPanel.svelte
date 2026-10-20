@@ -23,6 +23,8 @@
   import SamplingSettings from '../sampling/SamplingSettings.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
+  import ProjectSourceList from './ProjectSourceList.svelte';
+  import ProjectModelMappings from './ProjectModelMappings.svelte';
   import {
     effortOptionsForReasoning,
     effortForReasoning,
@@ -703,6 +705,15 @@
           </details>
         {/if}
       {/if}
+
+      <div class="s-subhead">
+        <h4 class="s-subhead__title">{t('projects.sources.agentsTitle')}</h4>
+      </div>
+      <p class="s-group__note projects-sources-help">
+        {t('projects.sources.agentsHelp')}
+      </p>
+      <ProjectSourceList {projectsState} {projectsController} kind="agents" />
+      <ProjectModelMappings {projectsState} {projectsController} />
     </div>
   </section>
 </div>
