@@ -1,6 +1,6 @@
 # WebUI shared controls
 
-Read when using or changing the behavior of the shared `LazyContent`, `SortableList`, `PathField`, `DataTable`, `Modal` or `Dropdown` controls. The rule to use them is in `webui.md` -> Ownership; their appearance is in `webui/design.md` -> Shared controls and feedback, their files in `webui/source-map.md` -> UI primitives.
+Read when using or changing the behavior of the shared `LazyContent`, `SortableList`, `PathField`, `DataTable`, `DateField`, `TimeField`, `Modal` or `Dropdown` controls. The rule to use them is in `webui.md` -> Ownership; their appearance is in `webui/design.md` -> Shared controls and feedback, their files in `webui/source-map.md` -> UI primitives.
 
 ## LazyContent
 
@@ -27,7 +27,16 @@ dnd-kit setup: the manager gets its plugins and sensors at construction, because
 
 `components/ui/DataTable.svelte` owns sortable headers with `aria-sort`, the optional filter with its "N of M" count, the optional row limit with Show all / Show fewer, activatable rows, and the keyboard-scrollable horizontal region, so a wide table scrolls inside itself instead of widening the page; the pure sorting, filtering, and limiting rules live in `lib/dataTable.js`. Callers pass translated column labels, rows, and a stable row key; a column sets `align: 'end'` for numbers, `mono` only for code-like values (paths, commands, codes, opaque ids), and a `cell` snippet called as `(row, column)` for custom markup. Visual rules: `webui/design.md` -> Tables. Tests: `ui/__tests__/DataTable.test.js`, `lib/__tests__/dataTable.test.js`.
 
+## DateField and TimeField
+
+`components/ui/DateField.svelte` and `TimeField.svelte` replace the browser's date and time inputs, whose wording and theme follow the browser; the guard bans native `date`, `time`, `datetime-local`, `month` and `week` inputs. Values are wall-clock strings without a zone, `YYYY-MM-DD` and `HH:MM` (`''` when empty); the caller adds the zone (Extension input composes `${date}T${time}`, `webui/settings.md` -> Extension input outside Settings). `lib/dateTimeFields.js` formats and parses them in the app language (`activeLocaleTag()`, never the browser's) and computes on UTC dates, so the browser zone never shifts a day. Both report `onChange(next)` as soon as the typed text reads as a value, and `required` keeps the last value when the text is cleared. Their popovers are portaled on the floating layer (`--z-floating`, `styles/app/controls/date-time.css`).
+
+- DateField shows `Wed, Sep 23, 2026`-style text and opens a month grid; `min`/`max` (inclusive) bound typed and picked dates; `today` marks the current day, by default in the application time zone. ArrowDown or Alt+ArrowDown opens the grid and moves into its days; there the arrows move by day and week, PageUp/PageDown by month, Home/End to the week's ends, Enter or Space picks, Escape closes.
+- TimeField reads typed times such as `9`, `930`, `9:30` or `9:30 pm` and lists times every `step` minutes (default 30), opened at the time it holds. Focus stays in the field: ArrowDown/ArrowUp open and move through the list, Enter picks, Escape closes.
+- Tests: `ui/__tests__/DateField.test.js`, `ui/__tests__/TimeField.test.js`.
+
 ## Modal and Dropdown keyboard
 
+- Escape, Back (the Modal registers a navigation layer) and the close button close a `Modal` unless `closeDisabled`. A backdrop click closes it only when the press started on the backdrop, so a text selection dragged out of the dialog does not close it; once an `input` or `change` event bubbled up inside the dialog, a backdrop click only nudges it (`modal--nudge`) and keeps what the user entered. A Modal opened while another one is open renders stacked (`modal-overlay--stacked`; appearance in `webui/design.md` -> Dialogs).
 - Of stacked `Modal`s (a dialog opened from a dialog, such as Browse... in the Add Project dialog) only the newest answers Escape and Tab (`ui/__tests__/Modal.test.js`). During IME composition the Modal leaves shortcuts to native input; composing Escape also stops before background window handlers, preserving the dialog and its draft. Escape already consumed by a nested picker dismisses only that picker; the enclosing dialog retains its draft and closes on a subsequent unhandled Escape.
 - Shared Dropdown variants implement the listbox/combobox keyboard contract with an explicit active option (the simple list adds typeahead; the searchable one filters); callers provide values and callbacks, not bespoke keyboard behavior. The searchable variant's collapsible-group mode switches to the tree pattern: Right opens a group or enters it, Left closes it or returns to its header, Enter toggles a header; callers own which groups are open (`expandedGroups` plus `onGroupToggle`). A Dropdown inside a `FormField` passes the field's `labelId` as `ariaLabelledby`, so its visible label and current value name the trigger; without it the trigger falls back to `ariaLabel` or the placeholder.
