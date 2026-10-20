@@ -11,6 +11,18 @@ from tests.cli.cli_test_support import FakeRpc, RunCli
 
 CREATE = ("cron", "create", "assistant", "--name", "Morning news", "--prompt", "Check the news")
 CREATED = {"agent_id": "assistant", "prompt": "Check the news", "name": "Morning news"}
+HOOK_URL = "https://vbot.example.com/api/hooks/job-1"
+
+
+def _webhook(reach: str = "internet") -> dict[str, Any]:
+    return {
+        "url": HOOK_URL,
+        "path": "/api/hooks/job-1",
+        "reach": reach,
+        "last_received_at": None,
+        "waiting": 0,
+        "dropped": 0,
+    }
 
 
 @pytest.mark.parametrize(
@@ -153,6 +165,16 @@ def test_cron_list_prints_one_row_per_job(rpc: FakeRpc, run_cli: RunCli) -> None
                     "status": "active",
                     "next_fire_at": "2026-06-15T06:30:00+00:00",
                 },
+                {
+                    "id": "job-1",
+                    "agent_id": "assistant",
+                    "name": "Triage issues",
+                    "prompt": "Triage the issue",
+                    "schedule_type": "webhook",
+                    "status": "active",
+                    "next_fire_at": None,
+                    "webhook": _webhook(),
+                },
             ]
         },
     )
@@ -174,6 +196,9 @@ def test_cron_list_prints_one_row_per_job(rpc: FakeRpc, run_cli: RunCli) -> None
         "schedule=event[evt_1 start - 30m] remaining_runs=unlimited "
         "next_fire_at=2026-06-15T06:30:00+00:00 session=new last_outcome=- "
         "last_error=- prompt=Prepare the standup",
+        "- name=Triage issues id=job-1 agent=assistant status=active "
+        f"schedule=webhook[{HOOK_URL}] remaining_runs=unlimited "
+        "next_fire_at=- session=new last_outcome=- last_error=- prompt=Triage the issue",
     ]
 
 
@@ -254,6 +279,7 @@ def test_cron_update_without_changes_names_every_option(rpc: FakeRpc, run_cli: R
         "--every",
         "--at",
         "--event",
+        "--webhook",
         "--event-time",
         "--repeat",
         "--session",
@@ -273,3 +299,64 @@ def test_cron_job_commands_address_the_job_by_id(
     assert code == 0
     assert rpc.calls == [(f"cron.{command}", {"id": "job-1"})]
     assert "job-1" in out
+
+
+@pytest.mark.parametrize(
+    ("command", "reach"),
+    [
+        pytest.param(CREATE, "internet", id="create"),
+        # Only a caller on the same computer reaches it, so GitHub cannot.
+        pytest.param(("cron", "update", "job-1"), "computer", id="update"),
+    ],
+)
+def test_a_webhook_job_prints_its_url_and_secret(
+    rpc: FakeRpc, run_cli: RunCli, command: tuple[str, ...], reach: str
+) -> None:
+    method = f"cron.{command[1]}"
+    rpc.reply(method, {"id": "job-1", "schedule_type": "webhook", "webhook": _webhook(reach)})
+    rpc.reply("cron.webhook_secret", {"secret": "vbw_s3cret", "webhook": _webhook(reach)})
+
+    code, out, _err = run_cli(*command, "--webhook")
+
+    assert code == 0
+    assert rpc.calls[0][1]["schedule_type"] == "webhook"
+    assert rpc.calls[1] == ("cron.webhook_secret", {"id": "job-1"})
+    assert f"schedule=webhook[{HOOK_URL}]" in out
+    assert f"url: {HOOK_URL}" in out
+    assert "secret: vbw_s3cret" in out
+    assert '"Authorization: Bearer vbw_s3cret"' in out
+    assert ("cannot reach this URL" in out) is (reach != "internet")
+
+
+def test_a_created_webhook_job_names_how_to_show_an_unreadable_secret(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    rpc.reply("cron.create", {"id": "job-1", "schedule_type": "webhook", "webhook": _webhook()})
+    rpc.fail("cron.webhook_secret", "storage_error", "The Secret Store is locked")
+
+    code, out, _err = run_cli(*CREATE, "--webhook")
+
+    assert code == 0
+    assert "job-1" in out
+    assert "vbot cron secret job-1" in out
+
+
+@pytest.mark.parametrize(
+    ("options", "method"),
+    [
+        pytest.param((), "cron.webhook_secret", id="show"),
+        pytest.param(("--rotate",), "cron.rotate_webhook_secret", id="rotate"),
+    ],
+)
+def test_cron_secret_shows_or_replaces_the_secret_with_the_url(
+    rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], method: str
+) -> None:
+    rpc.reply(method, {"secret": "vbw_s3cret", "webhook": _webhook()})
+
+    code, out, _err = run_cli("cron", "secret", "job-1", *options)
+
+    assert code == 0
+    assert rpc.calls == [(method, {"id": "job-1"})]
+    assert f"url: {HOOK_URL} (reachable from the internet)" in out
+    assert "secret: vbw_s3cret" in out
+    assert ("old secret" in out) is bool(options)

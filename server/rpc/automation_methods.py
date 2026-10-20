@@ -244,15 +244,17 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _cron_webhook_secret(state: Any, params: JsonObject) -> JsonObject:
-    """The secret a webhook job's requests prove: ``{"secret": ...}``."""
+    """The secret a webhook job's requests prove, with the job's ``webhook``."""
     _reject_unsupported(params, {"id"}, "cron.webhook_secret")
 
     job_id = _required_string(params, "id")
+    cron_service = state.runtime.cron_service
     try:
-        secret = await state.runtime.cron_service.webhook_secret(job_id)
+        secret = await cron_service.webhook_secret(job_id)
+        job = cron_service.get_job(job_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"secret": secret}
+    return {"secret": secret, "webhook": _webhook_response(cron_service, job)}
 
 
 async def _cron_rotate_webhook_secret(state: Any, params: JsonObject) -> JsonObject:
@@ -260,11 +262,13 @@ async def _cron_rotate_webhook_secret(state: Any, params: JsonObject) -> JsonObj
     _reject_unsupported(params, {"id"}, "cron.rotate_webhook_secret")
 
     job_id = _required_string(params, "id")
+    cron_service = state.runtime.cron_service
     try:
-        secret = await state.runtime.cron_service.rotate_webhook_secret(job_id, actor="rpc")
+        secret = await cron_service.rotate_webhook_secret(job_id, actor="rpc")
+        job = cron_service.get_job(job_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"secret": secret}
+    return {"secret": secret, "webhook": _webhook_response(cron_service, job)}
 
 
 async def _cron_delete(state: Any, params: JsonObject) -> JsonObject:

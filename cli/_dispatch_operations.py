@@ -28,6 +28,7 @@ from cli.cron_management import (
     cron_disable,
     cron_enable,
     cron_list,
+    cron_secret,
     cron_show,
     cron_update,
 )
@@ -371,6 +372,8 @@ def dispatch_cron_command(
         return enable_cron_fn(instance, args.id)
     if args.command == "disable":
         return disable_cron_fn(instance, args.id)
+    if args.command == "secret":
+        return cron_secret(instance, args.id, rotate=args.rotate)
     raise ValueError(f"Unsupported cron command: {args.command}")
 
 
@@ -473,6 +476,8 @@ def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
         fields["event_id"] = args.event
         if args.event_time is not None:
             fields["event_time"] = args.event_time
+    elif args.webhook:
+        fields["schedule_type"] = "webhook"
     else:
         fields["schedule_type"] = "once"
         fields["run_at"] = args.at
@@ -503,6 +508,8 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     elif args.event is not None:
         changes["schedule_type"] = "event"
         changes["event_id"] = args.event
+    elif args.webhook:
+        changes["schedule_type"] = "webhook"
     if args.event_time is not None:
         changes["event_time"] = args.event_time
     if args.repeat is not None:

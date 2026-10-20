@@ -732,6 +732,7 @@ async def test_a_webhook_secret_is_revealed_and_rotated_by_job(tmp_path: Path) -
         "dropped": 0,
     }
     assert revealed["secret"].startswith("vbw_")
+    assert revealed["webhook"] == created["webhook"]
     assert rotated["secret"] != revealed["secret"]
     assert current == rotated
     assert refused["code"] == "domain_error"

@@ -19,6 +19,7 @@ CRON_UPDATE_FLAGS = (
     "--every",
     "--at",
     "--event",
+    "--webhook",
     "--event-time",
     "--repeat",
     "--session",
@@ -26,6 +27,12 @@ CRON_UPDATE_FLAGS = (
     "--status",
 )
 _PROMPT_PREVIEW_LIMIT = 60
+# Who can send requests to a webhook job's URL, by the reach the server reports.
+_WEBHOOK_REACH = {
+    "internet": "reachable from the internet",
+    "network": "reachable from this computer and the home network",
+    "computer": "reachable from this computer only",
+}
 
 
 def cron_create(instance: ServerInstance, fields: Mapping[str, Any]) -> CommandResult:
@@ -34,9 +41,10 @@ def cron_create(instance: ServerInstance, fields: Mapping[str, Any]) -> CommandR
     payload = _rpc_call(instance, "cron.create", dict(fields))
     if not payload.ok:
         return payload.to_command_result()
-    return CommandResult(
-        ok=True, message=_format_job_operation("created", payload.data), instance=instance
-    )
+    message = _format_job_operation("created", payload.data)
+    if fields.get("schedule_type") == "webhook":
+        message += "\n" + _new_webhook_secret(instance, payload.data)
+    return CommandResult(ok=True, message=message, instance=instance)
 
 
 def cron_list(instance: ServerInstance) -> CommandResult:
@@ -87,11 +95,10 @@ def cron_update(
     payload = _rpc_call(instance, "cron.update", {"id": job_id, **dict(changes)})
     if not payload.ok:
         return payload.to_command_result()
-    return CommandResult(
-        ok=True,
-        message=_format_job_operation("updated", payload.data, fallback_id=job_id),
-        instance=instance,
-    )
+    message = _format_job_operation("updated", payload.data, fallback_id=job_id)
+    if changes.get("schedule_type") == "webhook":
+        message += "\n" + _new_webhook_secret(instance, {"id": job_id, **payload.data})
+    return CommandResult(ok=True, message=message, instance=instance)
 
 
 def cron_delete(instance: ServerInstance, job_id: str) -> CommandResult:
@@ -127,6 +134,65 @@ def cron_disable(instance: ServerInstance, job_id: str) -> CommandResult:
         message=_format_job_operation("disabled", payload.data, fallback_id=job_id),
         instance=instance,
     )
+
+
+def cron_secret(instance: ServerInstance, job_id: str, *, rotate: bool) -> CommandResult:
+    """Show or replace a webhook job's secret via `cron.webhook_secret` or
+    `cron.rotate_webhook_secret` RPC."""
+
+    method = "cron.rotate_webhook_secret" if rotate else "cron.webhook_secret"
+    payload = _rpc_call(instance, method, {"id": job_id})
+    if not payload.ok:
+        return payload.to_command_result()
+    if rotate:
+        first = (
+            f"replaced the secret of cron job {job_id}; requests that send the old secret "
+            "are refused from now on"
+        )
+    else:
+        first = f"secret of cron job {job_id}"
+    return CommandResult(
+        ok=True,
+        message=f"{first}\n{_format_webhook_secret(job_id, payload.data)}",
+        instance=instance,
+    )
+
+
+def _new_webhook_secret(instance: ServerInstance, job: Mapping[str, Any]) -> str:
+    """The secret lines of a job that just became a webhook job."""
+    job_id = _string_or_default(job.get("id"), "?")
+    payload = _rpc_call(instance, "cron.webhook_secret", {"id": job_id})
+    if not payload.ok:
+        return (
+            f"Note: the job's secret could not be read ({payload.message.rstrip('. ')}); "
+            f"vbot cron secret {job_id} shows it."
+        )
+    return _format_webhook_secret(job_id, payload.data)
+
+
+def _format_webhook_secret(job_id: str, data: Mapping[str, Any]) -> str:
+    secret = _string_or_default(data.get("secret"), "?")
+    webhook = data.get("webhook")
+    webhook = webhook if isinstance(webhook, dict) else {}
+    url = webhook.get("url")
+    lines = []
+    if isinstance(url, str) and url:
+        reach = _WEBHOOK_REACH.get(str(webhook.get("reach")))
+        lines.append(f"url: {url}" + (f" ({reach})" if reach else ""))
+    else:
+        path = _string_or_default(webhook.get("path"), f"/api/hooks/{job_id}")
+        lines.append(f"url: {path} on vBot's server address")
+    lines.append(f"secret: {secret}")
+    lines.append(
+        f'Send each request as POST to url with the header "Authorization: Bearer {secret}", '
+        "or enter secret as the secret of a GitHub webhook (X-Hub-Signature-256)."
+    )
+    if webhook.get("reach") in {"network", "computer"}:
+        lines.append(
+            "Note: services on the internet, such as GitHub, cannot reach this URL until the "
+            "user opens vBot to the internet (vbot application access show)."
+        )
+    return "\n".join(lines)
 
 
 def _format_job_rows(jobs: Sequence[object]) -> str:
@@ -196,6 +262,10 @@ def _format_schedule(job: Mapping[str, Any]) -> str:
     if schedule_type == "event":
         event_id = _string_or_default(job.get("event_id"), "?")
         return f"event[{event_id} {_string_or_default(job.get('schedule'), '?')}]"
+    if schedule_type == "webhook":
+        webhook = job.get("webhook")
+        address = (webhook.get("url") or webhook.get("path")) if isinstance(webhook, dict) else None
+        return f"webhook[{_string_or_default(address, '?')}]"
     return "?"
 
 

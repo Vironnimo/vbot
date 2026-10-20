@@ -325,6 +325,7 @@ CRON_HELP = {
     "delete": "Delete a cron job",
     "enable": "Enable a cron job",
     "disable": "Disable a cron job",
+    "secret": "Show or replace the secret that requests to a webhook job's URL send",
 }
 
 

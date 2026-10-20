@@ -116,6 +116,23 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         )
         command_parser.add_argument("id", metavar="<job-id>", help=f"Cron job id to {command}")
 
+    secret_parser = _add_command_parser(
+        cron_subparsers, "secret", CRON_HELP["secret"], example="cron secret <job-id>"
+    )
+    secret_parser.epilog = (
+        "Prints the job's webhook URL, the secret and how a request proves it. Exit 0 when "
+        "shown or replaced; 1 when the job has no webhook or is not found."
+    )
+    secret_parser.add_argument("id", metavar="<job-id>", help="Exact id of a webhook job")
+    secret_parser.add_argument(
+        "--rotate",
+        action="store_true",
+        help=(
+            "Replace the secret; requests that send the old one are refused from then on. "
+            "Omit to show the current secret"
+        ),
+    )
+
 
 def _add_cron_schedule_arguments(group: argparse._MutuallyExclusiveGroup) -> None:
     group.add_argument(
@@ -141,6 +158,14 @@ def _add_cron_schedule_arguments(group: argparse._MutuallyExclusiveGroup) -> Non
         "--event",
         metavar="<event-id>",
         help="Run once at every occurrence of this calendar event",
+    )
+    group.add_argument(
+        "--webhook",
+        action="store_true",
+        help=(
+            "Run whenever a request reaches the job's webhook URL; each Run gets the request's "
+            "headers and body. The output shows the URL and the secret requests send"
+        ),
     )
 
 
