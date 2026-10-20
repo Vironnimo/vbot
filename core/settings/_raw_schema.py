@@ -25,6 +25,7 @@ from core.settings.settings import (
     OPENROUTER_ROUTING_FIELDS,
     OPENROUTER_ROUTING_POLICY_FIELDS,
 )
+from core.tools.tool_loading import TOOL_LOADING_FIELDS
 
 SETTINGS_FORMAT_VERSION = 1
 
@@ -195,7 +196,14 @@ SETTINGS_SHAPE: JsonShape = json_document(
         "archive": json_object(ARCHIVE_FIELDS),
         "compaction": COMPACTION_POLICY_SHAPE,
         "debug": json_object(DEBUG_FIELDS),
-        "defaults": json_object(DEFAULTS_SECTIONS, {"agent": json_object(AGENT_DEFAULT_FIELDS)}),
+        "defaults": json_object(
+            DEFAULTS_SECTIONS,
+            {
+                "agent": json_object(
+                    AGENT_DEFAULT_FIELDS, {"tool_loading": json_object(TOOL_LOADING_FIELDS)}
+                )
+            },
+        ),
         "extensions": json_object(EXTENSIONS_FIELDS, {"config": json_map(OPAQUE)}),
         "local_models": json_object(LOCAL_MODELS_FIELDS),
         "notifications": json_object(NOTIFICATION_FIELD_SET),

@@ -119,7 +119,7 @@ def project_tool_configurability_reason(
 
 # The optional fields a per-agent override may carry. Each maps to the top tier of
 # the matching config-agent resolver chain (model / temperature / top_p / thinking effort);
-# ``tool_loading`` has no chain: without an override the Agent has no On-demand Tools.
+# ``tool_loading`` inherits each part it does not set from ``defaults.agent.tool_loading``.
 OVERRIDE_FIELDS: frozenset[str] = frozenset(
     {
         "model",
@@ -165,7 +165,7 @@ def project_shape() -> JsonShape:
     fields are imported lazily (see :func:`_normalize_tool_access_policy`).
     """
     from core.tools.availability import TOOL_ACCESS_FIELDS
-    from core.tools.on_demand import TOOL_LOADING_FIELDS
+    from core.tools.tool_loading import TOOL_LOADING_FIELDS
 
     return json_document(
         _PROJECT_CONFIG_FIELDS,
@@ -956,6 +956,6 @@ def _normalize_tool_access_policy(value: Any) -> Any:
 def _normalize_tool_loading(value: Any) -> dict[str, Any]:
     """Import the Tools-owned ``tool_loading`` validator lazily to avoid package cycles."""
 
-    from core.tools.on_demand import normalize_tool_loading
+    from core.tools.tool_loading import normalize_tool_loading
 
     return normalize_tool_loading(value)

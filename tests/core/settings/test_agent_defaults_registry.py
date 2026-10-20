@@ -59,6 +59,9 @@ def test_every_field_dispatches_through_all_three_surfaces(field: str) -> None:
         assert parse_agent_default_value(field, ["openai/gpt-4"], label="l") == ["openai/gpt-4"]
     elif field in {"temperature", "top_p"}:
         assert parse_agent_default_value(field, 0.5, label="l") == 0.5
+    elif field == "tool_loading":
+        value = {"on_demand": True, "always_loaded": ["read"]}
+        assert parse_agent_default_value(field, value, label="l") == value
     else:
         assert parse_agent_default_value(field, "high", label="l") == "high"
 
@@ -85,6 +88,7 @@ def test_agent_defaults_round_trips_non_null_fields() -> None:
         "temperature": 0.7,
         "top_p": 0.9,
         "thinking_effort": "high",
+        "tool_loading": {"on_demand": True},
     }
     assert AgentDefaults.from_dict(data).to_dict() == data
 
@@ -96,6 +100,7 @@ def test_agent_defaults_absent_fields_are_none() -> None:
     assert defaults.temperature is None
     assert defaults.top_p is None
     assert defaults.thinking_effort is None
+    assert defaults.tool_loading is None
     assert defaults.to_dict() == {}
 
 
@@ -116,6 +121,7 @@ def _bake_defaults(agent_defaults: dict[str, Any]) -> dict[str, Any]:
         temperature=None,
         top_p=None,
         thinking_effort=None,
+        tool_loading=None,
         defaults=AgentDefaults.from_dict(agent_defaults),
     )
 
@@ -162,6 +168,7 @@ def test_valid_fallback_chain_is_stripped_by_normalize_and_bake() -> None:
         pytest.param({"temperature": MAX_TEMPERATURE + 1}, id="out-of-range-temperature"),
         pytest.param({"thinking_effort": "ultra"}, id="unknown-thinking-effort"),
         pytest.param({"model": 42}, id="non-string-model"),
+        pytest.param({"tool_loading": {"on_demand": "yes"}}, id="non-boolean-tool-loading"),
     ],
 )
 def test_bake_rejects_unusable_defaults(agent_defaults: dict[str, Any]) -> None:

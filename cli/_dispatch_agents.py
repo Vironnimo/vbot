@@ -149,14 +149,15 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["tool_access"] = tool_access
     tools_on_demand = getattr(args, "tools_on_demand", None)
     if tools_on_demand is not None:
+        # The flags replace the agent's own setting; a part they leave out follows the
+        # shared default, and a setting with neither part is removed.
+        tool_loading: dict[str, Any] = {}
+        if tools_on_demand != "default":
+            tool_loading["on_demand"] = tools_on_demand == "on"
         always_loaded = getattr(args, "always_loaded", None)
-        if tools_on_demand == "off" and always_loaded is None:
-            changes["tool_loading"] = None
-        else:
-            tool_loading: dict[str, Any] = {"on_demand": tools_on_demand == "on"}
-            if always_loaded is not None:
-                tool_loading["always_loaded"] = list(always_loaded)
-            changes["tool_loading"] = tool_loading
+        if always_loaded is not None:
+            tool_loading["always_loaded"] = list(always_loaded)
+        changes["tool_loading"] = tool_loading or None
     if args.allowed_skills is not None:
         changes["allowed_skills"] = list(args.allowed_skills)
     if args.excluded_skills is not None:

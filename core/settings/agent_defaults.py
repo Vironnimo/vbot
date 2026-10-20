@@ -16,6 +16,7 @@ canonical validators in those modules the one implementation of each value rule.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -26,11 +27,18 @@ from core.utils.errors import StorageError
 # Only literal enumeration of the defaults.agent field names. Every consumer
 # imports this; none may repeat the set.
 AGENT_DEFAULT_FIELDS = frozenset(
-    {"model", "fallback_models", "temperature", "top_p", "thinking_effort"}
+    {"model", "fallback_models", "temperature", "top_p", "thinking_effort", "tool_loading"}
 )
 
 # Stable catalog order (matches the historical Settings-path listing).
-AGENT_DEFAULT_FIELD_ORDER = ("model", "fallback_models", "temperature", "top_p", "thinking_effort")
+AGENT_DEFAULT_FIELD_ORDER = (
+    "model",
+    "fallback_models",
+    "temperature",
+    "top_p",
+    "thinking_effort",
+    "tool_loading",
+)
 
 # Sampling bounds, shared with the canonical validators in ``settings.py``.
 MIN_TEMPERATURE = 0.0
@@ -44,6 +52,9 @@ KIND_MODEL_BINDING = "model_binding"
 KIND_MODEL_BINDING_LIST = "model_binding_list"
 KIND_NULLABLE_NUMBER = "nullable_number"
 KIND_NULLABLE_ENUM = "nullable_enum"
+KIND_TOOL_LOADING = "tool_loading"
+
+type AgentDefaultValue = str | list[str] | float | dict[str, Any] | None
 
 
 @dataclass(frozen=True)
@@ -56,7 +67,7 @@ class AgentDefaultSpec:
     description: str
     parse: Callable[[Any, str], Any]
     diagnose: Callable[[list[JsonDiagnostic], str, Any], None]
-    normalize: Callable[[Any], str | list[str] | float | None]
+    normalize: Callable[[Any], AgentDefaultValue]
     # Inclusive bounds of a number field.
     bounds: tuple[float, float] | None = None
 
@@ -118,6 +129,17 @@ def _parse_thinking_effort(value: Any, label: str) -> str | None:
     return validate_thinking_effort(value, label=label, allow_none=True)
 
 
+def _parse_tool_loading(value: Any, label: str) -> dict[str, Any] | None:
+    from core.settings.settings import SettingsValidationError
+    from core.tools.tool_loading import normalize_tool_loading
+
+    try:
+        normalized = normalize_tool_loading(value)
+    except ValueError as error:
+        raise SettingsValidationError(f"{label}: {error}") from error
+    return normalized or None
+
+
 def _diagnose_model_binding(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
     from core.config_validation import add_error
 
@@ -152,6 +174,21 @@ def _diagnose_thinking_effort(diagnostics: list[JsonDiagnostic], path: str, valu
     from core.settings.validation import validate_thinking_effort_diagnostic
 
     validate_thinking_effort_diagnostic(diagnostics, path, value, allow_none=True)
+
+
+def _diagnose_tool_loading(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    from core.config_validation import add_error
+    from core.json_documents import json_object, strip_unknown_fields, warn_unknown_fields
+    from core.tools.tool_loading import TOOL_LOADING_FIELDS, normalize_tool_loading
+
+    if value is None:
+        return
+    shape = json_object(TOOL_LOADING_FIELDS)
+    warn_unknown_fields(diagnostics, path, value, shape, label="tool_loading field")
+    try:
+        normalize_tool_loading(strip_unknown_fields(value, shape))
+    except ValueError as error:
+        add_error(diagnostics, path, str(error))
 
 
 def _normalize_model_binding(value: Any) -> str:
@@ -204,6 +241,16 @@ def _normalize_thinking_effort(value: Any) -> str:
     return value
 
 
+def _normalize_tool_loading(value: Any) -> dict[str, Any] | None:
+    from core.tools.tool_loading import normalize_tool_loading
+
+    try:
+        normalized = normalize_tool_loading(value)
+    except ValueError as error:
+        raise StorageError(f"Agent default {error}") from error
+    return normalized or None
+
+
 _AGENT_DEFAULT_SPECS: dict[str, AgentDefaultSpec] = {
     "model": AgentDefaultSpec(
         name="model",
@@ -252,6 +299,18 @@ _AGENT_DEFAULT_SPECS: dict[str, AgentDefaultSpec] = {
         diagnose=_diagnose_thinking_effort,
         normalize=_normalize_thinking_effort,
     ),
+    "tool_loading": AgentDefaultSpec(
+        name="tool_loading",
+        kind=KIND_TOOL_LOADING,
+        value_type="object",
+        description=(
+            "Default On-demand Tools setting {on_demand, always_loaded}; an Agent inherits "
+            "each part it does not set itself."
+        ),
+        parse=_parse_tool_loading,
+        diagnose=_diagnose_tool_loading,
+        normalize=_normalize_tool_loading,
+    ),
 }
 
 
@@ -285,10 +344,11 @@ def diagnose_agent_default_value(diagnostics: list[JsonDiagnostic], path: str, v
     spec.diagnose(diagnostics, path, value)
 
 
-def normalize_agent_default_value(field: str, value: Any) -> str | list[str] | float | None:
+def normalize_agent_default_value(field: str, value: Any) -> AgentDefaultValue:
     """Validate and normalize a single ``defaults.agent`` field value for storage.
 
-    Raises ``StorageError`` on a bad value; ``None`` passes through unchanged.
+    Raises ``StorageError`` on a bad value; ``None`` passes through unchanged, and a
+    value that sets nothing (an empty ``tool_loading``) becomes ``None``.
     Centralizes the storage-layer messages so no caller re-implements them.
     """
     if value is None:
@@ -336,6 +396,7 @@ class AgentDefaults:
     temperature: float | None = None
     top_p: float | None = None
     thinking_effort: str | None = None
+    tool_loading: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any] | None) -> AgentDefaults:
@@ -343,12 +404,14 @@ class AgentDefaults:
         if not data:
             return cls()
         fallback_models = data.get("fallback_models")
+        tool_loading = data.get("tool_loading")
         return cls(
             model=data.get("model"),
             fallback_models=list(fallback_models) if fallback_models is not None else None,
             temperature=data.get("temperature"),
             top_p=data.get("top_p"),
             thinking_effort=data.get("thinking_effort"),
+            tool_loading=copy.deepcopy(dict(tool_loading)) if tool_loading is not None else None,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -364,6 +427,8 @@ class AgentDefaults:
             result["top_p"] = self.top_p
         if self.thinking_effort is not None:
             result["thinking_effort"] = self.thinking_effort
+        if self.tool_loading is not None:
+            result["tool_loading"] = copy.deepcopy(self.tool_loading)
         return result
 
 
@@ -374,12 +439,14 @@ def bake_agent_defaults(
     temperature: float | None,
     top_p: float | None,
     thinking_effort: str | None,
+    tool_loading: Mapping[str, Any] | None,
     defaults: AgentDefaults,
 ) -> dict[str, Any]:
     """Compute the fields changed by baking global defaults into one agent.
 
     Mirrors the resolver's identity-branch provenance exactly: a default applies
-    only when the agent's own value is empty/absent. Every applied value passes
+    only when the agent's own value is empty/absent, and ``tool_loading`` fills in each
+    part (``on_demand``, ``always_loaded``) the agent does not set. Every applied value passes
     through the field's storage normalizer first, so a stale or hand-edited
     settings file cannot bake an invalid chain, range, or enum into agents.
     Returns the changed fields; an empty dict means nothing changed. Shared by
@@ -397,4 +464,11 @@ def bake_agent_defaults(
         changes["top_p"] = _normalize_top_p(defaults.top_p)
     if thinking_effort is None and defaults.thinking_effort is not None:
         changes["thinking_effort"] = _normalize_thinking_effort(defaults.thinking_effort)
+    if defaults.tool_loading is not None:
+        from core.tools.tool_loading import inherit_tool_loading
+
+        default_tool_loading = _normalize_tool_loading(defaults.tool_loading)
+        inherited = inherit_tool_loading(tool_loading, default_tool_loading)
+        if inherited != tool_loading:
+            changes["tool_loading"] = inherited
     return changes

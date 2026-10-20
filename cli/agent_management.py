@@ -332,6 +332,7 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         f"librarian_enabled: {_bool_text(agent.get('librarian_enabled'))}",
         f"tool_access: {_json_text(agent.get('tool_access'))}",
         f"tool_loading: {_json_text(agent.get('tool_loading'))}",
+        f"tool_loading_own: {_json_text(_own_config(agent).get('tool_loading'))}",
         f"allowed_skills: {_format_string_list(agent.get('allowed_skills'))}",
         f"current_session_id: {_string_or_default(agent.get('current_session_id'), '-')}",
         f"context_window: {_value_text(agent.get('context_window'))}",
@@ -404,6 +405,11 @@ def _subagent_allowed_agents(value: object) -> str:
     if not isinstance(subagent, dict):
         return "-"
     return _format_string_list(subagent.get("allowed_agents"))
+
+
+def _own_config(agent: Mapping[str, Any]) -> Mapping[str, Any]:
+    config = agent.get("config")
+    return config if isinstance(config, dict) else {}
 
 
 def _json_text(value: object) -> str:

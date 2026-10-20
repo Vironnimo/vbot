@@ -367,6 +367,23 @@ def test_tool_loading_override_reaches_the_config_agent_until_cleared(
     assert resolver.resolve_agent("vbot", "builder").tool_loading is None
 
 
+def test_tool_loading_override_inherits_each_part_it_does_not_set(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    default = {"on_demand": True, "always_loaded": ["read"]}
+    resolver = _resolver(agents, projects, _openai_configured(), global_tool_loading=default)
+
+    inherited = resolver.resolve_agent("vbot", "builder").tool_loading
+    projects.set_override("vbot", "builder", "tool_loading", {"on_demand": False})
+    switched_off = resolver.resolve_agent("vbot", "builder").tool_loading
+
+    assert inherited == default
+    assert switched_off == {"on_demand": False, "always_loaded": ["read"]}
+    assert resolver.inherited_tool_loading() == default
+
+
 @pytest.mark.parametrize(
     ("mode", "granted_access", "usable"),
     [

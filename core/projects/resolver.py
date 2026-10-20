@@ -64,6 +64,7 @@ from core.projects.projects import ProjectError, ProjectNotFoundError
 from core.projects.sources import AgentAdapter, AgentProfile, ScanResult
 from core.sessions import AGENT_DEFAULT_PROJECT
 from core.settings import AgentDefaults
+from core.tools.tool_loading import complete_tool_loading, inherit_tool_loading
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -691,7 +692,10 @@ class AgentResolver:
             project.overrides.get(agent_id, {}).get("compaction_policy"),
             project_id=project_id,
             resolved_top_p=resolved_top_p,
-            tool_loading=project.overrides.get(agent_id, {}).get("tool_loading"),
+            tool_loading=inherit_tool_loading(
+                project.overrides.get(agent_id, {}).get("tool_loading"),
+                global_defaults.tool_loading,
+            ),
         )
         return replace(
             result,
@@ -739,6 +743,17 @@ class AgentResolver:
                 if name in effective:
                     effective[name] = {"value": value, "source": "session"}
         return effective
+
+    def inherited_tool_loading(self) -> dict[str, Any]:
+        """Return the On-demand Tools setting an Agent runs with where it sets no part itself.
+
+        Both parts complete: the global default ``defaults.agent.tool_loading``, switched
+        off and with the built-in always-loaded Tools where it sets nothing. Identity and
+        Project Agents inherit the same value; editors show it as the default.
+        """
+        return complete_tool_loading(
+            AgentDefaults.from_dict(self._global_agent_defaults()).tool_loading
+        )
 
     def effective_tools_for_member(self, project: Project, member: AgentProfile) -> dict[str, Any]:
         """Project repository-owned Tool settings for one current Team member."""

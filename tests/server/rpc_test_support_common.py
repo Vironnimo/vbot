@@ -40,6 +40,7 @@ from core.projects.resolver import (
 from core.sessions import SessionAddress
 from core.settings import AgentDefaults, bake_agent_defaults
 from core.tools.availability import ToolAccess
+from core.tools.tool_loading import complete_tool_loading
 from server.rpc import (
     model_methods,
 )
@@ -166,6 +167,7 @@ class StubAgents:
             temperature=agent.temperature,
             top_p=agent.top_p,
             thinking_effort=agent.thinking_effort,
+            tool_loading=getattr(agent, "tool_loading", None),
             defaults=defaults,
         )
         if not changes:
@@ -483,6 +485,13 @@ class StubAgentResolver:
 
     async def session_working_project_async(self, address: SessionAddress) -> str | None:
         return await self._overrides.session_working_project_async(address)
+
+    def inherited_tool_loading(self) -> dict[str, Any]:
+        """The shared On-demand Tools default, both parts complete, as the real resolver."""
+        defaults = (
+            self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
+        )
+        return complete_tool_loading(defaults.get("tool_loading"))
 
     def effective_config(
         self, project_id: str | None, agent_id: str, *, session_id: str | None = None
