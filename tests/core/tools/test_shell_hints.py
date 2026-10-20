@@ -474,6 +474,13 @@ def test_bash_habits_in_powershell_name_the_powershell_form(
         # head and tail point to the untrimmed output, not to a trim stage.
         ("git log | head -n 5", "head", "Run the command without it", _NOT_RECOGNIZED),
         ("tail -n 20 app.log", "tail", "`Get-Content path -Tail 20`", _NOT_RECOGNIZED),
+        # A missing later stage skipped the stages before it.
+        (
+            "node -e 1 && node t.js 2>&1 | Sort-Object | tail -5; npm test | tail -1",
+            "tail",
+            "so `node t.js 2>&1 | Sort-Object` and `npm test` did not run.",
+            _NOT_RECOGNIZED,
+        ),
         ("wc -l notes.txt", "wc", "`(Get-Content path).Count`", _NOT_RECOGNIZED),
         # A description sent as the command; a missing program keeps its own hint.
         (
@@ -1186,7 +1193,7 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
         (
             "python check.py 2>&1 | grep FAIL; Write-Output done",
             f"{_NOT_RECOGNIZED.format(name='grep')}\ndone",
-            ("Select-String", "`grep`", "code 0"),
+            ("Select-String", "`python check.py 2>&1` did not run", "code 0"),
         ),
         # A program called by its quoted path.
         (

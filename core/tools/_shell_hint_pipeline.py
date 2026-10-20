@@ -327,12 +327,12 @@ def _hint_hidden_failure(
     window = _scan_window(output)
     missing = _POWERSHELL_NOT_RECOGNIZED.search(window)
     if missing is not None and _calls(command, missing[1]):
-        hint = _hint_powershell_command_not_found(_Failure(command, window, None, offers))
+        # The hint names the statement or the pipeline part that did not run.
+        hint = _hint_powershell_command_not_found(
+            _Failure(command, window, None, offers), exit_zero=True
+        )
         if hint is not None:
-            return (
-                f"{hint} The statement with `{missing[1]}` did not run, although the command "
-                "exited with code 0."
-            )
+            return hint
     if _DEV_NULL.search(command) and _DEV_NULL_RESOLVED.search(window):
         return (
             f"{_DEV_NULL_HINT} The statement with /dev/null did not run, although the command "

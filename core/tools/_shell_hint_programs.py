@@ -8,7 +8,12 @@ from collections.abc import Callable
 from core.utils.edit_distance import edit_distance
 
 from . import _shell_hint_common as _common
-from ._shell_hint_code import _POWERSHELL_NOT_RECOGNIZED, _powershell_code, _quoted_in
+from ._shell_hint_code import (
+    _POWERSHELL_NOT_RECOGNIZED,
+    _powershell_code,
+    _quoted_in,
+    _skipped_before,
+)
 from ._shell_hint_common import (
     _BASH_SYNTAX_HINT,
     _READ_TOOL,
@@ -197,13 +202,38 @@ def _cmdlet_spelling_in_command(command: str, missing: str) -> str | None:
     return next(iter(candidates.values())) if len(candidates) == 1 else None
 
 
-def _hint_powershell_command_not_found(failure: _Failure) -> str | None:
+def _hint_powershell_command_not_found(failure: _Failure, *, exit_zero: bool = False) -> str | None:
+    """The hint for a term PowerShell did not recognize, and what it did not run.
+
+    A missing later stage of a pipeline skipped the stages before it: Agents
+    read the missing output of ``node t.js 2>&1 | tail -5`` as the program's
+    and repeated the call. *exit_zero*: the command exited with code 0, which
+    the hint then says did not show the failure.
+    """
     # pwsh reports "The term 'X' is not recognized as a name of a cmdlet, function,
     # script file, or executable program."
     match = _POWERSHELL_NOT_RECOGNIZED.search(failure.output)
     if not match:
         return None
     missing = match.group(1)
+    hint = _not_recognized_hint(failure, missing)
+    if hint is None:
+        return None
+    zero = ", although the command exited with code 0" if exit_zero else ""
+    skipped = _skipped_before(failure.command, missing)
+    if skipped:
+        parts = [f"`{part}`" for part in skipped]
+        listed = parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"
+        return (
+            f"{hint} PowerShell runs no part of a pipeline with a command it cannot find, so "
+            f"{listed} did not run{zero}."
+        )
+    if exit_zero:
+        return f"{hint} The statement with `{missing}` did not run{zero}."
+    return hint
+
+
+def _not_recognized_hint(failure: _Failure, missing: str) -> str | None:
     described = _description_as_command(failure, missing)
     if described is not None:
         return described
