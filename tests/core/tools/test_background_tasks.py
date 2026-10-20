@@ -345,6 +345,12 @@ async def test_status_shows_a_running_command_with_its_newest_output(
     again = [data(await tasks.call({"action": "status", "id": command_id})) for _ in range(2)]
     assert "2 times" not in again[0]["next"]
     assert ("3 times" in again[1]["next"]) is own
+    # Output that stopped arriving 5 minutes ago or more is named, so a stuck
+    # command does not read as one making progress.
+    assert "no new output" not in again[1]["next"]
+    await tasks.commands.advance(300, step=60)
+    silent = data(await tasks.call({"action": "status", "id": command_id}))
+    assert "keeps running. It has printed no new output for 5 minutes." in silent["next"]
 
 
 @pytest.mark.parametrize("owner", [OWNER, CHILD], ids=["own", "subagent"])

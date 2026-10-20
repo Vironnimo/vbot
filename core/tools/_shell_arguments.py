@@ -661,24 +661,30 @@ def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore
         # missing one, so the manager reports the actual filesystem failure.
         return workdir
     if not directory:
-        raise _call_error(_missing_workdir(workdir, given=bool(raw)))
+        raise _call_error(_missing_workdir(workdir, given=bool(raw), cwd=context.effective_cwd))
     return workdir
 
 
-def _missing_workdir(workdir: Path, *, given: bool) -> str:
-    """The failure for a missing directory; *given* when the call named it as workdir."""
+def _missing_workdir(workdir: Path, *, given: bool, cwd: Path) -> str:
+    """The failure for a missing directory; *given* when the call named it as
+    workdir, *cwd* the working directory a call without workdir uses.
+
+    Its path lets the Agent pass a path relative to it: Agents guessed an
+    absolute path, then ran the command without workdir in the wrong directory.
+    """
     if not given:
         return (
             f"the working directory {model_path(workdir)} is not an existing directory. Pass an "
             "existing directory as workdir."
         )
+    fallback = f"omit workdir to use the working directory {model_path(cwd)}."
     if workdir.exists():
         return (
             f"workdir {model_path(workdir)} is a file, not a directory. Pass the directory it "
-            "is in, or omit workdir to use the working directory."
+            f"is in, or {fallback}"
         )
     message = f"workdir {model_path(workdir)} is not an existing directory."
     nearby = similar_entries(workdir, kind="dirs")
     if nearby:
         message += f" Similar directories: {', '.join(model_path(path) for path in nearby)}."
-    return f"{message} Pass an existing directory, or omit workdir to use the working directory."
+    return f"{message} Pass an existing directory, or {fallback}"

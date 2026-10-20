@@ -265,3 +265,37 @@ def _calls(command: str, name: str) -> bool:
 
 # A word of the command, between blanks, quotes, parentheses and separators.
 _COMMAND_WORD = re.compile(r"[^\s'\"(),;|&]++")
+
+
+_LATER_STAGE = re.compile(r"(?<!\|)\|(?!\|)")
+_SKIPPED_SHOWN_CHARS = 60
+
+
+def _skipped_before(command: str, name: str) -> list[str]:
+    """What PowerShell did not run because *name*, a later stage, was not found.
+
+    PowerShell resolves every command of a pipeline before it starts one, so a
+    stage it cannot find skips the stages before it too: ``node t.js | tail -5``
+    runs no node. Each pipeline's part before that stage, as written within 60
+    characters, for at most three pipelines; a part with an open bracket is left
+    out, since its start is unclear.
+    """
+    flat = _powershell_code(command).flat
+    starts = [0, *(match.end() for match in _PIPELINE_START.finditer(flat))]
+    found: list[str] = []
+    for pipe in _LATER_STAGE.finditer(flat):
+        stage = _PIPELINE_PROGRAM.match(flat, pipe.end())
+        if stage is None or command[stage.start(1) : stage.end(1)].strip("'\"") != name:
+            continue
+        start = starts[bisect.bisect_right(starts, pipe.start()) - 1]
+        part = flat[start : pipe.start()]
+        if not part.strip() or any(part.count(o) != part.count(c) for o, c in ("()", "{}", "[]")):
+            continue
+        text = " ".join(command[start : pipe.start()].split())
+        if len(text) > _SKIPPED_SHOWN_CHARS:
+            text = text[: _SKIPPED_SHOWN_CHARS - 3] + "..."
+        if text not in found:
+            found.append(text)
+        if len(found) == 3:
+            break
+    return found

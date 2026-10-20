@@ -8,7 +8,12 @@ from collections.abc import Callable
 from core.utils.edit_distance import edit_distance
 
 from . import _shell_hint_common as _common
-from ._shell_hint_code import _POWERSHELL_NOT_RECOGNIZED, _powershell_code, _quoted_in
+from ._shell_hint_code import (
+    _POWERSHELL_NOT_RECOGNIZED,
+    _powershell_code,
+    _quoted_in,
+    _skipped_before,
+)
 from ._shell_hint_common import (
     _BASH_SYNTAX_HINT,
     _READ_TOOL,
@@ -18,10 +23,11 @@ from ._shell_hint_common import (
 )
 
 # A title in place of a command: one line of at least three plain words that
-# starts with a capitalized word, such as "Check shell files compile and behave".
-# Programs are rarely capitalized; a cmdlet's hyphen, a flag or a file's dot ends
-# the match.
-_PROSE = re.compile(r"[A-Z][a-z]*(?:[ \t]+[^\W_][\w'’-]*){2,}\.?")
+# starts with a capitalized word in any language, such as "Check shell files
+# compile and behave"; the first word can end in a hyphen, as German "Quell- und
+# ..." does. Programs are rarely capitalized; a cmdlet's hyphen, a flag or a
+# file's dot ends the match.
+_PROSE = re.compile(r"([^\W\d_]+)-?(?:[ \t]+[^\W_][\w'’-]*){2,}\.?")
 
 
 def _description_as_command(failure: _Failure, missing: str) -> str | None:
@@ -33,7 +39,11 @@ def _description_as_command(failure: _Failure, missing: str) -> str | None:
     a short command into description.
     """
     command = failure.command.strip()
-    if not _PROSE.fullmatch(command) or command.split(maxsplit=1)[0] != missing:
+    prose = _PROSE.fullmatch(command)
+    if prose is None or command.split(maxsplit=1)[0] != missing:
+        return None
+    first = prose[1]
+    if not first[0].isupper() or not (first[1:].islower() or len(first) == 1):
         return None
     return (
         f"command holds a description, not a command, so its first word `{missing}` was run "
@@ -192,13 +202,38 @@ def _cmdlet_spelling_in_command(command: str, missing: str) -> str | None:
     return next(iter(candidates.values())) if len(candidates) == 1 else None
 
 
-def _hint_powershell_command_not_found(failure: _Failure) -> str | None:
+def _hint_powershell_command_not_found(failure: _Failure, *, exit_zero: bool = False) -> str | None:
+    """The hint for a term PowerShell did not recognize, and what it did not run.
+
+    A missing later stage of a pipeline skipped the stages before it: Agents
+    read the missing output of ``node t.js 2>&1 | tail -5`` as the program's
+    and repeated the call. *exit_zero*: the command exited with code 0, which
+    the hint then says did not show the failure.
+    """
     # pwsh reports "The term 'X' is not recognized as a name of a cmdlet, function,
     # script file, or executable program."
     match = _POWERSHELL_NOT_RECOGNIZED.search(failure.output)
     if not match:
         return None
     missing = match.group(1)
+    hint = _not_recognized_hint(failure, missing)
+    if hint is None:
+        return None
+    zero = ", although the command exited with code 0" if exit_zero else ""
+    skipped = _skipped_before(failure.command, missing)
+    if skipped:
+        parts = [f"`{part}`" for part in skipped]
+        listed = parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"
+        return (
+            f"{hint} PowerShell runs no part of a pipeline with a command it cannot find, so "
+            f"{listed} did not run{zero}."
+        )
+    if exit_zero:
+        return f"{hint} The statement with `{missing}` did not run{zero}."
+    return hint
+
+
+def _not_recognized_hint(failure: _Failure, missing: str) -> str | None:
     described = _description_as_command(failure, missing)
     if described is not None:
         return described
@@ -218,6 +253,10 @@ def _hint_powershell_command_not_found(failure: _Failure) -> str | None:
             f"`{missing}` was not found. Did you mean `{spelling}`, "
             "which also appears as a command in your script?"
         )
+    if re.search(r"\s|\$\(", missing) or missing.startswith("\\"):
+        # Text PowerShell ran as a command, such as a string that lost its
+        # quotes: no program to install.
+        return None
     return (
         f"`{missing}` is not installed or not on PATH. Check with `Get-Command {missing}`; "
         "install it or run it by its absolute path instead of retrying the same command."

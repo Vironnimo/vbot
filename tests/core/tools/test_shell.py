@@ -299,6 +299,12 @@ def note(content: str) -> Any:
             128,
             ["git.exe exited with code 128", "python.exe exited with code 128"],
         ),
+        # A program that failed before the last statement: the exit code is not its.
+        (
+            (ProgramExit("node.exe", 1, "tests/check.js"),),
+            0,
+            ["node.exe exited with code 1 (tests/check.js)"],
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -320,6 +326,8 @@ async def test_ended_command_reports_output_exit_code_failed_programs_and_enviro
         expected["exit_code_hex"] = "0xC0000005"
     if failed_programs is not None:
         expected["failed_programs"] = failed_programs
+    if exit_code == 0 and failed_programs:
+        assert "last statement" in result.pop("hint")
     assert result == expected
     if exit_code == 0xC0000005:
         shown = shell_detail_blocks({"command": "build --all"}, tool_success(result))
@@ -573,6 +581,11 @@ async def test_a_command_still_running_when_the_wait_passes_continues_and_delive
     log_file(result["next"])
     # Only a silent command whose processes are idle on Windows may wait for the console.
     assert ("console input" in result["next"]) is (run == "silent-idle")
+    # Output that stopped arriving 5 minutes ago or more is named, so the wait does
+    # not read as progress.
+    assert ("It has printed no new output for 10 minutes." in result["next"]) is (
+        wait == SHELL_MAX_WAIT_SECONDS
+    )
     assert (queries == 0) is run.endswith("posix")
     # Nothing stops a command for taking long: it is listed and keeps running.
     await shell.commands.advance(3 * SHELL_MAX_WAIT_SECONDS, step=30)
@@ -984,15 +997,16 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
         [SHELL_TOOL_NAME],
     )
 
+    # The working directory's path, so a path relative to it can be passed.
     assert missing["error"]["message"] == (
         f"{SHELL_MODEL_NAME} was not run: workdir {model_path(tmp_path / 'nope')} is not "
         "an existing directory. Pass an existing directory, or omit workdir to use the working "
-        "directory."
+        f"directory {model_path(tmp_path)}."
     )
     assert a_file["error"]["message"] == (
         f"{SHELL_MODEL_NAME} was not run: workdir {model_path(tmp_path / 'notes.txt')} is "
         "a file, not a directory. Pass the directory it is in, or omit workdir to use the "
-        "working directory."
+        f"working directory {model_path(tmp_path)}."
     )
     # Omitting workdir cannot help when the working directory itself is missing.
     assert missing_cwd["error"]["message"] == (
@@ -1333,6 +1347,7 @@ def test_definition_states_the_host_shell_and_its_detached_start() -> None:
     ("culture", "named"),
     [
         (PowerShellCulture("de-DE", "3,14", "13.10.2026"), True),
+        (PowerShellCulture("en-GB", "3.14", "13/10/2026"), True),
         # The formats Models assume, and a culture vBot could not read, go unnamed.
         (PowerShellCulture("en-US", "3.14", "10/13/2026"), False),
         (PowerShellCulture("", "3.14", "10/13/2026"), False),
@@ -1349,6 +1364,8 @@ def test_the_definition_names_the_users_number_and_date_format(
     if culture is not None and named:
         for text in (culture.name, culture.number, culture.date):
             assert text in sentence
+        # Only a decimal comma needs the invariant way to write data.
+        assert ("InvariantCulture" in sentence) is (culture.number != "3.14")
     assert shell_definition._culture_sentence(powershell_culture()) in SHELL_TOOL_DESCRIPTION
 
 

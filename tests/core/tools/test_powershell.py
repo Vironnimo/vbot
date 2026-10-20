@@ -293,13 +293,16 @@ _PRINTED_ERROR_TEXT = "; ".join(
         # #requires keeps its meaning at the start of the command.
         ("#requires -Version 7\n'requires-sentinel'", 0, ("requires-sentinel",)),
         # PowerShell's messages are English whatever the display language; numbers
-        # and dates keep the user's own regional format, the one vBot read.
+        # and dates keep the user's own regional format, the one vBot read. -f
+        # writes it too, string expansion the invariant 3.14 (the definition says so).
         (
             "(Get-UICulture).Name\n(Get-Culture).Name\n3.14\n"
-            "[datetime]::new(2026, 10, 13).ToString('d')\nGet-Item does-not-exist",
+            "[datetime]::new(2026, 10, 13).ToString('d')\n'{0}' -f 3.14\n\"$(3.14)\"\n"
+            "Get-Item does-not-exist",
             1,
             (
-                f"en-US\n{_CULTURE.name}\n{_CULTURE.number}\n{_CULTURE.date}\n",
+                f"en-US\n{_CULTURE.name}\n{_CULTURE.number}\n{_CULTURE.date}\n"
+                f"{_CULTURE.number}\n3.14\n",
                 "Cannot find path",
                 "does-not-exist",
             ),

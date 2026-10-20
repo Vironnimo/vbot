@@ -53,6 +53,7 @@ from core.tools._shell_results import (
     processes_text,
     running_output_note,
     running_output_text,
+    silence_note,
     stop_call,
 )
 from core.tools._tool_display import display_notice, display_results, display_text
@@ -359,7 +360,7 @@ class BackgroundTasksTool:
             delivery = f"Its result goes to the Sub-Agent {subagent}."
         data["next"] = (
             f"The command has run for {duration(report.elapsed_seconds)} and keeps running."
-            f"{running_output_note(report)} {delivery} Stop it with "
+            f"{silence_note(report)}{running_output_note(report)} {delivery} Stop it with "
             f"{stop_call(report.command_id)} if you no longer need it."
         )
         return data

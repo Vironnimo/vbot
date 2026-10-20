@@ -129,6 +129,31 @@ def duration(seconds: float) -> str:
     return " ".join(parts)
 
 
+# A running command silent this long says so: a command stuck after its last
+# line read like one making progress, and Agents checked it again and again
+# (Swarm run 2026-10-20). Builds and test runs print at least every few
+# minutes; a server or watcher is quiet by nature, which the fact alone leaves
+# to the Agent's judgment.
+COMMAND_SILENCE_NOTED_SECONDS = 300.0
+
+
+def silence_note(report: CommandReport) -> str:
+    """How long a running command has printed nothing, as a sentence after a
+    space, from ``COMMAND_SILENCE_NOTED_SECONDS`` on; empty before, after the end
+    and behind a stage that holds the output, which explains the silence."""
+    silent = report.silent_seconds
+    if (
+        report.ended
+        or silent < COMMAND_SILENCE_NOTED_SECONDS
+        or holding_stage(report.command) is not None
+    ):
+        return ""
+    minutes = int(silent // 60)
+    if report.transcript.total_lines:
+        return f" It has printed no new output for {minutes} minutes."
+    return f" It has printed nothing for {minutes} minutes."
+
+
 def running_output_note(report: CommandReport) -> str:
     """Where a running command's complete output is, and when output piped into a
     stage that holds it appears, as sentences after a space."""
@@ -397,7 +422,7 @@ def failure_hint(report: CommandReport, output: str, names: ToolNames) -> str | 
             "finished, so the stop lost that output; to see output as it arrives, run the "
             "command without that pipe."
         )
-    return annotate_failure(
+    hint = annotate_failure(
         report.command,
         report.exit_code,
         output,
@@ -406,6 +431,14 @@ def failure_hint(report: CommandReport, output: str, names: ToolNames) -> str | 
         failed_programs=report.failed_programs,
         output_lines=report.transcript.total_lines,
     )
+    if hint is None and report.exit_code == 0 and report.failed_programs:
+        # Agents read exit code 0 as success although a test script before
+        # the last statement had failed.
+        hint = (
+            "Exit code 0 comes from the last statement only: the failed programs exited with "
+            "an error before it, and the command went on after them."
+        )
+    return hint
 
 
 # Output
@@ -744,6 +777,7 @@ __all__ = [
     "processes_text",
     "running_output_note",
     "running_output_text",
+    "silence_note",
     "stop_with",
     "stopped_because",
 ]
@@ -799,7 +833,8 @@ def _start_failure(
         given = call.workdir != context.effective_cwd
         return tool_failure(
             "command_not_started",
-            f"{SHELL_MODEL_NAME} was not run: {_missing_workdir(call.workdir, given=given)}",
+            f"{SHELL_MODEL_NAME} was not run: "
+            f"{_missing_workdir(call.workdir, given=given, cwd=context.effective_cwd)}",
             retryable=False,
         )
     _LOGGER.warning("Starting a shell command failed", exc_info=error)

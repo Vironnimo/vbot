@@ -162,6 +162,10 @@ class CommandReport:
     not_run: NotRunReason | None = None
     # Why the log file misses output from some point on; None while it holds every byte.
     log_loss: LogLoss | None = None
+    # How long the command has written nothing: since its last output, or since
+    # its start when it wrote none, until it ended or the report was taken; 0
+    # for a command restored after a restart.
+    silent_seconds: float = 0.0
 
     @property
     def status(self) -> CommandStatus:
