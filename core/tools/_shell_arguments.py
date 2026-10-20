@@ -606,6 +606,7 @@ def _parse_call(
         notes.extend(no_effect_notes(no_effect, terminal=terminal_available))
 
     workdir = _workdir(context, arguments, projects)
+    context.record_worked_paths(workdir)
 
     granted = frozenset(bash_allowed_env_keys(context.tool_settings)) | frozenset(
         context.skill_env_keys

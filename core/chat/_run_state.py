@@ -28,6 +28,7 @@ from core.chat.recovery import RecoveryBudget
 from core.chat.usage import RequestContextUsage
 from core.chat.wire_shaping import RequestImageBudget
 from core.projects import (
+    FolderInstructions,
     resolve_prompt_project,
     resolve_skill_scope,
     runtime_agent_body,
@@ -331,6 +332,9 @@ class _RunExecutionContext:
     # The Session has an open goal, which grants ``update_goal`` for this Run.
     goal_session: bool = False
     request_state: _RequestState | None = None
+    # Finds the folder instruction files of the Working Project's subfolders;
+    # ``None`` without a Working Project or with its folder instructions off.
+    folder_instructions: FolderInstructions | None = None
     image_budget: RequestImageBudget = field(default_factory=RequestImageBudget)
     context_usage: RequestContextUsage = field(default_factory=RequestContextUsage)
     recovery: RecoveryBudget = field(default_factory=RecoveryBudget)
@@ -788,6 +792,11 @@ async def create_run_execution_context(
             )
         if temporary_cwd is not None:
             project_cwd = temporary_cwd
+        folder_instructions = (
+            await _CHAT_TRANSFORM_WORKERS.run(prompt_project.folder_instructions_finder)
+            if prompt_project is not None
+            else None
+        )
         project_prompt_context = (
             ProjectPromptContext.from_project(
                 prompt_project.project_id,
@@ -891,6 +900,7 @@ async def create_run_execution_context(
             session_snapshot=session_snapshot,
             subagent_session=subagent_session,
             goal_session=goal_session,
+            folder_instructions=folder_instructions,
             # The Session's newest measurement still anchors this Run's Context.
             context_usage=RequestContextUsage.resume(
                 session_snapshot.active_messages, dependencies.usage_recorder

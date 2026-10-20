@@ -82,6 +82,9 @@ ToolTurnEndHook = Callable[[str], None]
 # (tool_call_id, registry names) for the Tools a successful ``load_tools`` call
 # loaded; Chat records them with that call's Tool Result.
 ToolLoadHook = Callable[[str, Sequence[str]], None]
+# (tool_call_id, absolute paths) of the files and folders a call worked in;
+# Chat gives the Agent the folder instructions governing them.
+ToolWorkedPathsHook = Callable[[str, Sequence[Path]], None]
 # (tool_call_id, tool_name, payload) -> payload_id. Chat stages the payload and
 # persists it with this call's Tool Result in the same Session transaction.
 ToolResultPayloadHook = Callable[[str, str, Any], str]
@@ -171,6 +174,8 @@ class ToolContext:
     unloadable_tools: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
     tool_load_hook: ToolLoadHook | None = field(default=None, repr=False, compare=False)
     _loaded_tools: list[str] = field(default_factory=list, init=False, repr=False, compare=False)
+    worked_paths_hook: ToolWorkedPathsHook | None = field(default=None, repr=False, compare=False)
+    _worked_paths: list[Path] = field(default_factory=list, init=False, repr=False, compare=False)
     allowed_skills: Sequence[str] | None = None
     # Environment credentials made available by Skills active in this Session.
     # Bash combines these transient grants with the Agent's permanent Tool settings.
@@ -511,6 +516,20 @@ class ToolContext:
         """
         self._loaded_tools.extend(names)
 
+    def record_worked_paths(self, *paths: Path) -> None:
+        """Record absolute paths of files or folders this call read, changed or ran in.
+
+        Chat gives the Agent the folder instructions that govern them, with this
+        call's Tool Result. Recorded whatever the call's outcome; a worker thread
+        of the call can record too.
+        """
+        self._worked_paths.extend(paths)
+
+    def _commit_worked_paths(self) -> None:
+        """Hand the recorded paths to the batch owner once the call finished."""
+        if self._worked_paths and self.worked_paths_hook is not None:
+            self.worked_paths_hook(self.tool_call_id, tuple(self._worked_paths))
+
     def _commit_owned_effects(self) -> None:
         """Hand successful-call effects to the batch owner after validation."""
         if self.delivery_receipt_hook is not None:
@@ -601,6 +620,7 @@ class ToolExecutionConfig:
     # See ``ToolContext.unloadable_tools``.
     unloadable_tools: Collection[str] = frozenset()
     tool_load_registrar: ToolLoadHook | None = None
+    worked_paths_registrar: ToolWorkedPathsHook | None = None
     # Session-scoped file-content tracker for git-style change statistics.
     # ``None`` keeps direct/legacy execution groups without change tracking.
     change_tracker: ChangeTracker | None = field(

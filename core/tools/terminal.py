@@ -345,6 +345,7 @@ async def _handle_start(
             f"No terminal was started: workdir {model_path(workdir)} is not a directory. Pass "
             "an existing directory, or omit workdir to use the working directory."
         )
+    context.record_worked_paths(workdir)
     owner = _owner(context)
     if arguments.get("group") not in (None, ""):
         notes.append(

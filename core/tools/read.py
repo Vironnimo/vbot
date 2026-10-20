@@ -225,6 +225,7 @@ def make_read_handler(
             return tool_failure(
                 "file_not_found", missing_file_message(resolved, cwd, elsewhere=page)
             )
+        context.record_worked_paths(resolved)
         if stat.S_ISDIR(status.st_mode):
             if arguments.get("pattern") is not None:
                 return tool_failure(

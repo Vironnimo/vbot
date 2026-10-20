@@ -71,6 +71,8 @@ def _diagnostics(data: object) -> list[tuple[str, str, str]]:
                     {"id": "claude.skills", "enabled": True},
                 ],
                 "model_mappings": {},
+                "auto_instructions": False,
+                "folder_instructions": True,
                 # Registry membership is runtime state: a disabled Extension must not
                 # make its persisted Project unloadable.
                 "allowed_tools": ["read", "disabled_extension_tool"],
@@ -153,6 +155,11 @@ def test_validate_project_data_accepts_only_identity_cwd_and_tool_whitelist() ->
             {"auto_load": ["AGENTS.md", "  "]},
             [("error", "$.auto_load[1]", "must be a non-empty string")],
             id="empty-auto-load-entry",
+        ),
+        pytest.param(
+            {"folder_instructions": "off"},
+            [("error", "$.folder_instructions", "must be true or false")],
+            id="switch-not-a-bool",
         ),
         pytest.param(
             {"allowed_tools": "read"},

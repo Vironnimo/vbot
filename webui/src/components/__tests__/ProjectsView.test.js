@@ -502,7 +502,6 @@ describe('ProjectsView Project settings', () => {
         agent_paths: ['.claude/agents/*.md'],
       },
       { id: 'shared.skills', enabled: true },
-      { id: 'claude.instructions', enabled: false },
     ];
     const scan = cleanScan({
       sources: [
@@ -522,15 +521,6 @@ describe('ProjectsView Project settings', () => {
           paths: ['.agents/skills'],
           agents: 0,
           skills: 1,
-        },
-        {
-          id: 'claude.instructions',
-          ecosystem: 'claude',
-          kind: 'instructions',
-          detected: true,
-          paths: ['CLAUDE.md'],
-          agents: 0,
-          skills: 0,
         },
       ],
     });
@@ -552,9 +542,6 @@ describe('ProjectsView Project settings', () => {
     expect(
       section('project-section-skills').textContent.includes('.agents/skills'),
     ).toBe(true);
-    expect(
-      section('project-section-auto-load').textContent.includes('CLAUDE.md'),
-    ).toBe(true);
     toggleByAriaLabel('Toggle Claude Code').click();
     flushSync();
     expect(
@@ -566,7 +553,7 @@ describe('ProjectsView Project settings', () => {
     buttonByTestId('project-save-demo').click();
     await waitForCondition(() => setProjectMock.mock.calls.length === 1);
     expect(setProjectMock).toHaveBeenLastCalledWith('demo', {
-      sources: [{ ...sources[0], enabled: false }, sources[1], sources[2]],
+      sources: [{ ...sources[0], enabled: false }, sources[1]],
     });
     buttonWithTextContent('Include all detected definitions').click();
     flushSync();
@@ -576,11 +563,7 @@ describe('ProjectsView Project settings', () => {
     buttonByTestId('project-save-demo').click();
     await waitForCondition(() => setProjectMock.mock.calls.length === 2);
     expect(setProjectMock).toHaveBeenLastCalledWith('demo', {
-      sources: [
-        { id: 'claude.agents', enabled: false },
-        sources[1],
-        sources[2],
-      ],
+      sources: [{ id: 'claude.agents', enabled: false }, sources[1]],
     });
   });
 
@@ -908,6 +891,35 @@ describe('ProjectsView Project settings', () => {
 
 describe('ProjectsView auto-load files', () => {
   const view = setupProjectsViewSuite();
+
+  it('shows the main instruction file and missing additional files and saves the switches', async () => {
+    serveProject({
+      auto_load: ['NOTES.md'],
+      instruction_status: { main_file: 'CLAUDE.md', missing: ['NOTES.md'] },
+    });
+    view.mount();
+    await selectDemo();
+
+    const main = () =>
+      document.querySelector('[data-testid="project-main-instruction-file"]')
+        .textContent;
+    await waitForCondition(() => main().includes('CLAUDE.md'));
+    expect(main()).toContain('Loads CLAUDE.md');
+    expect(
+      document.querySelector('.projects-file-missing').textContent,
+    ).toContain('Not found');
+    toggleByAriaLabel('Load the main instruction file').click();
+    toggleByAriaLabel('Load folder instructions').click();
+    flushSync();
+    expect(main()).toContain('CLAUDE.md is not loaded');
+    buttonByTestId('project-save-demo').click();
+
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      auto_instructions: false,
+      folder_instructions: false,
+    });
+  });
 
   it('adds and removes auto-load files through the list and saves them', async () => {
     serveProject({ auto_load: ['AGENTS.md'] });

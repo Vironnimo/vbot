@@ -17,7 +17,6 @@ from core.projects.projects import (
     ProjectError,
     build_project,
     project_from_dict,
-    seed_default_auto_load,
 )
 from core.utils.timestamps import is_canonical_timestamp
 
@@ -68,6 +67,9 @@ def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path:
             {"id": "claude.skills", "enabled": True},
         ],
         "model_mappings": {},
+        # Both switches are written only when off.
+        "auto_instructions": False,
+        "folder_instructions": False,
         "auto_load": ["AGENTS.md"],
         "allowed_tools": ["read", "grep"],
         "skills_bundled_enabled": ["frontend-design"],
@@ -320,25 +322,6 @@ def test_override_fields_constant_contains_all_overridable_fields() -> None:
         )
         == OVERRIDE_FIELDS
     )
-
-
-@pytest.mark.parametrize(
-    ("auto_load", "seeded"),
-    [
-        (None, ["AGENTS.md"]),
-        (["CONTEXT.md"], ["AGENTS.md", "CONTEXT.md"]),
-        # An already-named AGENTS.md (any case) is not duplicated; the user's spelling
-        # and ordering survive untouched.
-        (["AGENTS.md", "CONTEXT.md"], ["AGENTS.md", "CONTEXT.md"]),
-        (["agents.md"], ["agents.md"]),
-        # A path-qualified agents.md is a different file.
-        (["docs/agents.md"], ["AGENTS.md", "docs/agents.md"]),
-    ],
-)
-def test_seed_default_auto_load_prepends_agents_file_once(
-    auto_load: list[str] | None, seeded: list[str]
-) -> None:
-    assert seed_default_auto_load(auto_load) == seeded
 
 
 def test_project_from_dict_defaults_optional_fields() -> None:

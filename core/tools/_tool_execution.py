@@ -151,6 +151,7 @@ class ToolExecutor:
                 loadable_tools=config.loadable_tools,
                 unloadable_tools=frozenset(config.unloadable_tools),
                 tool_load_hook=config.tool_load_registrar,
+                worked_paths_hook=config.worked_paths_registrar,
                 change_tracker=config.change_tracker,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)

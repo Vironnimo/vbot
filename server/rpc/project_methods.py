@@ -39,6 +39,7 @@ from core.archive import ArchiveSubjectInUseError
 from core.projects import (
     Project,
     cwd_exists,
+    main_instruction_file,
     normalize_cwd,
     project_tool_configurability_reason,
     slugify_project_id,
@@ -110,6 +111,8 @@ _ADD_FIELDS = frozenset(
         "sources",
         "model_mappings",
         "auto_load",
+        "auto_instructions",
+        "folder_instructions",
     }
 )
 _SET_MUTABLE_FIELDS = frozenset(
@@ -124,6 +127,8 @@ _SET_MUTABLE_FIELDS = frozenset(
         "sources",
         "model_mappings",
         "auto_load",
+        "auto_instructions",
+        "folder_instructions",
         "allowed_tools",
         "skills_bundled_enabled",
         "skills_global_enabled",
@@ -215,6 +220,8 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
         else None
     )
     auto_load = _optional_auto_load(params)
+    auto_instructions = _optional_bool(params, "auto_instructions", default=True)
+    folder_instructions = _optional_bool(params, "folder_instructions", default=True)
     resolved_display_name = display_name or _display_name_from_cwd(cwd)
     project_id = _slug_from_display_name(resolved_display_name)
 
@@ -231,6 +238,8 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
             sources=sources,
             model_mappings=model_mappings,
             auto_load=auto_load,
+            auto_instructions=auto_instructions,
+            folder_instructions=folder_instructions,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -752,6 +761,9 @@ def _set_changes(params: JsonObject) -> JsonObject:
         changes["model_mappings"] = params["model_mappings"]
     if "auto_load" in params:
         changes["auto_load"] = _optional_auto_load(params)
+    for switch in ("auto_instructions", "folder_instructions"):
+        if switch in params:
+            changes[switch] = _optional_bool(params, switch, default=True)
     # The Tool/Skill Whitelist fields are lists of non-empty strings; an explicit
     # empty list is a real value (e.g. every tool off), so presence in params — not
     # truthiness — decides whether the field changes.
@@ -911,13 +923,29 @@ def _project_response(project: Project) -> JsonObject:
         "default_top_p": project.default_top_p,
         "sources": [item.to_dict() for item in project.sources],
         "model_mappings": dict(project.model_mappings),
+        "auto_instructions": project.auto_instructions,
         "auto_load": list(project.auto_load),
+        "folder_instructions": project.folder_instructions,
+        "instruction_status": _instruction_status(project),
         "allowed_tools": list(project.allowed_tools),
         "skills_bundled_enabled": list(project.skills_bundled_enabled),
         "skills_global_enabled": list(project.skills_global_enabled),
         "skills_project_disabled": list(project.skills_project_disabled),
         "created_at": project.created_at,
         "updated_at": project.updated_at,
+    }
+
+
+def _instruction_status(project: Project) -> JsonObject:
+    """Which file is the main instruction file and which additional files are missing.
+
+    The main file is reported while automatic loading is off too, so the Projects
+    view can say what switching it on would load. Blocking.
+    """
+    root = Path(project.cwd)
+    return {
+        "main_file": main_instruction_file(root) if cwd_exists(project.cwd) else None,
+        "missing": [name for name in project.auto_load if not (root / name).is_file()],
     }
 
 

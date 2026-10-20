@@ -20,7 +20,13 @@ from core.chat import (
 from core.chat._run_state import RequestBuildInputs
 from core.database import write_bootstrap_marker
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
-from core.projects import AgentOverrides, AgentResolutionError, AgentResolver, ConfigAgent
+from core.projects import (
+    AgentOverrides,
+    AgentResolutionError,
+    AgentResolver,
+    ConfigAgent,
+    FolderInstructions,
+)
 from core.providers.accounts import ConnectionRef
 from core.runs import PROVIDER_REQUEST_STATUS_EVENT, ChatRunManager, Run
 from core.sessions import ChatSession, SessionAddress, SessionNotFoundError
@@ -193,10 +199,16 @@ class StubProject:
     cwd: str
     auto_load: list[str]
     display_name: str = ""
+    folder_instructions: bool = False
 
     @property
     def instruction_files(self) -> list[str]:
         return self.auto_load
+
+    def folder_instructions_finder(self) -> FolderInstructions | None:
+        if not self.folder_instructions:
+            return None
+        return FolderInstructions.for_project(Path(self.cwd), self.auto_load)
 
 
 class StubProjects:

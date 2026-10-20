@@ -151,6 +151,7 @@ class ToolRound:
             loadable_tools=context.loadable_tools,
             unloadable_tools=context.unloadable_tools,
             tool_load_registrar=context.record_tool_load,
+            worked_paths_registrar=context.record_worked_paths,
             change_tracker=context.change_tracker,
         )
         # Calls run in the context the round was opened in, never in the

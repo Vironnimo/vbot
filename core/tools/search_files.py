@@ -759,6 +759,7 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
                 f"Nothing was searched. Could not check {target}: {os_error_reason(error)}. "
                 "Check access to this path and retry.",
             )
+        context.record_worked_paths(*roots.paths)
         missing = _missing_warnings(query, roots, cwd, context.offers, arguments.get("args"))
         if not roots.paths:
             return tool_failure("path_not_found", _nothing_searched(missing, roots, query))

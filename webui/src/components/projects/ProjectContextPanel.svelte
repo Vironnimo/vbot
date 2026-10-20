@@ -6,18 +6,27 @@
   import SortableList from '../ui/SortableList.svelte';
   import PathField from '../ui/PathField.svelte';
   import { tooltip } from '$lib/tooltip.js';
-  import ProjectSourceList from './ProjectSourceList.svelte';
-  import { sourceKind } from '$lib/projectsView.js';
+  import Toggle from '../ui/Toggle.svelte';
   let { projectsState = $bindable(), projectsController } = $props();
 
-  // Auto-load files are picked inside the Project folder, relative to it.
+  // Additional files are picked inside the Project folder, relative to it.
   let projectRoot = $derived(projectsController.selectedProject()?.cwd ?? '');
-  // Instruction files of other tools join the auto-load files here.
-  let hasInstructionSources = $derived(
-    projectsState.editForm.sources.some(
-      (source) =>
-        sourceKind(source, projectsState.activeSources) === 'instructions',
-    ),
+  // What the server found when the Project was last loaded or saved.
+  let instructionStatus = $derived(
+    projectsController.selectedProject()?.instruction_status ?? {
+      main_file: null,
+      missing: [],
+    },
+  );
+  let mainFileSummary = $derived(
+    instructionStatus.main_file
+      ? t(
+          projectsState.editForm.auto_instructions
+            ? 'projects.instructions.mainLoaded'
+            : 'projects.instructions.mainFound',
+          { file: instructionStatus.main_file },
+        )
+      : t('projects.instructions.mainNone'),
   );
 
   function addAutoLoadEntry() {
@@ -60,6 +69,45 @@
       <InfoHint text={t('projects.detail.autoLoadInfo')} />
     </header>
     <div class="s-section__body">
+      <div class="s-group">
+        <div class="s-row s-row--compact">
+          <div class="s-row-info">
+            <div class="s-row-label">{t('projects.instructions.main')}</div>
+            <div class="s-row-desc" data-testid="project-main-instruction-file">
+              {mainFileSummary}
+            </div>
+          </div>
+          <div class="s-row-control">
+            <Toggle
+              checked={projectsState.editForm.auto_instructions}
+              ariaLabel={t('projects.instructions.main')}
+              onChange={(next) =>
+                projectsController.updateEditField('auto_instructions', next)}
+            />
+          </div>
+        </div>
+        <div class="s-row s-row--compact">
+          <div class="s-row-info">
+            <div class="s-row-label">{t('projects.instructions.folders')}</div>
+            <div class="s-row-desc">
+              {t('projects.instructions.foldersHelp')}
+            </div>
+          </div>
+          <div class="s-row-control">
+            <Toggle
+              checked={projectsState.editForm.folder_instructions}
+              ariaLabel={t('projects.instructions.folders')}
+              onChange={(next) =>
+                projectsController.updateEditField('folder_instructions', next)}
+            />
+          </div>
+        </div>
+      </div>
+      <div class="s-subhead">
+        <h4 class="s-subhead__title">
+          {t('projects.instructions.additional')}
+        </h4>
+      </div>
       <div class="s-group projects-auto-load">
         {#if projectsState.editForm.auto_load.length > 0}
           <SortableList
@@ -70,7 +118,7 @@
             getKey={(filePath) => filePath}
             getLabel={(filePath) => filePath}
             disabled={projectsState.editSaving}
-            aria-label={t('projects.detail.sectionAutoLoad')}
+            aria-label={t('projects.instructions.additional')}
             onReorder={(from, to) =>
               projectsController.moveAutoLoadEntry(from, to)}
           >
@@ -83,6 +131,11 @@
                   whenTruncated: true,
                 }}>{filePath}</span
               >
+              {#if instructionStatus.missing.includes(filePath)}
+                <span class="projects-file-missing"
+                  >{t('projects.instructions.missing')}</span
+                >
+              {/if}
               <button
                 type="button"
                 class="projects-file-remove"
@@ -125,21 +178,6 @@
           </Button>
         </div>
       </div>
-      {#if hasInstructionSources}
-        <div class="s-subhead">
-          <h4 class="s-subhead__title">
-            {t('projects.sources.instructionsTitle')}
-          </h4>
-        </div>
-        <p class="s-group__note projects-sources-help">
-          {t('projects.sources.instructionsHelp')}
-        </p>
-        <ProjectSourceList
-          {projectsState}
-          {projectsController}
-          kind="instructions"
-        />
-      {/if}
     </div>
   </section>
 </div>

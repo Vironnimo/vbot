@@ -244,3 +244,78 @@ async def test_persisted_project_load_restores_the_skill_scope_of_its_session_on
     assert [name for name, _body in _loaded_skills(runtime, "loaded")] == ["deploy"]
     assert ("vbot", "coder") in loaded_resolutions
     assert ("vbot", "coder") not in resolutions
+
+
+def _read_call(call_id: str, path: str) -> dict[str, Any]:
+    return {"id": call_id, "name": "read", "arguments": {"path": path}}
+
+
+@pytest.mark.asyncio
+async def test_tool_batch_in_a_subfolder_shows_its_folder_instructions_once(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "app" / "ui").mkdir(parents=True)
+    (repo / "AGENTS.md").write_text("Root rules", encoding="utf-8")
+    (repo / "app" / "AGENTS.md").write_text("App rules", encoding="utf-8")
+    (repo / "app" / "ui" / "AGENTS.md").write_text("UI rules", encoding="utf-8")
+
+    def read(context: ToolContext, arguments: ToolJsonObject) -> ToolJsonObject:
+        context.record_worked_paths(repo / str(arguments["path"]))
+        return tool_success({"content": "read"})
+
+    tools = ToolRegistry()
+    tools.register(
+        "read",
+        "Read a file.",
+        {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "additionalProperties": False,
+        },
+        read,
+    )
+    adapter = StubAdapter(
+        [
+            {"content": None, "tool_calls": [_read_call("call-one", "app/ui/x.py")]},
+            {"content": None, "tool_calls": [_read_call("call-two", "app/y.py")]},
+            {"content": "Done", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["read"]),
+        adapter=adapter,
+        tools=tools,
+        projects=StubProjects(
+            {
+                "vbot": StubProject(
+                    project_id="vbot",
+                    cwd=str(repo),
+                    auto_load=["AGENTS.md"],
+                    display_name="vBot",
+                    folder_instructions=True,
+                )
+            }
+        ),
+    )
+    runtime.chat_sessions.create("coder", session_id="s1", working_project_id="vbot")
+
+    await build_chat_loop(runtime).send("coder", "Work on the UI", session_id="s1")
+
+    # The notes follow the batch's Tool Result, outermost folder first.
+    after_first = adapter.requests[1]["messages"]
+    tool_index = next(i for i, m in enumerate(after_first) if m.get("role") == "tool")
+    reminder = str(after_first[tool_index + 1]["content"])
+    assert reminder.index("App rules") < reminder.index("UI rules")
+    assert "Folder instructions for `app/ui/` from `app/ui/AGENTS.md`." in reminder
+    # The second batch works in a folder already covered: nothing is repeated,
+    # and the System Prompt's own file never counts as folder instructions.
+    final_request = str(adapter.requests[2]["messages"])
+    assert final_request.count("App rules") == 1
+    assert final_request.count("UI rules") == 1
+    assert "Folder instructions for `.`" not in final_request
+    stored = runtime.chat_sessions.get(session_address("coder", "s1")).load()
+    assert sum(message.role == "note" for message in stored) == 2
+    # A shown file counts as read for the read-before-write guard.
+    assert runtime.file_read_state.check_stale("s1", (repo / "app" / "AGENTS.md").resolve()) is None

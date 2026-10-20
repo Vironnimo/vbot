@@ -66,6 +66,8 @@ def test_project_add_sends_every_option_and_previews_the_scan(
         "--sources", '[{"id":"claude.agents","enabled":true}]',
         "--model-mappings", '{"sonnet":"openai/gpt-5.2"}',
         "--auto-load", "AGENTS.md", "docs/guide.md",
+        "--auto-instructions", "off",
+        "--folder-instructions", "on",
         "--allowed-tools", "read", "bash",
         "--enabled-bundled-skills", "vbot-docs",
     )  # fmt: skip
@@ -84,6 +86,8 @@ def test_project_add_sends_every_option_and_previews_the_scan(
                 "sources": [{"id": "claude.agents", "enabled": True}],
                 "model_mappings": {"sonnet": "openai/gpt-5.2"},
                 "auto_load": ["AGENTS.md", "docs/guide.md"],
+                "auto_instructions": False,
+                "folder_instructions": True,
                 "allowed_tools": ["read", "bash"],
                 "skills_bundled_enabled": ["vbot-docs"],
             },
@@ -182,6 +186,20 @@ def test_project_list_prints_one_row_per_project(
             ("  default_temperature: 0.4", "  default_thinking_effort: high"),
             id="explicit-effort",
         ),
+        pytest.param(
+            {
+                "auto_instructions": True,
+                "folder_instructions": False,
+                "auto_load": ["NOTES.md"],
+                "instruction_status": {"main_file": "CLAUDE.md", "missing": ["NOTES.md"]},
+            },
+            (
+                "  auto_instructions: on (CLAUDE.md)",
+                "  folder_instructions: off",
+                "  auto_load_missing: NOTES.md",
+            ),
+            id="instruction-files",
+        ),
     ],
 )
 def test_project_show_renders_the_team_and_the_default_knobs(
@@ -246,6 +264,11 @@ def test_project_show_renders_the_team_and_the_default_knobs(
             },
             id="tool-and-skill-policy",
         ),
+        pytest.param(
+            ("--auto-instructions", "off", "--folder-instructions", "off"),
+            {"auto_instructions": False, "folder_instructions": False},
+            id="instruction-switches",
+        ),
     ],
 )  # fmt: skip
 def test_project_set_sends_the_requested_changes(
@@ -275,6 +298,8 @@ def test_project_set_without_changes_lists_every_option(rpc: FakeRpc, run_cli: R
         "--sources",
         "--model-mappings",
         "--auto-load",
+        "--auto-instructions",
+        "--folder-instructions",
         "--allowed-tools",
         "--enabled-bundled-skills",
         "--enabled-global-skills",

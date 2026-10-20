@@ -239,6 +239,7 @@ def _project_add_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
         fields["model_mappings"] = args.model_mappings
     if args.auto_load is not None:
         fields["auto_load"] = list(args.auto_load)
+    _apply_project_instruction_switches(args, fields)
     _apply_project_capability_fields(args, fields)
     return fields
 
@@ -264,8 +265,16 @@ def _project_set_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["model_mappings"] = args.model_mappings
     if args.auto_load is not None:
         changes["auto_load"] = list(args.auto_load)
+    _apply_project_instruction_switches(args, changes)
     _apply_project_capability_fields(args, changes)
     return changes
+
+
+def _apply_project_instruction_switches(args: argparse.Namespace, target: dict[str, Any]) -> None:
+    for switch in ("auto_instructions", "folder_instructions"):
+        value = getattr(args, switch, None)
+        if value is not None:
+            target[switch] = value == "on"
 
 
 def _apply_project_capability_fields(args: argparse.Namespace, target: dict[str, Any]) -> None:

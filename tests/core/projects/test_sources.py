@@ -379,24 +379,6 @@ def test_a_selected_unavailable_profile_never_uses_a_shadowed_definition(
     assert type(error.value) is AgentResolutionError
 
 
-@pytest.mark.parametrize(
-    ("files", "enabled"),
-    [(("AGENTS.md", "CLAUDE.md", "GEMINI.md"), set()), (("CLAUDE.md", "GEMINI.md"), {"claude"})],
-)
-def test_new_projects_load_at_most_one_instruction_file(projects, repo, files, enabled):
-    for name in files:
-        write(repo, name, "Instructions.")
-    sources = projects.create("repo", "Repo", repo).sources
-    assert {
-        source.id.removesuffix(".instructions")
-        for source in sources
-        if source.id.endswith(".instructions") and source.enabled
-    } == enabled
-    write(repo, ".github/copilot-instructions.md", "Instructions.")
-    refreshed = projects.refresh_sources("repo").sources
-    assert next(item for item in refreshed if item.id == "copilot.instructions").enabled is False
-
-
 # The old readers: Claude walked its agents folder, OpenCode read only its top level.
 @pytest.mark.parametrize(
     ("ecosystem", "legacy_team"), [("claude", ["new", "reviewer"]), ("opencode", ["reviewer"])]

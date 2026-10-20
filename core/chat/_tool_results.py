@@ -9,6 +9,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 from core.chat._boundaries import _finish_visible_boundary
+from core.chat._folder_instructions import folder_instruction_notes
 from core.chat._run_state import RequestState
 from core.chat._step_outcomes import (
     tool_result_facts,
@@ -57,10 +58,17 @@ class ToolResultPersistence:
 
         A ``load_tools`` call whose Result is persisted adds a silent ``loaded``
         note per Tool it loaded to the same transaction; returns those changes.
+        Runs while the Session defers its notes, so the folder instruction notes
+        of the batch join the deferred ones: stored with the Results and shown
+        with the next request.
         """
         run = context.run
         session = context.session
         loads = _tool_load_changes(context.request_state, tool_dispatch_context, tool_messages)
+        for note in await self._folder_instruction_notes(
+            context, tool_dispatch_context, tool_messages
+        ):
+            session.add_note_message(note)
         deferred_notes = session.take_deferred_notes()
         session.assistant_message_id = assistant_message_id
         batch_messages = [
@@ -124,6 +132,37 @@ class ToolResultPersistence:
             if context.project_id is None and loaded_project_id is not None:
                 await self._requests._apply_project_skill_context(context, loaded_project_id)
         return loads
+
+    async def _folder_instruction_notes(
+        self,
+        context: _RunExecutionContext,
+        tool_dispatch_context: ToolDispatchContext,
+        tool_messages: Sequence[ChatMessage],
+    ) -> list[ChatMessage]:
+        """Return the folder instruction notes for the paths the persisted calls worked in."""
+        finder = context.folder_instructions
+        if finder is None:
+            return []
+        persisted = {message.tool_call_id for message in tool_messages}
+        paths = [
+            path
+            for tool_call_id, call_paths in tool_dispatch_context.worked_paths
+            if tool_call_id in persisted
+            for path in call_paths
+        ]
+        if not paths:
+            return []
+        state = context.request_state
+        allowed = frozenset(state.allowed_tool_names if state is not None else ())
+        # A shown file counts as read, so the Agent can edit it without a ``read``.
+        return await _CHAT_TRANSFORM_WORKERS.run(
+            folder_instruction_notes,
+            finder,
+            paths,
+            context.session_snapshot.active_messages,
+            tool_available=allowed.__contains__,
+            on_read=partial(self._dependencies.file_read_state.record_read, context.run.session_id),
+        )
 
     async def _finish_tool_round(
         self,

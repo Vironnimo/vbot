@@ -69,8 +69,8 @@ def test_create_writes_the_anchor_with_seeded_defaults(data_dir: Path, repo: Pat
         "cwd": str(Path(os.path.realpath(repo))),
         "sources": [],
         "model_mappings": {},
-        # AGENTS.md loads with zero config, yet stays a removable entry.
-        "auto_load": ["AGENTS.md"],
+        # The main instruction file is found automatically; no file is listed.
+        "auto_load": [],
         # The base Tool Whitelist is the ceiling; Skill rule lists start empty.
         "allowed_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
         "skills_bundled_enabled": [],
@@ -105,8 +105,7 @@ def test_create_persists_explicit_fields(data_dir: Path, repo: Path) -> None:
         project.default_thinking_effort,
         [item.id for item in project.sources],
     ) == ("orchestrator", "openai/gpt-5", 0.4, "high", ["claude.agents", "claude.skills"])
-    # The caller's list keeps its order behind the seeded AGENTS.md.
-    assert project.auto_load == ["AGENTS.md", "docs/guide.md", "CONTEXT.md"]
+    assert project.auto_load == ["docs/guide.md", "CONTEXT.md"]
 
 
 def test_failed_create_removes_anchor_so_retry_succeeds(

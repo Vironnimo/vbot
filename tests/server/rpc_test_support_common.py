@@ -319,6 +319,9 @@ class StubProject:
     def instruction_files(self) -> list[str]:
         return list(self.auto_load)
 
+    def folder_instructions_finder(self) -> None:
+        return None
+
 
 class StubProjects:
     """``runtime.projects`` slice the prompt-preview path reads (cwd + auto-load)."""
