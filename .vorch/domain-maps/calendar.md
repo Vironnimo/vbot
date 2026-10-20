@@ -67,6 +67,7 @@ New event ids use `evt_` plus 12 lowercase base32 characters, with collision che
 - The `when` grammar is deliberately small; unknown expressions raise `CalendarValidationError` naming the grammar. A `start..end` range's end side is an inclusive day when given as a date.
 - A repeating event's moved occurrence can start far from its original start: expansion merges moved occurrences into the rule's stream (`_expansion.py`), so callers must use the service's expansion instead of the rule.
 - The WebUI's current day, Today navigation, default event date, and agenda window use `calendar.window.system_timezone`, never the browser zone or UTC; the event form, Agent jobs and navigation in the WebUI: `webui/design.md` -> Calendar.
+- Every WebUI view places an occurrence on all visible days it overlaps, with exclusive ends (all-day dates and timed midnight alike). Grouping clips to the visible window and follows calendar days across timezone transitions (`groupOccurrencesByDay`, `calendarView.test.js`).
 
 ## References
 

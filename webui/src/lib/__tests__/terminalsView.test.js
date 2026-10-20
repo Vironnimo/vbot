@@ -480,6 +480,33 @@ describe('terminal streams', () => {
 });
 
 describe('terminal input', () => {
+  it('sends a large Unicode paste whole in bounded messages, including its closing sequence', async () => {
+    const { streams, controller } = await startTerminals();
+    streams[0].emit(readyEvent('term-1', 1));
+    const paste =
+      '\u001b[200~' +
+      'x'.repeat(32761) +
+      '😀' +
+      'y'.repeat(70000) +
+      '\u001b[201~';
+    controller.queueInput(paste, { immediate: true });
+    expect(streams[0].sent.map((message) => message.data).join('')).toBe(paste);
+    expect(
+      streams[0].sent.every(
+        ({ data }) => data.length <= 32768 && data.isWellFormed(),
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses an oversized disconnected paste whole and reports it', async () => {
+    const { state, streams, controller } = await startTerminals();
+    controller.queueInput('kept');
+    controller.queueInput('x'.repeat(70000), { immediate: true });
+    expect(state.actionError).toBeTruthy();
+    streams[0].emit(readyEvent('term-1', 1));
+    expect(streams[0].sent).toEqual([{ type: 'input', data: 'kept' }]);
+  });
+
   it('batches input per exact terminal over its socket and keeps the previous buffer on focus switch', async () => {
     vi.useFakeTimers();
     const { streams, controller } = await startTerminals({

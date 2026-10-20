@@ -578,6 +578,10 @@ class SwarmExtension:
                 raise
 
     async def _drain_wakes(self, swarm_id: str) -> None:
+        async with self.management.control(swarm_id):
+            await self._drain_wakes_locked(swarm_id)
+
+    async def _drain_wakes_locked(self, swarm_id: str) -> None:
         """Coalesce changes before claiming the Store's durable wake work."""
 
         host = self.host
@@ -629,7 +633,7 @@ class SwarmExtension:
                         TemporaryRunInput(
                             "continuation",
                             "",
-                            f"wake:{swarm['epoch']}:{wake['participant_id']}:{wake['announced_sequence']}",
+                            f"wake:{swarm['epoch']}:{wake['participant_id']}:{claim['receipt_id']}",
                         ),
                     )
                     admitted = await self._store().mark_wake_admitted(
@@ -695,40 +699,45 @@ class SwarmExtension:
         )
         if swarm.get("replayed"):
             return swarm
-        snapshot = await self._store().get_swarm(swarm["swarm_id"])
-        group = host.temporary_agents
-        try:
-            for participant in snapshot["participants"]:
-                binding = await group.create(
-                    snapshot["id"],
-                    participant["id"],
-                    _participant_config(profile, participant, cwd),
-                    project_id=project_id,
+        async with self.management.control(swarm["swarm_id"]):
+            snapshot = await self._store().get_swarm(swarm["swarm_id"])
+            if snapshot["state"] != "preparing":
+                raise SwarmStoreError("swarm_closed")
+            group = host.temporary_agents
+            bindings: dict[str, TemporarySessionBinding] = {}
+            try:
+                for participant in snapshot["participants"]:
+                    binding = await group.create(
+                        snapshot["id"],
+                        participant["id"],
+                        _participant_config(profile, participant, cwd),
+                        project_id=project_id,
+                    )
+                    bindings[participant["id"]] = binding
+                    await self._store().bind_participant_session(binding)
+                handle = await group.open_group(snapshot["id"])
+                await self._store().bind_execution_epoch(
+                    snapshot["id"], expected_epoch=snapshot["epoch"], execution_epoch=handle.epoch
                 )
-                await self._store().bind_participant_session(binding)
-            handle = await group.open_group(snapshot["id"])
-            await self._store().bind_execution_epoch(
-                snapshot["id"], expected_epoch=snapshot["epoch"], execution_epoch=handle.epoch
+                await self._store().set_swarm_state(snapshot["id"], "running")
+                admissions = await self._admit_initial(snapshot, handle, request_id, bindings)
+            except BaseException:
+                await group.close_group(snapshot["id"])
+                await self._store().fail_startup(snapshot["id"], expected_epoch=snapshot["epoch"])
+                raise
+            self._changed("swarms", snapshot["id"], snapshot["settings_revision"])
+            result = await self._store().finish_admission(
+                snapshot["id"], request_id=request_id, kind="start", runs=admissions
             )
-            await self._store().set_swarm_state(snapshot["id"], "running")
-            admissions = await self._admit_initial(snapshot, handle, request_id)
-        except BaseException:
-            await group.close_group(snapshot["id"])
-            await self._store().fail_startup(snapshot["id"], expected_epoch=snapshot["epoch"])
-            raise
-        self._changed("swarms", snapshot["id"], snapshot["settings_revision"])
-        result = await self._store().finish_admission(
-            snapshot["id"], request_id=request_id, kind="start", runs=admissions
-        )
-        self._enqueue_title(snapshot["id"], prompt, snapshot["settings_revision"])
-        _LOGGER.info(
-            "Swarm started (swarm=%s profile=%s participants=%d runs=%d)",
-            snapshot["id"],
-            profile_id,
-            len(snapshot["participants"]),
-            len(admissions),
-        )
-        return result
+            self._enqueue_title(snapshot["id"], prompt, snapshot["settings_revision"])
+            _LOGGER.info(
+                "Swarm started (swarm=%s profile=%s participants=%d runs=%d)",
+                snapshot["id"],
+                profile_id,
+                len(snapshot["participants"]),
+                len(admissions),
+            )
+            return result
 
     async def _resume_swarm(
         self,
@@ -799,7 +808,7 @@ class SwarmExtension:
                 input = (
                     TemporaryRunInput(
                         "initial",
-                        _initial_message(snapshot),
+                        _initial_message(snapshot, binding),
                         request_id,
                     )
                     if initial is None
@@ -842,7 +851,13 @@ class SwarmExtension:
             swarm_id, request_id=request_id, kind="resume", runs=admissions
         )
 
-    async def _admit_initial(self, swarm: Json, handle: Any, request_id: str) -> list[Json]:
+    async def _admit_initial(
+        self,
+        swarm: Json,
+        handle: Any,
+        request_id: str,
+        bindings: dict[str, TemporarySessionBinding],
+    ) -> list[Json]:
         assert self.host is not None and self.host.temporary_agents is not None
         admissions: list[Json] = []
         for participant in swarm["participants"]:
@@ -851,7 +866,7 @@ class SwarmExtension:
                 participant["id"],
                 TemporaryRunInput(
                     "initial",
-                    _initial_message(swarm),
+                    _initial_message(swarm, bindings[participant["id"]]),
                     request_id,
                 ),
             )

@@ -17,6 +17,7 @@
     eventJobDueAt,
     eventJobs,
     groupByDay,
+    groupOccurrencesByDay,
     isDayKey,
     monthGridDays,
     monthLabel,
@@ -83,8 +84,10 @@
 
   let localByDay = $derived(
     viewState.showLocalLayer
-      ? groupByDay(viewState.occurrences, (occurrence) =>
-          dayKeyForOccurrence(occurrence, viewState.systemTimeZone),
+      ? groupOccurrencesByDay(
+          viewState.occurrences,
+          viewState.systemTimeZone,
+          windowForView(viewState.view, viewState.anchorKey),
         )
       : {},
   );

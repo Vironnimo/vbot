@@ -211,11 +211,11 @@ def _clamped_limit(arguments: Json, notes: list[str], maximum: int = 100, defaul
     return limit
 
 
-def _initial_message(swarm: Json) -> str:
+def _initial_message(swarm: Json, binding: TemporarySessionBinding) -> str:
     from ._store_values import post_ref
     from .agent_text import INITIAL_MESSAGE
 
-    denied = swarm["profile_snapshot"]["tool_access"].get("denied", [])
+    denied = binding.config["tool_access"].get("denied", [])
     if "swarm_board" not in denied:
         return INITIAL_MESSAGE.format(goal_post=post_ref(swarm["goal_post_sequence"]))
     guidance = (

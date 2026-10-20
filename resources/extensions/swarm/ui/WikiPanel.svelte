@@ -39,6 +39,7 @@
   let error = $state('');
   let titleError = $state('');
   let saving = $state(false);
+  let changingPage = $state(false);
   let history = $state.raw([]);
   let historyNext = $state.raw(null);
   let historyOpen = $state(false);
@@ -468,9 +469,16 @@
   }
   // Deletes the open page, or restores the shown revision as the newest.
   async function changePage(action) {
-    if (!selected) return;
+    if (!selected || changingPage) return;
     const page = selected;
-    saving = true;
+    const generation = readGeneration;
+    const stillReading = () =>
+      !disposed &&
+      active &&
+      !editing &&
+      selected?.page_id === page.page_id &&
+      generation === readGeneration;
+    changingPage = true;
     error = '';
     try {
       await call({
@@ -480,15 +488,20 @@
         ...(action === 'restore' ? { revision: page.revision } : {}),
         request_id: requestId(),
       });
-      await readPage(page.page_id);
-      if (historyOpen) await loadHistory();
+      if (stillReading()) {
+        const read = await readPage(page.page_id, undefined, {
+          background: true,
+        });
+        if (read && historyOpen) await loadHistory();
+        await tick();
+        if (read && active && !editing && selected?.page_id === page.page_id)
+          pageView?.focusTitle();
+      }
       await refresh({ keep: true });
-      await tick();
-      pageView?.focusTitle();
     } catch (cause) {
-      if (!disposed) error = failureText(cause);
+      if (stillReading()) error = failureText(cause);
     } finally {
-      saving = false;
+      changingPage = false;
     }
   }
   async function saveAndContinue() {
@@ -609,7 +622,7 @@
             {history}
             historyMore={Boolean(historyNext)}
             {historyOpen}
-            busy={saving}
+            busy={saving || changingPage}
             {now}
             {contentLinks}
             onEdit={startEdit}

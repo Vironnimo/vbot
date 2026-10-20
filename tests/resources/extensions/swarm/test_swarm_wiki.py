@@ -759,7 +759,35 @@ async def test_wiki_repeated_create_and_delete_change_nothing(board):
 
 
 @pytest.mark.asyncio
-async def test_wiki_expected_revision_is_needed_only_to_replace_a_peers_revision(board):
+async def test_wiki_legacy_content_requires_a_base_for_whole_replacement(board):
+    page_id = await create(board, "Legacy content")
+    saved = await stored(board, page_id)
+    (database,) = board.databases.open_databases()
+    # Additive schema evolution leaves existing revisions without provenance.
+    changed = await database.write_async(
+        lambda connection: (
+            connection.execute(
+                "UPDATE wiki_revisions SET replacement_author_id=NULL WHERE page_id=?",
+                (saved["page_id"],),
+            ).rowcount
+        )
+    )
+    assert changed == 1
+    assert (await invoke(board, {"action": "update", "page_id": page_id, "title": "New title"}))[
+        "ok"
+    ]
+    change = {"action": "update", "page_id": page_id, "content": "Replacement"}
+    refused = await invoke(board, change)
+    assert not refused["ok"] and refused["error"]["code"] == "invalid_arguments"
+    assert (await stored(board, page_id))["content"] == "Legacy content"
+    assert (await invoke(board, {**change, "expected_revision": 2}))["ok"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "own_change", [None, {"title": "My title"}, {"old_text": "rewrite", "new_text": "revision"}]
+)
+async def test_wiki_expected_revision_is_needed_only_to_replace_a_peers_revision(board, own_change):
     page_id = await create(board, "First finding")
     for change in (
         {"old_text": "First", "new_text": "Main"},
@@ -783,17 +811,20 @@ async def test_wiki_expected_revision_is_needed_only_to_replace_a_peers_revision
     assert replay["data"] == {**own["data"], "note": REPLAYED}
     peer_edit = {"action": "update", "page_id": page_id, "old_text": "Own", "new_text": "Peer"}
     assert (await invoke(board, peer_edit, 1))["ok"]
+    if own_change:
+        assert (await invoke(board, {"action": "update", "page_id": page_id, **own_change}))["ok"]
     current = await stored(board, page_id)
     replace_all = await invoke(board, {"action": "update", "page_id": page_id, "content": "new"})
-    assert visible(replace_all) == (
-        "Error (invalid_arguments): Nothing changed. Replacing the whole content needs "
-        "expected_revision: the revision your content is based on. The current revision is 5; "
-        "read it first if you have not, so no newer change is lost."
-    )
+    assert not replace_all["ok"]
+    assert replace_all["error"]["code"] == "invalid_arguments"
+    assert "expected_revision" in replace_all["error"]["message"]
     assert await stored(board, page_id) == current
+    based = await invoke(board, {**rewrite, "expected_revision": current["revision"]})
+    assert based["ok"]
+    assert (await invoke(board, {**rewrite, "content": "Another own rewrite"}))["ok"]
     assert (await invoke(board, {"action": "delete", "page_id": page_id}))["ok"]
     assert (await invoke(board, {"action": "restore", "page_id": page_id, "revision": 5}))["ok"]
-    assert (await stored(board, page_id))["revision"] == 7
+    assert (await stored(board, page_id))["revision"] == current["revision"] + 4
 
 
 @pytest.mark.asyncio

@@ -412,6 +412,8 @@ export default Object.freeze({
   'terminals.streamGap':
     'Terminal output continuity was lost; rebuilding the live screen.',
   'terminals.unknownError': 'Unknown terminal error',
+  'terminals.inputBacklogFull':
+    'This input was not sent: the terminal is reconnecting and its input buffer is full. Try again after it reconnects.',
   'terminals.rendererError':
     'The browser terminal renderer could not be loaded.',
   'terminals.maximize': 'Maximize',

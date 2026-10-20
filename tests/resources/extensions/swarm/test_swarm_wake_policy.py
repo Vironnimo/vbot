@@ -215,8 +215,10 @@ async def test_quiet_wake_waits_for_addressed_or_user_posts_without_freezing_a_b
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("older_unaddressed", [False, True])
 async def test_wake_announces_only_its_first_batch_so_the_remainder_wakes_again(
     tmp_path: Path,
+    older_unaddressed: bool,
 ) -> None:
     async with _two_participants(tmp_path) as env:
         store, sid, swarm = env.store, env.sid, env.swarm
@@ -233,14 +235,19 @@ async def test_wake_announces_only_its_first_batch_so_the_remainder_wakes_again(
                 sid,
                 env.sender,
                 text=f"Post {index}",
-                recipients=[env.recipient],
+                recipients=[] if older_unaddressed and index == 0 else [env.recipient],
                 request_id=f"post-{index}",
             )
         assert (await store.prepare_wake(env.sid, env.recipient, expected_epoch=0))["wake"]
         # A Run that ends after its first request received only the first batch.
-        assert await _run_wake(env, "first-run") == ["Post 0", "Post 1"]
+        first_claim = await store.claim_wake(env.sid, env.recipient, expected_epoch=0)
+        assert await _run_wake(env, "first-run") == (
+            ["Post 1", "Post 2"] if older_unaddressed else ["Post 0", "Post 1"]
+        )
         assert (await store.prepare_wake(env.sid, env.recipient, expected_epoch=0))["wake"]
-        assert await _run_wake(env, "second-run") == ["Post 2"]
+        second_claim = await store.claim_wake(env.sid, env.recipient, expected_epoch=0)
+        assert second_claim["receipt_id"] != first_claim["receipt_id"]
+        assert await _run_wake(env, "second-run") == ["Post 0" if older_unaddressed else "Post 2"]
         assert not (await store.prepare_wake(env.sid, env.recipient, expected_epoch=0))["wake"]
 
 

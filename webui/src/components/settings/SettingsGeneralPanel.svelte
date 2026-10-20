@@ -118,6 +118,7 @@
   });
   const unregisterAutosave = autosaveContext.register(autosave.participant);
   onDestroy(() => {
+    clientsRequestId += 1;
     unregisterAutosave();
     autosave.cancelPendingTimer();
   });
@@ -137,6 +138,7 @@
   let clientRows = $state([]);
   let clientsLoaded = $state(false);
   let clientsError = $state('');
+  let clientsRequestId = 0;
 
   // Reload the roster on mount and on every clients signal App bumps (a window
   // connected or disconnected). A pure display surface, so it swaps immediately.
@@ -148,15 +150,18 @@
   });
 
   async function loadClients() {
+    const requestId = ++clientsRequestId;
     clientsError = '';
     try {
       const result = await listClients();
+      if (requestId !== clientsRequestId) return;
       clientRows = buildClientPresenceRows(
         result?.clients ?? [],
         ownConnectionId,
       );
       clientsLoaded = true;
     } catch (error) {
+      if (requestId !== clientsRequestId) return;
       clientsError = `${t(
         'settings.general.clients.loadError',
       )} ${error.message}`;

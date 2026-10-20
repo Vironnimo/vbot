@@ -420,6 +420,33 @@ describe('SettingsView provider credentials', () => {
       expect(document.body.textContent).not.toContain(USER_CODE);
     });
 
+    it('keeps a newer connection dialog open when an earlier OAuth refresh finishes', async () => {
+      await startDeviceFlowFromAddModal();
+      const backend = rpcMock.getMockImplementation();
+      let finishRefresh;
+      rpcMock.mockImplementation((method, params) =>
+        method === 'settings.get'
+          ? new Promise((resolve) => (finishRefresh = resolve))
+          : backend(method, params),
+      );
+      completeAuth('default', true);
+      await waitForCondition(() => finishRefresh);
+      buttonByText('Cancel').click();
+      flushSync();
+      buttonByText('Add provider').click();
+      flushSync();
+      [...modalRoot().querySelectorAll('button')]
+        .find((button) => button.textContent.includes('Anthropic'))
+        .click();
+      flushSync();
+      setInputValue('.provider-connect-modal input', 'new-dialog-draft');
+      finishRefresh(credentialSettings({ copilot: true }));
+      await waitForCondition(() => providerRow('GitHub Copilot'));
+      expect(modalRoot()?.querySelector('input').value).toBe(
+        'new-dialog-draft',
+      );
+    });
+
     it('cancels an active device flow through provider.disconnect and closes the modal', async () => {
       await startDeviceFlowFromAddModal();
 

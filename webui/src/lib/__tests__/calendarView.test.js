@@ -7,6 +7,7 @@ import {
   dayKeyForOccurrence,
   formatTimeInZone,
   groupByDay,
+  groupOccurrencesByDay,
   isDayKey,
   monthGridDays,
   sortDayEntries,
@@ -136,6 +137,47 @@ describe('day keys and the month grid', () => {
 });
 
 describe('server timezone rendering', () => {
+  it.each([
+    [
+      { all_day: true, start: '2026-10-20', end: '2026-10-23' },
+      ['2026-10-21', '2026-10-22'],
+    ],
+    [
+      {
+        all_day: false,
+        start_utc: '2026-10-20T21:00:00Z',
+        end_utc: '2026-10-21T23:00:00Z',
+      },
+      ['2026-10-21', '2026-10-22'],
+    ],
+    [
+      {
+        all_day: false,
+        start_utc: '2026-10-20T21:00:00Z',
+        end_utc: '2026-10-21T22:00:00Z',
+      },
+      ['2026-10-21'],
+    ],
+    [
+      {
+        all_day: false,
+        start_utc: '2026-10-24T22:00:00Z',
+        end_utc: '2026-10-26T00:00:00Z',
+      },
+      ['2026-10-25', '2026-10-26'],
+    ],
+  ])(
+    'groups the overlapping days of %j, bounded by the visible window',
+    (item, days) => {
+      expect(
+        groupOccurrencesByDay([item], 'Europe/Berlin', {
+          from: '2026-10-21',
+          to: '2026-10-26',
+        }),
+      ).toEqual(Object.fromEntries(days.map((day) => [day, [item]])));
+    },
+  );
+
   it('groups occurrences by their day in the server timezone', () => {
     const late = {
       title: 'late',

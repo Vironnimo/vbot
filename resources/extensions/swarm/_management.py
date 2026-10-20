@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
+from weakref import WeakValueDictionary
 
 from core.utils.logging import get_logger
 
@@ -56,7 +57,21 @@ class SwarmManagement:
 
     def __init__(self, extension: SwarmExtension) -> None:
         self._extension = extension
-        self._control_lock = asyncio.Lock()
+        self._control_locks: WeakValueDictionary[tuple[str, str], asyncio.Lock] = (
+            WeakValueDictionary()
+        )
+
+    def _control(self, kind: str, identity: str) -> asyncio.Lock:
+        key = (kind, identity)
+        lock = self._control_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._control_locks[key] = lock
+        return lock
+
+    def control(self, swarm_id: str) -> asyncio.Lock:
+        """Serialize one Swarm's lifecycle and wakes, without blocking other Swarms."""
+        return self._control("swarm", swarm_id)
 
     async def _wiki_operation(self, arguments: Json) -> Json:
         sid = _string(arguments, "swarm_id")
@@ -104,7 +119,12 @@ class SwarmManagement:
                 "swarms.delete",
                 "board.post",
             }:
-                async with self._control_lock:
+                lock = (
+                    self._control("start", _string(arguments, "request_id"))
+                    if name == "swarms.start"
+                    else self.control(_string(arguments, "swarm_id"))
+                )
+                async with lock:
                     return await handlers[name](arguments)
             return await handlers[name](arguments)
         except SwarmStoreError as error:

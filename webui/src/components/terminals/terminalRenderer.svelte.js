@@ -42,7 +42,7 @@ export function createTerminalRenderer({
     ensureRenderer(terminalId);
     return {
       destroy() {
-        disposeTile(terminalId);
+        if (tileHosts.get(terminalId) === node) disposeTile(terminalId);
       },
     };
   }
@@ -56,9 +56,10 @@ export function createTerminalRenderer({
     ) {
       return;
     }
-    const loading = initializeTerminal(terminalId)
+    const host = tileHosts.get(terminalId);
+    const loading = initializeTerminal(terminalId, host)
       .catch(() => {
-        if (isMounted()) {
+        if (isMounted() && tileHosts.get(terminalId) === host) {
           viewState.streams = {
             ...viewState.streams,
             [terminalId]: {
@@ -113,10 +114,13 @@ export function createTerminalRenderer({
     return xtermModulesPromise;
   }
 
-  async function initializeTerminal(terminalId) {
+  async function initializeTerminal(terminalId, host) {
     const [{ Terminal }, { FitAddon }] = await loadXtermModules();
-    const host = tileHosts.get(terminalId);
-    if (!isMounted() || !host) {
+    if (
+      !isMounted() ||
+      tileHosts.get(terminalId) !== host ||
+      tileRegistry.has(terminalId)
+    ) {
       return;
     }
     const interactive =
@@ -511,7 +515,7 @@ export function createTerminalRenderer({
     else pendingFocusTerminalId = terminalId;
   }
   function destroy() {
-    for (const id of [...tileRegistry.keys()]) disposeTile(id);
+    for (const id of [...tileHosts.keys()]) disposeTile(id);
   }
   return {
     mountTile,

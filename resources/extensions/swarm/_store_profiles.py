@@ -330,7 +330,7 @@ def _delete_swarm(db: SwarmDatabase, swarm_id: str) -> None:
             connection.execute(f"DELETE FROM {table} WHERE swarm_id=?", (swarm_id,))
         connection.execute(
             "DELETE FROM requests WHERE scope IN (?,?,?,?) "
-            "OR substr(scope,1,?)=? OR substr(scope,1,?)=? "
+            "OR substr(scope,1,?)=? OR substr(scope,1,?)=? OR substr(scope,1,?)=? "
             "OR (scope='start' AND json_extract(outcome,'$.swarm_id')=?)",
             (
                 f"settings:{swarm_id}",
@@ -341,6 +341,8 @@ def _delete_swarm(db: SwarmDatabase, swarm_id: str) -> None:
                 f"post:{swarm_id}:",
                 len(f"create:{swarm_id}:"),
                 f"create:{swarm_id}:",
+                len(f"post_step:{swarm_id}:"),
+                f"post_step:{swarm_id}:",
                 swarm_id,
             ),
         )
@@ -599,9 +601,7 @@ def _apply_delivery_settings(
                     "AND r.delivered_at IS NULL AND r.route_class IN (" + placeholders + ")",
                     (swarm_id, participant["id"], *sorted(newly_enabled)),
                 ).fetchone()
-                if pending["newest"] is None or int(pending["newest"]) <= int(
-                    participant["wake_announced_seq"]
-                ):
+                if pending["newest"] is None:
                     continue
                 # The settings operation schedules the normal wake scan. Only
                 # that scan reserves a wake, with its epoch, batch watermark

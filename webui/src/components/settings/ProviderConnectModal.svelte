@@ -1,5 +1,5 @@
 <script>
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import Button from '../ui/Button.svelte';
   import FormField from '../ui/FormField.svelte';
   import Modal from '../ui/Modal.svelte';
@@ -66,6 +66,16 @@
   let activeOAuthAccount = $state(DEFAULT_ACCOUNT_ID);
   let copiedCode = $state(false);
   let handledAuthEvent = null;
+  let closed = false;
+  onDestroy(() => {
+    closed = true;
+  });
+
+  function finishClose() {
+    if (closed) return;
+    closed = true;
+    onClose();
+  }
 
   let accountFixed = $derived(scopedAccount !== null);
   let accountInvalid = $derived(
@@ -160,7 +170,7 @@
     if (oauthActive) {
       void cancelOAuthFlow();
     }
-    onClose();
+    finishClose();
   }
 
   async function submitApiKey(event) {
@@ -188,7 +198,7 @@
         variant: 'success',
       });
       await onCompleted();
-      onClose();
+      finishClose();
     } catch (error) {
       errorMessage = `${t('settings.providers.add.keyError')} ${error.message}`;
     } finally {
@@ -221,7 +231,7 @@
         variant: result?.reachable === false ? 'warn' : 'success',
       });
       await onCompleted();
-      onClose();
+      finishClose();
     } catch (error) {
       errorMessage = `${t('settings.providers.add.localError')} ${error.message}`;
     } finally {
@@ -300,8 +310,13 @@
       }),
       variant: 'success',
     });
-    await onCompleted();
-    onClose();
+    try {
+      await onCompleted();
+      finishClose();
+    } catch (error) {
+      if (!closed)
+        errorMessage = `${t('settings.providers.connectError')} ${error.message}`;
+    }
   }
 
   async function copyUserCode() {
