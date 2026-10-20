@@ -34,6 +34,7 @@ from core.extensions.extensions import (
 from core.extensions.interactions import InteractionHandlerDeclaration
 from core.extensions.settings_schema import parse_settings_fields
 from core.runs import ChatRunManager, Run, RunExecutionOwner
+from core.sessions import SessionAddress
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
 from tests.server.rpc_test_support import (
@@ -477,6 +478,28 @@ async def test_set_secret_saves_or_clears_the_credential_without_logging_it(
             "timeline",
         ),
         (
+            "extensions.page_run",
+            {
+                "name": "alpha",
+                "page": _PAGE,
+                "group_id": "group",
+                "run_id": "run",
+                "child_limit": 100,
+            },
+            "child_limit requires timeline",
+        ),
+        (
+            "extensions.page_history",
+            {
+                "name": "alpha",
+                "page": _PAGE,
+                "group_id": "group",
+                "participant_id": "participant",
+                "query": {"child_limit": 201},
+            },
+            "child_limit must be an integer from 1 to 200",
+        ),
+        (
             "extensions.set_secret",
             {"name": "nope", "key": "token", "value": "x"},
             "unknown extension",
@@ -626,6 +649,9 @@ class _HistoryDelivery:
 
     def resolve_token(self, token: str) -> object | None:
         return object() if token == "capability.signature" else None
+
+    def bind_payload(self, payload: Any, _actor: str | None, **_kwargs: Any) -> Any:
+        return payload
 
 
 _CONTEXT_USAGE = {
@@ -845,6 +871,109 @@ async def test_extension_page_history_projects_only_its_canonical_live_run(
         assert "active_run" not in result
 
 
+@pytest.mark.asyncio
+async def test_extension_page_history_windows_runs_and_pages_their_earlier_steps() -> None:
+    """A long Run reaches the page as its latest steps; earlier ones load by gap."""
+    question = ChatMessage.user("Question")
+    steps = [
+        ChatMessage.assistant(
+            model="test/model",
+            content=f"[step {index}](/api/files/capability.signature)",
+        )
+        for index in range(5)
+    ]
+    snapshot = SimpleNamespace(
+        runs=(),
+        generation_id="generation",
+        after_cursor="after",
+        incremental=False,
+        has_newer=False,
+        page=SimpleNamespace(
+            record_sequences=tuple(range(6)),
+            record_run_ids=("run-a",) * 6,
+            messages=(question, *steps),
+            has_more=False,
+            before_cursor=None,
+        ),
+        session_usage={},
+        context_messages=(),
+    )
+    address = SessionAddress(None, "participant-agent", "participant-session")
+
+    class Groups:
+        async def inspect(self, group_id: str, participant_id: str, query: JsonObject) -> Any:
+            # The step window is the projection's, not the History query's.
+            assert query == {"limit": 100}
+            return snapshot
+
+        async def owned_run(self, group_id: str, run_id: str) -> Any:
+            assert (group_id, run_id) == ("group-a", "run-a")
+            return SimpleNamespace(
+                run=None,
+                record=SimpleNamespace(
+                    address=address, owner=SimpleNamespace(participant_id="participant-a")
+                ),
+            )
+
+    class Session:
+        generation_id = "generation"
+
+        async def load_run_messages_async(self, run_id: str) -> list[ChatMessage]:
+            assert run_id == "run-a"
+            return [question, *steps]
+
+    class Sessions:
+        async def get_async(self, requested: SessionAddress) -> Session:
+            assert requested == address
+            return Session()
+
+    state = _page_state(Groups())
+    state.runtime.chat_sessions = Sessions()
+    state.file_delivery = _HistoryDelivery()
+    params: JsonObject = {"name": "alpha", "page": _PAGE, "group_id": "group-a"}
+
+    history = await rpc_result(
+        state,
+        "extensions.page_history",
+        participant_id="participant-a",
+        query={"limit": 100, "child_limit": 2},
+        **params,
+    )
+    run = next(item for item in history["items"] if item["type"] == "assistant_run")
+    gap, *latest = run["items"]
+    assert gap["type"] == "history_gap"
+    assert [child["position"] for child in latest] == [3, 4]
+    assert [message["role"] for message in history["messages"]] == ["user"]
+    assert history["file_urls"] == ["/api/files/capability.signature"]
+
+    children = {
+        "run_id": "run-a",
+        "before": gap["before"],
+        "history_generation": history["history_generation"],
+        "limit": 2,
+    }
+    page = await rpc_result(
+        state,
+        "extensions.page_timeline_children",
+        participant_id="participant-a",
+        **children,
+        **params,
+    )
+    assert [child["position"] for child in page["items"][1:]] == [1, 2]
+    assert page["has_more"] is True
+    assert page["file_urls"] == ["/api/files/capability.signature"]
+
+    # Only the participant that owns the Run reads its steps.
+    foreign = await rpc_error(
+        state,
+        "extensions.page_timeline_children",
+        participant_id="participant-b",
+        **children,
+        **params,
+    )
+    assert foreign["code"] == "invalid_request"
+
+
 # ---------------------------------------------------------------------------
 # extensions.page_cancel_tool / extensions.page_run
 # ---------------------------------------------------------------------------
@@ -921,6 +1050,7 @@ async def test_extension_page_run_reports_verified_replay_watermark(
         def open_extension_run(self, **kwargs: Any) -> Any:
             assert kwargs["after_sequence"] == 3
             assert kwargs["timeline"] is timeline
+            assert kwargs["child_limit"] == (100 if timeline else 0)
             return {"url": "/api/extension-runs/test"}
 
     groups = Groups()
@@ -937,6 +1067,7 @@ async def test_extension_page_run_reports_verified_replay_watermark(
         run_id="run-a",
         after_sequence=3,
         timeline=timeline,
+        **({"child_limit": 100} if timeline else {}),
     )
 
     assert groups.reads == 1

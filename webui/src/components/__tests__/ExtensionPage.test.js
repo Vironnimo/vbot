@@ -11,12 +11,14 @@ vi.mock(
 
 const operation = vi.fn();
 const history = vi.fn();
+const runChildren = vi.fn();
 vi.mock('$lib/api.js', () => ({
   isTerminalRunEvent,
   invokeExtensionPageOperation: (...args) => operation(...args),
   openExtensionPageRun: vi.fn(),
   cancelExtensionPageToolCall: vi.fn().mockResolvedValue({ ok: true }),
   readExtensionPageHistory: (...args) => history(...args),
+  readExtensionPageTimelineChildren: (...args) => runChildren(...args),
   listServerDirectory: vi.fn(),
   subscribeRunEvents: vi.fn(),
 }));
@@ -43,6 +45,7 @@ afterEach(async () => {
   document.body.innerHTML = '';
   operation.mockReset();
   history.mockReset();
+  runChildren.mockReset();
   api.openExtensionPageRun.mockReset();
   api.subscribeRunEvents.mockReset();
   api.cancelExtensionPageToolCall.mockClear();
@@ -615,11 +618,36 @@ describe('ExtensionPage file links', () => {
       read(id, 'participant-a', query);
       await page.replied(id);
     }
-    for (const id of ['newest', 'oldest'])
+    // A Run's earlier steps grant their files like a History page.
+    runChildren.mockResolvedValueOnce({
+      file_urls: ['/api/files/earlier.signature'],
+    });
+    page.call('earlier', 'history.children', {
+      group_id: 'group-a',
+      participant_id: 'participant-a',
+      run_id: 'run-a',
+      before: 'step-3',
+      history_generation: 'generation',
+      limit: 100,
+    });
+    await page.replied('earlier');
+    expect(runChildren).toHaveBeenCalledExactlyOnceWith(
+      'alpha',
+      pageRef,
+      'group-a',
+      'participant-a',
+      {
+        runId: 'run-a',
+        before: 'step-3',
+        historyGeneration: 'generation',
+        limit: 100,
+      },
+    );
+    for (const id of ['newest', 'oldest', 'earlier'])
       page.call(`open-${id}`, 'link.open', {
         url: `/api/files/${id}.signature`,
       });
-    expect(open).toHaveBeenCalledTimes(2);
+    expect(open).toHaveBeenCalledTimes(3);
 
     let finishStale;
     history.mockImplementationOnce(
@@ -636,12 +664,12 @@ describe('ExtensionPage file links', () => {
     await page.replied('current');
     finishStale({ file_urls: ['/api/files/stale.signature'] });
     await page.replied('stale');
-    for (const id of ['newest', 'oldest', 'stale', 'current'])
+    for (const id of ['newest', 'oldest', 'earlier', 'stale', 'current'])
       page.call(`after-switch-${id}`, 'link.open', {
         url: `/api/files/${id}.signature`,
       });
     await page.replied('after-switch-current');
-    expect(open).toHaveBeenCalledTimes(3);
+    expect(open).toHaveBeenCalledTimes(4);
     expect(open).toHaveBeenLastCalledWith(
       window.location.origin + '/api/files/current.signature',
       ...OPEN_OPTIONS,
@@ -649,6 +677,7 @@ describe('ExtensionPage file links', () => {
     expect(page.errors()).toEqual([
       'after-switch-newest',
       'after-switch-oldest',
+      'after-switch-earlier',
       'after-switch-stale',
     ]);
   });
@@ -807,7 +836,7 @@ describe('ExtensionPage Run stream recovery', () => {
 
   // Subscribes a ready page after `afterSequence`; the test drives each
   // transport the host opens through `streams`.
-  async function subscribe(afterSequence = 4) {
+  async function subscribe(afterSequence = 4, options = {}) {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const streams = [];
@@ -825,6 +854,7 @@ describe('ExtensionPage Run stream recovery', () => {
       group_id: 'group',
       run_id: 'run',
       after_sequence: afterSequence,
+      ...options,
     });
     await vi.advanceTimersByTimeAsync(0);
     return {
@@ -867,7 +897,11 @@ describe('ExtensionPage Run stream recovery', () => {
   });
 
   it('reopens after the last delivered sequence and ignores retired transports', async () => {
-    const { streams, opens, forwarded, resyncs } = await subscribe();
+    // A windowed timeline reopens with the same step window.
+    const { streams, opens, forwarded, resyncs } = await subscribe(4, {
+      timeline: true,
+      child_limit: 100,
+    });
     deliver(streams[0], 'assistant_output_delta', 5);
     streams[0].handlers.onError();
     expect(streams[0].close).toHaveBeenCalledOnce();
@@ -879,8 +913,12 @@ describe('ExtensionPage Run stream recovery', () => {
       'group',
       'run',
       5,
-      { timeline: false },
+      { timeline: true, childLimit: 100 },
     );
+    expect(api.openExtensionPageRun.mock.calls[0][5]).toEqual({
+      timeline: true,
+      childLimit: 100,
+    });
     expect(streams[1].options.afterSequence).toBe(5);
     expect(resyncs()).toBe(1);
     deliver(streams[1], 'assistant_output_delta', 5);

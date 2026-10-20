@@ -413,8 +413,12 @@ class FileDelivery:
         run_id: str,
         after_sequence: int = 0,
         timeline: bool = False,
+        child_limit: int = 0,
     ) -> JsonObject:
         """Mint a short-lived parent-origin SSE capability for one owned Run.
+
+        A timeline stream with ``child_limit`` delivers each Run's latest steps
+        only, like the Chat's windowed timeline stream.
 
         The caller resolves the owner-bound host before minting. The route still
         re-checks this registration and ownership on every use, so this token is
@@ -446,8 +450,9 @@ class FileDelivery:
         )
         token = f"{encoded}.{signature}"
         if timeline:
+            window = f"?child_limit={child_limit}" if child_limit else ""
             return {
-                "url": f"{EXTENSION_RUN_URL_PREFIX}{token}/timeline",
+                "url": f"{EXTENSION_RUN_URL_PREFIX}{token}/timeline{window}",
                 "timeline_version": 1,
             }
         return {"url": f"{EXTENSION_RUN_URL_PREFIX}{token}/events"}

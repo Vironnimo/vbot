@@ -60,6 +60,7 @@ export {
   openExtensionPageRun,
   cancelExtensionPageToolCall,
   readExtensionPageHistory,
+  readExtensionPageTimelineChildren,
   getDataStoreStatus,
   createDataSnapshot,
   acknowledgeDataStoreIncident,
