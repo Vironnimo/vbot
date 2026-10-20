@@ -272,6 +272,11 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     getStatisticsRunActivity: (params) =>
       call('statistics.run_activity', params),
     listProjects: () => call('project.list'),
+    reorderProjects: (projectIds, expectedRevision) =>
+      call('project.reorder', {
+        project_ids: projectIds,
+        expected_revision: expectedRevision,
+      }),
     listCronJobs: () => call('cron.list'),
     showProject: (projectId) => call('project.show', { project_id: projectId }),
     detectProject: (cwd) => call('project.detect', { cwd }),
