@@ -928,7 +928,7 @@
 
 {#if actions.deleteConfirmSession}
   <ConfirmDialog
-    title={t('sessions.delete_confirm_title')}
+    title={actions.deleteConfirmTitle}
     body={actions.deleteConfirmMessage}
     confirmLabel={actions.deletePermanently
       ? t('archive.deletePermanently')
@@ -949,37 +949,42 @@
   <Modal
     title={t('sessions.compactionPolicy')}
     labelledById="session-compaction-policy-title"
+    size="lg"
     closeDisabled={actions.policySaving}
     onClose={actions.closePolicyEdit}
   >
     {#snippet body()}
-      <div class="modal-body session-policy-modal__body">
-        <div class="session-policy-modal__inheritance">
-          <div>
-            <div class="session-policy-modal__label">
-              {t('sessions.compactionOverride')}
+      <div class="modal-body">
+        <!-- Without the override the rows show the inherited Policy, read-only. -->
+        <div class="s-group">
+          <div class="s-row s-row--compact">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('sessions.compactionOverride')}
+              </div>
+              <div class="s-row-desc">
+                {t('sessions.compactionOverrideDescription')}
+              </div>
             </div>
-            <p>
-              {t('sessions.compactionOverrideDescription')}
-            </p>
+            <div class="s-row-control">
+              <Toggle
+                checked={actions.policyUsesOverride}
+                disabled={actions.policySaving}
+                ariaLabel={t('sessions.compactionOverride')}
+                onChange={(enabled) => (actions.policyUsesOverride = enabled)}
+              />
+            </div>
           </div>
-          <Toggle
-            checked={actions.policyUsesOverride}
-            disabled={actions.policySaving}
-            ariaLabel={t('sessions.compactionOverride')}
-            onChange={(enabled) => (actions.policyUsesOverride = enabled)}
+          <CompactionPolicyEditor
+            layout="rows"
+            value={actions.policyDraft}
+            disabled={!actions.policyUsesOverride || actions.policySaving}
+            idPrefix="session-compaction-policy"
+            onChange={(next) => (actions.policyDraft = next)}
           />
         </div>
-        <CompactionPolicyEditor
-          value={actions.policyDraft}
-          disabled={!actions.policyUsesOverride || actions.policySaving}
-          idPrefix="session-compaction-policy"
-          onChange={(next) => (actions.policyDraft = next)}
-        />
         {#if actions.policyError}
-          <p class="session-policy-modal__error" role="alert">
-            {actions.policyError}
-          </p>
+          <Banner variant="error" role="alert">{actions.policyError}</Banner>
         {/if}
       </div>
     {/snippet}
@@ -991,7 +996,11 @@
       >
         {t('common.cancel')}
       </Button>
-      <Button disabled={actions.policySaving} onClick={actions.savePolicy}>
+      <Button
+        variant="primary"
+        disabled={actions.policySaving}
+        onClick={actions.savePolicy}
+      >
         {actions.policySaving ? t('common.saving') : t('common.save')}
       </Button>
     {/snippet}

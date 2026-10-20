@@ -332,7 +332,6 @@ function setupSystemPromptViewSuite() {
     listProjectsMock.mockResolvedValue({ projects: [] });
     showProjectMock.mockResolvedValue({ project: {}, scan: { team: [] } });
     mountedComponent = null;
-    window.prompt = vi.fn(() => null);
   });
   afterEach(async () => {
     vi.useRealTimers();

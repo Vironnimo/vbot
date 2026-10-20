@@ -25,7 +25,7 @@ Per-occurrence changes of a repeating event, like an iCalendar RECURRENCE-ID or 
 RFC 5545 exception that removes one occurrence from a repeating event while keeping the series (`delete_occurrence`); its change goes with it.
 
 ### Agent job
-The WebUI's name for a Cron job of schedule type `event` (`automation.md` -> Conventions -> Event jobs): an Agent instruction bound to an event, listed and edited in the event's detail modal and counted on its entries. RPC, CLI and Tool call it an event job; it replaces the removed Calendar actions.
+The WebUI's name for a Cron job of schedule type `event` (`automation.md` -> Conventions -> Event jobs): an Agent instruction bound to an event, listed in the event's card, added and edited in its own dialog, and counted on its entries. RPC, CLI and Tool call it an event job; it replaces the removed Calendar actions.
 
 ### when expression
 A window grammar (`today`, `this week`, `next month`, a date, a year-month, `start..end`) parsed by `core/calendar/when.py` against the server zone and current time. The calendar Tool accepts it unadvertised as a dialect next to its `time_min`/`time_max` window. Not an ISO window; RPC `calendar.window` takes explicit `from`/`to` bounds.

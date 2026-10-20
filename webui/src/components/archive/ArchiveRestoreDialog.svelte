@@ -33,20 +33,19 @@
 </script>
 
 <Modal
-  title={t('archive.restoreAs.title')}
+  title={t('archive.restoreAs.title', { name: entry.label })}
+  description={t('archive.restoreAs.hint')}
   labelledById="archive-restore-as-title"
+  size="md"
   closeDisabled={busy}
   {onClose}
 >
   {#snippet body()}
     <form onsubmit={submit}>
-      <div class="modal-body archive-restore-as">
+      <div class="modal-body">
         {#if conflictText}
           <Banner variant="warn">{conflictText}</Banner>
         {/if}
-        <p class="archive-restore-as__hint">
-          {t('archive.restoreAs.hint', { name: entry.label })}
-        </p>
         <FormField
           controlId="archive-restore-as-id"
           label={restoreAsFieldLabel(entry.kind)}
@@ -82,16 +81,3 @@
     </form>
   {/snippet}
 </Modal>
-
-<style>
-  .archive-restore-as {
-    display: grid;
-    gap: 14px;
-  }
-
-  .archive-restore-as__hint {
-    margin: 0;
-    color: var(--text-med);
-    line-height: 1.5;
-  }
-</style>

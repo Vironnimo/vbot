@@ -9,7 +9,7 @@ export function launchHistoryLabel(entry) {
   );
 }
 
-export function launchHistoryWorkdir(entry) {
+function launchHistoryWorkdir(entry) {
   return (
     String(entry?.workdir || '').trim() || t('terminals.workdirPlaceholder')
   );

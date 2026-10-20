@@ -248,41 +248,48 @@ describe('SystemPromptView blocks', () => {
   });
 
   it.each([
-    ['a valid slug', 'my-note', null, true, false],
-    ['an invalid slug', '1 bad slug!', null, false, true],
+    ['a valid slug', 'my-note', null, null],
+    [
+      'an invalid slug',
+      '1 bad slug!',
+      null,
+      'systemPrompt.blockList.invalidSlug',
+    ],
     [
       'a slug the backend rejects',
       'taken',
       new Error('invalid_request'),
-      true,
-      true,
+      'systemPrompt.blockList.createFailed',
     ],
   ])(
     'creates a custom block from %s',
-    async (_case, slug, createBlockError, expectCreate, expectToast) => {
-      const onToast = vi.fn();
-      window.prompt = vi.fn(() => slug);
-      await mountView({ createBlockError }, { onToast });
+    async (_case, slug, createBlockError, errorKey) => {
+      await mountView({ createBlockError });
 
       clickToolbarButton(t('systemPrompt.blockList.newBlock'));
       flushSync();
-      await Promise.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      const input = document.getElementById('sp-new-block-name');
+      input.value = slug;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
       flushSync();
+      confirmDialog(t('systemPrompt.blockList.createBlock'));
 
-      if (expectCreate) {
-        await waitForCondition(() => hasCall('prompt.create_block'), 100);
-        expect(lastCall('prompt.create_block')[1]).toMatchObject({ slug });
-      } else {
-        expect(hasCall('prompt.create_block')).toBe(false);
-      }
-      if (expectToast) {
-        await waitForCondition(() => onToast.mock.calls.length > 0, 100);
-        expect(onToast).toHaveBeenCalledWith(
-          expect.objectContaining({ variant: 'error' }),
+      if (errorKey) {
+        // A refused name stays in the open dialog with the reason beside it.
+        await waitForCondition(
+          () =>
+            document.querySelector('.form-field__error')?.textContent ===
+            t(errorKey),
+          100,
         );
+        expect(hasCall('prompt.create_block')).toBe(createBlockError !== null);
+        expect(document.getElementById('sp-new-block-name').value).toBe(slug);
       } else {
-        expect(onToast).not.toHaveBeenCalled();
+        await waitForCondition(
+          () => !document.getElementById('sp-new-block-name'),
+          100,
+        );
+        expect(lastCall('prompt.create_block')[1]).toMatchObject({ slug });
       }
     },
   );

@@ -476,75 +476,79 @@
     title={t('mcp.credentialsFor', {
       name: secretConnection.id,
     })}
+    size="md"
     closeDisabled={state.busy}
     onClose={closeCredentials}
-    class="mcp-credentials-modal"
   >
     {#snippet body()}
       <form
         id={`${componentId}-secret`}
-        class="modal-body mcp-editor"
         onsubmit={(event) => {
           event.preventDefault();
           void saveCredential(secretValue);
         }}
       >
-        {#if state.error}<Banner variant="error" role="alert"
-            >{state.error}</Banner
-          >{/if}
-        <FormField
-          controlId={`${componentId}-key`}
-          label={t('mcp.credentialName')}
-        >
-          {#snippet children(field)}<Dropdown
-              id={field.controlId}
-              ariaLabelledby={field.labelId}
-              value={secretKey}
-              options={mcpCredentialNames(secretConnection.configuration)}
+        <div class="modal-body">
+          {#if state.error}<Banner variant="error" role="alert"
+              >{state.error}</Banner
+            >{/if}
+          <FormField
+            controlId={`${componentId}-key`}
+            label={t('mcp.credentialName')}
+          >
+            {#snippet children(field)}<Dropdown
+                id={field.controlId}
+                ariaLabelledby={field.labelId}
+                value={secretKey}
+                options={mcpCredentialNames(secretConnection.configuration)}
+                disabled={state.busy}
+                ariaLabel={t('mcp.credentialName')}
+                onValueChange={(value) => {
+                  secretKey = value;
+                  secretValue = '';
+                }}
+              />{/snippet}
+          </FormField>
+          <FormField
+            controlId={`${componentId}-value`}
+            label={t('mcp.secretValue')}
+            help={t('mcp.secretHelp')}
+          >
+            {#snippet children(field)}<TextField
+                id={field.controlId}
+                aria-describedby={field.describedBy}
+                type="password"
+                autocomplete="off"
+                value={secretValue}
+                disabled={state.busy}
+                onInput={(value) => {
+                  secretValue = value;
+                }}
+              />{/snippet}
+          </FormField>
+        </div>
+        <div class="modal-footer">
+          <div class="modal-footer__start">
+            <Button
+              variant="tertiary"
               disabled={state.busy}
-              ariaLabel={t('mcp.credentialName')}
-              onValueChange={(value) => {
-                secretKey = value;
-                secretValue = '';
-              }}
-            />{/snippet}
-        </FormField>
-        <FormField
-          controlId={`${componentId}-value`}
-          label={t('mcp.secretValue')}
-          help={t('mcp.secretHelp')}
-        >
-          {#snippet children(field)}<TextField
-              id={field.controlId}
-              aria-describedby={field.describedBy}
-              type="password"
-              autocomplete="off"
-              value={secretValue}
-              disabled={state.busy}
-              onInput={(value) => {
-                secretValue = value;
-              }}
-            />{/snippet}
-        </FormField>
+              onClick={() => saveCredential('')}
+              >{t('mcp.clearCredential')}</Button
+            >
+          </div>
+          <Button
+            variant="secondary"
+            disabled={state.busy}
+            onClick={closeCredentials}>{t('common.cancel')}</Button
+          >
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={state.busy || !secretValue}
+            >{t('mcp.saveCredential')}</Button
+          >
+        </div>
       </form>
-    {/snippet}
-    {#snippet footer()}
-      <Button
-        variant="danger"
-        disabled={state.busy}
-        onClick={() => saveCredential('')}>{t('mcp.clearCredential')}</Button
-      >
-      <Button
-        variant="secondary"
-        disabled={state.busy}
-        onClick={closeCredentials}>{t('common.cancel')}</Button
-      >
-      <Button
-        variant="primary"
-        type="submit"
-        form={`${componentId}-secret`}
-        disabled={state.busy || !secretValue}>{t('mcp.saveCredential')}</Button
-      >
     {/snippet}
   </Modal>
 {/if}

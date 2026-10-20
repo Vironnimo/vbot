@@ -14,6 +14,9 @@
   import ToolDefinitionsPanel from './ToolDefinitionsPanel.svelte';
   import MarkdownContent from './chat/MarkdownContent.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import FormField from './ui/FormField.svelte';
+  import Modal from './ui/Modal.svelte';
+  import TextField from './ui/TextField.svelte';
   import { onMount, untrack } from 'svelte';
   import { useAutosaveContext } from '$lib/autosave.js';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
@@ -156,6 +159,11 @@
     }
     void scope.refreshPreview();
   });
+
+  // A block's title as the list shows it: its translated name, else its id.
+  function blockName(id) {
+    return tOr(`systemPrompt.blockTitle.${id}`, id);
+  }
 
   function showToast(message, variant = 'error') {
     onToast?.({ title: message, variant });
@@ -389,8 +397,7 @@
               ]
                 .filter(Boolean)
                 .join(' ')}
-            getLabel={(block) =>
-              tOr(`systemPrompt.blockTitle.${block.id}`, block.id)}
+            getLabel={(block) => blockName(block.id)}
             disabled={editor.isBusy}
             aria-label={t('systemPrompt.tabs.edit')}
             onReorder={editor.reorderBlocks}
@@ -398,12 +405,7 @@
             {#snippet item(block)}
               <div class="sp-block-row">
                 <div class="sp-block-meta">
-                  <strong class="sp-block-title"
-                    >{tOr(
-                      `systemPrompt.blockTitle.${block.id}`,
-                      block.id,
-                    )}</strong
-                  >
+                  <strong class="sp-block-title">{blockName(block.id)}</strong>
                   <div class="sp-block-id-row">
                     <span class="sp-block-id">{block.id}</span>
                     {#if !block.enabled}<Badge variant="neutral"
@@ -657,7 +659,9 @@
 
   {#if editor.resetConfirmBlockId}
     <ConfirmDialog
-      title={t('systemPrompt.fragmentEditor.resetConfirmTitle')}
+      title={t('systemPrompt.fragmentEditor.resetConfirmTitle', {
+        name: blockName(editor.resetConfirmBlockId),
+      })}
       body={editor.resetConfirmBody}
       confirmLabel={t('common.reset')}
       onConfirm={editor.confirmResetBlock}
@@ -667,7 +671,9 @@
 
   {#if editor.removeConfirmBlockId}
     <ConfirmDialog
-      title={t('systemPrompt.blockList.removeConfirmTitle')}
+      title={t('systemPrompt.blockList.removeConfirmTitle', {
+        name: blockName(editor.removeConfirmBlockId),
+      })}
       body={t('systemPrompt.blockList.removeConfirm')}
       confirmLabel={t('common.remove')}
       onConfirm={editor.confirmRemoveCustomBlock}
@@ -683,5 +689,66 @@
       onConfirm={editor.confirmResetLayout}
       onCancel={editor.cancelResetLayout}
     />
+  {/if}
+
+  {#if editor.newBlockOpen}
+    <Modal
+      title={t('systemPrompt.blockList.newBlock')}
+      size="sm"
+      closeDisabled={editor.newBlockSaving}
+      onClose={editor.cancelNewBlock}
+    >
+      {#snippet body()}
+        <form
+          id="sp-new-block-form"
+          onsubmit={(event) => {
+            event.preventDefault();
+            editor.confirmNewBlock();
+          }}
+        >
+          <div class="modal-body">
+            <FormField
+              controlId="sp-new-block-name"
+              label={t('systemPrompt.blockList.newBlockName')}
+              help={t('systemPrompt.blockList.newBlockHelp')}
+              error={editor.newBlockError}
+            >
+              {#snippet children(field)}
+                <TextField
+                  id={field.controlId}
+                  code
+                  autofocus
+                  autocomplete="off"
+                  spellcheck="false"
+                  value={editor.newBlockName}
+                  invalid={field.invalid}
+                  disabled={editor.newBlockSaving}
+                  aria-describedby={field.describedBy}
+                  onInput={editor.setNewBlockName}
+                />
+              {/snippet}
+            </FormField>
+          </div>
+        </form>
+      {/snippet}
+      {#snippet footer()}
+        <Button
+          variant="secondary"
+          disabled={editor.newBlockSaving}
+          onClick={editor.cancelNewBlock}
+        >
+          {t('common.cancel')}
+        </Button>
+        <Button
+          variant="primary"
+          type="submit"
+          form="sp-new-block-form"
+          loading={editor.newBlockSaving}
+          disabled={!editor.newBlockName.trim()}
+        >
+          {t('systemPrompt.blockList.createBlock')}
+        </Button>
+      {/snippet}
+    </Modal>
   {/if}
 </section>

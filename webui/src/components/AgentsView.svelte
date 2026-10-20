@@ -848,14 +848,16 @@
 
   {#if deleteCandidate}
     <ConfirmDialog
-      title={t('agents.delete')}
-      body={deletePermanently
-        ? t('agents.deletePermanentConfirm', {
+      title={deletePermanently
+        ? t('agents.deletePermanentConfirmTitle', {
             name: deleteCandidate.name || deleteCandidate.id,
           })
-        : t('agents.deleteConfirm', {
+        : t('agents.deleteConfirmTitle', {
             name: deleteCandidate.name || deleteCandidate.id,
           })}
+      body={deletePermanently
+        ? t('agents.deletePermanentConfirm')
+        : t('agents.deleteConfirm')}
       confirmLabel={deletePermanently
         ? t('archive.deletePermanently')
         : t('common.delete')}

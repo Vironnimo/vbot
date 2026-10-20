@@ -118,6 +118,13 @@
         ? t('mcp.catalogGrantTitle', { name: targetName })
         : t('mcp.catalogTitle'),
   );
+  let description = $derived(
+    view === 'signin'
+      ? t('mcp.catalogSignInHelp', { name: targetName })
+      : view === 'grant'
+        ? t('mcp.catalogGrantHelp', { name: targetName })
+        : t('mcp.catalogHelp'),
+  );
   let grantable = $derived(
     (access ?? []).filter((item) => chosen.has(item.agent.id)),
   );
@@ -384,18 +391,17 @@
 
 <Modal
   {title}
+  {description}
   labelledById={titleId}
+  size={view === 'browse' ? 'xl' : 'md'}
   closeDisabled={busy}
   onClose={busy ? noop : onClose}
-  class={view === 'browse'
-    ? 'mcp-modal mcp-catalog-modal mcp-catalog-modal--browse'
-    : 'mcp-modal mcp-catalog-modal'}
+  class="mcp-modal mcp-catalog-modal"
 >
   {#snippet body()}
-    <div class="modal-body mcp-editor mcp-catalog">
+    <div class="modal-body mcp-catalog">
       {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
       {#if view === 'browse'}
-        <p>{t('mcp.catalogHelp')}</p>
         <div class="mcp-catalog__filters">
           <TextField
             type="search"
@@ -499,7 +505,6 @@
           </ul>
         {/if}
       {:else if view === 'signin'}
-        <p>{t('mcp.catalogSignInHelp', { name: targetName })}</p>
         {#if signIn.phase === 'waiting'}
           <RequestedUrl
             url={signIn.request.payload?.url}
@@ -522,7 +527,7 @@
             <summary>{t('mcp.catalogOtherDevice')}</summary>
             <form
               id={`${componentId}-paste`}
-              class="mcp-editor"
+              class="mcp-catalog__paste-form"
               onsubmit={completeSignIn}
             >
               <p>{t('mcp.catalogPasteHelp')}</p>
@@ -575,7 +580,6 @@
             ? t('mcp.catalogSignedIn', { name: targetName })
             : t('mcp.catalogAdded', { name: targetName })}</Banner
         >
-        <p>{t('mcp.catalogGrantHelp', { name: targetName })}</p>
         {#if access === null}
           {#if !error}
             <Banner variant="neutral" role="status"

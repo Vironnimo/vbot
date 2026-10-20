@@ -773,7 +773,7 @@ describe('AgentsView', () => {
 
     openRowMenu(agentButton('bravo'))[3].click();
     flushSync();
-    expect(getDialog(t('agents.delete')).textContent).toContain('Bravo');
+    getDialog(t('agents.deleteConfirmTitle', { name: 'Bravo' }));
     getButton(t('common.delete')).click();
     await waitForCondition(() => listedAgentIds().join() === 'alpha', 100);
     expect(
@@ -812,7 +812,7 @@ describe('AgentsView', () => {
     const deleteFromEditor = async () => {
       getButton(t('agents.delete')).click();
       flushSync();
-      expect(getDialog(t('agents.delete')).textContent).toContain('Alpha');
+      getDialog(t('agents.deleteConfirmTitle', { name: 'Alpha' }));
       getButton(t('common.delete')).click();
       await flushAsyncUpdates();
     };
@@ -829,7 +829,7 @@ describe('AgentsView', () => {
     // The dialog's permanent option skips the Archive.
     getButton(t('agents.delete')).click();
     flushSync();
-    const dialog = getDialog(t('agents.delete'));
+    const dialog = getDialog(t('agents.deleteConfirmTitle', { name: 'Alpha' }));
     expect(dialog.textContent).toContain(t('archive.deleteNotice.kept'));
     [...dialog.querySelectorAll('[role="checkbox"]')]
       .find((box) =>
@@ -838,8 +838,9 @@ describe('AgentsView', () => {
       .click();
     flushSync();
     expect(dialog.textContent).toContain(
-      t('agents.deletePermanentConfirm', { name: 'Alpha' }),
+      t('agents.deletePermanentConfirmTitle', { name: 'Alpha' }),
     );
+    expect(dialog.textContent).toContain(t('agents.deletePermanentConfirm'));
     getButton(t('archive.deletePermanently')).click();
     await waitForCondition(() => navigation.place[0] === 'bravo', 100);
     expect(agentDelete).toHaveBeenLastCalledWith({

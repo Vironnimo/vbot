@@ -591,28 +591,30 @@ export default Object.freeze({
   'sessions.details.runResult': 'Run result',
   'sessions.details.runFinished': 'Finished',
   'sessions.actions': 'Session actions',
-  'sessions.delete_confirm_title': 'Delete session',
+  'sessions.delete_confirm_title': 'Delete session “{name}”?',
+  'sessions.delete_permanent_confirm_title':
+    'Delete session “{name}” permanently?',
   'sessions.rename': 'Rename',
   'sessions.rename_label': 'Rename session',
   'sessions.rename_placeholder': 'Session name',
   'sessions.rename_error': 'The session could not be renamed.',
-  'sessions.compactionPolicy': 'Compaction Policy',
-  'sessions.compactionOverride': 'Session override',
+  'sessions.compactionPolicy': 'Compaction policy',
+  'sessions.compactionOverride': 'Use a Session Policy',
   'sessions.compactionOverrideDescription':
-    'When disabled, this Session follows later Agent or global Policy changes.',
+    'Off: this Session follows the Agent or global Policy, including later changes.',
   'sessions.compactionSaveError': 'The Compaction Policy could not be saved.',
   'sessions.activeRun': 'Active',
   'sessions.activeRunHint': 'This session is currently running.',
   'sessions.delete': 'Delete',
   'sessions.moreHint': '{count} more sessions — scroll to load',
   'sessions.delete_confirm_channel':
-    'Delete session "{name}"? It moves to the Archive, where you can restore it. The channel conversation will start fresh on the next incoming message.',
+    'It moves to the Archive, where you can restore it. The channel conversation starts fresh with the next incoming message.',
   'sessions.delete_confirm':
-    'Delete session "{name}"? It moves to the Archive, where you can restore it.',
+    'It moves to the Archive, where you can restore it.',
   'sessions.delete_permanent_confirm_channel':
-    'Delete session "{name}" permanently? It is deleted now and cannot be restored. The channel conversation will start fresh on the next incoming message.',
+    'It is deleted now and cannot be restored. The channel conversation starts fresh with the next incoming message.',
   'sessions.delete_permanent_confirm':
-    'Delete session "{name}" permanently? It is deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+    'It is deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
   'sessions.delete_error': 'The session could not be deleted.',
   'sessions.delete_busy':
     'This Session or one of its Reflection Sessions has an active or queued Run. Wait until it finishes or stop it, then try again.',

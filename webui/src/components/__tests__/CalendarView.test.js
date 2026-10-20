@@ -354,11 +354,11 @@ describe('CalendarView', () => {
       button(t('calendar.newEvent')).click();
       flushSync();
 
-      // The Modal shell renders body snippets directly; callers own the padded
-      // `.modal-body` wrapper. Without it the form sits flush against the
-      // modal edges.
+      // The Modal shell renders body snippets directly; the form wraps the
+      // padded `.modal-body` and its footer. Without that body the form sits
+      // flush against the modal edges.
       expect(
-        document.querySelector('.modal-body .calendar-form'),
+        document.querySelector('.modal > .calendar-form > .modal-body'),
       ).not.toBeNull();
       for (const id of [
         'calendar-form-title-input',
@@ -376,7 +376,7 @@ describe('CalendarView', () => {
         );
       }
       expect(document.getElementById('calendar-form-start-date').value).toBe(
-        '2026-09-23',
+        'Wed, Sep 23, 2026',
       );
 
       button(t('common.cancel')).click();
@@ -387,7 +387,7 @@ describe('CalendarView', () => {
       document.querySelector('.calendar-cell-surface').click();
       flushSync();
       expect(document.getElementById('calendar-form-start-date').value).toBe(
-        '2026-08-31',
+        'Mon, Aug 31, 2026',
       );
     });
 
@@ -414,7 +414,7 @@ describe('CalendarView', () => {
       expect(document.querySelector('.calendar-weekday-picker')).not.toBeNull();
       chooseOption('calendar-form-end-mode', t('calendar.form.endsUntil'));
       expect(
-        document.querySelector('.calendar-form-ends input[type="date"]'),
+        document.querySelector('.calendar-form-ends .date-field'),
       ).not.toBeNull();
       chooseOption('calendar-form-end-mode', t('calendar.form.endsCount'));
       expect(
@@ -469,7 +469,7 @@ describe('CalendarView', () => {
           flushSync();
           button(
             t('common.edit'),
-            document.querySelector('.modal-footer'),
+            document.querySelector('.calendar-event-card'),
           ).click();
         } else {
           button(t('calendar.newEvent')).click();
@@ -556,69 +556,101 @@ describe('CalendarView', () => {
       });
     });
 
-    it.each(['close', 'edit', 'delete'])(
-      'protects a pending job when the event detail tries to %s',
-      async (transition) => {
-        serveWindow(weeklyStandup(), [eventJob()]);
-        const backend = rpcMock.getMockImplementation();
-        let refuse = true;
-        rpcMock.mockImplementation((method, params) => {
-          if (method === 'cron.update') {
-            return refuse
-              ? Promise.reject(new Error('test-job-write-refused'))
-              : Promise.resolve({});
-          }
-          return backend(method, params);
-        });
-        mountedComponent = await mountCalendarView();
-        document.querySelector('.calendar-cell .calendar-entry').click();
+    it('keeps an Agent job dialog open while its pending edit cannot be saved', async () => {
+      serveWindow(weeklyStandup(), [eventJob()]);
+      const backend = rpcMock.getMockImplementation();
+      let refuse = true;
+      rpcMock.mockImplementation((method, params) => {
+        if (method === 'cron.update') {
+          return refuse
+            ? Promise.reject(new Error('test-job-write-refused'))
+            : Promise.resolve({});
+        }
+        return backend(method, params);
+      });
+      mountedComponent = await mountCalendarView();
+      document.querySelector('.calendar-cell .calendar-entry').click();
+      flushSync();
+      await waitForCondition(() =>
+        Boolean(document.querySelector('.calendar-job-row')),
+      );
+      document.querySelector('.calendar-job-main').click();
+      await waitForCondition(() =>
+        Boolean(document.getElementById('calendar-job-prompt')),
+      );
+      typeInto('calendar-job-prompt', 'Pending event job');
+      const close = () => {
+        document.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+        );
         flushSync();
-        await waitForCondition(() =>
-          Boolean(document.querySelector('.calendar-job-row')),
-        );
-        button(
-          t('common.edit'),
-          document.querySelector('.calendar-job-row'),
-        ).click();
-        flushSync();
-        typeInto('calendar-job-prompt', 'Pending event job');
-        const act = () => {
-          if (transition === 'close')
-            document.dispatchEvent(
-              new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
-            );
-          else
-            button(
-              t(transition === 'edit' ? 'common.edit' : 'common.delete'),
-              document.querySelector('.modal-footer'),
-            ).click();
-          flushSync();
-        };
-        act();
-        await waitForCondition(() => rpcCalls('cron.update').length === 1);
-        await waitForCondition(() =>
-          document.body.textContent.includes('test-job-write-refused'),
-        );
-        expect(document.getElementById('calendar-job-prompt').value).toBe(
-          'Pending event job',
-        );
-        expect(document.querySelector('.calendar-detail')).not.toBeNull();
-        refuse = false;
-        act();
-        await waitForCondition(
-          () => document.querySelector('.calendar-detail') === null,
-        );
-        expect(rpcCalls('cron.update')).toHaveLength(2);
-        if (transition === 'edit')
-          expect(document.querySelector('.calendar-form')).not.toBeNull();
-        if (transition === 'delete')
-          expect(
-            document.querySelector('[role="dialog"]').textContent,
-          ).toContain(t('calendar.deleteTitle'));
-      },
-    );
+      };
+      close();
+      await waitForCondition(() => rpcCalls('cron.update').length === 1);
+      await waitForCondition(() =>
+        document.body.textContent.includes('test-job-write-refused'),
+      );
+      expect(document.getElementById('calendar-job-prompt').value).toBe(
+        'Pending event job',
+      );
+      refuse = false;
+      close();
+      await waitForCondition(
+        () => document.getElementById('calendar-job-prompt') === null,
+      );
+      expect(rpcCalls('cron.update')).toHaveLength(2);
+      // The event's card stays open below the closed job dialog.
+      expect(document.querySelector('.calendar-event-card')).not.toBeNull();
+    });
 
-    it('opens an entry in the detail modal and saves an edit in the server wall clock', async () => {
+    it('shows an entry in a card beside it that Escape or a press outside closes', async () => {
+      serveWindow(weeklyStandup());
+      mountedComponent = await mountCalendarView();
+      const entry = document.querySelector('.calendar-cell .calendar-entry');
+      entry.focus();
+      entry.click();
+      await waitForCondition(
+        () =>
+          document.activeElement ===
+          document.querySelector('.calendar-event-card'),
+      );
+
+      // A non-modal dialog named by the event, with its date and time and
+      // how it repeats.
+      const card = document.querySelector('.calendar-event-card');
+      expect(card.getAttribute('role')).toBe('dialog');
+      expect(card.hasAttribute('aria-modal')).toBe(false);
+      expect(
+        document.getElementById(card.getAttribute('aria-labelledby'))
+          .textContent,
+      ).toBe('Standup');
+      expect(plainText(card.querySelector('.calendar-detail-time'))).toBe(
+        'Wednesday, September 23 · 9:00 – 9:30 AM',
+      );
+      expect(card.textContent).toContain(
+        t('calendar.repeat.weekly', { days: 'Wednesday' }),
+      );
+
+      // Escape closes it and returns to the entry.
+      card.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+      flushSync();
+      expect(document.querySelector('.calendar-event-card')).toBeNull();
+      expect(document.activeElement).toBe(entry);
+
+      // A press elsewhere in the Calendar closes it too.
+      entry.click();
+      flushSync();
+      expect(document.querySelector('.calendar-event-card')).not.toBeNull();
+      document
+        .querySelector('.calendar-grid')
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+      flushSync();
+      expect(document.querySelector('.calendar-event-card')).toBeNull();
+    });
+
+    it('opens an entry in its card and saves an edit in the server wall clock', async () => {
       serveWindow(
         calendarWindow({
           timezone: 'Europe/Berlin',
@@ -664,7 +696,7 @@ describe('CalendarView', () => {
       flushSync();
 
       // Regression: clicking an entry used to bubble to the create surface, so
-      // the form opened instead of the detail modal.
+      // the form opened instead of the event's card.
       expect(document.querySelector('.calendar-detail')).not.toBeNull();
       expect(document.querySelector('.calendar-form')).toBeNull();
       expect(document.querySelector('.calendar-detail').textContent).toContain(
@@ -675,13 +707,13 @@ describe('CalendarView', () => {
       flushSync();
       // 07:00 UTC is 09:00 in Berlin; the form presents that wall clock.
       expect(document.getElementById('calendar-form-start-date').value).toBe(
-        '2026-09-23',
+        'Wed, Sep 23, 2026',
       );
       expect(document.getElementById('calendar-form-start-time').value).toBe(
-        '09:00',
+        '9:00 AM',
       );
       expect(document.getElementById('calendar-form-end-time').value).toBe(
-        '10:00',
+        '10:00 AM',
       );
       // A single event has no occurrence to edit on its own.
       expect(document.querySelector('.calendar-edit-scope')).toBeNull();
@@ -843,17 +875,22 @@ describe('CalendarView', () => {
       );
       expect(tooltipRows()).toContainEqual([
         t('calendar.form.recurrence'),
-        t('calendar.form.freqWeekly'),
+        t('calendar.repeat.weekly', { days: 'Wednesday' }),
       ]);
       document.querySelector('.calendar-cell .calendar-entry').click();
       flushSync();
 
-      // The footer deletes the event; each Agent job has its own Delete.
-      button(
-        t('common.delete'),
-        document.querySelector('.modal-footer'),
-      ).click();
+      // The card's delete icon asks about the event; each Agent job has its
+      // own Delete in its row menu.
+      document
+        .querySelector(
+          `.calendar-event-card button[aria-label="${t('calendar.deleteEvent')}"]`,
+        )
+        .click();
       flushSync();
+      expect(
+        document.querySelector('[aria-modal="true"] .modal-title').textContent,
+      ).toBe(t('calendar.deleteTitle', { title: 'Standup' }));
       // Deleting the whole event takes its Agent jobs along.
       expect(document.querySelector('.calendar-delete-jobs').textContent).toBe(
         t('calendar.deleteJob'),
@@ -864,7 +901,7 @@ describe('CalendarView', () => {
       flushSync();
       expect(document.querySelector('.calendar-delete-jobs')).toBeNull();
       button(
-        t('calendar.deleteOccurrence'),
+        t('calendar.deleteOccurrenceAction'),
         document.querySelector('.modal-footer'),
       ).click();
       await waitForCondition(() => rpcCalls('calendar.delete').length > 0);

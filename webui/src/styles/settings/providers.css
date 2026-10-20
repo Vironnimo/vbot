@@ -400,28 +400,11 @@
   animation: s-oauth-spin 800ms linear infinite;
 }
 
-.device-flow-inline {
-  margin-top: 12px;
-  padding: 14px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-lg);
-  background: var(--surface-2);
-}
-
-.device-flow-header {
-  margin-bottom: 12px;
-}
-
-.device-flow-header h3 {
-  margin: 0;
-  color: var(--text-hi);
-  font-size: var(--fs-heading-sm);
-  font-weight: 600;
-  line-height: 1.3;
-}
-
+/* Device flow of a Provider sign-in (ProviderConnectModal): the
+   instructions, the one-time code with its copy action, the verification
+   link and the waiting line follow each other in the dialog body. */
 .device-flow-instructions {
-  margin: 0 0 10px;
+  margin: 0;
   color: var(--text-med);
   font-size: var(--fs-body-sm);
   line-height: 1.4;
@@ -449,7 +432,7 @@
   border: 1px solid var(--border-2);
   border-radius: var(--r-md);
   color: var(--text-hi);
-  background: var(--bg);
+  background: var(--field-surface);
   font-family: var(--font-mono);
   font-size: var(--fs-heading-lg);
   font-weight: 500;
@@ -460,7 +443,7 @@
    the setup dialog restyles it for its prose link (onboarding.css). */
 .device-flow-link {
   display: inline-flex;
-  margin-top: 12px;
+  align-self: flex-start;
   color: var(--accent);
   font-size: var(--fs-body-sm);
   overflow-wrap: anywhere;
@@ -476,15 +459,8 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  margin-top: 14px;
   color: var(--text-med);
   font-size: var(--fs-body-sm);
-}
-
-.device-flow-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 14px;
 }
 
 @keyframes s-oauth-spin {
@@ -493,83 +469,101 @@
   }
 }
 
-.provider-connect-modal {
-  width: min(480px, calc(100vw - 48px));
+/* Add provider / Connect dialog. The API key form takes no box of its own,
+   so its fields follow the body's rhythm. */
+.provider-connect-modal__form {
+  display: contents;
 }
 
-.provider-connect-modal__body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.provider-connect-modal__hint {
+.provider-connect-modal__note {
   margin: 0;
   color: var(--text-med);
   font-size: var(--fs-body-sm);
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
-.provider-connect-modal__error {
+.provider-connect-modal__empty {
   margin: 0;
-  color: var(--red);
+  padding: 18px 0;
+  color: var(--text-lo);
   font-size: var(--fs-body-sm);
-  line-height: 1.4;
+  text-align: center;
 }
 
+/* Choices (Providers, then connection methods) are full-width rows in one
+   bordered list, like an entity group on the Settings pages; each row leads
+   on to the next step. */
 .provider-pick-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-height: 320px;
-  overflow-y: auto;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.provider-pick-list > [role='listitem'] + [role='listitem'] {
+  border-top: 1px solid var(--border);
 }
 
 .provider-pick-item {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  background: var(--bg);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 14px 10px 16px;
+  border: 0;
+  color: inherit;
+  background: transparent;
   text-align: left;
-  transition:
-    border-color 120ms ease,
-    background 120ms ease;
+  cursor: pointer;
+  transition: background 120ms ease;
 }
 
 .provider-pick-item:hover {
-  border-color: var(--text-faint);
-  background: var(--surface-2);
+  background: var(--surface-3);
 }
 
 .provider-pick-item:focus-visible {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
+  box-shadow: inset 0 0 0 2px var(--accent);
   outline: none;
+}
+
+.provider-pick-item__text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .provider-pick-item__name {
   color: var(--text-hi);
-  font-size: var(--fs-label-md);
+  font-size: var(--fs-body-md);
   font-weight: 500;
-}
-
-.provider-pick-item__connection {
-  margin-left: 6px;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
+  line-height: 1.4;
 }
 
 /* The detail line is a base URL on the provider step but a prose method
    description on the method step, so it stays in the interface face. */
 .provider-pick-item__detail {
   color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  overflow-wrap: anywhere;
+  font-size: var(--fs-body-sm);
+  line-height: 1.45;
 }
+
 .provider-pick-item__detail.provider-pick-item__detail--code {
+  overflow: hidden;
   font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-mono-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-pick-item__go {
+  margin: 0 2px 0 0;
+}
+
+.provider-pick-item:hover .provider-pick-item__go {
+  color: var(--text-hi);
 }

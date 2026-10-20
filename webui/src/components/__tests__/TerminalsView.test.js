@@ -25,7 +25,6 @@ import {
   userGroup,
   terminalListResponse,
   readyAll,
-  submitStartForm,
   flushAnimationFrames,
   waitFor,
   findButton,
@@ -64,6 +63,50 @@ function fireResize() {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function keydown(target, key) {
+  target.dispatchEvent(
+    new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+  );
+}
+
+function launcherInput() {
+  return document.querySelector('.terminal-launcher__input');
+}
+
+function launcherError() {
+  return (
+    document.querySelector('.terminal-launcher__error')?.textContent.trim() ??
+    ''
+  );
+}
+
+function setupRows() {
+  return [...document.querySelectorAll('.terminal-launcher__setup')];
+}
+
+// Each recent setup as its command line, or with the folder it names.
+function setupLabels() {
+  return setupRows().map((row) => {
+    const command = row
+      .querySelector('.terminal-launcher__setup-command')
+      .textContent.trim();
+    const folder = row.querySelector('.terminal-launcher__setup-folder');
+    return folder ? [command, folder.textContent.trim()] : command;
+  });
+}
+
+function folderChip() {
+  return document
+    .querySelector('.terminal-launcher__chip--folder')
+    .textContent.trim();
+}
+
+function optionButton(label) {
+  return [...document.querySelectorAll('[role="option"]')].find((option) =>
+    option.textContent.includes(label),
+  );
 }
 
 describe('TerminalsView views and starting', () => {
@@ -206,13 +249,13 @@ describe('TerminalsView views and starting', () => {
 
       await waitFor(() => document.querySelector('[data-terminal-id="new-1"]'));
       expect(startTerminalMock).toHaveBeenCalledWith(request);
-      expect(document.querySelector('#terminal-start-form')).toBeNull();
+      expect(document.querySelector('.terminal-launcher')).toBeNull();
       const tiles = document.querySelectorAll('.terminals-view__tile');
       expect(tiles[tiles.length - 1].dataset.terminalId).toBe('new-1');
     },
   );
 
-  it('offers recent setups, the start dialog and a new group beside the start button', async () => {
+  it('opens the launcher from the start button with recent setups and a new group', async () => {
     listTerminalsMock.mockResolvedValue({
       ...terminalListResponse([]),
       launch_history: [
@@ -230,26 +273,33 @@ describe('TerminalsView views and starting', () => {
       document.querySelector('.terminals-view__detail > .empty-state'),
     );
 
-    findButtonByAriaLabel('More ways to start a terminal').click();
-    await waitFor(() => menuItems().length > 0);
-    expect(
-      menuItems().map(
-        (item) => item.querySelector('.context-menu__label').textContent,
-      ),
-    ).toEqual(['codex --profile daily', 'Customize…', 'New group…']);
+    const chevron = findButtonByAriaLabel('More ways to start a terminal');
+    chevron.click();
+    await waitFor(() => document.activeElement === launcherInput());
+    expect(chevron.getAttribute('aria-expanded')).toBe('true');
+    expect(setupLabels()).toEqual(['codex --profile daily']);
 
-    menuItems()[0].click();
+    setupRows()[0].click();
     await waitFor(() => startTerminalMock.mock.calls.length === 1);
     expect(startTerminalMock).toHaveBeenCalledWith({
       command: 'codex',
       args: ['--profile', 'daily'],
       workdir: 'C:\\repo',
     });
+    await waitFor(() => !document.querySelector('.terminal-launcher'));
 
-    findButtonByAriaLabel('More ways to start a terminal').click();
-    await waitFor(() => menuItems().length > 0);
-    menuItems()[2].click();
+    chevron.click();
+    await waitFor(() => document.querySelector('.terminal-launcher'));
+    keydown(launcherInput(), 'Escape');
     flushSync();
+    expect(document.querySelector('.terminal-launcher')).toBeNull();
+    expect(document.activeElement).toBe(chevron);
+
+    chevron.click();
+    await waitFor(() => document.querySelector('.terminal-launcher'));
+    findButton('New group…').click();
+    flushSync();
+    expect(document.querySelector('.terminal-launcher')).toBeNull();
     expect(document.querySelector('#terminal-group-form')).toBeTruthy();
   });
 
@@ -298,12 +348,15 @@ describe('TerminalsView views and starting', () => {
     );
     await waitFor(() => menuItems().length > 0);
     expect(menuItems().map((item) => item.textContent.trim())).toEqual([
-      'Rename group',
-      'Delete group',
+      'Rename group…',
+      'Delete group…',
     ]);
     expect(menuItems()[1].classList).toContain('context-menu__item--danger');
     menuItems()[1].click();
     flushSync();
+    expect(document.querySelector('.modal-title').textContent).toBe(
+      'Delete group “Work”?',
+    );
     expect(document.body.textContent).toContain(
       t('terminals.deleteGroupWarning'),
     );
@@ -399,74 +452,93 @@ describe('TerminalsView views and starting', () => {
 describe('TerminalsView launch and close', () => {
   const view = setupTerminalsViewSuite();
 
-  async function openStartDialog() {
+  async function openLauncher() {
     view.mount();
     await waitFor(() =>
       document.querySelector('.terminals-view__detail > .empty-state'),
     );
     findButton('Customize…').click();
-    flushSync();
+    await waitFor(() => document.activeElement === launcherInput());
   }
 
-  it('starts a terminal from the modal and focuses it for direct input', async () => {
-    listTerminalsMock.mockResolvedValue(terminalListResponse([]));
+  it('starts a typed command line in the chosen folder and view and focuses it', async () => {
+    listTerminalsMock.mockResolvedValue(
+      terminalListResponse(
+        [],
+        [manualGroup(), userGroup('work', 'Work'), userGroup('ops', 'Ops')],
+      ),
+    );
     startTerminalMock.mockResolvedValue({
       terminal: terminal({
         terminal_id: 'manual-1',
+        group_id: 'ops',
         command: 'codex',
         owner: null,
       }),
     });
-    await openStartDialog();
-    expect(document.querySelector('#terminal-start-arguments')).toBeNull();
-    expect(
-      document.querySelectorAll('#terminal-start-form .form-field__help'),
-    ).toHaveLength(0);
-    expect(
-      document.querySelectorAll('#terminal-start-form .info-hint'),
-    ).toHaveLength(3);
+    await openLauncher();
 
-    setField('#terminal-start-command', 'codex --profile "work space"');
-    setField('#terminal-start-workdir', 'C:\\repo');
-    submitStartForm();
+    setField('.terminal-launcher__input', 'codex --profile "work space"');
+    findButtonByAriaLabel('Working directory: Home directory').click();
+    await waitFor(() =>
+      document.activeElement?.closest('.terminal-launcher__path'),
+    );
+    setField('.terminal-launcher__path input', 'C:\\repo');
+    keydown(document.activeElement, 'Enter');
+    await waitFor(() => document.activeElement === launcherInput());
+    expect(folderChip()).toBe('repo');
+
+    // It shows in the shown view unless another one is chosen.
+    findButtonByAriaLabel('Show in: Work').click();
+    await waitFor(() => optionButton('Ops'));
+    optionButton('Ops').click();
+    flushSync();
+    keydown(launcherInput(), 'Enter');
 
     await waitFor(() => streams.length === 1 && terminalInstances.length === 1);
     expect(startTerminalMock).toHaveBeenCalledWith({
       command: 'codex',
       args: ['--profile', 'work space'],
       workdir: 'C:\\repo',
+      group_id: 'ops',
     });
+    expect(document.querySelector('.terminal-launcher')).toBeNull();
     expect(terminalInstances[0].options.disableStdin).toBe(false);
     expect(terminalInstances[0].focus).toHaveBeenCalled();
   });
 
-  it('keeps malformed commands editable and starts the default shell when cleared', async () => {
+  it('shows start errors at the command line and starts the default shell when cleared', async () => {
     listTerminalsMock.mockResolvedValue(terminalListResponse([]));
-    startTerminalMock.mockResolvedValue({
-      terminal: terminal({ owner: null }),
-    });
-    await openStartDialog();
+    startTerminalMock
+      .mockRejectedValueOnce(new Error('The program nope was not found.'))
+      .mockResolvedValue({ terminal: terminal({ owner: null }) });
+    await openLauncher();
 
-    setField('#terminal-start-command', 'codex "unfinished');
-    submitStartForm();
-    await waitFor(() =>
-      document.querySelector('#terminal-start-command[aria-invalid="true"]'),
-    );
-    expect(startTerminalMock).not.toHaveBeenCalled();
-    await waitFor(() => document.activeElement.id === 'terminal-start-command');
-    expect(document.querySelector('#terminal-start-command').value).toBe(
-      'codex "unfinished',
-    );
-
-    setField('#terminal-start-command', '   ');
+    setField('.terminal-launcher__input', 'codex "unfinished');
+    keydown(launcherInput(), 'Enter');
     flushSync();
-    expect(document.querySelector('#terminal-start-command-error')).toBeNull();
-    submitStartForm();
-    await waitFor(() => startTerminalMock.mock.calls.length === 1);
-    expect(startTerminalMock).toHaveBeenCalledWith({});
+    expect(launcherInput().getAttribute('aria-invalid')).toBe('true');
+    expect(launcherError()).toBe(t('terminals.commandError.unclosedQuote'));
+    expect(startTerminalMock).not.toHaveBeenCalled();
+    expect(launcherInput().value).toBe('codex "unfinished');
+
+    setField('.terminal-launcher__input', 'nope');
+    flushSync();
+    expect(launcherError()).toBe('');
+    keydown(launcherInput(), 'Enter');
+    await waitFor(() => launcherError() !== '');
+    expect(launcherError()).toBe('The program nope was not found.');
+    expect(document.activeElement).toBe(launcherInput());
+
+    setField('.terminal-launcher__input', '   ');
+    flushSync();
+    expect(launcherError()).toBe('');
+    keydown(launcherInput(), 'Enter');
+    await waitFor(() => startTerminalMock.mock.calls.length === 2);
+    expect(startTerminalMock).toHaveBeenLastCalledWith({});
   });
 
-  it('prefills the last launch and can select an older persistent setup', async () => {
+  it('filters the recent setups as you type and starts the chosen one', async () => {
     listTerminalsMock.mockResolvedValue({
       groups: [],
       terminals: [],
@@ -477,6 +549,8 @@ describe('TerminalsView launch and close', () => {
           args: ['--profile', 'daily'],
           workdir: 'C:\\Development\\vBot',
         }),
+        launchHistory({ id: 'shell', workdir: 'C:\\Development\\vBot' }),
+        launchHistory({ id: 'home-shell' }),
         launchHistory({
           id: 'older',
           command: 'python',
@@ -485,21 +559,43 @@ describe('TerminalsView launch and close', () => {
         }),
       ],
     });
-    await openStartDialog();
-    const field = (id) => document.querySelector(`#terminal-start-${id}`).value;
-    expect(field('command')).toBe('codex --profile daily');
-    expect(field('workdir')).toBe('C:\\Development\\vBot');
+    startTerminalMock.mockResolvedValue({ terminal: terminal() });
+    await openLauncher();
 
-    document.querySelector('#terminal-start-history').click();
-    const olderOption = () =>
-      [...document.querySelectorAll('button')].find((button) =>
-        button.textContent.includes('python -m http.server 8080'),
-      );
-    await waitFor(olderOption);
-    olderOption().click();
+    // The last used folder is the default; the empty command line already
+    // starts the default shell there, and only other folders are named.
+    expect(folderChip()).toBe('vBot');
+    expect(setupLabels()).toEqual([
+      'codex --profile daily',
+      ['Default shell', 'Home directory'],
+      ['python -m http.server 8080', 'C:\\Sites\\docs'],
+    ]);
+
+    // Tab moves a setup into the launcher to edit it.
+    keydown(launcherInput(), 'ArrowUp');
+    keydown(launcherInput(), 'Tab');
     flushSync();
-    expect(field('command')).toBe('python -m http.server 8080');
-    expect(field('workdir')).toBe('C:\\Sites\\docs');
+    expect(launcherInput().value).toBe('python -m http.server 8080');
+    expect(folderChip()).toBe('docs');
+
+    setField('.terminal-launcher__input', 'cod');
+    flushSync();
+    expect(setupLabels()).toEqual([
+      ['codex --profile daily', 'C:\\Development\\vBot'],
+    ]);
+    keydown(launcherInput(), 'ArrowDown');
+    flushSync();
+    expect(launcherInput().getAttribute('aria-activedescendant')).toBe(
+      setupRows()[0].id,
+    );
+    expect(setupRows()[0].getAttribute('aria-selected')).toBe('true');
+    keydown(launcherInput(), 'Enter');
+    await waitFor(() => startTerminalMock.mock.calls.length === 1);
+    expect(startTerminalMock).toHaveBeenCalledWith({
+      command: 'codex',
+      args: ['--profile', 'daily'],
+      workdir: 'C:\\Development\\vBot',
+    });
   });
 
   it.each([

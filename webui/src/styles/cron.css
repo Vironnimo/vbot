@@ -355,6 +355,20 @@
   flex: 1;
 }
 
+/* A one-time run: its date beside its time. */
+.cron-view .cron-run-at-control {
+  display: flex;
+  gap: 8px;
+}
+
+.cron-view .cron-run-at-control > .date-field {
+  flex: 1 1 180px;
+}
+
+.cron-view .cron-run-at-control > .time-field {
+  flex: 0 0 120px;
+}
+
 /* An event job names its Calendar event; the event itself is chosen in the
    Calendar. */
 .cron-view .cron-event-title {

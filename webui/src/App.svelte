@@ -947,11 +947,11 @@
   <Modal
     title={t('settings.desktop.switchModalTitle')}
     labelledById="desktop-server-switch-title"
-    class="desktop-server-switch-modal"
+    size="lg"
     onClose={() => (serverSwitcherOpen = false)}
   >
     {#snippet body()}
-      <div class="modal-body desktop-server-switch-modal__body">
+      <div class="modal-body">
         <LazyContent load={loadDesktopConnectionSettings}>
           {#snippet children(Component)}
             <Component
@@ -1016,15 +1016,6 @@
     color: var(--text-med);
     font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
-  }
-
-  :global(.desktop-server-switch-modal) {
-    width: min(680px, calc(100vw - 40px));
-  }
-
-  .desktop-server-switch-modal__body {
-    max-height: min(70vh, 680px);
-    overflow-y: auto;
   }
 
   @media (max-width: 640px) {

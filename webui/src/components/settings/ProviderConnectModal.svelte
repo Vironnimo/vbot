@@ -1,5 +1,6 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import FormField from '../ui/FormField.svelte';
   import Modal from '../ui/Modal.svelte';
@@ -23,6 +24,8 @@
   } from '$lib/settingsView.js';
 
   const noop = () => {};
+  // A Provider list longer than this gets a search field.
+  const PROVIDER_SEARCH_THRESHOLD = 6;
 
   let {
     providers = [],
@@ -65,6 +68,7 @@
   let oauthActive = $state(false);
   let activeOAuthAccount = $state(DEFAULT_ACCOUNT_ID);
   let copiedCode = $state(false);
+  let providerQuery = $state('');
   let handledAuthEvent = null;
   let closed = false;
   onDestroy(() => {
@@ -97,6 +101,9 @@
     selectedProvider ? getAddableConnections(selectedProvider) : [],
   );
   let canGoBack = $derived(computeCanGoBack(step));
+  let filteredProviders = $derived(filterProviders(providers, providerQuery));
+  // The step's one-line lead under the title.
+  let stepDescription = $derived(describeStep(step));
 
   $effect(() => {
     if (providerAuthEvent && providerAuthEvent !== handledAuthEvent) {
@@ -107,6 +114,48 @@
 
   function providerName(provider) {
     return provider?.name ?? provider?.id ?? 'Provider';
+  }
+
+  function filterProviders(list, query) {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) {
+      return list;
+    }
+    return list.filter((provider) =>
+      [providerName(provider), provider.id, provider.base_url]
+        .filter(Boolean)
+        .some((value) => String(value).toLocaleLowerCase().includes(needle)),
+    );
+  }
+
+  function describeStep(currentStep) {
+    if (currentStep === 'provider') {
+      return providers.length > 0
+        ? t('settings.providers.add.chooseProvider')
+        : '';
+    }
+    if (currentStep === 'method') {
+      return t('settings.providers.add.chooseMethod', {
+        provider: providerName(selectedProvider),
+      });
+    }
+    if (currentStep === 'api-key') {
+      if (setupMode) {
+        return t('onboarding.connect.keyHelp');
+      }
+      // Several connections: name the one this key is for.
+      return methodOptions.length > 1
+        ? connectionMethodLabel(selectedConnection)
+        : '';
+    }
+    if (currentStep === 'keyless') {
+      return t('settings.providers.add.localIntro');
+    }
+    return oauthActive
+      ? ''
+      : t('settings.providers.add.oauthIntro', {
+          provider: providerName(selectedProvider),
+        });
   }
 
   function computeCanGoBack(currentStep) {
@@ -364,8 +413,10 @@
     return disconnectProviderRequest(providerId, connectionId, account);
   }
 
+  // A connection's own name ("Kimi Code API Key (Subscription)") tells
+  // several connections of one kind apart; the kind is the fallback.
   function connectionMethodLabel(connection) {
-    if (setupMode && connection.label) {
+    if (connection.label) {
       return connection.label;
     }
     if (connection.type === 'api_key') {
@@ -424,12 +475,18 @@
   </FormField>
 {/snippet}
 
+{#snippet pickChevron()}
+  <span class="disclosure-chevron provider-pick-item__go" aria-hidden="true"
+  ></span>
+{/snippet}
+
 <Modal
   title={selectedProvider
     ? t('settings.providers.device_flow.title', {
         provider: providerName(selectedProvider),
       })
     : t('settings.providers.add.title')}
+  description={stepDescription}
   labelledById="provider-connect-modal-title"
   class={setupMode
     ? 'provider-connect-modal provider-connect-modal--setup'
@@ -441,42 +498,54 @@
     <div class="modal-body provider-connect-modal__body">
       {#if step === 'provider'}
         {#if providers.length === 0}
-          <p class="provider-connect-modal__hint">
-            {t('settings.providers.add.allConnected')}
-          </p>
+          <p>{t('settings.providers.add.allConnected')}</p>
         {:else}
-          <p class="provider-connect-modal__hint">
-            {t('settings.providers.add.chooseProvider')}
-          </p>
-          <div class="provider-pick-list" role="list">
-            {#each providers as provider (provider.id)}
-              <div role="listitem">
-                <button
-                  type="button"
-                  class="provider-pick-item"
-                  onclick={() => chooseProvider(provider)}
-                >
-                  <span class="provider-pick-item__name">
-                    {providerName(provider)}
-                  </span>
-                  {#if provider.base_url}
-                    <span
-                      class="provider-pick-item__detail provider-pick-item__detail--code"
-                    >
-                      {provider.base_url}
+          {#if providers.length > PROVIDER_SEARCH_THRESHOLD}
+            <TextField
+              id="provider-connect-search"
+              type="search"
+              autocomplete="off"
+              value={providerQuery}
+              placeholder={t('settings.providers.add.search')}
+              ariaLabel={t('settings.providers.add.search')}
+              onInput={(next) => (providerQuery = next)}
+            />
+          {/if}
+          {#if filteredProviders.length === 0}
+            <p class="provider-connect-modal__empty">
+              {t('settings.providers.add.noMatch', {
+                query: providerQuery.trim(),
+              })}
+            </p>
+          {:else}
+            <div class="provider-pick-list" role="list">
+              {#each filteredProviders as provider (provider.id)}
+                <div role="listitem">
+                  <button
+                    type="button"
+                    class="provider-pick-item"
+                    onclick={() => chooseProvider(provider)}
+                  >
+                    <span class="provider-pick-item__text">
+                      <span class="provider-pick-item__name">
+                        {providerName(provider)}
+                      </span>
+                      {#if provider.base_url}
+                        <span
+                          class="provider-pick-item__detail provider-pick-item__detail--code"
+                        >
+                          {provider.base_url}
+                        </span>
+                      {/if}
                     </span>
-                  {/if}
-                </button>
-              </div>
-            {/each}
-          </div>
+                    {@render pickChevron()}
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
         {/if}
       {:else if step === 'method'}
-        <p class="provider-connect-modal__hint">
-          {t('settings.providers.add.chooseMethod', {
-            provider: providerName(selectedProvider),
-          })}
-        </p>
         <div class="provider-pick-list" role="list">
           {#each methodOptions as connection (connection.id)}
             <div role="listitem">
@@ -485,87 +554,73 @@
                 class="provider-pick-item"
                 onclick={() => chooseConnection(connection)}
               >
-                <span class="provider-pick-item__name">
-                  {connectionMethodLabel(connection)}
-                  {#if !setupMode}<span class="provider-pick-item__connection">
-                      {connection.label ?? connection.id}
-                    </span>{/if}
+                <span class="provider-pick-item__text">
+                  <span class="provider-pick-item__name">
+                    {connectionMethodLabel(connection)}
+                  </span>
+                  <span class="provider-pick-item__detail">
+                    {connectionMethodDescription(connection)}
+                  </span>
                 </span>
-                <span class="provider-pick-item__detail">
-                  {connectionMethodDescription(connection)}
-                </span>
+                {@render pickChevron()}
               </button>
             </div>
           {/each}
         </div>
       {:else if step === 'api-key'}
-        <form id="provider-connect-key-form" onsubmit={submitApiKey}>
-          {#if setupMode}
-            <strong class="provider-connect-method"
-              >{selectedConnection.label ??
-                connectionMethodLabel(selectedConnection)}</strong
+        <!-- The form takes no box of its own, so its fields follow the
+             dialog body's rhythm. -->
+        <form
+          id="provider-connect-key-form"
+          class="provider-connect-modal__form"
+          onsubmit={submitApiKey}
+        >
+          {#if setupMode && selectedProvider.id === 'openrouter'}
+            <a
+              class="device-flow-link"
+              href="https://openrouter.ai/settings/keys"
+              target="_blank"
+              rel="noreferrer"
             >
-            <p class="provider-connect-modal__hint">
-              {t('onboarding.connect.keyHelp')}
-            </p>
-            {#if selectedProvider.id === 'openrouter'}
-              <a
-                class="device-flow-link"
-                href="https://openrouter.ai/settings/keys"
-                target="_blank"
-                rel="noreferrer"
-              >
-                {t('onboarding.connect.openrouterKeys')}
-              </a>
-            {/if}
+              {t('onboarding.connect.openrouterKeys')}
+            </a>
           {/if}
           {#if isSharedOpenCodeConnection(selectedConnection)}
-            <p class="provider-connect-modal__hint" role="note">
+            <p class="provider-connect-modal__note" role="note">
               {describeSharedOpenCodeKey()}
             </p>
           {/if}
           <FormField
             controlId="provider-api-key"
             label={t('settings.providers.add.apiKeyLabel')}
+            help={!setupMode && selectedConnection.credential_key
+              ? t('settings.providers.add.apiKeyHint', {
+                  credentialKey: deriveAccountCredentialKey(
+                    selectedConnection.credential_key,
+                    effectiveAccount(),
+                  ),
+                })
+              : ''}
           >
-            <TextField
-              id="provider-api-key"
-              type="password"
-              autocomplete="off"
-              placeholder={t('settings.providers.add.apiKeyPlaceholder')}
-              value={apiKeyValue}
-              disabled={saving}
-              onInput={(next) => {
-                apiKeyValue = next;
-                errorMessage = '';
-              }}
-            />
+            {#snippet children(field)}
+              <TextField
+                id={field.controlId}
+                type="password"
+                autocomplete="off"
+                placeholder={t('settings.providers.add.apiKeyPlaceholder')}
+                value={apiKeyValue}
+                disabled={saving}
+                aria-describedby={field.describedBy}
+                onInput={(next) => {
+                  apiKeyValue = next;
+                  errorMessage = '';
+                }}
+              />
+            {/snippet}
           </FormField>
           {#if !setupMode}{@render accountField(saving)}{/if}
-          {#if !setupMode && selectedConnection.credential_key}
-            <p class="provider-connect-modal__hint">
-              {t('settings.providers.add.apiKeyHint', {
-                credentialKey: deriveAccountCredentialKey(
-                  selectedConnection.credential_key,
-                  effectiveAccount(),
-                ),
-              })}
-            </p>
-          {/if}
         </form>
-      {:else if step === 'keyless'}
-        {#if setupMode}<strong class="provider-connect-method"
-            >{selectedConnection.label ??
-              connectionMethodLabel(selectedConnection)}</strong
-          >{/if}
-        <p class="provider-connect-modal__hint">
-          {t('settings.providers.add.localIntro')}
-        </p>
       {:else if step === 'oauth'}
-        {#if setupMode}<strong class="provider-connect-method"
-            >{selectedConnection.label ??
-              connectionMethodLabel(selectedConnection)}</strong
-          >{/if}
         {#if oauthActive && oauthData}
           <p class="device-flow-instructions">
             {t('settings.providers.device_flow.instructions')}
@@ -610,29 +665,24 @@
               })}
             </span>
           </div>
-        {:else}
-          <p class="provider-connect-modal__hint">
-            {t('settings.providers.add.oauthIntro', {
-              provider: providerName(selectedProvider),
-            })}
-          </p>
-          {#if !setupMode}{@render accountField(false)}{/if}
+        {:else if !setupMode}
+          {@render accountField(false)}
         {/if}
       {/if}
 
       {#if errorMessage}
-        <p class="provider-connect-modal__error" role="alert">
-          {errorMessage}
-        </p>
+        <Banner variant="error" role="alert">{errorMessage}</Banner>
       {/if}
     </div>
   {/snippet}
 
   {#snippet footer()}
     {#if canGoBack}
-      <Button variant="secondary" disabled={saving} onClick={goBack}>
-        {t('common.back')}
-      </Button>
+      <div class="modal-footer__start">
+        <Button variant="tertiary" disabled={saving} onClick={goBack}>
+          {t('common.back')}
+        </Button>
+      </div>
     {/if}
     <Button variant="secondary" disabled={saving} onClick={close}>
       {t('common.cancel')}

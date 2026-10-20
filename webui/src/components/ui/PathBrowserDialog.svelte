@@ -236,7 +236,7 @@
 
 <div class="path-browser-host" use:portalThenRender>
   {#if portaled}
-    <Modal title={browser.title} class="path-browser" {onClose}>
+    <Modal title={browser.title} size="lg" class="path-browser" {onClose}>
       {#snippet body()}
         <!-- Shortcuts only: every key it handles has a control too. -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -613,15 +613,17 @@
         </div>
       {/snippet}
       {#snippet footer()}
-        <!-- A long path loses its start; the tooltip shows it whole. -->
-        <code
-          class="path-browser__choice"
-          use:tooltip={{
-            text: browser.chosenValue,
-            mono: true,
-            whenTruncated: true,
-          }}><bdi>{browser.chosenValue}</bdi></code
-        >
+        {#if browser.chosenValue}
+          <!-- A long path loses its start; the tooltip shows it whole. -->
+          <code
+            class="path-browser__choice"
+            use:tooltip={{
+              text: browser.chosenValue,
+              mono: true,
+              whenTruncated: true,
+            }}><bdi>{browser.chosenValue}</bdi></code
+          >
+        {/if}
         <Button variant="secondary" onClick={onClose}
           >{t('common.cancel')}</Button
         >
@@ -640,25 +642,19 @@
 </div>
 
 <style>
-  :global(.modal.path-browser) {
-    display: flex;
-    width: 600px;
-    max-height: 86vh;
-    flex-direction: column;
-  }
-
   /* One height for the places and every folder, whatever tools and notices
      show; the list takes the room they leave. */
   .path-browser__body {
     height: min(460px, 64vh);
     min-height: 0;
     gap: 10px;
-    padding-bottom: 12px;
   }
 
+  /* As tall as the path field, so typing a path moves nothing below. */
   .path-browser__bar {
     display: flex;
     min-width: 0;
+    min-height: 34px;
     align-items: center;
     gap: 6px;
   }
@@ -671,8 +667,10 @@
   }
 
   .path-browser__trail {
+    display: flex;
     min-width: 0;
     flex: 0 1 auto;
+    align-items: center;
     overflow-x: auto;
   }
 
@@ -687,7 +685,7 @@
   }
 
   .path-browser__type-path:hover {
-    background: var(--surface-2);
+    background: var(--surface-3);
   }
 
   .path-browser__bar :global(.path-browser__path) {
@@ -771,6 +769,7 @@
 
   .path-browser__list {
     flex: 1 0 auto;
+    padding: 4px;
     outline: none;
   }
 
@@ -786,7 +785,7 @@
   }
 
   .path-browser__error::before {
-    content: ' d7';
+    content: '×';
     font-weight: 600;
   }
 
@@ -810,33 +809,41 @@
   }
 
   .path-browser__group {
-    padding: 8px 10px 4px;
+    padding: 8px 8px 4px;
     color: var(--text-lo);
     font-size: var(--fs-label-sm);
     font-weight: 600;
   }
 
+  .path-browser__group:not(:first-child) {
+    margin-top: 6px;
+  }
+
+  /* Rows open on a double click, which must not select their text. */
   .path-browser__row {
     display: flex;
     width: 100%;
     min-width: 0;
+    min-height: 30px;
     align-items: center;
     gap: 8px;
-    padding: 5px 10px;
+    padding: 4px 8px;
     border: 0;
+    border-radius: var(--r-sm);
     color: var(--text-hi);
     background: transparent;
     font-size: var(--fs-body-md);
     text-align: left;
+    user-select: none;
   }
 
-  .path-browser__row:hover,
-  .path-browser__row.active {
+  .path-browser__row:hover {
     background: var(--surface-3);
   }
 
   .path-browser__row.active {
-    box-shadow: inset 2px 0 0 var(--accent);
+    color: var(--text-hi);
+    background: var(--selected-surface);
   }
 
   .path-browser__row--hidden {
@@ -913,5 +920,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     direction: rtl;
+  }
+
+  /* On a phone the buttons share the footer row, so the chosen path takes
+     its own line above them. */
+  @media (max-width: 640px) {
+    :global(.modal-footer):has(> .path-browser__choice) {
+      flex-wrap: wrap;
+    }
+
+    .path-browser__choice {
+      flex-basis: 100%;
+    }
   }
 </style>

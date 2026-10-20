@@ -15,6 +15,8 @@
     title={t('mcp.inspectTitle', {
       name: panelState.inspector.id,
     })}
+    description={t('mcp.accessHelp')}
+    size="lg"
     onClose={controller.closeInspector}
     class="mcp-modal"
   >
@@ -64,12 +66,18 @@
         {:else if panelState.inspector.data}
           {@const catalog = panelState.inspector.data}
           <div class="mcp-heading">
-            <p>
-              {t('mcp.accessHelp')}
-            </p>
-            <StatusChip variant={status(catalog).variant}
-              >{status(catalog).label}</StatusChip
-            >
+            {#if catalog.catalog_available}
+              <h4>
+                {t('mcp.availableTools', {
+                  count: catalog.total,
+                })}
+              </h4>
+            {/if}
+            <span class="mcp-inspector__state">
+              <StatusChip variant={status(catalog).variant}
+                >{status(catalog).label}</StatusChip
+              >
+            </span>
           </div>
           {#if !catalog.catalog_available}
             <EmptyState
@@ -81,11 +89,6 @@
             {#if catalog.state !== 'connected'}
               <Banner variant="warn">{t('mcp.catalogStale')}</Banner>
             {/if}
-            <h4>
-              {t('mcp.availableTools', {
-                count: catalog.total,
-              })}
-            </h4>
             {#if catalog.tools.length}
               <ul class="mcp-capability-list">
                 {#each catalog.tools as tool (tool.target)}

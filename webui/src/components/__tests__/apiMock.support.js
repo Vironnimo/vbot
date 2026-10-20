@@ -278,6 +278,11 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     addProject: (params) => call('project.add', params),
     setProject: (projectId, changes) =>
       call('project.set', { project_id: projectId, ...changes }),
+    reorderProjects: (projectIds, expectedRevision) =>
+      call('project.reorder', {
+        project_ids: projectIds,
+        expected_revision: expectedRevision,
+      }),
     removeProject: (
       projectId,
       { copyRootedAgentIdentityFiles = false, permanent = false } = {},

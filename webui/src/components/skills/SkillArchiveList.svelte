@@ -110,7 +110,7 @@
                 class="skills-row-delete"
                 disabled={busy}
                 ariaLabel={t('skills.row.purge', { name: item.name })}
-                tooltip={t('skills.archived.purgeTitle')}
+                tooltip={t('skills.archived.purge')}
                 onClick={() => onPurge(item)}
               >
                 <svg

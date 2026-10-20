@@ -154,173 +154,178 @@
 
 <Modal
   title={t('mcp.importTitle')}
+  description={servers ? t('mcp.importReview') : t('mcp.importSourceHelp')}
+  size="lg"
   closeDisabled={busy}
   onClose={busy ? noop : onClose}
   class="mcp-modal"
 >
   {#snippet body()}
-    <form
-      id={`${componentId}-import`}
-      class="modal-body mcp-editor mcp-import"
-      onsubmit={submit}
-    >
-      {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
-      {#if previewError}<Banner variant="error" role="alert"
-          >{previewError}</Banner
-        >{/if}
-      {#if !servers}
-        <FormField
-          controlId={`${componentId}-source`}
-          label={t('mcp.importSource')}
-          help={t('mcp.importSourceHelp')}
-          full
-        >
-          {#snippet children(field)}<TextArea
-              id={field.controlId}
-              aria-describedby={field.describedBy}
-              code
-              rows={10}
-              spellcheck="false"
-              autocomplete="off"
-              value={source}
-              disabled={working}
-              onInput={(value) => {
-                source = value;
-              }}
-            />{/snippet}
-        </FormField>
-        <div class="mcp-actions">
-          <Button
-            variant="secondary"
-            disabled={working}
-            onClick={() => fileInput.click()}>{t('mcp.importFile')}</Button
+    <form id={`${componentId}-import`} onsubmit={submit}>
+      <div class="modal-body mcp-import">
+        {#if error}<Banner variant="error" role="alert">{error}</Banner>{/if}
+        {#if previewError}<Banner variant="error" role="alert"
+            >{previewError}</Banner
+          >{/if}
+        {#if !servers}
+          <FormField
+            controlId={`${componentId}-source`}
+            label={t('mcp.importSource')}
+            full
           >
-          <input
-            bind:this={fileInput}
-            class="mcp-import__file"
-            type="file"
-            accept=".json,.jsonc,.toml,.txt,application/json,text/plain"
-            tabindex="-1"
-            aria-hidden="true"
-            onchange={readFile}
-          />
-        </div>
-        <p>{t('mcp.importSafety')}</p>
-      {:else}
-        <p>{t('mcp.importReview')}</p>
-        <ul class="mcp-import__servers">
-          {#each servers as server, index (server.name)}
-            {@const connection = server.connection}
-            <li class="mcp-import__server">
-              <div class="mcp-heading">
-                <Checkbox
-                  checked={chosen.has(server.name)}
-                  disabled={working || blocked(server)}
-                  onChange={(checked) => {
-                    if (checked) chosen.add(server.name);
-                    else chosen.delete(server.name);
-                  }}
-                  ><span class="mcp-import__name">{server.name}</span></Checkbox
-                >
-                {#if server.error}
-                  <StatusChip variant="error"
-                    >{t('mcp.importInvalid')}</StatusChip
+            {#snippet children(field)}<TextArea
+                id={field.controlId}
+                aria-describedby={field.describedBy}
+                code
+                rows={10}
+                spellcheck="false"
+                autocomplete="off"
+                value={source}
+                disabled={working}
+                onInput={(value) => {
+                  source = value;
+                }}
+              />{/snippet}
+          </FormField>
+          <div class="mcp-actions">
+            <Button
+              variant="secondary"
+              disabled={working}
+              onClick={() => fileInput.click()}>{t('mcp.importFile')}</Button
+            >
+            <input
+              bind:this={fileInput}
+              class="mcp-import__file"
+              type="file"
+              accept=".json,.jsonc,.toml,.txt,application/json,text/plain"
+              tabindex="-1"
+              aria-hidden="true"
+              onchange={readFile}
+            />
+          </div>
+          <p>{t('mcp.importSafety')}</p>
+        {:else}
+          <ul class="mcp-import__servers">
+            {#each servers as server, index (server.name)}
+              {@const connection = server.connection}
+              <li class="mcp-import__server">
+                <div class="mcp-heading">
+                  <Checkbox
+                    checked={chosen.has(server.name)}
+                    disabled={working || blocked(server)}
+                    onChange={(checked) => {
+                      if (checked) chosen.add(server.name);
+                      else chosen.delete(server.name);
+                    }}
+                    ><span class="mcp-import__name">{server.name}</span
+                    ></Checkbox
                   >
-                {:else if server.conflict}
-                  <StatusChip variant="warn">{t('mcp.importExists')}</StatusChip
-                  >
-                {:else if !server.enabled}
-                  <StatusChip variant="neutral"
-                    >{t('mcp.importDisabled')}</StatusChip
-                  >
-                {/if}
-              </div>
-              {#if server.error}
-                <p class="mcp-connection__error">{server.error}</p>
-              {:else}
-                <p>{transportLabel(connection)}</p>
-                <p class="mcp-endpoint">
-                  {connection.transport === 'stdio'
-                    ? commandLine(connection)
-                    : connection.url}
-                </p>
-                <FormField
-                  controlId={`${componentId}-id-${index}`}
-                  label={t('mcp.name')}
-                  error={server.conflict
-                    ? t('mcp.importConflict', { id: server.id })
-                    : ''}
-                >
-                  {#snippet children(field)}<TextField
-                      id={field.controlId}
-                      aria-describedby={field.describedBy}
-                      invalid={field.invalid}
-                      value={ids[server.name] ?? server.id}
-                      disabled={busy}
-                      pattern={'[a-z][a-z0-9_]{0,31}'}
-                      onInput={(value) => setId(server, value)}
-                    />{/snippet}
-                </FormField>
-                {#each server.credentials as credential (credential.target)}
-                  {#if credential.state === 'missing'}
-                    <FormField
-                      controlId={`${componentId}-secret-${index}-${credential.target}`}
-                      label={t('mcp.importCredentialValue', {
-                        target: credential.target,
-                      })}
-                      help={[credentialText(credential), credential.description]
-                        .filter(Boolean)
-                        .join(' ')}
+                  {#if server.error}
+                    <StatusChip variant="error"
+                      >{t('mcp.importInvalid')}</StatusChip
                     >
-                      {#snippet children(field)}<TextField
-                          id={field.controlId}
-                          aria-describedby={field.describedBy}
-                          type="password"
-                          autocomplete="off"
-                          value={values[
-                            mcpCredentialSlot(server, credential)
-                          ] ?? ''}
-                          disabled={busy}
-                          onInput={(value) => {
-                            values = {
-                              ...values,
-                              [mcpCredentialSlot(server, credential)]: value,
-                            };
-                          }}
-                        />{/snippet}
-                    </FormField>
-                  {:else}
-                    <p>{credential.target}: {credentialText(credential)}</p>
+                  {:else if server.conflict}
+                    <StatusChip variant="warn"
+                      >{t('mcp.importExists')}</StatusChip
+                    >
+                  {:else if !server.enabled}
+                    <StatusChip variant="neutral"
+                      >{t('mcp.importDisabled')}</StatusChip
+                    >
                   {/if}
-                {/each}
-                {#each server.warnings as warning, warningIndex (warningIndex)}
-                  <Banner variant="warn">{warning.message}</Banner>
-                {/each}
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {/if}
+                </div>
+                {#if server.error}
+                  <p class="mcp-connection__error">{server.error}</p>
+                {:else}
+                  <p>{transportLabel(connection)}</p>
+                  <p class="mcp-endpoint">
+                    {connection.transport === 'stdio'
+                      ? commandLine(connection)
+                      : connection.url}
+                  </p>
+                  <FormField
+                    controlId={`${componentId}-id-${index}`}
+                    label={t('mcp.name')}
+                    error={server.conflict
+                      ? t('mcp.importConflict', { id: server.id })
+                      : ''}
+                  >
+                    {#snippet children(field)}<TextField
+                        id={field.controlId}
+                        aria-describedby={field.describedBy}
+                        invalid={field.invalid}
+                        value={ids[server.name] ?? server.id}
+                        disabled={busy}
+                        pattern={'[a-z][a-z0-9_]{0,31}'}
+                        onInput={(value) => setId(server, value)}
+                      />{/snippet}
+                  </FormField>
+                  {#each server.credentials as credential (credential.target)}
+                    {#if credential.state === 'missing'}
+                      <FormField
+                        controlId={`${componentId}-secret-${index}-${credential.target}`}
+                        label={t('mcp.importCredentialValue', {
+                          target: credential.target,
+                        })}
+                        help={[
+                          credentialText(credential),
+                          credential.description,
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                      >
+                        {#snippet children(field)}<TextField
+                            id={field.controlId}
+                            aria-describedby={field.describedBy}
+                            type="password"
+                            autocomplete="off"
+                            value={values[
+                              mcpCredentialSlot(server, credential)
+                            ] ?? ''}
+                            disabled={busy}
+                            onInput={(value) => {
+                              values = {
+                                ...values,
+                                [mcpCredentialSlot(server, credential)]: value,
+                              };
+                            }}
+                          />{/snippet}
+                      </FormField>
+                    {:else}
+                      <p>{credential.target}: {credentialText(credential)}</p>
+                    {/if}
+                  {/each}
+                  {#each server.warnings as warning, warningIndex (warningIndex)}
+                    <Banner variant="warn">{warning.message}</Banner>
+                  {/each}
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+      <div class="modal-footer">
+        {#if servers}
+          <div class="modal-footer__start">
+            <Button variant="tertiary" disabled={busy} onClick={edit}
+              >{t('mcp.importEdit')}</Button
+            >
+          </div>
+        {/if}
+        <Button variant="secondary" disabled={busy} onClick={onClose}
+          >{t('common.cancel')}</Button
+        >
+        <Button
+          variant="primary"
+          type="submit"
+          disabled={working ||
+            (servers ? !plan?.servers.length : !source.trim())}
+          loading={busy || previewing}
+          >{servers
+            ? t('mcp.importApply', { count: plan?.servers.length ?? 0 })
+            : t('mcp.importPreview')}</Button
+        >
+      </div>
     </form>
-  {/snippet}
-  {#snippet footer()}
-    {#if servers}
-      <Button variant="secondary" disabled={busy} onClick={edit}
-        >{t('mcp.importEdit')}</Button
-      >
-    {/if}
-    <Button variant="secondary" disabled={busy} onClick={onClose}
-      >{t('common.cancel')}</Button
-    >
-    <Button
-      variant="primary"
-      type="submit"
-      form={`${componentId}-import`}
-      disabled={working || (servers ? !plan?.servers.length : !source.trim())}
-      loading={busy || previewing}
-      >{servers
-        ? t('mcp.importApply', { count: plan?.servers.length ?? 0 })
-        : t('mcp.importPreview')}</Button
-    >
   {/snippet}
 </Modal>

@@ -1,0 +1,176 @@
+/* DateField and TimeField (components/ui/). Each is a TextField with a quiet
+   picker button inside its end edge; the month picker and the time list are
+   portaled to <body> on the shared floating layer and share the menus' raised
+   surface. */
+.date-field,
+.time-field {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.date-field > .date-field__input,
+.time-field > .time-field__input {
+  width: 100%;
+  min-width: 0;
+  padding-right: 34px;
+}
+
+.date-field > .date-field__toggle,
+.time-field > .time-field__toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  color: var(--text-lo);
+  transform: translateY(-50%);
+}
+
+.date-field > .date-field__toggle:hover:not(:disabled),
+.time-field > .time-field__toggle:hover:not(:disabled) {
+  color: var(--text-hi);
+}
+
+.date-field__input:disabled,
+.time-field__input:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.date-field__panel {
+  position: fixed;
+  z-index: var(--z-floating);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  color: var(--text-hi);
+  background: var(--surface-2);
+  box-shadow: var(--dropdown-elevation);
+  font-family: var(--font-ui);
+  outline: none;
+  animation: floating-layer-enter 120ms ease-out;
+  --floating-shift-x: 0px;
+  --floating-shift-y: -3px;
+}
+
+.date-field__panel[data-floating-side='top'] {
+  --floating-shift-y: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .date-field__panel {
+    animation: none;
+  }
+}
+
+.date-field__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.date-field__header > .date-field__step {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  color: var(--text-med);
+}
+
+.date-field__title {
+  flex: 1;
+  color: var(--text-hi);
+  font-size: var(--fs-body-md);
+  font-weight: 600;
+  text-align: center;
+}
+
+.date-field__grid {
+  display: grid;
+  gap: 2px;
+  outline: none;
+}
+
+.date-field__row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.date-field__weekday {
+  padding: 4px 0;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
+  text-align: center;
+}
+
+.date-field__day {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: var(--text-hi);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.date-field__day:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.date-field__day:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.date-field__day--outside {
+  color: var(--text-lo);
+}
+
+/* Today is orientation, not a selection: the Calendar's neutral marker. */
+.date-field__day--today {
+  color: var(--bg);
+  background: var(--text-hi);
+  font-weight: 600;
+}
+
+.date-field__day--today:hover:not(:disabled) {
+  background: var(--text-med);
+}
+
+.date-field__day--selected,
+.date-field__day--selected:hover:not(:disabled) {
+  color: var(--on-accent);
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.date-field__day:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.time-field__list {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+
+.time-field__option {
+  justify-content: flex-start;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}

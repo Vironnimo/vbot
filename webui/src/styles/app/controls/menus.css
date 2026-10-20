@@ -124,8 +124,7 @@
 .dropdown-option:focus-visible,
 .s-dropdown-opt:focus-visible,
 .dropdown-trigger:focus-visible,
-.s-dropdown-trigger:focus-visible,
-.s-dropdown-search input:focus-visible {
+.s-dropdown-trigger:focus-visible {
   box-shadow: var(--field-focus-ring);
 }
 
@@ -140,6 +139,13 @@
   gap: 8px;
   padding: 8px 11px;
   border-bottom: 1px solid var(--border);
+}
+
+/* The search field is the panel's borderless header row: a focus halo would
+   draw a second frame inside the panel, so focus shows as an accent magnifier
+   next to the caret instead. */
+.s-dropdown-search:focus-within svg {
+  color: var(--accent);
 }
 
 .s-dropdown-search input {
